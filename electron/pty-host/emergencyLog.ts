@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { scrubSecrets } from "../utils/secretScrubber.js";
 
 export function getEmergencyLogPath(): string {
   const userData = process.env.DAINTREE_USER_DATA;
@@ -32,13 +33,15 @@ export function emergencyLogFatal(kind: string, error: unknown): void {
       : { message: String(error) };
 
   appendEmergencyLog(
-    [
-      "============================================================",
-      `[${timestamp}] [${kind}] pid=${pid} uptimeMs=${uptimeMs}`,
-      `node=${process.version} platform=${process.platform} arch=${process.arch}`,
-      `memory.rss=${memory.rss} heapUsed=${memory.heapUsed} heapTotal=${memory.heapTotal} external=${memory.external}`,
-      `error=${JSON.stringify(details)}`,
-      "",
-    ].join("\n")
+    scrubSecrets(
+      [
+        "============================================================",
+        `[${timestamp}] [${kind}] pid=${pid} uptimeMs=${uptimeMs}`,
+        `node=${process.version} platform=${process.platform} arch=${process.arch}`,
+        `memory.rss=${memory.rss} heapUsed=${memory.heapUsed} heapTotal=${memory.heapTotal} external=${memory.external}`,
+        `error=${JSON.stringify(details)}`,
+        "",
+      ].join("\n")
+    )
   );
 }

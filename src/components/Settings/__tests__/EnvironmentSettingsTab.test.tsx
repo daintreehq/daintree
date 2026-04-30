@@ -3,6 +3,21 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EnvironmentSettingsTab } from "../EnvironmentSettingsTab";
+import { SettingsValidationProvider } from "../SettingsValidationRegistry";
+
+vi.mock("@/lib/notify", () => ({
+  notify: vi.fn(),
+}));
+
+vi.mock("@/utils/logger", () => ({
+  logError: vi.fn(),
+  logWarn: vi.fn(),
+  logInfo: vi.fn(),
+  logDebug: vi.fn(),
+}));
+
+import { notify } from "@/lib/notify";
+import { logError } from "@/utils/logger";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -14,9 +29,17 @@ beforeEach(() => {
   } as unknown as typeof window.electron;
 });
 
+function renderTab() {
+  return render(
+    <SettingsValidationProvider>
+      <EnvironmentSettingsTab />
+    </SettingsValidationProvider>
+  );
+}
+
 describe("EnvironmentSettingsTab", () => {
   it("renders without a project open (no empty-state guard)", async () => {
-    render(<EnvironmentSettingsTab />);
+    renderTab();
 
     await waitFor(() => {
       expect(screen.getByText("Environment Variables")).toBeTruthy();
@@ -32,7 +55,7 @@ describe("EnvironmentSettingsTab", () => {
       },
     } as unknown as typeof window.electron;
 
-    render(<EnvironmentSettingsTab />);
+    renderTab();
 
     await waitFor(() => {
       expect(window.electron.globalEnv.get).toHaveBeenCalledTimes(1);
@@ -50,7 +73,7 @@ describe("EnvironmentSettingsTab", () => {
       },
     } as unknown as typeof window.electron;
 
-    render(<EnvironmentSettingsTab />);
+    renderTab();
 
     await waitFor(() => {
       expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
@@ -68,7 +91,7 @@ describe("EnvironmentSettingsTab", () => {
   });
 
   it("shows description about global scope", async () => {
-    render(<EnvironmentSettingsTab />);
+    renderTab();
 
     await waitFor(() => {
       expect(
@@ -79,7 +102,7 @@ describe("EnvironmentSettingsTab", () => {
     });
   });
 
-  it("handles globalEnv.get failure gracefully (shows empty state)", async () => {
+  it("blocks editing and notifies the user when globalEnv.get fails", async () => {
     window.electron = {
       globalEnv: {
         get: vi.fn().mockRejectedValue(new Error("IPC channel not found")),
@@ -87,13 +110,26 @@ describe("EnvironmentSettingsTab", () => {
       },
     } as unknown as typeof window.electron;
 
-    render(<EnvironmentSettingsTab />);
+    renderTab();
 
     await waitFor(() => {
-      expect(screen.getByText("No environment variables configured yet")).toBeTruthy();
+      expect(screen.getByText(/Couldn't load saved environment variables/)).toBeTruthy();
     });
 
+    // Save and editing affordances must be absent so a failed load can't
+    // overwrite the user's stored variables with an empty record.
     expect(screen.queryByRole("button", { name: /save/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /add variable/i })).toBeNull();
+
+    expect(logError).toHaveBeenCalledWith("Failed to load global env vars", expect.any(Error));
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        title: "Couldn't load environment variables",
+        priority: "high",
+        duration: 0,
+      })
+    );
   });
 
   it("adds new variable row and saves via globalEnv.set", async () => {
@@ -104,7 +140,7 @@ describe("EnvironmentSettingsTab", () => {
       },
     } as unknown as typeof window.electron;
 
-    render(<EnvironmentSettingsTab />);
+    renderTab();
 
     await waitFor(() => {
       expect(screen.getByText("No environment variables configured yet")).toBeTruthy();

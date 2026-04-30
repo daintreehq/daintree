@@ -13,6 +13,7 @@ import type {
 } from "../../shared/types/commands.js";
 import { projectStore } from "./ProjectStore.js";
 import { substituteTemplateVariables } from "../../shared/utils/promptTemplate.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -374,7 +375,7 @@ class CommandServiceImpl {
       const result = await command.execute(context, effectiveArgs);
       return result as CommandResult<TResult>;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err, "Command execution failed");
       // Only include stack traces in development mode
       const isDev = process.env.NODE_ENV === "development";
       return {

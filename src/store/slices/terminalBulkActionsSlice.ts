@@ -3,8 +3,9 @@ import type { StateCreator } from "zustand";
 import type { TerminalInstance } from "./panelRegistrySlice";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import type { AgentState } from "@/types";
-import { isAgentTerminal } from "../../utils/terminalType";
+import { isRuntimeAgentTerminal } from "../../utils/terminalType";
 import { validateTerminals, type ValidationResult } from "@/utils/terminalValidation";
+import { logError } from "@/utils/logger";
 
 export interface BulkRestartValidation {
   valid: TerminalInstance[];
@@ -16,8 +17,12 @@ export interface TerminalBulkActionsSlice {
   bulkCloseByWorktree: (worktreeId: string, state?: AgentState) => void;
   bulkCloseAll: () => void;
   bulkTrashAll: () => void;
+  bulkTrashSet: (ids: Iterable<string>) => void;
+  bulkKillSet: (ids: Iterable<string>) => void;
   bulkRestartAll: () => Promise<void>;
+  bulkRestartSet: (ids: Iterable<string>) => Promise<void>;
   bulkRestartPreflightCheck: () => Promise<BulkRestartValidation>;
+  bulkRestartPreflightCheckSet: (ids: Iterable<string>) => Promise<BulkRestartValidation>;
   bulkMoveToDockByWorktree: (worktreeId: string) => void;
   bulkMoveToGridByWorktree: (worktreeId: string) => void;
   bulkTrashByWorktree: (worktreeId: string) => void;
@@ -52,7 +57,7 @@ export const createTerminalBulkActionsSlice = (
         try {
           await restartTerminal(id);
         } catch (error) {
-          console.error(`Failed to restart terminal ${id}:`, error);
+          logError(`Failed to restart terminal ${id}`, error);
         }
       })
     );
@@ -85,15 +90,69 @@ export const createTerminalBulkActionsSlice = (
       activeTerminals.forEach((t) => trashPanel(t.id));
     },
 
+    bulkTrashSet: (ids) => {
+      const idSet = ids instanceof Set ? ids : new Set(ids);
+      if (idSet.size === 0) return;
+      const terminals = getTerminals();
+      const toTrash = terminals.filter((t) => idSet.has(t.id) && t.location !== "trash");
+      toTrash.forEach((t) => trashPanel(t.id));
+    },
+
+    bulkKillSet: (ids) => {
+      const idSet = ids instanceof Set ? ids : new Set(ids);
+      if (idSet.size === 0) return;
+      const terminals = getTerminals();
+      const toKill = terminals.filter((t) => idSet.has(t.id));
+      toKill.forEach((t) => removePanel(t.id));
+    },
+
     bulkRestartAll: async () => {
       const terminals = getTerminals();
       const activeTerminals = terminals.filter((t) => t.location !== "trash");
       await restartTerminals(activeTerminals);
     },
 
+    bulkRestartSet: async (ids) => {
+      const idSet = ids instanceof Set ? ids : new Set(ids);
+      if (idSet.size === 0) return;
+      const terminals = getTerminals();
+      const activeTerminals = terminals.filter((t) => idSet.has(t.id) && t.location !== "trash");
+      if (activeTerminals.length === 0) return;
+      try {
+        const validationResults = await validateTerminals(activeTerminals);
+        const valid = activeTerminals.filter((t) => !validationResults.get(t.id));
+        await restartTerminals(valid);
+      } catch (error) {
+        logError("Failed to validate terminals for restart", error);
+        await restartTerminals(activeTerminals);
+      }
+    },
+
     bulkRestartPreflightCheck: async () => {
       const terminals = getTerminals();
       const activeTerminals = terminals.filter((t) => t.location !== "trash");
+
+      const validationResults = await validateTerminals(activeTerminals);
+
+      const valid: TerminalInstance[] = [];
+      const invalid: Array<{ terminal: TerminalInstance; errors: ValidationResult }> = [];
+
+      for (const terminal of activeTerminals) {
+        const result = validationResults.get(terminal.id);
+        if (result) {
+          invalid.push({ terminal, errors: result });
+        } else {
+          valid.push(terminal);
+        }
+      }
+
+      return { valid, invalid };
+    },
+
+    bulkRestartPreflightCheckSet: async (ids) => {
+      const idSet = ids instanceof Set ? ids : new Set(ids);
+      const terminals = getTerminals();
+      const activeTerminals = terminals.filter((t) => idSet.has(t.id) && t.location !== "trash");
 
       const validationResults = await validateTerminals(activeTerminals);
 
@@ -195,7 +254,7 @@ export const createTerminalBulkActionsSlice = (
         const valid = activeTerminals.filter((t) => !validationResults.get(t.id));
         await restartTerminals(valid);
       } catch (error) {
-        console.error("Failed to validate terminals for restart:", error);
+        logError("Failed to validate terminals for restart", error);
         await restartTerminals(activeTerminals);
       }
     },
@@ -253,8 +312,11 @@ export const createTerminalBulkActionsSlice = (
 
     restartIdleAgents: async () => {
       const terminals = getTerminals();
+      // Runtime predicate — include terminals that were promoted at runtime
+      // (a plain shell where `claude` is currently the foreground process),
+      // not just spawn-sealed agent terminals.
       const idleAgents = terminals.filter(
-        (t) => t.agentState === "idle" && isAgentTerminal(t.kind ?? t.type, t.agentId)
+        (t) => t.agentState === "idle" && isRuntimeAgentTerminal(t)
       );
       await restartTerminals(idleAgents);
     },

@@ -141,6 +141,21 @@ export interface WorktreeSnapshot {
 
   /** Cached display label for the environment (e.g., "Docker", "Akash") */
   worktreeEnvironmentLabel?: string;
+
+  /** True when the worktree path is mounted via \\wsl$\ or \\wsl.localhost\. */
+  isWslPath?: boolean;
+
+  /** Distro name parsed from the WSL UNC mount, when `isWslPath` is true. */
+  wslDistro?: string;
+
+  /** Whether `wslDistro` matches the WSL default distro (gates "Enable" UI). */
+  wslGitEligible?: boolean;
+
+  /** User has opted in to WSL-routed git for this worktree. */
+  wslGitOptIn?: boolean;
+
+  /** User dismissed the WSL git suggestion banner without opting in. */
+  wslGitDismissed?: boolean;
 }
 
 /** Monitor configuration for polling intervals */
@@ -166,6 +181,12 @@ export type WorkspaceHostRequest =
       requestId: string;
       rootPath: string;
       globalEnvVars?: Record<string, string>;
+      /**
+       * Persisted per-worktree WSL git opt-in state (Windows only). Map key is
+       * the worktree id; values capture the user's previous Enable/Dismiss
+       * decisions so the host can apply them when constructing monitors.
+       */
+      wslGitByWorktree?: Record<string, { enabled: boolean; dismissed: boolean }>;
     }
   | {
       type: "sync";
@@ -182,6 +203,7 @@ export type WorkspaceHostRequest =
   // Worktree operations
   | { type: "set-active"; requestId: string; worktreeId: string }
   | { type: "refresh"; requestId: string; worktreeId?: string }
+  | { type: "refresh-on-wake"; requestId: string }
   | { type: "refresh-prs"; requestId: string }
   | { type: "get-pr-status"; requestId: string }
   | { type: "reset-pr-state"; requestId: string }
@@ -218,6 +240,13 @@ export type WorkspaceHostRequest =
     }
   // Polling control
   | { type: "set-polling-enabled"; enabled: boolean }
+  // WSL-routed git opt-in / banner dismissal (Windows only)
+  | {
+      type: "set-wsl-opt-in";
+      worktreeId: string;
+      enabled: boolean;
+      dismissed: boolean;
+    }
   // Background/foreground lifecycle
   | { type: "background" }
   | { type: "foreground" }
@@ -225,6 +254,9 @@ export type WorkspaceHostRequest =
   | { type: "health-check" }
   // Lifecycle
   | { type: "dispose" }
+  // Live log-level override updates from main (map of stable logger names to
+  // `debug|info|warn|error|off`). Empty map clears all overrides.
+  | { type: "set-log-level-overrides"; overrides: Record<string, string> }
   // CopyTree operations
   | {
       type: "copytree:generate";
@@ -292,7 +324,19 @@ export type WorkspaceHostEvent =
   | { type: "pong" }
   | { type: "error"; error: string; requestId?: string }
   // Project lifecycle responses
-  | { type: "load-project-result"; requestId: string; success: boolean; error?: string }
+  | {
+      type: "load-project-result";
+      requestId: string;
+      success: boolean;
+      error?: string;
+      /**
+       * Whether `git lfs` is available on PATH for this machine. Probed during
+       * load-project via `git lfs version`. `undefined` means the probe did not
+       * run (e.g. project load failed before the probe) and the renderer should
+       * treat it as unknown rather than unavailable.
+       */
+      lfsAvailable?: boolean;
+    }
   | { type: "sync-result"; requestId: string; success: boolean; error?: string }
   | { type: "update-monitor-config-result"; requestId: string; success: boolean; error?: string }
   | { type: "project-switch-result"; requestId: string; success: boolean }
@@ -316,12 +360,25 @@ export type WorkspaceHostEvent =
   // Branch operation responses
   | { type: "list-branches-result"; requestId: string; branches: BranchInfo[]; error?: string }
   | { type: "get-recent-branches-result"; requestId: string; branches: string[]; error?: string }
-  | { type: "fetch-pr-branch-result"; requestId: string; success: boolean; error?: string }
+  | {
+      type: "fetch-pr-branch-result";
+      requestId: string;
+      success: boolean;
+      error?: string;
+      gitReason?: import("./ipc/errors.js").GitOperationReason;
+      recoveryAction?: import("./ipc/errors.js").RecoveryAction;
+    }
   // Git operation responses
   | { type: "get-file-diff-result"; requestId: string; diff: string; error?: string }
   // Spontaneous updates (no requestId - these are pushed events)
   | { type: "worktree-update"; worktree: WorktreeSnapshot }
   | { type: "worktree-removed"; worktreeId: string }
+  // Linux-only: fired once per host-process lifetime when the recursive file
+  // watcher hits the inotify watch limit (ENOSPC).
+  | { type: "inotify-limit-reached" }
+  // macOS-only: fired once per host-process lifetime when the recursive file
+  // watcher hits the FSEvents file descriptor ceiling (EMFILE).
+  | { type: "emfile-limit-reached" }
   // PR events
   | {
       type: "pr-detected";
@@ -345,6 +402,14 @@ export type WorkspaceHostEvent =
       type: "issue-not-found";
       worktreeId: string;
       issueNumber: number;
+    }
+  // GitHub rate-limit state observed in the workspace-host utility process.
+  // The main process applies this to its own `GitHubRateLimitService`
+  // singleton so that main-process callers (IPC handlers, toolbar
+  // countdown) see limits triggered by PullRequestService polling too.
+  | {
+      type: "github-rate-limit-changed";
+      state: import("./ipc/github.js").GitHubRateLimitPayload;
     }
   // CopyTree events
   | { type: "copytree:progress"; operationId: string; progress: CopyTreeProgress }

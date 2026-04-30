@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 export const HELP_PANEL_MIN_WIDTH = 320;
 export const HELP_PANEL_MAX_WIDTH = 800;
@@ -54,6 +55,8 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
     {
       name: "help-panel-storage",
       storage: createSafeJSONStorage(),
+      version: 0,
+      migrate: (persistedState) => persistedState as HelpPanelState & HelpPanelActions,
       partialize: (state) => ({
         width: state.width,
         preferredAgentId: state.preferredAgentId,
@@ -75,3 +78,9 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "helpPanelStore",
+  store: useHelpPanelStore,
+  persistedStateType: "Pick<HelpPanelState, 'width' | 'preferredAgentId'>",
+});

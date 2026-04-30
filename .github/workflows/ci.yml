@@ -68,10 +68,12 @@ jobs:
       - name: Test
         run: npm run test
 
-  build:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+  # Non-blocking static-analysis report. Deliberately NOT in ci-ok.needs —
+  # this surfaces dead-code findings without gating merges while the baseline
+  # stabilises. Promote to required once the report is clean.
+  knip:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
       - name: Check out repository
@@ -91,10 +93,56 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Knip (static dead-code report)
+        run: npm run knip
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Fontconfig cache key
+        id: fontconfig-cache-key
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cache/fontconfig
+          source /etc/os-release
+          echo "ubuntu=${ID}-${VERSION_ID}-${VERSION_CODENAME}" >> "$GITHUB_OUTPUT"
+          echo "fc_version=$(fc-cache --version 2>&1 | head -1)" >> "$GITHUB_OUTPUT"
+          echo "font_pkg_hash=$(dpkg-query -W -f='${Package} ${Version}\n' 2>/dev/null | grep -E '^fonts-|^fontconfig' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache fontconfig
+        id: cache-fontconfig
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fontconfig
+          key: fontconfig-${{ runner.os }}-${{ runner.arch }}-${{ steps.fontconfig-cache-key.outputs.ubuntu }}-${{ steps.fontconfig-cache-key.outputs.fc_version }}-${{ steps.fontconfig-cache-key.outputs.font_pkg_hash }}
+
+      - name: Warm fontconfig cache
+        run: fc-cache -fv
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Build
         run: npm run build
 
       - name: Smoke test
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: xvfb-run --auto-servernum npm run test:smoke
         env:
           NODE_ENV: production
@@ -107,7 +155,7 @@ jobs:
   # Insulates against matrix/job name changes breaking required checks.
   ci-ok:
     if: always()
-    needs: [check, test]
+    needs: [check, test, build]
     runs-on: ubuntu-latest
     timeout-minutes: 2
 

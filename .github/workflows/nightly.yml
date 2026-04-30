@@ -155,6 +155,29 @@ jobs:
             libnotify-dev \
             libxkbfile-dev
 
+      - name: Fontconfig cache key
+        id: fontconfig-cache-key
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cache/fontconfig
+          source /etc/os-release
+          echo "ubuntu=${ID}-${VERSION_ID}-${VERSION_CODENAME}" >> "$GITHUB_OUTPUT"
+          echo "fc_version=$(fc-cache --version 2>&1 | head -1)" >> "$GITHUB_OUTPUT"
+          echo "font_pkg_hash=$(dpkg-query -W -f='${Package} ${Version}\n' 2>/dev/null | grep -E '^fonts-|^fontconfig' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache fontconfig
+        id: cache-fontconfig
+        if: matrix.os == 'ubuntu-22.04'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fontconfig
+          key: fontconfig-${{ runner.os }}-${{ runner.arch }}-${{ steps.fontconfig-cache-key.outputs.ubuntu }}-${{ steps.fontconfig-cache-key.outputs.fc_version }}-${{ steps.fontconfig-cache-key.outputs.font_pkg_hash }}
+
+      - name: Warm fontconfig cache
+        if: matrix.os == 'ubuntu-22.04'
+        run: fc-cache -fv
+
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
         run: npm ci
@@ -321,6 +344,119 @@ jobs:
           retention-days: 3
           if-no-files-found: error
 
+  compiler-budget:
+    needs: matrix-setup
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer (with React Compiler logger)
+        run: npm run compiler-budget:build
+
+      - name: Check compiler bailout budget
+        run: npm run compiler-budget:check
+
+  eager-import-budget:
+    needs: matrix-setup
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build eager-import metafile
+        run: npm run import-budget:build
+
+      - name: Check eager-import budget
+        run: npm run import-budget:check
+
+  renderer-bundle-budget:
+    needs: matrix-setup
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer (with bundle size report)
+        run: npm run renderer-bundle-budget:build
+
+      - name: Check renderer bundle size budget
+        run: npm run renderer-bundle-budget:check
+
+  integration-test:
+    needs: [check, test]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run integration tests
+        run: npm run test:integration
+
   # E2E suites run in parallel with build (both gate on check + test)
   # Nightly runs the full suite (all 72 test files), not just the core subset
   e2e-full:
@@ -448,7 +584,20 @@ jobs:
 
   notify:
     if: failure() && github.event_name == 'schedule'
-    needs: [check, test, build, e2e-full, e2e-online, e2e-nightly, publish]
+    needs:
+      [
+        check,
+        test,
+        build,
+        compiler-budget,
+        eager-import-budget,
+        renderer-bundle-budget,
+        integration-test,
+        e2e-full,
+        e2e-online,
+        e2e-nightly,
+        publish,
+      ]
     runs-on: ubuntu-22.04
     permissions:
       issues: write

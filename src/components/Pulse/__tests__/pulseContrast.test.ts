@@ -57,10 +57,15 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
     expect(content).toContain('"pulse-card-header');
   });
 
-  it("inline selector active item uses accent tint fill, not a surface token", async () => {
+  it("inline selector active item uses neutral selected tokens, not accent (issue #5979)", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("color-mix(in oklab, var(--color-accent-primary) 12%, transparent)");
-    expect(content).not.toMatch(/rangeDays.*bg-surface-highlight/);
+    expect(content).toContain("bg-overlay-selected");
+    expect(content).toContain("border-border-strong");
+    expect(content).not.toContain(
+      "color-mix(in oklab, var(--color-accent-primary) 12%, transparent)"
+    );
+    expect(content).not.toContain("border-daintree-accent/25");
+    expect(content).not.toContain("text-daintree-accent");
   });
 });
 

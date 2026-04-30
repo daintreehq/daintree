@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -20,11 +20,46 @@ const storeState = vi.hoisted(() => ({
   } as Record<string, unknown>,
 }));
 
-const storeMock = vi.hoisted(() => ({
-  get: vi.fn((key: string) => storeState.data[key]),
-  set: vi.fn((key: string, value: unknown) => {
-    storeState.data[key] = value;
-  }),
+const storeMock = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const getDeep = (key: string): any => {
+    if (!key.includes(".")) return storeState.data[key];
+    const parts = key.split(".");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let cur: any = storeState.data;
+    for (const p of parts) {
+      if (cur == null) return undefined;
+      cur = cur[p];
+    }
+    return cur;
+  };
+  const setDeep = (key: string, value: unknown): void => {
+    if (!key.includes(".")) {
+      storeState.data[key] = value;
+      return;
+    }
+    const parts = key.split(".");
+    const last = parts.pop()!;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let cur: any = storeState.data;
+    for (const p of parts) {
+      if (typeof cur[p] !== "object" || cur[p] === null) cur[p] = {};
+      cur = cur[p];
+    }
+    cur[last] = value;
+  };
+  return {
+    get: vi.fn(getDeep),
+    set: vi.fn(setDeep),
+  };
+});
+
+const osState = vi.hoisted(() => ({ totalmem: 8 * 1024 ** 3 }));
+
+vi.mock("node:os", () => ({
+  default: {
+    totalmem: () => osState.totalmem,
+  },
 }));
 
 vi.mock("../../../store.js", () => ({
@@ -61,6 +96,12 @@ describe("terminalConfig handlers", () => {
         screenReaderMode: "auto",
       },
     };
+    osState.totalmem = 8 * 1024 ** 3;
+    delete process.env.DAINTREE_E2E_MODE;
+  });
+
+  afterEach(() => {
+    delete process.env.DAINTREE_E2E_MODE;
   });
 
   it("registers all handlers and cleanup removes them", () => {
@@ -86,11 +127,131 @@ describe("terminalConfig handlers", () => {
     expect(removedChannels).toEqual(expect.arrayContaining(registeredChannels));
   });
 
-  it("get returns current terminal config", async () => {
+  it("get returns current terminal config with an effective cachedProjectViews", async () => {
     registerTerminalConfigHandlers();
     const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
 
-    await expect(handler({}, undefined)).resolves.toEqual(storeState.data.terminalConfig);
+    const result = (await handler({}, undefined)) as Record<string, unknown>;
+
+    expect(result).toEqual(
+      expect.objectContaining(storeState.data.terminalConfig as Record<string, unknown>)
+    );
+    expect(result.cachedProjectViews).toBe(1);
+  });
+
+  describe("get derives cachedProjectViews", () => {
+    it("preserves a stored preference regardless of RAM", async () => {
+      (storeState.data.terminalConfig as Record<string, unknown>).cachedProjectViews = 5;
+      osState.totalmem = 128 * 1024 ** 3;
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+      const result = (await handler({}, undefined)) as Record<string, unknown>;
+      expect(result.cachedProjectViews).toBe(5);
+    });
+
+    it("preserves a stored preference in E2E mode", async () => {
+      process.env.DAINTREE_E2E_MODE = "1";
+      (storeState.data.terminalConfig as Record<string, unknown>).cachedProjectViews = 2;
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+      const result = (await handler({}, undefined)) as Record<string, unknown>;
+      expect(result.cachedProjectViews).toBe(2);
+    });
+
+    it("returns 1 for an 8 GiB machine with no preference", async () => {
+      osState.totalmem = 8 * 1024 ** 3;
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+      const result = (await handler({}, undefined)) as Record<string, unknown>;
+      expect(result.cachedProjectViews).toBe(1);
+    });
+
+    it("returns 1 for a 16 GiB machine with no preference", async () => {
+      osState.totalmem = 16 * 1024 ** 3;
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+      const result = (await handler({}, undefined)) as Record<string, unknown>;
+      expect(result.cachedProjectViews).toBe(1);
+    });
+
+    it("returns 1 for a 24 GiB machine (below the 32 GiB threshold)", async () => {
+      osState.totalmem = 24 * 1024 ** 3;
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+      const result = (await handler({}, undefined)) as Record<string, unknown>;
+      expect(result.cachedProjectViews).toBe(1);
+    });
+
+    it("returns 2 at the 32 GiB threshold", async () => {
+      osState.totalmem = 32 * 1024 ** 3;
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+      const result = (await handler({}, undefined)) as Record<string, unknown>;
+      expect(result.cachedProjectViews).toBe(2);
+    });
+
+    it("returns 2 for a 48 GiB machine", async () => {
+      osState.totalmem = 48 * 1024 ** 3;
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+      const result = (await handler({}, undefined)) as Record<string, unknown>;
+      expect(result.cachedProjectViews).toBe(2);
+    });
+
+    it("returns 3 at the 64 GiB threshold", async () => {
+      osState.totalmem = 64 * 1024 ** 3;
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+      const result = (await handler({}, undefined)) as Record<string, unknown>;
+      expect(result.cachedProjectViews).toBe(3);
+    });
+
+    it("returns 3 for a 128 GiB machine", async () => {
+      osState.totalmem = 128 * 1024 ** 3;
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+      const result = (await handler({}, undefined)) as Record<string, unknown>;
+      expect(result.cachedProjectViews).toBe(3);
+    });
+
+    it("returns 4 in E2E mode when no preference is stored, regardless of RAM", async () => {
+      process.env.DAINTREE_E2E_MODE = "1";
+      osState.totalmem = 8 * 1024 ** 3;
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+      const result = (await handler({}, undefined)) as Record<string, unknown>;
+      expect(result.cachedProjectViews).toBe(4);
+    });
+
+    it("treats corrupted stored values as absent and falls back to the RAM default", async () => {
+      osState.totalmem = 64 * 1024 ** 3;
+      (storeState.data.terminalConfig as Record<string, unknown>).cachedProjectViews = "bogus";
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+      const result = (await handler({}, undefined)) as Record<string, unknown>;
+      expect(result.cachedProjectViews).toBe(3);
+    });
+
+    it("treats out-of-range stored values as absent and falls back to the RAM default", async () => {
+      osState.totalmem = 32 * 1024 ** 3;
+      (storeState.data.terminalConfig as Record<string, unknown>).cachedProjectViews = 99;
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+      const result = (await handler({}, undefined)) as Record<string, unknown>;
+      expect(result.cachedProjectViews).toBe(2);
+    });
   });
 
   it("setScrollback accepts valid finite integer in range", async () => {
@@ -200,22 +361,30 @@ describe("terminalConfig handlers", () => {
     expect(storeState.data.terminalConfig).toMatchObject({ cachedProjectViews: 5 });
   });
 
-  it("setCachedProjectViews rejects out-of-range values", async () => {
-    registerTerminalConfigHandlers();
+  it("setCachedProjectViews rejects out-of-range values without mutating store or pvm", async () => {
+    const mockPvm = { setCachedViewLimit: vi.fn() };
+    registerTerminalConfigHandlers({ projectViewManager: mockPvm } as never);
     const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS);
 
     await expect(handler({}, 0)).rejects.toThrow("Invalid cachedProjectViews value");
     await expect(handler({}, 6)).rejects.toThrow("Invalid cachedProjectViews value");
     await expect(handler({}, -1)).rejects.toThrow("Invalid cachedProjectViews value");
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+    expect(mockPvm.setCachedViewLimit).not.toHaveBeenCalled();
   });
 
-  it("setCachedProjectViews rejects non-integer and non-finite values", async () => {
-    registerTerminalConfigHandlers();
+  it("setCachedProjectViews rejects non-integer and non-finite values without side effects", async () => {
+    const mockPvm = { setCachedViewLimit: vi.fn() };
+    registerTerminalConfigHandlers({ projectViewManager: mockPvm } as never);
     const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS);
 
     await expect(handler({}, 1.5)).rejects.toThrow("Invalid cachedProjectViews value");
     await expect(handler({}, Number.NaN)).rejects.toThrow("Invalid cachedProjectViews value");
     await expect(handler({}, Infinity)).rejects.toThrow("Invalid cachedProjectViews value");
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+    expect(mockPvm.setCachedViewLimit).not.toHaveBeenCalled();
   });
 
   it("setCachedProjectViews calls projectViewManager.setCachedViewLimit", async () => {

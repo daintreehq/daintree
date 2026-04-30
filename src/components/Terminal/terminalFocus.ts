@@ -1,13 +1,32 @@
 export type TerminalFocusTarget = "hybridInput" | "xterm";
 
+export function shouldShowHybridInputBar(options: {
+  hasAgentIdentity: boolean;
+  hybridInputEnabled: boolean;
+  isFleetArmed: boolean;
+  fleetSize: number;
+}): boolean {
+  return (
+    options.hybridInputEnabled &&
+    (options.hasAgentIdentity || (options.isFleetArmed && options.fleetSize >= 2))
+  );
+}
+
+/**
+ * Resolve which child component should receive focus when the terminal pane
+ * gains focus.
+ *
+ * The HybridInputBar can render for live agent terminals and for normal
+ * terminals that are temporarily participating in a Fleet broadcast.
+ */
 export function getTerminalFocusTarget(options: {
-  isAgentTerminal: boolean;
+  hasHybridInputSurface: boolean;
   isInputDisabled: boolean;
   hybridInputEnabled: boolean;
   hybridInputAutoFocus: boolean;
 }): TerminalFocusTarget {
   if (
-    options.isAgentTerminal &&
+    options.hasHybridInputSurface &&
     !options.isInputDisabled &&
     options.hybridInputEnabled &&
     options.hybridInputAutoFocus

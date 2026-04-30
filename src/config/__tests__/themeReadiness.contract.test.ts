@@ -12,7 +12,6 @@ const CRITICAL_THEME_FILES = [
   "src/components/Browser/ConsolePanel.tsx",
   "src/components/DevPreview/ConsoleDrawer.tsx",
   "src/components/DevPreview/DevPreviewPane.tsx",
-  "src/components/DevPreview/DevPreviewToolbar.tsx",
   "src/components/Layout/Toolbar.tsx",
   "src/components/Project/ProjectSwitcher.tsx",
   "src/components/Project/QuickRun.tsx",

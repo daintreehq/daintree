@@ -312,4 +312,102 @@ describe("DiagnosticsCollector adversarial", () => {
       "https://<redacted>@example.com/private"
     );
   });
+
+  it("FREE_TEXT_GITHUB_PAT_SCRUBBED_IN_LOG_MESSAGE", async () => {
+    shared.logEntries = [
+      {
+        level: "error",
+        message: "git clone failed with token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456",
+        timestamp: 1,
+      },
+    ];
+
+    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+      logs: { recentEntries: Array<{ message: string }> };
+    };
+
+    const msg = payload.logs.recentEntries[0]?.message ?? "";
+    expect(msg).not.toContain("ghp_");
+    expect(msg).toContain("[REDACTED]");
+  });
+
+  it("FREE_TEXT_JWT_AND_BEARER_SCRUBBED_IN_NESTED_CONTEXT", async () => {
+    const jwt = `eyJ${"a".repeat(20)}.${"b".repeat(20)}.${"c".repeat(40)}`;
+    shared.logEntries = [
+      {
+        level: "warn",
+        message: "auth failure",
+        timestamp: 2,
+        context: {
+          // `authorization` key name is caught by SENSITIVE_KEY_PATTERN — the
+          // whole value becomes `<redacted>` via key-based redaction.
+          requestHeaders: {
+            authorization: "Bearer abcdefghij.klmnop-qr_st=",
+          },
+          // `responseBody` is a safe key name, so its value is a free-text
+          // string that only the new scrubber can catch. Also embed a Bearer
+          // header shape here so the scrubber's Bearer pattern is exercised.
+          responseBody: `{"token":"${jwt}","echo":"Authorization: Bearer abcdefghij.klmnop-qr_st="}`,
+        },
+      },
+    ];
+
+    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+      logs: {
+        recentEntries: Array<{
+          context?: {
+            requestHeaders?: { authorization?: string };
+            responseBody?: string;
+          };
+        }>;
+      };
+    };
+
+    expect(payload.logs.recentEntries[0]?.context?.requestHeaders?.authorization).toBe(
+      "<redacted>"
+    );
+    const body = payload.logs.recentEntries[0]?.context?.responseBody ?? "";
+    expect(body).not.toContain(jwt);
+    expect(body).not.toContain("eyJ");
+    expect(body).not.toMatch(/Bearer [A-Za-z0-9]/);
+    expect(body).toContain("[REDACTED]");
+  });
+
+  it("FREE_TEXT_AWS_KEY_SCRUBBED_IN_LOG_MESSAGE", async () => {
+    shared.logEntries = [
+      {
+        level: "info",
+        message: "envrc loaded: AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
+        timestamp: 3,
+      },
+    ];
+
+    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+      logs: { recentEntries: Array<{ message: string }> };
+    };
+
+    const msg = payload.logs.recentEntries[0]?.message ?? "";
+    expect(msg).not.toContain("AKIAIOSFODNN7EXAMPLE");
+    expect(msg).toContain("[REDACTED]");
+  });
+
+  it("FREE_TEXT_PEM_BLOCK_SCRUBBED", async () => {
+    shared.logEntries = [
+      {
+        level: "error",
+        message:
+          "config dump: -----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY----- end",
+        timestamp: 4,
+      },
+    ];
+
+    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+      logs: { recentEntries: Array<{ message: string }> };
+    };
+
+    const msg = payload.logs.recentEntries[0]?.message ?? "";
+    expect(msg).not.toContain("BEGIN RSA PRIVATE KEY");
+    expect(msg).not.toContain("MIIEpAIBAAKCAQEA");
+    expect(msg).toContain("[REDACTED]");
+  });
 });

@@ -9,7 +9,11 @@ function createMockAudioContext() {
   const mockResume = vi.fn().mockResolvedValue(undefined);
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockDecodeAudioData = vi.fn();
-  const sources: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
+  const sources: Array<{
+    stop: ReturnType<typeof vi.fn>;
+    detune: { value: number };
+    detuneAtStart: number | null;
+  }> = [];
 
   let state = "running";
 
@@ -24,8 +28,13 @@ function createMockAudioContext() {
     createBufferSource: vi.fn(() => {
       const source = {
         buffer: null as AudioBuffer | null,
+        detune: { value: 0 },
+        detuneAtStart: null as number | null,
         connect: mockConnect,
-        start: mockStart,
+        start: (when?: number) => {
+          source.detuneAtStart = source.detune.value;
+          mockStart(when);
+        },
         stop: vi.fn(),
         onended: null as (() => void) | null,
       };
@@ -107,7 +116,7 @@ describe("WebAudioService", () => {
     await service.playSound("chime.wav");
     service.cancelSound();
 
-    expect(sources[0].stop).toHaveBeenCalled();
+    expect(sources[0]!.stop).toHaveBeenCalled();
   });
 
   it("handles fetch failure gracefully", async () => {
@@ -128,6 +137,36 @@ describe("WebAudioService", () => {
     await service.playSound("resume-test.wav");
 
     expect(mockResume).toHaveBeenCalled();
+  });
+
+  it("applies detune to the source before start when provided", async () => {
+    const { service, mockSuccessfulFetch, sources, mockStart } = await setupTest();
+    mockSuccessfulFetch();
+
+    await service.playSound("pulse.wav", 12);
+
+    // Snapshot captured at start() proves detune was assigned BEFORE start,
+    // not after — the entire premise of this feature.
+    expect(sources[0]!.detuneAtStart).toBe(12);
+    expect(mockStart).toHaveBeenCalledWith(0);
+  });
+
+  it("leaves detune at default (0) when no detune argument is passed", async () => {
+    const { service, mockSuccessfulFetch, sources } = await setupTest();
+    mockSuccessfulFetch();
+
+    await service.playSound("chime.wav");
+
+    expect(sources[0]!.detuneAtStart).toBe(0);
+  });
+
+  it("respects an explicit detune of 0 (does not drop via truthiness)", async () => {
+    const { service, mockSuccessfulFetch, sources } = await setupTest();
+    mockSuccessfulFetch();
+
+    await service.playSound("pulse.wav", 0);
+
+    expect(sources[0]!.detuneAtStart).toBe(0);
   });
 
   it("dispose closes the AudioContext", async () => {

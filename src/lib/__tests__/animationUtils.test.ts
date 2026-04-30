@@ -1,28 +1,45 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  DURATION_75,
+  DURATION_100,
+  DURATION_150,
+  DURATION_200,
+  DURATION_250,
+  DURATION_300,
+  EASE_OUT_EXPO,
+  EASE_SNAPPY,
+  EASE_SPRING_CRITICAL,
   getPanelTransitionDuration,
+  getUiAnimationDuration,
   getUiTransitionDuration,
   PANEL_MINIMIZE_DURATION,
   PANEL_RESTORE_DURATION,
+  UI_ANIMATION_DURATION,
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
   UI_ENTER_EASING,
   UI_EXIT_EASING,
 } from "../animationUtils";
 
+describe("motion token constants", () => {
+  it("exposes the 75–300ms duration scale", () => {
+    expect(DURATION_75).toBe(75);
+    expect(DURATION_100).toBe(100);
+    expect(DURATION_150).toBe(150);
+    expect(DURATION_200).toBe(200);
+    expect(DURATION_250).toBe(250);
+    expect(DURATION_300).toBe(300);
+  });
+
+  it("exposes semantic easing tokens as valid CSS strings", () => {
+    expect(EASE_SNAPPY).toMatch(/^cubic-bezier\(/);
+    expect(EASE_OUT_EXPO).toMatch(/^cubic-bezier\(/);
+    expect(EASE_SPRING_CRITICAL).toMatch(/^linear\(/);
+  });
+});
+
 describe("getPanelTransitionDuration", () => {
-  let matchMediaSpy: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    matchMediaSpy = vi.fn().mockReturnValue({ matches: false });
-    vi.stubGlobal("matchMedia", matchMediaSpy);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it("returns 120ms for minimize direction", () => {
     expect(getPanelTransitionDuration("minimize")).toBe(PANEL_MINIMIZE_DURATION);
     expect(getPanelTransitionDuration("minimize")).toBe(120);
@@ -33,16 +50,18 @@ describe("getPanelTransitionDuration", () => {
     expect(getPanelTransitionDuration("restore")).toBe(200);
   });
 
-  it("returns 0 for both directions when prefers-reduced-motion is active", () => {
-    matchMediaSpy.mockReturnValue({ matches: true });
+  it("ignores prefers-reduced-motion — CSS owns reduced-motion, not JS timers", () => {
+    // WCAG 2.2 SC 2.3.3: remove motion via component-level @media overrides,
+    // don't zero out the duration (that produces a spatial jump).
+    const matchMediaSpy = vi.fn().mockReturnValue({ matches: true });
+    vi.stubGlobal("matchMedia", matchMediaSpy);
 
-    expect(getPanelTransitionDuration("minimize")).toBe(0);
-    expect(getPanelTransitionDuration("restore")).toBe(0);
-  });
-
-  it("queries the correct media query", () => {
-    getPanelTransitionDuration("minimize");
-    expect(matchMediaSpy).toHaveBeenCalledWith("(prefers-reduced-motion: reduce)");
+    try {
+      expect(getPanelTransitionDuration("minimize")).toBe(120);
+      expect(getPanelTransitionDuration("restore")).toBe(200);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -67,16 +86,36 @@ describe("getUiTransitionDuration", () => {
     expect(getUiTransitionDuration("exit")).toBe(120);
   });
 
-  it("returns 0 when prefers-reduced-motion is active", () => {
+  it("still returns the full duration when prefers-reduced-motion is active", () => {
     matchMediaSpy.mockReturnValue({ matches: true });
+    expect(getUiTransitionDuration("enter")).toBe(200);
+    expect(getUiTransitionDuration("exit")).toBe(120);
+  });
+
+  it("returns 0 when performance mode is active (skip-timer signal)", () => {
+    document.body.dataset.performanceMode = "true";
     expect(getUiTransitionDuration("enter")).toBe(0);
     expect(getUiTransitionDuration("exit")).toBe(0);
+  });
+});
+
+describe("getUiAnimationDuration", () => {
+  beforeEach(() => {
+    document.body.dataset.performanceMode = "false";
+  });
+
+  afterEach(() => {
+    delete document.body.dataset.performanceMode;
+  });
+
+  it("returns the UI animation token regardless of prefers-reduced-motion", () => {
+    expect(getUiAnimationDuration()).toBe(UI_ANIMATION_DURATION);
+    expect(getUiAnimationDuration()).toBe(150);
   });
 
   it("returns 0 when performance mode is active", () => {
     document.body.dataset.performanceMode = "true";
-    expect(getUiTransitionDuration("enter")).toBe(0);
-    expect(getUiTransitionDuration("exit")).toBe(0);
+    expect(getUiAnimationDuration()).toBe(0);
   });
 });
 

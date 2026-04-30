@@ -135,8 +135,8 @@ describe("agentInstall", () => {
       const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const blocks = getInstallBlocksForCurrentOS(mockAgent);
       expect(blocks).toHaveLength(1);
-      expect(blocks?.[0].label).toBe("Homebrew");
-      expect(blocks?.[0].commands).toEqual(["brew install test"]);
+      expect(blocks?.[0]!.label).toBe("Homebrew");
+      expect(blocks?.[0]!.commands).toEqual(["brew install test"]);
     });
 
     it("should return Windows blocks on Windows", async () => {
@@ -144,8 +144,8 @@ describe("agentInstall", () => {
       const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const blocks = getInstallBlocksForCurrentOS(mockAgent);
       expect(blocks).toHaveLength(1);
-      expect(blocks?.[0].label).toBe("npm");
-      expect(blocks?.[0].commands).toEqual(["npm install -g test"]);
+      expect(blocks?.[0]!.label).toBe("npm");
+      expect(blocks?.[0]!.commands).toEqual(["npm install -g test"]);
     });
 
     it("should return Linux blocks on Linux", async () => {
@@ -156,8 +156,8 @@ describe("agentInstall", () => {
       const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const blocks = getInstallBlocksForCurrentOS(mockAgent);
       expect(blocks).toHaveLength(1);
-      expect(blocks?.[0].label).toBe("apt");
-      expect(blocks?.[0].commands).toEqual(["apt install test"]);
+      expect(blocks?.[0]!.label).toBe("apt");
+      expect(blocks?.[0]!.commands).toEqual(["apt install test"]);
     });
 
     it("should fallback to generic blocks if OS-specific blocks not available", async () => {
@@ -182,7 +182,7 @@ describe("agentInstall", () => {
       };
       const blocks = getInstallBlocksForCurrentOS(agentWithoutMacOS);
       expect(blocks).toHaveLength(1);
-      expect(blocks?.[0].label).toBe("Generic");
+      expect(blocks?.[0]!.label).toBe("Generic");
     });
 
     it("should return null if no install config", async () => {
@@ -263,8 +263,8 @@ describe("agentInstall", () => {
       };
       const blocks = getInstallBlocksForCurrentOS(agentWithMultipleBlocks);
       expect(blocks).toHaveLength(2);
-      expect(blocks?.[0].label).toBe("Homebrew");
-      expect(blocks?.[1].label).toBe("npm");
+      expect(blocks?.[0]!.label).toBe("Homebrew");
+      expect(blocks?.[1]!.label).toBe("npm");
     });
 
     it("should prioritize OS-specific blocks over generic", async () => {
@@ -295,7 +295,7 @@ describe("agentInstall", () => {
       };
       const blocks = getInstallBlocksForCurrentOS(agentWithBoth);
       expect(blocks).toHaveLength(1);
-      expect(blocks?.[0].label).toBe("Homebrew");
+      expect(blocks?.[0]!.label).toBe("Homebrew");
     });
 
     it("should fallback to generic when OS-specific array is empty", async () => {
@@ -321,7 +321,7 @@ describe("agentInstall", () => {
       };
       const blocks = getInstallBlocksForCurrentOS(agentWithEmptyMacOS);
       expect(blocks).toHaveLength(1);
-      expect(blocks?.[0].label).toBe("Generic");
+      expect(blocks?.[0]!.label).toBe("Generic");
     });
   });
 

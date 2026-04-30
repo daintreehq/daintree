@@ -2,7 +2,7 @@ import type { StateCreator } from "zustand";
 import type { TerminalInstance } from "./panelRegistrySlice";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isAgentTerminal } from "@/utils/terminalType";
+import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 
 export type NavigationDirection = "up" | "down" | "left" | "right";
 
@@ -24,6 +24,45 @@ function isTerminalVisible(
   return true;
 }
 
+// Walk the visible terminal list from the currently focused position, advancing
+// in `direction` and returning the first terminal that satisfies `predicate`.
+// Anchoring on the *visible* list (not the predicate-filtered subset) preserves
+// spatial memory: if focus is on a non-matching terminal between matches,
+// "next" lands on the next match after that position rather than resetting to
+// index 0 — and stays robust when an agent's state changes between presses.
+function cycleToMatch(
+  terminals: TerminalInstance[],
+  focusedId: string | null,
+  isInTrash: (id: string) => boolean,
+  validWorktreeIds: Set<string>,
+  predicate: (t: TerminalInstance) => boolean,
+  direction: "next" | "prev"
+): TerminalInstance | undefined {
+  const visibleList = terminals.filter((t) => isTerminalVisible(t, isInTrash, validWorktreeIds));
+  const len = visibleList.length;
+  if (len === 0) return undefined;
+
+  const focusedIndex = focusedId ? visibleList.findIndex((t) => t.id === focusedId) : -1;
+  const step = direction === "next" ? 1 : -1;
+  const start =
+    focusedIndex === -1 ? (direction === "next" ? 0 : len - 1) : (focusedIndex + step + len) % len;
+
+  for (let i = 0; i < len; i++) {
+    const idx = (start + i * step + len) % len;
+    const candidate = visibleList[idx]!;
+    if (predicate(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+function isOpenableDockTerminal(
+  terminal: TerminalInstance | undefined
+): terminal is TerminalInstance {
+  if (!terminal) return false;
+  if (terminal.location !== "dock") return false;
+  return true;
+}
+
 interface PreMaximizeLayoutSnapshot {
   gridCols: number;
   gridItemCount: number;
@@ -34,6 +73,14 @@ export type MaximizeTarget = { type: "panel"; id: string } | { type: "group"; id
 
 export interface TerminalFocusSlice {
   focusedId: string | null;
+  /**
+   * Most recent panel that held focus before `focusedId`. Used by
+   * `focusAlternate` for tmux-style A↔B toggling. Updated atomically alongside
+   * `focusedId` only when the focused panel actually changes — re-focusing the
+   * already-active panel must not corrupt the toggle. Cleared when the
+   * referenced panel is removed or when focus state is reset.
+   */
+  previousFocusedId: string | null;
   maximizedId: string | null;
   /** Tracks whether maximize is for a single panel or a tab group */
   maximizeTarget: MaximizeTarget;
@@ -59,6 +106,11 @@ export interface TerminalFocusSlice {
   clearPreMaximizeLayout: () => void;
   focusNext: () => void;
   focusPrevious: () => void;
+  /**
+   * Toggles focus between the current panel and the previously focused panel
+   * (tmux `last-pane` semantics). No-op when no valid alternate exists.
+   */
+  focusAlternate: () => void;
   focusDirection: (
     direction: NavigationDirection,
     findNearest: (id: string, dir: NavigationDirection) => string | null
@@ -72,7 +124,7 @@ export interface TerminalFocusSlice {
   // Dock terminal activation
   openDockTerminal: (id: string) => void;
   closeDockTerminal: () => void;
-  activateTerminal: (id: string) => void;
+  activateTerminal: (id: string | null) => void;
 
   // Agent state navigation
   focusNextWaiting: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
@@ -104,6 +156,7 @@ export const createTerminalFocusSlice =
 
     return {
       focusedId: null,
+      previousFocusedId: null,
       maximizedId: null,
       maximizeTarget: null,
       activeDockTerminalId: null,
@@ -111,18 +164,30 @@ export const createTerminalFocusSlice =
       preMaximizeLayout: null,
       setFocused: (id, shouldPing = false) => {
         if (id) {
+          const previousFocusedId = get().focusedId;
+          const focusActuallyChanged = id !== previousFocusedId;
           const terminal = getTerminals().find((t) => t.id === id);
           if (terminal?.location === "dock") {
-            set({ focusedId: id, activeDockTerminalId: id });
+            set({
+              focusedId: id,
+              activeDockTerminalId: id,
+              ...(focusActuallyChanged && { previousFocusedId }),
+            });
           } else {
-            set({ focusedId: id, activeDockTerminalId: null });
+            set({
+              focusedId: id,
+              activeDockTerminalId: null,
+              ...(focusActuallyChanged && { previousFocusedId }),
+            });
           }
           // Wake-on-focus: sync terminal state from backend when focused.
           // Skip wake for non-PTY panels - they don't have backend PTY processes.
           if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
             terminalInstanceService.wake(id);
           }
-          if (shouldPing) {
+          // Only ping when selection actually changes — re-focusing the already
+          // selected terminal should be a no-op visually (no 1.6s ping loop).
+          if (shouldPing && focusActuallyChanged) {
             get().pingTerminal(id);
           }
         } else {
@@ -271,7 +336,7 @@ export const createTerminalFocusSlice =
         const { focusedId, activateTerminal } = get();
         const currentIndex = focusedId ? cycleList.findIndex((t) => t.id === focusedId) : -1;
         const nextIndex = (currentIndex + 1) % cycleList.length;
-        activateTerminal(cycleList[nextIndex].id);
+        activateTerminal(cycleList[nextIndex]!.id);
       },
 
       focusPrevious: () => {
@@ -290,7 +355,7 @@ export const createTerminalFocusSlice =
         const { focusedId, activateTerminal } = get();
         const currentIndex = focusedId ? cycleList.findIndex((t) => t.id === focusedId) : 0;
         const prevIndex = currentIndex <= 0 ? cycleList.length - 1 : currentIndex - 1;
-        activateTerminal(cycleList[prevIndex].id);
+        activateTerminal(cycleList[prevIndex]!.id);
       },
 
       focusDirection: (direction, findNearest) => {
@@ -321,6 +386,16 @@ export const createTerminalFocusSlice =
       openDockTerminal: (id) => {
         // Skip wake for non-PTY panels - they don't have backend PTY processes.
         const terminal = getTerminals().find((t) => t.id === id);
+        if (!isOpenableDockTerminal(terminal)) {
+          set((state) => {
+            if (state.activeDockTerminalId === null && state.focusedId !== id) return state;
+            return {
+              activeDockTerminalId: null,
+              focusedId: state.focusedId === id ? null : state.focusedId,
+            };
+          });
+          return;
+        }
         if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
           terminalInstanceService.wake(id);
         }
@@ -330,12 +405,22 @@ export const createTerminalFocusSlice =
         if (terminal?.agentState === "working") {
           window.electron?.notification?.acknowledgeWorkingPulse(id);
         }
-        set({ activeDockTerminalId: id, focusedId: id });
+        const previousFocusedId = get().focusedId;
+        const focusActuallyChanged = id !== previousFocusedId;
+        set({
+          activeDockTerminalId: id,
+          focusedId: id,
+          ...(focusActuallyChanged && { previousFocusedId }),
+        });
       },
 
       closeDockTerminal: () => set({ activeDockTerminalId: null }),
 
       activateTerminal: (id) => {
+        if (!id) {
+          set({ focusedId: null });
+          return;
+        }
         const terminals = getTerminals();
         const terminal = terminals.find((t) => t.id === id);
         if (!terminal) return;
@@ -346,6 +431,9 @@ export const createTerminalFocusSlice =
           terminalInstanceService.wake(id);
         }
 
+        const previousFocusedId = get().focusedId;
+        const focusActuallyChanged = id !== previousFocusedId;
+
         if (terminal.location === "dock") {
           if (terminal.agentState === "waiting") {
             window.electron?.notification?.acknowledgeWaiting(id);
@@ -353,106 +441,95 @@ export const createTerminalFocusSlice =
           if (terminal.agentState === "working") {
             window.electron?.notification?.acknowledgeWorkingPulse(id);
           }
-          set({ activeDockTerminalId: id, focusedId: id });
+          set({
+            activeDockTerminalId: id,
+            focusedId: id,
+            ...(focusActuallyChanged && { previousFocusedId }),
+          });
         } else {
-          set({ focusedId: id, activeDockTerminalId: null });
+          set({
+            focusedId: id,
+            activeDockTerminalId: null,
+            ...(focusActuallyChanged && { previousFocusedId }),
+          });
         }
       },
 
+      focusAlternate: () => {
+        const { previousFocusedId, focusedId, activateTerminal } = get();
+        if (!previousFocusedId || previousFocusedId === focusedId) return;
+        const target = getTerminals().find((t) => t.id === previousFocusedId);
+        if (!target) return;
+        // Skip targets that are no longer reachable: trashed panels are
+        // pending TTL cleanup and background panels are hibernated mirrors,
+        // not user-visible. Activating either would surface a panel the user
+        // didn't expect or fail outright.
+        if (target.location === "trash" || target.location === "background") return;
+        activateTerminal(previousFocusedId);
+      },
+
       focusNextWaiting: (isInTrash, validWorktreeIds) => {
-        const terminals = getTerminals();
         const { focusedId, activateTerminal, pingTerminal } = get();
-
-        // Find all waiting terminals excluding trash and orphaned
-        const waitingTerminals = terminals.filter(
-          (t) => t.agentState === "waiting" && isTerminalVisible(t, isInTrash, validWorktreeIds)
+        const next = cycleToMatch(
+          getTerminals(),
+          focusedId,
+          isInTrash,
+          validWorktreeIds,
+          (t) => t.agentState === "waiting",
+          "next"
         );
-
-        if (waitingTerminals.length === 0) return;
-
-        // Find current index in waiting list
-        const currentIndex = waitingTerminals.findIndex((t) => t.id === focusedId);
-
-        // Calculate next index with wrap-around
-        const nextIndex = (currentIndex + 1) % waitingTerminals.length;
-        const nextTerminal = waitingTerminals[nextIndex];
-
-        // Activate and ping the terminal for visual feedback
-        activateTerminal(nextTerminal.id);
-        pingTerminal(nextTerminal.id);
+        if (!next) return;
+        activateTerminal(next.id);
+        pingTerminal(next.id);
       },
 
       focusNextWorking: (isInTrash, validWorktreeIds) => {
-        const terminals = getTerminals();
         const { focusedId, activateTerminal, pingTerminal } = get();
-
-        // Find all working terminals excluding trash and orphaned
-        const workingTerminals = terminals.filter(
-          (t) => t.agentState === "working" && isTerminalVisible(t, isInTrash, validWorktreeIds)
+        const next = cycleToMatch(
+          getTerminals(),
+          focusedId,
+          isInTrash,
+          validWorktreeIds,
+          (t) => t.agentState === "working",
+          "next"
         );
-
-        if (workingTerminals.length === 0) return;
-
-        // Find current index in working list
-        const currentIndex = workingTerminals.findIndex((t) => t.id === focusedId);
-
-        // Calculate next index with wrap-around
-        const nextIndex = (currentIndex + 1) % workingTerminals.length;
-        const nextTerminal = workingTerminals[nextIndex];
-
-        // Activate and ping the terminal for visual feedback
-        activateTerminal(nextTerminal.id);
-        pingTerminal(nextTerminal.id);
+        if (!next) return;
+        activateTerminal(next.id);
+        pingTerminal(next.id);
       },
 
       focusNextAgent: (isInTrash, validWorktreeIds) => {
-        const terminals = getTerminals();
+        // Uses runtime identity so ex-agent panels are excluded and promoted shells
+        // with a detected agent are included.
         const { focusedId, activateTerminal, pingTerminal } = get();
-
-        // Find all agent terminals excluding trash and orphaned
-        const agentTerminals = terminals.filter(
-          (t) =>
-            isAgentTerminal(t.kind ?? t.type, t.agentId) &&
-            isTerminalVisible(t, isInTrash, validWorktreeIds)
+        const next = cycleToMatch(
+          getTerminals(),
+          focusedId,
+          isInTrash,
+          validWorktreeIds,
+          isRuntimeAgentTerminal,
+          "next"
         );
-
-        if (agentTerminals.length === 0) return;
-
-        // Find current index in agent list
-        const currentIndex = agentTerminals.findIndex((t) => t.id === focusedId);
-
-        // Calculate next index with wrap-around
-        const nextIndex = (currentIndex + 1) % agentTerminals.length;
-        const nextTerminal = agentTerminals[nextIndex];
-
-        // Activate and ping the terminal for visual feedback
-        activateTerminal(nextTerminal.id);
-        pingTerminal(nextTerminal.id);
+        if (!next) return;
+        activateTerminal(next.id);
+        pingTerminal(next.id);
       },
 
       focusPreviousAgent: (isInTrash, validWorktreeIds) => {
-        const terminals = getTerminals();
+        // Uses runtime identity so ex-agent panels are excluded and promoted shells
+        // with a detected agent are included.
         const { focusedId, activateTerminal, pingTerminal } = get();
-
-        // Find all agent terminals excluding trash and orphaned
-        const agentTerminals = terminals.filter(
-          (t) =>
-            isAgentTerminal(t.kind ?? t.type, t.agentId) &&
-            isTerminalVisible(t, isInTrash, validWorktreeIds)
+        const prev = cycleToMatch(
+          getTerminals(),
+          focusedId,
+          isInTrash,
+          validWorktreeIds,
+          isRuntimeAgentTerminal,
+          "prev"
         );
-
-        if (agentTerminals.length === 0) return;
-
-        // Find current index in agent list
-        const currentIndex = agentTerminals.findIndex((t) => t.id === focusedId);
-
-        // Calculate previous index with wrap-around
-        const prevIndex = currentIndex <= 0 ? agentTerminals.length - 1 : currentIndex - 1;
-        const prevTerminal = agentTerminals[prevIndex];
-
-        // Activate and ping the terminal for visual feedback
-        activateTerminal(prevTerminal.id);
-        pingTerminal(prevTerminal.id);
+        if (!prev) return;
+        activateTerminal(prev.id);
+        pingTerminal(prev.id);
       },
 
       focusNextBlockedDock: (activeWorktreeId, getPanelGroup) => {
@@ -475,7 +552,7 @@ export const createTerminalFocusSlice =
 
         const currentIndex = sorted.findIndex((t) => t.id === activeDockTerminalId);
         const nextIndex = (currentIndex + 1) % sorted.length;
-        const nextTerminal = sorted[nextIndex];
+        const nextTerminal = sorted[nextIndex]!;
 
         // Activate the correct tab in the group before opening the dock popover
         if (getPanelGroup) {
@@ -525,6 +602,12 @@ export const createTerminalFocusSlice =
             } else {
               updates.focusedId = null;
             }
+            // Auto-fallback focus is not a user navigation event, so the round-
+            // trip semantic doesn't apply — clear the alternate pointer rather
+            // than letting it point at a panel that wasn't the user's previous.
+            updates.previousFocusedId = null;
+          } else if (state.previousFocusedId === removedId) {
+            updates.previousFocusedId = null;
           }
 
           // Clear maximize state if the removed panel was maximized, or if it was in a maximized group

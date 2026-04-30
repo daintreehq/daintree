@@ -1,7 +1,8 @@
 import type React from "react";
+import { useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
 import type { RetryAction } from "@/store";
-import type { AppError } from "@/store/errorStore";
+import type { ErrorRecord } from "@/store/errorStore";
 import { cn } from "@/lib/utils";
 import { ActivityLight } from "../ActivityLight";
 import { LiveTimeAgo } from "../LiveTimeAgo";
@@ -34,7 +35,7 @@ export interface WorktreeDetailsSectionProps {
   computedSubtitle: ComputedSubtitle;
   effectiveNote?: string;
   effectiveSummary?: string | null;
-  worktreeErrors: AppError[];
+  worktreeErrors: ErrorRecord[];
   isFocused: boolean;
   onToggleExpand: (e: React.MouseEvent) => void;
   onPathClick: () => void;
@@ -83,6 +84,22 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   } = props;
   const detailsId = `worktree-${worktree.id}-details`;
   const detailsPanelId = `worktree-${worktree.id}-details-panel`;
+
+  // One-shot bump on file-count change. Counter increments on every change
+  // and is used as a `key` on the count span so back-to-back updates remount
+  // the node and restart the animation (a plain boolean latch would silently
+  // drop a second update arriving inside the 200ms animation window).
+  // prevRef seeded to current value so mount produces no bump.
+  const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;
+  const prevCountRef = useRef(changedFileCount);
+  const [bumpKey, setBumpKey] = useState(0);
+
+  useEffect(() => {
+    if (prevCountRef.current !== changedFileCount) {
+      prevCountRef.current = changedFileCount;
+      setBumpKey((k) => k + 1);
+    }
+  }, [changedFileCount]);
 
   const rsLower = resourceStatus?.toLowerCase();
   const showResourceResume =
@@ -140,26 +157,28 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
         <div className="-m-3 flex items-stretch">
           <div
             onClick={onToggleExpand}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onToggleExpand(e as unknown as React.MouseEvent);
-              }
-            }}
-            role="button"
-            tabIndex={0}
-            aria-expanded={false}
-            aria-controls={detailsPanelId}
             className={cn(
-              "worktree-section-button flex min-w-0 flex-1 items-center justify-between px-3 py-2.5 text-left transition-colors",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+              "worktree-section-button relative flex min-w-0 flex-1 items-center justify-between px-3 py-2.5 text-left transition-colors",
               onOpenReviewHub && hasChanges
                 ? "rounded-l-[var(--radius-lg)]"
                 : "rounded-[var(--radius-lg)]"
             )}
-            id={`${detailsId}-button`}
           >
-            <span className="text-xs truncate min-w-0 flex-1">
+            <button
+              type="button"
+              aria-expanded={false}
+              aria-controls={detailsPanelId}
+              id={`${detailsId}-button`}
+              aria-label="Show details"
+              className={cn(
+                "absolute inset-0",
+                onOpenReviewHub && hasChanges
+                  ? "rounded-l-[var(--radius-lg)]"
+                  : "rounded-[var(--radius-lg)]",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+              )}
+            />
+            <span className="relative z-10 text-xs truncate min-w-0 flex-1 pointer-events-none">
               {isLifecycleRunning && lifecycleLabel ? (
                 <span className="flex items-center gap-1.5 text-text-secondary">
                   <Spinner size="xs" className="shrink-0" />
@@ -171,7 +190,10 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 <span className="text-status-error">{lifecycleLabel}</span>
               ) : hasChanges && worktree.worktreeChanges ? (
                 <span className="flex items-center gap-1.5 text-text-secondary">
-                  <span>
+                  <span
+                    key={bumpKey}
+                    className={cn("inline-block", bumpKey > 0 && "animate-badge-bump")}
+                  >
                     {worktree.worktreeChanges.changedFileCount} file
                     {worktree.worktreeChanges.changedFileCount !== 1 ? "s" : ""}
                   </span>
@@ -255,7 +277,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
 
             {hasResourceConfig &&
               (showResourceResume || showResourcePause || showResourceConnect) && (
-                <span className="ml-1 inline-flex shrink-0 items-center gap-0.5">
+                <span className="relative z-10 ml-1 inline-flex shrink-0 items-center gap-0.5">
                   {showResourceResume && onResourceResume && (
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -264,7 +286,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                             e.stopPropagation();
                             onResourceResume();
                           }}
-                          className="shrink-0 p-1 rounded transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                          className="shrink-0 p-1 rounded transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                           aria-label="Resume Resource"
                         >
                           <Play className="w-3 h-3" />
@@ -281,7 +303,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                             e.stopPropagation();
                             onResourcePause();
                           }}
-                          className="shrink-0 p-1 rounded transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                          className="shrink-0 p-1 rounded transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                           aria-label="Pause Resource"
                         >
                           <Square className="w-3 h-3" />
@@ -298,7 +320,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                             e.stopPropagation();
                             onResourceConnect!();
                           }}
-                          className="shrink-0 p-1 rounded transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                          className="shrink-0 p-1 rounded transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                           aria-label="Connect to Resource"
                         >
                           <Plug className="w-3 h-3" />
@@ -312,7 +334,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
 
             <Tooltip>
               <TooltipTrigger asChild>
-                <div className="ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
+                <div className="relative z-10 ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
                   <ActivityLight
                     lastActivityTimestamp={worktree.lastActivityTimestamp}
                     className="w-1.5 h-1.5"
@@ -337,7 +359,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     "shrink-0 border-l border-border-default px-2 py-1 transition-colors",
                     "text-[var(--color-state-active)]/70 hover:bg-[var(--color-state-active)]/10 hover:text-[var(--color-state-active)]",
                     "rounded-r-[var(--radius-lg)]",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                    "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                   )}
                   aria-label="Open Review & Commit"
                 >

@@ -6,7 +6,7 @@
 
 Daintree is a desktop environment where multiple AI agents work side by side — isolated, observable, and under your control. Instead of juggling terminal windows and manually wiring context between tools, Daintree gives your agents a stable place to run while you focus on reviewing their work.
 
-It works with any CLI agent — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex](https://github.com/openai/codex), [OpenCode](https://github.com/anomalyco/opencode), [Cursor Agent](https://docs.cursor.com/agent), [Kiro CLI](https://kiro.dev/docs/cli/chat/) — and stays out of the way.
+It ships with deep, opinionated support for 15 CLI agents — [Claude Code](https://github.com/anthropics/claude-code), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai/docs/), [Cursor Agent](https://cursor.com/features/cursor-agent), [Kiro](https://kiro.dev/cli/), [GitHub Copilot CLI](https://github.com/github/copilot-cli), [Goose](https://block.github.io/goose/), [Crush](https://github.com/charmbracelet/crush), [Qwen Code](https://github.com/QwenLM/qwen-code), [Open Interpreter](https://docs.openinterpreter.com/), [Mistral Vibe](https://github.com/mistralai/mistral-vibe), [Kimi Code](https://github.com/MoonshotAI/kimi-cli), [Amp](https://ampcode.com/manual), and [Aider](https://aider.chat/) — and stays out of the way.
 
 ---
 
@@ -123,15 +123,40 @@ Daintree works immediately for terminal management. For AI features, open **Sett
 
 ### Install Agent CLIs
 
-Daintree works with any agent you have installed:
+Daintree works with any agent you have installed. The Settings → Agents tab lists every supported agent with a one-click installer for your platform; the commands below are the canonical recipes for reference.
+
+**npm (cross-platform):**
 
 ```bash
 npm install -g @anthropic-ai/claude-code    # Claude Code
 npm install -g @google/gemini-cli           # Gemini CLI
-npm install -g @openai/codex                # Codex CLI
+npm install -g @openai/codex                # Codex
 npm install -g opencode-ai@latest           # OpenCode
-npm install -g @anthropic-ai/cursor-agent   # Cursor Agent
-curl -fsSL https://cli.kiro.dev/install | bash  # Kiro CLI (macOS/Linux)
+npm install -g @github/copilot              # GitHub Copilot CLI
+npm install -g @qwen-code/qwen-code         # Qwen Code
+npm install -g @sourcegraph/amp             # Amp
+```
+
+**Shell installer (macOS/Linux):**
+
+```bash
+curl https://cursor.com/install -fsS | bash                                                     # Cursor Agent
+curl -fsSL https://cli.kiro.dev/install | bash                                                  # Kiro
+curl -fsSL https://opencode.ai/install | bash                                                   # OpenCode
+curl -fsSL https://ampcode.com/install.sh | bash                                                # Amp
+curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash       # Goose
+curl -LsSf https://mistral.ai/vibe/install.sh | bash                                            # Mistral Vibe
+curl -LsSf https://aider.chat/install.sh | sh                                                   # Aider
+```
+
+**Other ecosystems:**
+
+```bash
+brew install charmbracelet/tap/crush        # Crush (Homebrew)
+go install github.com/charmbracelet/crush@latest  # Crush (Go)
+uv tool install kimi-cli                    # Kimi Code (uv)
+uv tool install open-interpreter            # Open Interpreter (uv)
+pipx install aider-chat                     # Aider (pipx)
 ```
 
 ---
@@ -226,7 +251,6 @@ daintree/
 │   ├── online/              # 2 tests — agent integration
 │   └── nightly/             # Memory leak detection
 │
-├── demo/                    # Demo recording (Stage DSL + scenes)
 ├── scripts/                 # Build, dev, and perf scripts
 ├── help/                    # Embedded help documentation
 └── docs/                    # Architecture and development docs
@@ -248,4 +272,6 @@ daintree/
 
 ## License
 
-[MIT](LICENSE)
+Daintree is released under the [Apache License 2.0](LICENSE).
+
+The Daintree name and logo are not covered by that license. See [TRADEMARKS.md](TRADEMARKS.md) for the brand and marks policy.

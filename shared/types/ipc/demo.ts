@@ -10,11 +10,6 @@ export interface DemoTypePayload {
   cps?: number;
 }
 
-export interface DemoSetZoomPayload {
-  factor: number;
-  durationMs?: number;
-}
-
 export interface DemoWaitForSelectorPayload {
   selector: string;
   timeoutMs?: number;
@@ -39,9 +34,30 @@ export interface DemoScreenshotResult {
 
 export interface DemoStartCapturePayload {
   fps?: number;
-  maxFrames?: number;
   outputPath: string;
-  preset: DemoEncodePreset;
+}
+
+export interface DemoCaptureChunkPayload {
+  captureId: string;
+  data: Uint8Array;
+}
+
+export interface DemoCaptureStopPayload {
+  captureId: string;
+  frameCount: number;
+  error?: string;
+}
+
+export interface DemoExecStartCapturePayload {
+  captureId: string;
+  requestId: string;
+  fps: number;
+  mimeType: string;
+}
+
+export interface DemoExecStopCapturePayload {
+  captureId: string;
+  requestId: string;
 }
 
 export interface DemoStartCaptureResult {
@@ -57,27 +73,6 @@ export interface DemoCaptureStatus {
   active: boolean;
   frameCount: number;
   outputPath: string | null;
-}
-
-export type DemoEncodePreset = "youtube-4k" | "youtube-1080p" | "web-webm";
-
-export interface DemoEncodePayload {
-  framesDir: string;
-  outputPath: string;
-  preset: DemoEncodePreset;
-  fps?: number;
-}
-
-export interface DemoEncodeProgressEvent {
-  frame: number;
-  fps: number;
-  percentComplete: number;
-  etaSeconds: number;
-}
-
-export interface DemoEncodeResult {
-  outputPath: string;
-  durationMs: number;
 }
 
 export interface DemoScrollPayload {

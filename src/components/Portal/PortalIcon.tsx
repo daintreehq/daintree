@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Globe, Search } from "lucide-react";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { BrandMark } from "@/components/icons";
 
 interface PortalIconProps {
   icon: string;
@@ -31,7 +32,12 @@ export function PortalIcon({ icon, size = "launchpad", url, type }: PortalIconPr
     const config = getAgentConfig(icon);
     if (config) {
       const Icon = config.icon;
-      return <Icon className={iconClass} brandColor={config.color} />;
+      const pixelSize = size === "launchpad" ? 32 : 12;
+      return (
+        <BrandMark brandColor={config.color} size={pixelSize} className={iconClass}>
+          <Icon className={iconClass} brandColor={config.color} />
+        </BrandMark>
+      );
     }
   }
 

@@ -31,6 +31,12 @@ const terminalClientMock = {
 
 const notifyMock = vi.fn().mockReturnValue("");
 
+const actionServiceDispatchMock = vi.fn().mockResolvedValue({ ok: true });
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: actionServiceDispatchMock },
+}));
+
 vi.mock("@/clients", () => ({
   projectClient: projectClientMock,
   appClient: appClientMock,
@@ -65,6 +71,11 @@ vi.mock("../slices", () => ({
 
 const { useProjectStore } = await import("../projectStore");
 
+// Capture original action references once — earlier tests replace them via
+// setState() which is a merge, so functions leak across tests without this.
+const originalAddProjectByPath = useProjectStore.getState().addProjectByPath;
+const originalAddProject = useProjectStore.getState().addProject;
+
 describe("projectStore addProject", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -75,6 +86,8 @@ describe("projectStore addProject", () => {
       error: null,
       gitInitDialogOpen: false,
       gitInitDirectoryPath: null,
+      addProjectByPath: originalAddProjectByPath,
+      addProject: originalAddProject,
     });
   });
 
@@ -140,5 +153,156 @@ describe("projectStore addProject", () => {
     expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo");
     expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
     expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();
+  });
+
+  describe("dubious ownership handling", () => {
+    const markSafeDirectoryMock = vi.fn().mockResolvedValue(undefined);
+
+    beforeEach(() => {
+      markSafeDirectoryMock.mockClear();
+      Object.defineProperty(window, "electron", {
+        value: { git: { markSafeDirectory: markSafeDirectoryMock } },
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    it("shows an actionable toast with Mark as safe and Open logs", async () => {
+      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/dubious-repo");
+      projectClientMock.add.mockRejectedValueOnce(
+        new Error(
+          "Git refused to open this repository due to 'dubious ownership'. Mark it as safe.directory and try again."
+        )
+      );
+
+      await useProjectStore.getState().addProject();
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const payload = notifyMock.mock.calls[0]![0] as {
+        type: string;
+        title: string;
+        duration: number;
+        actions: Array<{ label: string; variant?: string; actionId?: string }>;
+      };
+      expect(payload.type).toBe("error");
+      expect(payload.title).toBe("Repository ownership issue");
+      expect(payload.duration).toBe(0);
+      expect(payload.actions).toHaveLength(2);
+      expect(payload.actions[0]!.label).toBe("Mark as safe");
+      expect(payload.actions[0]!.variant).toBe("primary");
+      expect(payload.actions[1]!.label).toBe("Open logs");
+      expect(payload.actions[1]!.variant).toBe("secondary");
+      expect(payload.actions[1]!.actionId).toBe("errors.openLogs");
+    });
+
+    it("primary action calls markSafeDirectory and retries addProjectByPath", async () => {
+      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/dubious-repo");
+      projectClientMock.add.mockRejectedValueOnce(new Error("detected dubious ownership"));
+
+      await useProjectStore.getState().addProject();
+
+      const payload = notifyMock.mock.calls[0]![0] as {
+        actions: Array<{ onClick: () => void | Promise<void> }>;
+      };
+
+      // Second add (the retry) should succeed
+      projectClientMock.add.mockResolvedValueOnce({
+        id: "proj-1",
+        name: "dubious-repo",
+        path: "/tmp/dubious-repo",
+        emoji: "📁",
+        lastOpened: Date.now(),
+      });
+
+      await payload.actions[0]!.onClick();
+
+      expect(markSafeDirectoryMock).toHaveBeenCalledWith("/tmp/dubious-repo");
+      expect(projectClientMock.add).toHaveBeenCalledTimes(2);
+      expect(projectClientMock.add).toHaveBeenLastCalledWith("/tmp/dubious-repo");
+    });
+
+    it("secondary action dispatches the errors.openLogs action", async () => {
+      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/dubious-repo");
+      projectClientMock.add.mockRejectedValueOnce(
+        new Error("fatal: detected dubious ownership in repository at '/tmp/dubious-repo'")
+      );
+
+      await useProjectStore.getState().addProject();
+
+      const payload = notifyMock.mock.calls[0]![0] as {
+        actions: Array<{ onClick: () => void | Promise<void> }>;
+      };
+      actionServiceDispatchMock.mockClear();
+
+      await payload.actions[1]!.onClick();
+
+      expect(actionServiceDispatchMock).toHaveBeenCalledWith(
+        "errors.openLogs",
+        undefined,
+        expect.objectContaining({ source: "user" })
+      );
+    });
+
+    it("falls back to generic error toast when path is not absolute", async () => {
+      projectClientMock.add.mockRejectedValueOnce(new Error("detected dubious ownership"));
+
+      await useProjectStore.getState().addProjectByPath("relative/path");
+
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Failed to add project" })
+      );
+    });
+
+    it("shows an error toast when markSafeDirectory fails and does not retry", async () => {
+      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/dubious-repo");
+      projectClientMock.add.mockRejectedValueOnce(new Error("detected dubious ownership"));
+      markSafeDirectoryMock.mockRejectedValueOnce(new Error("git binary not on PATH"));
+
+      await useProjectStore.getState().addProject();
+      const payload = notifyMock.mock.calls[0]![0] as {
+        actions: Array<{ onClick: () => void | Promise<void> }>;
+      };
+
+      const addCallsBefore = projectClientMock.add.mock.calls.length;
+      await payload.actions[0]!.onClick();
+
+      expect(markSafeDirectoryMock).toHaveBeenCalledWith("/tmp/dubious-repo");
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          title: "Failed to mark as safe",
+          message: "git binary not on PATH",
+        })
+      );
+      // Retry must NOT happen when the mark-as-safe step failed.
+      expect(projectClientMock.add.mock.calls.length).toBe(addCallsBefore);
+    });
+
+    it("does not re-show the dubious toast when the retry also fails", async () => {
+      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/dubious-repo");
+      // First add: dubious ownership → toast
+      projectClientMock.add.mockRejectedValueOnce(new Error("detected dubious ownership"));
+
+      await useProjectStore.getState().addProject();
+      const payload = notifyMock.mock.calls[0]![0] as {
+        actions: Array<{ onClick: () => void | Promise<void> }>;
+      };
+
+      // Retry add: same dubious error (symlink case) — must NOT show another
+      // "Repository ownership issue" toast; falls through to generic instead.
+      projectClientMock.add.mockRejectedValueOnce(new Error("detected dubious ownership"));
+      notifyMock.mockClear();
+
+      await payload.actions[0]!.onClick();
+
+      const ownershipToasts = notifyMock.mock.calls.filter(
+        (call) => (call[0] as { title?: string }).title === "Repository ownership issue"
+      );
+      expect(ownershipToasts).toHaveLength(0);
+      const genericToasts = notifyMock.mock.calls.filter(
+        (call) => (call[0] as { title?: string }).title === "Failed to add project"
+      );
+      expect(genericToasts.length).toBeGreaterThan(0);
+    });
   });
 });

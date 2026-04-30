@@ -90,7 +90,7 @@ export function useRecipeRunner({
   const focusedItemId = useMemo(() => {
     const flat = getFlatRecipes();
     if (focusedIndex < flat.length) {
-      return `recipe-option-${flat[focusedIndex].id}`;
+      return `recipe-option-${flat[focusedIndex]!.id}`;
     }
     if (focusedIndex === flat.length) {
       return "recipe-option-create";
@@ -192,7 +192,7 @@ export function useRecipeRunner({
         e.preventDefault();
         const flat = getFlatRecipes();
         if (focusedIndex < flat.length) {
-          handleRun(flat[focusedIndex].id);
+          handleRun(flat[focusedIndex]!.id);
         } else {
           handleCreate();
         }
@@ -205,7 +205,7 @@ export function useRecipeRunner({
         e.preventDefault();
         const flat = getFlatRecipes();
         if (focusedIndex < flat.length) {
-          handleEdit(flat[focusedIndex].id);
+          handleEdit(flat[focusedIndex]!.id);
         }
       } else if (e.key === "n" && e.metaKey) {
         e.preventDefault();

@@ -1,10 +1,9 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { getBrandColorHex } from "@/lib/colorUtils";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import type { QuickSwitcherItem as QuickSwitcherItemData } from "@/hooks/useQuickSwitcher";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export interface QuickSwitcherItemProps {
   item: QuickSwitcherItemData;
@@ -38,15 +37,9 @@ export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
     >
       <span className="shrink-0 text-daintree-text/70" aria-hidden="true">
         {item.type === "terminal" ? (
-          <TerminalIcon
-            type={item.terminalType}
-            kind={item.terminalKind}
-            agentId={item.agentId}
-            detectedProcessId={item.detectedProcessId}
-            brandColor={getBrandColorHex(item.agentId ?? item.terminalType)}
-          />
+          <TerminalIcon kind={item.terminalKind} chrome={item.chrome} />
         ) : (
-          <WorktreeIcon className="w-4 h-4" />
+          <FolderGit2 className="w-4 h-4" />
         )}
       </span>
 
@@ -57,22 +50,22 @@ export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
             className={cn(
               "shrink-0 px-1.5 py-0.5 text-xs rounded-[var(--radius-sm)] border",
               item.type === "terminal"
-                ? "bg-daintree-accent/10 text-daintree-accent border-daintree-accent/30"
+                ? "bg-overlay-medium text-daintree-text/70 border-border-strong"
                 : "bg-status-success/10 text-status-success border-status-success/30"
             )}
           >
-            {item.type === "terminal" ? (item.terminalType ?? "terminal") : "worktree"}
+            {item.type === "terminal"
+              ? (item.chrome?.agentId ?? item.chrome?.processId ?? "terminal")
+              : "worktree"}
           </span>
         </div>
         {item.subtitle && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="text-xs text-daintree-text/50 truncate">{item.subtitle}</div>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{item.subtitle}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="text-xs text-daintree-text/50 truncate">{item.subtitle}</div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{item.subtitle}</TooltipContent>
+          </Tooltip>
         )}
       </div>
     </button>

@@ -3,10 +3,9 @@ import React from "react";
 import { render } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("framer-motion", () => ({
-  AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  motion: {
-    div: React.forwardRef((props: Record<string, unknown>, ref: React.Ref<HTMLDivElement>) => {
+vi.mock("framer-motion", () => {
+  const MotionDiv = React.forwardRef(
+    (props: Record<string, unknown>, ref: React.Ref<HTMLDivElement>) => {
       const {
         initial: _initial,
         animate: _animate,
@@ -15,9 +14,17 @@ vi.mock("framer-motion", () => ({
         ...rest
       } = props;
       return <div ref={ref} {...rest} />;
-    }),
-  },
-}));
+    }
+  );
+  return {
+    AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    LazyMotion: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    domAnimation: {},
+    domMax: {},
+    m: { div: MotionDiv },
+    motion: { div: MotionDiv },
+  };
+});
 
 import { CelebrationConfetti } from "../CelebrationConfetti";
 

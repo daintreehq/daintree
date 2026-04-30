@@ -5,8 +5,9 @@
  * Switching projects swaps the visible view (<16ms for cached views).
  */
 
-import { BrowserWindow, WebContentsView, session } from "electron";
+import { app, BrowserWindow, WebContentsView, session } from "electron";
 import path from "path";
+import { performance } from "node:perf_hooks";
 import {
   registerWebContents,
   registerAppView,
@@ -20,8 +21,17 @@ import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isLocalhostUrl } from "../../shared/utils/urlUtils.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
+import { forgetBlinkSample } from "../services/ProcessMemoryMonitor.js";
+import { getPtyManager } from "../services/PtyManager.js";
 import { notifyError } from "../ipc/errorHandlers.js";
+import { logInfo, logWarn } from "../utils/logger.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { injectSkeletonCss } from "./skeletonCss.js";
+import {
+  attachRendererConsoleCapture,
+  detachRendererConsoleCapture,
+} from "./rendererConsoleCapture.js";
+import { ACTIVE_AGENT_STATES } from "../../shared/types/agent.js";
 
 const GC_DELAY_MS = 100;
 const LOAD_TIMEOUT_MS = 10_000;
@@ -30,6 +40,8 @@ const CRASH_LOOP_THRESHOLD = 3;
 
 type ViewState = "loading" | "active" | "cached";
 
+type EvictionReason = "lru" | "pressure" | "limit-change";
+
 interface ViewEntry {
   view: WebContentsView;
   projectId: string;
@@ -37,6 +49,7 @@ interface ViewEntry {
   lastUsed: number;
   state: ViewState;
   crashTimestamps: number[];
+  cleanupHandlers: () => void;
 }
 
 export interface ProjectViewManagerOptions {
@@ -45,8 +58,17 @@ export interface ProjectViewManagerOptions {
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   /** Called when a view is evicted (destroyed) with its webContents.id, for port cleanup */
   onViewEvicted?: (webContentsId: number) => void;
+  /**
+   * Called when a view transitions from active to cached with its webContents.id.
+   * Mirrors onViewEvicted: live producer ports (worktree, workspace direct) must
+   * be closed so messages don't accumulate in a renderer that Chromium may freeze
+   * after backgroundThrottling is enabled. Reactivation re-brokers a fresh port.
+   */
+  onViewCached?: (webContentsId: number) => void;
   /** Called on every did-finish-load for any managed view (initial load and reloads) */
   onViewReady?: (webContents: Electron.WebContents) => void;
+  /** Called synchronously when a view's renderer process is gone (non-clean), before reload */
+  onViewCrashed?: (webContents: Electron.WebContents) => void;
   /** Number of project views to keep cached in memory (1–5, default: 1) */
   cachedProjectViews?: number;
 }
@@ -60,17 +82,22 @@ export class ProjectViewManager {
   private dirname: string;
   private onRecreateWindow?: () => Promise<void>;
   private onViewEvicted?: (webContentsId: number) => void;
+  private onViewCached?: (webContentsId: number) => void;
   private onViewReady?: (webContents: Electron.WebContents) => void;
+  private onViewCrashed?: (webContents: Electron.WebContents) => void;
   private windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
   private resizeHandler: (() => void) | null = null;
+  private evictionTimestamps = new Map<string, number>();
 
   constructor(win: BrowserWindow, opts: ProjectViewManagerOptions) {
     this.win = win;
     this.dirname = opts.dirname;
     this.onRecreateWindow = opts.onRecreateWindow;
     this.onViewEvicted = opts.onViewEvicted;
+    this.onViewCached = opts.onViewCached;
     this.onViewReady = opts.onViewReady;
+    this.onViewCrashed = opts.onViewCrashed;
     this.windowRegistry = opts.windowRegistry;
     if (opts.cachedProjectViews != null) {
       this.maxCachedViews = opts.cachedProjectViews;
@@ -105,6 +132,7 @@ export class ProjectViewManager {
       lastUsed: Date.now(),
       state: "active",
       crashTimestamps: [],
+      cleanupHandlers: () => {},
     };
     this.views.set(projectId, entry);
     this.webContentsToProject.set(view.webContents.id, projectId);
@@ -154,6 +182,21 @@ export class ProjectViewManager {
     // Try to activate cached view
     const cached = this.views.get(projectId);
     if (cached && !cached.view.webContents.isDestroyed()) {
+      // "revival" measures time since this projectId was last evicted — not time
+      // since the current cached view (a cold-started successor) was last active.
+      // Eviction destroys the original view, so any cache hit for a previously-
+      // evicted projectId necessarily hits a later cold-started entry. The
+      // timestamp persists across the cold-start so cache-pressure signals stay
+      // observable at the project level. Consumed on read to fire only once per
+      // eviction → return cycle.
+      const evictedAt = this.evictionTimestamps.get(projectId);
+      if (evictedAt !== undefined) {
+        logInfo("projectview.revival", {
+          projectId,
+          timeSinceEvictionMs: Date.now() - evictedAt,
+        });
+        this.evictionTimestamps.delete(projectId);
+      }
       this.activateView(cached);
       return { view: cached.view, isNew: false };
     }
@@ -163,6 +206,7 @@ export class ProjectViewManager {
       this.cleanupEntry(projectId);
     }
 
+    const coldStartAt = performance.now();
     const view = this.createView(projectId);
     const entry: ViewEntry = {
       view,
@@ -171,13 +215,14 @@ export class ProjectViewManager {
       lastUsed: Date.now(),
       state: "loading",
       crashTimestamps: [],
+      cleanupHandlers: () => {},
     };
     this.views.set(projectId, entry);
     this.webContentsToProject.set(view.webContents.id, projectId);
     registerProjectView(projectId, view.webContents);
 
     // Set up security handlers and attach to window
-    this.setupViewHandlers(view);
+    this.setupViewHandlers(view, entry);
     registerWebContents(view.webContents, this.win);
     registerAppView(this.win, view);
 
@@ -194,6 +239,10 @@ export class ProjectViewManager {
     try {
       // Load the renderer with projectId context
       await this.loadView(view, projectId);
+      logInfo("projectview.coldstart", {
+        projectId,
+        durationMs: Math.round(performance.now() - coldStartAt),
+      });
     } catch (loadError) {
       // Rollback: clean up the failed new view
       this.cleanupEntry(projectId);
@@ -221,7 +270,7 @@ export class ProjectViewManager {
     }
 
     // Evict LRU views if over limit
-    this.evictStaleViews();
+    this.evictStaleViews("lru");
 
     return { view, isNew: true };
   }
@@ -248,8 +297,9 @@ export class ProjectViewManager {
   }
 
   setCachedViewLimit(n: number): void {
-    this.maxCachedViews = Math.max(1, Math.min(5, n));
-    this.evictStaleViews();
+    const safe = Number.isFinite(n) ? n : 1;
+    this.maxCachedViews = Math.max(1, Math.min(5, safe));
+    this.evictStaleViews("limit-change");
   }
 
   destroyView(projectId: string): void {
@@ -279,6 +329,7 @@ export class ProjectViewManager {
     }
     this.views.clear();
     this.webContentsToProject.clear();
+    this.evictionTimestamps.clear();
     this.activeProjectId = null;
   }
 
@@ -299,6 +350,17 @@ export class ProjectViewManager {
 
     // Throttle background view to reduce CPU and allow Chromium to reclaim memory
     if (!current.view.webContents.isDestroyed()) {
+      const cachedWcId = current.view.webContents.id;
+      // Close live producer ports BEFORE enabling background throttling. Once
+      // throttled, Chromium can freeze the renderer after ~5 min hidden or
+      // under memory pressure; any messages still posted by main/utility
+      // processes accumulate in the frozen renderer's task queue (no native
+      // backpressure). Reactivation re-brokers a fresh port via activateView.
+      try {
+        this.onViewCached?.(cachedWcId);
+      } catch (error) {
+        console.error("[ProjectViewManager] onViewCached threw during deactivate:", error);
+      }
       current.view.webContents.setBackgroundThrottling(true);
 
       // Trigger V8 GC after a short delay to reclaim orphaned heap from
@@ -314,7 +376,10 @@ export class ProjectViewManager {
           liveEntry.state === "cached" &&
           !webContents.isDestroyed()
         ) {
-          webContents.executeJavaScript("window.gc && window.gc()").catch(() => {});
+          webContents.executeJavaScript("window.gc && window.gc()").catch(() => {
+            // Intentional: V8 GC is best-effort — failure (no --js-flags=--expose-gc,
+            // destroyed context) is harmless and noisy if logged.
+          });
         }
       }, GC_DELAY_MS);
     }
@@ -405,11 +470,26 @@ export class ProjectViewManager {
       injectSkeletonCss(wc);
 
       const encodedId = encodeURIComponent(projectId);
+      // Outer .catch surfaces any rejection from `wc.loadURL` itself; the inner
+      // did-fail-load / preload-error / timeout handlers already reject the
+      // outer Promise with a descriptive Error. ERR_ABORTED is the dominant
+      // normal case during rapid project switching and renderer teardown — drop
+      // it silently to avoid log noise.
+      const onLoadURLReject = (err: unknown, url: string) => {
+        if (err instanceof Error && err.message.includes("ERR_ABORTED")) return;
+        logWarn("Project view loadURL rejected", {
+          projectId,
+          url,
+          error: formatErrorMessage(err, "loadURL failed"),
+        });
+      };
       if (process.env.NODE_ENV === "development") {
         const devServerUrl = getDevServerUrl();
-        wc.loadURL(`${devServerUrl}?projectId=${encodedId}`).catch(() => {});
+        const url = `${devServerUrl}?projectId=${encodedId}`;
+        wc.loadURL(url).catch((err) => onLoadURLReject(err, url));
       } else {
-        wc.loadURL(`app://daintree/index.html?projectId=${encodedId}`).catch(() => {});
+        const url = `app://daintree/index.html?projectId=${encodedId}`;
+        wc.loadURL(url).catch((err) => onLoadURLReject(err, url));
       }
     });
   }
@@ -420,9 +500,11 @@ export class ProjectViewManager {
     view.setBounds({ x: 0, y: 0, width, height });
   }
 
-  private setupViewHandlers(view: WebContentsView): void {
+  private setupViewHandlers(view: WebContentsView, entry: ViewEntry): void {
     const wc = view.webContents;
     const win = this.win;
+
+    attachRendererConsoleCapture(wc);
 
     wc.setWindowOpenHandler(({ url }) => {
       if (url && canOpenExternalUrl(url)) {
@@ -435,21 +517,25 @@ export class ProjectViewManager {
       return { action: "deny" };
     });
 
-    wc.on("will-navigate", (event, navigationUrl) => {
+    const handleWillNavigate = (event: Electron.Event, navigationUrl: string) => {
       if (!isTrustedRendererUrl(navigationUrl)) {
         console.error("[ProjectViewManager] Blocked navigation to untrusted URL:", navigationUrl);
         event.preventDefault();
       }
-    });
+    };
 
-    wc.on("will-redirect", (event, redirectUrl) => {
+    const handleWillRedirect = (event: Electron.Event, redirectUrl: string) => {
       if (!isTrustedRendererUrl(redirectUrl)) {
         console.error("[ProjectViewManager] Blocked redirect to untrusted URL:", redirectUrl);
         event.preventDefault();
       }
-    });
+    };
 
-    wc.on("will-attach-webview", (event, webPreferences, params) => {
+    const handleWillAttachWebview = (
+      event: Electron.Event,
+      webPreferences: Electron.WebPreferences,
+      params: Record<string, string>
+    ) => {
       const allowedPartitions = ["persist:browser", "persist:dev-preview"];
       const isAllowedLocalhostUrl = isLocalhostUrl(params.src);
       const isValidPartition =
@@ -471,9 +557,9 @@ export class ProjectViewManager {
       webPreferences.navigateOnDragDrop = false;
       webPreferences.disableBlinkFeatures = "Auxclick";
       webPreferences.partition = params.partition;
-    });
+    };
 
-    wc.on("before-input-event", (_event, input) => {
+    const handleBeforeInputEvent = (_event: Electron.Event, input: Electron.Input) => {
       const isMac = process.platform === "darwin";
       const isCloseShortcut =
         input.type === "keyDown" &&
@@ -481,20 +567,23 @@ export class ProjectViewManager {
         ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
         !input.alt;
       wc.setIgnoreMenuShortcuts(isCloseShortcut);
-    });
+    };
 
     // Fire onViewReady on load/reload, but ONLY for the active view.
     // A cached view reloading (e.g. after crash recovery) must not steal
     // the PTY MessagePort from the currently visible view.
-    wc.on("did-finish-load", () => {
+    const handleDidFinishLoad = () => {
       if (wc.isDestroyed()) return;
       const projectId = this.webContentsToProject.get(wc.id);
       if (projectId && projectId === this.activeProjectId) {
         this.onViewReady?.(wc);
       }
-    });
+    };
 
-    wc.on("render-process-gone", (_event, details) => {
+    const handleRenderProcessGone = (
+      _event: Electron.Event,
+      details: Electron.RenderProcessGoneDetails
+    ) => {
       if (details.reason === "clean-exit") return;
 
       const projectId = this.webContentsToProject.get(wc.id);
@@ -509,12 +598,24 @@ export class ProjectViewManager {
 
       if (win.isDestroyed()) return;
 
-      const entry = projectId ? this.views.get(projectId) : null;
+      const crashEntry = projectId ? this.views.get(projectId) : null;
 
       // If the view is still loading, loadView's one-shot handler will handle
       // the failure and trigger rollback — skip crash recovery here.
-      if (entry?.state === "loading") return;
-      const crashTimestamps = entry?.crashTimestamps ?? [];
+      if (crashEntry?.state === "loading") return;
+
+      // Synchronously notify subscribers (e.g. PtyClient) so per-window
+      // MessagePorts can be torn down before reload re-issues fresh ones.
+      // Without this, a stale port can keep PortQueueManager wedged in a
+      // backpressure-pause loop for the entire reload window (#6244).
+      // Scoped to the active project: only the active view ever owns the
+      // per-window port (handleDidFinishLoad gates onViewReady on
+      // activeProjectId), so a cached-view crash must not tear it down.
+      if (projectId && projectId === this.activeProjectId) {
+        this.onViewCrashed?.(wc);
+      }
+
+      const crashTimestamps = crashEntry?.crashTimestamps ?? [];
       const now = Date.now();
       while (crashTimestamps.length > 0 && now - crashTimestamps[0] > CRASH_LOOP_WINDOW_MS) {
         crashTimestamps.shift();
@@ -529,6 +630,13 @@ export class ProjectViewManager {
             reason: details.reason,
             exitCode: String(details.exitCode),
           });
+          if (crashEntry?.projectPath) {
+            params.set("project", path.basename(crashEntry.projectPath));
+          }
+          const backupTimestamp = getCrashRecoveryService().getLastBackupTimestamp();
+          if (backupTimestamp !== null) {
+            params.set("backupTimestamp", String(backupTimestamp));
+          }
           if (process.env.NODE_ENV === "development") {
             wc.loadURL(`${getDevServerUrl()}/recovery.html?${params}`);
           } else {
@@ -555,7 +663,30 @@ export class ProjectViewManager {
           if (!wc.isDestroyed()) wc.reload();
         });
       }
-    });
+    };
+
+    wc.on("will-navigate", handleWillNavigate);
+    wc.on("will-redirect", handleWillRedirect);
+    wc.on("will-attach-webview", handleWillAttachWebview);
+    wc.on("before-input-event", handleBeforeInputEvent);
+    wc.on("did-finish-load", handleDidFinishLoad);
+    wc.on("render-process-gone", handleRenderProcessGone);
+
+    // Capture wc in closure: post-eviction the view's webContents getter may be
+    // undefined (Electron #50249). Removing listeners must happen before close()
+    // so any queued event from Chromium cannot fire against stale view state.
+    let cleaned = false;
+    entry.cleanupHandlers = () => {
+      if (cleaned) return;
+      wc.removeListener("will-navigate", handleWillNavigate);
+      wc.removeListener("will-redirect", handleWillRedirect);
+      wc.removeListener("will-attach-webview", handleWillAttachWebview);
+      wc.removeListener("before-input-event", handleBeforeInputEvent);
+      wc.removeListener("did-finish-load", handleDidFinishLoad);
+      wc.removeListener("render-process-gone", handleRenderProcessGone);
+      detachRendererConsoleCapture(wc);
+      cleaned = true;
+    };
 
     // Fullscreen events are handled by the window-level resize handler
     // and the sendToRenderer in createWindow.ts — no per-view listeners needed.
@@ -564,6 +695,15 @@ export class ProjectViewManager {
   private cleanupEntry(projectId: string): void {
     const entry = this.views.get(projectId);
     if (!entry) return;
+
+    // Detach persistent webContents listeners before close() so any queued
+    // event (did-finish-load, render-process-gone, etc.) cannot fire against
+    // an evicted view and act on stale views/activeProjectId state.
+    try {
+      entry.cleanupHandlers();
+    } catch (error) {
+      console.error("[ProjectViewManager] cleanupHandlers threw during eviction:", error);
+    }
 
     // Remove from window if attached
     if (!this.win.isDestroyed()) {
@@ -582,6 +722,7 @@ export class ProjectViewManager {
 
     this.webContentsToProject.delete(wcId);
     unregisterProjectView(wcId);
+    forgetBlinkSample(wcId);
 
     // Notify listeners (e.g. WorkspaceClient) so they can clean up direct ports
     this.onViewEvicted?.(wcId);
@@ -596,17 +737,80 @@ export class ProjectViewManager {
     this.views.delete(projectId);
   }
 
-  private evictStaleViews(): void {
+  private hasActiveAgent(projectId: string): boolean {
+    const terminals = getPtyManager().getAll();
+    return terminals.some(
+      (t) =>
+        t.projectId === projectId && t.agentState != null && ACTIVE_AGENT_STATES.has(t.agentState)
+    );
+  }
+
+  private evictStaleViews(reason: EvictionReason): void {
     if (this.views.size <= this.maxCachedViews) return;
     if (this.activeProjectId === null) return;
 
+    // Build pid → privateBytes index from the synchronous app.getAppMetrics()
+    // snapshot. Joined per-view via `webContents.getOSProcessId()` so eviction
+    // can prefer the largest renderer first instead of pure LRU. Views without
+    // a measured pid (process not yet spawned, or metrics missing) sort below
+    // measured ones via the 0 fallback, preserving LRU as the final tiebreak.
+    const memoryByPid = new Map<number, number>();
+    try {
+      for (const proc of app.getAppMetrics()) {
+        const kb = proc.memory.privateBytes ?? proc.memory.workingSetSize;
+        if (typeof kb === "number" && kb > 0) {
+          memoryByPid.set(proc.pid, kb);
+        }
+      }
+    } catch {
+      // app.getAppMetrics() throwing is non-fatal — fall back to pure LRU below.
+    }
+    const memoryFor = (entry: ViewEntry): number => {
+      const wc = entry.view.webContents;
+      if (wc.isDestroyed()) return 0;
+      const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
+      if (typeof getPid !== "function") return 0;
+      const pid = getPid.call(wc);
+      if (typeof pid !== "number" || pid <= 0) return 0;
+      return memoryByPid.get(pid) ?? 0;
+    };
+
     const evictable = Array.from(this.views.entries())
       .filter(([id]) => id !== this.activeProjectId)
-      .sort(([, a], [, b]) => a.lastUsed - b.lastUsed);
+      // Largest privateBytes first; LRU (oldest first) as tiebreaker so the
+      // existing limit-change/lru ordering still holds when memory data is
+      // unavailable for both candidates.
+      .sort(([, a], [, b]) => {
+        const memDelta = memoryFor(b) - memoryFor(a);
+        if (memDelta !== 0) return memDelta;
+        return a.lastUsed - b.lastUsed;
+      });
 
-    while (this.views.size > this.maxCachedViews && evictable.length > 0) {
-      const [projectId] = evictable.shift()!;
-      console.log(`[ProjectViewManager] Evicting cached view for project: ${projectId}`);
+    // Partition: evict views without active agents first, only fall back to
+    // active-agent views when safe candidates are exhausted. This keeps memory
+    // bounded (each WebContentsView is ~400-500MB) without silently killing
+    // agent renderers mid-task.
+    const safeToEvict: Array<[string, ViewEntry, boolean]> = [];
+    const activeAgentFallback: Array<[string, ViewEntry, boolean]> = [];
+    for (const [projectId, entry] of evictable) {
+      const active = this.hasActiveAgent(projectId);
+      if (active) {
+        activeAgentFallback.push([projectId, entry, true]);
+      } else {
+        safeToEvict.push([projectId, entry, false]);
+      }
+    }
+
+    const candidates = [...safeToEvict, ...activeAgentFallback];
+
+    while (this.views.size > this.maxCachedViews && candidates.length > 0) {
+      const [projectId, entry, activeAgent] = candidates.shift()!;
+      const ageMs = Date.now() - entry.lastUsed;
+      const memoryKb = memoryFor(entry);
+      const ctx: Record<string, unknown> = { projectId, reason, ageMs, activeAgent };
+      if (memoryKb > 0) ctx.memoryKb = memoryKb;
+      logInfo("projectview.eviction", ctx);
+      this.evictionTimestamps.set(projectId, Date.now());
       this.cleanupEntry(projectId);
     }
   }

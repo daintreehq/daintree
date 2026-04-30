@@ -50,6 +50,16 @@ test.describe("Next.js Turbopack Normalization (#4557)", () => {
     const binDir = path.join(fixtureRepoPath, "node_modules", ".bin");
     mkdirSync(binDir, { recursive: true });
 
+    // resolveNextMajorVersion reads node_modules/next/package.json first — the
+    // auto-turbopack path only triggers when next's major version is >= 15.
+    // Drop a stub package.json there so the fixture reports a compatible major.
+    const nextDir = path.join(fixtureRepoPath, "node_modules", "next");
+    mkdirSync(nextDir, { recursive: true });
+    writeFileSync(
+      path.join(nextDir, "package.json"),
+      JSON.stringify({ name: "next", version: "15.0.0" }, null, 2)
+    );
+
     const fakeNextScript = `#!/usr/bin/env node
 const http = require('http');
 const args = process.argv.slice(2);

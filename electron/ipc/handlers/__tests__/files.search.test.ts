@@ -1,14 +1,76 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const ipcMainMock = vi.hoisted(() => ({
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
-  ipcMain: {
-    handle: vi.fn(),
-    removeHandler: vi.fn(),
-  },
+  ipcMain: ipcMainMock,
 }));
 
 const fileSearchServiceMock = vi.hoisted(() => ({
   search: vi.fn<(payload: { cwd: string; query: string; limit?: number }) => Promise<string[]>>(),
+}));
+
+const checkRateLimitMock = vi.hoisted(() => vi.fn());
+
+type SafeParseable = {
+  safeParse: (v: unknown) => { success: true; data: unknown } | { success: false; error: unknown };
+};
+
+vi.mock("../../utils.js", () => ({
+  checkRateLimit: checkRateLimitMock,
+  typedHandle: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: null,
+          projectId: null,
+        };
+        return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleValidated: (channel: string, schema: SafeParseable, handler: unknown) => {
+    ipcMainMock.handle(channel, async (_e: unknown, ...args: unknown[]) => {
+      const parsed = schema.safeParse(args[0]);
+      if (!parsed.success) {
+        throw new Error(`IPC validation failed: ${channel}`);
+      }
+      return (handler as (payload: unknown) => unknown)(parsed.data);
+    });
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContextValidated: (channel: string, schema: SafeParseable, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      async (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const parsed = schema.safeParse(args[0]);
+        if (!parsed.success) {
+          throw new Error(`IPC validation failed: ${channel}`);
+        }
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: null,
+          projectId: null,
+        };
+        return (handler as (ctx: unknown, payload: unknown) => unknown)(ctx, parsed.data);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 vi.mock("../../../services/FileSearchService.js", () => ({
@@ -51,7 +113,7 @@ describe("files:search handler", () => {
     });
   });
 
-  it("returns empty files for invalid payloads", async () => {
+  it("rejects invalid payloads at the wrapper boundary before invoking search", async () => {
     registerFilesHandlers();
     const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
       .calls;
@@ -61,9 +123,10 @@ describe("files:search handler", () => {
       payload: unknown
     ) => Promise<{ files: string[] }>;
 
-    const result = await handler({} as unknown, { cwd: "/tmp/project", query: 123 });
+    await expect(handler({} as unknown, { cwd: "/tmp/project", query: 123 })).rejects.toThrow(
+      /IPC validation failed/
+    );
 
-    expect(result).toEqual({ files: [] });
     expect(fileSearchServiceMock.search).not.toHaveBeenCalled();
   });
 
@@ -104,5 +167,39 @@ describe("files:search handler", () => {
     cleanup();
 
     expect(ipcMain.removeHandler).toHaveBeenCalledWith(CHANNELS.FILES_SEARCH);
+  });
+
+  it("calls checkRateLimit with files:search limits on every invocation", async () => {
+    registerFilesHandlers();
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const entry = calls.find((c) => c[0] === CHANNELS.FILES_SEARCH);
+    const handler = entry?.[1] as (
+      event: unknown,
+      payload: unknown
+    ) => Promise<{ files: string[] }>;
+
+    await handler({} as unknown, { cwd: "/tmp/project", query: "readme" });
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.FILES_SEARCH, 20, 10_000);
+  });
+
+  it("propagates rate-limit errors and skips search service", async () => {
+    checkRateLimitMock.mockImplementationOnce(() => {
+      throw new Error("Rate limit exceeded");
+    });
+    registerFilesHandlers();
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const entry = calls.find((c) => c[0] === CHANNELS.FILES_SEARCH);
+    const handler = entry?.[1] as (
+      event: unknown,
+      payload: unknown
+    ) => Promise<{ files: string[] }>;
+
+    await expect(handler({} as unknown, { cwd: "/tmp/project", query: "readme" })).rejects.toThrow(
+      "Rate limit exceeded"
+    );
+    expect(fileSearchServiceMock.search).not.toHaveBeenCalled();
   });
 });

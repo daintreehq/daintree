@@ -8,7 +8,7 @@ import { DockPanelOffscreenContainer } from "./DockPanelOffscreenContainer";
 
 export function TerminalDockRegion() {
   const { shouldShowInLayout, isHydrated, hasDocked } = useDockRenderState();
-  const dockRegionRef = useRef<HTMLDivElement>(null);
+  const dockRegionRef = useRef<HTMLElement>(null);
   const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "dock");
   const dockDensity = usePreferencesStore((state) => state.dockDensity);
 
@@ -27,13 +27,12 @@ export function TerminalDockRegion() {
   }
 
   return (
-    <div
+    <aside
       ref={dockRegionRef}
-      role="region"
       tabIndex={-1}
-      aria-label="Dock bar"
+      aria-label="Dock"
       data-macro-focus={isMacroFocused ? "true" : undefined}
-      className="outline-none data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset"
+      className="outline-hidden data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset"
     >
       <DockPanelOffscreenContainer>
         {shouldShowInLayout && (
@@ -42,6 +41,6 @@ export function TerminalDockRegion() {
           </ErrorBoundary>
         )}
       </DockPanelOffscreenContainer>
-    </div>
+    </aside>
   );
 }

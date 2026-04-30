@@ -1,7 +1,8 @@
 import { readFile } from "fs/promises";
 import { join as pathJoin } from "path";
 import { existsSync } from "fs";
-import { createHardenedGit } from "../utils/hardenedGit.js";
+import { createHardenedGit, createWslHardenedGit } from "../utils/hardenedGit.js";
+import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import type PQueue from "p-queue";
 import type { WorktreeChanges, FileChangeDetail } from "../../shared/types/git.js";
 import type {
@@ -12,21 +13,30 @@ import type {
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { getGitDir } from "../utils/gitUtils.js";
+import { isRepoOperationInProgress } from "../utils/gitRepoOperationState.js";
 import { WorktreeRemovedError } from "../utils/errorTypes.js";
 import { categorizeWorktree } from "../services/worktree/mood.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
 import { ensureSerializable } from "../../shared/utils/serialization.js";
 import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
 import { GitFileWatcher } from "../utils/gitFileWatcher.js";
+import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
+import { Cache } from "../utils/cache.js";
 
 const GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS = 1000;
 const WATCHER_FALLBACK_POLL_INTERVAL_MS = 30_000;
+const NO_UPSTREAM_CACHE_TTL_MS = 5 * 60 * 1000;
+const UPSTREAM_NOT_FOUND_CACHE_TTL_MS = 2 * 60 * 1000;
 const WATCHER_RETRY_INTERVAL_MS = 30_000;
 const WATCHER_MAX_RETRIES = 5;
-const WATCHER_WORKTREE_MAX_WAIT_MS = 2000;
+const WATCHER_WORKTREE_MIN_DEBOUNCE_MS = 150;
+const WATCHER_WORKTREE_MAX_DEBOUNCE_MS = 800;
+const WATCHER_WORKTREE_MAX_WAIT_MS = 1500;
 const PLAN_FILE_CANDIDATES = ["TODO.md", "PLAN.md", "plan.md", "TASKS.md"] as const;
 const RESOURCE_POLL_DEFAULT_ACTIVE_MS = 30_000;
 const RESOURCE_POLL_DEFAULT_BACKGROUND_MS = 120_000;
+const HEARTBEAT_GAP_MULTIPLIER = 3;
+const HEARTBEAT_GAP_FLOOR_MS = 30_000;
 
 export interface WorktreeMonitorConfig {
   basePollingInterval: number;
@@ -44,6 +54,8 @@ export interface WorktreeMonitorCallbacks {
   onBranchChanged?: (worktreeId: string, newBranch: string) => void;
   onExternalRemoval?: (worktreeId: string) => void;
   onResourceStatusPoll?: (worktreeId: string) => Promise<unknown> | void;
+  onInotifyLimitReached?: (worktreeId: string) => void;
+  onEmfileLimitReached?: (worktreeId: string) => void;
 }
 
 export class WorktreeMonitor {
@@ -76,6 +88,7 @@ export class WorktreeMonitor {
   // Upstream tracking state
   private aheadCount: number | undefined;
   private behindCount: number | undefined;
+  private upstreamFailureCache = new Cache<string, string>();
 
   // Issue/PR state
   private _issueNumber: number | undefined;
@@ -93,8 +106,9 @@ export class WorktreeMonitor {
   private pollingEnabled: boolean = true;
   private _hasInitialStatus: boolean = false;
 
-  // File watcher state
-  private gitWatcher: (() => void) | null = null;
+  // File watcher state — MutableDisposable auto-disposes the previous watcher
+  // on reassignment, eliminating the manual stop-old-start-new dance.
+  private gitWatcher = new MutableDisposable<IDisposable>();
   private gitWatchDebounceTimer: NodeJS.Timeout | null = null;
   private gitWatchRefreshPending: boolean = false;
   private gitWatchEnabled: boolean;
@@ -130,6 +144,14 @@ export class WorktreeMonitor {
   private _pendingPollPromise: Promise<void> | null = null;
   private _pollAbortController: AbortController = new AbortController();
 
+  // WSL routing state (Windows only)
+  private _isWslPath: boolean = false;
+  private _wslDistro: string | undefined;
+  private _wslGitEligible: boolean = false;
+  private _wslGitOptIn: boolean = false;
+  private _wslGitDismissed: boolean = false;
+  private _wslPosixPath: string | undefined;
+
   // Components
   private pollingStrategy: AdaptivePollingStrategy;
   private noteReader: NoteFileReader;
@@ -163,6 +185,54 @@ export class WorktreeMonitor {
     );
 
     this.noteReader = new NoteFileReader(worktree.path);
+
+    this._isWslPath = Boolean(worktree.isWslPath);
+    this._wslDistro = worktree.wslDistro;
+    this._wslGitEligible = Boolean(worktree.wslGitEligible);
+    this._wslGitOptIn = Boolean(worktree.wslGitOptIn);
+    this._wslGitDismissed = Boolean(worktree.wslGitDismissed);
+    if (this._isWslPath && this._wslDistro) {
+      const m = /^\\\\wsl(?:\$|\.localhost)\\[^\\]+(.*)/i.exec(worktree.path);
+      const remainder = m ? (m[1] ?? "") : "";
+      this._wslPosixPath = remainder.replace(/\\/g, "/") || "/";
+    }
+  }
+
+  /**
+   * Build the WSL invocation passed to `createWslHardenedGit` /
+   * `getWorktreeChangesWithStats({ wsl })`. Returns `undefined` when this
+   * worktree should keep using the native git path: not on Windows, not a
+   * WSL path, ineligible distro (not the default), or user hasn't opted in.
+   */
+  private get wslInvocation(): WslGitInvocation | undefined {
+    if (process.platform !== "win32") return undefined;
+    if (!this._isWslPath || !this._wslGitEligible || !this._wslGitOptIn) return undefined;
+    if (!this._wslDistro || !this._wslPosixPath) return undefined;
+    return {
+      distro: this._wslDistro,
+      uncPath: this.path,
+      posixPath: this._wslPosixPath,
+    };
+  }
+
+  /**
+   * Update the WSL opt-in / dismissed state at runtime (called by the
+   * workspace-host message handler). Re-emits a snapshot so the renderer's
+   * banner state stays in sync.
+   */
+  setWslOptIn(enabled: boolean, dismissed: boolean): void {
+    let changed = false;
+    if (this._wslGitOptIn !== enabled) {
+      this._wslGitOptIn = enabled;
+      changed = true;
+    }
+    if (this._wslGitDismissed !== dismissed) {
+      this._wslGitDismissed = dismissed;
+      changed = true;
+    }
+    if (changed && this._hasInitialStatus) {
+      this.emitUpdate();
+    }
   }
 
   get name(): string {
@@ -178,6 +248,9 @@ export class WorktreeMonitor {
   }
 
   set branch(value: string | undefined) {
+    if (value !== this._branch && this._branch) {
+      this.upstreamFailureCache.invalidate(`${this.path}:${this._branch}`);
+    }
     this._branch = value;
   }
 
@@ -232,7 +305,7 @@ export class WorktreeMonitor {
   }
 
   get hasWatcher(): boolean {
-    return this.gitWatcher !== null;
+    return this.gitWatcher.value !== undefined;
   }
 
   setIssueNumber(issueNumber: number | undefined): void {
@@ -594,6 +667,11 @@ export class WorktreeMonitor {
       planFilePath: this.planFilePath,
       aheadCount: this.aheadCount,
       behindCount: this.behindCount,
+      isWslPath: this._isWslPath || undefined,
+      wslDistro: this._wslDistro,
+      wslGitEligible: this._wslGitEligible || undefined,
+      wslGitOptIn: this._wslGitOptIn || undefined,
+      wslGitDismissed: this._wslGitDismissed || undefined,
     };
 
     return ensureSerializable(snapshot) as WorktreeSnapshot;
@@ -636,15 +714,15 @@ export class WorktreeMonitor {
   }
 
   ensureWatcherState(): void {
-    if (!this.gitWatchEnabled && this.gitWatcher) {
+    if (!this.gitWatchEnabled && this.gitWatcher.value) {
       this.stopWatcher();
-    } else if (this.gitWatchEnabled && this._isRunning && !this.gitWatcher) {
+    } else if (this.gitWatchEnabled && this._isRunning && !this.gitWatcher.value) {
       this.startWatcher();
     }
   }
 
   restartWatcherIfRunning(): void {
-    if (this.gitWatcher) {
+    if (this.gitWatcher.value) {
       this.updateWatcher();
     }
   }
@@ -652,7 +730,7 @@ export class WorktreeMonitor {
   // --- File watcher management ---
 
   private startWatcher(): void {
-    if (!this._isRunning || !this.gitWatchEnabled || this.gitWatcher) {
+    if (!this._isRunning || !this.gitWatchEnabled || this.gitWatcher.value) {
       return;
     }
 
@@ -662,14 +740,17 @@ export class WorktreeMonitor {
       debounceMs: this.gitWatchDebounceMs,
       onChange: () => this.handleGitFileChange(),
       watchWorktree: true,
-      worktreeDebounceMs: 1000,
+      worktreeMinDebounceMs: WATCHER_WORKTREE_MIN_DEBOUNCE_MS,
+      worktreeMaxDebounceMs: WATCHER_WORKTREE_MAX_DEBOUNCE_MS,
       worktreeMaxWaitMs: WATCHER_WORKTREE_MAX_WAIT_MS,
       onWatcherFailed: () => this.handleWatcherFailed(),
+      onInotifyLimitReached: () => this.callbacks.onInotifyLimitReached?.(this.id),
+      onEmfileLimitReached: () => this.callbacks.onEmfileLimitReached?.(this.id),
     });
 
     const started = watcher.start();
     if (started) {
-      this.gitWatcher = () => watcher.dispose();
+      this.gitWatcher.value = toDisposable(() => watcher.dispose());
       this.watcherRetryCount = 0;
     } else {
       watcher.dispose();
@@ -678,10 +759,7 @@ export class WorktreeMonitor {
   }
 
   private stopWatcher(): void {
-    if (this.gitWatcher) {
-      this.gitWatcher();
-      this.gitWatcher = null;
-    }
+    this.gitWatcher.clear();
     if (this.gitWatchDebounceTimer) {
       clearTimeout(this.gitWatchDebounceTimer);
       this.gitWatchDebounceTimer = null;
@@ -702,10 +780,7 @@ export class WorktreeMonitor {
   }
 
   private handleWatcherFailed(): void {
-    if (this.gitWatcher) {
-      this.gitWatcher();
-      this.gitWatcher = null;
-    }
+    this.gitWatcher.clear();
     this.scheduleWatcherRetry();
   }
 
@@ -721,7 +796,7 @@ export class WorktreeMonitor {
 
     this.watcherRetryTimer = setTimeout(() => {
       this.watcherRetryTimer = null;
-      if (this._isRunning && this.gitWatchEnabled && !this.gitWatcher) {
+      if (this._isRunning && this.gitWatchEnabled && !this.gitWatcher.value) {
         this.startWatcher();
       }
     }, WATCHER_RETRY_INTERVAL_MS);
@@ -826,7 +901,7 @@ export class WorktreeMonitor {
       return;
     }
 
-    const baseInterval = this.gitWatcher
+    const baseInterval = this.gitWatcher.value
       ? WATCHER_FALLBACK_POLL_INTERVAL_MS
       : this.pollingStrategy.calculateNextInterval();
     const jitterRange = Math.min(2000, Math.floor(baseInterval * 0.2));
@@ -835,8 +910,53 @@ export class WorktreeMonitor {
 
     this.pollingTimer = setTimeout(() => {
       this.pollingTimer = null;
+      if (!this._isRunning) return;
+
+      // Heartbeat gap: when the OS throttles or suspends the process, the
+      // timer fires far later than scheduled. Detect by measuring elapsed
+      // wall time since the last completed poll. Surface "stale" so the
+      // card dims, then force-refresh — categorizeWorktree() on the
+      // refreshed status will overwrite mood with the real value.
+      // Skip the gap check while a refresh is already in flight: it would
+      // false-emit "stale" for any updateGitStatus that happens to take
+      // longer than the floor (e.g., a slow git on a frozen filesystem).
+      if (!this._isUpdating && this.lastGitStatusCompletedAt > 0) {
+        const elapsedMs = Date.now() - this.lastGitStatusCompletedAt;
+        const threshold = Math.max(delayMs * HEARTBEAT_GAP_MULTIPLIER, HEARTBEAT_GAP_FLOOR_MS);
+        if (elapsedMs > threshold) {
+          this.mood = "stale";
+          this.emitUpdate();
+          void this.forceRefreshAfterGap();
+          return;
+        }
+      }
+
       void this.poll();
     }, delayMs);
+  }
+
+  private async forceRefreshAfterGap(): Promise<void> {
+    // Route through pollQueue when present so wake-induced gap refreshes are
+    // serialized across sibling monitors instead of all racing simultaneously.
+    const run = (): Promise<void> =>
+      this.updateGitStatus(true).catch(() => {
+        // updateGitStatus's own error path emits "error" mood; nothing to do here.
+      });
+    try {
+      if (this.pollQueue) {
+        await this.pollQueue.add(run, {
+          signal: this._pollAbortController.signal,
+          priority: this._isCurrent ? 1 : 0,
+        });
+      } else {
+        await run();
+      }
+    } catch {
+      // Queue abort or task error — already swallowed by run() / signal.
+    }
+    if (this._isRunning && this.pollingEnabled) {
+      this.scheduleNextPoll();
+    }
   }
 
   private async poll(force: boolean = false): Promise<void> {
@@ -857,7 +977,7 @@ export class WorktreeMonitor {
       const queueDelayMs = Math.max(0, startTime - queuedAt);
 
       try {
-        const forceRefresh = this._isCurrent && !this.gitWatcher;
+        const forceRefresh = this._isCurrent && !this.gitWatcher.value;
         await this.updateGitStatus(forceRefresh);
         this.pollingStrategy.recordSuccess(Date.now() - startTime, queueDelayMs);
       } catch (_error) {
@@ -907,6 +1027,24 @@ export class WorktreeMonitor {
       return;
     }
 
+    // Skip the git status invocation while a rebase/merge/cherry-pick/revert
+    // is in progress — running it would compete with the user's git client
+    // for .git/index.lock. The watcher tracks the same sentinel files, so
+    // it fires when the operation finishes and triggers a fresh refresh.
+    // Polling continues uninterrupted, so the next scheduled poll after
+    // sentinels clear also picks up the change.
+    const gitDir = getGitDir(this.path, { cache: true, logErrors: false });
+    if (gitDir && isRepoOperationInProgress(gitDir)) {
+      // If we're skipping the very first poll (e.g. app started mid-rebase),
+      // emit a default snapshot so the renderer can still display the worktree.
+      // Mirrors startWithoutGitStatus()'s contract.
+      if (!this._hasInitialStatus) {
+        this._hasInitialStatus = true;
+        this.emitUpdate();
+      }
+      return;
+    }
+
     this._isUpdating = true;
 
     try {
@@ -922,6 +1060,7 @@ export class WorktreeMonitor {
       const newChanges = await getWorktreeChangesWithStats(this.path, {
         forceRefresh,
         cacheTTL,
+        wsl: this.wslInvocation,
       });
 
       if (!this._isRunning) {
@@ -932,7 +1071,11 @@ export class WorktreeMonitor {
       const currentBranch = await this.readCurrentBranch();
       const branchChanged = currentBranch !== undefined && currentBranch !== this._branch;
       if (branchChanged) {
+        const oldCacheKey = this._branch ? `${this.path}:${this._branch}` : undefined;
         this._branch = currentBranch;
+        const newCacheKey = `${this.path}:${this._branch}`;
+        if (oldCacheKey) this.upstreamFailureCache.invalidate(oldCacheKey);
+        this.upstreamFailureCache.invalidate(newCacheKey);
         const hadPendingRefresh = this.gitWatchRefreshPending;
         this.updateWatcher();
         if (hadPendingRefresh) {
@@ -951,7 +1094,7 @@ export class WorktreeMonitor {
 
       const noteData = await this.noteReader.read();
 
-      const upstreamCounts = await this.fetchUpstreamCounts();
+      const upstreamCounts = await this.fetchUpstreamCounts(forceRefresh);
 
       const detectedPlanFile = PLAN_FILE_CANDIDATES.find((candidate) =>
         existsSync(pathJoin(this.path, candidate))
@@ -1094,7 +1237,7 @@ export class WorktreeMonitor {
     }
   }
 
-  private async fetchUpstreamCounts(): Promise<{
+  private async fetchUpstreamCounts(force: boolean = false): Promise<{
     ahead: number | undefined;
     behind: number | undefined;
   }> {
@@ -1102,17 +1245,52 @@ export class WorktreeMonitor {
       return { ahead: undefined, behind: undefined };
     }
 
+    const cacheKey = `${this.path}:${this._branch}`;
+    if (!force && this.upstreamFailureCache.get(cacheKey)) {
+      return { ahead: undefined, behind: undefined };
+    }
+
     try {
-      const git = createHardenedGit(this.path, this._pollAbortController.signal);
+      const wsl = this.wslInvocation;
+      const git = wsl
+        ? createWslHardenedGit(wsl, this._pollAbortController.signal)
+        : createHardenedGit(this.path, this._pollAbortController.signal);
       const output = await git.raw(["rev-list", "--left-right", "--count", "HEAD...@{u}"]);
       const [aheadStr, behindStr] = output.trim().split(/\s+/);
+
+      this.upstreamFailureCache.invalidate(cacheKey);
+
       return {
         ahead: parseInt(aheadStr, 10) || 0,
         behind: parseInt(behindStr, 10) || 0,
       };
-    } catch {
+    } catch (error) {
+      const classification = this.classifyUpstreamError(error);
+      if (classification) {
+        const ttl =
+          classification === "no-upstream"
+            ? NO_UPSTREAM_CACHE_TTL_MS
+            : UPSTREAM_NOT_FOUND_CACHE_TTL_MS;
+        this.upstreamFailureCache.set(cacheKey, classification, ttl);
+      }
       return { ahead: undefined, behind: undefined };
     }
+  }
+
+  private classifyUpstreamError(error: unknown): string | undefined {
+    if (!(error instanceof Error)) return undefined;
+    const msg = error.message;
+    if (
+      msg.includes("no upstream configured") ||
+      msg.includes("bad revision '@{u}'") ||
+      msg.includes("ambiguous argument '@{u}'")
+    ) {
+      return "no-upstream";
+    }
+    if (msg.includes("upstream branch") && msg.includes("not found")) {
+      return "upstream-not-found";
+    }
+    return undefined;
   }
 
   private calculateStateHash(changes: WorktreeChanges): string {
@@ -1130,7 +1308,10 @@ export class WorktreeMonitor {
     }
 
     try {
-      const git = createHardenedGit(this.path, this._pollAbortController.signal);
+      const wsl = this.wslInvocation;
+      const git = wsl
+        ? createWslHardenedGit(wsl, this._pollAbortController.signal)
+        : createHardenedGit(this.path, this._pollAbortController.signal);
       const log = await git.log({ maxCount: 1 });
       const lastCommitMsg = log.latest?.message;
 

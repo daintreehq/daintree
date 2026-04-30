@@ -1,8 +1,16 @@
-import React, { useMemo, useCallback, useEffect, useRef, useState } from "react";
+import React, { useMemo, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { useDroppable } from "@dnd-kit/core";
+import {
+  AnimatePresence,
+  LayoutGroup,
+  motion,
+  type TransformProperties,
+  type Transition,
+} from "framer-motion";
 import { cn } from "@/lib/utils";
+import { logError } from "@/utils/logger";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import {
   usePanelStore,
@@ -12,9 +20,12 @@ import {
   useTwoPaneSplitStore,
   type TerminalInstance,
 } from "@/store";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
-import { isAgentReady } from "../../../shared/utils/agentAvailability";
-import { isAgentPinned } from "../../../shared/utils/agentPinned";
+import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
+import { computeGridCanLaunch, computeGridSelectedAgentIds } from "./contentGridAgentFilter";
+import { buildFleetPanels } from "./contentGridFleetPanels";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
 import { GridNotificationBar } from "./GridNotificationBar";
@@ -34,6 +45,7 @@ import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
 import { svgToDataUrl, sanitizeSvg } from "@/lib/svg";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { TerminalRefreshTier } from "@shared/types/panel";
 import {
   computeGridColumns,
   MIN_TERMINAL_HEIGHT_PX,
@@ -58,11 +70,20 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
+
+// Snap mid-flight FLIP translations to integer pixels. xterm canvas/WebGL
+// renderers blur when an ancestor receives a fractional CSS transform
+// (Chromium bug 40892376) — this runs on every animation frame for grid
+// panels, so we round before composing the transform string.
+function pixelSnapTransform({ x, y }: TransformProperties): string {
+  const tx = typeof x === "number" ? x : parseFloat(x ?? "0") || 0;
+  const ty = typeof y === "number" ? y : parseFloat(y ?? "0") || 0;
+  return `translate3d(${Math.round(tx)}px, ${Math.round(ty)}px, 0)`;
+}
 
 interface TipEntry {
   id: string;
@@ -97,8 +118,7 @@ const TIPS: TipEntry[] = [
     id: "panel-palette",
     message: (
       <>
-        Press <Kbd>⌘N</Kbd> to open the panel palette — add terminals, browsers, notes, or dev
-        previews
+        Press <Kbd>⌘N</Kbd> to open the panel palette — add terminals, browsers, or dev previews
       </>
     ),
     actionId: "panel.palette",
@@ -200,23 +220,23 @@ function RotatingTip() {
     () =>
       TIPS.filter(
         (tip) =>
-          !tip.requiredAgents || tip.requiredAgents.some((a) => isAgentReady(availability[a]))
+          !tip.requiredAgents || tip.requiredAgents.some((a) => isAgentLaunchable(availability[a]))
       ),
     [availability]
   );
 
   if (filteredTips.length === 0) return null;
 
-  const tip = filteredTips[mountIndex.current % filteredTips.length];
+  const tip = filteredTips[mountIndex.current % filteredTips.length]!;
 
   return (
-    <div className="flex flex-col items-center gap-2 animate-in fade-in duration-300">
+    <div className="flex flex-col items-center gap-2 animate-in fade-in duration-200">
       <p className="text-xs text-daintree-text/70 text-center">Tip: {tip.message}</p>
       {tip.actionId && tip.actionLabel && (
         <button
           type="button"
           onClick={() => void actionService.dispatch(tip.actionId!, undefined, { source: "user" })}
-          className="text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent/50 rounded px-1"
+          className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 rounded px-1"
         >
           {tip.actionLabel}
         </button>
@@ -289,7 +309,7 @@ function EmptyState({
               <button
                 type="button"
                 onClick={handleOpenProjectSettings}
-                className="absolute -bottom-1 -right-1 p-1.5 bg-daintree-sidebar border border-daintree-border rounded-full opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity hover:bg-daintree-bg focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                className="absolute -bottom-1 -right-1 p-1.5 bg-daintree-sidebar border border-daintree-border rounded-full opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity hover:bg-daintree-bg focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                 aria-label="Change project icon"
               >
                 <Settings className="h-3 w-3 text-daintree-text/70" />
@@ -336,7 +356,7 @@ function EmptyState({
             <button
               type="button"
               onClick={handleOpenHelp}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-tint/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-tint/5 transition-colors group focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
             >
               <div className="w-0 h-0 border-t-[2.5px] border-t-transparent border-l-[5px] border-l-daintree-text/50 border-b-[2.5px] border-b-transparent group-hover:border-l-daintree-text/70 transition-colors" />
               <span className="text-xs text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors">
@@ -390,17 +410,23 @@ export function ContentGrid({
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
   const currentProject = useProjectStore((state) => state.currentProject);
-  const gridAgentSettings = useAgentSettingsStore((state) => state.settings);
+  const isAvailabilityInitialized = useCliAvailabilityStore((s) => s.isInitialized);
 
-  // undefined = no filter (settings not loaded or pre-migration); Set = loaded, filter to non-hidden
-  const gridSelectedAgentIds = useMemo((): Set<string> | undefined => {
-    if (!gridAgentSettings?.agents) return undefined;
-    return new Set(
-      Object.entries(gridAgentSettings.agents)
-        .filter(([, entry]) => isAgentPinned(entry))
-        .map(([id]) => id)
-    );
-  }, [gridAgentSettings]);
+  // undefined = no filter (availability not yet probed); Set = filter to installed agents.
+  // Gate on the store's `isInitialized` flag: the `agentAvailability` prop is always a
+  // defined object (pre-populated by `defaultAvailability()` with every agent as "missing"),
+  // so a `!agentAvailability` guard would never fire and the menu would start empty on cold
+  // boot until the first probe returns. Pin state intentionally does NOT gate this menu —
+  // unpinning from the toolbar must not remove an installed agent from the launch menu.
+  const gridSelectedAgentIds = useMemo(
+    () =>
+      computeGridSelectedAgentIds(
+        isAvailabilityInitialized,
+        agentAvailability,
+        getEffectiveAgentIds()
+      ),
+    [isAvailabilityInitialized, agentAvailability]
+  );
   const isProjectSwitching = false;
   const { projectIconSvg } = useProjectBranding(currentProject?.id);
   const { worktreeMap } = useWorktrees();
@@ -416,6 +442,16 @@ export function ContentGrid({
 
   // Two-pane split mode settings
   const twoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.config.enabled);
+
+  // Fleet scope render state — when the flag is "scoped" and scope is active
+  // the grid paints the armed set (across every worktree) as a flat grid of
+  // input-locked cells. Scope is a no-op in "legacy" mode.
+  const isFleetScopeActive = useWorktreeSelectionStore((state) => state.isFleetScopeActive);
+  const fleetScopeMode = useFleetScopeFlagStore((state) => state.mode);
+  const { armedIds, armOrder } = useFleetArmingStore(
+    useShallow((state) => ({ armedIds: state.armedIds, armOrder: state.armOrder }))
+  );
+  const isFleetScopeEnabled = fleetScopeMode === "scoped" && isFleetScopeActive;
 
   // Grid terminals filtered by location and active worktree
   const gridTerminals = useMemo(() => {
@@ -445,8 +481,10 @@ export function ContentGrid({
 
   // Get tab groups for the active worktree
   const tabGroups = useMemo(() => {
+    void storeTerminalIds;
+    void panelsById;
+    void trashedTerminals;
     return getTabGroups("grid", activeWorktreeId ?? undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds/panelsById/trashedTerminals are intentional trigger deps
   }, [getTabGroups, activeWorktreeId, storeTerminalIds, panelsById, trashedTerminals]);
 
   // Handler for adding a new tab to a single panel (creates a tab group)
@@ -476,7 +514,7 @@ export function ContentGrid({
         setActiveTab(groupId, newPanelId);
         setFocused(newPanelId);
       } catch (error) {
-        console.error("Failed to add tab:", error);
+        logError("Failed to add tab", error);
         if (createdNewGroup && groupId!) {
           deleteTabGroup(groupId);
         }
@@ -511,7 +549,9 @@ export function ContentGrid({
   // Track container dimensions for responsive layout and capacity calculation
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const preMaximizeLayoutRef = useRef(preMaximizeLayout);
-  preMaximizeLayoutRef.current = preMaximizeLayout;
+  useEffect(() => {
+    preMaximizeLayoutRef.current = preMaximizeLayout;
+  }, [preMaximizeLayout]);
   const [gridWidth, setGridWidth] = useState<number | null>(null);
 
   // Get placeholder state from DnD context
@@ -565,7 +605,7 @@ export function ContentGrid({
         e.stopPropagation();
         const instance = terminalInstanceService.get(focusedId);
         if (instance) {
-          instance.terminal.focus();
+          terminalInstanceService.focus(focusedId);
           useMacroFocusStore.getState().clearFocus();
         }
         return;
@@ -630,6 +670,13 @@ export function ContentGrid({
     }
   }, [layoutConfig, clearPreMaximizeLayout]);
 
+  // Hysteresis input for the automatic-strategy column count: holds the prior
+  // committed value so a brief drop in panel count doesn't ricochet the grid
+  // back through a re-flow. Read by the useMemo below; updated in the
+  // existing prevGridColsRef effect (~line 858) to mirror the codebase's
+  // established "previous value via ref" pattern.
+  const hysteresisGridColsRef = useRef<number | undefined>(undefined);
+
   const gridCols = useMemo(() => {
     if (
       !maximizedId &&
@@ -643,19 +690,38 @@ export function ContentGrid({
       return preMaximizeLayout.gridCols;
     }
     const { strategy, value } = layoutConfig;
-    return computeGridColumns(gridItemCount, gridWidth, strategy, value);
+    return computeGridColumns(
+      gridItemCount,
+      gridWidth,
+      strategy,
+      value,
+      hysteresisGridColsRef.current
+    );
   }, [gridItemCount, layoutConfig, gridWidth, maximizedId, preMaximizeLayout, activeWorktreeId]);
+
+  // FLIP transition shared across every panel in this grid. During project
+  // switching the duration drops to 0 so the freshly-hydrated panels snap into
+  // place — matching the prior CSS-transition `none` branch and preserving
+  // #4467's project-switch fit timing. MotionConfig propagates the global
+  // reduced-motion preference, so no `prefers-reduced-motion` check is needed
+  // here. Ease curve mirrors the previous `ease-out` CSS transition.
+  const layoutTransition: Transition = useMemo(
+    () => ({
+      duration: isProjectSwitching ? 0 : GRID_TRANSITION_DURATION_MS / 1000,
+      ease: [0.22, 1, 0.36, 1],
+    }),
+    [isProjectSwitching]
+  );
 
   const gridAgentMenuItems = useMemo(() => {
     return getEffectiveAgentIds()
       .filter((id) => !gridSelectedAgentIds || gridSelectedAgentIds.has(id))
       .map((id) => {
         const agentConfig = getEffectiveAgentConfig(id);
-        const canLaunch =
-          id === "terminal" ? true : !agentAvailability || isAgentReady(agentAvailability[id]);
+        const canLaunch = computeGridCanLaunch(id, isAvailabilityInitialized, agentAvailability);
         return { id, name: agentConfig?.name ?? id, canLaunch };
       });
-  }, [agentAvailability, gridSelectedAgentIds]);
+  }, [agentAvailability, gridSelectedAgentIds, isAvailabilityInitialized]);
 
   const handleGridLaunch = useCallback(
     (agentId: string) => {
@@ -689,20 +755,117 @@ export function ContentGrid({
     return ids;
   }, [tabGroups, showPlaceholder, placeholderIndex, placeholderInGrid]);
 
-  // Batch-fit grid terminals when layout (gridCols/count) changes
-  useEffect(() => {
-    const ids = gridTerminals.map((t) => t.id);
-    let cancelled = false;
+  // Fleet scope projection: order is the user's arm order, dropping any ids
+  // that have since been pruned, trashed, or moved to the dock. We resolve
+  // against panelsById once here so GridPanel cells receive stable refs.
+  // Shared with useGridNavigation so the focus model never drifts from
+  // what's rendered (#5989).
+  const fleetPanels = useMemo(() => {
+    if (!isFleetScopeEnabled) return [];
+    return buildFleetPanels(armOrder, armedIds, panelsById);
+  }, [isFleetScopeEnabled, armOrder, armedIds, panelsById]);
 
+  // Only render the fleet grid if at least one armed panel is actually
+  // grid-renderable. Otherwise fall through to the normal active-worktree
+  // grid so the user isn't trapped in an empty fleet view when every
+  // armed terminal has been moved to the dock or trashed.
+  const isFleetScopeRender = isFleetScopeEnabled && fleetPanels.length > 0;
+
+  const fleetNeedsWorktreePrefix = useMemo(() => {
+    if (fleetPanels.length <= 1) return false;
+    const firstWorktreeId = fleetPanels[0]?.worktreeId ?? null;
+    return fleetPanels.some((t) => (t.worktreeId ?? null) !== firstWorktreeId);
+  }, [fleetPanels]);
+
+  // Independent hysteresis state for the fleet grid — must not share with the
+  // main grid because fleet spans different worktrees with its own panel
+  // count history.
+  const hysteresisFleetColsRef = useRef<number | undefined>(undefined);
+
+  const fleetGridCols = useMemo(() => {
+    if (!isFleetScopeRender) return 1;
+    const { strategy, value } = layoutConfig;
+    return computeGridColumns(
+      Math.max(fleetPanels.length, 1),
+      gridWidth,
+      strategy,
+      value,
+      hysteresisFleetColsRef.current
+    );
+  }, [isFleetScopeRender, fleetPanels, layoutConfig, gridWidth]);
+
+  // Dedicated fleet batch-fit: the main startBatchFit closure reads
+  // `gridTerminals` and can't be redirected at the current armed set, which
+  // spans worktrees. Stagger fits via rAF to let xterm reattach per cell
+  // without starving the renderer — lesson #5092 flagged simultaneous cross-
+  // worktree mounts as a risk for IntersectionObserver misfires. We also
+  // promote every mounted fleet cell to VISIBLE so cross-worktree terminals
+  // keep streaming output — worktreeStore's per-worktree policy would
+  // otherwise demote them to BACKGROUND (showing stale frames).
+  const prevFleetGridColsRef = useRef(fleetGridCols);
+  useEffect(() => {
+    // Hysteresis ref is only meaningful for the automatic strategy — fixed
+    // strategies produce user-chosen counts that must not bias a future auto
+    // computation. Cleared whenever strategy isn't automatic or fleet scope
+    // isn't actively rendering.
+    const writeFleetHysteresis =
+      isFleetScopeRender && layoutConfig.strategy === "automatic" ? fleetGridCols : undefined;
+    if (!isFleetScopeRender) {
+      prevFleetGridColsRef.current = fleetGridCols;
+      hysteresisFleetColsRef.current = writeFleetHysteresis;
+      return;
+    }
+    const ids = fleetPanels.map((t) => t.id);
+    for (const id of ids) {
+      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+    }
+    // Mirror the main grid: lock resizes for the FLIP window when fleet column
+    // count changes so motion.div translations don't trigger spurious SIGWINCH.
+    const fleetColsChanged = prevFleetGridColsRef.current !== fleetGridCols;
+    prevFleetGridColsRef.current = fleetGridCols;
+    hysteresisFleetColsRef.current = writeFleetHysteresis;
+    if (fleetColsChanged && !isDraggingRef.current && ids.length > 0) {
+      terminalInstanceService.suppressResizesDuringLayoutTransition(
+        ids,
+        GRID_TRANSITION_DURATION_MS
+      );
+    }
+    const cancelRef = { cancelled: false };
     const timeoutId = window.setTimeout(() => {
+      if (isDraggingRef.current) return;
+      let index = 0;
+      const processNext = () => {
+        if (cancelRef.cancelled || index >= ids.length) return;
+        if (isDraggingRef.current) return;
+        const id = ids[index++]!;
+        const managed = terminalInstanceService.get(id);
+        if (managed?.hostElement.isConnected) {
+          terminalInstanceService.fit(id);
+        }
+        requestAnimationFrame(processNext);
+      };
+      processNext();
+    }, GRID_FIT_DELAY_MS);
+    return () => {
+      cancelRef.cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [isFleetScopeRender, fleetPanels, fleetGridCols, layoutConfig.strategy]);
+
+  // Batch-fit grid terminals when layout (gridCols/count) changes.
+  // gridTerminals is read via useEffectEvent so the effect doesn't re-run on
+  // worktree switch (which mutates gridTerminals without changing layout).
+  const startBatchFit = useEffectEvent((cancelRef: { cancelled: boolean }) => {
+    const ids = gridTerminals.map((t) => t.id);
+    return window.setTimeout(() => {
       if (isDraggingRef.current) return;
 
       let index = 0;
       const processNext = () => {
-        if (cancelled || index >= ids.length) return;
+        if (cancelRef.cancelled || index >= ids.length) return;
         if (isDraggingRef.current) return;
 
-        const id = ids[index++];
+        const id = ids[index++]!;
         const managed = terminalInstanceService.get(id);
 
         if (managed?.hostElement.isConnected) {
@@ -712,13 +875,51 @@ export function ContentGrid({
       };
       processNext();
     }, GRID_FIT_DELAY_MS);
+  });
+  // When the column count changes, the grid runs a per-panel FLIP animation
+  // (`layout="position"` on each SortableTerminal). Lock xterm resizes for the
+  // animation window so mid-flight `getBoundingClientRect` reads — which would
+  // otherwise produce fractional dimensions and spurious SIGWINCH on Codex and
+  // similar PTY-sensitive CLIs — are deferred until the panels settle. The
+  // batch-fit then runs `GRID_FIT_DELAY_MS` later (200ms animation + 50ms
+  // safety buffer), once geometry is final. See lessons #4170 and #4467.
+  // We deliberately skip the suppress call while a drag is active: the unlock
+  // fires unconditionally after 200ms and would prematurely clear a drag-held
+  // resize lock if a drop crosses a column threshold.
+  const prevGridColsRef = useRef(gridCols);
+  useEffect(() => {
+    void gridCols;
+    void panelIds;
+
+    const colsChanged = prevGridColsRef.current !== gridCols;
+    prevGridColsRef.current = gridCols;
+    // Only retain hysteresis state for the automatic strategy. Fixed strategies
+    // produce user-chosen column counts that must not bias a future automatic
+    // computation (e.g. fixed-columns=4 leaving the auto path stuck at 4).
+    // Skip the write while a drag placeholder is active so a phantom +1 in
+    // gridItemCount can't permanently sticky-widen the grid after a cancelled
+    // drop.
+    hysteresisGridColsRef.current =
+      layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined;
+
+    if (colsChanged && !isProjectSwitching && !isDraggingRef.current) {
+      const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
+      if (realPanelIds.length > 0) {
+        terminalInstanceService.suppressResizesDuringLayoutTransition(
+          realPanelIds,
+          GRID_TRANSITION_DURATION_MS
+        );
+      }
+    }
+
+    const cancelRef = { cancelled: false };
+    const timeoutId = startBatchFit(cancelRef);
 
     return () => {
-      cancelled = true;
+      cancelRef.cancelled = true;
       clearTimeout(timeoutId);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- gridTerminals intentionally excluded to prevent redundant fit cycles on worktree switch
-  }, [gridCols, panelIds]);
+  }, [gridCols, panelIds, isProjectSwitching, layoutConfig.strategy, showPlaceholder]);
 
   // Show "grid full" overlay when trying to drag from dock to a full grid
   const showGridFullOverlay = sourceContainer === "dock" && isGridFull;
@@ -741,13 +942,16 @@ export function ContentGrid({
       .slice(0, 2)
       .map((g) => getTabGroupPanels(g.id, "grid")[0])
       .filter((t): t is TerminalInstance => t !== undefined);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     return panels.length === 2 ? (panels as [TerminalInstance, TerminalInstance]) : null;
   }, [useTwoPaneSplitMode, tabGroups, getTabGroupPanels]);
 
   // Track mode transitions and stabilize terminals after switch
   const prevModeRef = useRef<boolean>(useTwoPaneSplitMode);
   const gridTerminalsRef = useRef(gridTerminals);
-  gridTerminalsRef.current = gridTerminals;
+  useEffect(() => {
+    gridTerminalsRef.current = gridTerminals;
+  }, [gridTerminals]);
 
   useEffect(() => {
     const prevMode = prevModeRef.current;
@@ -758,6 +962,7 @@ export function ContentGrid({
       prevModeRef.current = currentMode;
 
       // Immediate stabilization fit after mode switch
+      const MODE_SWITCH_FIT_DELAY_MS = 50;
       const timeoutId = window.setTimeout(() => {
         if (isDraggingRef.current) return;
 
@@ -769,7 +974,7 @@ export function ContentGrid({
             terminalInstanceService.fit(id);
           }
         }
-      }, 50);
+      }, MODE_SWITCH_FIT_DELAY_MS);
 
       return () => clearTimeout(timeoutId);
     }
@@ -874,6 +1079,111 @@ export function ContentGrid({
     </ContextMenuContent>
   );
 
+  // Fleet scope render path: a flat grid of armed terminals from every
+  // worktree, each input-locked with a broadcast overlay. Deliberately
+  // placed before the maximize branch — a maximize captured against a
+  // different worktree must not shadow the fleet view. DnD, two-pane, and
+  // tab-group logic are bypassed entirely; the armed set is the source of
+  // truth for both membership and order.
+  if (isFleetScopeRender) {
+    return (
+      <div
+        key="fleet-scope-mode"
+        ref={gridRegionRef}
+        role="region"
+        tabIndex={-1}
+        aria-label="Fleet scope grid"
+        data-fleet-scope="true"
+        data-macro-focus={isMacroFocused ? "true" : undefined}
+        onKeyDown={handleGridRegionKeyDown}
+        className={cn(
+          "h-full flex flex-col outline-hidden",
+          "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
+          className
+        )}
+      >
+        <GridNotificationBar className="mx-1 mt-1 shrink-0" />
+        <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
+        <div className="relative flex-1 min-h-0">
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              <div
+                ref={combinedGridRef}
+                className="h-full bg-noise p-1"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: `repeat(${fleetGridCols}, minmax(0, 1fr))`,
+                  gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
+                  gap: "4px",
+                  backgroundColor: "var(--color-grid-bg)",
+                  overflowY: "auto",
+                }}
+                id="panel-grid"
+                data-grid-container="true"
+              >
+                {fleetPanels.length === 0 ? (
+                  <div className="col-span-full row-span-full">
+                    <EmptyState
+                      hasActiveWorktree={hasActiveWorktree}
+                      activeWorktreeName={activeWorktreeName}
+                      activeWorktreeId={activeWorktreeId}
+                      showProjectPulse={showProjectPulse}
+                      projectIconSvg={projectIconSvg}
+                      defaultCwd={defaultCwd}
+                    />
+                  </div>
+                ) : (
+                  <LayoutGroup id="fleet-grid">
+                    <AnimatePresence initial={false}>
+                      {fleetPanels.map((terminal) => {
+                        let titleOverride: string | undefined;
+                        if (fleetNeedsWorktreePrefix) {
+                          const worktreeId = terminal.worktreeId ?? null;
+                          const worktree = worktreeId ? worktreeMap.get(worktreeId) : null;
+                          const prefix = worktree
+                            ? worktree.isMainWorktree
+                              ? worktree.name?.trim() ||
+                                worktree.branch?.trim() ||
+                                "Unknown Worktree"
+                              : worktree.branch?.trim() ||
+                                worktree.name?.trim() ||
+                                "Unknown Worktree"
+                            : null;
+                          if (prefix) {
+                            titleOverride = `${prefix} — ${terminal.title}`;
+                          }
+                        }
+                        return (
+                          <motion.div
+                            key={terminal.id}
+                            layout="position"
+                            transition={layoutTransition}
+                            transformTemplate={pixelSnapTransform}
+                            className="h-full min-w-0"
+                          >
+                            <GridPanel
+                              terminal={terminal}
+                              isFocused={terminal.id === focusedId}
+                              gridPanelCount={fleetPanels.length}
+                              gridCols={fleetGridCols}
+                              isFleetScope
+                              titleOverride={titleOverride}
+                            />
+                          </motion.div>
+                        );
+                      })}
+                    </AnimatePresence>
+                  </LayoutGroup>
+                )}
+              </div>
+            </ContextMenuTrigger>
+            {gridContextMenuContent}
+          </ContextMenu>
+        </div>
+      </div>
+    );
+  }
+
   // Maximized terminal or group takes full screen
   if (maximizedId && maximizeTarget) {
     if (maximizeTarget.type === "group") {
@@ -892,7 +1202,7 @@ export function ContentGrid({
             data-macro-focus={isMacroFocused ? "true" : undefined}
             onKeyDown={handleGridRegionKeyDown}
             className={cn(
-              "h-full flex flex-col bg-daintree-bg outline-none",
+              "h-full flex flex-col bg-daintree-bg outline-hidden",
               "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
               className
             )}
@@ -925,7 +1235,7 @@ export function ContentGrid({
             data-macro-focus={isMacroFocused ? "true" : undefined}
             onKeyDown={handleGridRegionKeyDown}
             className={cn(
-              "h-full flex flex-col bg-daintree-bg outline-none",
+              "h-full flex flex-col bg-daintree-bg outline-hidden",
               "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
               className
             )}
@@ -959,7 +1269,7 @@ export function ContentGrid({
         data-macro-focus={isMacroFocused ? "true" : undefined}
         onKeyDown={handleGridRegionKeyDown}
         className={cn(
-          "h-full flex flex-col outline-none",
+          "h-full flex flex-col outline-hidden",
           "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
           className
         )}
@@ -1002,7 +1312,7 @@ export function ContentGrid({
       data-macro-focus={isMacroFocused ? "true" : undefined}
       onKeyDown={handleGridRegionKeyDown}
       className={cn(
-        "h-full flex flex-col outline-none",
+        "h-full flex flex-col outline-hidden",
         "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
         className
       )}
@@ -1025,14 +1335,9 @@ export function ContentGrid({
                   gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
                   gap: "4px",
                   backgroundColor: "var(--color-grid-bg)",
-                  transition: isProjectSwitching
-                    ? "none"
-                    : `grid-template-columns ${GRID_TRANSITION_DURATION_MS}ms ease-out`,
                   overflowY: "auto",
                 }}
-                role="grid"
                 id="panel-grid"
-                aria-label="Panel grid"
                 data-grid-container="true"
               >
                 {isEmpty && !showPlaceholder ? (
@@ -1049,7 +1354,7 @@ export function ContentGrid({
                     )}
                   </div>
                 ) : (
-                  <>
+                  <LayoutGroup id="main-grid">
                     {tabGroups.map((group, index) => {
                       const groupPanels = getTabGroupPanels(group.id, "grid");
                       if (groupPanels.length === 0) return null;
@@ -1063,7 +1368,7 @@ export function ContentGrid({
                       const isGroupDisabled = groupPanels.some((p) => isInTrash(p.id));
 
                       if (groupPanels.length === 1) {
-                        const terminal = groupPanels[0];
+                        const terminal = groupPanels[0]!;
                         elements.push(
                           <SortableTerminal
                             key={group.id}
@@ -1071,6 +1376,7 @@ export function ContentGrid({
                             sourceLocation="grid"
                             sourceIndex={index}
                             disabled={isGroupDisabled}
+                            layoutTransition={layoutTransition}
                           >
                             <GridPanel
                               terminal={terminal}
@@ -1082,7 +1388,7 @@ export function ContentGrid({
                           </SortableTerminal>
                         );
                       } else {
-                        const firstPanel = groupPanels[0];
+                        const firstPanel = groupPanels[0]!;
                         elements.push(
                           <SortableTerminal
                             key={group.id}
@@ -1092,6 +1398,7 @@ export function ContentGrid({
                             disabled={isGroupDisabled}
                             groupId={group.id}
                             groupPanelIds={group.panelIds}
+                            layoutTransition={layoutTransition}
                           >
                             <GridTabGroup
                               group={group}
@@ -1111,7 +1418,7 @@ export function ContentGrid({
                       placeholderIndex === tabGroups.length && (
                         <SortableGridPlaceholder key={GRID_PLACEHOLDER_ID} />
                       )}
-                  </>
+                  </LayoutGroup>
                 )}
               </div>
             </ContextMenuTrigger>
@@ -1124,5 +1431,3 @@ export function ContentGrid({
     </div>
   );
 }
-
-export default ContentGrid;

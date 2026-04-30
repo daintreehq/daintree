@@ -35,4 +35,16 @@ describe("SettingsSection", () => {
     );
     expect(screen.queryByText("New Terminals")).toBeNull();
   });
+
+  it("uses grid layout with single-column track", () => {
+    const { container } = render(
+      <SettingsSection icon={TestIcon} title="My Section" description="desc">
+        <div>child</div>
+      </SettingsSection>
+    );
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.classList.contains("grid")).toBe(true);
+    expect(root.classList.contains("grid-cols-[minmax(0,1fr)]")).toBe(true);
+    expect(root.classList.contains("gap-3")).toBe(true);
+  });
 });

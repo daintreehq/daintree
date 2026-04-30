@@ -54,10 +54,13 @@ import {
   consumeRestoreQuota,
   _resetRateLimitQueuesForTest,
 } from "../utils.js";
+import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../ipcGuard.js";
 
 describe("ipc utils", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetIpcGuardForTesting();
+    markIpcSecurityReady();
   });
 
   it("sendToRenderer sends when window and webContents are alive", () => {
@@ -197,6 +200,22 @@ describe("ipc utils", () => {
     const ctx = handler.mock.calls[0][0] as { webContentsId: number; senderWindow: unknown };
     expect(ctx.webContentsId).toBe(99);
     expect(ctx.senderWindow).toBeNull();
+  });
+
+  it("typedHandle throws when invoked before enforceIpcSenderValidation", () => {
+    _resetIpcGuardForTesting();
+    expect(() => typedHandle("project:get:all" as never, (async () => ({})) as never)).toThrow(
+      /'project:get:all'/
+    );
+    expect(ipcMainMock.handle).not.toHaveBeenCalled();
+  });
+
+  it("typedHandleWithContext throws when invoked before enforceIpcSenderValidation", () => {
+    _resetIpcGuardForTesting();
+    expect(() =>
+      typedHandleWithContext("project:get:all" as never, (async () => ({})) as never)
+    ).toThrow(/'project:get:all'/);
+    expect(ipcMainMock.handle).not.toHaveBeenCalled();
   });
 });
 

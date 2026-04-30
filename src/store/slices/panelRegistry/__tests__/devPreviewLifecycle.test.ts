@@ -87,7 +87,6 @@ describe("dev-preview lifecycle integration", () => {
         "dev-panel-1": {
           id: "dev-panel-1",
           kind: "dev-preview",
-          type: "terminal",
           title: "Dev Preview",
           cwd: "/repo",
           cols: 80,
@@ -110,7 +109,6 @@ describe("dev-preview lifecycle integration", () => {
         "dev-panel-2": {
           id: "dev-panel-2",
           kind: "dev-preview",
-          type: "terminal",
           title: "Dev Preview",
           cwd: "/repo",
           cols: 80,
@@ -140,7 +138,6 @@ describe("dev-preview lifecycle integration", () => {
         "dev-panel-3": {
           id: "dev-panel-3",
           kind: "dev-preview",
-          type: "terminal",
           title: "Dev Preview",
           cwd: "/repo",
           cols: 80,
@@ -151,7 +148,6 @@ describe("dev-preview lifecycle integration", () => {
         "term-1": {
           id: "term-1",
           kind: "terminal",
-          type: "terminal",
           title: "Terminal",
           cwd: "/repo",
           cols: 80,
@@ -182,7 +178,6 @@ describe("dev-preview lifecycle integration", () => {
         "dev-panel-a": {
           id: "dev-panel-a",
           kind: "dev-preview",
-          type: "terminal",
           title: "Dev Preview A",
           cwd: "/repo",
           cols: 80,
@@ -193,7 +188,6 @@ describe("dev-preview lifecycle integration", () => {
         "dev-panel-b": {
           id: "dev-panel-b",
           kind: "dev-preview",
-          type: "terminal",
           title: "Dev Preview B",
           cwd: "/repo",
           cols: 80,
@@ -204,7 +198,6 @@ describe("dev-preview lifecycle integration", () => {
         "term-2": {
           id: "term-2",
           kind: "terminal",
-          type: "terminal",
           title: "Terminal",
           cwd: "/repo",
           cols: 80,

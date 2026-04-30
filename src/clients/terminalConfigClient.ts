@@ -1,4 +1,5 @@
 import type { TerminalConfig } from "@shared/types";
+import type { TerminalColorScheme } from "@/config/terminalColorSchemes";
 
 export const terminalConfigClient = {
   get: (): Promise<TerminalConfig> => {
@@ -33,8 +34,8 @@ export const terminalConfigClient = {
     return window.electron.terminalConfig.setColorScheme(schemeId);
   },
 
-  setCustomSchemes: (schemesJson: string): Promise<void> => {
-    return window.electron.terminalConfig.setCustomSchemes(schemesJson);
+  setCustomSchemes: (schemes: TerminalColorScheme[]): Promise<void> => {
+    return window.electron.terminalConfig.setCustomSchemes(schemes);
   },
 
   setRecentSchemeIds: (ids: string[]): Promise<void> => {

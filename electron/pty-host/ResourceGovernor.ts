@@ -10,6 +10,10 @@ export interface ResourceGovernorDeps {
   getTerminalPids: () => Array<{ id: string; pid: number | undefined }>;
   incrementPauseCount: (count: number) => void;
   sendEvent: (event: PtyHostEvent) => void;
+  getPendingBytesSnapshot?: () => {
+    totalPendingBytes: number;
+    perTerminal: Array<{ terminalId: string; pendingBytes: number }>;
+  };
 }
 
 export class ResourceGovernor {
@@ -60,6 +64,7 @@ export class ResourceGovernor {
     }
 
     this.checkFdUsage();
+    this.emitPendingBytesGauge();
   }
 
   private checkFdUsage(): void {
@@ -112,6 +117,25 @@ export class ResourceGovernor {
         timestamp: now,
       });
     }
+  }
+
+  private emitPendingBytesGauge(): void {
+    if (!metricsEnabled()) return;
+    if (!this.deps.getPendingBytesSnapshot) return;
+
+    const snapshot = this.deps.getPendingBytesSnapshot();
+    if (snapshot.totalPendingBytes <= 0) return;
+
+    this.deps.sendEvent({
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "pending-bytes-gauge",
+        timestamp: Date.now(),
+        totalPendingBytes: snapshot.totalPendingBytes,
+        perTerminal: snapshot.perTerminal,
+      },
+    });
   }
 
   private engageThrottle(currentUsageMb: number, percent: number): void {

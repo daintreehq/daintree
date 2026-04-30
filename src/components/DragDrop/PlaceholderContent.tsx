@@ -22,8 +22,6 @@ export function PlaceholderContent({ kind, agentId, compact = false }: Placehold
       return <AgentPlaceholder color={color} compact={compact} />;
     case "browser":
       return <BrowserPlaceholder color={color} compact={compact} />;
-    case "notes":
-      return <NotesPlaceholder color={color} compact={compact} />;
     case "dev-preview":
       return <DevPreviewPlaceholder color={color} compact={compact} />;
     default:
@@ -201,68 +199,6 @@ function BrowserPlaceholder({ color, compact }: PlaceholderProps) {
               borderRadius: "var(--radius-sm)",
             }}
           />
-        )}
-      </div>
-    </div>
-  );
-}
-
-/**
- * Notes placeholder: Title line + body text lines
- */
-function NotesPlaceholder({ color, compact }: PlaceholderProps) {
-  const titleHeight = compact ? 5 : 7;
-  const lineHeight = compact ? 4 : 5;
-  const gap = compact ? 3 : 4;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap, width: "100%" }}>
-      {/* Title (thicker) */}
-      <div
-        style={{
-          height: titleHeight,
-          width: "75%",
-          backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
-          borderRadius: "var(--radius-sm)",
-        }}
-      />
-      {/* Body text lines */}
-      <div style={{ display: "flex", flexDirection: "column", gap: compact ? 2 : 3, marginTop: 2 }}>
-        <div
-          style={{
-            height: lineHeight,
-            width: "90%",
-            backgroundColor: `color-mix(in srgb, ${color} 8%, transparent)`,
-            borderRadius: "var(--radius-sm)",
-          }}
-        />
-        <div
-          style={{
-            height: lineHeight,
-            width: "70%",
-            backgroundColor: `color-mix(in srgb, ${color} 8%, transparent)`,
-            borderRadius: "var(--radius-sm)",
-          }}
-        />
-        {!compact && (
-          <>
-            <div
-              style={{
-                height: lineHeight,
-                width: "80%",
-                backgroundColor: `color-mix(in srgb, ${color} 8%, transparent)`,
-                borderRadius: "var(--radius-sm)",
-              }}
-            />
-            <div
-              style={{
-                height: lineHeight,
-                width: "50%",
-                backgroundColor: `color-mix(in srgb, ${color} 8%, transparent)`,
-                borderRadius: "var(--radius-sm)",
-              }}
-            />
-          </>
         )}
       </div>
     </div>

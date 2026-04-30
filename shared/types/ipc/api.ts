@@ -10,8 +10,9 @@ import type {
   TerminalRecipe,
   TerminalSnapshot,
 } from "../project.js";
-import type { OnboardingState, ChecklistState, ChecklistItemId } from "./maps.js";
+import type { OnboardingState, ChecklistState, ChecklistItemId, IpcEventBusMap } from "./maps.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
+import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { VoiceInputStatus } from "../voice.js";
 export type { VoiceInputStatus };
 import type { ResourceProfilePayload } from "../resourceProfile.js";
@@ -25,11 +26,17 @@ import type {
   IssueAssociation,
 } from "./worktree.js";
 import type {
+  WorktreePortAction,
+  WorktreePortRequestArgs,
+  WorktreePortResult,
+} from "../worktree-port.js";
+import type {
   TerminalSpawnOptions,
   TerminalReconnectResult,
   BackendTerminalInfo,
   TerminalInfoPayload,
   TerminalActivityPayload,
+  SemanticSearchMatch,
 } from "./terminal.js";
 import type {
   SaveArtifactOptions,
@@ -39,6 +46,7 @@ import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
+  AgentFallbackTriggeredPayload,
   ArtifactDetectedPayload,
   AgentHelpRequest,
   AgentHelpResult,
@@ -50,9 +58,6 @@ import type {
   DemoStartCaptureResult,
   DemoStopCaptureResult,
   DemoCaptureStatus,
-  DemoEncodePayload,
-  DemoEncodeProgressEvent,
-  DemoEncodeResult,
   DemoAnnotateResult,
 } from "./demo.js";
 import type {
@@ -65,6 +70,7 @@ import type {
   SystemWakePayload,
   SystemOpenInEditorPayload,
   CliAvailability,
+  AgentCliDetails,
   AgentVersionInfo,
   AgentUpdateSettings,
   StartAgentUpdatePayload,
@@ -75,7 +81,7 @@ import type {
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
-import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
+import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
 import type {
   ProjectCloseResult,
@@ -92,6 +98,10 @@ import type {
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
+  GitHubRateLimitPayload,
+  GitHubTokenHealthPayload,
+  RepoStatsAndPagePayload,
+  GitHubFirstPageCachePayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -115,6 +125,7 @@ import type {
   PtyHostActivityTier,
   SpawnResult,
   TerminalResourceBatchPayload,
+  BroadcastWriteResultPayload,
 } from "../pty-host.js";
 import type { ShowContextMenuPayload } from "../menu.js";
 import type {
@@ -130,6 +141,7 @@ import type {
   DevPreviewStopByPanelRequest,
   DevPreviewSessionState,
   DevPreviewStateChangedPayload,
+  DevPreviewGetByWorktreeRequest,
 } from "./devPreview.js";
 import type {
   CommandContext,
@@ -143,6 +155,7 @@ import type { AppAgentConfig } from "../appAgent.js";
 import type { ActionContext } from "../actions.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
+import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 
 export interface NotificationSettings {
   enabled: boolean;
@@ -157,6 +170,14 @@ export interface NotificationSettings {
   workingPulseEnabled: boolean;
   workingPulseSoundFile: string;
   uiFeedbackSoundEnabled: boolean;
+  /** When true, non-urgent notifications are suppressed during the scheduled window. */
+  quietHoursEnabled: boolean;
+  /** Start of the quiet window, minutes since local midnight (0-1439). */
+  quietHoursStartMin: number;
+  /** End of the quiet window, minutes since local midnight (0-1439). Start === End disables. */
+  quietHoursEndMin: number;
+  /** Days the schedule applies to, 0 (Sun) - 6 (Sat). Empty array means every day. */
+  quietHoursWeekdays: number[];
 }
 
 // ElectronAPI Type (exposed via preload)
@@ -198,16 +219,21 @@ export interface ElectronAPI {
     detachIssue(worktreeId: string): Promise<void>;
     getIssueAssociation(worktreeId: string): Promise<IssueAssociation | null>;
     getAllIssueAssociations(): Promise<Record<string, IssueAssociation>>;
+    restartService(): Promise<void>;
     onUpdate(callback: (state: WorktreeState) => void): () => void;
     onRemove(callback: (data: { worktreeId: string }) => void): () => void;
     onActivated(callback: (data: { worktreeId: string }) => void): () => void;
   };
   worktreePort: {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    request(action: string, payload?: Record<string, unknown>): Promise<any>;
+    request<K extends WorktreePortAction>(
+      action: K,
+      ...args: WorktreePortRequestArgs<K>
+    ): Promise<WorktreePortResult<K>>;
     onEvent(type: string, callback: (data: unknown) => void): () => void;
     isReady(): boolean;
     onReady(callback: () => void): () => void;
+    onDisconnected(callback: () => void): () => void;
+    onFatalDisconnect(callback: () => void): () => void;
   };
   terminal: {
     spawn(options: TerminalSpawnOptions): Promise<string>;
@@ -225,6 +251,7 @@ export interface ElectronAPI {
     getAvailableTerminals(): Promise<BackendTerminalInfo[]>;
     getTerminalsByState(state: import("../agent.js").AgentState): Promise<BackendTerminalInfo[]>;
     getAllTerminals(): Promise<BackendTerminalInfo[]>;
+    searchSemanticBuffers(query: string, isRegex: boolean): Promise<SemanticSearchMatch[]>;
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;
     replayHistory(terminalId: string, maxLines?: number): Promise<{ replayed: number }>;
     getSerializedState(terminalId: string): Promise<string | null>;
@@ -240,11 +267,12 @@ export interface ElectronAPI {
     onAgentStateChanged(callback: (data: AgentStateChangePayload) => void): () => void;
     onAgentDetected(callback: (data: AgentDetectedPayload) => void): () => void;
     onAgentExited(callback: (data: AgentExitedPayload) => void): () => void;
+    onFallbackTriggered(callback: (data: AgentFallbackTriggeredPayload) => void): () => void;
     onAllAgentsClear(callback: (data: { timestamp: number }) => void): () => void;
     onActivity(callback: (data: TerminalActivityPayload) => void): () => void;
     onTrashed(callback: (data: { id: string; expiresAt: number }) => void): () => void;
     onRestored(callback: (data: { id: string }) => void): () => void;
-    forceResume(id: string): Promise<{ success: boolean; error?: string }>;
+    forceResume(id: string): Promise<void>;
     onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
     onResourceMetrics(
       callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
@@ -259,7 +287,11 @@ export interface ElectronAPI {
     ): () => void;
     onBackendReady(callback: () => void): () => void;
     sendKey(id: string, key: string): void;
+    batchDoubleEscape(ids: string[]): void;
+    broadcastWrite(ids: string[], data: string): void;
+    onBroadcastWriteResult(callback: (data: BroadcastWriteResultPayload) => void): () => void;
     reportTitleState(id: string, state: "working" | "waiting"): void;
+    updateObservedTitle(id: string, title: string): void;
     onSpawnResult(callback: (id: string, result: SpawnResult) => void): () => void;
     onReduceScrollback(
       callback: (data: { terminalIds: string[]; targetLines: number }) => void
@@ -313,6 +345,7 @@ export interface ElectronAPI {
     getTmpDir(): Promise<string>;
     getCliAvailability(): Promise<CliAvailability>;
     refreshCliAvailability(): Promise<CliAvailability>;
+    getAgentCliDetails(): Promise<AgentCliDetails>;
     getAgentVersions(): Promise<AgentVersionInfo[]>;
     refreshAgentVersions(): Promise<AgentVersionInfo[]>;
     getAgentUpdateSettings(): Promise<AgentUpdateSettings>;
@@ -322,6 +355,10 @@ export interface ElectronAPI {
     getHealthCheckSpecs(agentIds?: string[]): Promise<PrerequisiteSpec[]>;
     checkTool(spec: PrerequisiteSpec): Promise<PrerequisiteCheckResult>;
     downloadDiagnostics(): Promise<boolean>;
+    collectDiagnosticsForReview(): Promise<import("./system.js").DiagnosticsReviewPayload>;
+    saveDiagnosticsBundle(
+      payload: import("./system.js").DiagnosticsBundleSavePayload
+    ): Promise<boolean>;
     getAppMetrics(): Promise<import("./system.js").AppMetricsSummary>;
     getHardwareInfo(): Promise<import("./system.js").HardwareInfo>;
     getProcessMetrics(): Promise<import("./system.js").ProcessMetricEntry[]>;
@@ -345,6 +382,8 @@ export interface ElectronAPI {
     hydrate(): Promise<HydrateResult>;
     quit(): Promise<void>;
     forceQuit(): Promise<void>;
+    resetAndRelaunch(): Promise<void>;
+    notifyFirstInteractive(): Promise<void>;
     onMenuAction(callback: (action: string) => void): () => void;
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;
@@ -357,7 +396,7 @@ export interface ElectronAPI {
     getSources(): Promise<string[]>;
     clear(): Promise<void>;
     openFile(): Promise<void>;
-    setVerbose(enabled: boolean): Promise<{ success: boolean }>;
+    setVerbose(enabled: boolean): Promise<void>;
     getVerbose(): Promise<boolean>;
     onEntry(callback: (entry: LogEntry) => void): () => void;
     onBatch(callback: (entries: LogEntry[]) => void): () => void;
@@ -366,14 +405,18 @@ export interface ElectronAPI {
       message: string,
       context?: Record<string, unknown>
     ): Promise<void>;
+    getLevelOverrides(): Promise<Record<string, string>>;
+    setLevelOverrides(overrides: Record<string, string>): Promise<{ success: boolean }>;
+    clearLevelOverrides(): Promise<{ success: boolean }>;
+    getRegistry(): Promise<string[]>;
   };
   errors: {
-    onError(callback: (error: AppError) => void): () => void;
+    onError(callback: (error: ErrorRecord) => void): () => void;
     retry(errorId: string, action: RetryAction, args?: Record<string, unknown>): Promise<void>;
     cancelRetry(errorId: string): void;
     onRetryProgress(callback: (payload: RetryProgressPayload) => void): () => void;
     openLogs(): Promise<void>;
-    getPending(): Promise<AppError[]>;
+    getPending(): Promise<ErrorRecord[]>;
   };
   eventInspector: {
     getEvents(): Promise<EventRecord[]>;
@@ -381,11 +424,14 @@ export interface ElectronAPI {
     clear(): Promise<void>;
     subscribe(): void;
     unsubscribe(): void;
-    onEvent(callback: (event: EventRecord) => void): () => void;
     onEventBatch(callback: (events: EventRecord[]) => void): () => void;
   };
   events: {
     emit(eventType: string, payload: unknown): Promise<void>;
+    on<K extends keyof IpcEventBusMap>(
+      name: K,
+      callback: (payload: IpcEventBusMap[K]) => void
+    ): () => void;
   };
   project: {
     getAll(): Promise<Project[]>;
@@ -453,6 +499,7 @@ export interface ElectronAPI {
       previousName?: string
     ): Promise<void>;
     deleteInRepoRecipe(projectId: string, recipeName: string): Promise<void>;
+    getInRepoPresets(projectId: string): Promise<Record<string, AgentPreset[]>>;
     /**
      * Get saved terminal snapshots for a project (per-project panel state).
      * Used for restoring panel layout when switching projects.
@@ -526,6 +573,11 @@ export interface ElectronAPI {
      */
     disableInRepoSettings(projectId: string): Promise<Project>;
     /**
+     * Detect agent context files (e.g. CLAUDE.md, AGENTS.md, .mcp.json) at the project root.
+     * Returns the display names of the files that exist. Order is stable.
+     */
+    detectContextFiles(projectId: string): Promise<string[]>;
+    /**
      * Checks all non-active projects for missing directories.
      * Updates status to "missing" for projects whose paths no longer exist,
      * and resets "missing" back to "closed" for paths that are accessible again.
@@ -573,6 +625,7 @@ export interface ElectronAPI {
   };
   github: {
     getRepoStats(cwd: string, bypassCache?: boolean): Promise<RepositoryStats>;
+    getFirstPageCache(cwd: string): Promise<GitHubFirstPageCachePayload | null>;
     getProjectHealth(cwd: string, bypassCache?: boolean): Promise<ProjectHealthData>;
     openIssues(cwd: string, query?: string, state?: string): Promise<void>;
     openPRs(cwd: string, query?: string, state?: string): Promise<void>;
@@ -620,90 +673,15 @@ export interface ElectronAPI {
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
     onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;
     onIssueNotFound(callback: (data: IssueNotFoundPayload) => void): () => void;
+    onRateLimitChanged(callback: (data: GitHubRateLimitPayload) => void): () => void;
+    onTokenHealthChanged(callback: (data: GitHubTokenHealthPayload) => void): () => void;
+    onRepoStatsAndPageUpdated(callback: (data: RepoStatsAndPagePayload) => void): () => void;
+    getTokenHealth(): Promise<GitHubTokenHealthPayload>;
   };
-  notes: {
-    create(
-      title: string,
-      scope: "worktree" | "project",
-      worktreeId?: string
-    ): Promise<{
-      metadata: {
-        id: string;
-        title: string;
-        scope: "worktree" | "project";
-        worktreeId?: string;
-        createdAt: number;
-        tags?: string[];
-      };
-      content: string;
-      path: string;
-      lastModified: number;
-    }>;
-    read(notePath: string): Promise<{
-      metadata: {
-        id: string;
-        title: string;
-        scope: "worktree" | "project";
-        worktreeId?: string;
-        createdAt: number;
-        tags?: string[];
-      };
-      content: string;
-      path: string;
-      lastModified: number;
-    }>;
-    write(
-      notePath: string,
-      content: string,
-      metadata: {
-        id: string;
-        title: string;
-        scope: "worktree" | "project";
-        worktreeId?: string;
-        createdAt: number;
-        tags?: string[];
-      },
-      expectedLastModified?: number
-    ): Promise<{
-      lastModified?: number;
-      error?: "conflict";
-      message?: string;
-      currentLastModified?: number;
-    }>;
-    list(): Promise<
-      Array<{
-        id: string;
-        title: string;
-        path: string;
-        scope: "worktree" | "project";
-        worktreeId?: string;
-        createdAt: number;
-        modifiedAt: number;
-        preview: string;
-        tags: string[];
-      }>
-    >;
-    delete(notePath: string): Promise<void>;
-    search(query: string): Promise<{
-      notes: Array<{
-        id: string;
-        title: string;
-        path: string;
-        scope: "worktree" | "project";
-        worktreeId?: string;
-        createdAt: number;
-        modifiedAt: number;
-        preview: string;
-        tags: string[];
-      }>;
-      query: string;
-    }>;
-    onUpdated(
-      callback: (data: {
-        notePath: string;
-        title: string;
-        action: "created" | "updated" | "deleted";
-      }) => void
+  connectivity: {
+    getState(): Promise<import("./connectivity.js").ServiceConnectivitySnapshot>;
+    onServiceChanged(
+      callback: (payload: import("./connectivity.js").ServiceConnectivityPayload) => void
     ): () => void;
   };
   devPreview: {
@@ -712,6 +690,7 @@ export interface ElectronAPI {
     stop(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
     stopByPanel(request: DevPreviewStopByPanelRequest): Promise<void>;
     getState(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
+    getByWorktree(request: DevPreviewGetByWorktreeRequest): Promise<DevPreviewSessionState | null>;
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
   };
   git: {
@@ -735,8 +714,10 @@ export interface ElectronAPI {
     stageAll(cwd: string): Promise<void>;
     unstageAll(cwd: string): Promise<void>;
     commit(cwd: string, message: string): Promise<{ hash: string; summary: string }>;
-    push(cwd: string, setUpstream?: boolean): Promise<{ success: boolean; error?: string }>;
+    push(cwd: string, setUpstream?: boolean): Promise<void>;
     getStagingStatus(cwd: string): Promise<StagingStatus>;
+    abortRepositoryOperation(cwd: string): Promise<void>;
+    continueRepositoryOperation(cwd: string): Promise<void>;
     compareWorktrees(
       cwd: string,
       branch1: string,
@@ -750,6 +731,7 @@ export interface ElectronAPI {
     snapshotList(): Promise<SnapshotInfo[]>;
     snapshotRevert(worktreeId: string): Promise<SnapshotRevertResult>;
     snapshotDelete(worktreeId: string): Promise<void>;
+    markSafeDirectory(path: string): Promise<void>;
   };
   terminalConfig: {
     get(): Promise<TerminalConfig>;
@@ -760,7 +742,7 @@ export interface ElectronAPI {
     setHybridInputEnabled(enabled: boolean): Promise<void>;
     setHybridInputAutoFocus(enabled: boolean): Promise<void>;
     setColorScheme(schemeId: string): Promise<void>;
-    setCustomSchemes(schemesJson: string): Promise<void>;
+    setCustomSchemes(schemes: unknown): Promise<void>;
     setRecentSchemeIds(ids: string[]): Promise<void>;
     importColorScheme(): Promise<
       | {
@@ -835,7 +817,7 @@ export interface ElectronAPI {
       panelId: string,
       webContentsId: number,
       sessionStorageSnapshot?: Array<[string, string]>
-    ): Promise<{ success: boolean; error?: string } | null>;
+    ): Promise<{ success: true } | null>;
     /** Start CDP console capture for a webview panel */
     startConsoleCapture(webContentsId: number, paneId: string): Promise<void>;
     /** Stop CDP console capture for a webview panel */
@@ -855,6 +837,8 @@ export interface ElectronAPI {
     onConsoleContextCleared(
       callback: (payload: { paneId: string; navigationGeneration: number }) => void
     ): () => void;
+    /** Reload a webview bypassing HTTP cache */
+    reloadIgnoringCache(webContentsId: number, panelId: string): Promise<void>;
   };
   hibernation: {
     getConfig(): Promise<HibernationConfig>;
@@ -901,6 +885,14 @@ export interface ElectronAPI {
     get(): Promise<WorktreeConfig>;
     /** Set worktree path pattern */
     setPattern(pattern: string): Promise<WorktreeConfig>;
+    /**
+     * Toggle WSL-routed git for a single worktree. Persists the preference
+     * and forwards to the workspace host so the next git invocation uses the
+     * matching factory. Windows-only.
+     */
+    setWslGit(worktreeId: string, enabled: boolean): Promise<void>;
+    /** Hide the WSL git suggestion banner for this worktree without enabling. */
+    dismissWslBanner(worktreeId: string): Promise<void>;
   };
   window: {
     /** Subscribe to fullscreen state changes */
@@ -941,6 +933,10 @@ export interface ElectronAPI {
     reloadApp(): Promise<void>;
     /** Reset workspace state and reload the main app from the recovery page */
     resetAndReload(): Promise<void>;
+    /** Export a diagnostics bundle via save dialog. Resolves true if saved, false if cancelled. */
+    exportDiagnostics(): Promise<boolean>;
+    /** Open the main log file with the OS default viewer */
+    openLogs(): Promise<void>;
   };
   notification: {
     /** Update window title and dock badge based on terminal attention state */
@@ -977,10 +973,16 @@ export interface ElectronAPI {
     acknowledgeWaiting(terminalId: string): void;
     /** Acknowledge working pulse (cancels periodic pulse sound for the terminal) */
     acknowledgeWorkingPulse(terminalId: string): void;
+    /**
+     * Synchronize the renderer's session-mute expiry (set by "Mute 1h" / "Until morning")
+     * to the main process so completion watch notifications and working-pulse sounds
+     * are also suppressed until the timestamp.
+     */
+    setSessionMuteUntil(timestampMs: number): void;
   };
   sound: {
     /** Listen for sound trigger events from main process */
-    onTrigger(callback: (payload: { soundFile: string }) => void): () => void;
+    onTrigger(callback: (payload: { soundFile: string; detune?: number }) => void): () => void;
     /** Listen for sound cancel events from main process */
     onCancel(callback: () => void): () => void;
     /** Get the absolute path to the sounds directory */
@@ -994,6 +996,7 @@ export interface ElectronAPI {
     checkForUpdates(): Promise<void>;
     getChannel(): Promise<"stable" | "nightly">;
     setChannel(channel: "stable" | "nightly"): Promise<"stable" | "nightly">;
+    notifyDismiss(version: string): Promise<void>;
   };
   gemini: {
     /** Get Gemini config status (exists, alternate buffer enabled) */
@@ -1059,21 +1062,49 @@ export interface ElectronAPI {
     getAgentMetadata(agentId: string): Promise<AgentMetadata | null>;
     /** Check if agent is enabled/available */
     isAgentEnabled(agentId: string): Promise<boolean>;
+    /** Subscribe to CCR preset updates from main process */
+    onPresetsUpdated(
+      callback: (payload: {
+        agentId: string;
+        presets: Array<{
+          id: string;
+          name: string;
+          description?: string;
+          env?: Record<string, string>;
+          args?: string[];
+          color?: string;
+          dangerousEnabled?: boolean;
+          customFlags?: string;
+          inlineMode?: boolean;
+        }>;
+      }) => void
+    ): () => void;
+    /** Fetch current CCR presets from main process */
+    getCcrPresets(): Promise<
+      Array<{
+        id: string;
+        name: string;
+        description?: string;
+        env?: Record<string, string>;
+        args?: string[];
+        color?: string;
+        dangerousEnabled?: boolean;
+        customFlags?: string;
+        inlineMode?: boolean;
+      }>
+    >;
   };
   agentSessionHistory: {
     list(worktreeId?: string): Promise<AgentSessionRecord[]>;
     clear(worktreeId?: string): Promise<void>;
   };
   clipboard: {
-    saveImage(): Promise<
-      { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
-    >;
-    thumbnailFromPath(
-      filePath: string
-    ): Promise<
-      { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
-    >;
-    writeImage(pngData: Uint8Array): Promise<{ ok: true } | { ok: false; error: string }>;
+    saveImage(): Promise<{ filePath: string; thumbnailDataUrl: string }>;
+    thumbnailFromPath(filePath: string): Promise<{ filePath: string; thumbnailDataUrl: string }>;
+    writeImage(pngData: Uint8Array): Promise<void>;
+    writeText(text: string): Promise<void>;
+    writeSelection(text: string): Promise<void>;
+    readSelection(): Promise<{ text: string }>;
   };
   webUtils: {
     getPathForFile(file: File): string;
@@ -1081,7 +1112,7 @@ export interface ElectronAPI {
   appTheme: {
     get(): Promise<AppThemeConfig>;
     setColorScheme(schemeId: string): Promise<void>;
-    setCustomSchemes(schemesJson: string): Promise<void>;
+    setCustomSchemes(schemes: unknown): Promise<void>;
     importTheme(): Promise<import("../appTheme.js").AppThemeImportResult>;
     exportTheme(scheme: import("../appTheme.js").AppColorScheme): Promise<boolean>;
     setColorVisionMode(mode: import("../appTheme.js").ColorVisionMode): Promise<void>;
@@ -1099,6 +1130,14 @@ export interface ElectronAPI {
     setEnabled(enabled: boolean): Promise<void>;
     markPromptShown(): Promise<void>;
     track(event: string, properties: Record<string, unknown>): Promise<void>;
+    preview: {
+      getState(): Promise<TelemetryPreviewState>;
+      toggle(active: boolean): Promise<TelemetryPreviewState>;
+      subscribe(): void;
+      unsubscribe(): void;
+      onEventBatch(callback: (events: SanitizedTelemetryEvent[]) => void): () => void;
+      onStateChanged(callback: (state: TelemetryPreviewState) => void): () => void;
+    };
   };
   gpu: {
     getStatus(): Promise<{ hardwareAccelerationDisabled: boolean }>;
@@ -1128,22 +1167,19 @@ export interface ElectronAPI {
   };
   onboarding: {
     get(): Promise<OnboardingState>;
-    // TODO(0.9.0): Remove after deleting the temporary Canopy onboarding
-    // localStorage migration path.
-    migrate(payload: {
-      agentSelectionDismissed: boolean;
-      agentSetupComplete: boolean;
-      firstRunToastSeen: boolean;
-    }): Promise<OnboardingState>;
     setStep(step: string | null | { step: string | null; agentSetupIds?: string[] }): Promise<void>;
     complete(): Promise<void>;
     markToastSeen(): Promise<void>;
     markNewsletterSeen(): Promise<void>;
     markWaitingNudgeSeen(): Promise<void>;
+    markAgentsSeen(agentIds: string[]): Promise<OnboardingState>;
+    dismissWelcomeCard(): Promise<OnboardingState>;
+    dismissSetupBanner(): Promise<OnboardingState>;
     getChecklist(): Promise<ChecklistState>;
     dismissChecklist(): Promise<void>;
     markChecklistItem(item: ChecklistItemId): Promise<void>;
     markChecklistCelebrationShown(): Promise<void>;
+    onChecklistPush(callback: (state: ChecklistState) => void): () => void;
   };
   milestones: {
     get(): Promise<Record<string, boolean>>;
@@ -1270,6 +1306,20 @@ export interface ElectronAPI {
         item: import("../plugin.js").MenuItemContribution;
       }>
     >;
+    validateActionIds(actionIds: string[]): Promise<void>;
+    /** Pull the current set of plugin-registered actions. */
+    getActions(): Promise<import("../plugin.js").PluginActionDescriptor[]>;
+    /** Register a plugin-contributed action. Intended to be called from main-side bridges; not for direct UI use. */
+    registerAction(
+      pluginId: string,
+      contribution: import("../plugin.js").PluginActionContribution
+    ): Promise<void>;
+    /** Unregister a single plugin-contributed action. */
+    unregisterAction(pluginId: string, actionId: string): Promise<void>;
+    /** Subscribe to plugin-action registry changes. Returns a cleanup. */
+    onActionsChanged(
+      callback: (payload: { actions: import("../plugin.js").PluginActionDescriptor[] }) => void
+    ): () => void;
   };
   crashRecovery: {
     getPending(): Promise<import("./crashRecovery.js").PendingCrash | null>;
@@ -1297,7 +1347,6 @@ export interface ElectronAPI {
     ): Promise<void>;
     click(): Promise<void>;
     type(selector: string, text: string, cps?: number): Promise<void>;
-    setZoom(factor: number, durationMs?: number): Promise<void>;
     screenshot(): Promise<DemoScreenshotResult>;
     waitForSelector(selector: string, timeoutMs?: number): Promise<void>;
     pause(): Promise<void>;
@@ -1322,17 +1371,15 @@ export interface ElectronAPI {
     dismissAnnotation(id?: string): Promise<void>;
     waitForIdle(settleMs?: number, timeoutMs?: number): Promise<void>;
     startCapture(payload: DemoStartCapturePayload): Promise<DemoStartCaptureResult>;
+    sendCaptureChunk(captureId: string, data: Uint8Array): void;
+    sendCaptureStop(captureId: string, frameCount: number, error?: string): void;
     stopCapture(): Promise<DemoStopCaptureResult>;
     getCaptureStatus(): Promise<DemoCaptureStatus>;
-    encode(payload: DemoEncodePayload): Promise<DemoEncodeResult>;
-    onEncodeProgress(callback: (event: DemoEncodeProgressEvent) => void): () => void;
     onExecCommand(
       channel: string,
       callback: (payload: Record<string, unknown>) => void
     ): () => void;
     sendCommandDone(requestId: string, error?: string): void;
-    getZoomFactor(): number;
-    setZoomFactor(factor: number): void;
   };
 }
 

@@ -29,6 +29,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     destroy: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    wake: vi.fn(),
   },
 }));
 
@@ -145,7 +146,7 @@ describe("Grid Capacity Enforcement", () => {
       expect(result).toBe(true);
       expect(terminal?.location).toBe("grid");
 
-      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
+      const gridCount = getTerminals().filter((t) => t!.location === "grid").length;
       expect(gridCount).toBe(16);
     });
 
@@ -161,7 +162,7 @@ describe("Grid Capacity Enforcement", () => {
       expect(result).toBe(false);
       expect(terminal?.location).toBe("dock");
 
-      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
+      const gridCount = getTerminals().filter((t) => t!.location === "grid").length;
       expect(gridCount).toBe(16);
     });
 
@@ -186,8 +187,8 @@ describe("Grid Capacity Enforcement", () => {
 
       usePanelStore.getState().bulkMoveToGrid();
 
-      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
-      const dockCount = getTerminals().filter((t) => t.location === "dock").length;
+      const gridCount = getTerminals().filter((t) => t!.location === "grid").length;
+      const dockCount = getTerminals().filter((t) => t!.location === "dock").length;
 
       expect(gridCount).toBe(14);
       expect(dockCount).toBe(0);
@@ -201,8 +202,8 @@ describe("Grid Capacity Enforcement", () => {
 
       usePanelStore.getState().bulkMoveToGrid();
 
-      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
-      const dockCount = getTerminals().filter((t) => t.location === "dock").length;
+      const gridCount = getTerminals().filter((t) => t!.location === "grid").length;
+      const dockCount = getTerminals().filter((t) => t!.location === "dock").length;
 
       expect(gridCount).toBe(16);
       expect(dockCount).toBe(3);
@@ -216,8 +217,8 @@ describe("Grid Capacity Enforcement", () => {
 
       usePanelStore.getState().bulkMoveToGrid();
 
-      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
-      const dockCount = getTerminals().filter((t) => t.location === "dock").length;
+      const gridCount = getTerminals().filter((t) => t!.location === "grid").length;
+      const dockCount = getTerminals().filter((t) => t!.location === "dock").length;
 
       expect(gridCount).toBe(16);
       expect(dockCount).toBe(3);
@@ -260,7 +261,7 @@ describe("Grid Capacity Enforcement", () => {
 
       usePanelStore.getState().bulkMoveToGrid();
 
-      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
+      const gridCount = getTerminals().filter((t) => t!.location === "grid").length;
       expect(gridCount).toBe(10);
     });
   });
@@ -282,7 +283,7 @@ describe("Grid Capacity Enforcement", () => {
 
       usePanelStore.getState().bulkMoveToGrid();
 
-      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
+      const gridCount = getTerminals().filter((t) => t!.location === "grid").length;
       expect(gridCount).toBe(16);
     });
 
@@ -303,7 +304,7 @@ describe("Grid Capacity Enforcement", () => {
       expect(terminal?.location).toBe("dock");
 
       const gridAndUndefinedCount = getTerminals().filter(
-        (t) => t.location === "grid" || t.location === undefined
+        (t) => t!.location === "grid" || t!.location === undefined
       ).length;
       expect(gridAndUndefinedCount).toBe(16);
     });

@@ -42,9 +42,11 @@ export function WorktreeDialogs({
     <>
       <ConfirmDialog
         isOpen={confirmDialog.isOpen}
-        title={confirmDialog.title}
-        description={confirmDialog.description}
-        onConfirm={confirmDialog.onConfirm}
+        title={confirmDialog.isOpen ? confirmDialog.title : ""}
+        description={confirmDialog.isOpen ? confirmDialog.description : undefined}
+        confirmLabel={confirmDialog.isOpen ? confirmDialog.confirmLabel : ""}
+        variant={confirmDialog.isOpen ? confirmDialog.variant : "default"}
+        onConfirm={confirmDialog.isOpen ? confirmDialog.onConfirm : () => {}}
         onClose={onCloseConfirm}
       />
 

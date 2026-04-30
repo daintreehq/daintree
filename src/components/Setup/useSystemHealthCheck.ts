@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { systemClient } from "@/clients";
 import type { PrerequisiteCheckResult, PrerequisiteSpec } from "@shared/types";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 const POOL_CONCURRENCY = 3;
 
@@ -80,7 +81,7 @@ export function useSystemHealthCheck(): SystemHealthCheckState {
         }
       });
     } catch (err) {
-      if (activeRef.current) setError(err instanceof Error ? err.message : "Health check failed");
+      if (activeRef.current) setError(formatErrorMessage(err, "Health check failed"));
     } finally {
       isCheckingRef.current = false;
       if (activeRef.current) setIsChecking(false);

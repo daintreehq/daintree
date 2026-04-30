@@ -4,14 +4,14 @@ import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
 
-function isTerminalOrphaned(terminal: TerminalInstance, worktreeIds: Set<string>): boolean {
+export function isTerminalOrphaned(terminal: TerminalInstance, worktreeIds: Set<string>): boolean {
   const worktreeId = typeof terminal.worktreeId === "string" ? terminal.worktreeId.trim() : "";
   if (!worktreeId) return false;
   if (worktreeIds.size === 0) return false;
   return !worktreeIds.has(worktreeId);
 }
 
-function isTerminalVisible(
+export function isTerminalVisible(
   terminal: TerminalInstance,
   isInTrash: (id: string) => boolean,
   worktreeIds: Set<string>
@@ -58,7 +58,7 @@ export function _resetWorktreeIdCacheForTests(): void {
   _cachedIds = null;
 }
 
-function useWorktreeIds(): Set<string> {
+export function useWorktreeIds(): Set<string> {
   return useWorktreeStore(useShallow((state) => buildWorktreeIds(state.worktrees)));
 }
 

@@ -43,6 +43,7 @@ function createMockDeps() {
   const workspaceClient = {
     updateMonitorConfig: vi.fn(),
     refresh: vi.fn().mockResolvedValue(undefined),
+    setPollingEnabled: vi.fn(),
   } as unknown as WorkspaceClient;
 
   const statsService = {
@@ -124,6 +125,7 @@ describe("WindowFocusThrottle", () => {
       pollIntervalActive: 10_000,
       pollIntervalBackground: 50_000,
     });
+    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
     expect(statsService.updatePollInterval).toHaveBeenCalledWith(25_000);
     expect(
       vi.mocked(ptyClient as unknown as { setProcessTreePollInterval: () => void })
@@ -175,6 +177,7 @@ describe("WindowFocusThrottle", () => {
 
     // Reset mocks to verify unthrottle calls
     vi.mocked(workspaceClient.updateMonitorConfig).mockClear();
+    vi.mocked(workspaceClient.setPollingEnabled).mockClear();
     vi.mocked(statsService.updatePollInterval).mockClear();
 
     // Then unthrottle
@@ -184,7 +187,15 @@ describe("WindowFocusThrottle", () => {
       pollIntervalActive: 2_000,
       pollIntervalBackground: 10_000,
     });
+    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
     expect(workspaceClient.refresh).toHaveBeenCalled();
+
+    // setPollingEnabled(true) must run before refresh() so the host is
+    // polling-enabled when the refresh broadcast arrives.
+    const enableOrder = vi.mocked(workspaceClient.setPollingEnabled).mock.invocationCallOrder[0];
+    const refreshOrder = vi.mocked(workspaceClient.refresh).mock.invocationCallOrder[0];
+    expect(enableOrder).toBeLessThan(refreshOrder);
+
     expect(statsService.updatePollInterval).toHaveBeenCalledWith(5_000);
     expect(statsService.refresh).toHaveBeenCalled();
     expect(
@@ -207,6 +218,7 @@ describe("WindowFocusThrottle", () => {
     vi.advanceTimersByTime(100);
 
     expect(workspaceClient.updateMonitorConfig).toHaveBeenCalledTimes(1);
+    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledTimes(1);
   });
 
   it("handles minimize → throttle and restore → unthrottle via per-window events", async () => {
@@ -231,8 +243,10 @@ describe("WindowFocusThrottle", () => {
       pollIntervalActive: 10_000,
       pollIntervalBackground: 50_000,
     });
+    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
 
     vi.mocked(workspaceClient.updateMonitorConfig).mockClear();
+    vi.mocked(workspaceClient.setPollingEnabled).mockClear();
 
     // Restore triggers unthrottle
     windowHandlers.get("restore")!();
@@ -240,6 +254,7 @@ describe("WindowFocusThrottle", () => {
       pollIntervalActive: 2_000,
       pollIntervalBackground: 10_000,
     });
+    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
     expect(statsService.refresh).toHaveBeenCalled();
   });
 });

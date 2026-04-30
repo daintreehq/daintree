@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ActionDefinition } from "@shared/types/actions";
-import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
+import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const systemClientMock = vi.hoisted(() => ({
   openInEditor: vi.fn(),
@@ -22,7 +21,7 @@ function setupActions() {
   return async (id: string, args?: unknown): Promise<unknown> => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
-    const def = factory() as ActionDefinition<unknown, unknown>;
+    const def = factory() as AnyActionDefinition;
     return def.run(args, {} as never);
   };
 }
@@ -57,7 +56,7 @@ describe("fileActions adversarial", () => {
       col: 4,
     });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail: { path: string; rootPath?: string; line?: number; col?: number };
     };
@@ -106,7 +105,7 @@ describe("fileActions adversarial", () => {
     const run = setupActions();
     await run("file.view", { path: "/just/a/path.txt" });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       detail: { path: string; rootPath?: string; line?: number; col?: number };
     };
     expect(event.detail.path).toBe("/just/a/path.txt");

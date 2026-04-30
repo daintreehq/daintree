@@ -118,6 +118,21 @@ describe("getGroupBlockedAgentState", () => {
     expect(getGroupBlockedAgentState(panels)).toBe("waiting");
   });
 
+  it("ignores stale waiting state on demoted runtime terminals", () => {
+    const panels = [
+      {
+        agentState: "waiting" as const,
+        runtimeIdentity: {
+          kind: "process" as const,
+          id: "npm",
+          iconId: "npm",
+          processId: "npm",
+        },
+      },
+    ];
+    expect(getGroupBlockedAgentState(panels)).toBe(undefined);
+  });
+
   it("returns undefined for empty panels", () => {
     expect(getGroupBlockedAgentState([])).toBe(undefined);
   });
@@ -139,9 +154,15 @@ describe("getGroupAmbientAgentState", () => {
     expect(getGroupAmbientAgentState(panels)).toBe("working");
   });
 
-  it("returns 'working' for running state (treated as working tier)", () => {
-    const panels = [{ agentState: "idle" as const }, { agentState: "running" as const }];
-    expect(getGroupAmbientAgentState(panels)).toBe("working");
+  it("ignores stale working state when runtime identity is no longer agent", () => {
+    const panels = [
+      {
+        agentState: "working" as const,
+        detectedAgentId: undefined,
+        runtimeIdentity: undefined,
+      },
+    ];
+    expect(getGroupAmbientAgentState(panels)).toBe(undefined);
   });
 
   it("returns 'waiting' when waiting outranks working", () => {
@@ -191,11 +212,6 @@ describe("isGroupDeprioritized", () => {
 
   it("returns false when any panel is working", () => {
     const panels = [{ agentState: "idle" as const }, { agentState: "working" as const }];
-    expect(isGroupDeprioritized(panels)).toBe(false);
-  });
-
-  it("returns false when any panel is running", () => {
-    const panels = [{ agentState: "idle" as const }, { agentState: "running" as const }];
     expect(isGroupDeprioritized(panels)).toBe(false);
   });
 

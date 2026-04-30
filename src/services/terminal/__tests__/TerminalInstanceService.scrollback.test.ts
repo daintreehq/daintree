@@ -70,7 +70,7 @@ type ScrollbackTestService = {
 
 function makeMockManaged(overrides: Record<string, unknown> = {}) {
   const writtenData: string[] = [];
-  return {
+  const managed = {
     terminal: {
       options: { scrollback: 5000 },
       rows: 24,
@@ -86,6 +86,17 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     writtenData,
     ...overrides,
   };
+  const runtimeManaged = managed as typeof managed & {
+    runtimeAgentId?: string;
+    launchAgentId?: string;
+  };
+  if (
+    runtimeManaged.runtimeAgentId === undefined &&
+    typeof runtimeManaged.launchAgentId === "string"
+  ) {
+    runtimeManaged.runtimeAgentId = runtimeManaged.launchAgentId;
+  }
+  return runtimeManaged;
 }
 
 describe("TerminalInstanceService - Scrollback", () => {
@@ -221,13 +232,13 @@ describe("TerminalInstanceService - Scrollback", () => {
 
     it("ignores project override for agent terminals", () => {
       mockProjectSettingsStore.settings = { terminalSettings: { scrollbackLines: 2000 } };
-      const managed = makeMockManaged({ type: "claude", kind: "agent" });
+      const managed = makeMockManaged({ kind: "terminal", launchAgentId: "claude" });
       managed.terminal.options.scrollback = 100;
       service.instances.set("t1", managed);
 
       service.restoreScrollback("t1");
 
-      // getScrollbackForType("claude", 5000) = min(5000, max(500, floor(5000*1.5))) = 5000
+      // getScrollbackForType(true, 5000) = min(5000, max(500, floor(5000*1.5))) = 5000
       expect(managed.terminal.options.scrollback).toBe(5000);
     });
   });
@@ -267,14 +278,14 @@ describe("TerminalInstanceService - Scrollback", () => {
 
     it("skips active agent terminals but reduces completed agents", () => {
       const working = makeMockManaged({
-        kind: "agent",
-        type: "claude",
+        kind: "terminal",
+        launchAgentId: "claude",
         canonicalAgentState: "working",
       });
       working.terminal.buffer.active.length = 3000;
       const completed = makeMockManaged({
-        kind: "agent",
-        type: "claude",
+        kind: "terminal",
+        launchAgentId: "claude",
         canonicalAgentState: "completed",
       });
       completed.terminal.buffer.active.length = 3000;

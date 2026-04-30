@@ -8,7 +8,11 @@
 - **Dependencies:** Use `npm install` for local development. `npm ci` is acceptable for CI environments where reproducible builds are critical. Both commands run the `postinstall` rebuild hook automatically unless `--ignore-scripts` is used.
 - **Native Modules:** `node-pty` must be rebuilt for Electron. The `postinstall` script handles this automatically. If errors occur, run `npm run rebuild`.
 - **Code Style:** Minimal comments. No decorative headers. High signal-to-noise ratio.
-- **Codex MCP:** When calling `mcp__codex__codex`, always set `model: "gpt-5.4"`. Do NOT use any other model—ignore examples in the MCP definition like `o3`, `o4-mini`, etc. Only `gpt-5.4` is valid. Include file paths in prompts—Codex reads files directly and gives better advice when it can see the actual code.
+- **Accent Color Restraint:** The accent color (`--color-accent-primary`, `text-accent-primary`, `outline-daintree-accent`, etc.) is a scarce resource, not a default highlight. If everything uses it, nothing stands out. Reserve it for _one_ genuinely load-bearing signal per view — a strong focus anchor, a primary CTA. Do NOT use it for: multi-select state, membership markers, secondary emphasis, "this is selected too" indicators, arming badges, or any treatment applied to multiple elements at once. For those, use the title-bar lift (`bg-overlay-subtle`), focus styling, or neutral surface differences. When in doubt, err on the side of NO accent — subtle wins.
+- **Motion Timing:** Use the shared timing tiers unless the animation encodes semantic state. **Tier 1 — State changes (150ms `ease-out`):** hover, focus, active, selected, group-hover, toggle thumbs, drop-target rings, hover scrims, and other local UI feedback. Bare `transition-colors` (no explicit duration) inherits the app-wide 150ms default and needs no extra class; when a duration is required use `duration-150`. **Tier 2 — Deliberate entry/exit (200ms enter / 120ms exit):** modals, popovers, dropdowns, and surfaced dialogs. **Tier 2-fast — Palette/tooltip (150ms enter / 100ms exit):** command palettes and tooltips use a snappier sub-tier because typed-input flow expects faster response. **Tier 3 — Panel motion (200ms restore / 120ms minimize):** large-area choreographed reflow. Prefer the named constants in `src/lib/animationUtils.ts` (`UI_ANIMATION_DURATION` and `TERMINAL_ANIMATION_DURATION` for Tier 1; `UI_ENTER_DURATION`, `UI_EXIT_DURATION`, `UI_PALETTE_ENTER_DURATION`, `UI_PALETTE_EXIT_DURATION`, `PANEL_RESTORE_DURATION`, `PANEL_MINIMIZE_DURATION` for Tiers 2/3) when timing is expressed in TypeScript. **Semantic exceptions** — durations encoding meaning, not motion — must not be "fixed": `ActivityLight` 1000ms color fade (fade IS the decay indicator); progress bar 300–500ms width (width IS the progress signal); agent-state panel border 300ms (`ContentPanel` + `panel-state-*` classes — ambient, not jittery); welcome/empty-state hero fades 500ms (deliberately inviting); sidebar collapse 250ms `ease-out-expo` (large theatrical reflow); inline alert banner 200ms entry (`TerminalCountWarning`); diagnostics dock height 200ms. Never widen scoped transitions (`transition-[width]`, `transition-[backdrop-filter]`, `transition-transform`, `transition-colors`) to bare `transition` or `transition-all`.
+- **UI Microcopy:** Sentence case for titles, buttons, labels. No periods on titles, headings, or button labels (use periods on multi-sentence body text). Use unambiguous contractions (couldn't, didn't, can't). Drop "we" — write "Couldn't connect" not "We couldn't connect". Error toasts follow Title-Message-Action: title = concise verb-noun ("Connection failed"), message = 1-2 short sentences explaining why/how-to-fix, action = single contextual button (only when there's a real recovery action — no "Dismiss"). Destructive buttons use verb-noun labels ("Delete worktree", not "Delete" or "Confirm"). Toggle labels never change with state. Title names the thing; subtitle describes the behavior; the switch position conveys state. Confirmation dialogs: title is a sentence-case question naming the entity (`Delete 'foo'?`, not `Delete Foo`). Body states the specific consequence — never a generic "Are you sure". Button is verb-noun (`Delete recipe`).
+- **notify() Usage:** `priority: "low"` skips toasts — goes straight to inbox (except `placement: "grid-bar"` which always renders inline). Don't use for errors users need to see immediately. `message` as `ReactNode` requires `inboxMessage` or history entry is silently dropped (`src/lib/notify.ts:218-229`).
+- **Codex MCP:** When calling `mcp__codex__codex`, always set `model: "gpt-5.5"`. Do NOT use any other model—ignore examples in the MCP definition like `o3`, `o4-mini`, etc. Only `gpt-5.5` is valid. Include file paths in prompts—Codex reads files directly and gives better advice when it can see the actual code.
 - **Human-Review Label:** The `human-review` label marks issues that cannot be solved autonomously—they require a developer checking logs, observing runtime behavior, or making subjective UX judgments. Adding this label makes an issue 10-20x more expensive (human time vs agent time), so use it sparingly. Only apply when the issue genuinely requires human observation or iterative debugging that an agent cannot perform. Most issues should NOT have this label. When working issues, skip any labeled `human-review`.
 - **GitHub Access:** Public repo `daintreehq/daintree` (https://github.com/daintreehq/daintree). Always use the `gh` CLI for all GitHub operations (issues, PRs, checks, releases, API calls). Do NOT use HTTP fetches or web scraping to access GitHub URLs—they will fail due to authentication. Examples: `gh issue list`, `gh pr view 123`, `gh api repos/daintreehq/daintree/issues`.
 - **Branching:** Gitflow model. **All PRs must target `develop`—NEVER `main`.** Only release merges go to `main`.
@@ -29,8 +33,8 @@ npm run rebuild      # Rebuild native modules
 
 ### CI Testing Strategy
 
-- **PRs / pushes:** Typecheck, lint, format, and unit tests on **Ubuntu only** (no E2E). `ci-ok` gate job is the sole required status check.
-- **Nightly (2 AM UTC):** Full cross-platform CI on all 3 OSes: check + test + build + smoke + E2E full + E2E online + E2E nightly. Auto-creates GitHub issue on failure (`nightly-failure` label).
+- **PRs / pushes:** Typecheck, lint, format, unit tests, and build on **Ubuntu only** (smoke on push only; no E2E, no budgets). `ci-ok` gate job is the sole required status check.
+- **Nightly (2 AM UTC):** Full cross-platform CI on all 3 OSes: check + test + build + smoke + compiler / eager-import / renderer-bundle budgets + E2E full + E2E online + E2E nightly. Auto-creates GitHub issue on failure (`nightly-failure` label).
 - **Releases:** E2E core and E2E online gate the release publish on macOS + Linux. Windows E2E is nightly-only.
 - **E2E tiers:** `e2e/core/` (13 tests — gates releases), `e2e/full/` (61 tests — nightly), `e2e/online/` (2 agent integration tests — gates releases), `e2e/nightly/` (memory leak detection).
 - **Single-file E2E:** `gh workflow run "E2E Core Tests" --ref develop -f platform=linux -f test_file=e2e/core/core-foo.spec.ts` — use this when fixing a specific flaky test instead of re-running the full suite.
@@ -59,8 +63,8 @@ Central orchestration layer for all UI operations. Provides a unified, typed API
 
 Discriminated union types for type safety:
 
-- `PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData | DevPreviewPanelData` (`shared/types/panel.ts`)
-- Built-in panel kinds: `"terminal"` | `"agent"` | `"browser"` | `"notes"` | `"dev-preview"`
+- `PanelInstance = PtyPanelData | BrowserPanelData | DevPreviewPanelData` (`shared/types/panel.ts`)
+- Built-in panel kinds: `"terminal"` | `"browser"` | `"dev-preview"`
 - `panelKindHasPty(kind)` — Check if panel requires PTY process
 - Panel Kind Registry (`shared/config/panelKindRegistry.ts`) — config/metadata shared between processes
 - Panel Kind Modules (`src/panels/<kind>/`) — per-kind serializer, defaults factory, and component. Unified registry in `src/panels/registry.tsx`
@@ -148,13 +152,6 @@ src/
     └── electron.d.ts        # window.electron types
 ```
 
-```text
-demo/
-├── stage.ts                 # Stage DSL (cursor, keyboard, camera, wait helpers)
-├── runner.ts                # Scene sequencing and capture lifecycle
-└── scenes/                  # Demo scene definitions
-```
-
 ### Custom Icons
 
 Custom Daintree-specific icons live in `src/components/icons/custom/`. Lucide-style SVG components (24x24 viewBox, 2px stroke, round caps/joins, `currentColor`). Brand/agent icons in `src/components/icons/brands/`. Barrel-exported from `src/components/icons/index.ts`.
@@ -184,3 +181,4 @@ Custom Daintree-specific icons live in `src/components/icons/custom/`. Lucide-st
 - `docs/release.md` — Release process
 - `docs/sound-design.md` — Sound design guidelines
 - `docs/architecture/` — Action system and terminal lifecycle docs
+- `docs/plugins/` — Plugin system reference for plugin authors

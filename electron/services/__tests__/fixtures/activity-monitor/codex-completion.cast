@@ -1,0 +1,10 @@
+{"version":2,"width":120,"height":6,"timestamp":1700000000,"title":"codex-completion"}
+[0.05,"o","openai-codex v0.1.4\r\n"]
+[0.10,"o","codex> "]
+[0.50,"o","• Working (1s · esc to interrupt)"]
+[0.95,"o","\r• Working (2s · esc to interrupt)"]
+[1.40,"o","\r• Working (3s · esc to interrupt)"]
+[1.85,"o","\r\u001b[2K"]
+[1.90,"o","Task completed successfully\r\n"]
+[1.92,"o","$0.005 · 1234 tokens\r\n"]
+[1.95,"o","codex> "]

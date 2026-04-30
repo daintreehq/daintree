@@ -14,6 +14,15 @@ describe("buttonVariants", () => {
     expect(classes).toMatch(/(?:^|\s)transition(?:\s|$)/);
   });
 
+  it("uses asymmetric press timing (1ms down, base duration on release)", () => {
+    // Defends against Chromium bug 41304139 where transition-duration: 0s is
+    // sometimes ignored. 1ms is imperceptible but unambiguously non-zero.
+    const classes = buttonVariants();
+    expect(classes).toContain("active:scale-[0.98]");
+    expect(classes).toContain("active:duration-[1ms]");
+    expect(classes).toContain("duration-150");
+  });
+
   it("includes cursor-pointer across all variants", () => {
     const variants = [
       "default",

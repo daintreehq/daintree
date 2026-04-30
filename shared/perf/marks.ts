@@ -2,8 +2,10 @@ export const PERF_MARKS = {
   APP_BOOT_START: "app_boot_start",
   MAIN_WINDOW_CREATED: "main_window_created",
   RENDERER_READY: "renderer_ready",
+  RENDERER_FIRST_INTERACTIVE: "renderer_first_interactive",
 
   SERVICE_INIT_START: "service_init_start",
+  WINDOW_SERVICES_START: "window_services_start",
   SERVICE_INIT_MIGRATIONS_DONE: "service_init_migrations_done",
   SERVICE_INIT_PTY_READY: "service_init_pty_ready",
   SERVICE_INIT_WORKSPACE_READY: "service_init_workspace_ready",
@@ -28,6 +30,10 @@ export const PERF_MARKS = {
   PROJECT_SWITCH_LOAD_PROJECT: "project_switch_load_project",
   WORKTREE_SWITCH_START: "worktree_switch_start",
   WORKTREE_SWITCH_END: "worktree_switch_end",
+
+  PROJECT_STATE_WRITE: "project_state_write",
+  PROJECT_STATE_READ: "project_state_read",
+  PROJECT_STATE_QUARANTINE: "project_state_quarantine",
 
   DEVPREVIEW_ENSURE_START: "devpreview_ensure_start",
   DEVPREVIEW_TERMINAL_SPAWNED: "devpreview_terminal_spawned",

@@ -7,10 +7,11 @@ import { appThemeClient } from "@/clients/appThemeClient";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
-import { useNotificationStore } from "@/store/notificationStore";
+import { notify } from "@/lib/notify";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { getBuiltInAppSchemeForType, resolveAppTheme } from "@shared/theme";
+import { logError } from "@/utils/logger";
 
 async function refreshRendererConfig(): Promise<void> {
   await Promise.all([
@@ -69,6 +70,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onOpenSettings();
     },
@@ -83,6 +85,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     danger: "safe",
     scope: "renderer",
     argsSchema: SettingsNavTargetSchema,
+    nonRepeatable: true,
     run: async (args: unknown) => {
       callbacks.onOpenSettingsTab(args as SettingsNavTarget);
     },
@@ -91,8 +94,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
   actions.set("app.reloadConfig", () => ({
     id: "app.reloadConfig",
     title: "Reload Configuration",
-    description:
-      "Re-read config.json from disk and refresh all derived in-memory state (agent registry, agent settings, keybindings, CLI availability, application menu)",
+    description: "Reload config from disk and refresh agent, keybinding, CLI, and menu state.",
     category: "app",
     kind: "command",
     danger: "safe",
@@ -113,7 +115,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     try {
       await refreshRendererConfig();
     } catch (e) {
-      console.error("[app.reloadConfig] Failed to refresh renderer config:", e);
+      logError("[app.reloadConfig] Failed to refresh renderer config", e);
     }
   };
   if (
@@ -135,8 +137,23 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:open-theme-palette"));
+    },
+  }));
+
+  actions.set("app.theme.browser.open", () => ({
+    id: "app.theme.browser.open",
+    title: "Change Theme...",
+    description: "Open the theme browser to preview and commit a new theme",
+    category: "app",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    run: async () => {
+      window.dispatchEvent(new CustomEvent("daintree:open-theme-browser"));
     },
   }));
 
@@ -172,20 +189,23 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
       try {
         await appThemeClient.setColorScheme(target.id);
       } catch (error) {
-        console.error("Failed to persist theme toggle:", error);
-        useNotificationStore.getState().addNotification({
+        logError("Failed to persist theme toggle", error);
+        notify({
           type: "error",
-          priority: "low",
+          priority: "high",
           message: `Failed to save theme: ${target.name}`,
           duration: 3000,
         });
         return;
       }
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "info",
-        priority: "low",
+        priority: "high",
         message: `Theme: ${target.name}`,
         duration: 2000,
+        // Confirmation of a user-triggered toggle — the user already knows; no
+        // need to bump the unread badge in the notification center.
+        countable: false,
       });
     },
   }));

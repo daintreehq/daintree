@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo, createMultiProjectFixture } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { waitForTerminalText } from "../helpers/terminal";
+import { runTerminalCommand, waitForTerminalText } from "../helpers/terminal";
 import { getFirstGridPanel, getGridPanelCount, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_SETTLE } from "../helpers/timeouts";
@@ -15,15 +15,12 @@ import {
 import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../helpers/workflows";
 import { rmSync } from "fs";
 
-const MONITORED_CHANNELS = [
-  "worktree:update",
-  "agent:state-changed",
-  "terminal:activity",
-  "terminal:exit",
-  "terminal:data",
-];
+// Migrated events (worktree:update, agent:state-changed, terminal:exit, ...)
+// now travel over the multiplexed `events:push` channel so their listener
+// counts are observed there, not on the per-event channel.
+const MONITORED_CHANNELS = ["events:push", "terminal:activity", "terminal:data"];
 
-const RENDERER_CHANNELS = ["worktree:update", "agent:state-changed", "terminal:activity"];
+const RENDERER_CHANNELS = ["events:push", "terminal:activity"];
 
 test.describe.serial("Core: IPC Cleanup Verification", () => {
   let ctx: AppContext;
@@ -56,7 +53,8 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
 
       const panel = getFirstGridPanel(window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
-      await waitForTerminalText(panel, "ipc-cleanup", T_LONG);
+      await runTerminalCommand(window, panel, "echo READY_" + i);
+      await waitForTerminalText(panel, "READY_" + i, T_LONG);
 
       await panel.locator(SEL.panel.close).first().click({ force: true });
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(0);
@@ -83,7 +81,8 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
 
       const panel = getFirstGridPanel(window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
-      await waitForTerminalText(panel, "ipc-cleanup", T_LONG);
+      await runTerminalCommand(window, panel, "echo NAV_READY_" + i);
+      await waitForTerminalText(panel, "NAV_READY_" + i, T_LONG);
 
       await panel.locator(SEL.panel.close).first().click({ force: true });
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(0);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isTrustedRendererUrl, getTrustedOrigins } from "../trustedRenderer.js";
+import { isRecoveryPageUrl, isTrustedRendererUrl, getTrustedOrigins } from "../trustedRenderer.js";
 
 describe("trustedRenderer", () => {
   const originalNodeEnv = process.env.NODE_ENV;
@@ -101,6 +101,49 @@ describe("trustedRenderer", () => {
       expect(origins).toContain("app://daintree");
       expect(origins).toContain("http://localhost:5173");
       expect(origins).toContain("http://127.0.0.1:5173");
+    });
+  });
+
+  describe("isRecoveryPageUrl", () => {
+    it("accepts production recovery URL", () => {
+      expect(isRecoveryPageUrl("app://daintree/recovery.html")).toBe(true);
+    });
+
+    it("accepts dev recovery URLs on both localhost and 127.0.0.1", () => {
+      expect(isRecoveryPageUrl("http://localhost:5173/recovery.html")).toBe(true);
+      expect(isRecoveryPageUrl("http://127.0.0.1:5173/recovery.html")).toBe(true);
+    });
+
+    it("accepts recovery URL with query string", () => {
+      expect(isRecoveryPageUrl("app://daintree/recovery.html?reason=crash&exitCode=-1")).toBe(true);
+    });
+
+    it("rejects main index page URL", () => {
+      expect(isRecoveryPageUrl("app://daintree/index.html")).toBe(false);
+      expect(isRecoveryPageUrl("http://localhost:5173/index.html")).toBe(false);
+    });
+
+    it("rejects recovery.html on untrusted origin", () => {
+      expect(isRecoveryPageUrl("https://evil.com/recovery.html")).toBe(false);
+      expect(isRecoveryPageUrl("http://localhost:3000/recovery.html")).toBe(false);
+    });
+
+    it("rejects malformed URLs", () => {
+      expect(isRecoveryPageUrl("")).toBe(false);
+      expect(isRecoveryPageUrl("not-a-url")).toBe(false);
+    });
+
+    it("rejects recovery-like paths that are not /recovery.html", () => {
+      expect(isRecoveryPageUrl("app://daintree/recovery")).toBe(false);
+      expect(isRecoveryPageUrl("app://daintree/recovery.html/evil")).toBe(false);
+      expect(isRecoveryPageUrl("app://daintree/subdir/recovery.html")).toBe(false);
+    });
+
+    it("rejects localhost recovery URLs in production mode", () => {
+      process.env.NODE_ENV = "production";
+      expect(isRecoveryPageUrl("http://localhost:5173/recovery.html")).toBe(false);
+      expect(isRecoveryPageUrl("http://127.0.0.1:5173/recovery.html")).toBe(false);
+      expect(isRecoveryPageUrl("app://daintree/recovery.html")).toBe(true);
     });
   });
 });

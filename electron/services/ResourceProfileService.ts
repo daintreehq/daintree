@@ -1,3 +1,4 @@
+import os from "os";
 import { app, powerMonitor } from "electron";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -5,6 +6,7 @@ import { logInfo } from "../utils/logger.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import type { HibernationService } from "./HibernationService.js";
+import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import {
   RESOURCE_PROFILE_CONFIGS,
   type ResourceProfile,
@@ -16,14 +18,21 @@ const DOWNGRADE_HOLD_MS = 30_000;
 const UPGRADE_HOLD_MS = 60_000;
 const WARMUP_TICKS = 2;
 
-const MEMORY_THRESHOLD_HIGH_MB = 1200;
-const MEMORY_THRESHOLD_LOW_MB = 600;
+// Memory-pressure thresholds scale with device RAM so machines with very
+// different physical memory behave sensibly. On an 8 GB machine these
+// fractions evaluate to ~1229 MB / ~655 MB, preserving the originally-tuned
+// behavior; on a 64 GB machine they scale up to ~9830 MB / ~5243 MB, which
+// stops false "efficiency" drops when the app has plenty of headroom.
+const HIGH_FRACTION = 0.15;
+const LOW_FRACTION = 0.08;
 const WORKTREE_COUNT_HIGH = 8;
 
 export interface ResourceProfileDeps {
   getPtyClient: () => PtyClient | null;
   getWorkspaceClient: () => WorkspaceClient | null;
   getHibernationService: () => HibernationService | null;
+  getProjectViewManager: () => ProjectViewManager | null;
+  getUserCachedViewLimit: () => number;
 }
 
 export class ResourceProfileService {
@@ -34,8 +43,36 @@ export class ResourceProfileService {
   private tickCount = 0;
   private disposed = false;
   private cachedWorktreeCount = 0;
+  private thermalState: "unknown" | "nominal" | "fair" | "serious" | "critical" = "unknown";
+  private speedLimit = 100;
+  private readonly memoryThresholdHighMb: number;
+  private readonly memoryThresholdLowMb: number;
 
-  constructor(private deps: ResourceProfileDeps) {}
+  constructor(private deps: ResourceProfileDeps) {
+    const totalRamMb = os.totalmem() / 1024 / 1024;
+    this.memoryThresholdHighMb = totalRamMb * HIGH_FRACTION;
+    this.memoryThresholdLowMb = totalRamMb * LOW_FRACTION;
+  }
+
+  private onThermalStateChange = (details: { state: string }): void => {
+    const { state } = details;
+    if (
+      state === "unknown" ||
+      state === "nominal" ||
+      state === "fair" ||
+      state === "serious" ||
+      state === "critical"
+    ) {
+      this.thermalState = state;
+    }
+  };
+
+  private onSpeedLimitChange = (details: { limit: number }): void => {
+    const { limit } = details;
+    if (typeof limit === "number" && !isNaN(limit) && limit >= 0 && limit <= 100) {
+      this.speedLimit = limit;
+    }
+  };
 
   setWorktreeCount(count: number): void {
     this.cachedWorktreeCount = count;
@@ -52,6 +89,10 @@ export class ResourceProfileService {
     logInfo("resource-profile-service-started", { profile: this.currentProfile });
 
     this.refreshWorktreeCount();
+
+    powerMonitor.on("thermal-state-change", this.onThermalStateChange);
+    powerMonitor.on("speed-limit-change", this.onSpeedLimitChange);
+
     this.interval = setInterval(() => {
       this.refreshWorktreeCount();
       this.evaluate();
@@ -75,6 +116,9 @@ export class ResourceProfileService {
   }
 
   stop(): void {
+    powerMonitor.removeListener("thermal-state-change", this.onThermalStateChange);
+    powerMonitor.removeListener("speed-limit-change", this.onSpeedLimitChange);
+
     if (this.interval) {
       clearInterval(this.interval);
       this.interval = null;
@@ -117,9 +161,9 @@ export class ResourceProfileService {
         totalPrivateMb += (proc.memory.privateBytes ?? proc.memory.workingSetSize) / 1024;
       }
 
-      if (totalPrivateMb > MEMORY_THRESHOLD_HIGH_MB) {
+      if (totalPrivateMb > this.memoryThresholdHighMb) {
         pressureScore += 2;
-      } else if (totalPrivateMb > MEMORY_THRESHOLD_LOW_MB) {
+      } else if (totalPrivateMb > this.memoryThresholdLowMb) {
         pressureScore += 1;
       }
     } catch {
@@ -129,11 +173,19 @@ export class ResourceProfileService {
     // Battery signal
     try {
       if (powerMonitor.isOnBatteryPower()) {
-        pressureScore += 2;
+        pressureScore += 1;
       }
     } catch {
       // Skip battery signal (may throw in utility process context)
     }
+
+    // Thermal signal (macOS only)
+    if (this.thermalState === "critical") pressureScore += 2;
+    else if (this.thermalState === "serious") pressureScore += 1;
+
+    // CPU speed-limit signal (macOS & Windows)
+    if (this.speedLimit < 50) pressureScore += 2;
+    else if (this.speedLimit < 100) pressureScore += 1;
 
     // Worktree count signal
     const worktreeCount = this.cachedWorktreeCount;
@@ -196,10 +248,30 @@ export class ResourceProfileService {
       }
     }
 
+    // Adjust cached project view limit under memory pressure.
+    // Cached WebContentsViews cost ~100–500 MB RSS each (full Chromium renderer),
+    // so clamping to 1 on efficiency reclaims the largest memory chunk available.
+    // NOTE: only reaches the primary window's PVM (single-window scope) — mirrors
+    // the existing PtyClient/HibernationService ref pattern.
+    // TODO: memory-pressure eviction bypasses the browser/dev-preview state-capture
+    // flow used in project-switch-initiated eviction (see issue #5009).
+    const pvm = this.deps.getProjectViewManager();
+    if (pvm) {
+      try {
+        if (profile === "efficiency") {
+          pvm.setCachedViewLimit(1);
+        } else if (previous === "efficiency") {
+          pvm.setCachedViewLimit(this.deps.getUserCachedViewLimit());
+        }
+      } catch {
+        // non-critical
+      }
+    }
+
     // Broadcast to renderer
     try {
       const payload: ResourceProfilePayload = { profile, config };
-      broadcastToRenderer(CHANNELS.RESOURCE_PROFILE_CHANGED, payload);
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "resource:profile-changed", payload });
     } catch {
       // non-critical — window may be closing
     }

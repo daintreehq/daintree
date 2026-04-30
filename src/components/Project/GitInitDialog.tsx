@@ -3,8 +3,9 @@ import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Check, AlertCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { projectClient } from "@/clients";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { GitInitProgressEvent } from "@shared/types/ipc/gitInit";
 
 interface GitInitDialogProps {
@@ -70,20 +71,15 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
     hasFinalizedSuccessRef.current = false;
 
     try {
-      const result = await projectClient.initGitGuided({
+      await projectClient.initGitGuided({
         directoryPath,
         createInitialCommit: true,
         initialCommitMessage: "Initial commit",
         createGitignore: true,
         gitignoreTemplate: "node",
       });
-
-      if (!result.success) {
-        setError(result.error || "Initialization failed");
-      }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      setError(errorMessage);
+      setError(formatErrorMessage(err, "Failed to initialize git repository"));
     } finally {
       setIsInitializing(false);
     }
@@ -135,7 +131,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   return (
     <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isInitializing}>
       <AppDialog.Header>
-        <AppDialog.Title icon={<WorktreeIcon className="h-5 w-5 text-daintree-accent" />}>
+        <AppDialog.Title icon={<FolderGit2 className="h-5 w-5 text-daintree-accent" />}>
           Initialize Git Repository
         </AppDialog.Title>
         {!isInitializing && <AppDialog.CloseButton />}

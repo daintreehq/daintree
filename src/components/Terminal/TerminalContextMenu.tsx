@@ -1,12 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
 import { isMac } from "@/lib/platform";
 import type React from "react";
-import type { Terminal as XTermTerminal } from "@xterm/xterm";
-import { type PanelLocation, type TerminalType } from "@/types";
+import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { useWorktrees } from "@/hooks/useWorktrees";
-import { AGENT_IDS, getAgentConfig } from "@/config/agents";
+import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
@@ -20,30 +19,24 @@ import {
   CopyPlus,
   ExternalLink,
   Globe,
-  Info,
   Link,
   Lock,
   Maximize2,
-  NotebookPen,
   Minimize2,
   OctagonX,
+  PanelBottomClose,
+  PanelTopClose,
   Pencil,
   Play,
+  Radio,
+  RadioTower,
   RefreshCw,
-  Repeat2,
   RotateCcw,
-  Search,
   Send,
-  SquareTerminal,
   Trash2,
   Unlock,
 } from "lucide-react";
-import {
-  MoveToDockIcon,
-  MoveToGridIcon,
-  DaintreeAgentIcon,
-  WorktreeIcon,
-} from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -58,75 +51,6 @@ import {
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
-const URL_REGEX = /(?:https?|ftp):\/\/[^\s"'<>()[\]{}]+/g;
-
-export function extractUrlAtPoint(
-  terminal: XTermTerminal,
-  clientX: number,
-  clientY: number
-): string | null {
-  const el = terminal.element;
-  if (!el) return null;
-  const rect = el.getBoundingClientRect();
-  if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom)
-    return null;
-  const col = Math.floor(((clientX - rect.left) / rect.width) * terminal.cols);
-  const row = Math.floor(((clientY - rect.top) / rect.height) * terminal.rows);
-  if (row < 0 || row >= terminal.rows || col < 0 || col >= terminal.cols) return null;
-  const bufferRow = terminal.buffer.active.viewportY + row;
-  const line = terminal.buffer.active.getLine(bufferRow);
-  if (!line) return null;
-  const text = line.translateToString(true);
-  URL_REGEX.lastIndex = 0;
-  let match;
-  while ((match = URL_REGEX.exec(text)) !== null) {
-    const url = match[0].replace(/[.,;:!?'")\]]+$/, "");
-    if (col >= match.index && col < match.index + url.length) {
-      return url;
-    }
-  }
-  return null;
-}
-
-export interface CreateNoteArgs {
-  title: string;
-  content: string;
-  scope: "worktree" | "project";
-  worktreeId?: string;
-}
-
-export function buildCreateNoteArgs(
-  agentName: string,
-  worktreeName: string | undefined,
-  selectionText: string,
-  worktreeId: string | undefined
-): CreateNoteArgs {
-  const timestamp = new Date().toLocaleString();
-  const title = `Note from ${agentName} — ${timestamp}`;
-
-  const lines: string[] = [];
-  lines.push(`**Agent:** ${agentName}`);
-  if (worktreeName) lines.push(`**Worktree:** ${worktreeName}`);
-  lines.push(`**Time:** ${timestamp}`);
-
-  if (selectionText) {
-    lines.push("");
-    lines.push(
-      selectionText
-        .split("\n")
-        .map((line) => `> ${line}`)
-        .join("\n")
-    );
-  }
-
-  return {
-    title,
-    content: lines.join("\n"),
-    scope: worktreeId ? "worktree" : "project",
-    worktreeId,
-  };
-}
-
 interface TerminalContextMenuProps {
   terminalId: string;
   children: React.ReactNode;
@@ -134,7 +58,7 @@ interface TerminalContextMenuProps {
 }
 
 /**
- * Right-click context menu for panel headers (terminal, agent, browser, notes, dev-preview).
+ * Right-click context menu for panel headers (terminal, agent, browser, dev-preview).
  * Used by both DockedTerminalItem and PanelHeader.
  */
 export function TerminalContextMenu({
@@ -159,13 +83,21 @@ export function TerminalContextMenu({
   const { worktrees } = useWorktrees();
 
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
+  const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
+  const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
+  // Pull the panel directly here (rather than indexing through the shallow
+  // selector above) so the eligibility check sees the live record. The
+  // dropdown only renders fleet items when the panel is fleet-arm-eligible
+  // — non-agent terminals, trashed/backgrounded panels, and PTY-less panels
+  // don't get the option, matching the gesture-level rules in
+  // `multiSelectGestures`.
+  const fleetEligible = isFleetArmEligible(terminal);
 
   const [hasSelection, setHasSelection] = useState(false);
-  const [selectionText, setSelectionText] = useState("");
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
 
   const handleContextMenu = useCallback(
-    (e: React.MouseEvent) => {
+    (_e: React.MouseEvent) => {
       const managed = terminalInstanceService.get(terminalId);
       if (!managed?.terminal) {
         setHasSelection(false);
@@ -174,8 +106,7 @@ export function TerminalContextMenu({
       }
       const selection = managed.terminal.getSelection();
       setHasSelection(!!selection);
-      setSelectionText(selection);
-      setHoveredUrl(extractUrlAtPoint(managed.terminal, e.clientX, e.clientY));
+      setHoveredUrl(terminalInstanceService.getHoveredLinkText(terminalId));
     },
     [terminalId]
   );
@@ -191,9 +122,8 @@ export function TerminalContextMenu({
     (actionId: string) => {
       if (!terminal) return;
 
-      if (actionId.startsWith("open-link:")) {
-        const url = actionId.slice("open-link:".length);
-        void actionService.dispatch("system.openExternal", { url }, { source: "context-menu" });
+      if (actionId === "open-link") {
+        terminalInstanceService.openHoveredLink(terminalId);
         return;
       }
 
@@ -213,19 +143,35 @@ export function TerminalContextMenu({
         return;
       }
 
-      if (actionId.startsWith("convert-to:")) {
-        const targetType = actionId.slice("convert-to:".length);
-        if (targetType === "terminal" || AGENT_IDS.includes(targetType)) {
-          void actionService.dispatch(
-            "terminal.convertType",
-            { terminalId, type: targetType as TerminalType },
-            { source: "context-menu" }
-          );
-        }
-        return;
-      }
-
       switch (actionId) {
+        case "fleet-toggle":
+          // Mirror the gesture rule from multiSelectGestures: a toggle on
+          // an empty fleet implicitly seeds the focused pane so the user
+          // ends up with a 2-pane fleet rather than a single armed peer.
+          if (
+            !useFleetArmingStore.getState().armedIds.has(terminalId) &&
+            useFleetArmingStore.getState().armedIds.size === 0
+          ) {
+            const focusedId = usePanelStore.getState().focusedId;
+            if (focusedId && focusedId !== terminalId) {
+              const focusedTerminal = usePanelStore.getState().panelsById[focusedId];
+              if (focusedTerminal && isFleetArmEligible(focusedTerminal)) {
+                useFleetArmingStore.getState().armId(focusedId);
+              }
+            }
+          }
+          useFleetArmingStore.getState().toggleId(terminalId);
+          break;
+        case "fleet-arm-worktree":
+          void actionService.dispatch("terminal.bulkCommand", undefined, {
+            source: "context-menu",
+          });
+          break;
+        case "fleet-clear":
+          void actionService.dispatch("terminal.disarmAll", undefined, {
+            source: "context-menu",
+          });
+          break;
         case "copy":
           void actionService.dispatch("terminal.copy", { terminalId }, { source: "context-menu" });
           break;
@@ -260,13 +206,6 @@ export function TerminalContextMenu({
             { source: "context-menu" }
           );
           break;
-        case "redraw":
-          void actionService.dispatch(
-            "terminal.redraw",
-            { terminalId },
-            { source: "context-menu" }
-          );
-          break;
         case "force-resume":
           void actionService.dispatch(
             "terminal.forceResume",
@@ -294,13 +233,6 @@ export function TerminalContextMenu({
         case "rename":
           void actionService.dispatch(
             "terminal.rename",
-            { terminalId },
-            { source: "context-menu" }
-          );
-          break;
-        case "view-info":
-          void actionService.dispatch(
-            "terminal.viewInfo",
             { terminalId },
             { source: "context-menu" }
           );
@@ -339,54 +271,9 @@ export function TerminalContextMenu({
             );
           }
           break;
-        case "delete-note":
-          if (terminal.notePath) {
-            void actionService.dispatch(
-              "terminal.deleteNote",
-              {
-                terminalId,
-                notePath: terminal.notePath,
-                noteTitle: terminal.title,
-              },
-              { source: "context-menu", confirmed: true }
-            );
-          }
-          break;
-        case "reveal-in-palette":
-          if (terminal.notePath) {
-            void actionService.dispatch(
-              "notes.reveal",
-              { notePath: terminal.notePath },
-              { source: "context-menu" }
-            );
-          }
-          break;
-        case "create-note": {
-          const agentConfig = terminal.agentId ? getAgentConfig(terminal.agentId) : null;
-          const agentName = agentConfig?.name ?? terminal.agentId ?? "Agent";
-          const currentWorktree = worktrees.find((wt) => wt.id === terminal.worktreeId);
-          const worktreeName = currentWorktree
-            ? (currentWorktree.isMainWorktree
-                ? currentWorktree.name
-                : currentWorktree.branch || currentWorktree.name
-              ).trim() || undefined
-            : undefined;
-          const noteArgs = buildCreateNoteArgs(
-            agentName,
-            worktreeName,
-            selectionText,
-            terminal.worktreeId
-          );
-          void actionService.dispatch(
-            "notes.create",
-            { ...noteArgs, openPanel: true },
-            { source: "context-menu" }
-          );
-          break;
-        }
       }
     },
-    [terminal, terminalId, selectionText, worktrees]
+    [terminal, terminalId]
   );
 
   if (!terminal) {
@@ -394,19 +281,15 @@ export function TerminalContextMenu({
   }
 
   const isBrowser = terminal.kind === "browser";
-  const isNotes = terminal.kind === "notes";
   const isDevPreview = terminal.kind === "dev-preview";
   const hasPty = terminal.kind ? panelKindHasPty(terminal.kind) : true;
-
-  const currentAgentId = terminal.agentId ?? (terminal.type !== "terminal" ? terminal.type : null);
-  const isPlainTerminal = terminal.type === "terminal" || terminal.kind === "terminal";
 
   const layoutSection = (
     <>
       {worktrees.length > 1 && (
         <ContextMenuSub>
           <ContextMenuSubTrigger>
-            <WorktreeIcon className={ICON_CLASS} />
+            <FolderGit2 className={ICON_CLASS} />
             Move to Worktree
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
@@ -420,7 +303,7 @@ export function TerminalContextMenu({
                   disabled={isCurrent}
                   onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
                 >
-                  <WorktreeIcon className={ICON_CLASS} />
+                  <FolderGit2 className={ICON_CLASS} />
                   {label}
                 </ContextMenuItem>
               );
@@ -428,7 +311,7 @@ export function TerminalContextMenu({
           </ContextMenuSubContent>
         </ContextMenuSub>
       )}
-      {terminal.agentId && (
+      {terminal.launchAgentId && (
         <ContextMenuItem
           onSelect={() =>
             void actionService.dispatch(
@@ -438,7 +321,7 @@ export function TerminalContextMenu({
             )
           }
         >
-          <WorktreeIcon className={ICON_CLASS} />
+          <FolderGit2 className={ICON_CLASS} />
           Move to New Worktree…
         </ContextMenuItem>
       )}
@@ -446,9 +329,9 @@ export function TerminalContextMenu({
         onSelect={() => handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")}
       >
         {currentLocation === "grid" ? (
-          <MoveToDockIcon className={ICON_CLASS} />
+          <PanelBottomClose className={ICON_CLASS} />
         ) : (
-          <MoveToGridIcon className={ICON_CLASS} />
+          <PanelTopClose className={ICON_CLASS} />
         )}
         {currentLocation === "grid" ? "Move to Dock" : "Move to Grid"}
       </ContextMenuItem>
@@ -517,51 +400,6 @@ export function TerminalContextMenu({
     );
   }
 
-  if (isNotes) {
-    const hasNotePath = Boolean(terminal.notePath);
-    return (
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div className="contents" data-context-trigger={terminalId}>
-            {children}
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          {layoutSection}
-          <ContextMenuSeparator />
-          <ContextMenuItem disabled={!hasNotePath} onSelect={() => handleAction("rename")}>
-            <Pencil className={ICON_CLASS} aria-hidden="true" />
-            Rename Note
-          </ContextMenuItem>
-          <ContextMenuItem
-            disabled={!hasNotePath}
-            onSelect={() => handleAction("reveal-in-palette")}
-          >
-            <Search className={ICON_CLASS} aria-hidden="true" />
-            Reveal in Notes Palette
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("background")}>
-            <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-            Send to Background
-          </ContextMenuItem>
-          <ContextMenuItem
-            destructive
-            disabled={!hasNotePath}
-            onSelect={() => handleAction("delete-note")}
-          >
-            <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Delete Note
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("trash")}>
-            <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Close Note
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
-    );
-  }
-
   if (isDevPreview) {
     const hasUrl = Boolean(terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl));
     return (
@@ -613,34 +451,6 @@ export function TerminalContextMenu({
     );
   }
 
-  const showConvertTo = !isPlainTerminal || !!currentAgentId || AGENT_IDS.length > 0;
-
-  const convertToItems = (
-    <>
-      {(!isPlainTerminal || !!currentAgentId) && (
-        <ContextMenuItem onSelect={() => handleAction("convert-to:terminal")}>
-          <SquareTerminal className={ICON_CLASS} aria-hidden="true" />
-          Terminal
-        </ContextMenuItem>
-      )}
-      {AGENT_IDS.map((agentId) => {
-        const config = getAgentConfig(agentId);
-        if (!config) return null;
-        const isCurrent = currentAgentId === agentId;
-        return (
-          <ContextMenuItem
-            key={agentId}
-            disabled={isCurrent}
-            onSelect={() => handleAction(`convert-to:${agentId}`)}
-          >
-            <DaintreeAgentIcon className={ICON_CLASS} />
-            {config.name}
-          </ContextMenuItem>
-        );
-      })}
-    </>
-  );
-
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -682,7 +492,7 @@ export function TerminalContextMenu({
             {hoveredUrl && (
               <>
                 <ContextMenuSeparator />
-                <ContextMenuItem onSelect={() => handleAction(`open-link:${hoveredUrl}`)}>
+                <ContextMenuItem onSelect={() => handleAction("open-link")}>
                   <ExternalLink className={ICON_CLASS} aria-hidden="true" />
                   Open Link
                 </ContextMenuItem>
@@ -695,18 +505,35 @@ export function TerminalContextMenu({
             <ContextMenuSeparator />
           </>
         )}
+        {fleetEligible && (
+          <>
+            <ContextMenuItem onSelect={() => handleAction("fleet-toggle")}>
+              {isArmed ? (
+                <Radio className={ICON_CLASS} aria-hidden="true" />
+              ) : (
+                <RadioTower className={ICON_CLASS} aria-hidden="true" />
+              )}
+              {isArmed ? "Remove from Fleet" : "Add to Fleet"}
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => handleAction("fleet-arm-worktree")}>
+              <RadioTower className={ICON_CLASS} aria-hidden="true" />
+              Arm All in This Worktree
+            </ContextMenuItem>
+            {isArmed && fleetSize >= 2 && (
+              <ContextMenuItem destructive onSelect={() => handleAction("fleet-clear")}>
+                <Radio className={ICON_CLASS} aria-hidden="true" />
+                Clear Fleet
+              </ContextMenuItem>
+            )}
+            <ContextMenuSeparator />
+          </>
+        )}
         {layoutSection}
         <ContextMenuSeparator />
         {hasPty && (
           <ContextMenuItem onSelect={() => handleAction("restart")}>
             <RotateCcw className={ICON_CLASS} aria-hidden="true" />
             Restart Terminal
-          </ContextMenuItem>
-        )}
-        {hasPty && (
-          <ContextMenuItem onSelect={() => handleAction("redraw")}>
-            <RefreshCw className={ICON_CLASS} aria-hidden="true" />
-            Redraw Terminal
           </ContextMenuItem>
         )}
         {isPaused && (
@@ -723,7 +550,7 @@ export function TerminalContextMenu({
           )}
           {terminal.isInputLocked ? "Unlock Input" : "Lock Input"}
         </ContextMenuItem>
-        {terminal.agentId && (
+        {terminal.detectedAgentId && (
           <ContextMenuItem onSelect={() => handleAction("toggle-watch")}>
             {isWatched ? (
               <BellOff className={ICON_CLASS} aria-hidden="true" />
@@ -734,21 +561,6 @@ export function TerminalContextMenu({
             <ContextMenuShortcut>{mac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
           </ContextMenuItem>
         )}
-        {terminal.agentId && (
-          <ContextMenuItem onSelect={() => handleAction("create-note")}>
-            <NotebookPen className={ICON_CLASS} aria-hidden="true" />
-            Create Note
-          </ContextMenuItem>
-        )}
-        {showConvertTo && (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>
-              <Repeat2 className={ICON_CLASS} aria-hidden="true" />
-              Convert to
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent>{convertToItems}</ContextMenuSubContent>
-          </ContextMenuSub>
-        )}
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => handleAction("duplicate")}>
           <CopyPlus className={ICON_CLASS} aria-hidden="true" />
@@ -757,10 +569,6 @@ export function TerminalContextMenu({
         <ContextMenuItem onSelect={() => handleAction("rename")}>
           <Pencil className={ICON_CLASS} aria-hidden="true" />
           Rename Terminal
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => handleAction("view-info")}>
-          <Info className={ICON_CLASS} aria-hidden="true" />
-          View Terminal Info
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => handleAction("background")}>

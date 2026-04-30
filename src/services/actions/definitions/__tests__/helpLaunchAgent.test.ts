@@ -1,32 +1,42 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { CliAvailability } from "@shared/types";
 
-const mockDispatch = vi.fn().mockResolvedValue({ ok: true });
+const {
+  mockDispatch,
+  mockNotify,
+  mockGetAgentPrefsState,
+  mockGetCliAvailabilityState,
+  mockGetAgentSettingsState,
+  mockGetEffectiveAgentConfig,
+} = vi.hoisted(() => ({
+  mockDispatch: vi.fn().mockResolvedValue({ ok: true }),
+  mockNotify: vi.fn().mockReturnValue(""),
+  mockGetAgentPrefsState: vi.fn(),
+  mockGetCliAvailabilityState: vi.fn(),
+  mockGetAgentSettingsState: vi.fn(),
+  mockGetEffectiveAgentConfig: vi.fn(),
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: mockDispatch },
 }));
 
-const mockNotify = vi.fn().mockReturnValue("");
 vi.mock("@/lib/notify", () => ({
   notify: (...args: unknown[]) => mockNotify(...args),
 }));
 
-const mockGetAgentPrefsState = vi.fn();
 vi.mock("@/store/agentPreferencesStore", () => ({
   useAgentPreferencesStore: { getState: () => mockGetAgentPrefsState() },
 }));
 
-const mockGetCliAvailabilityState = vi.fn();
 vi.mock("@/store/cliAvailabilityStore", () => ({
   useCliAvailabilityStore: { getState: () => mockGetCliAvailabilityState() },
 }));
 
-const mockGetAgentSettingsState = vi.fn();
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: { getState: () => mockGetAgentSettingsState() },
 }));
 
-const mockGetEffectiveAgentConfig = vi.fn();
 vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@shared/config/agentRegistry")>();
   return {
@@ -37,7 +47,8 @@ vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
 
 import { registerPreferencesActions } from "../preferencesActions";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
-import type { ActionContext, ActionDefinition } from "@shared/types/actions";
+import type { ActionContext } from "@shared/types/actions";
+import type { AnyActionDefinition } from "../../actionTypes";
 
 const stubCtx: ActionContext = {};
 
@@ -51,8 +62,8 @@ function allAvailability(override?: Partial<CliAvailability>): CliAvailability {
   } as CliAvailability;
 }
 
-function extractHelpLaunchAgent(): ActionDefinition {
-  const registry = new Map<string, () => ActionDefinition>();
+function extractHelpLaunchAgent(): AnyActionDefinition {
+  const registry = new Map<string, () => AnyActionDefinition>();
   const callbacks = { onOpenShortcuts: vi.fn() } as unknown as ActionCallbacks;
   registerPreferencesActions(registry as unknown as ActionRegistry, callbacks);
   const factory = registry.get("help.launchAgent");
@@ -61,7 +72,7 @@ function extractHelpLaunchAgent(): ActionDefinition {
 }
 
 describe("help.launchAgent", () => {
-  let action: ActionDefinition;
+  let action: AnyActionDefinition;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -172,13 +183,17 @@ describe("help.launchAgent", () => {
     );
   });
 
-  it("resolves to codex when claude and gemini are unavailable", async () => {
+  it("resolves to codex when claude, opencode, and gemini are unavailable", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
     mockGetCliAvailabilityState.mockReturnValue({
-      availability: allAvailability({ claude: "missing", gemini: "missing" }),
+      availability: allAvailability({
+        claude: "missing",
+        opencode: "missing",
+        gemini: "missing",
+      }),
       isInitialized: true,
     });
 

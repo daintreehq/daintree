@@ -1,6 +1,7 @@
 import type { TerminalInstance } from "@/store";
 import type { PanelComponentProps } from "@/registry";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 const activityCache = new Map<string, ActivityState>();
 
@@ -63,8 +64,25 @@ export function buildPanelProps({
     onClose: overrides.onClose!,
 
     // Terminal-specific
-    type: terminal.type,
-    agentId: terminal.agentId,
+    type: undefined,
+    everDetectedAgent: terminal.everDetectedAgent,
+    agentId: terminal.launchAgentId,
+    detectedAgentId: terminal.detectedAgentId,
+    runtimeIdentity: terminal.runtimeIdentity,
+    chrome: deriveTerminalChrome({
+      kind: terminal.kind,
+      launchAgentId: terminal.launchAgentId,
+      runtimeIdentity: terminal.runtimeIdentity,
+      detectedAgentId: terminal.detectedAgentId,
+      detectedProcessId: terminal.detectedProcessId,
+      agentState: terminal.agentState,
+      runtimeStatus: terminal.runtimeStatus,
+      exitCode: terminal.exitCode,
+      presetColor: terminal.agentPresetColor,
+    }),
+    agentPresetId: terminal.agentPresetId,
+    presetColor: terminal.agentPresetColor,
+    agentLaunchFlags: terminal.agentLaunchFlags,
     cwd: terminal.cwd,
     agentState: terminal.agentState,
     activity: getStableActivity(
@@ -73,6 +91,7 @@ export function buildPanelProps({
       terminal.activityStatus,
       terminal.activityType
     ),
+    activityStatus: terminal.activityStatus,
     lastCommand: terminal.lastCommand,
     flowStatus: terminal.flowStatus,
     restartKey: terminal.restartKey,
@@ -86,12 +105,6 @@ export function buildPanelProps({
 
     // Browser-specific
     initialUrl: terminal.browserUrl || "http://localhost:3000",
-
-    // Notes-specific
-    notePath: (terminal as any).notePath,
-    noteId: (terminal as any).noteId,
-    scope: (terminal as any).scope,
-    createdAt: (terminal as any).createdAt,
 
     ...overrides,
   };

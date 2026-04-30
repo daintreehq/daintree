@@ -19,6 +19,7 @@ import type {
   WorkerOutboundMessage,
   WorkerTerminalState,
 } from "../../shared/types/worker-messages.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const ACTIVE_POLL_MS = 20; // 50Hz when receiving data
 const IDLE_INTERVALS = [50, 100, 250] as const; // Progressive backoff when idle
@@ -71,7 +72,7 @@ async function processPacket(terminalId: string, data: string): Promise<void> {
   } catch (error) {
     postTypedMessage({
       type: "ERROR",
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error, "Artifact extraction failed"),
       context: "artifact extraction",
     });
   }
@@ -149,7 +150,7 @@ async function pollBuffer(): Promise<void> {
   } catch (error) {
     postTypedMessage({
       type: "ERROR",
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error, "Polling loop failed"),
       context: "polling loop",
     });
   } finally {
@@ -161,7 +162,7 @@ async function pollBuffer(): Promise<void> {
 self.onunhandledrejection = (event: PromiseRejectionEvent) => {
   postTypedMessage({
     type: "ERROR",
-    error: event.reason instanceof Error ? event.reason.message : String(event.reason),
+    error: formatErrorMessage(event.reason, "Unhandled promise rejection"),
     context: "unhandled rejection",
   });
 };
@@ -192,7 +193,7 @@ self.onmessage = (event: MessageEvent<WorkerInboundMessage>) => {
       } catch (error) {
         postTypedMessage({
           type: "ERROR",
-          error: error instanceof Error ? error.message : String(error),
+          error: formatErrorMessage(error, "Failed to initialize ring buffer"),
           context: "buffer initialization",
         });
       }

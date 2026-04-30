@@ -109,7 +109,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
       "integrations",
       "agents",
       ...BUILT_IN_AGENT_IDS.flatMap((id) =>
-        [id, AGENT_REGISTRY[id]?.name?.toLowerCase()].filter(Boolean)
+        [id, AGENT_REGISTRY[id]?.name?.toLowerCase()].filter((s): s is string => Boolean(s))
       ),
     ],
   },
@@ -268,7 +268,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     section: "Idle Terminal Notifications",
     title: "Idle Terminal Notifications",
     description:
-      "Notify when background project terminals have been idle past a threshold. Includes Close Them / Dismiss actions.",
+      "Notify when background project terminals have been idle past a threshold. Includes Close Them / Mute project actions.",
     keywords: ["idle", "notify", "terminal", "background", "reminder", "inactive", "close"],
   },
   {
@@ -410,7 +410,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     subtab: "performance",
     subtabLabel: "Performance",
     section: "Panel Limits",
-    title: "Disable Panel Warnings",
+    title: "Panel Warnings",
     description:
       "Turn off soft warning banner and confirmation dialog while keeping the hard limit",
     keywords: ["disable", "warning", "panel", "nag", "dismiss", "suppress"],
@@ -1141,7 +1141,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     scope: "global",
     tabLabel: "Troubleshooting",
     section: "Developer Mode",
-    title: "Enable Verbose Logging",
+    title: "Verbose Logging",
     description: "Enable verbose logging for this session only. Resets on app restart.",
     keywords: ["verbose", "logging", "debug", "log level", "session"],
   },

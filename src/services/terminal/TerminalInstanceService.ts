@@ -1,7 +1,8 @@
-import { Terminal } from "@xterm/xterm";
-import { isMac } from "@/lib/platform";
+import { Terminal, ILink, IBufferRange } from "@xterm/xterm";
+import { isMac, isLinux } from "@/lib/platform";
 import { terminalClient } from "@/clients";
-import { TerminalRefreshTier, TerminalType } from "@/types";
+import { installLinuxPrimarySelectionListeners } from "./primarySelection";
+import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
 import {
   ManagedTerminal,
@@ -35,7 +36,11 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isUselessTitle, normalizeObservedTitle } from "@shared/utils/isUselessTitle";
+import { usePanelStore } from "@/store/panelStore";
 import { isNonKeyboardInput } from "./inputUtils";
+import { writeTerminalInputOrFleet } from "./fleetInputRouter";
 
 export { isNonKeyboardInput } from "./inputUtils";
 
@@ -59,6 +64,11 @@ const REFLOW_THROTTLE_MS = 250;
 // Periodic heartbeat interval — low frequency is enough to recover a paused
 // renderer that has no writes, without costing measurable CPU.
 const REFLOW_HEARTBEAT_MS = 3000;
+
+// Debounce on the visibility-driven WebGL restore path. Hide is immediate;
+// show waits this long before re-acquiring so rapid tab/panel toggles don't
+// thrash WebglAddon load/unload (each cycle reallocates GPU resources).
+const WEBGL_RESTORE_DEBOUNCE_MS = 100;
 
 function canAutoInitializeTerminalIngest(): boolean {
   return (
@@ -147,9 +157,11 @@ class TerminalInstanceService {
 
     // Periodic heartbeat: recovers a DOM-renderer terminal whose
     // IntersectionObserver has paused rendering, even while no new writes are
-    // arriving. Cheap (~1–5ms per visible non-agent terminal).
+    // arriving. Cheap (~1–5ms per visible non-agent terminal). Skipped while
+    // the document is hidden — _onVisibilityChange triggers a sweep on regain.
     if (typeof setInterval === "function") {
       this.reflowHeartbeatTimer = setInterval(() => {
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
         for (const managed of this.instances.values()) {
           this.maybeReflowTerminal(managed);
         }
@@ -183,24 +195,10 @@ class TerminalInstanceService {
       },
       onPostWake: (id) => this.handlePostWake(id),
       onTierApplied: (id, tier, managed) => {
-        // Hibernation timer management
-        if (
-          tier === TerminalRefreshTier.BACKGROUND &&
-          (managed.kind !== "agent" ||
-            managed.canonicalAgentState === "completed" ||
-            managed.canonicalAgentState === "exited")
-        ) {
-          if (!managed.hibernationTimer && !managed.isHibernated) {
-            managed.hibernationTimer = setTimeout(() => {
-              managed.hibernationTimer = undefined;
-              this.hibernate(id);
-            }, HIBERNATION_DELAY_MS);
-          }
+        if (this.isHibernationEligible(tier, managed) && !managed.isVisible) {
+          this.scheduleHibernation(id, managed);
         } else {
-          if (managed.hibernationTimer) {
-            clearTimeout(managed.hibernationTimer);
-            managed.hibernationTimer = undefined;
-          }
+          this.cancelHibernation(managed);
         }
 
         if (tier === TerminalRefreshTier.BACKGROUND) {
@@ -230,6 +228,7 @@ class TerminalInstanceService {
             }
             managed.webLinksAddon = null;
           }
+          managed.hoveredLink = null;
         } else {
           restoreScrollback(managed);
 
@@ -242,8 +241,14 @@ class TerminalInstanceService {
           }
           if (!managed.fileLinksDisposable) {
             try {
-              managed.fileLinksDisposable = createFileLinksAddon(managed.terminal, () =>
-                (this.cwdProviders.get(id) ?? (() => ""))()
+              managed.fileLinksDisposable = createFileLinksAddon(
+                managed.terminal,
+                () => (this.cwdProviders.get(id) ?? (() => ""))(),
+                (link) => {
+                  const current = this.instances.get(id);
+                  if (!current) return;
+                  current.hoveredLink = link;
+                }
               );
             } catch (err) {
               logWarn("Failed to recreate FileLinksAddon", { id, error: err });
@@ -251,8 +256,21 @@ class TerminalInstanceService {
           }
           if (!managed.webLinksAddon) {
             try {
-              managed.webLinksAddon = createWebLinksAddon(managed.terminal, (event, uri) =>
-                this.linkHandler.openLink(uri, id, event)
+              managed.webLinksAddon = createWebLinksAddon(
+                managed.terminal,
+                (event, uri) => this.linkHandler.openLink(uri, id, event),
+                {
+                  hover: (_event, text) => {
+                    const current = this.instances.get(id);
+                    if (!current) return;
+                    current.hoveredLink = this.makeSyntheticLink(text, null, id);
+                  },
+                  leave: () => {
+                    const current = this.instances.get(id);
+                    if (!current) return;
+                    current.hoveredLink = null;
+                  },
+                }
               );
             } catch (err) {
               logWarn("Failed to recreate WebLinksAddon", { id, error: err });
@@ -260,7 +278,7 @@ class TerminalInstanceService {
           }
         }
 
-        if (managed.kind === "agent") {
+        if (managed.runtimeAgentId) {
           if (
             tier === TerminalRefreshTier.FOCUSED ||
             tier === TerminalRefreshTier.BURST ||
@@ -288,6 +306,48 @@ class TerminalInstanceService {
   }
 
   /**
+   * Returns the text of the currently-hovered link, if any. Used by the
+   * right-click context menu to show "Open Link"/"Copy Link Address" based
+   * on the same detection xterm uses (WebLinksAddon, FileLinksAddon, OSC 8).
+   */
+  getHoveredLinkText(id: string): string | null {
+    return this.instances.get(id)?.hoveredLink?.text ?? null;
+  }
+
+  /**
+   * Opens the currently-hovered link by delegating to its own activate()
+   * method. File links route through the actionService (file.view); URL and
+   * OSC 8 links route through TerminalLinkHandler (localhost → browser panel
+   * when modifier pressed, external open otherwise).
+   */
+  openHoveredLink(id: string, event?: MouseEvent): void {
+    const managed = this.instances.get(id);
+    const link = managed?.hoveredLink;
+    if (!link) return;
+    const mouseEvent = event ?? new MouseEvent("click");
+    try {
+      link.activate(mouseEvent, link.text);
+    } catch (error) {
+      logWarn("Failed to activate hovered link", { id, error });
+    }
+  }
+
+  /**
+   * Builds a synthetic ILink for WebLinksAddon and OSC 8 link sources (which
+   * don't expose an ILink natively). activate() routes through the link
+   * handler so localhost URLs hit the browser-panel path when needed.
+   */
+  private makeSyntheticLink(text: string, range: IBufferRange | null, terminalId: string): ILink {
+    return {
+      range: range ?? { start: { x: 0, y: 0 }, end: { x: 0, y: 0 } },
+      text,
+      activate: (event: MouseEvent, uri: string) => {
+        this.linkHandler.openLink(uri, terminalId, event);
+      },
+    };
+  }
+
+  /**
    * Force an IntersectionObserver reflow on a standard terminal if it's
    * eligible — used by onWriteParsed, the periodic heartbeat, and
    * visibility/focus recovery paths. All guards live here so every caller
@@ -298,7 +358,7 @@ class TerminalInstanceService {
    * element. Throttled per terminal.
    */
   private maybeReflowTerminal(managed: ManagedTerminal): void {
-    if (managed.kind === "agent") return;
+    if (managed.runtimeAgentId) return;
     if (managed.isHibernated) return;
     if (!managed.isVisible) return;
     if (managed.isAttaching) return;
@@ -319,6 +379,26 @@ class TerminalInstanceService {
     } catch (err) {
       logWarn("forceXtermReflow failed", { error: err });
     }
+  }
+
+  /**
+   * Eligibility for visibility-driven WebGL restore. Mirrors the gates in
+   * onTierApplied (agent identity + visible/focused tier) plus liveness
+   * checks (opened, not attaching, not hibernated). Used by the debounced
+   * timer in setVisible() before re-acquiring a context.
+   */
+  private shouldRestoreWebGL(managed: ManagedTerminal): boolean {
+    if (!managed.runtimeAgentId) return false;
+    if (!managed.isOpened) return false;
+    if (!managed.isVisible) return false;
+    if (managed.isAttaching) return false;
+    if (managed.isHibernated) return false;
+    const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
+    return (
+      tier === TerminalRefreshTier.FOCUSED ||
+      tier === TerminalRefreshTier.BURST ||
+      tier === TerminalRefreshTier.VISIBLE
+    );
   }
 
   private onUserInput(id: string, data: string): void {
@@ -350,13 +430,13 @@ class TerminalInstanceService {
 
   prewarmTerminal(
     id: string,
-    type: TerminalType,
+    launchAgentId: string | undefined,
     options: ConstructorParameters<typeof Terminal>[0],
     params: { offscreen?: boolean; widthPx?: number; heightPx?: number } = {}
   ): ManagedTerminal {
     const managed = this.getOrCreate(
       id,
-      type,
+      launchAgentId,
       options,
       () => TerminalRefreshTier.BACKGROUND,
       undefined
@@ -485,7 +565,17 @@ class TerminalInstanceService {
       managed.isVisible = isVisible;
       managed.lastActiveTime = Date.now();
 
+      if (managed.webGLRestoreTimer !== undefined) {
+        clearTimeout(managed.webGLRestoreTimer);
+        managed.webGLRestoreTimer = undefined;
+      }
+
       if (isVisible) {
+        // Revealing an on-screen terminal — make sure it doesn't get hibernated.
+        // Tier may still be BACKGROUND (non-focused split view), so applying
+        // the renderer policy alone isn't enough to clear the timer.
+        this.cancelHibernation(managed);
+
         if (managed.isAttaching) {
           return;
         }
@@ -517,6 +607,40 @@ class TerminalInstanceService {
             current.terminal.refresh(0, current.terminal.rows - 1);
           }
         });
+
+        // Debounced WebGL restore for same-tier transitions. If
+        // applyRendererPolicy above triggers a tier upgrade (e.g.
+        // BACKGROUND→VISIBLE), onTierApplied loads the addon immediately
+        // and this timer becomes a (harmless) idempotent re-apply. The
+        // debounce only meaningfully gates rapid hide→show toggles where
+        // the tier doesn't change, since same-tier applyRendererPolicy
+        // is a no-op.
+        managed.webGLRestoreTimer = window.setTimeout(() => {
+          const current = this.instances.get(id);
+          if (!current) return;
+          current.webGLRestoreTimer = undefined;
+          if (!this.shouldRestoreWebGL(current)) return;
+          this.webGLManager.ensureContext(id, current);
+          if (current.terminal.rows > 0) {
+            current.terminal.refresh(0, current.terminal.rows - 1);
+          }
+        }, WEBGL_RESTORE_DEBOUNCE_MS);
+      } else {
+        // Going offscreen. Release the WebGL context immediately to free a
+        // pool slot — xterm falls back to the DOM renderer until the
+        // terminal becomes visible again.
+        const hadWebGL = this.webGLManager.isActive(id);
+        this.webGLManager.releaseContext(id);
+        if (hadWebGL && managed.terminal.rows > 0) {
+          managed.terminal.refresh(0, managed.terminal.rows - 1);
+        }
+
+        // If we're already in a hibernation-eligible tier, onTierApplied
+        // won't fire to start the timer — do it here instead.
+        const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
+        if (tier !== undefined && this.isHibernationEligible(tier, managed)) {
+          this.scheduleHibernation(id, managed);
+        }
       }
     }
   }
@@ -614,7 +738,7 @@ class TerminalInstanceService {
 
   getOrCreate(
     id: string,
-    type: TerminalType,
+    launchAgentId: string | undefined,
     options: ConstructorParameters<typeof Terminal>[0],
     getRefreshTier: RefreshTierProvider = () => TerminalRefreshTier.FOCUSED,
     onInput?: (data: string) => void,
@@ -637,10 +761,22 @@ class TerminalInstanceService {
       this.linkHandler.openLink(url, id, event);
     };
 
+    const setHoveredLink = (link: ILink | null) => {
+      const current = this.instances.get(id);
+      if (!current) return;
+      current.hoveredLink = link;
+    };
+
     const terminalOptions = {
       ...options,
+      rescaleOverlappingGlyphs: true,
+      reflowCursorLine: true,
       linkHandler: {
         activate: (event: MouseEvent, text: string) => openLink(text, event),
+        hover: (_event: MouseEvent, text: string, range: IBufferRange) => {
+          setHoveredLink(this.makeSyntheticLink(text, range, id));
+        },
+        leave: () => setHoveredLink(null),
       },
     };
 
@@ -649,7 +785,12 @@ class TerminalInstanceService {
     const addons = setupTerminalAddons(
       terminal,
       () => (this.cwdProviders.get(id) ?? (() => ""))(),
-      (event, uri) => openLink(uri, event)
+      (event, uri) => openLink(uri, event),
+      (link) => setHoveredLink(link),
+      {
+        hover: (_event, text) => setHoveredLink(this.makeSyntheticLink(text, null, id)),
+        leave: () => setHoveredLink(null),
+      }
     );
 
     const hostElement = document.createElement("div");
@@ -681,20 +822,17 @@ class TerminalInstanceService {
     });
     listeners.push(unsubExit);
 
-    const kind =
-      type === "claude" || type === "gemini" || type === "codex" || type === "opencode"
-        ? "agent"
-        : "terminal";
-    const agentId = kind === "agent" ? type : undefined;
+    const kind = "terminal" as const;
 
     const managed: ManagedTerminal = {
       terminal,
-      type,
       kind,
-      agentId,
+      launchAgentId,
+      runtimeAgentId: launchAgentId,
       agentState: undefined,
       agentStateSubscribers,
       ...addons,
+      hoveredLink: null,
       hostElement,
       isOpened: false,
       listeners,
@@ -762,7 +900,12 @@ class TerminalInstanceService {
     const writeParsedDisposable = terminal.onWriteParsed(() => {
       this.dataBuffer.notifyParsed(id);
       if (managed && !managed.isUserScrolledBack && !managed.isAltBuffer) {
-        this.scrollToBottomSafe(managed);
+        if (!managed.terminal.hasSelection()) {
+          this.scrollToBottomSafe(managed);
+        } else {
+          managed.isUserScrolledBack = true;
+          this.unseenTracker.updateScrollState(id, true);
+        }
       }
       this.maybeReflowTerminal(managed);
     });
@@ -792,6 +935,7 @@ class TerminalInstanceService {
     const SCROLL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
     const onWheel = () => {
       managed._userScrollIntent = true;
+      managed.lastWheelAt = Date.now();
     };
     const onKeydownScroll = (e: KeyboardEvent) => {
       if (SCROLL_KEYS.has(e.key)) managed._userScrollIntent = true;
@@ -807,91 +951,153 @@ class TerminalInstanceService {
       const sel = terminal.getSelection();
       if (sel) {
         this.cachedSelections.set(id, sel);
-      } else if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-        reduceScrollback(managed, SCROLLBACK_BACKGROUND);
+      } else {
+        this.cachedSelections.delete(id);
+        if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
+          reduceScrollback(managed, SCROLLBACK_BACKGROUND);
+        }
       }
     });
     listeners.push(() => selectionDisposable.dispose());
 
-    if (agentId) {
-      const agentConfig = getEffectiveAgentConfig(agentId);
-      const titlePatterns = agentConfig?.detection?.titleStatePatterns;
-      if (titlePatterns) {
-        let lastReportedTitleState: "working" | "waiting" | undefined;
-
-        const titleDisposable = terminal.onTitleChange((title: string) => {
-          let matched: "working" | "waiting" | undefined;
-          for (const pattern of titlePatterns.working) {
-            if (title.includes(pattern)) {
-              matched = "working";
-              break;
-            }
-          }
-          if (!matched) {
-            for (const pattern of titlePatterns.waiting) {
-              if (title.includes(pattern)) {
-                matched = "waiting";
-                break;
-              }
-            }
-          }
-          if (!matched) {
-            if (managed.titleReportTimer !== undefined) {
-              clearTimeout(managed.titleReportTimer);
-              managed.titleReportTimer = undefined;
-              managed.pendingTitleState = undefined;
-            }
-            return;
-          }
-
-          if (matched === "working") {
-            if (managed.titleReportTimer !== undefined) {
-              clearTimeout(managed.titleReportTimer);
-              managed.titleReportTimer = undefined;
-              managed.pendingTitleState = undefined;
-            }
-            if (lastReportedTitleState !== "working") {
-              lastReportedTitleState = "working";
-              window.electron.terminal.reportTitleState(id, "working");
-            }
-          } else {
-            managed.pendingTitleState = "waiting";
-            if (managed.titleReportTimer !== undefined) {
-              clearTimeout(managed.titleReportTimer);
-            }
-            managed.titleReportTimer = window.setTimeout(() => {
-              managed.titleReportTimer = undefined;
-              if (managed.pendingTitleState === "waiting") {
-                managed.pendingTitleState = undefined;
-                if (lastReportedTitleState !== "waiting") {
-                  lastReportedTitleState = "waiting";
-                  window.electron.terminal.reportTitleState(id, "waiting");
-                }
-              }
-            }, 250);
-          }
-        });
-        listeners.push(() => {
-          titleDisposable.dispose();
-          if (managed.titleReportTimer !== undefined) {
-            clearTimeout(managed.titleReportTimer);
-            managed.titleReportTimer = undefined;
-            managed.pendingTitleState = undefined;
-          }
-        });
-      }
+    if (isLinux()) {
+      const removePrimaryListeners = installLinuxPrimarySelectionListeners({
+        hostElement,
+        terminalId: id,
+        getCachedSelection: () => this.cachedSelections.get(id),
+        getBracketedPasteMode: () => {
+          const current = this.instances.get(id);
+          return current?.terminal.modes.bracketedPasteMode ?? false;
+        },
+        isDisposed: () => !this.instances.has(id),
+        isInputLocked: () => this.instances.get(id)?.isInputLocked ?? false,
+        writeToPty: (termId, data) => terminalClient.write(termId, data),
+        notifyUserInput: (termId) => this.notifyUserInput(termId),
+        writeSelection: (text) => window.electron.clipboard.writeSelection(text),
+        readSelection: () => window.electron.clipboard.readSelection(),
+      });
+      listeners.push(removePrimaryListeners);
     }
+
+    const observedTitleDisposable = terminal.onTitleChange((title: string) => {
+      if (!managed.runtimeAgentId) return;
+      const normalized = normalizeObservedTitle(title);
+      if (!normalized || isUselessTitle(normalized)) return;
+      if (normalized === managed.lastObservedTitleSent) return;
+      managed.pendingObservedTitle = normalized;
+      if (managed.observedTitleTimer !== undefined) {
+        clearTimeout(managed.observedTitleTimer);
+      }
+      managed.observedTitleTimer = window.setTimeout(() => {
+        managed.observedTitleTimer = undefined;
+        const pending = managed.pendingObservedTitle;
+        managed.pendingObservedTitle = undefined;
+        if (!managed.runtimeAgentId) return;
+        if (!pending || pending === managed.lastObservedTitleSent) return;
+        managed.lastObservedTitleSent = pending;
+        try {
+          window.electron.terminal.updateObservedTitle(id, pending);
+        } catch (err) {
+          logWarn("[TerminalInstanceService] updateObservedTitle failed", {
+            error: formatErrorMessage(err, "Failed to update observed title"),
+          });
+        }
+        try {
+          usePanelStore.getState().updateLastObservedTitle(id, pending);
+        } catch (err) {
+          logWarn("[TerminalInstanceService] panel store title update failed", {
+            error: formatErrorMessage(err, "Failed to update panel store observed title"),
+          });
+        }
+      }, 150);
+    });
+    listeners.push(() => {
+      observedTitleDisposable.dispose();
+      if (managed.observedTitleTimer !== undefined) {
+        clearTimeout(managed.observedTitleTimer);
+        managed.observedTitleTimer = undefined;
+        managed.pendingObservedTitle = undefined;
+      }
+    });
+
+    let lastReportedTitleState: "working" | "waiting" | undefined;
+    const titleDisposable = terminal.onTitleChange((title: string) => {
+      const agentId = managed.runtimeAgentId;
+      const titlePatterns = agentId
+        ? getEffectiveAgentConfig(agentId)?.detection?.titleStatePatterns
+        : undefined;
+      if (!titlePatterns) return;
+
+      let matched: "working" | "waiting" | undefined;
+      for (const pattern of titlePatterns.working) {
+        if (title.includes(pattern)) {
+          matched = "working";
+          break;
+        }
+      }
+      if (!matched) {
+        for (const pattern of titlePatterns.waiting) {
+          if (title.includes(pattern)) {
+            matched = "waiting";
+            break;
+          }
+        }
+      }
+      if (!matched) {
+        if (managed.titleReportTimer !== undefined) {
+          clearTimeout(managed.titleReportTimer);
+          managed.titleReportTimer = undefined;
+          managed.pendingTitleState = undefined;
+        }
+        return;
+      }
+
+      if (matched === "working") {
+        if (managed.titleReportTimer !== undefined) {
+          clearTimeout(managed.titleReportTimer);
+          managed.titleReportTimer = undefined;
+          managed.pendingTitleState = undefined;
+        }
+        if (lastReportedTitleState !== "working") {
+          lastReportedTitleState = "working";
+          window.electron.terminal.reportTitleState(id, "working");
+        }
+      } else {
+        managed.pendingTitleState = "waiting";
+        if (managed.titleReportTimer !== undefined) {
+          clearTimeout(managed.titleReportTimer);
+        }
+        managed.titleReportTimer = window.setTimeout(() => {
+          managed.titleReportTimer = undefined;
+          if (managed.pendingTitleState === "waiting") {
+            managed.pendingTitleState = undefined;
+            if (lastReportedTitleState !== "waiting") {
+              lastReportedTitleState = "waiting";
+              window.electron.terminal.reportTitleState(id, "waiting");
+            }
+          }
+        }, 250);
+      }
+    });
+    listeners.push(() => {
+      titleDisposable.dispose();
+      if (managed.titleReportTimer !== undefined) {
+        clearTimeout(managed.titleReportTimer);
+        managed.titleReportTimer = undefined;
+        managed.pendingTitleState = undefined;
+      }
+    });
 
     const inputDisposable = terminal.onData((data) => {
       if (!managed.isInputLocked) {
         if (isNonKeyboardInput(data)) {
           if (data === "\x1b") {
-            this.agentStateController.clearDirectingState(id);
+            this.agentStateController.clearDirectingState(id, "escape-key");
           }
         } else {
           this.onUserInput(id, data);
         }
-        terminalClient.write(id, data);
+        writeTerminalInputOrFleet(id, data);
         if (onInput) {
           onInput(data);
         }
@@ -899,22 +1105,20 @@ class TerminalInstanceService {
     });
     listeners.push(() => inputDisposable.dispose());
 
-    if (kind === "agent") {
-      const keyDisposable = terminal.onKey(({ domEvent }) => {
-        if (
-          !managed.isInputLocked &&
-          domEvent.key === "Enter" &&
-          !domEvent.isComposing &&
-          !domEvent.shiftKey &&
-          !domEvent.ctrlKey &&
-          !domEvent.altKey &&
-          !domEvent.metaKey
-        ) {
-          this.onEnterPressed(id);
-        }
-      });
-      listeners.push(() => keyDisposable.dispose());
-    }
+    const keyDisposable = terminal.onKey(({ domEvent }) => {
+      if (
+        !managed.isInputLocked &&
+        domEvent.key === "Enter" &&
+        !domEvent.isComposing &&
+        !domEvent.shiftKey &&
+        !domEvent.ctrlKey &&
+        !domEvent.altKey &&
+        !domEvent.metaKey
+      ) {
+        this.onEnterPressed(id);
+      }
+    });
+    listeners.push(() => keyDisposable.dispose());
 
     this.instances.set(id, managed);
 
@@ -1054,7 +1258,7 @@ class TerminalInstanceService {
       managed.isOpened = true;
       logDebug(`[TIS.attach] Opened terminal ${id}`);
       if (
-        managed.kind === "agent" &&
+        managed.runtimeAgentId &&
         (managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
           managed.lastAppliedTier === TerminalRefreshTier.BURST ||
           managed.lastAppliedTier === TerminalRefreshTier.VISIBLE)
@@ -1065,6 +1269,11 @@ class TerminalInstanceService {
     managed.attachGeneration++;
     managed.lastAttachAt = Date.now();
     managed.isDetached = false;
+
+    // Belt-and-braces: a terminal rehydrated from panel store can carry a
+    // stale "directing" agentState with no live controller timer to clear it.
+    // Sweep before the user sees the stuck indicator.
+    this.agentStateController.checkStaleDirecting(id);
 
     // For warm terminals (previously opened, detached during project switch) with
     // saved target dimensions, apply the resize synchronously before the rAF reveal.
@@ -1110,6 +1319,20 @@ class TerminalInstanceService {
           if (managed.lastAppliedTier === undefined || currentTier !== managed.lastAppliedTier) {
             this.rendererPolicy.applyRendererPolicy(id, currentTier);
           }
+        }
+
+        // Restore WebGL after a same-tier reparent: setVisible(true) above
+        // returned early because isAttaching was set, so no debounce timer
+        // was armed. If tier didn't change either, applyRendererPolicy
+        // above is a no-op. Re-acquire the context here so an agent
+        // terminal that released WebGL on hide doesn't stay on the DOM
+        // renderer permanently after a project switch or grid reflow.
+        if (
+          managed.isVisible &&
+          !this.webGLManager.isActive(id) &&
+          this.shouldRestoreWebGL(managed)
+        ) {
+          this.webGLManager.ensureContext(id, managed);
         }
 
         if (!managed.terminal.element) {
@@ -1234,6 +1457,7 @@ class TerminalInstanceService {
       }
     }
     managed.terminal.blur();
+    managed.hoveredLink = null;
     managed.lastDetachAt = Date.now();
     managed.isDetached = true;
   }
@@ -1259,6 +1483,7 @@ class TerminalInstanceService {
     }
 
     managed.terminal.blur();
+    managed.hoveredLink = null;
     managed.lastDetachAt = Date.now();
   }
 
@@ -1333,6 +1558,10 @@ class TerminalInstanceService {
     return this.unseenTracker.getSnapshot(id);
   }
 
+  getLastWheelAt(id: string): number {
+    return this.instances.get(id)?.lastWheelAt ?? 0;
+  }
+
   resumeAutoScroll(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
@@ -1349,6 +1578,10 @@ class TerminalInstanceService {
   private handlePostWake(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
+
+    // Wake path can restore a terminal whose persisted agentState is "directing"
+    // with no controller-owned timer. Clear before any other post-wake work.
+    this.agentStateController.checkStaleDirecting(id);
 
     // Settled-strategy agents require atomic xterm+PTY resize (deferred 500ms).
     // fit() would immediately resize xterm.js while PTY lags, breaking atomicity.
@@ -1385,8 +1618,8 @@ class TerminalInstanceService {
   }
 
   private getResizeStrategyForTerminal(managed: ManagedTerminal): "default" | "settled" {
-    if (!managed.agentId) return "default";
-    const config = getEffectiveAgentConfig(managed.agentId);
+    if (!managed.runtimeAgentId) return "default";
+    const config = getEffectiveAgentConfig(managed.runtimeAgentId);
     return config?.capabilities?.resizeStrategy ?? "default";
   }
 
@@ -1522,7 +1755,40 @@ class TerminalInstanceService {
   focus(id: string): void {
     const managed = this.instances.get(id);
     if (!managed || managed.isHibernated) return;
-    managed.terminal.focus();
+
+    const terminal = managed.terminal;
+    const buffer = terminal.buffer.active;
+    const savedViewportY = buffer.viewportY;
+    const wasAtBottom = savedViewportY >= buffer.baseY;
+
+    // xterm 6.0 wraps `.xterm-screen` in a VS-Code-derived SmoothScrollableElement
+    // whose internal `_handleScroll` mirrors native `scrollTop` changes back into
+    // `buffer.ydisp`. `CoreBrowserTerminal.focus()` calls
+    // `textarea.focus({ preventScroll: true })`, but Chromium bypasses that flag
+    // when IME composition initializes or the Selection API touches the textarea
+    // synchronously after focus. When the bypass fires, the browser runs
+    // `scrollIntoView` to reveal the helper textarea (styled `top: 0; left: -9999em`
+    // by default), yanking the scroll wrapper to y=0 — which xterm mirrors back
+    // into ydisp=0, flashing the terminal to the top of scrollback for one frame.
+    // The flash is only visible on taller terminals where the scroll distance
+    // from cursor to row 0 is large enough to perceive. Smooth-scroll is disabled
+    // (smoothScrollDuration=0), so the scroll sync is synchronous — restoring
+    // ydisp inline here runs before any render commits.
+    managed._suppressScrollTracking = true;
+    try {
+      terminal.focus();
+
+      const curBuffer = terminal.buffer.active;
+      if (wasAtBottom) {
+        if (curBuffer.viewportY < curBuffer.baseY) {
+          terminal.scrollToBottom();
+        }
+      } else if (curBuffer.viewportY !== savedViewportY) {
+        terminal.scrollToLine(savedViewportY);
+      }
+    } finally {
+      managed._suppressScrollTracking = false;
+    }
   }
 
   resetRenderer(id: string): void {
@@ -1667,12 +1933,40 @@ class TerminalInstanceService {
     restoreScrollback(managed);
   }
 
+  applyAgentPromotion(id: string, agentId: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+    if (managed.runtimeAgentId === agentId) {
+      restoreScrollback(managed);
+      return;
+    }
+    managed.runtimeAgentId = agentId;
+    restoreScrollback(managed);
+    if (
+      managed.isOpened &&
+      (managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
+        managed.lastAppliedTier === TerminalRefreshTier.BURST ||
+        managed.lastAppliedTier === TerminalRefreshTier.VISIBLE)
+    ) {
+      this.webGLManager.ensureContext(id, managed);
+    }
+  }
+
+  clearAgentPromotion(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed?.runtimeAgentId) return;
+    managed.runtimeAgentId = undefined;
+    restoreScrollback(managed);
+    this.webGLManager.releaseContext(id);
+    this.maybeReflowTerminal(managed);
+  }
+
   reduceScrollbackAllBackground(targetLines: number): void {
     for (const managed of this.instances.values()) {
       if (managed.isHibernated) continue;
       if (managed.isFocused) continue;
       if (
-        managed.kind === "agent" &&
+        managed.runtimeAgentId &&
         managed.canonicalAgentState !== "completed" &&
         managed.canonicalAgentState !== "exited"
       )
@@ -1698,6 +1992,34 @@ class TerminalInstanceService {
 
   unhibernate(id: string): void {
     this.hibernationManager.unhibernate(id);
+  }
+
+  private isHibernationEligible(tier: TerminalRefreshTier, managed: ManagedTerminal): boolean {
+    if (tier !== TerminalRefreshTier.BACKGROUND) return false;
+    return (
+      !managed.runtimeAgentId ||
+      managed.canonicalAgentState === "completed" ||
+      managed.canonicalAgentState === "exited"
+    );
+  }
+
+  private scheduleHibernation(id: string, managed: ManagedTerminal): void {
+    if (managed.hibernationTimer || managed.isHibernated) return;
+    managed.hibernationTimer = setTimeout(() => {
+      managed.hibernationTimer = undefined;
+      const current = this.instances.get(id);
+      // A terminal that became visible (or was revived) between schedule and
+      // fire should not be hibernated — the user is looking at it.
+      if (!current || current.isVisible || current.isHibernated) return;
+      this.hibernate(id);
+    }, HIBERNATION_DELAY_MS);
+  }
+
+  private cancelHibernation(managed: ManagedTerminal): void {
+    if (managed.hibernationTimer) {
+      clearTimeout(managed.hibernationTimer);
+      managed.hibernationTimer = undefined;
+    }
   }
 
   destroy(id: string): void {
@@ -1757,9 +2079,18 @@ class TerminalInstanceService {
       managed.titleReportTimer = undefined;
       managed.pendingTitleState = undefined;
     }
+    if (managed.observedTitleTimer !== undefined) {
+      clearTimeout(managed.observedTitleTimer);
+      managed.observedTitleTimer = undefined;
+      managed.pendingObservedTitle = undefined;
+    }
     if (managed.resizeSuppressionTimer !== undefined) {
       clearTimeout(managed.resizeSuppressionTimer);
       managed.resizeSuppressionTimer = undefined;
+    }
+    if (managed.webGLRestoreTimer !== undefined) {
+      clearTimeout(managed.webGLRestoreTimer);
+      managed.webGLRestoreTimer = undefined;
     }
 
     managed.lastActivityMarker?.dispose();

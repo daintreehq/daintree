@@ -17,6 +17,7 @@ export interface PtyEventsBridgeConfig {
     status: TerminalFlowStatus;
     bufferUtilization?: number;
     pauseDuration?: number;
+    reason?: string;
     timestamp: number;
   }) => void;
 
@@ -94,6 +95,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         terminalId: event.terminalId,
         agentType: event.agentType,
         timestamp: event.timestamp,
+        exitKind: event.exitKind,
       });
       return true;
 
@@ -127,6 +129,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         status: event.status,
         bufferUtilization: event.bufferUtilization,
         pauseDuration: event.pauseDuration,
+        reason: event.reason,
         timestamp: event.timestamp,
       };
       events.emit("terminal:status", statusPayload);

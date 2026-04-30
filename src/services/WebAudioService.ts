@@ -48,7 +48,7 @@ async function getBuffer(ctx: AudioContext, soundFile: string): Promise<AudioBuf
   }
 }
 
-export async function playSound(soundFile: string): Promise<void> {
+export async function playSound(soundFile: string, detune?: number): Promise<void> {
   try {
     const ctx = await ensureContext();
     const buffer = await getBuffer(ctx, soundFile);
@@ -59,6 +59,7 @@ export async function playSound(soundFile: string): Promise<void> {
 
     const source = ctx.createBufferSource();
     source.buffer = buffer;
+    if (detune !== undefined) source.detune.value = detune;
     source.connect(ctx.destination);
     source.onended = () => {
       if (activeSource === source) activeSource = null;

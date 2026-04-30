@@ -5,7 +5,7 @@ import { getProjectGradient } from "@/lib/colorUtils";
 import { useProjectStore } from "@/store/projectStore";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useProjectSwitcherPalette } from "@/hooks";
 import { actionService } from "@/services/ActionService";
@@ -16,7 +16,7 @@ import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 const renderIcon = (emoji: string, color?: string, sizeClass = "h-9 w-9 text-lg") => (
   <div
     className={cn(
-      "flex items-center justify-center rounded-[var(--radius-xl)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)] shrink-0 transition duration-200",
+      "flex items-center justify-center rounded-[var(--radius-xl)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)] shrink-0 transition duration-150",
       sizeClass
     )}
     style={{
@@ -123,7 +123,7 @@ export function ProjectSwitcher() {
     const totalActive = bgProjects.reduce((sum, p) => sum + p.activeAgentCount, 0);
 
     if (totalWaiting > 0) return { color: "bg-state-waiting", pulse: false, count: totalWaiting };
-    if (totalActive > 0) return { color: "bg-daintree-accent", pulse: true, count: totalActive };
+    if (totalActive > 0) return { color: "bg-activity-active", pulse: true, count: totalActive };
     return null;
   }, [projectSwitcher.results]);
 
@@ -234,57 +234,51 @@ export function ProjectSwitcher() {
         onConfirmRemove={projectSwitcher.confirmRemoveProject}
         isRemovingProject={projectSwitcher.isRemovingProject}
       >
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                className={cn(
-                  "relative w-full justify-between h-12 px-2.5",
-                  "rounded-[var(--radius-lg)]",
-                  "border border-border-subtle",
-                  "bg-surface-panel-elevated shadow-[inset_0_1px_0_var(--color-overlay-soft)]",
-                  "hover:bg-surface-panel-elevated transition-colors",
-                  "active:scale-100"
-                )}
-                disabled={isLoading}
-                onClick={() => projectSwitcher.open("dropdown")}
-              >
-                <div className="flex items-center gap-3 text-left min-w-0">
-                  {renderIcon(
-                    currentProject.emoji || "🌲",
-                    currentProject.color,
-                    "h-9 w-9 text-xl"
-                  )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              className={cn(
+                "relative w-full justify-between h-12 px-2.5",
+                "rounded-[var(--radius-lg)]",
+                "border border-border-subtle",
+                "bg-surface-panel-elevated shadow-[inset_0_1px_0_var(--color-overlay-soft)]",
+                "hover:bg-surface-panel-elevated transition-colors",
+                "active:scale-100"
+              )}
+              disabled={isLoading}
+              onClick={() => projectSwitcher.open("dropdown")}
+            >
+              <div className="flex items-center gap-3 text-left min-w-0">
+                {renderIcon(currentProject.emoji || "🌲", currentProject.color, "h-9 w-9 text-xl")}
 
-                  <div className="flex flex-col min-w-0 gap-0.5">
-                    <span className="truncate font-semibold text-daintree-text text-sm leading-none">
-                      {currentProject.name}
-                    </span>
-                    <span className="truncate font-mono text-xs text-text-secondary">
-                      {currentProject.path.split(/[/\\]/).pop()}
-                    </span>
-                  </div>
+                <div className="flex flex-col min-w-0 gap-0.5">
+                  <span className="truncate font-semibold text-daintree-text text-sm leading-none">
+                    {currentProject.name}
+                  </span>
+                  <span className="truncate font-mono text-xs text-text-secondary">
+                    {currentProject.path.split(/[/\\]/).pop()}
+                  </span>
                 </div>
-                <ChevronsUpDown className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary" />
-                {badgeStatus && (
-                  <span
-                    role="status"
-                    aria-label={`${badgeStatus.count} background agent${badgeStatus.count === 1 ? "" : "s"} ${badgeStatus.pulse ? "working" : "waiting"}`}
-                    className={cn(
-                      "absolute top-1 right-1 h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
-                      badgeStatus.color,
-                      badgeStatus.pulse && "animate-agent-pulse"
-                    )}
-                  />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              Switch project{projectSwitcherShortcut ? ` (${projectSwitcherShortcut})` : ""}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+              </div>
+              <ChevronsUpDown className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary" />
+              {badgeStatus && (
+                <span
+                  role="status"
+                  aria-label={`${badgeStatus.count} background agent${badgeStatus.count === 1 ? "" : "s"} ${badgeStatus.pulse ? "working" : "waiting"}`}
+                  className={cn(
+                    "absolute top-1 right-1 h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
+                    badgeStatus.color,
+                    badgeStatus.pulse && "animate-activity-pulse"
+                  )}
+                />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            Switch project{projectSwitcherShortcut ? ` (${projectSwitcherShortcut})` : ""}
+          </TooltipContent>
+        </Tooltip>
       </ProjectSwitcherPalette>
     </>
   );

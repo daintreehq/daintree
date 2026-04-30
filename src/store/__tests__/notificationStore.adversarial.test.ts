@@ -119,6 +119,72 @@ describe("notificationStore adversarial", () => {
     expect(n?.updatedAt).toBe(2000);
   });
 
+  it("updateNotification does not bump contentKey for non-message patches", () => {
+    const id = addToast({ message: "msg" });
+    const initial = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(initial.contentKey).toBe(1);
+
+    useNotificationStore.getState().updateNotification(id, { title: "new-title" });
+    expect(useNotificationStore.getState().notifications.find((x) => x.id === id)!.contentKey).toBe(
+      1
+    );
+
+    useNotificationStore.getState().updateNotification(id, { message: "msg" }); // unchanged
+    expect(useNotificationStore.getState().notifications.find((x) => x.id === id)!.contentKey).toBe(
+      1
+    );
+
+    useNotificationStore.getState().updateNotification(id, { message: "new-msg" });
+    expect(useNotificationStore.getState().notifications.find((x) => x.id === id)!.contentKey).toBe(
+      2
+    );
+  });
+
+  it("updateNotification preserves firstShownAt even when patch tries to overwrite it", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const id = addToast({ message: "m" });
+    const initial = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(initial.firstShownAt).toBe(1000);
+
+    vi.spyOn(Date, "now").mockReturnValue(5000);
+    useNotificationStore
+      .getState()
+      .updateNotification(id, { firstShownAt: 9999, message: "changed" });
+
+    const after = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(after.firstShownAt).toBe(1000);
+    expect(after.updatedAt).toBe(5000);
+  });
+
+  it("updateNotification resets firstShownAt when promoting duration:0 to auto-dismiss", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const id = addToast({ message: "Copying…", duration: 0 });
+    expect(
+      useNotificationStore.getState().notifications.find((x) => x.id === id)!.firstShownAt
+    ).toBe(1000);
+
+    // Long-running async operation completes 30s later; toast is promoted.
+    vi.spyOn(Date, "now").mockReturnValue(31000);
+    useNotificationStore.getState().updateNotification(id, { message: "Done", duration: 3000 });
+
+    const after = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(after.firstShownAt).toBe(31000);
+  });
+
+  it("updateNotification does NOT reset firstShownAt when patching auto-dismiss → auto-dismiss", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const id = addToast({ message: "m", duration: 3000 });
+    expect(
+      useNotificationStore.getState().notifications.find((x) => x.id === id)!.firstShownAt
+    ).toBe(1000);
+
+    vi.spyOn(Date, "now").mockReturnValue(2000);
+    useNotificationStore.getState().updateNotification(id, { message: "m2", duration: 5000 });
+
+    const after = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(after.firstShownAt).toBe(1000);
+  });
+
   it("updateNotification on a missing id is a pure no-op", () => {
     const id = addToast({ title: "keep" });
     const before = JSON.parse(JSON.stringify(useNotificationStore.getState().notifications));
@@ -135,7 +201,7 @@ describe("notificationStore adversarial", () => {
     useNotificationStore.getState().removeNotification("does-not-exist");
 
     expect(useNotificationStore.getState().notifications).toHaveLength(1);
-    expect(useNotificationStore.getState().notifications[0].id).toBe(id);
+    expect(useNotificationStore.getState().notifications[0]!.id).toBe(id);
   });
 
   it("clearNotifications and reset clear toasts but not history", () => {
@@ -182,5 +248,81 @@ describe("notificationStore adversarial", () => {
     addToast();
 
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("collapse never fires markUnseenAsToast — no history demotion when merging into a live toast", () => {
+    const h1 = addHistoryEntry(true);
+    addToast({ correlationId: "entity-a", historyEntryId: h1 });
+    addToast({ correlationId: "entity-a" });
+    addToast({ correlationId: "entity-a" });
+
+    const spy = vi.spyOn(useNotificationHistoryStore.getState(), "markUnseenAsToast");
+    addToast({ correlationId: "entity-a" });
+    addToast({ correlationId: "entity-a" });
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
+  });
+
+  it("mixed entity/entity-less burst — collapse preserves 3 cap slots and does not evict unrelated", () => {
+    // A1, B1, A2, C1 — all three slots stay, A collapses, count=2 on A.
+    addToast({ correlationId: "entity-a", message: "a-1" });
+    addToast({ correlationId: "entity-b", message: "b-1" });
+    addToast({ correlationId: "entity-a", message: "a-2" });
+    addToast({ correlationId: "entity-c", message: "c-1" });
+
+    const notifications = useNotificationStore.getState().notifications;
+    expect(notifications.filter((n) => n.dismissed)).toHaveLength(0);
+
+    const byCorr = notifications.reduce(
+      (acc, n) => {
+        acc[n.correlationId!] = n;
+        return acc;
+      },
+      {} as Record<string, Notification>
+    );
+    expect(byCorr["entity-a"]!.message).toBe("a-2");
+    expect(byCorr["entity-a"]!.count).toBe(2);
+    expect(byCorr["entity-b"]!.count).toBeUndefined();
+    expect(byCorr["entity-c"]!.count).toBeUndefined();
+  });
+
+  it("five collapses of the same entity still show one toast and a monotonically increasing count", () => {
+    for (let i = 0; i < 5; i++) {
+      addToast({ correlationId: "entity-a", message: `m-${i}` });
+    }
+
+    const active = useNotificationStore.getState().notifications.filter((n) => !n.dismissed);
+    expect(active).toHaveLength(1);
+    expect(active[0]!.count).toBe(5);
+    expect(active[0]!.message).toBe("m-4");
+  });
+
+  it("empty actions array on incoming payload is treated as 'no actions' (preserves existing)", () => {
+    const id = addToast({
+      correlationId: "entity-a",
+      message: "m",
+      actions: [{ label: "Retry", onClick: () => {} }],
+    });
+
+    addToast({ correlationId: "entity-a", message: "m2", actions: [] });
+
+    const n = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(n.actions).toHaveLength(1);
+    expect(n.actions![0]!.label).toBe("Retry");
+  });
+
+  it("collapse does not re-trigger FIFO even when the cap is at the edge", () => {
+    // Fill the cap with three distinct entities
+    addToast({ correlationId: "entity-a", message: "a" });
+    addToast({ correlationId: "entity-b", message: "b" });
+    addToast({ correlationId: "entity-c", message: "c" });
+
+    // Another entity-a collapses — no FIFO eviction even though cap is already full.
+    addToast({ correlationId: "entity-a", message: "a-updated" });
+
+    const notifications = useNotificationStore.getState().notifications;
+    expect(notifications.filter((n) => n.dismissed)).toHaveLength(0);
+    expect(notifications).toHaveLength(3);
   });
 });

@@ -11,6 +11,7 @@ import type {
 } from "../project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { AgentSettings } from "../agentSettings.js";
+import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
 import type { KeybindingImportResult, MicPermissionStatus, VoiceInputSettings } from "./api.js";
@@ -33,6 +34,7 @@ import type {
   BackendTerminalInfo,
   TerminalInfoPayload,
   TerminalActivityPayload,
+  SemanticSearchMatch,
 } from "./terminal.js";
 import type {
   SaveArtifactOptions,
@@ -42,6 +44,7 @@ import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
+  AgentFallbackTriggeredPayload,
   ArtifactDetectedPayload,
   AgentHelpRequest,
   AgentHelpResult,
@@ -64,6 +67,7 @@ import type {
   SystemOpenInEditorPayload,
   SystemWakePayload,
   CliAvailability,
+  AgentCliDetails,
   AgentVersionInfo,
   AgentUpdateSettings,
   StartAgentUpdatePayload,
@@ -81,7 +85,7 @@ import type {
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
-import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
+import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
 import type {
   ProjectCloseResult,
@@ -96,6 +100,10 @@ import type {
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
+  GitHubRateLimitPayload,
+  GitHubTokenHealthPayload,
+  RepoStatsAndPagePayload,
+  GitHubFirstPageCachePayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -124,7 +132,10 @@ import type {
   DevPreviewStopByPanelRequest,
   DevPreviewSessionState,
   DevPreviewStateChangedPayload,
+  DevPreviewGetByWorktreeRequest,
 } from "./devPreview.js";
+import type { ServiceConnectivityPayload, ServiceConnectivitySnapshot } from "./connectivity.js";
+import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type {
   GitCommitListOptions,
@@ -134,8 +145,10 @@ import type {
 } from "../github.js";
 import type {
   SpawnResult,
+  TerminalReliabilityMetricPayload,
   TerminalStatusPayload,
   TerminalResourceBatchPayload,
+  BroadcastWriteResultPayload,
 } from "../pty-host.js";
 import type { HibernationConfig, HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { IdleTerminalNotifyConfig, IdleTerminalNotifyPayload } from "./idleTerminals.js";
@@ -145,7 +158,6 @@ import type {
   DemoMoveToPayload,
   DemoMoveToSelectorPayload,
   DemoTypePayload,
-  DemoSetZoomPayload,
   DemoWaitForSelectorPayload,
   DemoSleepPayload,
   DemoScreenshotResult,
@@ -153,22 +165,45 @@ import type {
   DemoStartCaptureResult,
   DemoStopCaptureResult,
   DemoCaptureStatus,
-  DemoEncodePayload,
-  DemoEncodeProgressEvent,
-  DemoEncodeResult,
+  DemoAnnotatePayload,
+  DemoAnnotateResult,
+  DemoDismissAnnotationPayload,
+  DemoDragPayload,
+  DemoPressKeyPayload,
+  DemoScrollPayload,
+  DemoSpotlightPayload,
+  DemoWaitForIdlePayload,
 } from "./demo.js";
+import type { BulkProjectStats } from "./project.js";
+import type {
+  PrerequisiteSpec,
+  PrerequisiteCheckResult,
+  DiagnosticsReviewPayload,
+  DiagnosticsBundleSavePayload,
+} from "./system.js";
+import type { CloneRepoOptions, CloneRepoResult } from "./gitClone.js";
+import type { AppAgentConfig } from "../appAgent.js";
+import type { AgentSessionRecord } from "./agentSessionHistory.js";
+import type {
+  CommandContext,
+  CommandExecutePayload,
+  CommandGetPayload,
+  CommandManifestEntry,
+  CommandResult,
+  DaintreeCommand,
+} from "../commands.js";
 
 export type ChecklistItemId =
   | "openedProject"
   | "launchedAgent"
   | "createdWorktree"
-  | "subscribedNewsletter";
+  | "ranSecondParallelAgent";
 
 export interface ChecklistItems {
   openedProject: boolean;
   launchedAgent: boolean;
   createdWorktree: boolean;
-  subscribedNewsletter: boolean;
+  ranSecondParallelAgent: boolean;
 }
 
 export interface ChecklistState {
@@ -185,9 +220,9 @@ export interface OnboardingState {
   firstRunToastSeen: boolean;
   newsletterPromptSeen: boolean;
   waitingNudgeSeen: boolean;
-  // TODO(0.9.0): Remove after deleting onboarding:migrate and the renderer
-  // localStorage import path for old Canopy onboarding keys.
-  migratedFromLocalStorage: boolean;
+  seenAgentIds: string[];
+  welcomeCardDismissed: boolean;
+  setupBannerDismissed: boolean;
   checklist: ChecklistState;
 }
 
@@ -200,6 +235,9 @@ export interface MainProcessToastPayload {
     label: string;
     /** IPC channel to invoke when the action button is clicked */
     ipcChannel: string;
+    /** Optional payload passed to the renderer-side action handler
+     *  (e.g. the text to copy for a "clipboard:write-text" action). */
+    data?: string;
   };
 }
 
@@ -280,6 +318,10 @@ export interface IpcInvokeMap {
     args: [];
     result: Record<string, IssueAssociation>;
   };
+  "worktree:restart-service": {
+    args: [];
+    result: void;
+  };
 
   // Terminal channels
   "terminal:spawn": {
@@ -343,7 +385,7 @@ export interface IpcInvokeMap {
   };
   "terminal:force-resume": {
     args: [id: string];
-    result: { success: boolean; error?: string };
+    result: void;
   };
   "terminal:restart-service": {
     args: [];
@@ -463,6 +505,10 @@ export interface IpcInvokeMap {
     args: [];
     result: CliAvailability;
   };
+  "system:get-agent-cli-details": {
+    args: [];
+    result: AgentCliDetails;
+  };
   "system:get-agent-versions": {
     args: [];
     result: AgentVersionInfo[];
@@ -496,6 +542,14 @@ export interface IpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "system:collect-diagnostics-for-review": {
+    args: [];
+    result: DiagnosticsReviewPayload;
+  };
+  "system:save-diagnostics-bundle": {
+    args: [DiagnosticsBundleSavePayload];
+    result: boolean;
+  };
   "system:get-app-metrics": {
     args: [];
     result: AppMetricsSummary;
@@ -515,6 +569,22 @@ export interface IpcInvokeMap {
   "diagnostics:get-info": {
     args: [];
     result: DiagnosticsInfo;
+  };
+  // Renderer reports process.getBlinkMemoryInfo() to ProcessMemoryMonitor.
+  // The webContents id is taken from event.sender on the handler side, so
+  // a renderer cannot claim to be a different view. All numeric fields are
+  // kilobytes (Electron's BlinkMemoryInfo unit, not bytes).
+  "system:report-blink-memory": {
+    args: [
+      payload: {
+        requestId: string;
+        allocated: number;
+        marked?: number;
+        total?: number;
+        partitionAlloc?: number;
+      },
+    ];
+    result: void;
   };
 
   // App state channels
@@ -539,6 +609,14 @@ export interface IpcInvokeMap {
     result: void;
   };
   "app:force-quit": {
+    args: [];
+    result: void;
+  };
+  "app:reset-and-relaunch": {
+    args: [];
+    result: void;
+  };
+  "app:first-interactive": {
     args: [];
     result: void;
   };
@@ -604,7 +682,7 @@ export interface IpcInvokeMap {
   };
   "logs:set-verbose": {
     args: [enabled: boolean];
-    result: { success: boolean };
+    result: void;
   };
   "logs:get-verbose": {
     args: [];
@@ -620,6 +698,22 @@ export interface IpcInvokeMap {
     ];
     result: void;
   };
+  "logs:get-level-overrides": {
+    args: [];
+    result: Record<string, string>;
+  };
+  "logs:set-level-overrides": {
+    args: [overrides: Record<string, string>];
+    result: { success: boolean };
+  };
+  "logs:clear-level-overrides": {
+    args: [];
+    result: { success: boolean };
+  };
+  "logs:get-registry": {
+    args: [];
+    result: string[];
+  };
 
   // Error channels
   "error:retry": {
@@ -632,7 +726,7 @@ export interface IpcInvokeMap {
   };
   "error:get-pending": {
     args: [];
-    result: AppError[];
+    result: ErrorRecord[];
   };
 
   // Event inspector channels
@@ -804,6 +898,10 @@ export interface IpcInvokeMap {
     args: [projectId: string];
     result: Project;
   };
+  "project:detect-context-files": {
+    args: [projectId: string];
+    result: string[];
+  };
   "project:check-missing": {
     args: [];
     result: string[];
@@ -817,6 +915,10 @@ export interface IpcInvokeMap {
   "github:get-repo-stats": {
     args: [cwd: string, bypassCache?: boolean];
     result: RepositoryStats;
+  };
+  "github:get-first-page-cache": {
+    args: [cwd: string];
+    result: GitHubFirstPageCachePayload | null;
   };
   "github:get-project-health": {
     args: [cwd: string, bypassCache?: boolean];
@@ -962,7 +1064,7 @@ export interface IpcInvokeMap {
     result: void;
   };
   "terminal-config:set-custom-schemes": {
-    args: [schemesJson: string];
+    args: [schemes: unknown];
     result: void;
   };
   "terminal-config:import-color-scheme": {
@@ -1034,11 +1136,23 @@ export interface IpcInvokeMap {
   };
   "git:push": {
     args: [payload: { cwd: string; setUpstream?: boolean }];
-    result: { success: boolean; error?: string };
+    /**
+     * Resolves on success. Throws `GitOperationError` on failure — the renderer
+     * reads `caught.gitReason` to surface a classified recovery hint.
+     */
+    result: void;
   };
   "git:get-staging-status": {
     args: [cwd: string];
     result: StagingStatus;
+  };
+  "git:abort-repository-operation": {
+    args: [cwd: string];
+    result: void;
+  };
+  "git:continue-repository-operation": {
+    args: [cwd: string];
+    result: void;
   };
   "git:compare-worktrees": {
     args: [payload: GitCompareWorktreesPayload];
@@ -1066,6 +1180,10 @@ export interface IpcInvokeMap {
   };
   "git:snapshot-delete": {
     args: [worktreeId: string];
+    result: void;
+  };
+  "git:mark-safe-directory": {
+    args: [path: string];
     result: void;
   };
 
@@ -1188,6 +1306,14 @@ export interface IpcInvokeMap {
     args: [payload: { pattern: string }];
     result: WorktreeConfig;
   };
+  "worktree-config:set-wsl-git": {
+    args: [payload: { worktreeId: string; enabled: boolean }];
+    result: void;
+  };
+  "worktree-config:dismiss-wsl-banner": {
+    args: [payload: { worktreeId: string }];
+    result: void;
+  };
 
   // Gemini channels
   "gemini:get-status": {
@@ -1197,96 +1323,6 @@ export interface IpcInvokeMap {
   "gemini:enable-alternate-buffer": {
     args: [];
     result: { success: boolean };
-  };
-
-  // Notes channels
-  "notes:create": {
-    args: [title: string, scope: "worktree" | "project", worktreeId?: string];
-    result: {
-      metadata: {
-        id: string;
-        title: string;
-        scope: "worktree" | "project";
-        worktreeId?: string;
-        createdAt: number;
-        tags?: string[];
-      };
-      content: string;
-      path: string;
-      lastModified: number;
-    };
-  };
-  "notes:read": {
-    args: [notePath: string];
-    result: {
-      metadata: {
-        id: string;
-        title: string;
-        scope: "worktree" | "project";
-        worktreeId?: string;
-        createdAt: number;
-        tags?: string[];
-      };
-      content: string;
-      path: string;
-      lastModified: number;
-    };
-  };
-  "notes:write": {
-    args: [
-      notePath: string,
-      content: string,
-      metadata: {
-        id: string;
-        title: string;
-        scope: "worktree" | "project";
-        worktreeId?: string;
-        createdAt: number;
-        tags?: string[];
-      },
-      expectedLastModified?: number,
-    ];
-    result: {
-      lastModified?: number;
-      error?: "conflict";
-      message?: string;
-      currentLastModified?: number;
-    };
-  };
-  "notes:list": {
-    args: [];
-    result: {
-      id: string;
-      title: string;
-      path: string;
-      scope: "worktree" | "project";
-      worktreeId?: string;
-      createdAt: number;
-      modifiedAt: number;
-      preview: string;
-      tags: string[];
-    }[];
-  };
-  "notes:delete": {
-    args: [notePath: string];
-    result: void;
-  };
-  "notes:search": {
-    args: [query: string];
-    result: {
-      notes: {
-        id: string;
-        title: string;
-        path: string;
-        scope: "worktree" | "project";
-        worktreeId?: string;
-        createdAt: number;
-        modifiedAt: number;
-        preview: string;
-        tags: string[];
-      }[];
-      query: string;
-    };
   };
 
   // Plugin channels
@@ -1304,6 +1340,22 @@ export interface IpcInvokeMap {
       pluginId: string;
       item: import("../plugin.js").MenuItemContribution;
     }>;
+  };
+  "plugin:validate-action-ids": {
+    args: [actionIds: string[]];
+    result: void;
+  };
+  "plugin:actions-get": {
+    args: [];
+    result: import("../plugin.js").PluginActionDescriptor[];
+  };
+  "plugin:actions-register": {
+    args: [pluginId: string, contribution: import("../plugin.js").PluginActionContribution];
+    result: void;
+  };
+  "plugin:actions-unregister": {
+    args: [pluginId: string, actionId: string];
+    result: void;
   };
 
   // Dev Preview channels
@@ -1326,6 +1378,10 @@ export interface IpcInvokeMap {
   "dev-preview:get-state": {
     args: [request: DevPreviewSessionRequest];
     result: DevPreviewSessionState;
+  };
+  "dev-preview:get-by-worktree": {
+    args: [request: DevPreviewGetByWorktreeRequest];
+    result: DevPreviewSessionState | null;
   };
 
   // Auto-update channels
@@ -1363,6 +1419,10 @@ export interface IpcInvokeMap {
     args: [agentId: string];
     result: boolean;
   };
+  "agent-capabilities:get-ccr-presets": {
+    args: [];
+    result: AgentPreset[];
+  };
 
   // Daintree CLI install channels
   "cli:install": {
@@ -1374,18 +1434,32 @@ export interface IpcInvokeMap {
     result: CliInstallStatus;
   };
 
-  // Clipboard channels
+  // Clipboard channels — handlers throw `AppError` on failure (CLIPBOARD_EMPTY,
+  // CLIPBOARD_INVALID, UNSUPPORTED, VALIDATION). Renderer consumers use
+  // try/catch + isClientAppError(e) to branch on e.code.
   "clipboard:save-image": {
     args: [];
-    result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
+    result: { filePath: string; thumbnailDataUrl: string };
   };
   "clipboard:thumbnail-from-path": {
     args: [filePath: string];
-    result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
+    result: { filePath: string; thumbnailDataUrl: string };
   };
   "clipboard:write-image": {
     args: [pngData: Uint8Array];
-    result: { ok: true } | { ok: false; error: string };
+    result: void;
+  };
+  "clipboard:write-text": {
+    args: [text: string];
+    result: void;
+  };
+  "clipboard:write-selection": {
+    args: [text: string];
+    result: void;
+  };
+  "clipboard:read-selection": {
+    args: [];
+    result: { text: string };
   };
 
   // Notification settings channels
@@ -1444,7 +1518,7 @@ export interface IpcInvokeMap {
     result: void;
   };
   "app-theme:set-custom-schemes": {
-    args: [schemesJson: string];
+    args: [schemes: unknown];
     result: void;
   };
   "app-theme:import": {
@@ -1486,6 +1560,14 @@ export interface IpcInvokeMap {
   "telemetry:track": {
     args: [event: string, properties: Record<string, unknown>];
     result: void;
+  };
+  "telemetry:preview-get-state": {
+    args: [];
+    result: TelemetryPreviewState;
+  };
+  "telemetry:preview-toggle": {
+    args: [active: boolean];
+    result: TelemetryPreviewState;
   };
 
   // GPU
@@ -1543,18 +1625,6 @@ export interface IpcInvokeMap {
     args: [];
     result: OnboardingState;
   };
-  "onboarding:migrate": {
-    // TODO(0.9.0): Remove after deleting the temporary Canopy onboarding
-    // localStorage migration path.
-    args: [
-      payload: {
-        agentSelectionDismissed: boolean;
-        agentSetupComplete: boolean;
-        firstRunToastSeen: boolean;
-      },
-    ];
-    result: OnboardingState;
-  };
   "onboarding:set-step": {
     args: [step: string | null | { step: string | null; agentSetupIds?: string[] }];
     result: void;
@@ -1574,6 +1644,18 @@ export interface IpcInvokeMap {
   "onboarding:mark-waiting-nudge-seen": {
     args: [];
     result: void;
+  };
+  "onboarding:mark-agents-seen": {
+    args: [agentIds: string[]];
+    result: OnboardingState;
+  };
+  "onboarding:dismiss-welcome-card": {
+    args: [];
+    result: OnboardingState;
+  };
+  "onboarding:dismiss-setup-banner": {
+    args: [];
+    result: OnboardingState;
   };
   "onboarding:checklist-get": {
     args: [];
@@ -1735,6 +1817,10 @@ export interface IpcInvokeMap {
     args: [webContentsId: number, objectId: string];
     result: import("./webviewConsole.js").CdpGetPropertiesResult;
   };
+  "webview:reload-ignoring-cache": {
+    args: [webContentsId: number, panelId: string];
+    result: void;
+  };
 
   // Demo mode channels (dev-only, gated by --demo-mode flag)
   "demo:move-to": {
@@ -1751,10 +1837,6 @@ export interface IpcInvokeMap {
   };
   "demo:type": {
     args: [payload: DemoTypePayload];
-    result: void;
-  };
-  "demo:set-zoom": {
-    args: [payload: DemoSetZoomPayload];
     result: void;
   };
   "demo:screenshot": {
@@ -1789,9 +1871,332 @@ export interface IpcInvokeMap {
     args: [];
     result: DemoCaptureStatus;
   };
-  "demo:encode": {
-    args: [payload: DemoEncodePayload];
-    result: DemoEncodeResult;
+  "demo:scroll": {
+    args: [payload: DemoScrollPayload];
+    result: void;
+  };
+  "demo:drag": {
+    args: [payload: DemoDragPayload];
+    result: void;
+  };
+  "demo:press-key": {
+    args: [payload: DemoPressKeyPayload];
+    result: void;
+  };
+  "demo:spotlight": {
+    args: [payload: DemoSpotlightPayload];
+    result: void;
+  };
+  "demo:dismiss-spotlight": {
+    args: [];
+    result: void;
+  };
+  "demo:annotate": {
+    args: [payload: DemoAnnotatePayload];
+    result: DemoAnnotateResult;
+  };
+  "demo:dismiss-annotation": {
+    args: [payload: DemoDismissAnnotationPayload];
+    result: void;
+  };
+  "demo:wait-for-idle": {
+    args: [payload: DemoWaitForIdlePayload];
+    result: void;
+  };
+
+  // Agent session history channels
+  "agent-session:list": {
+    args: [payload: { worktreeId?: string }];
+    result: AgentSessionRecord[];
+  };
+  "agent-session:clear": {
+    args: [payload: { worktreeId?: string }];
+    result: void;
+  };
+
+  // App Agent channels
+  "app-agent:get-config": {
+    args: [];
+    result: Omit<AppAgentConfig, "apiKey">;
+  };
+  "app-agent:set-config": {
+    args: [config: Partial<AppAgentConfig>];
+    result: Omit<AppAgentConfig, "apiKey">;
+  };
+  "app-agent:has-api-key": {
+    args: [];
+    result: boolean;
+  };
+  "app-agent:test-api-key": {
+    args: [apiKey: string];
+    result: { valid: boolean; error?: string };
+  };
+  "app-agent:test-model": {
+    args: [model: string];
+    result: { valid: boolean; error?: string };
+  };
+
+  // Additional app theme channels
+  "app-theme:set-accent-color-override": {
+    args: [color: unknown];
+    result: void;
+  };
+  "app-theme:set-recent-scheme-ids": {
+    args: [ids: unknown];
+    result: void;
+  };
+
+  // Command system channels
+  "commands:list": {
+    args: [context?: CommandContext];
+    result: CommandManifestEntry[];
+  };
+  "commands:get": {
+    args: [payload: CommandGetPayload];
+    result: CommandManifestEntry | null;
+  };
+  "commands:execute": {
+    args: [payload: CommandExecutePayload];
+    result: CommandResult;
+  };
+  "commands:get-builder": {
+    args: [commandId: string];
+    result: DaintreeCommand["builder"] | null;
+  };
+
+  // Additional GitHub channels
+  "github:get-issue-by-number": {
+    args: [payload: { cwd: string; issueNumber: number }];
+    result: import("../github.js").GitHubIssue | null;
+  };
+  "github:get-pr-by-number": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: import("../github.js").GitHubPR | null;
+  };
+  "github:list-remotes": {
+    args: [cwd: string];
+    result: Array<{
+      name: string;
+      fetchUrl: string;
+      parsedRepo: { owner: string; repo: string } | null;
+    }>;
+  };
+  "github:get-token-health": {
+    args: [];
+    result: GitHubTokenHealthPayload;
+  };
+
+  // Per-service connectivity channels
+  "connectivity:get-state": {
+    args: [];
+    result: ServiceConnectivitySnapshot;
+  };
+
+  // Global env channels
+  "global-env:get": {
+    args: [];
+    result: Record<string, string>;
+  };
+  "global-env:set": {
+    args: [payload: { variables: Record<string, string> }];
+    result: void;
+  };
+
+  // Global recipe channels
+  "global:get-recipes": {
+    args: [];
+    result: TerminalRecipe[];
+  };
+  "global:add-recipe": {
+    args: [payload: { recipe: TerminalRecipe }];
+    result: void;
+  };
+  "global:update-recipe": {
+    args: [
+      payload: {
+        recipeId: string;
+        updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>;
+      },
+    ];
+    result: void;
+  };
+  "global:delete-recipe": {
+    args: [payload: { recipeId: string }];
+    result: void;
+  };
+
+  // Help channels
+  "help:get-folder-path": {
+    args: [];
+    result: string | null;
+  };
+  "help:mark-terminal": {
+    args: [terminalId: string];
+    result: void;
+  };
+  "help:unmark-terminal": {
+    args: [terminalId: string];
+    result: void;
+  };
+
+  // Project clone channels
+  "project:clone-repo": {
+    args: [options: CloneRepoOptions];
+    result: CloneRepoResult;
+  };
+  "project:clone-cancel": {
+    args: [];
+    result: void;
+  };
+
+  // Bulk project stats
+  "project:get-bulk-stats": {
+    args: [projectIds: string[]];
+    result: BulkProjectStats;
+  };
+
+  // Draft inputs
+  "project:get-draft-inputs": {
+    args: [projectId: string];
+    result: Record<string, string>;
+  };
+  "project:set-draft-inputs": {
+    args: [payload: { projectId: string; draftInputs: Record<string, string> }];
+    result: void;
+  };
+
+  // In-repo recipe channels
+  "project:get-inrepo-recipes": {
+    args: [projectId: string];
+    result: TerminalRecipe[];
+  };
+  "project:sync-inrepo-recipes": {
+    args: [payload: { projectId: string; recipes: TerminalRecipe[] }];
+    result: void;
+  };
+  "project:update-inrepo-recipe": {
+    args: [payload: { projectId: string; recipe: TerminalRecipe; previousName?: string }];
+    result: void;
+  };
+  "project:delete-inrepo-recipe": {
+    args: [payload: { projectId: string; recipeName: string }];
+    result: void;
+  };
+  "project:get-inrepo-presets": {
+    args: [projectId: string];
+    result: Record<string, AgentPreset[]>;
+  };
+
+  // Recipe import/export
+  "recipe:export-file": {
+    args: [payload: { name: string; json: string }];
+    result: boolean;
+  };
+  "recipe:import-file": {
+    args: [];
+    result: string | null;
+  };
+
+  // Recovery channels
+  "recovery:reload-app": {
+    args: [];
+    result: void;
+  };
+  "recovery:reset-and-reload": {
+    args: [];
+    result: void;
+  };
+  "recovery:export-diagnostics": {
+    args: [];
+    result: boolean;
+  };
+  "recovery:open-logs": {
+    args: [];
+    result: void;
+  };
+
+  // System prerequisite check channels
+  "system:check-tool": {
+    args: [spec: PrerequisiteSpec];
+    result: PrerequisiteCheckResult;
+  };
+  "system:health-check-specs": {
+    args: [agentIds?: string[]];
+    result: PrerequisiteSpec[];
+  };
+
+  // Additional terminal config channels
+  "terminal-config:set-resource-monitoring": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "terminal-config:set-memory-leak-detection": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "terminal-config:set-memory-leak-auto-restart": {
+    args: [thresholdMb: number];
+    result: void;
+  };
+  "terminal-config:set-cached-project-views": {
+    args: [cachedProjectViews: number];
+    result: void;
+  };
+  "terminal-config:set-recent-scheme-ids": {
+    args: [ids: unknown];
+    result: void;
+  };
+
+  // Additional terminal snapshot channels
+  "terminal:get-all": {
+    args: [];
+    result: BackendTerminalInfo[];
+  };
+  "terminal:get-available": {
+    args: [];
+    result: BackendTerminalInfo[];
+  };
+  "terminal:get-by-state": {
+    args: [state: string];
+    result: BackendTerminalInfo[];
+  };
+  "terminal:graceful-kill": {
+    args: [id: string];
+    result: string | null;
+  };
+  "terminal:search-semantic-buffers": {
+    args: [query: string, isRegex: boolean];
+    result: SemanticSearchMatch[];
+  };
+
+  // Webview lifecycle / dialog / OAuth channels
+  "webview:set-lifecycle-state": {
+    args: [webContentsId: number, frozen: boolean];
+    result: void;
+  };
+  "webview:register-panel": {
+    args: [payload: { webContentsId: number; panelId: string }];
+    result: void;
+  };
+  "webview:dialog-response": {
+    args: [payload: { dialogId: string; confirmed: boolean; response?: string }];
+    result: void;
+  };
+  "webview:oauth-loopback": {
+    args: [
+      authUrl: string,
+      panelId: string,
+      webContentsId: number,
+      sessionStorageSnapshot?: Array<[string, string]>,
+    ];
+    /** Resolves with `{ success: true }` on success or `null` if the loopback was aborted. Throws `AppError` on hard failure. */
+    result: { success: true } | null;
+  };
+
+  // Additional worktree channels
+  "worktree:fetch-pr-branch": {
+    args: [payload: { rootPath: string; prNumber: number; headRefName: string }];
+    result: void;
   };
 }
 
@@ -1811,7 +2216,9 @@ export interface IpcEventMap {
   "terminal:trashed": { id: string; expiresAt: number };
   "terminal:restored": { id: string };
   "terminal:status": TerminalStatusPayload;
+  "terminal:reliability-metric": TerminalReliabilityMetricPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
+  "terminal:broadcast-write-result": BroadcastWriteResultPayload;
   "terminal:send-key": [id: string, key: string];
   "terminal:spawn-result": [id: string, result: SpawnResult];
   "terminal:backend-crashed": {
@@ -1829,6 +2236,7 @@ export interface IpcEventMap {
   "agent:all-clear": { timestamp: number };
   "agent:detected": AgentDetectedPayload;
   "agent:exited": AgentExitedPayload;
+  "agent:fallback-triggered": AgentFallbackTriggeredPayload;
 
   // Terminal activity events
   "terminal:activity": TerminalActivityPayload;
@@ -1850,8 +2258,22 @@ export interface IpcEventMap {
   "issue:detected": IssueDetectedPayload;
   "issue:not-found": IssueNotFoundPayload;
 
+  // GitHub rate-limit state push
+  "github:rate-limit-changed": GitHubRateLimitPayload;
+
+  // GitHub token health state push (expiry/revocation detection)
+  "github:token-health-changed": GitHubTokenHealthPayload;
+
+  // Combined repo stats + first page of open issues + open PRs push, emitted
+  // after every successful poll. Lets renderers prime githubResourceCache
+  // for the (open, created) default-filter cache key with no click-time fetch.
+  "github:repo-stats-and-page-updated": RepoStatsAndPagePayload;
+
+  // Per-service connectivity state push
+  "connectivity:service-changed": ServiceConnectivityPayload;
+
   // Error events
-  "error:notify": AppError;
+  "error:notify": ErrorRecord;
   "error:retry-progress": RetryProgressPayload;
 
   // Log events
@@ -1859,7 +2281,6 @@ export interface IpcEventMap {
   "logs:batch": LogEntry[];
 
   // Event inspector events
-  "event-inspector:event": EventRecord;
   "event-inspector:event-batch": EventRecord[];
 
   // Project events
@@ -1892,6 +2313,10 @@ export interface IpcEventMap {
   "window:fullscreen-change": boolean;
   "window:reclaim-memory": { reason: string };
   "window:destroy-hidden-webviews": { tier: 1 | 2 };
+  // Main asks renderers to report process.getBlinkMemoryInfo() so
+  // ProcessMemoryMonitor can see the Blink (DOM/CSS/inter-frame) memory tier
+  // that V8 heap stats miss. Renderer replies via SYSTEM_REPORT_BLINK_MEMORY.
+  "window:sample-blink-memory": { requestId: string };
   "window:disk-space-status": {
     status: "normal" | "warning" | "critical";
     availableMb: number;
@@ -1900,7 +2325,7 @@ export interface IpcEventMap {
   "portal:tabs-evicted": { tabIds: string[] };
 
   // Sound events (main → renderer)
-  "sound:trigger": { soundFile: string };
+  "sound:trigger": { soundFile: string; detune?: number };
   "sound:cancel": void;
 
   // Notification events
@@ -1915,13 +2340,6 @@ export interface IpcEventMap {
 
   // Dev Preview events
   "dev-preview:state-changed": DevPreviewStateChangedPayload;
-
-  // Notes events
-  "notes:updated": {
-    notePath: string;
-    title: string;
-    action: "created" | "updated" | "deleted";
-  };
 
   // Webview console events
   "webview:console-message": import("./webviewConsole.js").SerializedConsoleRow;
@@ -1972,12 +2390,10 @@ export interface IpcEventMap {
   "demo:exec-move-to-selector": DemoMoveToSelectorPayload;
   "demo:exec-click": void;
   "demo:exec-type": DemoTypePayload;
-  "demo:exec-set-zoom": DemoSetZoomPayload;
   "demo:exec-pause": void;
   "demo:exec-resume": void;
   "demo:exec-wait-for-selector": DemoWaitForSelectorPayload;
   "demo:exec-sleep": DemoSleepPayload;
-  "demo:encode:progress": DemoEncodeProgressEvent;
 
   // Accessibility events
   "accessibility:support-changed": { enabled: boolean };
@@ -1999,7 +2415,108 @@ export interface IpcEventMap {
     level: "off" | "errors" | "full";
     hasSeenPrompt: boolean;
   };
+
+  // Telemetry preview events
+  "telemetry:preview-event-batch": SanitizedTelemetryEvent[];
+  "telemetry:preview-state-changed": TelemetryPreviewState;
+
+  // Onboarding checklist push (main → renderer)
+  "onboarding:checklist-push": ChecklistState;
+
+  // Agent preset events
+  "agent-presets:updated": { agentId: string; presets: AgentPreset[] };
+
+  // Plugin action registry events
+  "plugin:actions-changed": {
+    actions: import("../plugin.js").PluginActionDescriptor[];
+  };
+
+  // Resource profile change (main → renderer)
+  "resource:profile-changed": import("../resourceProfile.js").ResourceProfilePayload;
+
+  // App-agent action dispatch/confirmation request events (main → renderer)
+  "app-agent:dispatch-action-request": {
+    requestId: string;
+    actionId: string;
+    args?: Record<string, unknown>;
+    context: {
+      projectId?: string;
+      activeWorktreeId?: string;
+      focusedWorktreeId?: string;
+      focusedTerminalId?: string;
+    };
+    confirmed?: boolean;
+  };
+  "app-agent:confirmation-request": {
+    requestId: string;
+    actionId: string;
+    actionName?: string;
+    args?: Record<string, unknown>;
+    danger: "safe" | "confirm" | "restricted";
+  };
+
+  // Typed event bus envelope (multiplexed main → renderer for IpcEventBusMap)
+  "events:push": EventBusEnvelope;
 }
+
+/**
+ * Typed event bus map — the subset of IpcEventMap bridged through the multiplexed
+ * `events:push` channel and exposed to the renderer via
+ * `window.electron.events.on(name, cb)`.
+ *
+ * The main-side bridge in `registerEventsHandlers` enforces that every key here
+ * has a corresponding entry in `EVENT_BUS_BRIDGED_MANIFEST` via
+ * `satisfies Record<keyof IpcEventBusMap, ...>`. Extend both when adding events.
+ *
+ * Excluded by design: binary / high-frequency channels (`terminal:data`,
+ * `terminal:resource-metrics`, `logs:batch`) stay on dedicated channels or the
+ * MessagePort path — envelope wrapping would force base64 encoding and add JS
+ * dispatch overhead unsuitable for hundreds-of-events-per-second streams.
+ */
+export type IpcEventBusMap = Pick<
+  IpcEventMap,
+  // Agent lifecycle (global broadcast)
+  | "agent:state-changed"
+  | "agent:all-clear"
+  | "agent:detected"
+  | "agent:exited"
+  | "agent:fallback-triggered"
+  // Worktree updates (window-scoped — routed via EVENTS_PUSH directly by sender)
+  | "worktree:update"
+  // Window lifecycle (window-scoped)
+  | "window:fullscreen-change"
+  | "window:reclaim-memory"
+  | "window:destroy-hidden-webviews"
+  | "window:disk-space-status"
+  | "window:sample-blink-memory"
+  // System wake (per-webContents)
+  | "system:wake"
+  // Resource profile (global broadcast)
+  | "resource:profile-changed"
+  // Sound cancel (global broadcast)
+  | "sound:cancel"
+  // App-agent dispatch/confirmation (window-scoped)
+  | "app-agent:dispatch-action-request"
+  | "app-agent:confirmation-request"
+  // Plugin action registry (global broadcast)
+  | "plugin:actions-changed"
+  // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready
+  | "terminal:exit"
+  | "terminal:backend-crashed"
+  | "terminal:backend-ready"
+  | "terminal:spawn-result"
+  // Terminal observability
+  | "terminal:reliability-metric"
+  | "terminal:status"
+>;
+
+/**
+ * Envelope carried on CHANNELS.EVENTS_PUSH. Discriminated by `name` so the
+ * renderer-side `events.on(name, cb)` can filter and narrow the payload type.
+ */
+export type EventBusEnvelope = {
+  [K in keyof IpcEventBusMap]: { name: K; payload: IpcEventBusMap[K] };
+}[keyof IpcEventBusMap];
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];
 export type IpcInvokeResult<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["result"];

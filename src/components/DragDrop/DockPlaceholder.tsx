@@ -3,6 +3,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@/lib/utils";
 import { useDndPlaceholder } from "./DndProvider";
 import { PlaceholderContent } from "./PlaceholderContent";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 interface DockPlaceholderProps {
   className?: string;
@@ -19,18 +20,19 @@ export function DockPlaceholder({ className }: DockPlaceholderProps) {
     return <div className={cn("min-w-[100px] h-full", className)} aria-hidden="true" />;
   }
 
-  const { kind, agentId } = activeTerminal;
+  const { kind } = activeTerminal;
+  const chrome = deriveTerminalChrome(activeTerminal);
 
   return (
     <div
       className={cn(
         "flex flex-col gap-1 px-3 py-2 min-w-[120px] h-full",
-        "rounded border border-daintree-accent/30 bg-daintree-accent/5",
+        "rounded border border-border-strong bg-overlay-subtle",
         className
       )}
       aria-hidden="true"
     >
-      <PlaceholderContent kind={kind ?? "terminal"} agentId={agentId} compact />
+      <PlaceholderContent kind={kind ?? "terminal"} agentId={chrome.agentId ?? undefined} compact />
     </div>
   );
 }

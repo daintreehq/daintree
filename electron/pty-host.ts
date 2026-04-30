@@ -9,20 +9,32 @@
  * pattern matching or AI classification.
  */
 
-// Silence EPIPE on stdout/stderr — the main process may close the pipe
-// at any time during shutdown or host restart.
+// Dead-fd errnos that must not propagate on GUI launch (AppImage/Wayland, no
+// terminal). EPIPE is a closed pipe; EIO is a disconnected pty (the primary
+// errno for AppImage desktop launches where fd 2 points to an orphaned pty
+// slave); EBADF is a closed fd; ECONNRESET is a socket-backed stdio reset.
+// ENOSPC is intentionally NOT swallowed — it's a real error condition.
+const STDIO_DEAD_CODES = new Set(["EPIPE", "EIO", "EBADF", "ECONNRESET"]);
 for (const stream of [process.stdout, process.stderr]) {
   if (stream && typeof stream.on === "function") {
     stream.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "EPIPE") return;
+      if (err.code && STDIO_DEAD_CODES.has(err.code)) return;
       throw err;
     });
   }
 }
 
+import nodeV8 from "node:v8";
+// Ask V8 to auto-dump up to two heap snapshots when this utility process is
+// genuinely close to its --max-old-space-size limit. Snapshot path is governed
+// by the parent's `--diagnostic-dir` execArgv (set in PtyClient).
+nodeV8.setHeapSnapshotNearHeapLimit(2);
+
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";
+import { stripAnsi } from "./services/pty/AgentPatternDetector.js";
+import type { SemanticSearchMatch } from "../shared/types/ipc/terminal.js";
 import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
 import { TerminalResourceMonitor } from "./services/pty/TerminalResourceMonitor.js";
@@ -30,9 +42,15 @@ import { RESOURCE_PROFILE_CONFIGS, type ResourceProfile } from "../shared/types/
 import { events } from "./services/events.js";
 import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer.js";
 import { selectShard } from "../shared/utils/shardSelection.js";
+import { setLogLevelOverrides } from "./utils/logger.js";
 import type { AgentEvent } from "./services/AgentStateMachine.js";
-import type { PtyHostEvent, SpawnResult } from "../shared/types/pty-host.js";
+import type {
+  PtyHostEvent,
+  SpawnResult,
+  BroadcastWriteTargetResult,
+} from "../shared/types/pty-host.js";
 import { normalizeScrollbackLines } from "../shared/config/scrollback.js";
+import { isBuiltInAgentId, type BuiltInAgentId } from "../shared/config/agentIds.js";
 import { setSessionPersistSuppressed } from "./services/pty/terminalSessionPersistence.js";
 import {
   appendEmergencyLog,
@@ -50,6 +68,7 @@ import {
   BACKPRESSURE_SAFETY_TIMEOUT_MS,
 } from "./pty-host/index.js";
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
+import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
@@ -79,7 +98,7 @@ process.on("unhandledRejection", (reason) => {
     sendEvent({
       type: "error",
       id: "system",
-      error: String(reason instanceof Error ? reason.message : reason),
+      error: formatErrorMessage(reason, "Unhandled rejection in PTY host"),
     });
   } catch {
     // ignore
@@ -87,7 +106,12 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const ptyManager = new PtyManager();
-const processTreeCache = new ProcessTreeCache(2500); // 2.5s poll interval (reduced CPU load)
+// 1.5s base poll interval. With 2-poll hysteresis in ProcessDetector, that's
+// ~3s to commit an agent/process change. Short enough for "I just ran claude
+// and want to see the chrome flip" to feel responsive, long enough to filter
+// `claude --version`-style blips. Adaptive backoff (see ProcessTreeCache)
+// stretches this out when the tree is quiet.
+const processTreeCache = new ProcessTreeCache(1500);
 const terminalResourceMonitor = new TerminalResourceMonitor(
   processTreeCache,
   ptyManager,
@@ -225,11 +249,17 @@ const resourceGovernor = new ResourceGovernor({
     backpressureManager.stats.pauseCount += count;
   },
   sendEvent,
+  getPendingBytesSnapshot: () => backpressureManager.getPendingBytesSnapshot(),
 });
 
 // Helper to convert data to string for IPC fallback (IPC events expect string)
 function toStringForIpc(data: string | Uint8Array): string {
   return typeof data === "string" ? data : textDecoder.decode(data);
+}
+
+/** Narrow a backend TerminalType-valued detection field to BuiltInAgentId for IPC. */
+function narrowDetectedAgentId(value: unknown): BuiltInAgentId | undefined {
+  return isBuiltInAgentId(value) ? value : undefined;
 }
 
 // Wire up PtyManager events
@@ -258,8 +288,14 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     rendererConnections.size > 0 &&
     !isSmokeTestTerminalId(id)
   ) {
-    const dataString = toStringForIpc(data);
-    const byteCount = Buffer.byteLength(dataString, "utf8");
+    // Carry raw bytes on the hot MessagePort path so the renderer receives a
+    // transferred ArrayBuffer instead of a structured-cloned UTF-8 string.
+    // Wrap with `new Uint8Array(...)` to escape node-pty's Buffer pool slab —
+    // each batcher will copy these chunks into a fresh isolated buffer at
+    // flush time before they land in the postMessage transfer list.
+    const chunk =
+      typeof data === "string" ? new Uint8Array(Buffer.from(data, "utf8")) : new Uint8Array(data);
+    const byteCount = chunk.byteLength;
 
     for (const [windowId, conn] of rendererConnections) {
       const windowProject = windowProjectMap.get(windowId) ?? null;
@@ -268,7 +304,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 
       if (filtered) continue;
 
-      if (conn.batcher.write(id, dataString, byteCount)) {
+      if (conn.batcher.write(id, chunk, byteCount)) {
         visualWritten = true;
       }
     }
@@ -516,6 +552,7 @@ events.on("agent:detected", (payload) => {
     agentType: payload.agentType,
     processIconId: payload.processIconId,
     processName: payload.processName,
+    defaultTitle: payload.defaultTitle,
     timestamp: payload.timestamp,
   });
 });
@@ -525,7 +562,9 @@ events.on("agent:exited", (payload) => {
     type: "agent-exited",
     terminalId: payload.terminalId,
     agentType: payload.agentType,
+    defaultTitle: payload.defaultTitle,
     timestamp: payload.timestamp,
+    exitKind: payload.exitKind,
   });
 });
 
@@ -535,7 +574,6 @@ events.on("agent:spawned", (payload) => {
     payload: {
       agentId: payload.agentId,
       terminalId: payload.terminalId,
-      type: payload.type,
       timestamp: payload.timestamp,
     },
   });
@@ -726,7 +764,12 @@ port.on("message", async (rawMsg: any) => {
           const perWindowBatcher = new PortBatcher({
             portQueueManager: perWindowQueueManager,
             postMessage: (id, data, bytes) => {
-              receivedPort.postMessage({ type: "data", id, data, bytes });
+              // Transfer the backing ArrayBuffer to the renderer instead of
+              // structured-cloning. The batcher allocates `data` fresh per
+              // flush, so it is safe to detach here.
+              receivedPort.postMessage({ type: "data", id, data, bytes }, [
+                data.buffer as ArrayBuffer,
+              ]);
             },
             onError: () => {
               disconnectWindow(windowId, "postMessage-error");
@@ -901,9 +944,75 @@ port.on("message", async (rawMsg: any) => {
         ptyManager.write(msg.id, msg.data, msg.traceId);
         break;
 
+      case "broadcast-write": {
+        // Fleet broadcast: fan one data payload to every armed PTY in a
+        // tight loop inside the pty-host event loop. Avoids N per-keystroke
+        // MessagePort/IPC hops from the renderer when a fleet types.
+        //
+        // Each target write goes through `ptyManager.tryWrite()` rather than
+        // `ptyManager.write()` because the regular write path swallows
+        // dead-pipe errors via `logWriteError` and returns void. The throwing
+        // variant returns `{ ok, error? }` per call so a dead target produces
+        // an actionable result the renderer can use to auto-disarm the pane.
+        const ids: string[] = Array.isArray(msg.ids) ? msg.ids : [];
+        const data: string = typeof msg.data === "string" ? msg.data : "";
+        if (!data) break;
+        const results: BroadcastWriteTargetResult[] = [];
+        for (const id of ids) {
+          if (typeof id !== "string" || !id) continue;
+          const terminal = ptyManager.getTerminal(id);
+          if (!terminal || terminal.wasKilled || terminal.isExited) {
+            results.push({
+              id,
+              ok: false,
+              error: { code: "EBADF", message: "terminal not available" },
+            });
+            continue;
+          }
+          const outcome = ptyManager.tryWrite(id, data);
+          if (outcome.ok) {
+            results.push({ id, ok: true });
+          } else {
+            const err = outcome.error;
+            const code = typeof err?.code === "string" ? err.code : undefined;
+            const message = err?.message ?? "unknown write error";
+            console.error(
+              `[PtyHost] broadcast-write failed for ${id}${code ? ` (${code})` : ""}: ${message}`
+            );
+            results.push({ id, ok: false, error: { code, message } });
+          }
+        }
+        if (results.length > 0) {
+          sendEvent({ type: "broadcast-write-result", results });
+        }
+        break;
+      }
+
       case "submit":
         ptyManager.submit(msg.id, msg.text);
         break;
+
+      case "batch-double-escape": {
+        // Fan out an ESC, 50ms per-PTY gap, then a second ESC. Scheduling the
+        // gap inside the utility-process event loop is load-bearing — doing
+        // it in the renderer or Main process lets IPC batching collapse the
+        // two writes into a single Meta-Escape on the receiving terminal.
+        const ESC = "\u001b";
+        const INTER_ESC_DELAY_MS = 50;
+        const ids: string[] = Array.isArray(msg.ids) ? msg.ids : [];
+        for (const id of ids) {
+          if (typeof id !== "string" || !id) continue;
+          const terminal = ptyManager.getTerminal(id);
+          if (!terminal || terminal.wasKilled || terminal.isExited) continue;
+          ptyManager.write(id, ESC);
+          setTimeout(() => {
+            const t = ptyManager.getTerminal(id);
+            if (!t || t.wasKilled || t.isExited) return;
+            ptyManager.write(id, ESC);
+          }, INTER_ESC_DELAY_MS);
+        }
+        break;
+      }
 
       case "resize":
         ptyManager.resize(msg.id, msg.cols, msg.rows);
@@ -1080,8 +1189,16 @@ port.on("message", async (rawMsg: any) => {
       }
 
       case "get-project-stats": {
-        const stats = ptyManager.getProjectStats(msg.projectId);
-        sendEvent({ type: "project-stats", requestId: msg.requestId, stats });
+        const rawStats = ptyManager.getProjectStats(msg.projectId);
+        sendEvent({
+          type: "project-stats",
+          requestId: msg.requestId,
+          stats: {
+            terminalCount: rawStats.terminalCount,
+            processIds: rawStats.processIds,
+            detectedAgents: rawStats.terminalTypes,
+          },
+        });
         break;
       }
 
@@ -1154,8 +1271,8 @@ port.on("message", async (rawMsg: any) => {
             lastInputTime: s.lastInputTime,
             lastOutputTime: s.lastOutputTime,
             lastCheckTime: s.lastCheckTime,
-            type: s.type,
-            agentId: s.agentId,
+
+            launchAgentId: s.launchAgentId,
             agentState: s.agentState,
             lastStateChange: s.lastStateChange,
             spawnedAt: s.spawnedAt,
@@ -1165,6 +1282,10 @@ port.on("message", async (rawMsg: any) => {
 
       case "mark-checked":
         ptyManager.markChecked(msg.id);
+        break;
+
+      case "update-observed-title":
+        ptyManager.updateObservedTitle(msg.id, msg.title);
         break;
 
       case "transition-state": {
@@ -1255,8 +1376,8 @@ port.on("message", async (rawMsg: any) => {
                 id: terminal.id,
                 projectId: terminal.projectId,
                 kind: terminal.kind,
-                type: terminal.type,
-                agentId: terminal.agentId,
+
+                launchAgentId: terminal.launchAgentId,
                 title: terminal.title,
                 cwd: terminal.cwd,
                 agentState: terminal.agentState,
@@ -1270,6 +1391,12 @@ port.on("message", async (rawMsg: any) => {
                 agentSessionId: terminal.agentSessionId,
                 agentLaunchFlags: terminal.agentLaunchFlags,
                 agentModelId: terminal.agentModelId,
+                agentPresetId: terminal.agentPresetId,
+                agentPresetColor: terminal.agentPresetColor,
+                originalAgentPresetId: terminal.originalAgentPresetId,
+                everDetectedAgent: terminal.everDetectedAgent,
+                detectedAgentId: narrowDetectedAgentId(terminal.detectedAgentId),
+                detectedProcessId: terminal.detectedProcessIconId,
               }
             : null,
         });
@@ -1376,8 +1503,8 @@ port.on("message", async (rawMsg: any) => {
             id: t.id,
             projectId: t.projectId,
             kind: t.kind,
-            type: t.type,
-            agentId: t.agentId,
+
+            launchAgentId: t.launchAgentId,
             title: t.title,
             cwd: t.cwd,
             agentState: t.agentState,
@@ -1391,6 +1518,12 @@ port.on("message", async (rawMsg: any) => {
             agentSessionId: t.agentSessionId,
             agentLaunchFlags: t.agentLaunchFlags,
             agentModelId: t.agentModelId,
+            agentPresetId: t.agentPresetId,
+            agentPresetColor: t.agentPresetColor,
+            originalAgentPresetId: t.originalAgentPresetId,
+            everDetectedAgent: t.everDetectedAgent,
+            detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
+            detectedProcessId: t.detectedProcessIconId,
           })),
         });
         break;
@@ -1405,8 +1538,8 @@ port.on("message", async (rawMsg: any) => {
             id: t.id,
             projectId: t.projectId,
             kind: t.kind,
-            type: t.type,
-            agentId: t.agentId,
+
+            launchAgentId: t.launchAgentId,
             title: t.title,
             cwd: t.cwd,
             agentState: t.agentState,
@@ -1420,6 +1553,12 @@ port.on("message", async (rawMsg: any) => {
             agentSessionId: t.agentSessionId,
             agentLaunchFlags: t.agentLaunchFlags,
             agentModelId: t.agentModelId,
+            agentPresetId: t.agentPresetId,
+            agentPresetColor: t.agentPresetColor,
+            originalAgentPresetId: t.originalAgentPresetId,
+            everDetectedAgent: t.everDetectedAgent,
+            detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
+            detectedProcessId: t.detectedProcessIconId,
           })),
         });
         break;
@@ -1434,8 +1573,8 @@ port.on("message", async (rawMsg: any) => {
             id: t.id,
             projectId: t.projectId,
             kind: t.kind,
-            type: t.type,
-            agentId: t.agentId,
+
+            launchAgentId: t.launchAgentId,
             title: t.title,
             cwd: t.cwd,
             agentState: t.agentState,
@@ -1449,7 +1588,70 @@ port.on("message", async (rawMsg: any) => {
             agentSessionId: t.agentSessionId,
             agentLaunchFlags: t.agentLaunchFlags,
             agentModelId: t.agentModelId,
+            agentPresetId: t.agentPresetId,
+            agentPresetColor: t.agentPresetColor,
+            originalAgentPresetId: t.originalAgentPresetId,
+            everDetectedAgent: t.everDetectedAgent,
+            detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
+            detectedProcessId: t.detectedProcessIconId,
           })),
+        });
+        break;
+      }
+
+      case "search-semantic-buffers": {
+        const matches: SemanticSearchMatch[] = [];
+        let regex: RegExp | null = null;
+        if (msg.isRegex) {
+          try {
+            regex = new RegExp(msg.query, "i");
+          } catch {
+            sendEvent({
+              type: "semantic-search-result",
+              requestId: msg.requestId,
+              matches: [],
+              error: "invalid-regex",
+            });
+            break;
+          }
+        }
+        const needle = msg.isRegex ? null : msg.query.toLowerCase();
+        for (const t of ptyManager.getAll()) {
+          const buffer = t.semanticBuffer;
+          if (!buffer || buffer.length === 0) continue;
+          for (let i = buffer.length - 1; i >= 0; i--) {
+            const cleaned = stripAnsi(buffer[i] ?? "").trim();
+            if (!cleaned) continue;
+            let start = -1;
+            let end = -1;
+            if (regex) {
+              const m = regex.exec(cleaned);
+              if (m && m[0].length > 0) {
+                start = m.index;
+                end = m.index + m[0].length;
+              }
+            } else if (needle !== null && needle.length > 0) {
+              const idx = cleaned.toLowerCase().indexOf(needle);
+              if (idx !== -1) {
+                start = idx;
+                end = idx + needle.length;
+              }
+            }
+            if (start !== -1 && end !== -1) {
+              matches.push({
+                terminalId: t.id,
+                line: cleaned,
+                matchStart: start,
+                matchEnd: end,
+              });
+              break;
+            }
+          }
+        }
+        sendEvent({
+          type: "semantic-search-result",
+          requestId: msg.requestId,
+          matches,
         });
         break;
       }
@@ -1479,6 +1681,18 @@ port.on("message", async (rawMsg: any) => {
       case "dispose":
         cleanup();
         break;
+
+      case "set-log-level-overrides": {
+        const overrides = (msg.overrides ?? {}) as Record<string, unknown>;
+        const sanitized: Record<string, string> = {};
+        for (const [key, value] of Object.entries(overrides)) {
+          if (typeof key === "string" && typeof value === "string") {
+            sanitized[key] = value;
+          }
+        }
+        setLogLevelOverrides(sanitized);
+        break;
+      }
 
       default:
         console.warn("[PtyHost] Unknown message type:", (msg as { type: string }).type);

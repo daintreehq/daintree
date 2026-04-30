@@ -12,6 +12,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, useWorktreeSelectionStore, type TerminalInstance } from "@/store";
 import { DockedPanel } from "@/components/Terminal/DockedPanel";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { logError } from "@/utils/logger";
 
 interface DockPanelContextValue {
   portalTarget: (terminalId: string, target: HTMLElement | null) => void;
@@ -38,8 +39,12 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
   const offscreenSlotsRef = useRef<Map<string, HTMLElement>>(new Map());
   const offscreenContainerRef = useRef<HTMLDivElement>(null);
   const [, forceUpdate] = useState(0);
+  // Mirror into state so JSX doesn't read the ref during render (React Compiler).
+  // The ref remains the authoritative source; state snapshots it for render.
+  const [offscreenSlots, setOffscreenSlots] = useState<Map<string, HTMLElement>>(() => new Map());
 
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const dockTerminals = usePanelStore(
     useShallow((s) => {
       const result: TerminalInstance[] = [];
@@ -48,6 +53,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         if (
           t &&
           t.location === "dock" &&
+          !s.trashedTerminals.has(t.id) &&
           // Show terminals that match active worktree OR have no worktree (global terminals)
           (t.worktreeId == null || t.worktreeId === activeWorktreeId)
         ) {
@@ -70,6 +76,12 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
   const handlePopoverClose = useCallback(() => {
     closeDockTerminal();
   }, [closeDockTerminal]);
+
+  useEffect(() => {
+    if (!activeDockTerminalId) return;
+    if (dockTerminals.some((terminal) => terminal.id === activeDockTerminalId)) return;
+    closeDockTerminal();
+  }, [activeDockTerminalId, dockTerminals, closeDockTerminal]);
 
   // Handler for adding a new tab to a single panel (creates a tab group)
   const handleAddTabForPanel = useCallback(
@@ -97,7 +109,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         setActiveTab(groupId, newPanelId);
         openDockTerminal(newPanelId);
       } catch (error) {
-        console.error("Failed to add tab:", error);
+        logError("Failed to add tab", error);
         if (createdNewGroup && groupId!) {
           deleteTabGroup(groupId);
         }
@@ -145,6 +157,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
 
     // Force update to ensure portals render with new slots
     forceUpdate((n) => n + 1);
+    setOffscreenSlots(new Map(offscreenSlotsRef.current));
   }, [dockTerminals]);
 
   // Cleanup portal targets for removed terminals
@@ -211,7 +224,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
       {dockTerminals.map((terminal) => {
         // Use popover target if available, otherwise use offscreen slot
         const target = portalTargets.get(terminal.id);
-        const offscreenSlot = offscreenSlotsRef.current.get(terminal.id);
+        const offscreenSlot = offscreenSlots.get(terminal.id);
         const portalContainer = target || offscreenSlot;
 
         // Skip if no container yet (will render on next update after slots are created)

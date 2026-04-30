@@ -46,7 +46,17 @@ export async function runTerminalCommand(
 ): Promise<void> {
   const xterm = panelLocator.locator(SEL.terminal.xtermRows);
   await xterm.click();
-  await page.keyboard.type(command);
+  // Wait for xterm's helper textarea to receive focus before typing —
+  // typing too early can drop the leading characters of the command.
+  await expect(panelLocator.locator(SEL.terminal.xtermHelperTextarea)).toBeFocused({
+    timeout: 5_000,
+  });
+  // Small settle delay so xterm's internal data handler is wired before we
+  // type. Without this, the renderer can swallow leading characters on the
+  // first click into a freshly opened terminal.
+  await page.waitForTimeout(150);
+  // Type with a small per-key delay; PTY can drop bursts on cold-start.
+  await page.keyboard.type(command, { delay: 15 });
   await page.keyboard.press("Enter");
 }
 

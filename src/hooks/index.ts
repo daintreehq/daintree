@@ -47,7 +47,7 @@ export { useWaitingTerminalIds, useBackgroundPanelStats } from "./useTerminalSel
 
 export { useWorktreeColorMap } from "./useWorktreeColorMap";
 
-export { useOverlayState } from "./useOverlayState";
+export { useOverlayClaim, useOverlayState } from "./useOverlayState";
 
 export { useEscapeStack } from "./useEscapeStack";
 export { useGlobalEscapeDispatcher } from "./useGlobalEscapeDispatcher";
@@ -83,6 +83,9 @@ export type { ActionPaletteItem, UseActionPaletteReturn } from "./useActionPalet
 
 export { useDoubleShift } from "./useDoubleShift";
 
+export { useProjectMruSwitcher } from "./useProjectMruSwitcher";
+export type { UseProjectMruSwitcherReturn } from "./useProjectMruSwitcher";
+
 export { useMainProcessToastListener } from "./useMainProcessToastListener";
 
 export { useAnimatedPresence } from "./useAnimatedPresence";
@@ -99,15 +102,13 @@ export type { UseUnsavedChangesOptions } from "./useUnsavedChanges";
 
 export { useDebounce } from "./useDebounce";
 
-export { useNoteSearch } from "./useNoteSearch";
-export type { SortOrder, UseNoteSearchReturn } from "./useNoteSearch";
-export { SORT_LABELS } from "./useNoteSearch";
+export { useDeferredLoading } from "./useDeferredLoading";
 
-export { useNoteEditor } from "./useNoteEditor";
-export type { UseNoteEditorReturn } from "./useNoteEditor";
+export { useSlowCall } from "./useSlowCall";
+export type { UseSlowCallOptions, UseSlowCallReturn } from "./useSlowCall";
 
-export { useNoteTitleEdit } from "./useNoteTitleEdit";
-export type { UseNoteTitleEditReturn } from "./useNoteTitleEdit";
+export { useShortcutHintHover } from "./useShortcutHintHover";
 
-export { useNoteActions } from "./useNoteActions";
-export type { UseNoteActionsReturn } from "./useNoteActions";
+export { useTruncationDetection, isElementTruncated } from "./useTruncationDetection";
+
+export { useConnectivity, useConnectivitySnapshot } from "./useConnectivity";

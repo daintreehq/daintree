@@ -1,6 +1,9 @@
 import type { AgentId } from "../agent.js";
 import type { TerminalState } from "./terminal.js";
 import type { TerminalConfig } from "./config.js";
+import type { ActionFrecencyEntry } from "../actions.js";
+
+export type { ActionFrecencyEntry };
 
 /** Saved recipe terminal */
 export interface SavedRecipeTerminal {
@@ -78,14 +81,21 @@ export interface AppState {
   panelGridConfig?: import("../config.js").PanelGridConfig;
   /** Most-recently-used ordered list of quick-switcher item IDs ("terminal:<id>" | "worktree:<id>") */
   mruList?: string[];
-  /** Most-recently-used ordered list of action IDs for the action palette */
-  actionMruList?: string[];
+  /** Most-recently-used action frecency entries for the action palette (migrated from legacy string[] format) */
+  actionMruList?: ActionFrecencyEntry[] | string[];
+  /** Whether Fleet scope primitive is active ("scoped") or feature is disabled ("legacy", default) */
+  fleetScopeMode?: "legacy" | "scoped";
 }
 
 /** Describes how the settings store recovered from corruption at startup */
 export type SettingsRecovery =
   | { kind: "restored-from-backup"; quarantinedPath?: string }
   | { kind: "reset-to-defaults"; quarantinedPath?: string };
+
+/** Describes a per-project state file that was quarantined due to corruption */
+export interface ProjectStateRecovery {
+  quarantinedPath: string;
+}
 
 /** Result from app hydration */
 export interface HydrateResult {
@@ -96,5 +106,12 @@ export interface HydrateResult {
   gpuWebGLHardware: boolean;
   gpuHardwareAccelerationDisabled: boolean;
   safeMode: boolean;
+  /** Number of saved panels skipped due to safe-mode boot (0 when safe mode is inactive). */
+  skippedPanelCount?: number;
+  /** Consecutive recent unclean launches counted by the crash-loop guard. */
+  crashCount?: number;
+  /** Timestamp (ms since epoch) of the most recent unclean launch prior to this boot. */
+  lastCrashAt?: number;
   settingsRecovery?: SettingsRecovery | null;
+  projectStateRecovery?: ProjectStateRecovery | null;
 }

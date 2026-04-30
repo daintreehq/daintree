@@ -2,12 +2,13 @@ import React, { useCallback, useMemo } from "react";
 import { usePanelStore, type TerminalInstance } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getPanelKindDefinition, type PanelComponentProps } from "@/registry";
-import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
+import { ContentPanel, PluginMissingPanel, triggerPanelTransition } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { usePanelLifecycle } from "@/hooks/usePanelLifecycle";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
 import type { AgentState } from "@/types";
+import { terminalChromeDescriptorsEqual } from "@/utils/terminalChrome";
 
 export interface GridPanelProps {
   terminal: TerminalInstance;
@@ -17,6 +18,13 @@ export interface GridPanelProps {
   gridCols?: number;
   // Group-level ambient agent state (highest urgency across all tabs in a tab group)
   ambientAgentState?: AgentState;
+  // Fleet scope render overrides: force input lock, disable per-panel
+  // maximize/minimize/add-tab, and let the caller disambiguate titles when
+  // the armed set spans multiple worktrees. These are transient render-only
+  // flags; the store is untouched. Title-bar selection chrome is derived
+  // inside TerminalPane from `fleetArmingStore`, not from this prop.
+  isFleetScope?: boolean;
+  titleOverride?: string;
   // Tab support
   tabs?: TabInfo[];
   groupId?: string;
@@ -43,6 +51,8 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
     prev.gridPanelCount !== next.gridPanelCount ||
     prev.gridCols !== next.gridCols ||
     prev.ambientAgentState !== next.ambientAgentState ||
+    prev.isFleetScope !== next.isFleetScope ||
+    prev.titleOverride !== next.titleOverride ||
     prev.groupId !== next.groupId
   ) {
     return false;
@@ -57,8 +67,10 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
       a.title !== b.title ||
       a.worktreeId !== b.worktreeId ||
       a.kind !== b.kind ||
-      a.type !== b.type ||
-      a.agentId !== b.agentId ||
+      a.launchAgentId !== b.launchAgentId ||
+      a.detectedAgentId !== b.detectedAgentId ||
+      a.everDetectedAgent !== b.everDetectedAgent ||
+      a.runtimeIdentity !== b.runtimeIdentity ||
       a.cwd !== b.cwd ||
       a.agentState !== b.agentState ||
       a.activityHeadline !== b.activityHeadline ||
@@ -72,14 +84,11 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
       a.spawnError !== b.spawnError ||
       a.detectedProcessId !== b.detectedProcessId ||
       a.browserUrl !== b.browserUrl ||
-      a.notePath !== b.notePath ||
-      a.noteId !== b.noteId ||
-      a.scope !== b.scope ||
-      a.createdAt !== b.createdAt ||
       a.isRestarting !== b.isRestarting ||
       a.runtimeStatus !== b.runtimeStatus ||
       a.isInputLocked !== b.isInputLocked ||
-      a.extensionState !== b.extensionState
+      a.extensionState !== b.extensionState ||
+      a.pluginId !== b.pluginId
     ) {
       return false;
     }
@@ -92,14 +101,12 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
     if (prevTabs == null || nextTabs == null) return false;
     if (prevTabs.length !== nextTabs.length) return false;
     for (let i = 0; i < prevTabs.length; i++) {
-      const pt = prevTabs[i];
-      const nt = nextTabs[i];
+      const pt = prevTabs[i]!;
+      const nt = nextTabs[i]!;
       if (
         pt.id !== nt.id ||
         pt.title !== nt.title ||
-        pt.type !== nt.type ||
-        pt.agentId !== nt.agentId ||
-        pt.detectedProcessId !== nt.detectedProcessId ||
+        !terminalChromeDescriptorsEqual(pt.chrome, nt.chrome) ||
         pt.kind !== nt.kind ||
         pt.agentState !== nt.agentState ||
         pt.isActive !== nt.isActive
@@ -119,6 +126,8 @@ export const GridPanel = React.memo(function GridPanel({
   gridPanelCount,
   gridCols,
   ambientAgentState,
+  isFleetScope = false,
+  titleOverride,
   tabs,
   groupId,
   onTabClick,
@@ -187,16 +196,22 @@ export const GridPanel = React.memo(function GridPanel({
           ambientAgentState,
           onFocus: handleFocus,
           onClose: handleClose,
-          onToggleMaximize: handleToggleMaximize,
+          // Fleet scope disables per-panel maximize — the armed grid is a single
+          // read-only composite view; promoting one cell would drop the rest.
+          onToggleMaximize: isFleetScope ? undefined : handleToggleMaximize,
           onTitleChange: handleTitleChange,
-          onMinimize: handleMinimize,
+          onMinimize: isFleetScope ? undefined : handleMinimize,
           tabs,
           groupId,
           onTabClick,
           onTabClose,
           onTabRename,
-          onAddTab,
+          // Adding a new tab in scope would create a cross-worktree tab group,
+          // which violates the tab-group invariant in shared/types/panel.ts.
+          onAddTab: isFleetScope ? undefined : onAddTab,
           onTabReorder,
+          ...(isFleetScope ? { isInputLocked: true } : undefined),
+          ...(titleOverride !== undefined ? { title: titleOverride } : undefined),
         },
       }),
     [
@@ -218,11 +233,16 @@ export const GridPanel = React.memo(function GridPanel({
       onTabRename,
       onAddTab,
       onTabReorder,
+      isFleetScope,
+      titleOverride,
     ]
   );
 
   if (!definition) {
-    console.warn(`[GridPanel] No component registered for kind: ${kind}`);
+    const isPluginOwned = Boolean(terminal.pluginId) || kind.includes(".");
+    if (!isPluginOwned) {
+      console.warn(`[GridPanel] No component registered for kind: ${kind}`);
+    }
     return (
       <ContentPanel
         id={terminal.id}
@@ -245,15 +265,23 @@ export const GridPanel = React.memo(function GridPanel({
         onAddTab={onAddTab}
         onTabReorder={onTabReorder}
       >
-        <div className="flex flex-1 items-center justify-center bg-surface-panel text-text-muted">
-          <div className="text-center">
-            <p className="text-sm font-medium">Unknown Panel Type</p>
-            <p className="text-xs mt-1 text-daintree-text/50">Kind: {kind}</p>
-            <p className="text-xs mt-2 text-daintree-text/40">
-              No component registered for this panel kind
-            </p>
+        {isPluginOwned ? (
+          <PluginMissingPanel
+            kind={kind}
+            pluginId={terminal.pluginId}
+            onRemove={() => handleClose(true)}
+          />
+        ) : (
+          <div className="flex flex-1 items-center justify-center bg-surface-panel text-text-muted">
+            <div className="text-center">
+              <p className="text-sm font-medium">Unknown Panel Type</p>
+              <p className="text-xs mt-1 text-daintree-text/50">Kind: {kind}</p>
+              <p className="text-xs mt-2 text-daintree-text/40">
+                No component registered for this panel kind
+              </p>
+            </div>
           </div>
-        </div>
+        )}
       </ContentPanel>
     );
   }

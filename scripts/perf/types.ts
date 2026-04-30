@@ -56,6 +56,32 @@ export interface ScenarioBudget {
   p95Ms?: number;
   maxRegressionPct?: number;
   maxMetricValues?: Record<string, number>;
+  comparison?: {
+    maxPValue: number;
+    minEffectSize: number;
+  };
+}
+
+export interface ComparisonSample {
+  label: string;
+  durations: number[];
+}
+
+export interface ComparisonResult {
+  headLabel: string;
+  baseLabel: string;
+  uStatistic: number;
+  pValue: number;
+  effectSize: number;
+  significant: boolean;
+  regression: boolean;
+}
+
+export interface ComparisonAggregate {
+  id: string;
+  head: ScenarioAggregate;
+  base: ScenarioAggregate;
+  comparison: ComparisonResult;
 }
 
 export interface PerfBudgetConfig {

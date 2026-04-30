@@ -3,21 +3,17 @@ import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
 
 /** Built-in panel kinds */
-export type BuiltInPanelKind = "terminal" | "agent" | "browser" | "notes" | "dev-preview";
+export type BuiltInPanelKind = "terminal" | "browser" | "dev-preview";
 
 /**
- * Panel kind: distinguishes between default terminals, agent-driven terminals, browser panels,
- * and extension-provided panel types.
+ * Panel kind: distinguishes between terminals, browser panels, and
+ * extension-provided panel types. Agent-ness is a dynamic state of a terminal,
+ * NOT a distinct panel kind — see `docs/architecture/terminal-identity.md`.
  *
- * Built-in kinds: "terminal" | "agent" | "browser"
+ * Built-in kinds: "terminal" | "browser" | "dev-preview"
  * Extensions can register additional kinds as strings.
  */
 export type PanelKind = BuiltInPanelKind | (string & {});
-
-/**
- * @deprecated Use PanelKind + agentId instead. This is kept for backward compatibility/migrations.
- */
-export type TerminalType = "terminal" | BuiltInAgentId;
 
 /** Location of a panel instance in the UI */
 export type PanelLocation = "grid" | "dock" | "trash" | "background";
@@ -64,17 +60,11 @@ export interface DockRenderState {
 
 /** Type guard to check if a panel kind is a built-in kind */
 export function isBuiltInPanelKind(kind: PanelKind): kind is BuiltInPanelKind {
-  return (
-    kind === "terminal" ||
-    kind === "agent" ||
-    kind === "browser" ||
-    kind === "notes" ||
-    kind === "dev-preview"
-  );
+  return kind === "terminal" || kind === "browser" || kind === "dev-preview";
 }
 
 /**
- * Check if a built-in panel kind requires PTY (terminal or agent).
+ * Check if a built-in panel kind requires PTY.
  * For extension kinds, use `panelKindHasPty()` from panelKindRegistry
  * which consults the runtime registry configuration.
  * Note: dev-preview panels manage their own ephemeral PTYs via useDevServer hook,
@@ -82,7 +72,7 @@ export function isBuiltInPanelKind(kind: PanelKind): kind is BuiltInPanelKind {
  */
 export function isPtyPanelKind(kind: PanelKind): boolean {
   // Built-in kinds - for extension kinds, use panelKindHasPty() from registry
-  return kind === "terminal" || kind === "agent";
+  return kind === "terminal";
 }
 
 /**
@@ -108,6 +98,34 @@ export type TerminalRuntimeStatus = TerminalFlowStatus | "background" | "exited"
 
 /** Origin that spawned a terminal */
 export type TerminalSpawnSource = "quickrun" | "recipe" | "agent" | "palette";
+
+/**
+ * Live process identity detected inside a PTY. This is transient runtime state,
+ * not a launch hint and not persisted.
+ */
+export interface TerminalRuntimeIdentity {
+  kind: "agent" | "process";
+  /** Stable runtime identity id: agent id for agents, process icon id for processes. */
+  id: string;
+  /** Icon registry id used by terminal chrome. */
+  iconId: string;
+  /** Present only when the live process is an agent. */
+  agentId?: AgentId;
+  /** Present when the detector emitted a process icon id. */
+  processId?: string;
+}
+
+/**
+ * How a panel's title is currently owned.
+ *
+ * - `"default"` — title is derived from live runtime identity and is free to
+ *   flip as detection promotes/demotes.
+ * - `"custom"` — the user renamed this panel; title is frozen and must not be
+ *   overwritten by detection events.
+ *
+ * Absent defaults to `"default"` for hydration compatibility.
+ */
+export type PanelTitleMode = "default" | "custom";
 
 /** Structured error state for terminal restart failures */
 export interface TerminalRestartError {
@@ -159,6 +177,8 @@ interface BasePanelData {
   kind: PanelKind;
   /** Display title for the panel tab */
   title: string;
+  /** How the title is owned. Absent = "default". */
+  titleMode?: PanelTitleMode;
   /** Location in the UI - grid (main view) or dock (minimized) */
   location: PanelLocation;
   /** ID of the worktree this panel is associated with */
@@ -167,19 +187,32 @@ interface BasePanelData {
   isVisible?: boolean;
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
+  /**
+   * Extension ID of the plugin that registered this panel's kind, if applicable.
+   * Preserved across save/restore so the placeholder can name the missing plugin
+   * when its registration is gone.
+   */
+  pluginId?: string;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 
-interface PtyPanelData extends BasePanelData {
-  kind: "terminal" | "agent";
+export interface PtyPanelData extends BasePanelData {
+  kind: "terminal";
   /**
-   * Legacy field retained for persistence; new code should prefer `kind`.
-   * - "terminal" for default terminals
-   * - legacy agent ids ("claude", "gemini", "codex") when migrated from old state
+   * Durable launch affinity — the agent this terminal was launched to run, if any.
+   *
+   * It is the "which agent's command did we inject at spawn time" record, kept so:
+   *   - Restart can re-inject the same command.
+   *   - Session resume can look up the agent's resume flags.
+   *   - Persisted settings (model, preset, launch flags) have a key.
+   *   - Chrome/activity can stay agent-branded across renderer restore before
+   *     transient runtime detection rehydrates.
+   *
+   * Live detection wins when present. A strong exit signal (`agentState:
+   * "exited"`, terminal exit/error, or exitCode) demotes back to shell chrome.
+   * Absent for plain-shell launches.
    */
-  type: TerminalType;
-  /** Agent ID when kind is 'agent' */
-  agentId?: AgentId;
+  launchAgentId?: AgentId;
   /** Current working directory of the terminal */
   cwd: string;
   /** Process ID of the underlying PTY process */
@@ -188,7 +221,7 @@ interface PtyPanelData extends BasePanelData {
   cols: number;
   /** Number of rows in the terminal */
   rows: number;
-  /** Current agent lifecycle state (for agent-type terminals) */
+  /** Current agent lifecycle state (only meaningful while an agent is detected) */
   agentState?: AgentState;
   /** Timestamp when agentState last changed (milliseconds since epoch) */
   lastStateChange?: number;
@@ -246,21 +279,56 @@ interface PtyPanelData extends BasePanelData {
   exitBehavior?: PanelExitBehavior;
   /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
   detectedProcessId?: string;
+  /** Canonical live runtime identity for terminal chrome (transient, not persisted) */
+  runtimeIdentity?: TerminalRuntimeIdentity;
+  /**
+   * Sticky live-session flag. True once runtime detection fires in this session,
+   * even if no agent is currently detected. Enables "this terminal hosted an
+   * agent at some point" decisions (exit preservation, chrome demotion).
+   *
+   * Not persisted; rehydrated from backend reconnect payload.
+   */
+  everDetectedAgent?: boolean;
+  /**
+   * Live detected identity — the agent currently running in this terminal.
+   *
+   * Live detected identity — highest-precedence runtime evidence for UI
+   * chrome, fleet eligibility, hybrid-input visibility, and focus routing.
+   * When absent, durable `launchAgentId` can still provide agent affinity until
+   * a strong exit signal demotes the terminal back to shell chrome.
+   *
+   * Not persisted; rehydrated from backend reconnect payload.
+   * See `docs/architecture/terminal-identity.md`.
+   */
+  detectedAgentId?: BuiltInAgentId;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Preset ID used at launch time, for live color lookup */
+  agentPresetId?: string;
+  /** Preset brand color (hex) captured at launch time; overridden by live settings lookup */
+  agentPresetColor?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
   /** Timestamp when this terminal was created */
   startedAt?: number;
   /** Exit code from the last process exit */
   exitCode?: number;
+  /**
+   * Original user-selected preset ID. Set on first spawn, never overwritten
+   * when a fallback activates. Used to display "was {original} → {active}".
+   */
+  originalPresetId?: string;
+  /** Whether this panel is currently running on a fallback preset. */
+  isUsingFallback?: boolean;
+  /** How many fallback hops have been consumed from the primary's chain (0-based index into fallbacks[]). */
+  fallbackChainIndex?: number;
 }
 
-interface BrowserPanelData extends BasePanelData {
+export interface BrowserPanelData extends BasePanelData {
   kind: "browser";
   /** Current URL for browser panes */
   browserUrl?: string;
@@ -272,19 +340,10 @@ interface BrowserPanelData extends BasePanelData {
   browserConsoleOpen?: boolean;
 }
 
-interface NotesPanelData extends BasePanelData {
-  kind: "notes";
-  /** Path to the note file (relative to project root) */
-  notePath: string;
-  /** Unique identifier for the note (from frontmatter) */
-  noteId: string;
-  /** Note scope: worktree-specific or project-wide */
-  scope: "worktree" | "project";
-  /** Timestamp when note was created (milliseconds since epoch) */
-  createdAt: number;
-}
+/** Viewport preset IDs for dev-preview responsive emulation */
+export type ViewportPresetId = "iphone" | "pixel" | "ipad";
 
-interface DevPreviewPanelData extends BasePanelData {
+export interface DevPreviewPanelData extends BasePanelData {
   kind: "dev-preview";
   /** Current working directory for the dev server */
   cwd: string;
@@ -298,24 +357,32 @@ interface DevPreviewPanelData extends BasePanelData {
   browserZoom?: number;
   /** Whether the console drawer is open */
   devPreviewConsoleOpen?: boolean;
+  /** Dev server status */
+  devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
+  /** Dev server URL */
+  devServerUrl?: string;
+  /** Dev server error */
+  devServerError?: { type: string; message: string };
+  /** Terminal ID associated with dev server */
+  devServerTerminalId?: string;
   /** Behavior when dev server exits */
   exitBehavior?: PanelExitBehavior;
+  /** Active viewport preset (undefined = fill/full-width) */
+  viewportPreset?: ViewportPresetId;
+  /** Last captured scroll position, paired with URL for stale-scroll prevention */
+  devPreviewScrollPosition?: { url: string; scrollY: number };
 }
 
-export type PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData | DevPreviewPanelData;
+export type PanelInstance = PtyPanelData | BrowserPanelData | DevPreviewPanelData;
 
 export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
   const kind = panel.kind ?? "terminal";
-  return kind === "terminal" || kind === "agent";
+  return kind === "terminal";
 }
 
 export function isBrowserPanel(panel: PanelInstance | TerminalInstance): panel is BrowserPanelData {
   const kind = panel.kind ?? "terminal";
   return kind === "browser";
-}
-
-export function isNotesPanel(panel: PanelInstance): panel is NotesPanelData {
-  return panel.kind === "notes";
 }
 
 export function isDevPreviewPanel(
@@ -330,15 +397,22 @@ export function isDevPreviewPanel(
  * New code should use the PanelInstance discriminated union.
  *
  * Note: PTY-specific fields (cwd, cols, rows) are optional to support
- * non-PTY panels like browser and notes.
+ * non-PTY panels like browser.
  */
 export interface TerminalInstance {
   id: string;
   worktreeId?: string;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  /**
+   * Launch hint — the agent this terminal was *launched to run*. Not identity.
+   * See `PtyPanelData.launchAgentId` for the full contract.
+   */
+  launchAgentId?: AgentId;
   title: string;
+  /** How the title is owned. Absent = "default". */
+  titleMode?: PanelTitleMode;
+  /** Last meaningful OSC title observed from the running agent — survives the trash window for display. */
+  lastObservedTitle?: string;
   /** Working directory - only present for PTY panels */
   cwd?: string;
   pid?: number;
@@ -379,10 +453,6 @@ export interface TerminalInstance {
   browserZoom?: number;
   /** Whether the browser console drawer is open */
   browserConsoleOpen?: boolean;
-  notePath?: string;
-  noteId?: string;
-  scope?: "worktree" | "project";
-  createdAt?: number;
   /** Dev command override for dev-preview panels */
   devCommand?: string;
   /** Dev server status for dev-preview panels */
@@ -395,26 +465,67 @@ export interface TerminalInstance {
   devServerTerminalId?: string;
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
+  /** Active viewport preset for dev-preview responsive emulation (undefined = fill) */
+  viewportPreset?: ViewportPresetId;
+  /** Last captured dev-preview scroll position, paired with URL for stale-scroll prevention */
+  devPreviewScrollPosition?: { url: string; scrollY: number };
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
+  /** Legacy persisted creation timestamp (milliseconds since epoch) */
+  createdAt?: number;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
   /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
   detectedProcessId?: string;
+  /** Canonical live runtime identity for terminal chrome (transient, not persisted) */
+  runtimeIdentity?: TerminalRuntimeIdentity;
+  /**
+   * Sticky live-session flag; set once on first runtime detection, never cleared.
+   * See `PtyPanelData.everDetectedAgent` for full contract.
+   */
+  everDetectedAgent?: boolean;
+  /**
+   * Live detected identity — the agent currently running in this terminal.
+   * See `PtyPanelData.detectedAgentId` for full contract.
+   */
+  detectedAgentId?: BuiltInAgentId;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Preset ID used at launch time, for live color lookup */
+  agentPresetId?: string;
+  /** Preset brand color (hex) captured at launch time; overridden by live settings lookup */
+  agentPresetColor?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
   /** Timestamp when this terminal was created */
   startedAt?: number;
   /** Exit code from the last process exit */
   exitCode?: number;
+  /**
+   * Live-only spawn lifecycle state. "spawning" from the moment the optimistic
+   * placeholder lands in `panelsById` until the PTY IPC round-trip resolves;
+   * then "ready". Absent (undefined) on hydrated panels — treat as "ready".
+   * Never serialized — see `serializePtyPanel`.
+   */
+  spawnStatus?: "spawning" | "ready" | "missing-cli";
+  /** Original user-selected preset ID; immutable across fallback hops. */
+  originalPresetId?: string;
+  /** Whether this panel is currently running on a fallback preset. */
+  isUsingFallback?: boolean;
+  /** How many fallback hops have been consumed from the primary's chain. */
+  fallbackChainIndex?: number;
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
+  /**
+   * Extension ID of the plugin that registered this panel's kind, if applicable.
+   * Preserved across save/restore so the placeholder can name the missing plugin
+   * when its registration is gone.
+   */
+  pluginId?: string;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 

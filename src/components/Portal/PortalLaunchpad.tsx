@@ -1,7 +1,10 @@
-import { Globe } from "lucide-react";
+import { Globe, Plus } from "lucide-react";
+import { useCallback } from "react";
 import type { PortalLink } from "@shared/types";
 import { PortalIcon } from "./PortalIcon";
 import { isMac } from "@/lib/platform";
+import { actionService } from "@/services/ActionService";
+import { Button } from "@/components/ui/button";
 
 interface PortalLaunchpadProps {
   links: PortalLink[];
@@ -10,11 +13,29 @@ interface PortalLaunchpadProps {
 
 export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
   const mac = isMac();
+
+  const handleAddPortalLink = useCallback(() => {
+    void actionService.dispatch("app.settings.openTab", { tab: "portal" }, { source: "user" });
+  }, []);
+
   if (links.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-start pt-8 text-muted-foreground px-6">
-        <Globe className="w-12 h-12 mb-4 opacity-50" />
-        <p className="text-sm">No AI agents configured</p>
+      <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
+        <Globe className="w-12 h-12 mb-2 opacity-50" />
+        <p className="text-sm text-daintree-text/50">No AI agents configured</p>
+        <p className="text-xs text-daintree-text/40">
+          Add a portal link to use as your AI agent web client.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={handleAddPortalLink}
+          className="gap-1.5"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          <span>Add agent link</span>
+        </Button>
       </div>
     );
   }

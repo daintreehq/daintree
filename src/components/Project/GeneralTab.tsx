@@ -1,13 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Image, Upload, X, Rocket, Check, FolderOpen, Copy, Palette } from "lucide-react";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
+import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { getProjectGradient, isValidHexColor } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
 import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
 import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { Project } from "@shared/types/project";
 
 const PRESET_SWATCHES = [
@@ -35,7 +37,7 @@ function cssColorToHex(cssColor: string): string | undefined {
   ctx.fillStyle = cssColor;
   ctx.fillRect(0, 0, 1, 1);
   const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+  return `#${r!.toString(16).padStart(2, "0")}${g!.toString(16).padStart(2, "0")}${b!.toString(16).padStart(2, "0")}`;
 }
 
 interface GeneralTabProps {
@@ -219,7 +221,7 @@ export function GeneralTab({
         setInRepoExpanded(false);
       }
     } catch (err) {
-      setInRepoError(err instanceof Error ? err.message : "Failed to enable in-repo settings");
+      setInRepoError(formatErrorMessage(err, "Failed to enable in-repo settings"));
     } finally {
       setInRepoEnabling(false);
     }
@@ -232,7 +234,7 @@ export function GeneralTab({
     try {
       await disableInRepoSettings(projectId);
     } catch (err) {
-      setInRepoError(err instanceof Error ? err.message : "Failed to disable in-repo settings");
+      setInRepoError(formatErrorMessage(err, "Failed to disable in-repo settings"));
     } finally {
       setInRepoEnabling(false);
     }
@@ -294,7 +296,7 @@ export function GeneralTab({
                 type="text"
                 value={name}
                 onChange={(e) => onNameChange(e.target.value)}
-                className="w-full bg-transparent border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
+                className="w-full bg-transparent border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
                 placeholder="My Awesome Project"
               />
             </div>
@@ -315,10 +317,10 @@ export function GeneralTab({
           <div className="flex flex-wrap items-center gap-2 mb-3">
             {resolvedSwatches.map((hex, i) => (
               <button
-                key={PRESET_SWATCHES[i].cssVar}
+                key={PRESET_SWATCHES[i]!.cssVar}
                 type="button"
-                title={PRESET_SWATCHES[i].label}
-                aria-label={`Set project color to ${PRESET_SWATCHES[i].label}`}
+                title={PRESET_SWATCHES[i]!.label}
+                aria-label={`Set project color to ${PRESET_SWATCHES[i]!.label}`}
                 onClick={() => onColorChange(hex)}
                 className={cn(
                   "h-7 w-7 rounded-full transition border-2 shrink-0",
@@ -360,7 +362,7 @@ export function GeneralTab({
               autoComplete="off"
               aria-label="Hex color value"
               className={cn(
-                "w-28 bg-daintree-bg border rounded px-3 py-1.5 text-sm text-daintree-text font-mono focus:outline-none focus:ring-1 transition placeholder:text-text-muted",
+                "w-28 bg-daintree-bg border rounded px-3 py-1.5 text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-1 transition placeholder:text-text-muted",
                 hexInput && !isValidHexColor(hexInput)
                   ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
                   : "border-daintree-border focus:border-daintree-accent focus:ring-daintree-accent/30"
@@ -396,7 +398,7 @@ export function GeneralTab({
           type="text"
           value={devServerCommand}
           onChange={(e) => onDevServerCommandChange(e.target.value)}
-          className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
+          className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
           placeholder="npm run dev"
           spellCheck={false}
           autoCapitalize="off"
@@ -426,7 +428,7 @@ export function GeneralTab({
                 onDevServerLoadTimeoutChange(num);
               }
             }}
-            className="w-28 bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
+            className="w-28 bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
             placeholder="30"
             aria-label="Dev server load timeout in seconds"
           />
@@ -532,7 +534,7 @@ export function GeneralTab({
       {/* In-Repository Settings */}
       <div className="mt-6">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
-          <WorktreeIcon className="h-4 w-4" />
+          <FolderGit2 className="h-4 w-4" />
           In-Repository Settings
         </h3>
         <p className="text-xs text-daintree-text/60 mb-4">
@@ -551,54 +553,15 @@ export function GeneralTab({
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={handleInRepoToggle}
+        <SettingsSwitchCard
+          icon={FolderGit2}
+          title="Store settings in repository"
+          subtitle="Writes to .daintree/project.json and .daintree/settings.json"
+          isEnabled={currentProject?.inRepoSettings ?? false}
+          onChange={handleInRepoToggle}
+          ariaLabel="Store settings in repository"
           disabled={inRepoEnabling}
-          role="switch"
-          aria-checked={currentProject?.inRepoSettings ?? false}
-          aria-label="Store settings in repository"
-          className={cn(
-            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
-            currentProject?.inRepoSettings
-              ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
-              : "border-daintree-border hover:bg-tint/5 text-daintree-text/70",
-            inRepoEnabling && "opacity-50 cursor-not-allowed"
-          )}
-        >
-          <div className="flex items-center gap-3">
-            <WorktreeIcon
-              className={cn(
-                "w-5 h-5",
-                currentProject?.inRepoSettings ? "text-daintree-accent" : "text-daintree-text/50"
-              )}
-              aria-hidden="true"
-            />
-            <div className="text-left">
-              <div className="text-sm font-medium">Store settings in repository</div>
-              <div className="text-xs opacity-70">
-                Writes to <code className="font-mono">.daintree/project.json</code> and{" "}
-                <code className="font-mono">.daintree/settings.json</code>
-              </div>
-            </div>
-          </div>
-          <div
-            className={cn(
-              "w-11 h-6 rounded-full relative transition-colors",
-              currentProject?.inRepoSettings ? "bg-daintree-accent" : "bg-daintree-border"
-            )}
-            aria-hidden="true"
-          >
-            <div
-              className={cn(
-                "absolute top-1 w-4 h-4 rounded-full transition-transform",
-                currentProject?.inRepoSettings
-                  ? "translate-x-6 bg-text-inverse"
-                  : "translate-x-1 bg-daintree-text"
-              )}
-            />
-          </div>
-        </button>
+        />
 
         {inRepoError && (
           <div

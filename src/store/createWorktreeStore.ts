@@ -18,12 +18,19 @@ export function getCurrentViewStore(): WorktreeViewStoreApi {
   return _currentViewStore;
 }
 
+// Non-throwing variant for callers that can legitimately run before the
+// provider mounts (e.g. action-manifest listing during initial render).
+export function getCurrentViewStoreOrNull(): WorktreeViewStoreApi | null {
+  return _currentViewStore;
+}
+
 export interface WorktreeViewState {
   worktrees: Map<string, WorktreeSnapshot>;
   version: number;
   isLoading: boolean;
   error: string | null;
   isInitialized: boolean;
+  isReconnecting: boolean;
 }
 
 export interface WorktreeViewActions {
@@ -33,6 +40,8 @@ export interface WorktreeViewActions {
   applyRemove(worktreeId: string, version: number): void;
   setLoading(loading: boolean): void;
   setError(error: string | null): void;
+  setFatalError(message: string): void;
+  setReconnecting(reconnecting: boolean): void;
 }
 
 export type WorktreeViewStore = WorktreeViewState & WorktreeViewActions;
@@ -47,6 +56,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     isLoading: true,
     error: null,
     isInitialized: false,
+    isReconnecting: false,
 
     nextVersion() {
       return ++versionCounter;
@@ -55,7 +65,14 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     applySnapshot(states: WorktreeSnapshot[], version: number) {
       if (version <= get().version) return;
       const map = new Map(states.map((s) => [s.id, s]));
-      set({ worktrees: map, version, isLoading: false, isInitialized: true, error: null });
+      set({
+        worktrees: map,
+        version,
+        isLoading: false,
+        isInitialized: true,
+        error: null,
+        isReconnecting: false,
+      });
     },
 
     applyUpdate(state: WorktreeSnapshot, version: number) {
@@ -90,6 +107,26 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     setError(error: string | null) {
       set({ error });
     },
+
+    setFatalError(message: string) {
+      // Also clear `isLoading` so the sidebar renders the error branch (and
+      // its Restart Service button) even when the host crashes before the
+      // first snapshot hydrates — otherwise `SidebarContent` keeps showing
+      // "Loading worktrees…" and the restart action is never surfaced.
+      // `isInitialized` is reset so the next `fetchInitialState` treats the
+      // post-restart fetch as a cold start rather than a silent wake refresh
+      // (which swallows fetch errors).
+      set({
+        error: message,
+        isInitialized: false,
+        isReconnecting: false,
+        isLoading: false,
+      });
+    },
+
+    setReconnecting(reconnecting: boolean) {
+      set({ isReconnecting: reconnecting });
+    },
   }));
 }
 
@@ -111,10 +148,10 @@ export function cleanupOrphanedTerminals(): void {
   const terminalStore = usePanelStore.getState();
   const orphanedTerminals = terminalStore.panelIds
     .map((id) => terminalStore.panelsById[id])
-    .filter((t) => {
+    .filter((t): t is NonNullable<typeof t> => {
       if (!t) return false;
       const worktreeId = typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
-      return worktreeId && !worktreeIds.has(worktreeId);
+      return Boolean(worktreeId && !worktreeIds.has(worktreeId));
     });
 
   if (orphanedTerminals.length > 0) {
@@ -158,6 +195,11 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.hasResumeCommand === b.hasResumeCommand &&
     a.hasTeardownCommand === b.hasTeardownCommand &&
     a.resourceConnectCommand === b.resourceConnectCommand &&
+    a.isWslPath === b.isWslPath &&
+    a.wslDistro === b.wslDistro &&
+    a.wslGitEligible === b.wslGitEligible &&
+    a.wslGitOptIn === b.wslGitOptIn &&
+    a.wslGitDismissed === b.wslGitDismissed &&
     resourceStatusEqual(a.resourceStatus, b.resourceStatus) &&
     worktreeChangesEqual(a.worktreeChanges, b.worktreeChanges) &&
     lifecycleStatusEqual(a.lifecycleStatus, b.lifecycleStatus)

@@ -60,12 +60,6 @@ vi.mock("@/components/ui/button", () => ({
   },
 }));
 
-vi.mock("@/components/icons", () => ({
-  WorktreeIcon: ({ className }: { className?: string }) => (
-    <span data-testid="worktree-icon" className={className} />
-  ),
-}));
-
 import { WorktreeDeleteDialog } from "../WorktreeDeleteDialog";
 
 function makeWorktree(worktreeChanges: WorktreeChanges | null = null): WorktreeState {

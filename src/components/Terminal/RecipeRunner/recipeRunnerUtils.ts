@@ -78,7 +78,7 @@ export function rankSearchResults(
   return results
     .map((result, i) => {
       const fuseRelevance = 1 - (result.score ?? 0);
-      const frecencyNorm = frecencyScores[i] / maxFrecency;
+      const frecencyNorm = frecencyScores[i]! / maxFrecency;
       const combined = 0.7 * fuseRelevance + 0.3 * frecencyNorm;
       return { recipe: result.item, score: combined };
     })

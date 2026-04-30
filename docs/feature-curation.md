@@ -182,13 +182,13 @@ Daintree targets all three desktop platforms, but not equally:
 
 Daintree is built by a solo developer augmented by AI coding agents — the same agents Daintree orchestrates. This means:
 
-1. **Higher throughput than traditional solo dev** — But maintenance burden is still real. Every feature must be maintained across 3 platforms and kept compatible with 5 agent CLIs that each update independently.
+1. **Higher throughput than traditional solo dev** — But maintenance burden is still real. Every feature must be maintained across 3 platforms and kept compatible with 15 agent CLIs that each update independently.
 
 2. **No unnecessary native dependencies** — `node-pty` is already complex enough. Avoid adding more native modules unless they provide 10x value.
 
 3. **State over database** — Use the file system (git) as the source of truth whenever possible. Don't sync state that can be derived from the folder structure.
 
-4. **Opinionated integrations** — Support the CLIs that matter (Claude, Gemini, Codex, OpenCode, Cursor) and support them _deeply_ via the agent registry. Don't try to support every AI tool generically.
+4. **Opinionated integrations** — Support the CLIs that matter (Claude, Gemini, Codex, OpenCode, Cursor, Kiro, GitHub Copilot, Goose, Crush, Qwen, Open Interpreter, Mistral Vibe, Kimi, Amp, Aider) and support them _deeply_ via the agent registry. Don't try to support every AI tool generically.
 
 5. **Maintenance budget** — If a feature can't justify its ongoing maintenance cost across platforms and agent updates, reject it.
 

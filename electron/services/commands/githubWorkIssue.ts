@@ -23,6 +23,7 @@ import { getWorkspaceClient } from "../WorkspaceClient.js";
 import { GitService } from "../GitService.js";
 import { generateWorktreePath, validatePathPattern } from "../../../shared/utils/pathPattern.js";
 import { resolveWorktreePattern } from "../../utils/worktreePattern.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 /** Arguments for the github:work-issue command */
 export interface GitHubWorkIssueArgs {
@@ -109,7 +110,7 @@ async function fetchIssueDetails(cwd: string, issueNumber: number): Promise<Issu
     })) as GraphQlQueryResponseData;
   } catch (error) {
     // Handle GraphQL errors (auth, rate limit, network)
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error, "Failed to fetch GitHub issue");
     if (message.includes("401") || message.includes("Unauthorized")) {
       throw new Error("GitHub authentication failed. Check your token.");
     }
@@ -291,7 +292,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
       const gitService = new GitService(cwd);
       rootPath = await gitService.getRepositoryRoot(cwd);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Not a git repository");
       return {
         success: false,
         error: {
@@ -317,7 +318,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
     try {
       issue = await fetchIssueDetails(rootPath, issueNumber);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to fetch issue");
 
       if (message.includes("not found")) {
         return {
@@ -388,7 +389,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
         fromRemote = detected.fromRemote;
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to detect base branch");
       return {
         success: false,
         error: {
@@ -406,7 +407,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
     try {
       finalBranchName = await gitService.findAvailableBranchName(branchName);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to validate branch name");
       return {
         success: false,
         error: {
@@ -439,7 +440,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
       try {
         await mkdir(parentDir, { recursive: true });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = formatErrorMessage(error, "Failed to create worktree directory");
         return {
           success: false,
           error: {
@@ -472,7 +473,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
         fromRemote,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to create worktree");
       return {
         success: false,
         error: {
@@ -488,7 +489,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
       await workspaceClient.setActiveWorktree(worktreeId);
     } catch (error) {
       // Non-fatal - worktree was created, just couldn't switch
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to switch worktree");
       switchWarning = `Worktree created but failed to switch: ${errorMessage}`;
       console.warn("Failed to switch to new worktree:", errorMessage);
     }
@@ -501,7 +502,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
         issueUrl = resolvedIssueUrl;
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to resolve issue URL");
       console.warn(`Failed to resolve issue URL for #${issueNumber}: ${message}`);
     }
 

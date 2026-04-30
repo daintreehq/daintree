@@ -73,6 +73,7 @@ const buildSwitchHydrateResultMock = vi.hoisted(() =>
     gpuHardwareAccelerationDisabled: false,
     safeMode: false,
     settingsRecovery: null,
+    projectStateRecovery: null,
   }))
 );
 

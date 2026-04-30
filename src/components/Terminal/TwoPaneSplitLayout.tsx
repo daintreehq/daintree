@@ -39,9 +39,11 @@ export function TwoPaneSplitLayout({
   const terminalsRef = useRef(terminals);
   const commitRatioIfChangedRef = useRef<typeof commitRatioIfChanged>(null!);
 
-  localRatioRef.current = localRatio;
-  activeWorktreeIdRef.current = activeWorktreeId;
-  terminalsRef.current = terminals;
+  useEffect(() => {
+    localRatioRef.current = localRatio;
+    activeWorktreeIdRef.current = activeWorktreeId;
+    terminalsRef.current = terminals;
+  });
 
   const ratioByWorktreeId = useTwoPaneSplitStore((state) => state.ratioByWorktreeId);
   const defaultRatio = useTwoPaneSplitStore((state) => state.config.defaultRatio);
@@ -49,7 +51,9 @@ export function TwoPaneSplitLayout({
   const commitRatioIfChanged = useTwoPaneSplitStore((state) => state.commitRatioIfChanged);
   const resetWorktreeRatio = useTwoPaneSplitStore((state) => state.resetWorktreeRatio);
 
-  commitRatioIfChangedRef.current = commitRatioIfChanged;
+  useEffect(() => {
+    commitRatioIfChangedRef.current = commitRatioIfChanged;
+  }, [commitRatioIfChanged]);
 
   const setWorktreeRatio = useTwoPaneSplitStore((state) => state.setWorktreeRatio);
 
@@ -231,9 +235,7 @@ export function TwoPaneSplitLayout({
             gap: 0,
             backgroundColor: "var(--color-grid-bg)",
           }}
-          role="grid"
           id="panel-grid"
-          aria-label="Panel grid - two pane split"
           data-grid-container="true"
           data-split-mode="true"
         >

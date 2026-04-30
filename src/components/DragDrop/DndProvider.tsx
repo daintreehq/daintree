@@ -159,7 +159,7 @@ function isWorktreeDragData(
 // Helper to get coordinates from pointer or touch event
 function getEventCoordinates(event: Event): { x: number; y: number } {
   if ("touches" in event && (event as TouchEvent).touches.length) {
-    const touch = (event as TouchEvent).touches[0];
+    const touch = (event as TouchEvent).touches[0]!;
     return { x: touch.clientX, y: touch.clientY };
   }
   const pointerEvent = event as PointerEvent;
@@ -467,14 +467,14 @@ export function DndProvider({ children }: DndProviderProps) {
         // Walk through the full order, replacing subset items in their new order
         for (const id of fullOrder) {
           if (subsetSet.has(id)) {
-            merged.push(reorderedSubset[subsetIdx++]);
+            merged.push(reorderedSubset[subsetIdx++]!);
           } else {
             merged.push(id);
           }
         }
         // Append any subset items not in the full order (first drag or new items)
         while (subsetIdx < reorderedSubset.length) {
-          merged.push(reorderedSubset[subsetIdx++]);
+          merged.push(reorderedSubset[subsetIdx++]!);
         }
 
         useWorktreeFilterStore.getState().setManualOrder(merged);
@@ -696,8 +696,8 @@ export function DndProvider({ children }: DndProviderProps) {
               let toGroupIndex = -1;
               for (let i = 0; i < tabGroupsAtLocation.length; i++) {
                 if (
-                  tabGroupsAtLocation[i].id === overId ||
-                  tabGroupsAtLocation[i].panelIds.includes(overId)
+                  tabGroupsAtLocation[i]!.id === overId ||
+                  tabGroupsAtLocation[i]!.panelIds.includes(overId)
                 ) {
                   toGroupIndex = i;
                   break;
@@ -736,8 +736,8 @@ export function DndProvider({ children }: DndProviderProps) {
                 let toGroupIndex = -1;
                 for (let i = 0; i < tabGroupsAtLocation.length; i++) {
                   if (
-                    tabGroupsAtLocation[i].id === overId ||
-                    tabGroupsAtLocation[i].panelIds.includes(overId)
+                    tabGroupsAtLocation[i]!.id === overId ||
+                    tabGroupsAtLocation[i]!.panelIds.includes(overId)
                   ) {
                     toGroupIndex = i;
                     break;

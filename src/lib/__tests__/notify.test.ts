@@ -1,25 +1,53 @@
 // @vitest-environment jsdom
+import React from "react";
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { notify, _resetCoalesceMap, _resetComboMap, _setQuietUntil } from "../notify";
+import {
+  notify,
+  TOAST_DURATION,
+  _resetCoalesceMap,
+  _resetComboMap,
+  _resetEscalationTrackers,
+  shouldEscalateTransientError,
+  consumeEscalation,
+  _setQuietUntil,
+  muteForDuration,
+  muteUntilNextMorning,
+  isScheduledQuietHours,
+} from "../notify";
 import { useNotificationStore } from "../../store/notificationStore";
 import { useNotificationHistoryStore } from "../../store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "../../store/notificationSettingsStore";
 
 const mockShowNative = vi.fn();
+const mockSetSessionMute = vi.fn();
 
 beforeEach(() => {
   Object.defineProperty(window, "electron", {
-    value: { notification: { showNative: mockShowNative } },
+    value: {
+      notification: {
+        showNative: mockShowNative,
+        setSettings: vi.fn().mockResolvedValue(undefined),
+        setSessionMuteUntil: mockSetSessionMute,
+      },
+    },
     writable: true,
     configurable: true,
   });
+  mockSetSessionMute.mockClear();
 });
 
 describe("notify()", () => {
   beforeEach(() => {
     useNotificationStore.setState({ notifications: [] });
     useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
-    useNotificationSettingsStore.setState({ enabled: true, hydrated: true });
+    useNotificationSettingsStore.setState({
+      enabled: true,
+      hydrated: true,
+      quietHoursEnabled: false,
+      quietHoursStartMin: 22 * 60,
+      quietHoursEndMin: 8 * 60,
+      quietHoursWeekdays: [],
+    });
     _resetCoalesceMap();
     _resetComboMap();
     _setQuietUntil(0);
@@ -35,7 +63,7 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "success", message: "Task done", priority: "high" });
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
-      expect(useNotificationHistoryStore.getState().entries[0].message).toBe("Task done");
+      expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe("Task done");
     });
 
     it("adds string message to history for low priority", () => {
@@ -58,7 +86,7 @@ describe("notify()", () => {
         inboxMessage: "plain text for history",
         priority: "low",
       });
-      expect(useNotificationHistoryStore.getState().entries[0].message).toBe(
+      expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe(
         "plain text for history"
       );
     });
@@ -71,17 +99,63 @@ describe("notify()", () => {
         inboxMessage: "inbox message",
         priority: "high",
       });
-      expect(useNotificationHistoryStore.getState().entries[0].message).toBe("inbox message");
+      expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe("inbox message");
     });
 
-    it("skips history entry if no string message and no inboxMessage", () => {
+    it("skips history entry if ReactNode message and no inboxMessage", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const jsxElement = React.createElement("span", null, "test");
       notify({
         type: "info",
-        message: null as unknown as string,
+        message: jsxElement,
+        priority: "low",
+      } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[notify] ReactNode message without inboxMessage")
+      );
+      consoleSpy.mockRestore();
+    });
+
+    it("creates history entry when ReactNode message provides inboxMessage", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const jsxElement = React.createElement("span", null, "rich");
+      notify({
+        type: "info",
+        message: jsxElement,
+        inboxMessage: "Plain text fallback",
         priority: "low",
       });
-      expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe(
+        "Plain text fallback"
+      );
+    });
+
+    it("does NOT log dev guard for string message without inboxMessage", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      notify({ type: "info", message: "Just a string", priority: "low" });
+      expect(consoleSpy).not.toHaveBeenCalled();
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      consoleSpy.mockRestore();
+    });
+
+    it("logs dev guard when ReactNode message has empty-string inboxMessage", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const jsxElement = React.createElement("span", null, "test");
+      notify({
+        type: "info",
+        message: jsxElement,
+        inboxMessage: "",
+        priority: "low",
+      });
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[notify] ReactNode message without inboxMessage")
+      );
+      consoleSpy.mockRestore();
     });
 
     it("stores correlationId in history entry", () => {
@@ -92,7 +166,7 @@ describe("notify()", () => {
         priority: "high",
         correlationId: "panel-abc",
       });
-      expect(useNotificationHistoryStore.getState().entries[0].correlationId).toBe("panel-abc");
+      expect(useNotificationHistoryStore.getState().entries[0]!.correlationId).toBe("panel-abc");
     });
   });
 
@@ -111,8 +185,8 @@ describe("notify()", () => {
         },
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.actions).toHaveLength(1);
-      expect(entry.actions![0]).toEqual({
+      expect(entry!.actions).toHaveLength(1);
+      expect(entry!.actions![0]).toEqual({
         label: "Go to terminal",
         actionId: "panel.focus",
         actionArgs: { panelId: "p1" },
@@ -129,7 +203,7 @@ describe("notify()", () => {
         action: { label: "Click me", onClick: () => {} },
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.actions).toBeUndefined();
+      expect(entry!.actions).toBeUndefined();
     });
 
     it("filters mixed actions array to only descriptor-backed ones", () => {
@@ -149,8 +223,8 @@ describe("notify()", () => {
         ],
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.actions).toHaveLength(1);
-      expect(entry.actions![0].label).toBe("Has ID");
+      expect(entry!.actions).toHaveLength(1);
+      expect(entry!.actions![0]!.label).toBe("Has ID");
     });
 
     it("forwards actions to history in grid-bar path", () => {
@@ -167,8 +241,8 @@ describe("notify()", () => {
         },
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.actions).toHaveLength(1);
-      expect(entry.actions![0].actionId).toBe("panel.focus");
+      expect(entry!.actions).toHaveLength(1);
+      expect(entry!.actions![0]!.actionId).toBe("panel.focus");
     });
 
     it("preserves variant in history action", () => {
@@ -185,7 +259,7 @@ describe("notify()", () => {
         },
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.actions![0].variant).toBe("secondary");
+      expect(entry!.actions![0]!.variant).toBe("secondary");
     });
 
     it("combines actions from both action and actions fields", () => {
@@ -210,9 +284,9 @@ describe("notify()", () => {
         ],
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.actions).toHaveLength(2);
-      expect(entry.actions![0].actionArgs).toEqual({ panelId: "p2" });
-      expect(entry.actions![1].actionArgs).toEqual({ panelId: "p1" });
+      expect(entry!.actions).toHaveLength(2);
+      expect(entry!.actions![0]!.actionArgs).toEqual({ panelId: "p2" });
+      expect(entry!.actions![1]!.actionArgs).toEqual({ panelId: "p1" });
     });
   });
 
@@ -280,7 +354,7 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       notify({ type: "info", message: "Inline bar", priority: "low", placement: "grid-bar" });
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
-      expect(useNotificationStore.getState().notifications[0].placement).toBe("grid-bar");
+      expect(useNotificationStore.getState().notifications[0]!.placement).toBe("grid-bar");
     });
   });
 
@@ -289,7 +363,207 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "success", message: "Default" });
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification.priority).toBe("high");
+      expect(notification!.priority).toBe("high");
+    });
+  });
+
+  describe("default duration — action-bearing toasts persist", () => {
+    it("defaults duration to 0 when `action` is present and duration is undefined", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Undo?",
+        action: { label: "Undo", onClick: () => {} },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(0);
+    });
+
+    it("defaults duration to 0 when `actions` is non-empty and duration is undefined", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "warning",
+        message: "Retry?",
+        actions: [
+          { label: "Retry", onClick: () => {} },
+          { label: "Cancel", onClick: () => {} },
+        ],
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(0);
+    });
+
+    it("preserves an explicit positive duration when action is present", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Timed action",
+        action: { label: "Retry", onClick: () => {} },
+        duration: 5000,
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(5000);
+    });
+
+    it("preserves an explicit duration of 0 (redundant but valid)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Persist",
+        action: { label: "Undo", onClick: () => {} },
+        duration: 0,
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(0);
+    });
+
+    it("applies the severity-based default when no action is present", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "success", message: "Done" });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(TOAST_DURATION.success);
+    });
+
+    it("applies the severity-based default when `actions` is an empty array", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "No actions", actions: [] });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(TOAST_DURATION.info);
+    });
+
+    it("applies the persist default on the grid-bar placement path", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Inline",
+        placement: "grid-bar",
+        action: { label: "Acknowledge", onClick: () => {} },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.placement).toBe("grid-bar");
+      expect(notification!.duration).toBe(0);
+    });
+
+    it("applies the persist default on the coalesce-create path", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "First",
+        action: { label: "Open", onClick: () => {} },
+        coalesce: {
+          key: "coalesce-persist",
+          buildMessage: (n) => `${n} events`,
+        },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(0);
+    });
+
+    it("applies the persist default on coalesce-update when buildAction introduces an action", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      // First event: no action → duration falls back to severity default (info).
+      notify({
+        type: "info",
+        message: "First",
+        coalesce: {
+          key: "coalesce-add-action",
+          buildMessage: (n) => `${n} events`,
+          buildAction: (n) => (n > 1 ? { label: "Review", onClick: () => {} } : undefined),
+        },
+      });
+      expect(useNotificationStore.getState().notifications[0]!.duration).toBe(TOAST_DURATION.info);
+
+      // Second event: buildAction now returns an action → duration should become 0.
+      notify({
+        type: "info",
+        message: "Second",
+        coalesce: {
+          key: "coalesce-add-action",
+          buildMessage: (n) => `${n} events`,
+          buildAction: (n) => (n > 1 ? { label: "Review", onClick: () => {} } : undefined),
+        },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.action).toBeDefined();
+      expect(notification!.duration).toBe(0);
+    });
+
+    it("preserves stored duration on coalesce-update when duration was explicitly set", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      // First event sets duration explicitly to 5000 — update must not override.
+      notify({
+        type: "info",
+        message: "First",
+        duration: 5000,
+        coalesce: {
+          key: "coalesce-keep-duration",
+          buildMessage: (n) => `${n} events`,
+          buildAction: () => ({ label: "Review", onClick: () => {} }),
+        },
+      });
+      notify({
+        type: "info",
+        message: "Second",
+        coalesce: {
+          key: "coalesce-keep-duration",
+          buildMessage: (n) => `${n} events`,
+          buildAction: () => ({ label: "Review", onClick: () => {} }),
+        },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(5000);
+    });
+  });
+
+  describe("default duration — severity-based defaults", () => {
+    it("applies a 12s default for error notifications", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "error", message: "Something failed" });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(12000);
+      expect(notification!.duration).toBe(TOAST_DURATION.error);
+    });
+
+    it("applies a 12s default for warning notifications", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "warning", message: "Heads up" });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(12000);
+      expect(notification!.duration).toBe(TOAST_DURATION.warning);
+    });
+
+    it("applies a 4s default for success notifications", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "success", message: "Saved" });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(4000);
+      expect(notification!.duration).toBe(TOAST_DURATION.success);
+    });
+
+    it("applies an 8s default for info notifications", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "FYI" });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(8000);
+      expect(notification!.duration).toBe(TOAST_DURATION.info);
+    });
+
+    it("preserves an explicit caller duration over the severity default", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "error", message: "Custom timing", duration: 7500 });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(7500);
+    });
+
+    it("action-bearing rule wins over severity default (sticky for actions)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "error",
+        message: "Try again?",
+        action: { label: "Retry", onClick: () => {} },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(0);
     });
   });
 
@@ -312,31 +586,31 @@ describe("notify()", () => {
     it("seenAsToast is true when focused + high (toast was shown)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "success", message: "Done", priority: "high" });
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(true);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(true);
     });
 
     it("seenAsToast is false when blurred + high (toast not shown)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       notify({ type: "error", message: "Failed", priority: "high" });
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
     });
 
     it("seenAsToast is false for low priority regardless of focus (never toasts)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "info", message: "Silent", priority: "low" });
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
     });
 
     it("seenAsToast is true for watch priority (always toasts)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       notify({ type: "warning", message: "Agent waiting", priority: "watch" });
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(true);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(true);
     });
 
     it("seenAsToast is true for grid-bar placement (shown inline)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       notify({ type: "info", message: "Inline", priority: "low", placement: "grid-bar" });
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(true);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(true);
     });
   });
 
@@ -409,7 +683,7 @@ describe("notify()", () => {
       notify({ type: "info", message: "toast-1", priority: "high" });
 
       const firstEntry = useNotificationHistoryStore.getState().entries[0];
-      expect(firstEntry.seenAsToast).toBe(true);
+      expect(firstEntry!.seenAsToast).toBe(true);
 
       notify({ type: "info", message: "toast-2", priority: "high" });
       notify({ type: "info", message: "toast-3", priority: "high" });
@@ -417,7 +691,7 @@ describe("notify()", () => {
 
       const updatedEntry = useNotificationHistoryStore
         .getState()
-        .entries.find((e) => e.id === firstEntry.id);
+        .entries.find((e) => e.id === firstEntry!.id);
       expect(updatedEntry?.seenAsToast).toBe(false);
     });
 
@@ -451,7 +725,7 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "success", message: "Task done", priority: "high" });
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
-      expect(useNotificationHistoryStore.getState().entries[0].message).toBe("Task done");
+      expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe("Task done");
     });
 
     it("does not create toast when disabled and focused + high", () => {
@@ -485,7 +759,7 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "success", message: "Task done", priority: "high" });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.seenAsToast).toBe(false);
+      expect(entry!.seenAsToast).toBe(false);
       expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
     });
 
@@ -535,8 +809,8 @@ describe("notify()", () => {
 
       const entries = useNotificationHistoryStore.getState().entries;
       expect(entries).toHaveLength(2);
-      expect(entries[0].message).toBe("Agent 2 done");
-      expect(entries[1].message).toBe("Agent 1 done");
+      expect(entries[0]!.message).toBe("Agent 2 done");
+      expect(entries[1]!.message).toBe("Agent 1 done");
     });
 
     it("updates toast message and title on coalesce", () => {
@@ -545,8 +819,8 @@ describe("notify()", () => {
       notify(makeCoalescePayload());
 
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification.message).toBe("2 agents finished");
-      expect(notification.title).toBe("Agent tasks completed");
+      expect(notification!.message).toBe("2 agents finished");
+      expect(notification!.title).toBe("Agent tasks completed");
     });
 
     it("updates action to multi-agent on coalesce", () => {
@@ -555,7 +829,7 @@ describe("notify()", () => {
       notify(makeCoalescePayload());
 
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification.action?.label).toBe("View all");
+      expect(notification!.action?.label).toBe("View all");
     });
 
     it("clears stale per-item actions on coalesce when buildAction is provided", () => {
@@ -574,7 +848,7 @@ describe("notify()", () => {
         priority: "high",
         actions: [
           { label: "Close Them", onClick: closeFn },
-          { label: "Dismiss", onClick: dismissFn },
+          { label: "Mute project", onClick: dismissFn },
         ],
         coalesce: {
           key: "idle-like",
@@ -591,7 +865,7 @@ describe("notify()", () => {
         priority: "high",
         actions: [
           { label: "Close Them", onClick: vi.fn() },
-          { label: "Dismiss", onClick: vi.fn() },
+          { label: "Mute project", onClick: vi.fn() },
         ],
         coalesce: {
           key: "idle-like",
@@ -602,8 +876,8 @@ describe("notify()", () => {
       });
 
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification.actions).toBeUndefined();
-      expect(notification.action?.label).toBe("View");
+      expect(notification!.actions).toBeUndefined();
+      expect(notification!.action?.label).toBe("View");
     });
 
     it("creates fresh toast after coalescing window expires", () => {
@@ -678,10 +952,10 @@ describe("notify()", () => {
     it("sets updatedAt on coalesced notification", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify(makeCoalescePayload());
-      const firstUpdatedAt = useNotificationStore.getState().notifications[0].updatedAt;
+      const firstUpdatedAt = useNotificationStore.getState().notifications[0]!.updatedAt;
 
       notify(makeCoalescePayload());
-      const secondUpdatedAt = useNotificationStore.getState().notifications[0].updatedAt;
+      const secondUpdatedAt = useNotificationStore.getState().notifications[0]!.updatedAt;
 
       expect(secondUpdatedAt).toBeDefined();
       expect(secondUpdatedAt).toBeGreaterThanOrEqual(firstUpdatedAt!);
@@ -724,7 +998,7 @@ describe("notify()", () => {
       notify({ type: "success", message: "Quiet entry", priority: "high" });
 
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
-      expect(useNotificationHistoryStore.getState().entries[0].message).toBe("Quiet entry");
+      expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe("Quiet entry");
       Date.now = realDateNow;
     });
 
@@ -736,7 +1010,7 @@ describe("notify()", () => {
 
       notify({ type: "success", message: "Unseen", priority: "high" });
 
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
       Date.now = realDateNow;
     });
 
@@ -802,7 +1076,7 @@ describe("notify()", () => {
 
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
       Date.now = realDateNow;
     });
 
@@ -863,7 +1137,7 @@ describe("notify()", () => {
       });
 
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
-      expect(useNotificationStore.getState().notifications[0].message).toBe("After quiet");
+      expect(useNotificationStore.getState().notifications[0]!.message).toBe("After quiet");
       expect(id.length).toBeGreaterThan(0);
       Date.now = realDateNow;
     });
@@ -877,8 +1151,107 @@ describe("notify()", () => {
       notify({ type: "info", message: "Low quiet", priority: "low" });
 
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
       Date.now = realDateNow;
+    });
+  });
+
+  describe("context — propagates projectId through history and toast", () => {
+    it("stores context on the history entry", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Project event",
+        priority: "high",
+        context: { projectId: "proj-1" },
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry!.context).toEqual({ projectId: "proj-1" });
+    });
+
+    it("stores context on the active toast notification", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Project event",
+        priority: "high",
+        context: { projectId: "proj-1", worktreeId: "wt-2" },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.context).toEqual({ projectId: "proj-1", worktreeId: "wt-2" });
+    });
+
+    it("stores context on grid-bar history entries", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Inline bar",
+        placement: "grid-bar",
+        context: { projectId: "proj-2" },
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry!.context).toEqual({ projectId: "proj-2" });
+    });
+
+    it("omits context on history entry when none supplied", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "No ctx", priority: "high" });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry!.context).toBeUndefined();
+    });
+
+    it("clears context on coalesce when the incoming projectId differs from the existing one", () => {
+      // Regression: the combined toast no longer represents a single project,
+      // so the "Mute project notifications" affordance must disappear rather
+      // than silently dispatch with the first project's ID.
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Project A hibernated",
+        priority: "high",
+        context: { projectId: "A" },
+        coalesce: {
+          key: "hibernation:project",
+          windowMs: 10_000,
+          buildMessage: (count) => `${count} projects hibernated`,
+        },
+      });
+      notify({
+        type: "info",
+        message: "Project B hibernated",
+        priority: "high",
+        context: { projectId: "B" },
+        coalesce: {
+          key: "hibernation:project",
+          windowMs: 10_000,
+          buildMessage: (count) => `${count} projects hibernated`,
+        },
+      });
+
+      const notifications = useNotificationStore.getState().notifications;
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0]!.context).toBeUndefined();
+    });
+
+    it("preserves context on coalesce when the incoming projectId matches", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const payload = {
+        type: "info" as const,
+        message: "Same project",
+        priority: "high" as const,
+        context: { projectId: "A" },
+        coalesce: {
+          key: "same-proj",
+          windowMs: 10_000,
+          buildMessage: (count: number) => `${count} events`,
+        },
+      };
+      notify(payload);
+      notify(payload);
+
+      const notifications = useNotificationStore.getState().notifications;
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0]!.context).toEqual({ projectId: "A" });
     });
   });
 
@@ -899,7 +1272,7 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify(comboPayload());
       const n = useNotificationStore.getState().notifications[0];
-      expect(n.message).toBe("Agent spawned");
+      expect(n!.message).toBe("Agent spawned");
     });
 
     it("second call within window uses tier 1", () => {
@@ -908,7 +1281,7 @@ describe("notify()", () => {
       notify(comboPayload());
       const notifications = useNotificationStore.getState().notifications;
       expect(notifications).toHaveLength(2);
-      expect(notifications[1].message).toBe("Double agent");
+      expect(notifications[1]!.message).toBe("Double agent");
     });
 
     it("third call within window uses tier 2", () => {
@@ -917,16 +1290,16 @@ describe("notify()", () => {
       notify(comboPayload());
       notify(comboPayload());
       const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[2].message).toBe("Triple agent");
+      expect(notifications[2]!.message).toBe("Triple agent");
     });
 
     it("calls beyond last tier loop on final tier", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       for (let i = 0; i < 6; i++) notify(comboPayload());
       const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[3].message).toBe("Sleeper cell activated");
-      expect(notifications[4].message).toBe("Sleeper cell activated");
-      expect(notifications[5].message).toBe("Sleeper cell activated");
+      expect(notifications[3]!.message).toBe("Sleeper cell activated");
+      expect(notifications[4]!.message).toBe("Sleeper cell activated");
+      expect(notifications[5]!.message).toBe("Sleeper cell activated");
     });
 
     it("resets to tier 0 after window expires", () => {
@@ -943,8 +1316,8 @@ describe("notify()", () => {
       notify(comboPayload());
 
       const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[1].message).toBe("Double agent");
-      expect(notifications[2].message).toBe("Agent spawned"); // reset
+      expect(notifications[1]!.message).toBe("Double agent");
+      expect(notifications[2]!.message).toBe("Agent spawned"); // reset
 
       Date.now = realDateNow;
     });
@@ -965,7 +1338,7 @@ describe("notify()", () => {
 
       const notifications = useNotificationStore.getState().notifications;
       expect(notifications).toHaveLength(1);
-      expect(notifications[0].message).toBe("Agent spawned"); // tier 0, not escalated
+      expect(notifications[0]!.message).toBe("Agent spawned"); // tier 0, not escalated
 
       Date.now = realDateNow;
     });
@@ -982,7 +1355,7 @@ describe("notify()", () => {
 
       const notifications = useNotificationStore.getState().notifications;
       expect(notifications).toHaveLength(1);
-      expect(notifications[0].message).toBe("Agent spawned"); // tier 0
+      expect(notifications[0]!.message).toBe("Agent spawned"); // tier 0
     });
 
     it("does not increment when blurred + high (shouldToast false)", () => {
@@ -996,7 +1369,7 @@ describe("notify()", () => {
 
       const notifications = useNotificationStore.getState().notifications;
       expect(notifications).toHaveLength(1);
-      expect(notifications[0].message).toBe("Agent spawned"); // tier 0
+      expect(notifications[0]!.message).toBe("Agent spawned"); // tier 0
     });
 
     it("each combo call creates a separate toast (not coalesced)", () => {
@@ -1015,11 +1388,11 @@ describe("notify()", () => {
 
       const entries = useNotificationHistoryStore.getState().entries;
       expect(entries).toHaveLength(2);
-      expect(entries[0].message).toBe("Agent spawned");
-      expect(entries[1].message).toBe("Agent spawned");
+      expect(entries[0]!.message).toBe("Agent spawned");
+      expect(entries[1]!.message).toBe("Agent spawned");
 
       const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[1].message).toBe("Double agent");
+      expect(notifications[1]!.message).toBe("Double agent");
     });
 
     it("works with watch priority and fires native notification", () => {
@@ -1035,8 +1408,8 @@ describe("notify()", () => {
 
       const notifications = useNotificationStore.getState().notifications;
       expect(notifications).toHaveLength(2);
-      expect(notifications[0].message).toBe("Agent spawned");
-      expect(notifications[1].message).toBe("Double agent");
+      expect(notifications[0]!.message).toBe("Agent spawned");
+      expect(notifications[1]!.message).toBe("Double agent");
       expect(mockShowNative).toHaveBeenCalledTimes(2);
     });
 
@@ -1057,8 +1430,371 @@ describe("notify()", () => {
       });
 
       const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[1].message).toBe("Double agent");
-      expect(notifications[2].message).toBe("Worktree created"); // tier 0 for different key
+      expect(notifications[1]!.message).toBe("Double agent");
+      expect(notifications[2]!.message).toBe("Worktree created"); // tier 0 for different key
     });
+  });
+
+  describe("quiet hours schedule — suppresses toasts during configured window", () => {
+    it("isScheduledQuietHours returns false when disabled", () => {
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: false,
+        quietHoursStartMin: 0,
+        quietHoursEndMin: 24 * 60 - 1,
+      });
+      expect(isScheduledQuietHours(new Date(2024, 0, 1, 12, 0))).toBe(false);
+    });
+
+    it("isScheduledQuietHours returns true within the configured window", () => {
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 6 * 60,
+        quietHoursWeekdays: [],
+      });
+      expect(isScheduledQuietHours(new Date(2024, 0, 1, 23, 0))).toBe(true);
+    });
+
+    it("suppresses non-urgent toast during scheduled quiet hours", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 6 * 60,
+      });
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+
+      notify({ type: "success", message: "Scheduled quiet", priority: "high" });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
+
+      vi.useRealTimers();
+    });
+
+    it("allows toast outside the scheduled window", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 6 * 60,
+      });
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 14, 0));
+
+      notify({ type: "success", message: "Afternoon", priority: "high" });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      vi.useRealTimers();
+    });
+
+    it("urgent: true bypasses the scheduled window", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 6 * 60,
+      });
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+
+      notify({ type: "error", message: "Critical", priority: "high", urgent: true });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      vi.useRealTimers();
+    });
+
+    it("suppresses OS native notification for watch priority during the window", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 6 * 60,
+      });
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+
+      notify({ type: "warning", message: "Quiet watch", priority: "watch" });
+
+      expect(mockShowNative).not.toHaveBeenCalled();
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      vi.useRealTimers();
+    });
+
+    it("respects weekday filter — skips days not in the list", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 23 * 60,
+        quietHoursWeekdays: [1, 2, 3, 4, 5], // weekdays only
+      });
+      vi.useFakeTimers();
+      // 2024-01-06 is a Saturday
+      vi.setSystemTime(new Date(2024, 0, 6, 22, 30));
+
+      notify({ type: "success", message: "Weekend", priority: "high" });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      vi.useRealTimers();
+    });
+
+    it("records history during schedule quiet with seenAsToast=false", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 6 * 60,
+      });
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+
+      notify({ type: "success", message: "Inbox only", priority: "high" });
+
+      const entries = useNotificationHistoryStore.getState().entries;
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.seenAsToast).toBe(false);
+      vi.useRealTimers();
+    });
+  });
+
+  describe("session mute helpers", () => {
+    afterEach(() => {
+      _setQuietUntil(0);
+    });
+
+    it("muteForDuration sets _quietUntil to now + duration", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      const until = muteForDuration(60 * 60 * 1000);
+      expect(until).toBe(Date.now() + 60 * 60 * 1000);
+
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "Muted", priority: "high" });
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+
+      vi.useRealTimers();
+    });
+
+    it("muteForDuration mirrors the timestamp to the main process", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      const until = muteForDuration(60 * 60 * 1000);
+      expect(mockSetSessionMute).toHaveBeenCalledWith(until);
+      vi.useRealTimers();
+    });
+
+    it("muteForDuration mirrors the timestamp into the settings store", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      const until = muteForDuration(30 * 60 * 1000);
+      expect(useNotificationSettingsStore.getState().quietUntil).toBe(until);
+      vi.useRealTimers();
+    });
+
+    it("muteUntilNextMorning mirrors the timestamp into the settings store", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      const until = muteUntilNextMorning();
+      expect(useNotificationSettingsStore.getState().quietUntil).toBe(until);
+      vi.useRealTimers();
+    });
+
+    it("_setQuietUntil (startup path) does NOT mirror to the settings store", () => {
+      // Startup quiet windows must not flip the toolbar to BellOff during boot.
+      useNotificationSettingsStore.setState({ quietUntil: 0 });
+      _setQuietUntil(Date.now() + 5_000);
+      expect(useNotificationSettingsStore.getState().quietUntil).toBe(0);
+    });
+
+    it("muteUntilNextMorning mirrors the timestamp to the main process", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      const until = muteUntilNextMorning();
+      expect(mockSetSessionMute).toHaveBeenCalledWith(until);
+      vi.useRealTimers();
+    });
+
+    it("muteUntilNextMorning mutes until next 08:00", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      const until = muteUntilNextMorning();
+      expect(new Date(until).getHours()).toBe(8);
+      expect(new Date(until).getDate()).toBe(2);
+      vi.useRealTimers();
+    });
+
+    it("muteUntilNextMorning picks tomorrow when already past 08:00", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 10, 0));
+      const until = muteUntilNextMorning();
+      expect(new Date(until).getHours()).toBe(8);
+      expect(new Date(until).getDate()).toBe(2);
+      vi.useRealTimers();
+    });
+  });
+});
+
+describe("shouldEscalateTransientError", () => {
+  beforeEach(() => {
+    _resetEscalationTrackers();
+  });
+
+  it("returns false for non-transient errors", () => {
+    expect(
+      shouldEscalateTransientError({
+        type: "process",
+        message: "spawn failed",
+        isTransient: false,
+      })
+    ).toBe(false);
+  });
+
+  it("returns false for first occurrence of a transient error", () => {
+    expect(
+      shouldEscalateTransientError({
+        type: "filesystem",
+        message: "EBUSY: resource locked",
+        isTransient: true,
+      })
+    ).toBe(false);
+  });
+
+  it("returns false for second occurrence within window", () => {
+    const error = { type: "process" as const, message: "EAGAIN", isTransient: true };
+    shouldEscalateTransientError(error);
+    expect(shouldEscalateTransientError(error)).toBe(false);
+  });
+
+  it("returns true when local-resource error hits threshold (3) within 5s window", () => {
+    const error = { type: "filesystem" as const, message: "EBUSY", isTransient: true };
+    shouldEscalateTransientError(error);
+    shouldEscalateTransientError(error);
+    expect(shouldEscalateTransientError(error)).toBe(true);
+  });
+
+  it("returns true when network error hits threshold (3) within 120s window", () => {
+    const error = { type: "network" as const, message: "ETIMEDOUT", isTransient: true };
+    shouldEscalateTransientError(error);
+    shouldEscalateTransientError(error);
+    expect(shouldEscalateTransientError(error)).toBe(true);
+  });
+
+  it("treats 'unknown' as network profile", () => {
+    const error = { type: "unknown" as const, message: "something failed", isTransient: true };
+    shouldEscalateTransientError(error);
+    shouldEscalateTransientError(error);
+    expect(shouldEscalateTransientError(error)).toBe(true);
+  });
+
+  it("resets counter after local-resource window expires (5s)", () => {
+    const error = { type: "filesystem" as const, message: "EBUSY", isTransient: true };
+    const realDateNow = Date.now;
+
+    let now = 1000;
+    Date.now = () => now;
+
+    shouldEscalateTransientError(error);
+    shouldEscalateTransientError(error); // count=2
+
+    now = 7000; // past 5s window
+    expect(shouldEscalateTransientError(error)).toBe(false); // count reset to 1
+
+    Date.now = realDateNow;
+  });
+
+  it("does not re-escalate after escalation is consumed (one-shot per group)", () => {
+    const error = { type: "network" as const, message: "ETIMEDOUT", isTransient: true };
+    shouldEscalateTransientError(error);
+    shouldEscalateTransientError(error);
+    const escalated = shouldEscalateTransientError(error);
+    expect(escalated).toBe(true);
+
+    consumeEscalation(error);
+
+    // Same error fires again immediately — should not re-escalate
+    expect(shouldEscalateTransientError(error)).toBe(false);
+  });
+
+  it("re-escalates if first escalation was not consumed (toast suppressed)", () => {
+    const error = { type: "network" as const, message: "ETIMEDOUT", isTransient: true };
+    shouldEscalateTransientError(error);
+    shouldEscalateTransientError(error);
+    expect(shouldEscalateTransientError(error)).toBe(true);
+
+    // Escalation not consumed (toast suppressed, e.g. blurred)
+    // Next occurrence should still signal escalation
+    expect(shouldEscalateTransientError(error)).toBe(true);
+
+    // Now consume it
+    consumeEscalation(error);
+    expect(shouldEscalateTransientError(error)).toBe(false);
+  });
+
+  it("allows re-escalation after cooldown expires", () => {
+    const error = { type: "network" as const, message: "ETIMEDOUT", isTransient: true };
+    const realDateNow = Date.now;
+
+    let now = 1000;
+    Date.now = () => now;
+
+    // First escalation
+    shouldEscalateTransientError(error);
+    shouldEscalateTransientError(error);
+    expect(shouldEscalateTransientError(error)).toBe(true);
+    consumeEscalation(error);
+
+    // Advance past 60-min cooldown + past the 120s window (so counter resets)
+    now = 1000 + 61 * 60 * 1000;
+    // Counter should reset since window expired, then escalate again on 3rd
+    shouldEscalateTransientError(error);
+    shouldEscalateTransientError(error);
+    expect(shouldEscalateTransientError(error)).toBe(true);
+
+    Date.now = realDateNow;
+  });
+
+  it("groups errors by type + source + message", () => {
+    const error1 = {
+      type: "network" as const,
+      message: "ECONNRESET",
+      source: "git-poll",
+      isTransient: true,
+    };
+    const error2 = {
+      type: "network" as const,
+      message: "ECONNRESET",
+      source: "terminal",
+      isTransient: true,
+    };
+
+    // Different source = different group
+    shouldEscalateTransientError(error1);
+    shouldEscalateTransientError(error1);
+    shouldEscalateTransientError(error1); // error1 escalates
+
+    // error2 should have its own counter at 1
+    shouldEscalateTransientError(error2);
+    expect(shouldEscalateTransientError(error2)).toBe(false); // count=2, not yet threshold
+  });
+
+  it("caps tracking entries and prunes LRU", () => {
+    const realDateNow = Date.now;
+    Date.now = () => 1000;
+
+    // Create 201 unique errors — should not throw
+    for (let i = 0; i < 201; i++) {
+      expect(() =>
+        shouldEscalateTransientError({
+          type: "network",
+          message: `error-${i}`,
+          isTransient: true,
+        })
+      ).not.toThrow();
+    }
+
+    Date.now = realDateNow;
   });
 });

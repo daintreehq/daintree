@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { app } from "electron";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
+import { setWritesSuppressed } from "./diskPressureState.js";
 
 export type DiskSpaceStatus = "normal" | "warning" | "critical";
 
@@ -17,8 +18,8 @@ export interface DiskSpaceMonitorActions {
   isWindowFocused: () => boolean;
 }
 
-const WARNING_MB = 500;
-const CRITICAL_MB = 100;
+const WARNING_MB = 2000;
+const CRITICAL_MB = 500;
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 const NOTIFICATION_COOLDOWN_MS = 30 * 60 * 1000;
 
@@ -63,12 +64,15 @@ export function startDiskSpaceMonitor(actions: DiskSpaceMonitorActions): () => v
 
     const writesSuppressed = status === "critical";
 
+    // Publish the flag before any logger call so the very next log line that
+    // would hit disk under critical pressure is also dropped.
+    currentStatus = { status, availableMb, writesSuppressed };
+    setWritesSuppressed(writesSuppressed);
+
     logDebug("disk-space-check", {
       availableMb: Math.round(availableMb),
       status,
     });
-
-    currentStatus = { status, availableMb, writesSuppressed };
 
     if (status !== lastStatus) {
       logInfo("disk-space-status-changed", {

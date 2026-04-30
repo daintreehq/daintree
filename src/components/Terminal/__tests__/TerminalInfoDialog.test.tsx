@@ -25,6 +25,13 @@ vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
 
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -171,7 +178,7 @@ describe("TerminalInfoDialog", () => {
     fireEvent.click(screen.getByText("Copy to Clipboard"));
 
     expect(writeTextMock).toHaveBeenCalledOnce();
-    const clipboardText = writeTextMock.mock.calls[0][0] as string;
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
     expect(clipboardText).toContain("PTY Diagnostics:");
     expect(clipboardText).toContain("Shell PID: 12345");
     expect(clipboardText).toContain("TTY Device: /dev/ttys004");
@@ -210,13 +217,14 @@ describe("TerminalInfoDialog", () => {
     expect(screen.queryByText("Args:")).toBeNull();
   });
 
-  it("renders Agent section with launch flag chips and model for agent terminals", async () => {
+  it("renders Launch Context and Live State sections for agent terminals", async () => {
     const payload = makePayload({
       isAgentTerminal: true,
-      kind: "agent",
+      kind: "terminal",
       type: "claude",
       agentId: "agent-1",
       detectedAgentType: "claude",
+      detectedAgentId: "claude",
       agentLaunchFlags: ["--dangerously-skip-permissions", "--verbose"],
       agentModelId: "claude-opus-4-7",
     });
@@ -225,24 +233,51 @@ describe("TerminalInfoDialog", () => {
     render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
 
     await waitFor(() => {
-      expect(screen.getByText("Agent")).toBeTruthy();
+      expect(screen.getByText("Agent — Launch Context")).toBeTruthy();
     });
 
     expect(screen.getByText("Agent ID:")).toBeTruthy();
     expect(screen.getByText("agent-1")).toBeTruthy();
-    expect(screen.getByText("Detected Agent:")).toBeTruthy();
     expect(screen.getByText("Launch Flags:")).toBeTruthy();
     expect(screen.getByText("--dangerously-skip-permissions")).toBeTruthy();
     expect(screen.getByText("--verbose")).toBeTruthy();
     expect(screen.getByText("Model:")).toBeTruthy();
     expect(screen.getByText("claude-opus-4-7")).toBeTruthy();
+
+    // Live State section shows the detected agent identity
+    expect(screen.getByText("Agent — Live State")).toBeTruthy();
+    expect(screen.getByText("Detected Agent:")).toBeTruthy();
+    // "claude" appears for the type row and the detected-agent row; at least two matches is enough
+    expect(screen.getAllByText("claude").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("omits Agent section entirely for plain terminals with no agent metadata", async () => {
+  it("shows 'None — agent has exited' in Live State when agent panel has no detectedAgentId", async () => {
+    const payload = makePayload({
+      isAgentTerminal: true,
+      kind: "terminal",
+      type: "claude",
+      agentId: "agent-1",
+      detectedAgentId: undefined,
+      agentLaunchFlags: ["--verbose"],
+      agentModelId: "claude-opus-4-7",
+    });
+    dispatchMock.mockResolvedValue({ ok: true, result: payload });
+
+    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Agent — Live State")).toBeTruthy();
+    });
+
+    expect(screen.getByText("None — agent has exited")).toBeTruthy();
+  });
+
+  it("omits Agent sections entirely for plain terminals with no agent metadata", async () => {
     const payload = makePayload({
       isAgentTerminal: false,
       agentId: undefined,
       detectedAgentType: undefined,
+      detectedAgentId: undefined,
       agentLaunchFlags: undefined,
       agentModelId: undefined,
     });
@@ -257,17 +292,18 @@ describe("TerminalInfoDialog", () => {
     expect(screen.queryByText("Agent ID:")).toBeNull();
     expect(screen.queryByText("Launch Flags:")).toBeNull();
     expect(screen.queryByText("Model:")).toBeNull();
-    // The Agent section heading should not exist either
-    expect(screen.queryByRole("heading", { name: "Agent" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Agent — Launch Context" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Agent — Live State" })).toBeNull();
   });
 
-  it("includes Spawn Command and Agent sections in clipboard export", async () => {
+  it("includes Spawn Command and both Agent sections in clipboard export", async () => {
     const payload = makePayload({
       isAgentTerminal: true,
-      kind: "agent",
+      kind: "terminal",
       type: "claude",
       agentId: "agent-1",
       detectedAgentType: "claude",
+      detectedAgentId: "claude",
       shell: "/usr/local/bin/claude",
       spawnArgs: ["--model", "claude-opus-4-7"],
       agentLaunchFlags: ["--dangerously-skip-permissions"],
@@ -286,20 +322,24 @@ describe("TerminalInfoDialog", () => {
     fireEvent.click(screen.getByText("Copy to Clipboard"));
 
     expect(writeTextMock).toHaveBeenCalledOnce();
-    const clipboardText = writeTextMock.mock.calls[0][0] as string;
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
     expect(clipboardText).toContain("Spawn Command:");
     expect(clipboardText).toContain("Shell: /usr/local/bin/claude");
     expect(clipboardText).toContain("Args: --model claude-opus-4-7");
-    expect(clipboardText).toContain("Agent:");
+    expect(clipboardText).toContain("Agent — Launch Context:");
     expect(clipboardText).toContain("Agent ID: agent-1");
     expect(clipboardText).toContain("Launch Flags: --dangerously-skip-permissions");
     expect(clipboardText).toContain("Model: claude-opus-4-7");
+    expect(clipboardText).toContain("Agent — Live State:");
+    expect(clipboardText).toContain("Detected Agent ID: claude");
+    expect(clipboardText).toContain("Detected Agent Type: claude");
   });
 
-  it("includes Agent section when only detectedAgentType is set on a non-agent terminal", async () => {
+  it("includes Live State but not Launch Context when only a runtime agent is detected", async () => {
     const payload = makePayload({
       isAgentTerminal: false,
       detectedAgentType: "claude",
+      detectedAgentId: "claude",
     });
     dispatchMock.mockResolvedValue({ ok: true, result: payload });
     const writeTextMock = vi.fn().mockResolvedValue(undefined);
@@ -311,15 +351,14 @@ describe("TerminalInfoDialog", () => {
       expect(screen.getByText("Copy to Clipboard")).toBeTruthy();
     });
 
-    // UI shows the Agent section
-    expect(screen.getByText("Agent")).toBeTruthy();
-    expect(screen.getByText("Detected Agent:")).toBeTruthy();
+    expect(screen.getByText("Agent — Live State")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Agent — Launch Context" })).toBeNull();
 
-    // Clipboard also includes the Agent section — UI and clipboard guards must agree
     fireEvent.click(screen.getByText("Copy to Clipboard"));
-    const clipboardText = writeTextMock.mock.calls[0][0] as string;
-    expect(clipboardText).toContain("Agent:");
-    expect(clipboardText).toContain("Detected Agent: claude");
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
+    expect(clipboardText).toContain("Agent — Live State:");
+    expect(clipboardText).toContain("Detected Agent ID: claude");
+    expect(clipboardText).not.toContain("Agent — Launch Context:");
   });
 
   it("renders empty spawnArgs as (none) in clipboard and omits the Args row in UI", async () => {
@@ -338,12 +377,12 @@ describe("TerminalInfoDialog", () => {
     expect(screen.queryByText("Args:")).toBeNull();
 
     fireEvent.click(screen.getByText("Copy to Clipboard"));
-    const clipboardText = writeTextMock.mock.calls[0][0] as string;
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
     expect(clipboardText).toContain("Args: (none)");
     expect(clipboardText).not.toContain("Args: N/A");
   });
 
-  it("omits Agent section from clipboard for non-agent terminals", async () => {
+  it("omits Agent sections from clipboard for non-agent terminals", async () => {
     const payload = makePayload({ isAgentTerminal: false, spawnArgs: ["-l"] });
     dispatchMock.mockResolvedValue({ ok: true, result: payload });
     const writeTextMock = vi.fn().mockResolvedValue(undefined);
@@ -357,10 +396,11 @@ describe("TerminalInfoDialog", () => {
 
     fireEvent.click(screen.getByText("Copy to Clipboard"));
 
-    const clipboardText = writeTextMock.mock.calls[0][0] as string;
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
     expect(clipboardText).toContain("Spawn Command:");
     expect(clipboardText).toContain("Args: -l");
-    expect(clipboardText).not.toContain("\nAgent:\n");
+    expect(clipboardText).not.toContain("Agent — Launch Context:");
+    expect(clipboardText).not.toContain("Agent — Live State:");
     expect(clipboardText).not.toContain("Launch Flags:");
   });
 });

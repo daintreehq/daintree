@@ -2,6 +2,43 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
+import { getMruProjects } from "@/lib/projectMru";
+import { notify } from "@/lib/notify";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+
+async function runMruFallbackSwitch(direction: "older" | "newer"): Promise<void> {
+  const state = useProjectStore.getState();
+  const currentId = state.currentProject?.id ?? null;
+  const sorted = getMruProjects(state.projects);
+  const otherProjects = sorted.filter((p) => p.id !== currentId);
+  if (otherProjects.length === 0) return;
+
+  const target = direction === "older" ? otherProjects[0] : otherProjects[otherProjects.length - 1];
+  if (!target) return;
+
+  try {
+    if (target.status === "background") {
+      await state.reopenProject(target.id);
+    } else {
+      await state.switchProject(target.id);
+    }
+  } catch (error) {
+    notify({
+      type: "error",
+      title: "Failed to switch project",
+      message: formatErrorMessage(error, "Failed to switch project"),
+      actions: [
+        {
+          label: "Try again",
+          variant: "primary",
+          onClick: () => {
+            void runMruFallbackSwitch(direction);
+          },
+        },
+      ],
+    });
+  }
+}
 
 export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("project.switcherPalette", () => ({
@@ -12,9 +49,32 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onOpenProjectSwitcherPalette();
     },
+  }));
+
+  actions.set("project.mruCycleOlder", () => ({
+    id: "project.mruCycleOlder",
+    title: "Switch to Previous Project (Older)",
+    description: "Switch to the most recent other project; hold to scrub older",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: () => runMruFallbackSwitch("older"),
+  }));
+
+  actions.set("project.mruCycleNewer", () => ({
+    id: "project.mruCycleNewer",
+    title: "Switch to Oldest Project (Newer)",
+    description: "Switch to the oldest other project; hold to scrub newer",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: () => runMruFallbackSwitch("newer"),
   }));
 
   actions.set("project.add", () => ({
@@ -114,7 +174,27 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     argsSchema: z.object({ projectId: z.string() }),
     run: async (args: unknown) => {
       const { projectId } = args as { projectId: string };
-      await useProjectStore.getState().closeProject(projectId);
+      const state = useProjectStore.getState();
+      if (projectId === state.currentProject?.id) {
+        callbacks.onConfirmCloseActiveProject(projectId);
+        return;
+      }
+      await state.closeProject(projectId);
+    },
+  }));
+
+  actions.set("project.closeActive", () => ({
+    id: "project.closeActive",
+    title: "Close Project",
+    description: "Close the currently active project and return to the welcome screen",
+    category: "project",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    run: async () => {
+      const projectId = useProjectStore.getState().currentProject?.id;
+      if (!projectId) return;
+      callbacks.onConfirmCloseActiveProject(projectId);
     },
   }));
 
@@ -174,6 +254,43 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
         settings: Record<string, unknown>;
       };
       await projectClient.saveSettings(projectId, settings as any);
+    },
+  }));
+
+  actions.set("project.muteNotifications", () => ({
+    id: "project.muteNotifications",
+    title: "Mute Project Notifications",
+    description: "Suppress future agent completion and waiting notifications for a project",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ projectId: z.string().min(1) }),
+    run: async (args: unknown) => {
+      const { projectId } = args as { projectId: string };
+      try {
+        const current = await projectClient.getSettings(projectId);
+        await projectClient.saveSettings(projectId, {
+          ...current,
+          notificationOverrides: {
+            ...current.notificationOverrides,
+            completedEnabled: false,
+            waitingEnabled: false,
+          },
+        });
+        notify({
+          type: "success",
+          message: "Project notifications muted",
+          priority: "low",
+        });
+      } catch (error) {
+        notify({
+          type: "error",
+          title: "Failed to mute notifications",
+          message: formatErrorMessage(error, "Failed to mute project notifications"),
+          duration: 5000,
+        });
+      }
     },
   }));
 

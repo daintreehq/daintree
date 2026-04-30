@@ -16,9 +16,9 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { cn } from "@/lib/utils";
-import { detectTerminalTypeFromCommand } from "@/utils/terminalType";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { RunCommand } from "@/types";
+import { logError } from "@/utils/logger";
 import { RunningTaskList } from "./RunningTaskList";
 
 interface QuickRunProps {
@@ -119,7 +119,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
           localStorage.removeItem(`${HISTORY_KEY_PREFIX}${projectId}`);
         }
       } catch (e) {
-        console.error("Failed to parse command history", e);
+        logError("Failed to parse command history", e);
         localStorage.removeItem(`${HISTORY_KEY_PREFIX}${projectId}`);
       }
     }
@@ -145,7 +145,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
     e.preventDefault();
 
     const commandToSave: RunCommand = {
-      id: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      id: `cmd-${crypto.randomUUID()}`,
       name: item.label,
       command: item.value,
       icon: "icon" in item ? item.icon || "terminal" : "terminal",
@@ -162,7 +162,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
     try {
       await promoteToSaved(commandToSave);
     } catch (err) {
-      console.error("Failed to pin command:", err);
+      logError("Failed to pin command", err);
     }
   };
 
@@ -173,7 +173,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
     try {
       await removeFromSaved(item.value);
     } catch (err) {
-      console.error("Failed to unpin command:", err);
+      logError("Failed to unpin command", err);
     }
   };
 
@@ -307,9 +307,8 @@ export function QuickRun({ projectId }: QuickRunProps) {
       setInput("");
       setFocusedSuggestionIndex(-1);
 
-      const terminalType = detectTerminalTypeFromCommand(cmd);
       await addPanel({
-        type: terminalType,
+        kind: "terminal",
         title: cmd,
         cwd: cwd,
         command: cmd,
@@ -319,7 +318,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
         spawnedBy: "quickrun",
       });
     } catch (error) {
-      console.error("Failed to spawn terminal:", error);
+      logError("Failed to spawn terminal", error);
     } finally {
       isRunningRef.current = false;
     }
@@ -362,7 +361,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
         onClick={() => setIsExpanded(!isExpanded)}
         className={cn(
           "flex w-full items-center justify-between px-4 py-2 font-sans",
-          "text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus:outline-none"
+          "text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus:outline-hidden"
         )}
         aria-expanded={isExpanded}
         aria-controls="quick-run-panel"
@@ -399,9 +398,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                 )}
               >
                 {/* Prompt Symbol */}
-                <div className="select-none pl-3 pr-2 font-mono font-bold text-accent-primary">
-                  $
-                </div>
+                <div className="select-none pl-3 pr-2 font-mono font-bold text-text-muted">$</div>
 
                 {/* Input */}
                 <input
@@ -420,7 +417,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                   aria-label="Command input"
                   className={cn(
                     "flex-1 bg-transparent py-2.5 text-xs font-mono text-daintree-text placeholder:text-text-muted",
-                    "focus:outline-none min-w-0"
+                    "focus:outline-hidden min-w-0"
                   )}
                   autoComplete="off"
                 />
@@ -428,88 +425,82 @@ export function QuickRun({ projectId }: QuickRunProps) {
                 {/* Right Side Controls */}
                 <div className="flex items-center pr-1.5 gap-1">
                   {/* Auto-Restart Toggle */}
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={handleToggleAutoRestart}
-                          className={cn(
-                            "p-1.5 rounded-[var(--radius-sm)] transition",
-                            autoRestart
-                              ? "bg-daintree-accent/20 text-daintree-accent"
-                              : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
-                          )}
-                          aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
-                          aria-pressed={autoRestart}
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        {autoRestart ? "Auto-restart: On" : "Auto-restart: Off"}
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={handleToggleAutoRestart}
+                        className={cn(
+                          "p-1.5 rounded-[var(--radius-sm)] transition",
+                          autoRestart
+                            ? "bg-overlay-medium text-daintree-text"
+                            : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
+                        )}
+                        aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
+                        aria-pressed={autoRestart}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {autoRestart ? "Auto-restart: On" : "Auto-restart: Off"}
+                    </TooltipContent>
+                  </Tooltip>
 
                   {/* Location Toggle */}
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => setRunAsDocked(!runAsDocked)}
-                          className={cn(
-                            "p-1.5 rounded-[var(--radius-sm)] transition",
-                            runAsDocked
-                              ? "bg-daintree-accent/20 text-daintree-accent"
-                              : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
-                          )}
-                          aria-label={
-                            runAsDocked
-                              ? "Send output to Dock (background task)"
-                              : "Send output to Grid (interactive terminal)"
-                          }
-                        >
-                          {runAsDocked ? (
-                            <PanelBottom className="h-3.5 w-3.5" />
-                          ) : (
-                            <LayoutGrid className="h-3.5 w-3.5" />
-                          )}
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        {runAsDocked
-                          ? "Output: Dock (Background Task)"
-                          : "Output: Grid (Interactive Terminal)"}
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => setRunAsDocked(!runAsDocked)}
+                        className={cn(
+                          "p-1.5 rounded-[var(--radius-sm)] transition",
+                          runAsDocked
+                            ? "bg-overlay-medium text-daintree-text"
+                            : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
+                        )}
+                        aria-label={
+                          runAsDocked
+                            ? "Send output to Dock (background task)"
+                            : "Send output to Grid (interactive terminal)"
+                        }
+                      >
+                        {runAsDocked ? (
+                          <PanelBottom className="h-3.5 w-3.5" />
+                        ) : (
+                          <LayoutGrid className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {runAsDocked
+                        ? "Output: Dock (Background Task)"
+                        : "Output: Grid (Interactive Terminal)"}
+                    </TooltipContent>
+                  </Tooltip>
 
                   {/* Enter Button */}
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex">
-                          <button
-                            type="button"
-                            onClick={() => handleRun(input)}
-                            disabled={!input.trim()}
-                            className={cn(
-                              "p-1.5 rounded-[var(--radius-sm)] transition",
-                              input.trim()
-                                ? "text-accent-primary hover:bg-accent-soft"
-                                : "cursor-not-allowed text-text-muted/50"
-                            )}
-                            aria-label="Run command"
-                          >
-                            <CornerDownLeft className="h-3.5 w-3.5" />
-                          </button>
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">Run Command (Enter)</TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <button
+                          type="button"
+                          onClick={() => handleRun(input)}
+                          disabled={!input.trim()}
+                          className={cn(
+                            "p-1.5 rounded-[var(--radius-sm)] transition",
+                            input.trim()
+                              ? "text-accent-primary hover:bg-accent-soft"
+                              : "cursor-not-allowed text-text-muted/50"
+                          )}
+                          aria-label="Run command"
+                        >
+                          <CornerDownLeft className="h-3.5 w-3.5" />
+                        </button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Run Command (Enter)</TooltipContent>
+                  </Tooltip>
                 </div>
 
                 {/* Autocomplete Menu */}
@@ -541,7 +532,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           }}
                         >
                           {item.type === "saved" ? (
-                            <Pin className="h-3 w-3 text-daintree-accent shrink-0 fill-daintree-accent" />
+                            <Pin className="h-3 w-3 text-text-secondary shrink-0" />
                           ) : item.type === "history" ? (
                             <Clock className="h-3 w-3 opacity-40 shrink-0" />
                           ) : (
@@ -552,7 +543,6 @@ export function QuickRun({ projectId }: QuickRunProps) {
                               <span
                                 className={cn(
                                   "group-hover:text-daintree-text",
-                                  index === focusedSuggestionIndex ? "text-daintree-accent" : "",
                                   item.type === "saved" ? "font-semibold text-daintree-text" : ""
                                 )}
                               >
@@ -569,6 +559,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                                 </span>
                               )}
                               {(item.type === "script" || item.type === "saved") &&
+                                "description" in item &&
                                 item.description && (
                                   <span className="mt-0.5 block truncate text-[11px] font-sans text-text-muted">
                                     {item.description}
@@ -591,7 +582,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                                 className="ml-2 shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-overlay-soft"
                                 aria-label="Pin this command"
                               >
-                                <Pin className="h-3 w-3 text-text-muted hover:text-daintree-accent" />
+                                <Pin className="h-3 w-3 text-text-muted hover:text-daintree-text" />
                               </button>
                             )}
                           </div>

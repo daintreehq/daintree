@@ -1,4 +1,4 @@
-import { createContext, useEffect, useRef, type ReactNode } from "react";
+import { createContext, useEffect, useState, type ReactNode } from "react";
 import {
   createWorktreeStore,
   setCurrentViewStore,
@@ -57,11 +57,7 @@ interface WorktreeActivatedEvent {
 }
 
 export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
-  const storeRef = useRef<WorktreeViewStoreApi>(null);
-  if (!storeRef.current) {
-    storeRef.current = createWorktreeStore();
-  }
-  const store = storeRef.current;
+  const [store] = useState<WorktreeViewStoreApi>(() => createWorktreeStore());
 
   // Register module-level store reference for non-React code (action definitions, services)
   useEffect(() => {
@@ -107,6 +103,12 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             // Non-critical — proceed without manual associations
             if (thisGen !== generation) return;
           }
+
+          // If the host crashed during the associations fetch (a separate IPC
+          // that port-close cannot reject), skip applySnapshot so it does not
+          // spuriously clear the Reconnecting… indicator.  The next onReady
+          // cycle will deliver fresh data.
+          if (!worktreePort.isReady()) return;
 
           store.getState().applySnapshot(states, store.getState().nextVersion());
         })
@@ -266,6 +268,32 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       fetchInitialState();
     }
     cleanups.push(worktreePort.onReady(fetchInitialState));
+
+    // Surface a "Reconnecting…" state the moment the workspace host dies, so
+    // the UI doesn't appear frozen while we wait (up to 2–4s) for the
+    // replacement port.  Cleared by applySnapshot when the new port returns
+    // data — this avoids flashing the indicator during normal port replacement
+    // where a new port arrives within milliseconds.
+    cleanups.push(
+      worktreePort.onDisconnected(() => {
+        store.getState().setReconnecting(true);
+      })
+    );
+
+    // If the host exhausts its restart budget, no replacement port will
+    // arrive — transition to a terminal error state instead of leaving the
+    // spinner stuck indefinitely.  `setFatalError` also resets
+    // `isInitialized` so a successful manual restart re-hydrates as a cold
+    // fetch rather than a silent wake refresh.
+    cleanups.push(
+      worktreePort.onFatalDisconnect(() => {
+        store
+          .getState()
+          .setFatalError(
+            "Workspace service crashed and could not recover automatically. Restart the service to reconnect."
+          );
+      })
+    );
 
     // Snapshot-on-wake: when a cached view is reactivated (addChildView),
     // Chromium fires visibilitychange. Request a fresh snapshot to rehydrate

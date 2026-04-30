@@ -18,6 +18,7 @@ vi.mock("../../utils/fs.js", () => ({
 vi.mock("../../utils/hardenedGit.js", () => ({
   createHardenedGit: vi.fn(() => mockSimpleGit),
   validateCwd: vi.fn(),
+  getGitLocaleEnv: vi.fn().mockReturnValue({}),
 }));
 
 vi.mock("../../utils/git.js", () => ({
@@ -497,11 +498,13 @@ describe("WorkspaceService.loadProject performance behavior", () => {
 
     await service.loadProject("req-1", "/test/root");
 
-    expect(mockSendEvent).toHaveBeenCalledWith({
-      type: "load-project-result",
-      requestId: "req-1",
-      success: true,
-    });
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "load-project-result",
+        requestId: "req-1",
+        success: true,
+      })
+    );
     expect(service["initializePRService"]).toHaveBeenCalledTimes(1);
     expect(service["refreshAll"]).toHaveBeenCalledTimes(1);
 

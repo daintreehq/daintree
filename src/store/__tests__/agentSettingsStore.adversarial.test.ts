@@ -59,8 +59,8 @@ describe("agentSettingsStore adversarial", () => {
 
     const availability = { claude: "missing", codex: "ready" } as unknown as CliAvailability;
     const after = normalizeAgentSelection(before, availability, true);
-    expect(after.agents.claude.pinned).toBe(true);
-    expect(after.agents.codex.pinned).toBe(false);
+    expect(after.agents.claude!.pinned).toBe(true);
+    expect(after.agents.codex!.pinned).toBe(false);
   });
 
   it("normalizeAgentSelection returns the same reference when no changes are needed", () => {
@@ -191,7 +191,7 @@ describe("agentSettingsStore adversarial", () => {
     expect(state.settings?.agents.codex?.pinned).toBe(false);
   });
 
-  it("initialize synthesizes pinned from CLI availability when real data is present", async () => {
+  it("initialize synthesizes pinned from availability for pre-existing entries (upgrader path)", async () => {
     registryMock.getEffectiveAgentIds.mockReturnValue(["claude", "codex"]);
     setAvailability({ claude: "ready", codex: "missing" }, true);
     clientMock.get.mockResolvedValue({
@@ -204,6 +204,9 @@ describe("agentSettingsStore adversarial", () => {
     await useAgentSettingsStore.getState().initialize();
 
     const state = useAgentSettingsStore.getState();
+    // Existing entries (upgraders from 0.7.x) preserve the implicit pin:
+    // installed/ready → true, missing → false. Only agents without any
+    // persisted entry default to pinned:false under the new opt-in model.
     expect(state.settings?.agents.claude?.pinned).toBe(true);
     expect(state.settings?.agents.codex?.pinned).toBe(false);
   });
@@ -319,6 +322,108 @@ describe("agentSettingsStore adversarial", () => {
     await expect(stale).resolves.toBeUndefined();
 
     expect(useAgentSettingsStore.getState().settings?.agents.claude?.pinned).toBe(false);
+  });
+
+  describe("updateWorktreePreset", () => {
+    it("spreads existing worktree keys so sibling entries are preserved", async () => {
+      useAgentSettingsStore.setState({
+        settings: {
+          agents: {
+            claude: {
+              pinned: true,
+              worktreePresets: { "wt-A": "user-111", "wt-B": "user-222" },
+            },
+          },
+        } as never,
+        isInitialized: true,
+        isLoading: false,
+      });
+      clientMock.set.mockImplementation(
+        async (_agentId: string, updates: Record<string, unknown>) => ({
+          agents: {
+            claude: {
+              pinned: true,
+              worktreePresets: updates.worktreePresets,
+            },
+          },
+        })
+      );
+
+      await useAgentSettingsStore.getState().updateWorktreePreset("claude", "wt-A", "user-new");
+
+      expect(clientMock.set).toHaveBeenCalledWith("claude", {
+        worktreePresets: { "wt-A": "user-new", "wt-B": "user-222" },
+      });
+    });
+
+    it("deletes the target key when presetId is undefined", async () => {
+      useAgentSettingsStore.setState({
+        settings: {
+          agents: {
+            claude: {
+              worktreePresets: { "wt-A": "user-111", "wt-B": "user-222" },
+            },
+          },
+        } as never,
+        isInitialized: true,
+        isLoading: false,
+      });
+      clientMock.set.mockResolvedValue({
+        agents: { claude: { worktreePresets: { "wt-B": "user-222" } } },
+      });
+
+      await useAgentSettingsStore.getState().updateWorktreePreset("claude", "wt-A", undefined);
+
+      expect(clientMock.set).toHaveBeenCalledWith("claude", {
+        worktreePresets: { "wt-B": "user-222" },
+      });
+    });
+
+    it("collapses an empty map to undefined when the last key is removed", async () => {
+      useAgentSettingsStore.setState({
+        settings: {
+          agents: { claude: { worktreePresets: { "wt-A": "user-111" } } },
+        } as never,
+        isInitialized: true,
+        isLoading: false,
+      });
+      clientMock.set.mockResolvedValue({ agents: { claude: {} } });
+
+      await useAgentSettingsStore.getState().updateWorktreePreset("claude", "wt-A", undefined);
+
+      expect(clientMock.set).toHaveBeenCalledWith("claude", {
+        worktreePresets: undefined,
+      });
+    });
+
+    it("creates the map when the entry has no prior worktreePresets", async () => {
+      useAgentSettingsStore.setState({
+        settings: { agents: { claude: { pinned: true } } } as never,
+        isInitialized: true,
+        isLoading: false,
+      });
+      clientMock.set.mockResolvedValue({
+        agents: { claude: { pinned: true, worktreePresets: { "wt-A": "user-111" } } },
+      });
+
+      await useAgentSettingsStore.getState().updateWorktreePreset("claude", "wt-A", "user-111");
+
+      expect(clientMock.set).toHaveBeenCalledWith("claude", {
+        worktreePresets: { "wt-A": "user-111" },
+      });
+    });
+
+    it("no-ops silently when worktreeId is an empty string", async () => {
+      useAgentSettingsStore.setState({
+        settings: { agents: { claude: {} } } as never,
+        isInitialized: true,
+        isLoading: false,
+      });
+
+      await useAgentSettingsStore.getState().updateWorktreePreset("claude", "", "user-111");
+
+      expect(clientMock.set).not.toHaveBeenCalled();
+    });
   });
 
   it("initialize after a concurrent refresh flips isInitialized even when the result is stale", async () => {

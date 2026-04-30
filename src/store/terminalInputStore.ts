@@ -168,6 +168,13 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   setDraftInput: (terminalId, value, projectId) =>
     set((state) => {
       const key = makeDraftKey(terminalId, projectId);
+      const existing = state.draftInputs.get(key);
+      // Short-circuit on no-op writes — fleet mirroring otherwise causes
+      // every keystroke to fan out N redundant Map-replacements that wake
+      // every draft subscriber for nothing.
+      if (value === "" ? existing === undefined : existing === value) {
+        return state;
+      }
       const newDraftInputs = new Map(state.draftInputs);
       if (value === "") {
         newDraftInputs.delete(key);

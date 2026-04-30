@@ -21,7 +21,9 @@ import { registerGpuHandlers } from "./app/gpu.js";
 export function registerAppHandlers(deps: HandlerDependencies): () => void {
   const cleanups = [
     registerAppStateHandlers(),
-    registerLogsHandlers(),
+    // Pass `deps` by reference so mutations (workspaceClient assigned after
+    // ptyClient is ready) are visible when handlers fan out to utility hosts.
+    registerLogsHandlers(deps),
     registerEventInspectorHandlers(deps),
     registerTerminalConfigHandlers(deps),
     registerAppThemeHandlers(deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow),

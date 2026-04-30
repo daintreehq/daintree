@@ -19,7 +19,7 @@ export class InputTracker {
     this.results = [];
 
     for (let i = 0; i < data.length; i++) {
-      const char = data[i];
+      const char = data[i]!;
       const code = char.charCodeAt(0);
 
       // Handle bracketed paste start: ESC[200~
@@ -70,7 +70,7 @@ export class InputTracker {
         if (i + 1 < data.length && data[i + 1] === "[") {
           i++; // Skip '['
           // Skip until we find a letter (command terminator)
-          while (i + 1 < data.length && !/[A-Za-z]/.test(data[i + 1])) {
+          while (i + 1 < data.length && !/[A-Za-z]/.test(data[i + 1]!)) {
             i++;
           }
           if (i + 1 < data.length) {

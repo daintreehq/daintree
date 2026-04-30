@@ -482,4 +482,195 @@ describe("ProjectPulseService", () => {
       })
     ).rejects.toThrow("Failed to read git HEAD");
   });
+
+  it("returns null firstCommitDate and no isBeforeProject cells for shallow clone", async () => {
+    const baseTime = new Date("2025-01-15T12:00:00.000Z");
+    vi.setSystemTime(baseTime);
+
+    // Shallow boundary SHA would be only 5 days old — recent enough to mark
+    // most cells as isBeforeProject if we trusted rev-list. The shallow probe
+    // must short-circuit before we ever call rev-list.
+    const recentDate = new Date(baseTime);
+    recentDate.setDate(recentDate.getDate() - 5);
+
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "true\n";
+      if (cmd === "rev-list") return "shallowboundary\n";
+      if (cmd === "log") return "";
+      return "";
+    });
+
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    const pulse = await svc.getPulse({
+      worktreePath: "/repo",
+      worktreeId: "wt-shallow",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    });
+
+    expect(pulse.heatmap).toHaveLength(60);
+    expect(pulse.heatmap.every((cell) => !cell.isBeforeProject)).toBe(true);
+    expect(pulse.projectAgeDays).toBe(60);
+
+    // Critical invariant: rev-list must never be called when shallow probe trips.
+    const revListCalls = raw.mock.calls.filter(([args]) => (args as string[])[0] === "rev-list");
+    expect(revListCalls.length).toBe(0);
+  });
+
+  it("renders heatmap cells with commits in shallow clone (regression for #5728)", async () => {
+    const baseTime = new Date("2025-01-15T12:00:00.000Z");
+    vi.setSystemTime(baseTime);
+
+    // Simulate the user-visible symptom from #5728: a long-lived repo cloned shallow.
+    // Commits exist across the last 30 days; the heatmap must show them, not collapse
+    // to 2 cells because the shallow boundary tricked rev-list into returning a recent SHA.
+    const commitTimestamps: number[] = [];
+    for (let i = 0; i < 30; i++) {
+      const date = new Date(baseTime);
+      date.setDate(date.getDate() - i);
+      commitTimestamps.push(Math.floor(date.getTime() / 1000));
+    }
+    const commitOutput = commitTimestamps.join("\n");
+
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "true\n";
+      if (cmd === "rev-list") return "shallowboundary\n";
+      if (cmd === "log") return commitOutput;
+      return "";
+    });
+
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    const pulse = await svc.getPulse({
+      worktreePath: "/repo",
+      worktreeId: "wt-shallow-active",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    });
+
+    expect(pulse.heatmap).toHaveLength(60);
+    expect(pulse.commitsInRange).toBe(30);
+    expect(pulse.activeDays).toBe(30);
+    expect(pulse.heatmap.every((cell) => !cell.isBeforeProject)).toBe(true);
+    // Active cells must have count > 0 — the symptom was these getting filtered out entirely.
+    const activeCells = pulse.heatmap.filter((cell) => cell.count > 0);
+    expect(activeCells.length).toBe(30);
+  });
+
+  it("marks early heatmap cells isBeforeProject for non-shallow repo younger than range", async () => {
+    const baseTime = new Date("2025-01-15T12:00:00.000Z");
+    vi.setSystemTime(baseTime);
+
+    // Repo started 20 days ago — half of the 60-day range should be greyed out.
+    const firstCommitDate = new Date(baseTime);
+    firstCommitDate.setDate(firstCommitDate.getDate() - 20);
+    const firstCommitTimestamp = Math.floor(firstCommitDate.getTime() / 1000);
+
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "false\n";
+      if (cmd === "rev-list") return "rootsha\n";
+      if (cmd === "log" && args.includes("--format=%ct") && args.includes("rootsha")) {
+        return `${firstCommitTimestamp}\n`;
+      }
+      if (cmd === "log") return "";
+      return "";
+    });
+
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    const pulse = await svc.getPulse({
+      worktreePath: "/repo",
+      worktreeId: "wt-young",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    });
+
+    expect(pulse.heatmap).toHaveLength(60);
+    // 20 days back + inclusive today = 21 days
+    expect(pulse.projectAgeDays).toBe(21);
+    expect(pulse.heatmap.some((cell) => cell.isBeforeProject)).toBe(true);
+    // Cells in the most recent 21 days should not be marked.
+    const recentCells = pulse.heatmap.slice(-21);
+    expect(recentCells.every((cell) => !cell.isBeforeProject)).toBe(true);
+  });
+
+  it("treats unknown --is-shallow-repository response as non-shallow (old git fallback)", async () => {
+    const baseTime = new Date("2025-01-15T12:00:00.000Z");
+    vi.setSystemTime(baseTime);
+
+    // Repo is 300 days old — older than 60-day range, so projectAgeDays should clamp.
+    const firstCommitDate = new Date(baseTime);
+    firstCommitDate.setDate(firstCommitDate.getDate() - 300);
+    const firstCommitTimestamp = Math.floor(firstCommitDate.getTime() / 1000);
+
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      // Pre-2.15 git echoes back the unknown flag.
+      if (cmd === "rev-parse" && args.includes("--is-shallow-repository"))
+        return "--is-shallow-repository\n";
+      if (cmd === "rev-list") return "rootsha\n";
+      if (cmd === "log" && args.includes("--format=%ct") && args.includes("rootsha")) {
+        return `${firstCommitTimestamp}\n`;
+      }
+      if (cmd === "log") return "";
+      return "";
+    });
+
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    const pulse = await svc.getPulse({
+      worktreePath: "/repo",
+      worktreeId: "wt-oldgit",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    });
+
+    // Non-shallow path executed; rev-list was called.
+    const revListCalls = raw.mock.calls.filter(([args]) => (args as string[])[0] === "rev-list");
+    expect(revListCalls.length).toBeGreaterThan(0);
+    // Repo is older than range → clamped.
+    expect(pulse.projectAgeDays).toBe(60);
+    // No cells marked because firstCommitDate (300 days ago) precedes every cell in the range.
+    expect(pulse.heatmap.every((cell) => !cell.isBeforeProject)).toBe(true);
+  });
 });

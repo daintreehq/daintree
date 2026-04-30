@@ -1,5 +1,6 @@
 import { logDebug, logWarn } from "../utils/logger.js";
 import { fileSearchService } from "./FileSearchService.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const P = "[VoiceFileLinkResolver]";
 const NL_CONFIDENCE_THRESHOLD = 0.67;
@@ -50,7 +51,7 @@ export class VoiceFileLinkResolver {
 
       return await this.aiRerank(description, candidates, apiKey);
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = formatErrorMessage(error, "Voice file link resolution failed");
       logWarn(`${P} Resolution failed`, { error: msg });
       return null;
     }
@@ -161,7 +162,7 @@ export class VoiceFileLinkResolver {
 
       return null;
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = formatErrorMessage(error, "Voice AI rerank failed");
       logWarn(`${P} AI rerank failed, using top candidate`, { error: msg });
       return candidates[0];
     }

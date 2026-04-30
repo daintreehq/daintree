@@ -1,10 +1,14 @@
-// Silence EPIPE errors on stdout/stderr. When the parent terminal is closed
-// (e.g. user quits Terminal.app while Daintree runs), writes to the broken pipe
-// throw an uncaught EPIPE that would crash the main process. These are harmless.
+// Dead-fd errnos that must not propagate on GUI launch (AppImage/Wayland, no
+// terminal). EPIPE is a closed pipe (e.g. user quits Terminal.app while
+// Daintree runs); EIO is a disconnected pty (the primary errno for AppImage
+// desktop launches where fd 2 points to an orphaned pty slave); EBADF is a
+// closed fd; ECONNRESET is a socket-backed stdio reset. ENOSPC is
+// intentionally NOT swallowed — it's a real error condition.
+const STDIO_DEAD_CODES = new Set(["EPIPE", "EIO", "EBADF", "ECONNRESET"]);
 for (const stream of [process.stdout, process.stderr]) {
   if (stream && typeof stream.on === "function") {
     stream.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "EPIPE") return;
+      if (err.code && STDIO_DEAD_CODES.has(err.code)) return;
       throw err;
     });
   }
@@ -12,15 +16,14 @@ for (const stream of [process.stdout, process.stderr]) {
 
 import nodeV8 from "node:v8";
 import vm from "node:vm";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
+import { randomBytes } from "crypto";
 import { app } from "electron";
 import path from "path";
 import fs from "fs";
 import { existsSync } from "fs";
 import os from "os";
 import fixPath from "fix-path";
-import Database from "better-sqlite3";
-import { resilientAtomicWriteFileSync } from "../utils/fs.js";
 
 export let exposeGc: (() => void) | undefined;
 try {
@@ -45,224 +48,6 @@ if (!app.isPackaged && !hasExplicitUserDataDir) {
   // doesn't collide with the default Daintree dev instance.
   const devDirName = process.env.BUILD_VARIANT === "canopy" ? "canopy-app-dev" : "daintree-dev";
   app.setPath("userData", path.join(app.getPath("appData"), devDirName));
-}
-
-// TODO(0.9.0): Remove this temporary Canopy -> Daintree userData migration
-// after the 0.8.x upgrade window closes.
-//
-// One-shot rebrand migration on first Daintree launch. The copy goes to a
-// staging directory and is atomically promoted with a rename, so a crash mid-
-// copy leaves us in a recoverable state instead of a half-populated userData.
-// A `.rebrand-migrated` marker skips the flow on subsequent launches.
-//
-// Skipped when --user-data-dir is set (E2E tests) and for the canopy variant
-// (it IS the Canopy user data — migrating would copy it into itself).
-//
-// Design notes:
-//  - Chromium singleton locks, caches, and crashpad state must NOT be copied.
-//    Inheriting SingletonLock that points at a live Canopy PID makes Daintree
-//    fail to launch (it thinks it's a secondary instance and exits).
-//    Crashpad state would re-report Canopy's crashes under Daintree's bundle
-//    id. Caches regenerate, copying them is wasted I/O.
-//  - Pre-rebrand 0.6.x Canopy used a named session partition `persist:canopy-app`;
-//    Daintree uses `persist:daintree`. The Partitions subdir is renamed after
-//    copy so Local Storage / IndexedDB / Cookies carry across.
-//  - If Daintree has a `daintree.db` with real rows, we assume the user has
-//    been running Daintree and skip the copy to avoid clobbering real state.
-//    A schema-only DB (e.g. created by a pre-release Daintree launch that
-//    never wrote any user data) does NOT count — issue #5156.
-//  - Auto-heal: users already affected by the pre-fix bug have a marker
-//    containing "skipped: daintree.db already present" plus an empty
-//    daintree.db. If the legacy canopy.db still has real data, we delete
-//    the stale marker and re-run the migration on next launch.
-
-// Probe daintree.db (or canopy.db) for actual user data. Opens read-only
-// so the file is never created as a side effect, fails fast on lock, and
-// throws on any SQLite error so the caller can decide the safe default.
-function countProjectRows(dbPath: string): number {
-  const db = new Database(dbPath, { readonly: true, timeout: 0 });
-  try {
-    const row = db.prepare("SELECT COUNT(*) AS count FROM projects").get() as
-      | { count: number }
-      | undefined;
-    return row?.count ?? 0;
-  } finally {
-    // Always close — leaving the connection open holds WAL/SHM sidecar
-    // descriptors that conflict with the persistence service opening the
-    // same file moments later during normal startup.
-    db.close();
-  }
-}
-
-// Detect Chromium-side Daintree state — Preferences, Local Storage, and the
-// `persist:daintree` partition are all written by previous Daintree launches
-// even when the user never opened a project. Used as a second signal so the
-// row-count probe alone never wipes out customized state (themes, layouts,
-// auth tokens stored in localStorage). Marker file is intentionally ignored
-// here so the auto-heal pre-check can still delete a stale skip marker.
-function hasDaintreeUsageMarkers(newUserData: string): boolean {
-  return (
-    fs.existsSync(path.join(newUserData, "Preferences")) ||
-    fs.existsSync(path.join(newUserData, "Local Storage")) ||
-    fs.existsSync(path.join(newUserData, "Partitions", "daintree"))
-  );
-}
-
-if (!hasExplicitUserDataDir && process.env.BUILD_VARIANT !== "canopy") {
-  try {
-    const newUserData = app.getPath("userData");
-    const markerPath = path.join(newUserData, ".rebrand-migrated");
-    const appData = app.getPath("appData");
-    const legacyName = app.isPackaged ? "Canopy" : "canopy-app-dev";
-    const legacyUserData = path.join(appData, legacyName);
-    const daintreeDbPath = path.join(newUserData, "daintree.db");
-    const legacyDbPath = path.join(legacyUserData, "canopy.db");
-
-    // Auto-heal pre-check: a marker written by the buggy pre-fix code path
-    // has the literal "skipped: daintree.db already present" text and may be
-    // sitting next to a schema-only daintree.db while real data still lives
-    // in the legacy Canopy directory. Delete the marker so the normal
-    // migration flow below re-runs.
-    if (fs.existsSync(markerPath)) {
-      try {
-        const markerContent = fs.readFileSync(markerPath, "utf-8").trim();
-        if (markerContent.includes("skipped: daintree.db already present")) {
-          // Fail-safe defaults: Infinity for daintree (treat probe failure as
-          // "has data" — never overwrite an unreadable user DB), 0 for canopy
-          // (treat probe failure as "no legacy data" — don't migrate empty).
-          let daintreeRows = Number.POSITIVE_INFINITY;
-          let canopyRows = 0;
-          try {
-            daintreeRows = countProjectRows(daintreeDbPath);
-          } catch {
-            // probe failed — leave daintreeRows = Infinity (no auto-heal)
-          }
-          try {
-            canopyRows = countProjectRows(legacyDbPath);
-          } catch {
-            // probe failed — leave canopyRows = 0 (no auto-heal)
-          }
-          // Extra guard: never auto-heal when Chromium-side Daintree state
-          // exists. A user who launched pre-release Daintree, customized
-          // prefs/themes, but never opened a project would have the same
-          // (zero-row daintree.db, populated canopy.db) shape — wiping
-          // their state to re-run the migration is exactly the bug we are
-          // fixing in the other direction.
-          if (daintreeRows === 0 && canopyRows > 0 && !hasDaintreeUsageMarkers(newUserData)) {
-            fs.rmSync(markerPath);
-            console.log(
-              "[daintree] Auto-healing rebrand migration — stale skip marker found alongside empty daintree.db; re-running migration"
-            );
-          }
-        }
-      } catch (err) {
-        // Reading or inspecting the marker failed — leave it in place.
-        // Conservative: better to skip migration than to delete a marker
-        // we can't reason about.
-        console.warn("[daintree] Auto-heal pre-check failed:", err);
-      }
-    }
-
-    if (!fs.existsSync(markerPath)) {
-      // Replace the old `fs.existsSync(daintreeDbPath)` guard with a row
-      // count: a schema-only DB has zero rows in `projects` and is safe to
-      // overwrite. Any probe error is treated as "has data" (fail-safe).
-      let daintreeHasRows = false;
-      if (fs.existsSync(daintreeDbPath)) {
-        try {
-          daintreeHasRows = countProjectRows(daintreeDbPath) > 0;
-        } catch {
-          daintreeHasRows = true;
-        }
-      }
-      // Either real project rows OR Chromium-side state means Daintree has
-      // been used — block the migration in both cases. The usage-marker
-      // check protects pre-release users who customized prefs/themes but
-      // never opened a project from having their state wiped.
-      const daintreeAlreadyUsed = daintreeHasRows || hasDaintreeUsageMarkers(newUserData);
-
-      if (daintreeAlreadyUsed) {
-        // Daintree has already been used — never overwrite real user state.
-        // Drop the marker so we don't re-check on every launch. Atomic
-        // write so a crash mid-write doesn't leave a half-formed marker
-        // that the auto-heal pre-check would misread on the next launch.
-        resilientAtomicWriteFileSync(
-          markerPath,
-          new Date().toISOString() + "\nskipped: daintree.db already present\n"
-        );
-        console.log("[daintree] Skipping userData migration — existing daintree.db found");
-      } else if (fs.existsSync(legacyUserData)) {
-        // Files/dirs produced by Chromium/Electron that must NOT be copied:
-        // singleton locks, caches, crashpad state. See
-        // https://www.electronjs.org/docs/latest/api/app#appgetpathname .
-        const EXCLUDE = new Set([
-          "SingletonLock",
-          "SingletonCookie",
-          "SingletonSocket",
-          "lockfile",
-          "GPUCache",
-          "ShaderCache",
-          "GrShaderCache",
-          "DawnCache",
-          "DawnGraphiteCache",
-          "DawnWebGPUCache",
-          "Code Cache",
-          "Cache",
-          "Crashpad",
-          "Crash Reports",
-          "Network",
-          "blob_storage",
-          "Service Worker",
-        ]);
-        const stagingPath = newUserData + ".migrating";
-        if (fs.existsSync(stagingPath)) {
-          fs.rmSync(stagingPath, { recursive: true, force: true });
-        }
-        fs.cpSync(legacyUserData, stagingPath, {
-          recursive: true,
-          filter: (src) => !EXCLUDE.has(path.basename(src)),
-        });
-        // Rename the SQLite database + WAL/SHM/backup artefacts in staging.
-        for (const suffix of ["", "-wal", "-shm", ".backup"]) {
-          const oldDb = path.join(stagingPath, "canopy.db" + suffix);
-          const newDb = path.join(stagingPath, "daintree.db" + suffix);
-          if (fs.existsSync(oldDb) && !fs.existsSync(newDb)) {
-            fs.renameSync(oldDb, newDb);
-          }
-        }
-        // Pre-rebrand Canopy used `persist:canopy-app` session partition;
-        // rename the directory so Chromium finds carried-over storage under
-        // the new `persist:daintree` partition name.
-        const oldPartition = path.join(stagingPath, "Partitions", "canopy-app");
-        const newPartition = path.join(stagingPath, "Partitions", "daintree");
-        if (fs.existsSync(oldPartition) && !fs.existsSync(newPartition)) {
-          fs.renameSync(oldPartition, newPartition);
-        }
-        // Atomic promotion: remove the bare newUserData (only if it's empty
-        // of user data — we've already guarded on daintree.db above) and
-        // rename staging into place.
-        if (fs.existsSync(newUserData)) {
-          fs.rmSync(newUserData, { recursive: true, force: true });
-        }
-        fs.renameSync(stagingPath, newUserData);
-        // Atomic write: if a crash happens between the rename above and a
-        // partial marker write, next launch would see no marker and could
-        // re-run the migration over already-migrated data.
-        resilientAtomicWriteFileSync(markerPath, new Date().toISOString());
-        console.log(`[daintree] Migrated userData ${legacyUserData} -> ${newUserData}`);
-      } else if (fs.existsSync(newUserData)) {
-        // No legacy dir but new dir already exists (fresh install or already
-        // migrated on a prior version) — drop the marker so we don't re-check.
-        resilientAtomicWriteFileSync(markerPath, new Date().toISOString());
-      }
-    }
-  } catch (err) {
-    // The marker is intentionally NOT written here. A clean retry on the next
-    // launch is safe because the existing-data guard at the top of this block
-    // protects any user state accumulated between a failed migration and the
-    // next launch.
-    console.warn("[daintree] userData migration failed:", err);
-  }
 }
 
 // GPU crash fallback: disable hardware acceleration before app.whenReady()
@@ -305,8 +90,17 @@ if (process.platform === "linux") {
 
 app.commandLine.appendSwitch("enable-features", enabledFeatures.join(","));
 
-// Raise GPU tile memory budget to keep Retina/multi-panel rendering from exhausting Chromium's default cap
-app.commandLine.appendSwitch("force-gpu-mem-available-mb", "1024");
+// Raise GPU tile memory budget to keep Retina/multi-panel rendering from exhausting Chromium's default cap.
+// Scales with system RAM: ≤8 GiB → 768 MB, >8 and ≤16 GiB → 1024 MB, >16 GiB → 2048 MB.
+// Must run before app.whenReady(), so only synchronous APIs are available.
+function getGpuTileMemoryCapMb(): string {
+  const totalMem = os.totalmem();
+  if (totalMem <= 8 * 1024 ** 3) return "768";
+  if (totalMem <= 16 * 1024 ** 3) return "1024";
+  return "2048";
+}
+
+app.commandLine.appendSwitch("force-gpu-mem-available-mb", getGpuTileMemoryCapMb());
 
 if (process.platform === "win32") {
   const extraPaths = getWindowsExtraPaths();
@@ -320,7 +114,20 @@ if (process.platform === "win32") {
   }
 }
 
-const REFRESH_TIMEOUT_MS = 5_000;
+// Bumped from 8s to 10s to match the markered shell-probe budget specified
+// in #6063. The common case is ~50ms; the timeout exists purely to bound
+// worst-case hangs. If the shell call still times out, refreshPath()
+// falls back to getUnixFallbackPaths() so CLIs installed via
+// mise/asdf/Volta are still discoverable.
+const REFRESH_TIMEOUT_MS = 10_000;
+const SHELL_PROBE_KILL_GRACE_MS = 500;
+
+// Module-level singleton: caches the in-flight or successful probe Promise
+// so concurrent refreshPath() calls don't spawn duplicate shells. On a null
+// (failed) result we clear the cache to allow a future retry — caching a
+// transient failure for the entire session is worse than the bounded cost
+// of one extra probe.
+let shellProbePromise: Promise<string | null> | null = null;
 
 function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
   const entries = pathStr.split(path.delimiter).filter(Boolean);
@@ -336,8 +143,78 @@ function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
   return unique.join(path.delimiter);
 }
 
-function expandWindowsEnvVars(str: string): string {
+export function expandWindowsEnvVars(str: string): string {
   return str.replace(/%([^%]+)%/g, (match, name: string) => process.env[name] ?? match);
+}
+
+/**
+ * Fallback shim/bin directories to add to PATH on macOS/Linux when the
+ * shell-env probe fails or times out. Each candidate is gated by
+ * `existsSync` so we never prepend nonexistent directories.
+ *
+ * Rationale: Electron apps launched from Finder/dock inherit a minimal
+ * PATH that excludes user-level version managers (mise/asdf/Volta) and the
+ * native Claude installer bin dir. The shell-env probe covers the common
+ * case, but corporate `.zshrc` files can hang shell-env past the timeout.
+ * Without this fallback those users would see every CLI as "missing".
+ */
+export function getUnixFallbackPaths(): string[] {
+  const home = os.homedir();
+  const candidates: string[] = [];
+
+  // mise — env var override, then the standard location.
+  const miseData = process.env["MISE_DATA_DIR"];
+  candidates.push(
+    miseData ? path.join(miseData, "shims") : path.join(home, ".local/share/mise/shims")
+  );
+
+  // asdf — env var override, then the standard location.
+  const asdfData = process.env["ASDF_DATA_DIR"];
+  candidates.push(asdfData ? path.join(asdfData, "shims") : path.join(home, ".asdf/shims"));
+
+  // Volta — env var override, then the standard location.
+  const voltaHome = process.env["VOLTA_HOME"];
+  candidates.push(voltaHome ? path.join(voltaHome, "bin") : path.join(home, ".volta/bin"));
+
+  // pnpm — env var override, then the platform-default bin dir. pnpm's
+  // installer writes the bin dir path directly (no `bin/` suffix).
+  const pnpmHome = process.env["PNPM_HOME"];
+  if (pnpmHome) {
+    candidates.push(pnpmHome);
+  } else {
+    candidates.push(
+      process.platform === "darwin"
+        ? path.join(home, "Library/pnpm")
+        : path.join(home, ".local/share/pnpm")
+    );
+  }
+
+  // Nix — user profile (single-user + home-manager) and system default profile.
+  candidates.push(path.join(home, ".nix-profile/bin"));
+  candidates.push("/nix/var/nix/profiles/default/bin");
+
+  // Homebrew — Apple Silicon (ARM64) default prefix. Intel Homebrew lives
+  // at /usr/local/bin which is usually already on PATH.
+  candidates.push("/opt/homebrew/bin");
+
+  // User-local bin — catches Anthropic's native installer for Claude
+  // (~/.local/bin/claude) and other user-level installs.
+  candidates.push(path.join(home, ".local/bin"));
+
+  return candidates.filter((p) => {
+    try {
+      return existsSync(p);
+    } catch {
+      return false;
+    }
+  });
+}
+
+function applyUnixFallbackPaths(currentPath: string): string {
+  const extraPaths = getUnixFallbackPaths();
+  const existingEntries = currentPath.split(path.delimiter);
+  const missing = extraPaths.filter((p) => !existingEntries.includes(p));
+  return missing.length ? [...missing, currentPath].join(path.delimiter) : currentPath;
 }
 
 function getWindowsExtraPaths(): string[] {
@@ -410,33 +287,220 @@ function applyWindowsExtraPaths(currentPath: string): string {
   return missing.length ? [...missing, currentPath].join(path.delimiter) : currentPath;
 }
 
+function parseMarkeredPath(stdout: string, marker: string): string | null {
+  // Non-greedy quantifier so the first balanced marker pair wins. With a
+  // 32-hex-char random marker a collision is astronomically improbable,
+  // but the lazy match is structurally clearer than relying on uniqueness.
+  const regex = new RegExp(marker + "([\\s\\S]+?)" + marker);
+  const match = regex.exec(stdout);
+  if (!match) return null;
+  try {
+    const env = JSON.parse(match[1]) as Record<string, unknown>;
+    if (typeof env.PATH === "string" && env.PATH.trim().length > 0) {
+      return env.PATH;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Spawn $SHELL -i -l -c '<probe>' where <probe> brackets a JSON dump of
+// process.env between random hex markers. Parsing only what's between the
+// markers ignores prompt-tool noise (Powerlevel10k instant prompt,
+// oh-my-zsh update messages, fortune banners, motd output). Sets
+// DAINTREE_RESOLVING_ENVIRONMENT=1 in the child env so users can guard
+// slow .zshrc sections. Mirrors VS Code's getUnixShellEnvironment.
+function runShellProbe(): Promise<string | null> {
+  return new Promise((resolve) => {
+    let resolved = false;
+    let termTimer: NodeJS.Timeout | undefined = undefined;
+    let killTimer: NodeJS.Timeout | undefined = undefined;
+
+    const settle = (value: string | null) => {
+      if (resolved) return;
+      resolved = true;
+      if (termTimer !== undefined) clearTimeout(termTimer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      resolve(value);
+    };
+
+    const shell = process.env.SHELL ?? (process.platform === "darwin" ? "/bin/zsh" : "/bin/bash");
+    const marker = randomBytes(16).toString("hex");
+    // process.execPath is the Electron binary; ELECTRON_RUN_AS_NODE=1 in the
+    // child env makes it act as plain Node so we don't depend on `node`
+    // being on the user's PATH.
+    const probeCmd = `printf '%s' "${marker}"; "${process.execPath}" -e 'process.stdout.write(JSON.stringify(process.env))'; printf '%s' "${marker}"`;
+
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      DAINTREE_RESOLVING_ENVIRONMENT: "1",
+      ELECTRON_RUN_AS_NODE: "1",
+    };
+
+    let child: ReturnType<typeof spawn>;
+    try {
+      // stderr is intentionally ignored: a noisy oh-my-zsh/.zshrc can write
+      // tens of KB to stderr (update banners, compliance scripts), and a
+      // piped-but-undrained stderr would block the child once the OS pipe
+      // buffer fills — preventing the marker probe from ever reaching its
+      // closing printf and forcing a guaranteed timeout. Mirrors VS Code's
+      // getUnixShellEnvironment.
+      child = spawn(shell, ["-i", "-l", "-c", probeCmd], {
+        stdio: ["ignore", "pipe", "ignore"],
+        env: childEnv,
+      });
+    } catch (err) {
+      console.warn(
+        "[refreshPath] shell probe spawn failed:",
+        // eslint-disable-next-line no-restricted-syntax -- diagnostic console.warn passes the raw error if not an Error; not a user-visible string.
+        err instanceof Error ? err.message : err
+      );
+      settle(null);
+      return;
+    }
+
+    let stdout = "";
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      stdout += typeof chunk === "string" ? chunk : chunk.toString();
+    });
+    child.on("error", (err: Error) => {
+      console.warn("[refreshPath] shell probe error:", err.message);
+      settle(null);
+    });
+    child.on("close", () => {
+      settle(parseMarkeredPath(stdout, marker));
+    });
+
+    termTimer = setTimeout(() => {
+      console.warn(
+        "[refreshPath] Shell probe timed out after",
+        REFRESH_TIMEOUT_MS,
+        "ms — sending SIGTERM"
+      );
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // ignore kill errors — the close handler or kill timer below will settle
+      }
+    }, REFRESH_TIMEOUT_MS);
+
+    killTimer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore — process may already be gone
+      }
+      settle(null);
+    }, REFRESH_TIMEOUT_MS + SHELL_PROBE_KILL_GRACE_MS);
+  });
+}
+
+function resolvePathViaShellProbe(): Promise<string | null> {
+  if (shellProbePromise) return shellProbePromise;
+
+  const probe = runShellProbe();
+  shellProbePromise = probe;
+
+  // Clear the singleton on null/rejection so a subsequent refreshPath() can retry.
+  probe
+    .then((result) => {
+      if (result === null && shellProbePromise === probe) {
+        shellProbePromise = null;
+      }
+    })
+    .catch(() => {
+      if (shellProbePromise === probe) {
+        shellProbePromise = null;
+      }
+    });
+
+  return probe;
+}
+
 export async function refreshPath(): Promise<void> {
   let timeoutId: NodeJS.Timeout | undefined;
+  let shellEnvFailed = false;
+  // Guards against late inner-IIFE writes to process.env.PATH after the
+  // outer race has already resolved with "timeout". Without this guard a
+  // shell that closes during the SIGTERM→SIGKILL grace window can clobber
+  // the fallback-augmented PATH that the post-race block has already set.
+  let timedOut = false;
   try {
     const result = await Promise.race([
       (async () => {
         if (process.platform === "win32") {
           const registryPath = await readWindowsRegistryPath();
-          if (!registryPath) return;
+          if (!registryPath || timedOut) return;
           const withExtras = applyWindowsExtraPaths(registryPath);
           process.env.PATH = deduplicatePath(withExtras, true);
+        } else if (process.env.DAINTREE_SHELL_PROBE === "1") {
+          // Opt-in markered shell-probe path (#6063). Replaces shell-env
+          // with a real `$SHELL -i -l -c` invocation so lazy-loaded version
+          // managers (mise/asdf), eval-based activations (pyenv/rbenv,
+          // `eval "$(tool init)"`), and non-bashrc layouts (fnm, pnpm)
+          // are visible. Gated behind the flag so we can dogfood for one
+          // release before flipping the default.
+          const probedPath = await resolvePathViaShellProbe();
+          if (timedOut) return;
+          if (probedPath) {
+            process.env.PATH = deduplicatePath(probedPath, false);
+          } else {
+            shellEnvFailed = true;
+          }
         } else {
-          const { shellEnv } = (await import("shell-env")) as {
-            shellEnv: () => Promise<Record<string, string>>;
-          };
-          const env = await shellEnv();
-          if (env.PATH) {
-            process.env.PATH = deduplicatePath(env.PATH, false);
+          try {
+            const { shellEnv } = (await import("shell-env")) as {
+              shellEnv: () => Promise<Record<string, string>>;
+            };
+            const env = await shellEnv();
+            if (timedOut) return;
+            if (env.PATH) {
+              process.env.PATH = deduplicatePath(env.PATH, false);
+            }
+          } catch (err) {
+            // shell-env can throw when the user's shell profile errors out
+            // (e.g. broken .zshrc, missing sourced file). Previously this
+            // was swallowed silently, leaving the Electron process with an
+            // unexpanded PATH and no diagnostic. Log the failure so the
+            // fallback path below is correlated with the root cause.
+            shellEnvFailed = true;
+            console.warn(
+              "[refreshPath] shell-env failed:",
+              // eslint-disable-next-line no-restricted-syntax -- diagnostic console.warn passes the raw error if not an Error; not a user-visible string.
+              err instanceof Error ? err.message : err
+            );
           }
         }
       })(),
       new Promise<"timeout">((resolve) => {
-        timeoutId = setTimeout(() => resolve("timeout"), REFRESH_TIMEOUT_MS);
+        timeoutId = setTimeout(() => {
+          timedOut = true;
+          resolve("timeout");
+        }, REFRESH_TIMEOUT_MS);
       }),
     ]);
 
     if (result === "timeout") {
       console.warn("[refreshPath] Timed out after", REFRESH_TIMEOUT_MS, "ms — using existing PATH");
+    }
+
+    // On macOS/Linux, when shell-env fails or times out we still want the
+    // native installer bin dir (~/.local/bin) and common version-manager
+    // shims (mise/asdf/Volta) on PATH so downstream CLI probes can find
+    // binaries installed via those tools. The common case (shell-env
+    // succeeded) also benefits — shell profile may have been activated
+    // but the user's version manager shim dirs may not be in the PATH
+    // it exported.
+    if (
+      process.platform !== "win32" &&
+      (result === "timeout" || shellEnvFailed || process.env.PATH)
+    ) {
+      const current = process.env.PATH || "";
+      const augmented = applyUnixFallbackPaths(current);
+      if (augmented !== current) {
+        process.env.PATH = deduplicatePath(augmented, false);
+      }
     }
   } catch {
     // Fallback to current PATH silently

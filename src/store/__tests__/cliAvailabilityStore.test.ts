@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { refreshMock, getMock, isElectronAvailableMock } = vi.hoisted(() => ({
+const { refreshMock, getMock, getDetailsMock, isElectronAvailableMock } = vi.hoisted(() => ({
   refreshMock: vi.fn(),
   getMock: vi.fn(),
+  getDetailsMock: vi.fn().mockResolvedValue({}),
   isElectronAvailableMock: vi.fn(() => true),
 }));
 
@@ -10,6 +11,7 @@ vi.mock("@/clients", () => ({
   cliAvailabilityClient: {
     get: getMock,
     refresh: refreshMock,
+    getDetails: getDetailsMock,
   },
 }));
 
@@ -41,6 +43,9 @@ const installedAvail = {
 describe("cliAvailabilityStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // getDetails defaults to an empty map; tests that care about details
+    // override this with mockResolvedValueOnce.
+    getDetailsMock.mockResolvedValue({});
     cleanupCliAvailabilityStore();
   });
 
@@ -305,6 +310,79 @@ describe("cliAvailabilityStore", () => {
     });
   });
 
+  describe("details", () => {
+    it("populates details alongside availability on initialize", async () => {
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      getDetailsMock.mockResolvedValueOnce({
+        claude: { state: "ready", resolvedPath: "/usr/local/bin/claude", via: "which" },
+        cursor: {
+          state: "ready",
+          resolvedPath: "/usr/local/bin/cursor-agent",
+          via: "which",
+          authConfirmed: false,
+        },
+      });
+
+      await useCliAvailabilityStore.getState().initialize();
+
+      const state = useCliAvailabilityStore.getState();
+      expect(state.details.claude?.resolvedPath).toBe("/usr/local/bin/claude");
+      expect(state.details.cursor?.authConfirmed).toBe(false);
+    });
+
+    it("leaves details as an empty map when getDetails IPC rejects on first init", async () => {
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      getDetailsMock.mockRejectedValueOnce(new Error("ipc failed"));
+
+      await useCliAvailabilityStore.getState().initialize();
+
+      const state = useCliAvailabilityStore.getState();
+      // Availability must still land; details failure is best-effort.
+      expect(state.availability).toEqual(installedAvail);
+      expect(state.details).toEqual({});
+      expect(state.error).toBeNull();
+    });
+
+    it("preserves previous details when a subsequent getDetails IPC fails", async () => {
+      // First refresh populates details.
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      getDetailsMock.mockResolvedValueOnce({
+        claude: { state: "ready", resolvedPath: "/a", via: "which", authConfirmed: false },
+      });
+      await useCliAvailabilityStore.getState().initialize();
+      expect(useCliAvailabilityStore.getState().details.claude?.authConfirmed).toBe(false);
+
+      // Second refresh: availability ok, getDetails throws. Stale authConfirmed
+      // must survive so a transient error doesn't suppress the sign-in nudge.
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      getDetailsMock.mockRejectedValueOnce(new Error("ipc blip"));
+      await useCliAvailabilityStore.getState().refresh(true);
+
+      const state = useCliAvailabilityStore.getState();
+      expect(state.details.claude?.authConfirmed).toBe(false);
+      expect(state.error).toBeNull();
+    });
+
+    it("refreshes details when refresh() is called", async () => {
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      getDetailsMock.mockResolvedValueOnce({
+        claude: { state: "ready", resolvedPath: "/a", via: "which", authConfirmed: false },
+      });
+
+      await useCliAvailabilityStore.getState().initialize();
+      expect(useCliAvailabilityStore.getState().details.claude?.authConfirmed).toBe(false);
+
+      // Force past the throttle so refresh actually re-runs.
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      getDetailsMock.mockResolvedValueOnce({
+        claude: { state: "ready", resolvedPath: "/a", via: "which", authConfirmed: true },
+      });
+      await useCliAvailabilityStore.getState().refresh(true);
+
+      expect(useCliAvailabilityStore.getState().details.claude?.authConfirmed).toBe(true);
+    });
+  });
+
   describe("cleanupCliAvailabilityStore", () => {
     it("resets store to initial state and clears in-flight promise", async () => {
       refreshMock.mockResolvedValueOnce(installedAvail);
@@ -317,6 +395,7 @@ describe("cliAvailabilityStore", () => {
       expect(state.isLoading).toBe(true);
       expect(state.lastCheckedAt).toBeNull();
       expect(state.availability).toEqual(defaultAvail);
+      expect(state.details).toEqual({});
 
       refreshMock.mockResolvedValueOnce(installedAvail);
       await useCliAvailabilityStore.getState().initialize();

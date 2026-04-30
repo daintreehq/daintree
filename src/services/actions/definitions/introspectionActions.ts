@@ -1,9 +1,28 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
+import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
+import { usePortalStore } from "@/store/portalStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { listPersistedStores } from "@/store/persistence/persistedStoreRegistry";
+import { readLocalStorageItemSafely } from "@/store/persistence/safeStorage";
+
+interface PersistedStoreInfo {
+  storeId: string;
+  storageKey: string;
+  declaredVersion: number | null;
+  persistedBlobVersion: number | null;
+  hasMigrate: boolean;
+  hasMerge: boolean;
+  hasPartialize: boolean;
+  persistedStateType: string;
+  hasPersistedValue: boolean;
+  sizeBytes: number;
+  parseStatus: "ok" | "missing" | "corrupt";
+}
 
 export function registerIntrospectionActions(
   actions: ActionRegistry,
@@ -13,7 +32,7 @@ export function registerIntrospectionActions(
     id: "actions.list",
     title: "List Actions",
     description:
-      "Get a manifest of available actions. Use category or search to filter. Note: MCP clients already receive the tool list via the MCP protocol — use this only if you need action metadata like danger level or enabled state.",
+      "List available actions. Filter by category or search. Includes metadata like danger level and enabled state.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -34,7 +53,6 @@ export function registerIntrospectionActions(
     run: async (args: unknown, ctx: ActionContext) => {
       const { category, search, enabledOnly } =
         (args as { category?: string; search?: string; enabledOnly?: boolean } | undefined) ?? {};
-      const { actionService } = await import("@/services/ActionService");
       let manifest = actionService.list(ctx);
 
       if (category) {
@@ -44,9 +62,9 @@ export function registerIntrospectionActions(
         const q = search.toLowerCase();
         manifest = manifest.filter(
           (a) =>
-            a.id.toLowerCase().includes(q) ||
-            a.title.toLowerCase().includes(q) ||
-            a.description.toLowerCase().includes(q)
+            (a.id ?? "").toLowerCase().includes(q) ||
+            (a.title ?? "").toLowerCase().includes(q) ||
+            (a.description ?? "").toLowerCase().includes(q)
         );
       }
       if (enabledOnly) {
@@ -67,9 +85,6 @@ export function registerIntrospectionActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
-      const { usePortalStore } = await import("@/store/portalStore");
-
       const project = useProjectStore.getState().currentProject;
       const terminalState = usePanelStore.getState();
       const worktreeSelection = useWorktreeSelectionStore.getState();
@@ -94,7 +109,6 @@ export function registerIntrospectionActions(
         focusedWorktreeId: worktreeSelection.focusedWorktreeId ?? undefined,
         focusedTerminalId: focusedId ?? undefined,
         focusedTerminalKind: focusedTerminal?.kind,
-        focusedTerminalType: focusedTerminal?.type,
         focusedTerminalTitle: focusedTerminal?.title,
       };
 
@@ -107,6 +121,59 @@ export function registerIntrospectionActions(
         ).length,
         worktreeCount: worktrees.size,
       };
+    },
+  }));
+
+  actions.set("actions.persistedStores", () => ({
+    id: "actions.persistedStores",
+    title: "List Persisted Stores",
+    description:
+      "List persisted renderer stores with storage key, version, migration flags, size, and parse status.",
+    category: "introspection",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const registrations = listPersistedStores();
+      const stores: PersistedStoreInfo[] = registrations.map((reg) => {
+        const options = reg.store.persist.getOptions();
+        const storageKey = typeof options.name === "string" ? options.name : "";
+        const declaredVersion = typeof options.version === "number" ? options.version : null;
+
+        const raw = storageKey ? readLocalStorageItemSafely(storageKey) : null;
+        const hasPersistedValue = raw !== null;
+        const sizeBytes = raw !== null ? raw.length * 2 : 0;
+
+        let persistedBlobVersion: number | null = null;
+        let parseStatus: "ok" | "missing" | "corrupt" = "missing";
+        if (raw !== null) {
+          try {
+            const parsed = JSON.parse(raw) as { version?: unknown };
+            parseStatus = "ok";
+            if (typeof parsed?.version === "number") {
+              persistedBlobVersion = parsed.version;
+            }
+          } catch {
+            parseStatus = "corrupt";
+          }
+        }
+
+        return {
+          storeId: reg.storeId,
+          storageKey,
+          declaredVersion,
+          persistedBlobVersion,
+          hasMigrate: typeof options.migrate === "function",
+          hasMerge: typeof options.merge === "function",
+          hasPartialize: typeof options.partialize === "function",
+          persistedStateType: reg.persistedStateType,
+          hasPersistedValue,
+          sizeBytes,
+          parseStatus,
+        };
+      });
+
+      return { storeCount: stores.length, stores };
     },
   }));
 }

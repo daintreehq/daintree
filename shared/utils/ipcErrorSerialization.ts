@@ -5,6 +5,9 @@ const KNOWN_ERROR_KEYS = new Set([
   "message",
   "stack",
   "code",
+  "userMessage",
+  "gitReason",
+  "reason",
   "errno",
   "syscall",
   "path",
@@ -34,6 +37,14 @@ export function serializeError(error: unknown, seen = new WeakSet<object>()): Se
 
   if (typeof err.stack === "string") serialized.stack = err.stack;
   if (typeof err.code === "string") serialized.code = err.code;
+  if (typeof err.userMessage === "string") serialized.userMessage = err.userMessage;
+  // GitOperationError exposes `reason`; promote to a top-level `gitReason`
+  // field on the wire so it survives the packaged-build strip.
+  if (typeof err.gitReason === "string") {
+    serialized.gitReason = err.gitReason as SerializedError["gitReason"];
+  } else if (typeof err.reason === "string") {
+    serialized.gitReason = err.reason as SerializedError["gitReason"];
+  }
   if (typeof err.errno === "number") serialized.errno = err.errno;
   if (typeof err.syscall === "string") serialized.syscall = err.syscall;
   if (typeof err.path === "string") serialized.path = err.path;
@@ -66,6 +77,12 @@ export function deserializeError(serialized: SerializedError): Error {
 
   if (serialized.stack !== undefined) error.stack = serialized.stack;
   if (serialized.code !== undefined) (error as NodeJS.ErrnoException).code = serialized.code;
+  if (serialized.userMessage !== undefined) {
+    (error as unknown as Record<string, unknown>).userMessage = serialized.userMessage;
+  }
+  if (serialized.gitReason !== undefined) {
+    (error as unknown as Record<string, unknown>).gitReason = serialized.gitReason;
+  }
   if (serialized.errno !== undefined) (error as NodeJS.ErrnoException).errno = serialized.errno;
   if (serialized.syscall !== undefined)
     (error as NodeJS.ErrnoException).syscall = serialized.syscall;

@@ -23,7 +23,7 @@ describe("terminal pool inspection handlers", () => {
         getAvailableTerminalsAsync: vi.fn(async () => [
           {
             id: "t-idle",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "idle",
@@ -31,7 +31,7 @@ describe("terminal pool inspection handlers", () => {
           },
           {
             id: "t-waiting",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "waiting",
@@ -102,7 +102,7 @@ describe("terminal pool inspection handlers", () => {
         getAvailableTerminalsAsync: vi.fn(async () => [
           {
             id: "t-idle",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "idle",
@@ -140,7 +140,7 @@ describe("terminal pool inspection handlers", () => {
         getTerminalsByStateAsync: vi.fn(async () => [
           {
             id: "t-working-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "working",
@@ -148,7 +148,7 @@ describe("terminal pool inspection handlers", () => {
           },
           {
             id: "t-working-2",
-            kind: "agent",
+            kind: "terminal",
             type: "codex",
             cwd: "/tmp",
             agentState: "working",
@@ -182,7 +182,7 @@ describe("terminal pool inspection handlers", () => {
         getTerminalsByStateAsync: vi.fn(async () => [
           {
             id: "t-working",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "working",
@@ -287,9 +287,8 @@ describe("terminal pool inspection handlers", () => {
           {
             id: "t-full",
             projectId: "proj-1",
-            kind: "agent",
-            type: "claude",
-            agentId: "claude",
+            kind: "terminal",
+            launchAgentId: "claude",
             title: "Claude Agent",
             cwd: "/tmp",
             worktreeId: "wt-1",
@@ -319,7 +318,7 @@ describe("terminal pool inspection handlers", () => {
         id: string;
         projectId?: string;
         worktreeId?: string;
-        agentId?: string;
+        launchAgentId?: string;
         lastStateChange?: number;
         activityTier?: string;
         hasPty?: boolean;
@@ -329,7 +328,7 @@ describe("terminal pool inspection handlers", () => {
       expect(result[0].id).toBe("t-full");
       expect(result[0].projectId).toBe("proj-1");
       expect(result[0].worktreeId).toBe("wt-1");
-      expect(result[0].agentId).toBe("claude");
+      expect(result[0].launchAgentId).toBe("claude");
       expect(result[0].lastStateChange).toBe(now - 1000);
       expect(result[0].activityTier).toBe("active");
       expect(result[0].hasPty).toBe(true);
@@ -342,7 +341,7 @@ describe("terminal pool inspection handlers", () => {
         getAllTerminalsAsync: vi.fn(async () => [
           {
             id: "t-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "idle",
@@ -358,7 +357,7 @@ describe("terminal pool inspection handlers", () => {
           },
           {
             id: "t-3",
-            kind: "agent",
+            kind: "terminal",
             type: "codex",
             cwd: "/tmp",
             agentState: "working",
@@ -424,7 +423,7 @@ describe("terminal pool inspection handlers", () => {
         getAllTerminalsAsync: vi.fn(async () => [
           {
             id: "t-active",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "working",
@@ -434,7 +433,7 @@ describe("terminal pool inspection handlers", () => {
           },
           {
             id: "t-background",
-            kind: "agent",
+            kind: "terminal",
             type: "codex",
             cwd: "/tmp",
             agentState: "idle",

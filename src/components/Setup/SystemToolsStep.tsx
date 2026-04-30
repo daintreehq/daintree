@@ -57,7 +57,7 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
               <button
                 type="button"
                 onClick={() => setExpanded((v) => !v)}
-                className="inline-flex items-center gap-1 text-[11px] text-daintree-accent hover:underline"
+                className="inline-flex items-center gap-1 text-[11px] text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline"
               >
                 {expanded ? (
                   <ChevronDown className="w-3 h-3" />

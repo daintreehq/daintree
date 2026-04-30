@@ -1,5 +1,4 @@
 import { useCallback, useMemo } from "react";
-import Fuse, { type IFuseOptions } from "fuse.js";
 import { useShallow } from "zustand/react/shallow";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
@@ -7,6 +6,8 @@ import { notify } from "@/lib/notify";
 import type { ActionManifestEntry } from "@shared/types/actions";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useActionMruStore } from "@/store/actionMruStore";
+import { extractAcronym, rankActionMatches } from "@/lib/actionPaletteSearch";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useSearchablePalette } from "./useSearchablePalette";
 
 export interface ActionPaletteItem {
@@ -18,6 +19,11 @@ export interface ActionPaletteItem {
   disabledReason?: string;
   keybinding?: string;
   kind: string;
+  titleLower: string;
+  categoryLower: string;
+  descriptionLower: string;
+  titleAcronym: string;
+  keywordsLower: readonly string[];
 }
 
 export interface UseActionPaletteReturn {
@@ -36,18 +42,7 @@ export interface UseActionPaletteReturn {
   confirmSelection: () => void;
 }
 
-const FUSE_OPTIONS: IFuseOptions<ActionPaletteItem> = {
-  keys: [
-    { name: "title", weight: 2 },
-    { name: "category", weight: 1.5 },
-    { name: "description", weight: 1 },
-  ],
-  threshold: 0.4,
-  includeScore: true,
-};
-
 const MAX_RESULTS = 20;
-const MRU_BOOST_FACTOR = 0.05;
 
 function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
   const title =
@@ -56,6 +51,11 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
   const category = typeof entry.category === "string" ? entry.category : "General";
   const disabledReason =
     typeof entry.disabledReason === "string" ? entry.disabledReason : undefined;
+  const keywordsLower: readonly string[] = Array.isArray(entry.keywords)
+    ? entry.keywords
+        .filter((k): k is string => typeof k === "string" && k.length > 0)
+        .map((k) => k.toLowerCase())
+    : [];
 
   return {
     id: entry.id,
@@ -66,12 +66,19 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
     disabledReason,
     keybinding: keybindingService.getDisplayCombo(entry.id),
     kind: entry.kind,
+    titleLower: title.toLowerCase(),
+    categoryLower: category.toLowerCase(),
+    descriptionLower: description.toLowerCase(),
+    titleAcronym: extractAcronym(title),
+    keywordsLower,
   };
 }
 
 export function useActionPalette(): UseActionPaletteReturn {
   const isActionOpen = usePaletteStore((state) => state.activePaletteId === "action");
-  const actionMruList = useActionMruStore(useShallow((state) => state.actionMruList));
+  const getSortedActionMruList = useActionMruStore(
+    useShallow((state) => state.getSortedActionMruList)
+  );
 
   const allActions = useMemo<ActionPaletteItem[]>(() => {
     if (!isActionOpen) return [];
@@ -79,39 +86,30 @@ export function useActionPalette(): UseActionPaletteReturn {
     return entries.filter((e) => e.kind === "command" && !e.requiresArgs).map(toActionPaletteItem);
   }, [isActionOpen]);
 
-  const fuse = useMemo(() => new Fuse(allActions, FUSE_OPTIONS), [allActions]);
-
   const filterFn = useCallback(
     (items: ActionPaletteItem[], query: string): ActionPaletteItem[] => {
-      const mruIndexMap = new Map<string, number>();
-      actionMruList.forEach((id, index) => mruIndexMap.set(id, index));
-      const mruSize = actionMruList.length;
+      const actionMruList = getSortedActionMruList().map(({ id }) => id);
 
       if (!query.trim()) {
+        const mruIndexMap = new Map<string, number>();
+        actionMruList.forEach((id, index) => mruIndexMap.set(id, index));
         return [...items].sort((a, b) => {
           if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
           const aIndex = mruIndexMap.get(a.id) ?? Infinity;
           const bIndex = mruIndexMap.get(b.id) ?? Infinity;
           if (aIndex !== bIndex) return aIndex - bIndex;
-          return a.title.localeCompare(b.title);
+          return a.title.localeCompare(b.title, "en", { sensitivity: "base" });
         });
       }
 
-      const fuseResults = fuse.search(query);
-      return fuseResults
-        .map((r) => {
-          const rank = mruIndexMap.get(r.item.id);
-          const boost =
-            rank !== undefined ? (1 - rank / Math.max(mruSize, 1)) * MRU_BOOST_FACTOR : 0;
-          return { item: r.item, boostedScore: (r.score ?? 1) - boost };
-        })
-        .sort((a, b) => {
-          if (a.item.enabled !== b.item.enabled) return a.item.enabled ? -1 : 1;
-          return a.boostedScore - b.boostedScore;
-        })
-        .map((r) => r.item);
+      const context = actionService.getContext();
+      return rankActionMatches(query, items, actionMruList, {
+        focusedTerminalKind: context.focusedTerminalKind,
+        focusedWorktreeId: context.focusedWorktreeId,
+        isSettingsOpen: context.isSettingsOpen,
+      });
     },
-    [fuse, actionMruList]
+    [getSortedActionMruList]
   );
 
   const {
@@ -135,8 +133,12 @@ export function useActionPalette(): UseActionPaletteReturn {
 
   const executeAction = useCallback(
     (item: ActionPaletteItem) => {
-      if (!item.enabled) return;
-      useActionMruStore.getState().recordActionMru(item.id);
+      // Only record frecency for enabled items so disabled actions don't get
+      // promoted to the top from repeated attempts. Dispatch still runs for
+      // disabled items so ActionService can surface the disabled-reason toast.
+      if (item.enabled) {
+        useActionMruStore.getState().recordActionMru(item.id);
+      }
       close();
       void actionService
         .dispatch(
@@ -147,18 +149,18 @@ export function useActionPalette(): UseActionPaletteReturn {
           }
         )
         .then((result) => {
-          if (!result.ok) {
+          if (!result.ok && result.error.code !== "DISABLED") {
             notify({
               type: "error",
-              title: "Action Failed",
-              message: result.error.message,
+              title: "Action failed",
+              message: formatErrorMessage(result.error, "Action failed."),
             });
           }
         })
         .catch(() => {
           notify({
             type: "error",
-            title: "Action Failed",
+            title: "Action failed",
             message: "An unexpected error occurred.",
           });
         });
@@ -168,7 +170,7 @@ export function useActionPalette(): UseActionPaletteReturn {
 
   const confirmSelection = useCallback(() => {
     if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-      executeAction(results[selectedIndex]);
+      executeAction(results[selectedIndex]!);
     }
   }, [results, selectedIndex, executeAction]);
 

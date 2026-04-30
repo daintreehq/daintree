@@ -1,9 +1,8 @@
-import { useCallback, useMemo, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import type { Compartment } from "@codemirror/state";
 import { useVoiceRecordingStore } from "@/store";
-import { createCustomKeymap } from "../inputEditorExtensions";
 import type { AutocompleteItem } from "../AutocompleteMenu";
 import type { AtFileContext, SlashCommandContext, AtDiffContext } from "../hybridInputParsing";
 
@@ -54,6 +53,21 @@ interface UseEditorKeymapParams {
   setSelectedIndex: Dispatch<SetStateAction<number>>;
 }
 
+interface KeymapHandlers {
+  onEnter: () => boolean;
+  onEscape: () => boolean;
+  onArrowUp: () => boolean;
+  onArrowDown: () => boolean;
+  onArrowLeft: () => boolean;
+  onArrowRight: () => boolean;
+  onTab: () => boolean;
+  onCtrlC: (hasSelection: boolean) => boolean;
+  onStash: () => boolean;
+  onPopStash: () => boolean;
+  onExpand: () => boolean;
+  onHistorySearch: () => boolean;
+}
+
 export function useEditorKeymap({
   latestRef,
   editorViewRef,
@@ -74,249 +88,241 @@ export function useEditorKeymap({
   setIsExpanded,
   setSelectedIndex,
 }: UseEditorKeymapParams) {
-  const handleStash = useCallback(() => {
-    const view = editorViewRef.current;
-    if (!view) return false;
-    const doc = view.state.doc.toString();
-    if (doc.length === 0) return true;
-    const latest = latestRef.current;
-    if (!latest) return false;
-    stashEditorState(latest.terminalId, view.state, latest.projectId);
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: "" },
-      selection: EditorSelection.cursor(0),
-    });
-    return true;
-  }, [stashEditorState, editorViewRef, latestRef]);
+  // Route all keymap handlers through a ref holder updated in an effect. The keymap
+  // extension is built once with stable callbacks that read the latest handlers via
+  // the ref. This keeps the React Compiler happy — the createCustomKeymap call sees
+  // only ref-free stable arrow wrappers, and actual ref/closure access happens after
+  // render via the handlersRef indirection.
+  const handlersRef = useRef<KeymapHandlers | null>(null);
 
-  const handlePopStash = useCallback(() => {
-    const view = editorViewRef.current;
-    if (!view) return false;
-    const latest = latestRef.current;
-    if (!latest) return false;
-    const stashed = popStashedEditorState(latest.terminalId, latest.projectId);
-    if (!stashed) return false;
-    view.setState(stashed);
-    view.dispatch({
-      effects: editableCompartmentRef.current.reconfigure(EditorView.editable.of(!latest.disabled)),
-    });
-    return true;
-  }, [popStashedEditorState, editorViewRef, latestRef, editableCompartmentRef]);
+  const buildHandlers = (): KeymapHandlers => ({
+    onEnter: () => {
+      const latest = latestRef.current;
+      if (!latest) return false;
+      if (isComposingRef.current) return false;
 
-  const keymapExtension = useMemo(
-    () =>
-      createCustomKeymap({
-        onEnter: () => {
-          const latest = latestRef.current;
-          if (!latest) return false;
-          if (isComposingRef.current) return false;
+      if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
+        const action = latest.activeMode === "command" ? "execute" : "insert";
 
-          if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
-            const action = latest.activeMode === "command" ? "execute" : "insert";
+        handledEnterRef.current = true;
+        setTimeout(() => {
+          handledEnterRef.current = false;
+        }, 0);
 
-            handledEnterRef.current = true;
-            setTimeout(() => {
-              handledEnterRef.current = false;
-            }, 0);
+        applyAutocompleteSelection(action);
+        return true;
+      }
 
-            applyAutocompleteSelection(action);
-            return true;
-          }
+      if (latest.disabled) return true;
 
-          if (latest.disabled) return true;
+      if (hasVoiceWorkPending(latest.terminalId, latest.isVoiceActiveForPanel)) {
+        handledEnterRef.current = true;
+        setTimeout(() => {
+          handledEnterRef.current = false;
+        }, 0);
 
-          if (hasVoiceWorkPending(latest.terminalId, latest.isVoiceActiveForPanel)) {
-            handledEnterRef.current = true;
-            setTimeout(() => {
-              handledEnterRef.current = false;
-            }, 0);
+        startVoiceWaitSubmit();
+        return true;
+      }
 
-            startVoiceWaitSubmit();
-            return true;
-          }
+      const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+      if (text.trim().length === 0) {
+        handledEnterRef.current = true;
+        setTimeout(() => {
+          handledEnterRef.current = false;
+        }, 0);
 
-          const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
-          if (text.trim().length === 0) {
-            handledEnterRef.current = true;
-            setTimeout(() => {
-              handledEnterRef.current = false;
-            }, 0);
+        if (latest.onSendKey) latest.onSendKey("enter");
+        return true;
+      }
 
-            if (latest.onSendKey) latest.onSendKey("enter");
-            return true;
-          }
+      handledEnterRef.current = true;
+      setTimeout(() => {
+        handledEnterRef.current = false;
+      }, 0);
 
-          handledEnterRef.current = true;
-          setTimeout(() => {
-            handledEnterRef.current = false;
-          }, 0);
+      sendFromEditor();
+      return true;
+    },
+    onEscape: () => {
+      const latest = latestRef.current;
+      if (!latest) return false;
+      if (isComposingRef.current) return false;
 
-          sendFromEditor();
+      if (cancelVoiceWaitSubmit()) return true;
+
+      if (latest.isAutocompleteOpen) {
+        setAtContext(null);
+        setSlashContext(null);
+        setDiffContext(null);
+        return true;
+      }
+
+      if (latest.isExpanded) {
+        setIsExpanded(false);
+        return true;
+      }
+
+      if (latest.disabled) return false;
+      if (!latest.onSendKey) return false;
+
+      latest.onSendKey("escape");
+      return true;
+    },
+    onArrowUp: () => {
+      const latest = latestRef.current;
+      if (!latest) return false;
+      if (isComposingRef.current) return false;
+      if (latest.disabled) return false;
+
+      const resultsCount = latest.autocompleteItems.length;
+      if (latest.isAutocompleteOpen && resultsCount > 0) {
+        setSelectedIndex((prev) => {
+          if (resultsCount === 0) return 0;
+          return (prev - 1 + resultsCount) % resultsCount;
+        });
+        return true;
+      }
+
+      const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+      const isEmpty = text.trim().length === 0;
+      const canNavigateHistory = isEmpty || latest.isInHistoryMode;
+
+      if (canNavigateHistory) {
+        if (handleHistoryNavigation("up")) return true;
+        if (isEmpty && latest.onSendKey) {
+          latest.onSendKey("up");
           return true;
-        },
-        onEscape: () => {
-          const latest = latestRef.current;
-          if (!latest) return false;
-          if (isComposingRef.current) return false;
+        }
+      }
 
-          if (cancelVoiceWaitSubmit()) return true;
+      return false;
+    },
+    onArrowDown: () => {
+      const latest = latestRef.current;
+      if (!latest) return false;
+      if (isComposingRef.current) return false;
+      if (latest.disabled) return false;
 
-          if (latest.isAutocompleteOpen) {
-            setAtContext(null);
-            setSlashContext(null);
-            setDiffContext(null);
-            return true;
-          }
+      const resultsCount = latest.autocompleteItems.length;
+      if (latest.isAutocompleteOpen && resultsCount > 0) {
+        setSelectedIndex((prev) => {
+          if (resultsCount === 0) return 0;
+          return (prev + 1) % resultsCount;
+        });
+        return true;
+      }
 
-          if (latest.isExpanded) {
-            setIsExpanded(false);
-            return true;
-          }
+      const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+      const isEmpty = text.trim().length === 0;
+      const canNavigateHistory = isEmpty || latest.isInHistoryMode;
 
-          if (latest.disabled) return false;
-          if (!latest.onSendKey) return false;
-
-          latest.onSendKey("escape");
+      if (canNavigateHistory) {
+        if (handleHistoryNavigation("down")) return true;
+        if (isEmpty && latest.onSendKey) {
+          latest.onSendKey("down");
           return true;
-        },
-        onArrowUp: () => {
-          const latest = latestRef.current;
-          if (!latest) return false;
-          if (isComposingRef.current) return false;
-          if (latest.disabled) return false;
+        }
+      }
 
-          const resultsCount = latest.autocompleteItems.length;
-          if (latest.isAutocompleteOpen && resultsCount > 0) {
-            setSelectedIndex((prev) => {
-              if (resultsCount === 0) return 0;
-              return (prev - 1 + resultsCount) % resultsCount;
-            });
-            return true;
-          }
+      return false;
+    },
+    onArrowLeft: () => {
+      const latest = latestRef.current;
+      if (!latest) return false;
+      if (isComposingRef.current) return false;
+      if (latest.disabled) return false;
 
-          const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
-          const isEmpty = text.trim().length === 0;
-          const canNavigateHistory = isEmpty || latest.isInHistoryMode;
+      const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+      if (text.trim().length !== 0) return false;
 
-          if (canNavigateHistory) {
-            if (handleHistoryNavigation("up")) return true;
-            if (isEmpty && latest.onSendKey) {
-              latest.onSendKey("up");
-              return true;
-            }
-          }
+      if (!latest.onSendKey) return false;
+      latest.onSendKey("left");
+      return true;
+    },
+    onArrowRight: () => {
+      const latest = latestRef.current;
+      if (!latest) return false;
+      if (isComposingRef.current) return false;
+      if (latest.disabled) return false;
 
-          return false;
-        },
-        onArrowDown: () => {
-          const latest = latestRef.current;
-          if (!latest) return false;
-          if (isComposingRef.current) return false;
-          if (latest.disabled) return false;
+      const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+      if (text.trim().length !== 0) return false;
 
-          const resultsCount = latest.autocompleteItems.length;
-          if (latest.isAutocompleteOpen && resultsCount > 0) {
-            setSelectedIndex((prev) => {
-              if (resultsCount === 0) return 0;
-              return (prev + 1) % resultsCount;
-            });
-            return true;
-          }
+      if (!latest.onSendKey) return false;
+      latest.onSendKey("right");
+      return true;
+    },
+    onTab: () => {
+      const latest = latestRef.current;
+      if (!latest) return false;
+      if (isComposingRef.current) return false;
 
-          const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
-          const isEmpty = text.trim().length === 0;
-          const canNavigateHistory = isEmpty || latest.isInHistoryMode;
+      if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
+        applyAutocompleteSelection("insert");
+        return true;
+      }
 
-          if (canNavigateHistory) {
-            if (handleHistoryNavigation("down")) return true;
-            if (isEmpty && latest.onSendKey) {
-              latest.onSendKey("down");
-              return true;
-            }
-          }
+      return false;
+    },
+    onCtrlC: (hasSelection) => {
+      const latest = latestRef.current;
+      if (!latest) return false;
+      if (isComposingRef.current) return false;
+      if (latest.disabled) return false;
+      if (!latest.onSendKey) return false;
+      if (hasSelection) return false;
 
-          return false;
-        },
-        onArrowLeft: () => {
-          const latest = latestRef.current;
-          if (!latest) return false;
-          if (isComposingRef.current) return false;
-          if (latest.disabled) return false;
+      latest.onSendKey("ctrl+c");
+      return true;
+    },
+    onStash: () => {
+      const view = editorViewRef.current;
+      if (!view) return false;
+      const doc = view.state.doc.toString();
+      if (doc.length === 0) return true;
+      const latest = latestRef.current;
+      if (!latest) return false;
+      stashEditorState(latest.terminalId, view.state, latest.projectId);
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "" },
+        selection: EditorSelection.cursor(0),
+      });
+      return true;
+    },
+    onPopStash: () => {
+      const view = editorViewRef.current;
+      if (!view) return false;
+      const latest = latestRef.current;
+      if (!latest) return false;
+      const stashed = popStashedEditorState(latest.terminalId, latest.projectId);
+      if (!stashed) return false;
+      view.setState(stashed);
+      view.dispatch({
+        effects: editableCompartmentRef.current.reconfigure(
+          EditorView.editable.of(!latest.disabled)
+        ),
+      });
+      return true;
+    },
+    onExpand: () => {
+      setIsExpanded((v) => !v);
+      return true;
+    },
+    onHistorySearch: () => {
+      historyPaletteOpenRef.current?.();
+      return true;
+    },
+  });
 
-          const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
-          if (text.trim().length !== 0) return false;
+  // Update handlers on every render via effect so the keymap always sees the
+  // freshest closure values.
+  useEffect(() => {
+    handlersRef.current = buildHandlers();
+  });
 
-          if (!latest.onSendKey) return false;
-          latest.onSendKey("left");
-          return true;
-        },
-        onArrowRight: () => {
-          const latest = latestRef.current;
-          if (!latest) return false;
-          if (isComposingRef.current) return false;
-          if (latest.disabled) return false;
+  const handleStash = useCallback(() => handlersRef.current?.onStash() ?? false, []);
+  const handlePopStash = useCallback(() => handlersRef.current?.onPopStash() ?? false, []);
 
-          const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
-          if (text.trim().length !== 0) return false;
-
-          if (!latest.onSendKey) return false;
-          latest.onSendKey("right");
-          return true;
-        },
-        onTab: () => {
-          const latest = latestRef.current;
-          if (!latest) return false;
-          if (isComposingRef.current) return false;
-
-          if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
-            applyAutocompleteSelection("insert");
-            return true;
-          }
-
-          return false;
-        },
-        onCtrlC: (hasSelection) => {
-          const latest = latestRef.current;
-          if (!latest) return false;
-          if (isComposingRef.current) return false;
-          if (latest.disabled) return false;
-          if (!latest.onSendKey) return false;
-          if (hasSelection) return false;
-
-          latest.onSendKey("ctrl+c");
-          return true;
-        },
-        onStash: handleStash,
-        onPopStash: handlePopStash,
-        onExpand: () => {
-          setIsExpanded((v) => !v);
-          return true;
-        },
-        onHistorySearch: () => {
-          historyPaletteOpenRef.current?.();
-          return true;
-        },
-      }),
-    [
-      applyAutocompleteSelection,
-      handleHistoryNavigation,
-      handleStash,
-      handlePopStash,
-      sendFromEditor,
-      startVoiceWaitSubmit,
-      cancelVoiceWaitSubmit,
-      latestRef,
-      editorViewRef,
-      isComposingRef,
-      handledEnterRef,
-      historyPaletteOpenRef,
-      setAtContext,
-      setSlashContext,
-      setDiffContext,
-      setIsExpanded,
-      setSelectedIndex,
-    ]
-  );
-
-  return { keymapExtension, handleStash, handlePopStash };
+  return { handlersRef, handleStash, handlePopStash };
 }

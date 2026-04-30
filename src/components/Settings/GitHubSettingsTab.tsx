@@ -4,7 +4,10 @@ import { Key, Check, AlertCircle, FlaskConical, ExternalLink, Github } from "luc
 import { Spinner } from "@/components/ui/Spinner";
 import { useGitHubConfigStore } from "@/store";
 import { actionService } from "@/services/ActionService";
+import type { GitHubTokenConfig, GitHubTokenValidation } from "@/types";
 import { SettingsSection } from "./SettingsSection";
+import { logError } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
 
@@ -47,7 +50,7 @@ export function GitHubSettingsTab() {
     setErrorMessage(null);
 
     try {
-      const result = await actionService.dispatch(
+      const result = await actionService.dispatch<GitHubTokenValidation>(
         "github.setToken",
         { token: githubToken.trim() },
         { source: "user" }
@@ -55,18 +58,19 @@ export function GitHubSettingsTab() {
       if (!result.ok) {
         throw new Error(result.error.message);
       }
-      const validation = result.result as { valid: boolean; error?: string };
+      const validation = result.result;
       if (validation.valid) {
         setGithubToken("");
         setValidationResult("success");
-        const configResult = await actionService.dispatch("github.getConfig", undefined, {
-          source: "user",
-        });
+        const configResult = await actionService.dispatch<GitHubTokenConfig>(
+          "github.getConfig",
+          undefined,
+          { source: "user" }
+        );
         if (!configResult.ok) {
           throw new Error(configResult.error.message);
         }
-        const config = configResult.result as any;
-        updateConfig(config);
+        updateConfig(configResult.result);
         void actionService.dispatch("worktree.refresh", undefined, {
           source: "user",
         });
@@ -75,7 +79,13 @@ export function GitHubSettingsTab() {
         setErrorMessage(validation.error || "Invalid token");
       }
     } catch (error) {
-      console.error("Failed to save GitHub token:", error);
+      logError("Failed to save GitHub token", error);
+      notify({
+        type: "error",
+        title: "GitHub token save failed",
+        message: "Couldn't save the GitHub token. Check that the token is valid and try again.",
+        priority: "low",
+      });
       setValidationResult("error");
       setErrorMessage("Failed to save token");
     } finally {
@@ -91,17 +101,25 @@ export function GitHubSettingsTab() {
       if (!clearResult.ok) {
         throw new Error(clearResult.error.message);
       }
-      const configResult = await actionService.dispatch("github.getConfig", undefined, {
-        source: "user",
-      });
+      const configResult = await actionService.dispatch<GitHubTokenConfig>(
+        "github.getConfig",
+        undefined,
+        { source: "user" }
+      );
       if (!configResult.ok) {
         throw new Error(configResult.error.message);
       }
-      updateConfig(configResult.result as any);
+      updateConfig(configResult.result);
       setValidationResult(null);
       setErrorMessage(null);
     } catch (error) {
-      console.error("Failed to clear GitHub token:", error);
+      logError("Failed to clear GitHub token", error);
+      notify({
+        type: "error",
+        title: "GitHub token removal failed",
+        message: "Couldn't remove the GitHub token. Try again.",
+        priority: "low",
+      });
       setValidationResult("error");
       setErrorMessage("Failed to clear token");
     }
@@ -115,7 +133,7 @@ export function GitHubSettingsTab() {
     setErrorMessage(null);
 
     try {
-      const result = await actionService.dispatch(
+      const result = await actionService.dispatch<GitHubTokenValidation>(
         "github.validateToken",
         { token: githubToken.trim() },
         { source: "user" }
@@ -123,13 +141,19 @@ export function GitHubSettingsTab() {
       if (!result.ok) {
         throw new Error(result.error.message);
       }
-      const validation = result.result as { valid: boolean; error?: string };
+      const validation = result.result;
       setValidationResult(validation.valid ? "test-success" : "test-error");
       if (!validation.valid) {
         setErrorMessage(validation.error || "Invalid token");
       }
     } catch (error) {
-      console.error("Failed to test GitHub token:", error);
+      logError("Failed to test GitHub token", error);
+      notify({
+        type: "error",
+        title: "GitHub token test failed",
+        message: "Couldn't test the token. Check your network connection and try again.",
+        priority: "low",
+      });
       setValidationResult("test-error");
       setErrorMessage("Failed to validate token");
     } finally {
@@ -154,7 +178,7 @@ export function GitHubSettingsTab() {
           <div className="text-status-error text-sm">Settings load timed out</div>
           <button
             onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
-            className="text-xs px-3 py-1.5 bg-daintree-accent/10 hover:bg-daintree-accent/20 text-daintree-accent rounded transition-colors"
+            className="text-xs px-3 py-1.5 border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
           >
             Reload Application
           </button>
@@ -176,7 +200,7 @@ export function GitHubSettingsTab() {
         </div>
         <button
           onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
-          className="text-xs px-3 py-1.5 bg-daintree-accent/10 hover:bg-daintree-accent/20 text-daintree-accent rounded transition-colors"
+          className="text-xs px-3 py-1.5 border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
         >
           Reload Application
         </button>
@@ -192,7 +216,7 @@ export function GitHubSettingsTab() {
         title="Personal Access Token"
         description="Used for repository statistics, issue/PR detection, and linking worktrees to GitHub. Eliminates the need for the gh CLI."
       >
-        <div className="space-y-3">
+        <div className="contents">
           {githubConfig?.hasToken && (
             <div className="flex items-center gap-1 text-xs text-status-success">
               <Check className="w-3 h-3" />
@@ -210,7 +234,7 @@ export function GitHubSettingsTab() {
               }
               aria-label="GitHub personal access token"
               autoComplete="new-password"
-              className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-none focus:border-daintree-accent transition-colors"
+              className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent transition-colors"
               disabled={isValidating || isTesting}
             />
             <Button

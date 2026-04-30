@@ -44,12 +44,15 @@ function getStack(reason: unknown): string | undefined {
   return undefined;
 }
 
-function reportRendererGlobalError(
+export function reportRendererGlobalError(
   kind: "unhandledrejection" | "error",
   rawError: unknown,
   metadata: { message?: string; filename?: string; lineno?: number; colno?: number }
 ): void {
   if (reentrant) {
+    // Logger may itself be the source of the re-entrant error; console is the
+    // last-resort sink in the global error handler.
+    // eslint-disable-next-line no-console
     console.error(`[Renderer] Re-entrant ${kind} suppressed:`, rawError);
     return;
   }
@@ -87,6 +90,8 @@ function reportRendererGlobalError(
         correlationId,
       });
     } catch (storeError) {
+      // Last-resort sink: the error store has already failed.
+      // eslint-disable-next-line no-console
       console.error("[Renderer] Failed to add error to store:", storeError);
     }
 
@@ -102,6 +107,8 @@ function reportRendererGlobalError(
         },
       });
     } catch (sentryError) {
+      // Last-resort sink: Sentry capture failed.
+      // eslint-disable-next-line no-console
       console.error("[Renderer] Failed to report error to Sentry:", sentryError);
     }
 
@@ -114,6 +121,8 @@ function reportRendererGlobalError(
         colno: metadata.colno,
       });
     } catch {
+      // Last-resort sink: the logger itself failed.
+      // eslint-disable-next-line no-console
       console.error(`[Renderer] Failed to log ${kind}:`, rawError);
     }
   } finally {

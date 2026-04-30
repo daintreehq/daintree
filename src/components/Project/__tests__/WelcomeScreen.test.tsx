@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const { dispatchMock } = vi.hoisted(() => ({
@@ -18,7 +18,7 @@ const { getDisplayComboMock } = vi.hoisted(() => ({
       "panel.palette": "⌘N",
       "nav.quickSwitcher": "⌘P",
       "terminal.new": "⌘⌥T",
-      "action.palette": "⌘K",
+      "action.palette.open": "⌘K",
       "help.shortcuts": "⌘/",
       "app.settings": "⌘,",
     };
@@ -44,6 +44,68 @@ vi.mock("@/lib/utils", () => ({
 
 vi.mock("@/lib/colorUtils", () => ({
   getProjectGradient: (color?: string) => (color ? `gradient(${color})` : undefined),
+  getBrandColorHex: () => "#000000",
+}));
+
+const {
+  markAgentsSeenMock,
+  dismissWelcomeCardMock,
+  dismissSetupBannerMock,
+  setAgentPinnedMock,
+  agentDiscoveryState,
+  agentSettingsState,
+  cliAvailabilityState,
+} = vi.hoisted(() => ({
+  markAgentsSeenMock: vi.fn(() => Promise.resolve()),
+  dismissWelcomeCardMock: vi.fn(() => Promise.resolve()),
+  dismissSetupBannerMock: vi.fn(() => Promise.resolve()),
+  setAgentPinnedMock: vi.fn(() => Promise.resolve()),
+  agentDiscoveryState: {
+    loaded: true,
+    seenAgentIds: [] as string[],
+    welcomeCardDismissed: false,
+    setupBannerDismissed: false,
+  },
+  agentSettingsState: {
+    settings: null as { agents: Record<string, { pinned?: boolean }> } | null,
+  },
+  cliAvailabilityState: {
+    availability: {} as Record<string, "ready" | "installed" | "missing">,
+    hasRealData: false,
+  },
+}));
+
+vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
+  useAgentDiscoveryOnboarding: () => ({
+    loaded: agentDiscoveryState.loaded,
+    seenAgentIds: agentDiscoveryState.seenAgentIds,
+    welcomeCardDismissed: agentDiscoveryState.welcomeCardDismissed,
+    setupBannerDismissed: agentDiscoveryState.setupBannerDismissed,
+    markAgentsSeen: markAgentsSeenMock,
+    dismissWelcomeCard: dismissWelcomeCardMock,
+    dismissSetupBanner: dismissSetupBannerMock,
+  }),
+}));
+
+vi.mock("@/store/agentSettingsStore", () => ({
+  useAgentSettingsStore: (
+    selector: (
+      s: typeof agentSettingsState & { setAgentPinned: typeof setAgentPinnedMock }
+    ) => unknown
+  ) => selector({ ...agentSettingsState, setAgentPinned: setAgentPinnedMock }),
+}));
+
+vi.mock("@/store/cliAvailabilityStore", () => ({
+  useCliAvailabilityStore: (selector: (s: typeof cliAvailabilityState) => unknown) =>
+    selector(cliAvailabilityState),
+}));
+
+vi.mock("@/config/agents", () => ({
+  getAgentConfig: (id: string) => ({
+    name: id.charAt(0).toUpperCase() + id.slice(1),
+    icon: () => null,
+    iconId: id,
+  }),
 }));
 
 vi.mock("@/utils/timeAgo", () => ({
@@ -139,7 +201,7 @@ const allIncomplete: ChecklistState = {
     openedProject: false,
     launchedAgent: false,
     createdWorktree: false,
-    subscribedNewsletter: false,
+    ranSecondParallelAgent: false,
   },
 };
 
@@ -150,7 +212,7 @@ const oneComplete: ChecklistState = {
     openedProject: true,
     launchedAgent: false,
     createdWorktree: false,
-    subscribedNewsletter: false,
+    ranSecondParallelAgent: false,
   },
 };
 
@@ -161,7 +223,7 @@ const allComplete: ChecklistState = {
     openedProject: true,
     launchedAgent: true,
     createdWorktree: true,
-    subscribedNewsletter: true,
+    ranSecondParallelAgent: true,
   },
 };
 
@@ -172,7 +234,7 @@ const dismissed: ChecklistState = {
     openedProject: false,
     launchedAgent: false,
     createdWorktree: false,
-    subscribedNewsletter: false,
+    ranSecondParallelAgent: false,
   },
 };
 
@@ -202,6 +264,15 @@ describe("WelcomeScreen", () => {
       openCreateFolderDialog: openCreateFolderDialogMock,
       switchProject: switchProjectMock,
     };
+    agentDiscoveryState.loaded = true;
+    agentDiscoveryState.seenAgentIds = [];
+    agentDiscoveryState.welcomeCardDismissed = false;
+    // Default to dismissed in existing card/layout suites so they continue
+    // to exercise only the behavior they were written for.
+    agentDiscoveryState.setupBannerDismissed = true;
+    agentSettingsState.settings = null;
+    cliAvailabilityState.availability = {};
+    cliAvailabilityState.hasRealData = false;
   });
 
   it("renders hero section with icon, title, and tagline", () => {
@@ -444,5 +515,176 @@ describe("WelcomeScreen", () => {
 
     expect(screen.queryByText("Recent Projects")).toBeNull();
     expect(screen.getByText("Getting Started")).toBeTruthy();
+  });
+
+  // --- Agent Welcome Card (#5111) ---
+
+  describe("agent welcome card", () => {
+    it("does not render while availability has no real data", () => {
+      cliAvailabilityState.hasRealData = false;
+      cliAvailabilityState.availability = { claude: "ready" };
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      expect(screen.queryByText(/We detected your installed agents/)).toBeNull();
+    });
+
+    it("does not render when no agents are ready", () => {
+      cliAvailabilityState.hasRealData = true;
+      cliAvailabilityState.availability = { claude: "missing", codex: "missing" };
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      expect(screen.queryByText(/We detected your installed agents/)).toBeNull();
+    });
+
+    it("does not render when any agent is already pinned", () => {
+      cliAvailabilityState.hasRealData = true;
+      cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+      agentSettingsState.settings = { agents: { claude: { pinned: true } } };
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      expect(screen.queryByText(/We detected your installed agents/)).toBeNull();
+    });
+
+    it("does not render when the card has been dismissed", () => {
+      cliAvailabilityState.hasRealData = true;
+      cliAvailabilityState.availability = { claude: "ready" };
+      agentSettingsState.settings = { agents: {} };
+      agentDiscoveryState.welcomeCardDismissed = true;
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      expect(screen.queryByText(/We detected your installed agents/)).toBeNull();
+    });
+
+    it("renders with ready agent names when conditions are met", () => {
+      cliAvailabilityState.hasRealData = true;
+      cliAvailabilityState.availability = {
+        claude: "ready",
+        codex: "ready",
+        gemini: "missing",
+      };
+      agentSettingsState.settings = { agents: {} };
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      expect(screen.getByText(/We detected your installed agents/)).toBeTruthy();
+      expect(screen.getByText("Claude")).toBeTruthy();
+      expect(screen.getByText("Codex")).toBeTruthy();
+      expect(screen.queryByText("Gemini")).toBeNull();
+    });
+
+    it("pins all ready agents then dismisses when Pin all is clicked", async () => {
+      cliAvailabilityState.hasRealData = true;
+      cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+      agentSettingsState.settings = { agents: {} };
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+      const btn = screen.getByTestId("welcome-card-pin-all");
+      await act(async () => {
+        fireEvent.click(btn);
+      });
+
+      expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+      expect(setAgentPinnedMock).toHaveBeenCalledWith("codex", true);
+      expect(markAgentsSeenMock).toHaveBeenCalled();
+      expect(dismissWelcomeCardMock).toHaveBeenCalled();
+    });
+
+    it("does not pin agents when the Not now link is clicked but still dismisses", async () => {
+      cliAvailabilityState.hasRealData = true;
+      cliAvailabilityState.availability = { claude: "ready" };
+      agentSettingsState.settings = { agents: {} };
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByText("Not now"));
+      });
+      expect(setAgentPinnedMock).not.toHaveBeenCalled();
+      expect(markAgentsSeenMock).toHaveBeenCalled();
+      expect(dismissWelcomeCardMock).toHaveBeenCalled();
+    });
+
+    it("keeps the card visible and surfaces an error if any pin fails", async () => {
+      cliAvailabilityState.hasRealData = true;
+      cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+      agentSettingsState.settings = { agents: {} };
+      setAgentPinnedMock.mockImplementationOnce(() => Promise.reject(new Error("IPC down")));
+
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("welcome-card-pin-all"));
+      });
+
+      // First call rejected — card should stay visible with an inline error,
+      // and dismiss should NOT have been called.
+      expect(screen.getByTestId("welcome-card-pin-error")).toBeTruthy();
+      expect(dismissWelcomeCardMock).not.toHaveBeenCalled();
+      expect(markAgentsSeenMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- Agent Setup Banner (#5131) ---
+
+  describe("agent setup banner", () => {
+    it("does not render until onboarding state is hydrated", () => {
+      agentDiscoveryState.loaded = false;
+      agentDiscoveryState.setupBannerDismissed = false;
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      expect(screen.queryByTestId("agent-setup-banner")).toBeNull();
+    });
+
+    it("renders when hydrated and not dismissed", () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = false;
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      expect(screen.getByTestId("agent-setup-banner")).toBeTruthy();
+      expect(screen.getByText("Set up your AI agents")).toBeTruthy();
+    });
+
+    it("does not render when dismissed", () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = true;
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      expect(screen.queryByTestId("agent-setup-banner")).toBeNull();
+    });
+
+    it("calls dismissSetupBanner when the X button is clicked", async () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = false;
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("agent-setup-banner-dismiss"));
+      });
+      expect(dismissSetupBannerMock).toHaveBeenCalled();
+    });
+
+    it("calls dismissSetupBanner when the Not now link is clicked", async () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = false;
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByText("Not now"));
+      });
+      expect(dismissSetupBannerMock).toHaveBeenCalled();
+    });
+
+    it("dispatches daintree:open-agent-setup-wizard with isFirstRun: true when CTA is clicked", async () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = false;
+
+      const dispatched: CustomEvent[] = [];
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent").mockImplementation((e: Event) => {
+        dispatched.push(e as CustomEvent);
+        return true;
+      });
+
+      try {
+        render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+        await act(async () => {
+          fireEvent.click(screen.getByTestId("agent-setup-banner-cta"));
+        });
+
+        const openEvt = dispatched.find((e) => e.type === "daintree:open-agent-setup-wizard");
+        expect(openEvt).toBeTruthy();
+        expect(openEvt?.detail).toEqual({ isFirstRun: true });
+      } finally {
+        dispatchSpy.mockRestore();
+      }
+    });
   });
 });

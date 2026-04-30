@@ -28,7 +28,8 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   let focusPanelStateToUse = globalAppState.focusPanelState;
   let activeWorktreeIdToUse = globalAppState.activeWorktreeId;
 
-  const projectState = await projectStore.getProjectState(projectId);
+  const { state: projectState, quarantinedPath: projectStateQuarantinedPath } =
+    await projectStore.getProjectStateWithRecovery(projectId);
 
   if (projectState?.terminals !== undefined) {
     const validatedTerminals = filterValidTerminalEntries(
@@ -77,7 +78,7 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
 
   return {
-    appState,
+    appState: appState as import("../../shared/types/ipc/app.js").AppState,
     terminalConfig: store.get("terminalConfig"),
     project: currentProject ?? null,
     agentSettings: store.get("agentSettings"),
@@ -85,5 +86,8 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
     safeMode: inSafeMode,
     settingsRecovery: null,
+    projectStateRecovery: projectStateQuarantinedPath
+      ? { quarantinedPath: projectStateQuarantinedPath }
+      : null,
   };
 }

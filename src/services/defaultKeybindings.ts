@@ -1,5 +1,3 @@
-import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
-
 import type { KeybindingConfig } from "./keybindingUtils";
 
 export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
@@ -180,6 +178,14 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
+    actionId: "terminal.focusAlternate",
+    combo: "Cmd+Alt+`",
+    scope: "global",
+    priority: 0,
+    description: "Toggle focus between current and previously focused panel",
+    category: "Terminal",
+  },
+  {
     actionId: "tab.next",
     combo: "Cmd+Shift+]",
     scope: "global",
@@ -259,16 +265,70 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     description: "Open quick switcher",
     category: "Agents",
   },
-  ...Object.entries(AGENT_REGISTRY)
-    .filter(([, config]) => config.shortcut)
-    .map(([id, config]) => ({
-      actionId: `agent.${id}`,
-      combo: config.shortcut!.replace("Cmd/Ctrl", "Cmd"),
-      scope: "global" as const,
-      priority: 0,
-      description: `Launch ${config.name} agent`,
-      category: "Agents",
-    })),
+  {
+    actionId: "agent.claude",
+    combo: "Cmd+Alt+C",
+    scope: "global",
+    priority: 0,
+    description: "Launch Claude Code agent",
+    category: "Agents",
+  },
+  {
+    actionId: "agent.gemini",
+    combo: "Cmd+Alt+G",
+    scope: "global",
+    priority: 0,
+    description: "Launch Gemini agent",
+    category: "Agents",
+  },
+  {
+    actionId: "agent.codex",
+    combo: "Cmd+Alt+X",
+    scope: "global",
+    priority: 0,
+    description: "Launch Codex agent",
+    category: "Agents",
+  },
+  {
+    actionId: "agent.opencode",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Launch OpenCode agent",
+    category: "Agents",
+  },
+  {
+    actionId: "agent.cursor",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Launch Cursor agent",
+    category: "Agents",
+  },
+  {
+    actionId: "agent.kiro",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Launch Kiro agent",
+    category: "Agents",
+  },
+  {
+    actionId: "agent.copilot",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Launch GitHub Copilot agent",
+    category: "Agents",
+  },
+  {
+    actionId: "agent.kimi",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Launch Kimi Code agent",
+    category: "Agents",
+  },
   {
     actionId: "agent.terminal",
     combo: "Cmd+Alt+N",
@@ -334,12 +394,68 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
-    actionId: "terminal.bulkCommand",
+    actionId: "terminal.armDefault",
     combo: "Cmd+Shift+B",
     scope: "global",
     priority: 0,
-    description: "Open Bulk Operations",
+    description: "Arm all eligible terminals in the current worktree",
     category: "Terminal",
+  },
+  // Fleet quick-actions. These are registered at priority 5 so they beat
+  // conflicting global bindings (panel.palette at Cmd+N) while the fleet
+  // ribbon is visible. When nothing is armed, each action either no-ops
+  // (accept/interrupt/restart/kill/trash) or falls through to the
+  // conflicting binding (reject → panel.palette) so the UI stays intact.
+  // fleet.interrupt has no combo here — it's driven by a custom Esc-Esc
+  // double-tap handler in FleetArmingRibbon that avoids the escape-stack
+  // LIFO collision a chord binding would cause.
+  {
+    actionId: "fleet.armFocused",
+    combo: "Cmd+J",
+    scope: "global",
+    priority: 0,
+    description: "Toggle arm focused pane (Join the fleet)",
+    category: "Fleet",
+  },
+  {
+    actionId: "fleet.accept",
+    combo: "Cmd+Y",
+    scope: "global",
+    priority: 5,
+    description: "Accept all armed waiting agents",
+    category: "Fleet",
+  },
+  {
+    actionId: "fleet.reject",
+    combo: "Cmd+N",
+    scope: "global",
+    priority: 5,
+    description: "Reject all armed waiting agents",
+    category: "Fleet",
+  },
+  {
+    actionId: "fleet.restart",
+    combo: "Cmd+Shift+R",
+    scope: "global",
+    priority: 5,
+    description: "Restart all armed agents",
+    category: "Fleet",
+  },
+  {
+    actionId: "fleet.kill",
+    combo: "Cmd+Shift+K",
+    scope: "global",
+    priority: 5,
+    description: "Kill all armed terminals",
+    category: "Fleet",
+  },
+  {
+    actionId: "fleet.trash",
+    combo: "Cmd+Shift+Backspace",
+    scope: "global",
+    priority: 5,
+    description: "Trash all armed terminals",
+    category: "Fleet",
   },
   // Directional terminal navigation (Ghostty-style: Cmd+Option+Arrow)
   {
@@ -453,6 +569,14 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Open command palette",
+    category: "Navigation",
+  },
+  {
+    actionId: "action.repeatLast",
+    combo: "Cmd+Shift+.",
+    scope: "global",
+    priority: 0,
+    description: "Repeat last action",
     category: "Navigation",
   },
   {
@@ -648,12 +772,20 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
-    actionId: "notes.openPalette",
-    combo: "Cmd+Shift+N",
+    actionId: "project.mruCycleOlder",
+    combo: "Cmd+Alt+-",
     scope: "global",
-    priority: 0,
-    description: "Open notes palette",
-    category: "Notes",
+    priority: 10,
+    description: "Switch to previous project (hold to scrub older)",
+    category: "Project",
+  },
+  {
+    actionId: "project.mruCycleNewer",
+    combo: "Cmd+Alt+=",
+    scope: "global",
+    priority: 10,
+    description: "Switch to previous project (hold to scrub newer)",
+    category: "Project",
   },
   {
     actionId: "app.theme.pick",
@@ -879,38 +1011,6 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Maximize all sessions in active worktree",
-    category: "Worktree Sessions",
-  },
-  {
-    actionId: "worktree.sessions.restartAll",
-    combo: "Cmd+K Cmd+T",
-    scope: "global",
-    priority: 0,
-    description: "Restart all sessions in active worktree",
-    category: "Worktree Sessions",
-  },
-  {
-    actionId: "worktree.sessions.endAll",
-    combo: "Cmd+K Cmd+E",
-    scope: "global",
-    priority: 0,
-    description: "End all sessions in active worktree",
-    category: "Worktree Sessions",
-  },
-  {
-    actionId: "worktree.sessions.closeCompleted",
-    combo: "Cmd+K Cmd+D",
-    scope: "global",
-    priority: 0,
-    description: "Close completed sessions in active worktree",
-    category: "Worktree Sessions",
-  },
-  {
-    actionId: "worktree.sessions.trashAll",
-    combo: "Cmd+K Cmd+B",
-    scope: "global",
-    priority: 0,
-    description: "Trash all sessions in active worktree",
     category: "Worktree Sessions",
   },
   {

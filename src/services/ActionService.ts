@@ -9,15 +9,35 @@ import type {
   ActionSource,
   ActionError,
 } from "../../shared/types/actions.js";
+import type { AnyActionDefinition } from "./actions/actionTypes";
 import { logWarn } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 import { keybindingService } from "./KeybindingService";
 import { shortcutHintStore } from "../store/shortcutHintStore";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 /** Fields that should be redacted from event payloads to prevent secret leakage */
 const SENSITIVE_ARG_FIELDS = new Set(["token", "password", "secret", "key", "auth", "credential"]);
 
 /** Max size for args in event payloads (prevents explosion) */
 const MAX_ARG_PAYLOAD_SIZE = 1024;
+
+/**
+ * Validate an action definition for common anti-patterns.
+ * Emits console warnings in dev mode only.
+ */
+function validateActionDefinition<S extends z.ZodTypeAny | undefined, Result>(
+  definition: ActionDefinition<S, Result>
+): void {
+  if (!import.meta.env.DEV) return;
+
+  if (definition.isEnabled && !definition.disabledReason) {
+    console.warn(
+      `[ActionRegistry] Action "${definition.id}" defines isEnabled but no disabledReason callback. ` +
+        `Users may see a disabled command with no explanation.`
+    );
+  }
+}
 
 function isElectronApiAvailable(): boolean {
   return typeof window !== "undefined" && !!window.electron;
@@ -40,15 +60,78 @@ function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> | und
   }
 }
 
-export class ActionService {
-  private registry = new Map<ActionId, ActionDefinition<unknown, unknown>>();
-  private contextProvider: (() => ActionContext) | null = null;
+/**
+ * Heuristic for plugin-contributed actions that declare a raw JSON Schema.
+ * Treat the action as requiring args if the schema has a non-empty
+ * `required` array. Anything else (no schema, schema without required) is
+ * treated as taking no required args — matches how argsSchema=undefined
+ * behaves for built-ins.
+ */
+function rawSchemaRequiresArgs(schema: Record<string, unknown> | undefined): boolean {
+  if (!schema || typeof schema !== "object") return false;
+  const required = (schema as { required?: unknown }).required;
+  return Array.isArray(required) && required.length > 0;
+}
 
-  register<Args = unknown, Result = unknown>(definition: ActionDefinition<Args, Result>): void {
+/** Sources whose successful dispatches are eligible to be recorded as the "last action". */
+const REPEATABLE_SOURCES: ReadonlySet<ActionSource> = new Set<ActionSource>([
+  "user",
+  "keybinding",
+  "menu",
+  "context-menu",
+]);
+
+/**
+ * Snapshot args for replay. Structured clone isolates the captured copy from
+ * later mutation by the action's run body or the caller — non-cloneable values
+ * fall through unchanged.
+ */
+function cloneArgsForReplay(args: unknown): unknown {
+  if (args === undefined || args === null) return args;
+  if (typeof args !== "object") return args;
+  try {
+    return structuredClone(args);
+  } catch {
+    return args;
+  }
+}
+
+export interface LastDispatchedAction {
+  actionId: ActionId;
+  args: unknown;
+}
+
+export class ActionService {
+  private registry = new Map<ActionId, AnyActionDefinition>();
+  private contextProvider: (() => ActionContext) | null = null;
+  /**
+   * Last eligible {actionId, args} captured after a successful dispatch from a
+   * user-facing source. Lives in renderer memory only — intentionally does not
+   * survive reloads. Consumed by `action.repeatLast`.
+   */
+  private lastAction: LastDispatchedAction | null = null;
+
+  register<S extends z.ZodTypeAny | undefined = undefined, Result = unknown>(
+    definition: ActionDefinition<S, Result>
+  ): void {
     if (this.registry.has(definition.id)) {
-      logWarn(`Action "${definition.id}" already registered. Overwriting.`);
+      throw new Error(`Action "${definition.id}" is already registered.`);
     }
-    this.registry.set(definition.id, definition as ActionDefinition<unknown, unknown>);
+    // Validate after the duplicate-ID guard: on HMR / plugin reload a
+    // re-registering action was already validated on first pass — emitting
+    // a warning before the throw would be spurious noise.
+    validateActionDefinition(definition);
+    this.registry.set(definition.id, definition as AnyActionDefinition);
+  }
+
+  /** Whether an action id is present in the registry. */
+  has(id: ActionId): boolean {
+    return this.registry.has(id);
+  }
+
+  /** Remove an action from the registry. Silent no-op if unknown — safe for unload cleanup. */
+  unregister(id: ActionId): void {
+    this.registry.delete(id);
   }
 
   setContextProvider(provider: (() => ActionContext) | null): void {
@@ -57,6 +140,10 @@ export class ActionService {
 
   getContext(): ActionContext {
     return this.getActionContext();
+  }
+
+  getLastAction(): LastDispatchedAction | null {
+    return this.lastAction;
   }
 
   async dispatch<Result = unknown>(
@@ -93,7 +180,15 @@ export class ActionService {
 
     const isEnabled = definition.isEnabled?.(context) ?? true;
     if (!isEnabled) {
-      const disabledReason = definition.disabledReason?.(context) ?? "Action is currently disabled";
+      const reasonText = definition.disabledReason?.(context);
+      const disabledReason = reasonText ?? "Action is currently disabled";
+      if (reasonText) {
+        notify({
+          type: "warning",
+          title: "Action disabled",
+          message: reasonText,
+        });
+      }
       const error: ActionError = {
         code: "DISABLED",
         message: disabledReason,
@@ -119,22 +214,37 @@ export class ActionService {
       return { ok: false, error };
     }
 
-    void this.emitActionDispatchedEvent({
-      actionId,
-      args: this.redactSensitiveArgs(args),
-      context,
-      source,
-      timestamp: Date.now(),
-    });
+    const startMs = Date.now();
 
     try {
       const result = await definition.run(validatedArgs, context);
+      const durationMs = Date.now() - startMs;
+      if (
+        REPEATABLE_SOURCES.has(source) &&
+        !definition.nonRepeatable &&
+        definition.danger === "safe"
+      ) {
+        // Only danger:"safe" actions are eligible for repeat. Confirm-gated actions
+        // rely on originating UI dialogs for consent — replaying them from a keybinding
+        // would silently bypass that UI and repeat a destructive op.
+        this.lastAction = { actionId, args: cloneArgsForReplay(validatedArgs) };
+      }
+      void this.emitActionDispatchedEvent({
+        actionId,
+        args: this.redactSensitiveArgs(args),
+        context,
+        source,
+        timestamp: startMs,
+        category: definition.category,
+        durationMs,
+        safeArgs: this.extractSafeBreadcrumbArgs(args, definition),
+      });
       this.emitShortcutHint(actionId, source);
       return { ok: true, result: result as Result };
     } catch (err) {
       const error: ActionError = {
         code: "EXECUTION_ERROR",
-        message: err instanceof Error ? err.message : String(err),
+        message: formatErrorMessage(err, `Action "${actionId}" failed`),
         details: err,
       };
       return { ok: false, error };
@@ -157,21 +267,39 @@ export class ActionService {
   }
 
   private toManifestEntry(
-    definition: ActionDefinition<unknown, unknown>,
+    definition: AnyActionDefinition,
     context: ActionContext
   ): ActionManifestEntry {
-    const enabled = definition.isEnabled?.(context) ?? true;
-    const disabledReason = enabled ? undefined : definition.disabledReason?.(context);
+    // Fail closed if isEnabled throws: a single broken action must not crash
+    // ActionService.list(), which runs during initial render and would take
+    // the whole React tree down.
+    let enabled = true;
+    try {
+      enabled = definition.isEnabled?.(context) ?? true;
+    } catch (err) {
+      logWarn("Action isEnabled threw", { actionId: definition.id, error: err });
+      enabled = false;
+    }
+    let disabledReason: string | undefined;
+    if (!enabled) {
+      try {
+        disabledReason = definition.disabledReason?.(context);
+      } catch (err) {
+        logWarn("Action disabledReason threw", { actionId: definition.id, error: err });
+      }
+    }
 
     return {
       id: definition.id,
       name: definition.id,
-      title: definition.title,
-      description: definition.description,
+      title: definition.title ?? "",
+      description: definition.description ?? "",
       category: definition.category,
       kind: definition.kind,
       danger: definition.danger,
-      inputSchema: definition.argsSchema ? zodSchemaToJsonSchema(definition.argsSchema) : undefined,
+      inputSchema: definition.argsSchema
+        ? zodSchemaToJsonSchema(definition.argsSchema)
+        : definition.rawInputSchema,
       outputSchema: definition.resultSchema
         ? zodSchemaToJsonSchema(definition.resultSchema)
         : undefined,
@@ -180,7 +308,9 @@ export class ActionService {
       requiresArgs: definition.argsSchema
         ? !definition.argsSchema.safeParse(undefined).success &&
           !definition.argsSchema.safeParse({}).success
-        : false,
+        : rawSchemaRequiresArgs(definition.rawInputSchema),
+      keywords: definition.keywords?.slice(),
+      ...(definition.pluginId ? { pluginId: definition.pluginId } : {}),
     };
   }
 
@@ -238,6 +368,32 @@ export class ActionService {
     return result;
   }
 
+  /**
+   * Extract the subset of top-level arg keys the action opts in to exposing
+   * in Sentry breadcrumbs. Returns undefined when no allowlist is declared
+   * or when args aren't a plain object. Listed keys are passed through
+   * verbatim — the allowlist is the policy.
+   */
+  private extractSafeBreadcrumbArgs(
+    args: unknown,
+    definition: AnyActionDefinition
+  ): Record<string, unknown> | undefined {
+    const allowlist = definition.safeBreadcrumbArgs;
+    if (!allowlist || allowlist.length === 0) return undefined;
+    if (args === null || typeof args !== "object" || Array.isArray(args)) return undefined;
+
+    const source = args as Record<string, unknown>;
+    const picked: Record<string, unknown> = {};
+    let hasAny = false;
+    for (const key of allowlist) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) {
+        picked[key] = source[key];
+        hasAny = true;
+      }
+    }
+    return hasAny ? picked : undefined;
+  }
+
   private emitShortcutHint(actionId: ActionId, source: ActionSource): void {
     if (source !== "user") return;
     try {
@@ -261,6 +417,9 @@ export class ActionService {
     context: ActionContext;
     source: ActionSource;
     timestamp: number;
+    category: string;
+    durationMs: number;
+    safeArgs?: Record<string, unknown>;
   }): Promise<void> {
     if (!isElectronApiAvailable()) return;
 
@@ -271,6 +430,9 @@ export class ActionService {
         source: payload.source,
         context: payload.context,
         timestamp: payload.timestamp,
+        category: payload.category,
+        durationMs: payload.durationMs,
+        ...(payload.safeArgs ? { safeArgs: payload.safeArgs } : {}),
       });
     } catch (err) {
       logWarn("Failed to emit action:dispatched event", { error: err });
@@ -281,10 +443,11 @@ export class ActionService {
 export const actionService = new ActionService();
 
 // Expose dispatch function for E2E tests (WebGL renderer has no DOM-level action API).
-// Registered unconditionally but gated at call time — the function is harmless
-// in production and avoids import-time env var timing issues.
-if (typeof window !== "undefined") {
-  (window as unknown as Record<string, unknown>).__daintreeDispatchAction = (
+// Gated on the preload-injected __DAINTREE_E2E_MODE__ flag so the global is never
+// attached in production sessions — the flag is only exposed when the Electron
+// process was launched with DAINTREE_E2E_MODE=1 (set exclusively by e2e/helpers/launch.ts).
+if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
+  window.__daintreeDispatchAction = (
     actionId: string,
     args?: unknown,
     options?: { source?: string; confirmed?: boolean }

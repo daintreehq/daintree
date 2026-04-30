@@ -1,8 +1,9 @@
 import { useMemo, useCallback, useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { useErrorStore, type AppError, type RetryAction } from "@/store";
+import { useErrorStore, type ErrorRecord, type RetryAction } from "@/store";
 import { Copy, Check, Lightbulb } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { logError } from "@/utils/logger";
 
 const ERROR_TYPE_LABELS: Record<string, string> = {
   git: "Git",
@@ -33,7 +34,7 @@ function formatTimestamp(timestamp: number): string {
 }
 
 interface ErrorRowProps {
-  error: AppError;
+  error: ErrorRecord;
   isExpanded: boolean;
   onToggleExpand: () => void;
   onDismiss: () => void;
@@ -97,7 +98,7 @@ function ErrorRow({
         copyTimeoutRef.current = null;
       }, 2000);
     } catch (err) {
-      console.error("Failed to copy to clipboard:", err);
+      logError("Failed to copy to clipboard", err);
     }
   };
 
@@ -183,29 +184,25 @@ function ErrorRow({
               <pre className="text-xs text-daintree-text/60 whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto flex-1 select-text">
                 {error.details}
               </pre>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={handleCopyDetails}
-                      className="shrink-0 p-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 rounded transition-colors"
-                      aria-label={
-                        copied ? "Copied to clipboard" : "Copy error details to clipboard"
-                      }
-                    >
-                      {copied ? (
-                        <Check className="w-4 h-4 text-status-success" />
-                      ) : (
-                        <Copy className="w-4 h-4" />
-                      )}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {copied ? "Copied!" : "Copy error details"}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleCopyDetails}
+                    className="shrink-0 p-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 rounded transition-colors"
+                    aria-label={copied ? "Copied to clipboard" : "Copy error details to clipboard"}
+                  >
+                    {copied ? (
+                      <Check className="w-4 h-4 text-status-success" />
+                    ) : (
+                      <Copy className="w-4 h-4" />
+                    )}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {copied ? "Copied!" : "Copy error details"}
+                </TooltipContent>
+              </Tooltip>
             </div>
             {error.context && Object.keys(error.context).length > 0 && (
               <div className="mt-2 text-xs text-daintree-text/60">

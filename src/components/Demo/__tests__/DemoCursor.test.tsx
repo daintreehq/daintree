@@ -18,8 +18,6 @@ const demoMock = {
     };
   }),
   sendCommandDone: vi.fn(),
-  getZoomFactor: vi.fn(() => 1),
-  setZoomFactor: vi.fn(),
 };
 
 // Set up window.electron.demo before importing the component
@@ -85,7 +83,6 @@ describe("DemoCursor", () => {
     );
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-click", expect.any(Function));
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-type", expect.any(Function));
-    expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-set-zoom", expect.any(Function));
     expect(demoMock.onExecCommand).toHaveBeenCalledWith(
       "demo:exec-wait-for-selector",
       expect.any(Function)
@@ -107,8 +104,8 @@ describe("DemoCursor", () => {
 
   it("cleans up listeners on unmount", () => {
     const { unmount } = render(<DemoCursor />);
-    // All 13 onExecCommand calls return cleanup functions (9 original + 4 new: scroll, drag, pressKey, waitForIdle)
-    expect(demoMock.onExecCommand).toHaveBeenCalledTimes(13);
+    // All 12 onExecCommand calls return cleanup functions (move-to, move-to-selector, click, type, wait-for-selector, sleep, pause, resume, scroll, drag, press-key, wait-for-idle)
+    expect(demoMock.onExecCommand).toHaveBeenCalledTimes(12);
     unmount();
     // After unmount, listeners should be removed
     expect(listenerMap.get("demo:exec-move-to")?.length ?? 0).toBe(0);
@@ -123,9 +120,9 @@ describe("DemoCursor", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(animateSpy).toHaveBeenCalled();
-    const keyframes = animateSpy.mock.calls[0][0] as Array<{ transform: string }>;
+    const keyframes = animateSpy.mock.calls[0]![0] as Array<{ transform: string }>;
     expect(keyframes[0]).toHaveProperty("transform");
-    expect(keyframes[keyframes.length - 1].transform).toContain("translate(");
+    expect(keyframes[keyframes.length - 1]!.transform).toContain("translate(");
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-1", undefined);
   });
 
@@ -204,7 +201,7 @@ describe("DemoCursor", () => {
     expect(events).toEqual(["mousedown", "mouseup", "click"]);
     // Verify elementFromPoint was called with cursor position (near viewport center, shifted by settle drift)
     const efp = document.elementFromPoint as ReturnType<typeof vi.fn>;
-    const [calledX, calledY] = efp.mock.calls[0];
+    const [calledX, calledY] = efp.mock.calls[0]!;
     expect(calledX).toBeCloseTo(window.innerWidth / 2, -1);
     expect(calledY).toBeCloseTo(window.innerHeight / 2, -1);
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-click-1", undefined);
@@ -329,7 +326,7 @@ describe("DemoCursor", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(animateSpy).toHaveBeenCalled();
-    const options = animateSpy.mock.calls[0][1] as KeyframeAnimationOptions;
+    const options = animateSpy.mock.calls[0]![1] as KeyframeAnimationOptions;
     expect(options.duration).toBeGreaterThan(0);
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-fitts", undefined);
   });
@@ -340,7 +337,7 @@ describe("DemoCursor", () => {
     // Short move: 10% of 1000px = 100px from center (500,400)
     emit("demo:exec-move-to", { x: 60, y: 50, durationMs: 300, requestId: "req-short" });
     await new Promise((r) => setTimeout(r, 10));
-    const shortFrameCount = (animateSpy.mock.calls[0][0] as unknown[]).length;
+    const shortFrameCount = (animateSpy.mock.calls[0]![0] as unknown[]).length;
 
     animateSpy.mockClear();
 
@@ -349,7 +346,7 @@ describe("DemoCursor", () => {
     render(<DemoCursor />);
     emit("demo:exec-move-to", { x: 95, y: 95, durationMs: 300, requestId: "req-long" });
     await new Promise((r) => setTimeout(r, 10));
-    const longFrameCount = (animateSpy.mock.calls[0][0] as unknown[]).length;
+    const longFrameCount = (animateSpy.mock.calls[0]![0] as unknown[]).length;
 
     expect(longFrameCount).toBeGreaterThan(shortFrameCount);
   });
@@ -399,11 +396,11 @@ describe("DemoCursor", () => {
     expect(animateSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
 
     // Verify settle animation keyframes include small translate
-    const lastCall = animateSpy.mock.calls[animateSpy.mock.calls.length - 1];
+    const lastCall = animateSpy.mock.calls[animateSpy.mock.calls.length - 1]!;
     const lastKeyframes = lastCall[0] as Array<{ transform: string }>;
     if (lastKeyframes.length === 2) {
-      expect(lastKeyframes[0].transform).toBe("translate(0px, 0px)");
-      expect(lastKeyframes[1].transform).toMatch(/translate\([^)]+\)/);
+      expect(lastKeyframes[0]!.transform).toBe("translate(0px, 0px)");
+      expect(lastKeyframes[1]!.transform).toMatch(/translate\([^)]+\)/);
     }
 
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-settle", undefined);

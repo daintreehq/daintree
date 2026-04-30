@@ -11,13 +11,19 @@ import {
   X,
   MessageSquare,
 } from "lucide-react";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { Avatar } from "@/components/ui/Avatar";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { actionService } from "@/services/ActionService";
-import type { GitHubIssue, GitHubPR, GitHubLabel, GitHubPRCIStatus } from "@shared/types/github";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import type {
+  GitHubIssue,
+  GitHubPR,
+  GitHubLabel,
+  GitHubPRCIStatus,
+  GitHubPRCISummary,
+} from "@shared/types/github";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -61,20 +67,43 @@ function isPR(item: GitHubIssue | GitHubPR): item is GitHubPR {
   return "isDraft" in item;
 }
 
-function getCIStatusInfo(status: GitHubPRCIStatus): {
+function getCIStatusInfo(
+  status: GitHubPRCIStatus,
+  summary?: GitHubPRCISummary
+): {
   icon: typeof Check | null;
   color: string;
   tooltip: string;
 } {
   switch (status) {
-    case "SUCCESS":
-      return { icon: Check, color: "text-status-success", tooltip: "All checks passed" };
+    case "SUCCESS": {
+      let tooltip: string;
+      if (summary) {
+        tooltip =
+          summary.requiredTotal === 0
+            ? "No required checks"
+            : `${summary.requiredTotal} required check${summary.requiredTotal === 1 ? "" : "s"} passing`;
+      } else {
+        tooltip = "All checks passed";
+      }
+      return { icon: Check, color: "text-status-success", tooltip };
+    }
     case "PENDING":
-    case "EXPECTED":
-      return { icon: null, color: "bg-status-warning", tooltip: "Checks pending" };
+    case "EXPECTED": {
+      const tooltip =
+        summary && summary.requiredPending > 0
+          ? `${summary.requiredPending} of ${summary.requiredTotal} required check${summary.requiredTotal === 1 ? "" : "s"} pending`
+          : "Checks pending";
+      return { icon: null, color: "bg-status-warning", tooltip };
+    }
     case "FAILURE":
-    case "ERROR":
-      return { icon: X, color: "text-status-error", tooltip: "Checks failing" };
+    case "ERROR": {
+      const tooltip =
+        summary && summary.requiredFailing > 0
+          ? `${summary.requiredFailing} of ${summary.requiredTotal} required check${summary.requiredTotal === 1 ? "" : "s"} failing`
+          : "Checks failing";
+      return { icon: X, color: "text-status-error", tooltip };
+    }
     default:
       return { icon: null, color: "bg-muted-foreground", tooltip: "Check status unknown" };
   }
@@ -199,7 +228,7 @@ export function GitHubListItem({
                 }
               }}
               className={cn(
-                "flex-1 min-w-0 text-sm font-medium text-foreground truncate text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded",
+                "flex-1 min-w-0 text-sm font-medium text-foreground truncate text-left cursor-pointer focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded",
                 !isSelectionActive && "hover:underline"
               )}
             >
@@ -210,44 +239,40 @@ export function GitHubListItem({
               item.state === "OPEN" &&
               item.ciStatus &&
               (() => {
-                const ciInfo = getCIStatusInfo(item.ciStatus);
+                const ciInfo = getCIStatusInfo(item.ciStatus, item.ciSummary);
                 return (
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="shrink-0" aria-label={ciInfo.tooltip}>
-                          {ciInfo.icon ? (
-                            <ciInfo.icon className={cn("w-3 h-3", ciInfo.color)} />
-                          ) : (
-                            <span className={cn("block w-2 h-2 rounded-full", ciInfo.color)} />
-                          )}
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">{ciInfo.tooltip}</TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="shrink-0" aria-label={ciInfo.tooltip}>
+                        {ciInfo.icon ? (
+                          <ciInfo.icon className={cn("w-3 h-3", ciInfo.color)} />
+                        ) : (
+                          <span className={cn("block w-2 h-2 rounded-full", ciInfo.color)} />
+                        )}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{ciInfo.tooltip}</TooltipContent>
+                  </Tooltip>
                 );
               })()}
 
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleCopyNumber();
-                    }}
-                    className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-1"
-                    aria-label={`Copy number ${item.number}`}
-                  >
-                    {copied ? <Check className="w-3 h-3 text-status-success" /> : <span>#</span>}
-                    <span>{item.number}</span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{copied ? "Copied!" : "Copy number"}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleCopyNumber();
+                  }}
+                  className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded px-1"
+                  aria-label={`Copy number ${item.number}`}
+                >
+                  {copied ? <Check className="w-3 h-3 text-status-success" /> : <span>#</span>}
+                  <span>{item.number}</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{copied ? "Copied!" : "Copy number"}</TooltipContent>
+            </Tooltip>
           </div>
 
           {/* Metadata row: author, time, branch/labels, worktree, menu */}
@@ -293,28 +318,26 @@ export function GitHubListItem({
             {!isItemPR && "linkedPR" in item && item.linkedPR && (
               <>
                 <span className="shrink-0">&middot;</span>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void actionService.dispatch(
-                            "system.openExternal",
-                            { url: item.linkedPR!.url },
-                            { source: "user" }
-                          );
-                        }}
-                        className="shrink-0 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
-                        aria-label={`Linked PR #${item.linkedPR.number}`}
-                      >
-                        <GitPullRequest className="w-3 h-3" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">PR #{item.linkedPR.number}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void actionService.dispatch(
+                          "system.openExternal",
+                          { url: item.linkedPR!.url },
+                          { source: "user" }
+                        );
+                      }}
+                      className="shrink-0 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
+                      aria-label={`Linked PR #${item.linkedPR.number}`}
+                    >
+                      <GitPullRequest className="w-3 h-3" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">PR #{item.linkedPR.number}</TooltipContent>
+                </Tooltip>
               </>
             )}
 
@@ -322,67 +345,63 @@ export function GitHubListItem({
 
             {!isItemPR && item.assignees.length > 0 && (
               <Avatar
-                src={item.assignees[0].avatarUrl}
-                alt={item.assignees[0].login}
-                title={`Assigned to ${item.assignees[0].login}`}
+                src={item.assignees[0]!.avatarUrl}
+                alt={item.assignees[0]!.login}
+                title={`Assigned to ${item.assignees[0]!.login}`}
                 className="w-4 h-4 shrink-0"
               />
             )}
 
             {hasWorktree ? (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    {isActiveWorktree ? (
-                      <span className="shrink-0 text-daintree-accent">
-                        <WorktreeIcon className="w-3.5 h-3.5" />
-                      </span>
-                    ) : onSwitchToWorktree && matchedWorktree ? (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSwitchToWorktree(matchedWorktree.id);
-                        }}
-                        className="shrink-0 text-github-open hover:text-github-open/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
-                        aria-label="Switch to worktree"
-                      >
-                        <WorktreeIcon className="w-3.5 h-3.5" />
-                      </button>
-                    ) : (
-                      <span className="shrink-0 text-github-open">
-                        <WorktreeIcon className="w-3.5 h-3.5" />
-                      </span>
-                    )}
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {isActiveWorktree
-                      ? "Active worktree"
-                      : onSwitchToWorktree && matchedWorktree
-                        ? "Switch to worktree"
-                        : "Has worktree"}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            ) : item.state === "OPEN" && onCreateWorktree ? (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {isActiveWorktree ? (
+                    <span className="shrink-0 text-status-info">
+                      <FolderGit2 className="w-3.5 h-3.5" />
+                    </span>
+                  ) : onSwitchToWorktree && matchedWorktree ? (
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onCreateWorktree(item);
+                        onSwitchToWorktree(matchedWorktree.id);
                       }}
-                      className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
-                      aria-label="Create worktree"
+                      className="shrink-0 text-github-open hover:text-github-open/80 transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
+                      aria-label="Switch to worktree"
                     >
-                      <WorktreeIcon className="w-3.5 h-3.5" />
+                      <FolderGit2 className="w-3.5 h-3.5" />
                     </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Create worktree</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+                  ) : (
+                    <span className="shrink-0 text-github-open">
+                      <FolderGit2 className="w-3.5 h-3.5" />
+                    </span>
+                  )}
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {isActiveWorktree
+                    ? "Active worktree"
+                    : onSwitchToWorktree && matchedWorktree
+                      ? "Switch to worktree"
+                      : "Has worktree"}
+                </TooltipContent>
+              </Tooltip>
+            ) : item.state === "OPEN" && onCreateWorktree ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCreateWorktree(item);
+                    }}
+                    className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
+                    aria-label="Create worktree"
+                  >
+                    <FolderGit2 className="w-3.5 h-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Create worktree</TooltipContent>
+              </Tooltip>
             ) : null}
 
             <DropdownMenu>
@@ -391,7 +410,7 @@ export function GitHubListItem({
                   type="button"
                   onClick={(e) => e.stopPropagation()}
                   className={cn(
-                    "shrink-0 p-0.5 rounded hover:bg-muted transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "shrink-0 p-0.5 rounded hover:bg-muted transition focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
                     isActive
                       ? "opacity-100"
                       : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
@@ -411,7 +430,7 @@ export function GitHubListItem({
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onSelect={() => onSwitchToWorktree(matchedWorktree.id)}>
-                      <WorktreeIcon className="h-3.5 w-3.5 mr-2" />
+                      <FolderGit2 className="h-3.5 w-3.5 mr-2" />
                       Switch to Worktree
                     </DropdownMenuItem>
                   </>
@@ -421,7 +440,7 @@ export function GitHubListItem({
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
-                      <WorktreeIcon className="h-3.5 w-3.5 mr-2" />
+                      <FolderGit2 className="h-3.5 w-3.5 mr-2" />
                       Create Worktree
                     </DropdownMenuItem>
                   </>

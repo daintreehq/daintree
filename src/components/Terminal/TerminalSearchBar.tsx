@@ -1,9 +1,19 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { X, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { SEARCH_HIGHLIGHT_LIMIT } from "@/services/terminal/TerminalAddonManager";
 import { validateRegexTerm, buildSearchOptions, type SearchStatus } from "./terminalSearchUtils";
+
+interface MatchResults {
+  resultIndex: number;
+  resultCount: number;
+}
+
+function formatCount(count: number): string {
+  return count >= SEARCH_HIGHLIGHT_LIMIT ? `${SEARCH_HIGHLIGHT_LIMIT}+` : String(count);
+}
 
 interface TerminalSearchBarProps {
   terminalId: string;
@@ -16,6 +26,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [regexEnabled, setRegexEnabled] = useState(false);
   const [searchStatus, setSearchStatus] = useState<SearchStatus>("idle");
+  const [matchResults, setMatchResults] = useState<MatchResults | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -23,6 +34,18 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     inputRef.current?.focus();
     inputRef.current?.select();
   }, []);
+
+  useEffect(() => {
+    const managed = terminalInstanceService.get(terminalId);
+    const addon = managed?.searchAddon;
+    if (!addon?.onDidChangeResults) return;
+    const disposable = addon.onDidChangeResults(({ resultIndex, resultCount }) => {
+      setMatchResults({ resultIndex, resultCount });
+    });
+    return () => {
+      disposable.dispose();
+    };
+  }, [terminalId]);
 
   const performSearch = useCallback(
     (
@@ -35,6 +58,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
 
       if (!term) {
         setSearchStatus("idle");
+        setMatchResults(null);
         return;
       }
 
@@ -42,6 +66,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         const validation = validateRegexTerm(term, effectiveCaseSensitive);
         if (!validation.isValid) {
           setSearchStatus("invalidRegex");
+          setMatchResults(null);
           const managed = terminalInstanceService.get(terminalId);
           managed?.searchAddon.clearDecorations();
           return;
@@ -61,10 +86,12 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
 
         if (!found) {
           managed.searchAddon.clearDecorations();
+          setMatchResults(null);
         }
         setSearchStatus(found ? "found" : "none");
       } catch {
         setSearchStatus(effectiveRegexEnabled ? "invalidRegex" : "none");
+        setMatchResults(null);
         managed.searchAddon.clearDecorations();
       }
     },
@@ -75,6 +102,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     const managed = terminalInstanceService.get(terminalId);
     managed?.searchAddon.clearDecorations();
     setSearchStatus("idle");
+    setMatchResults(null);
   }, [terminalId]);
 
   const handleInputChange = useCallback(
@@ -148,14 +176,18 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     };
   }, []);
 
-  const statusText =
-    searchTerm && searchStatus !== "idle"
-      ? searchStatus === "found"
-        ? "Found"
-        : searchStatus === "none"
-          ? "No matches"
-          : "Invalid regex"
-      : "";
+  const statusText = (() => {
+    if (!searchTerm || searchStatus === "idle") return "";
+    if (searchStatus === "invalidRegex") return "Invalid regex";
+    if (searchStatus === "none") return "No matches";
+    if (matchResults && matchResults.resultCount > 0) {
+      const countLabel = formatCount(matchResults.resultCount);
+      return matchResults.resultIndex >= 0
+        ? `${matchResults.resultIndex + 1} of ${countLabel}`
+        : `${countLabel} matches`;
+    }
+    return "Found";
+  })();
 
   return (
     <div
@@ -179,52 +211,48 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         className={cn(
           "w-44 px-2 py-1 text-sm",
           "bg-daintree-bg border border-daintree-border rounded",
-          "focus:outline-none focus:ring-1 focus:ring-status-info",
+          "focus:outline-hidden focus:ring-1 focus:ring-status-info",
           "text-daintree-text placeholder:text-text-muted"
         )}
       />
 
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={handleCaseSensitiveToggle}
-              className={cn(
-                "px-1.5 py-1 text-xs rounded transition-colors",
-                caseSensitive
-                  ? "bg-status-info text-daintree-bg"
-                  : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
-              )}
-              aria-label="Toggle case sensitivity"
-              aria-pressed={caseSensitive}
-            >
-              Aa
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Case sensitive</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={handleCaseSensitiveToggle}
+            className={cn(
+              "px-1.5 py-1 text-xs rounded transition-colors",
+              caseSensitive
+                ? "bg-status-info text-daintree-bg"
+                : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
+            )}
+            aria-label="Toggle case sensitivity"
+            aria-pressed={caseSensitive}
+          >
+            Aa
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Case sensitive</TooltipContent>
+      </Tooltip>
 
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={handleRegexToggle}
-              className={cn(
-                "px-1.5 py-1 text-xs font-mono rounded transition-colors",
-                regexEnabled
-                  ? "bg-status-info text-daintree-bg"
-                  : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
-              )}
-              aria-label="Toggle regex mode"
-              aria-pressed={regexEnabled}
-            >
-              .*
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Regex</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={handleRegexToggle}
+            className={cn(
+              "px-1.5 py-1 text-xs font-mono rounded transition-colors",
+              regexEnabled
+                ? "bg-status-info text-daintree-bg"
+                : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
+            )}
+            aria-label="Toggle regex mode"
+            aria-pressed={regexEnabled}
+          >
+            .*
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Regex</TooltipContent>
+      </Tooltip>
 
       {statusText && (
         <span
@@ -242,69 +270,61 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         {statusText}
       </span>
 
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
-              <button
-                onClick={() => performSearch(searchTerm, "prev")}
-                disabled={!searchTerm}
-                className={cn(
-                  "p-1 rounded transition-colors",
-                  "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg",
-                  "disabled:opacity-30 disabled:cursor-not-allowed"
-                )}
-                aria-label="Previous match"
-              >
-                <ChevronUp className="w-4 h-4" />
-              </button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Previous match (Shift+Enter)</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
-              <button
-                onClick={() => performSearch(searchTerm, "next")}
-                disabled={!searchTerm}
-                className={cn(
-                  "p-1 rounded transition-colors",
-                  "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg",
-                  "disabled:opacity-30 disabled:cursor-not-allowed"
-                )}
-                aria-label="Next match"
-              >
-                <ChevronDown className="w-4 h-4" />
-              </button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Next match (Enter)</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
             <button
-              onClick={handleClose}
+              onClick={() => performSearch(searchTerm, "prev")}
+              disabled={!searchTerm}
               className={cn(
                 "p-1 rounded transition-colors",
-                "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
+                "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg",
+                "disabled:opacity-30 disabled:cursor-not-allowed"
               )}
-              aria-label="Close search"
+              aria-label="Previous match"
             >
-              <X className="w-4 h-4" />
+              <ChevronUp className="w-4 h-4" />
             </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Close (Esc)</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Previous match (Shift+Enter)</TooltipContent>
+      </Tooltip>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
+            <button
+              onClick={() => performSearch(searchTerm, "next")}
+              disabled={!searchTerm}
+              className={cn(
+                "p-1 rounded transition-colors",
+                "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg",
+                "disabled:opacity-30 disabled:cursor-not-allowed"
+              )}
+              aria-label="Next match"
+            >
+              <ChevronDown className="w-4 h-4" />
+            </button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Next match (Enter)</TooltipContent>
+      </Tooltip>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={handleClose}
+            className={cn(
+              "p-1 rounded transition-colors",
+              "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
+            )}
+            aria-label="Close search"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Close (Esc)</TooltipContent>
+      </Tooltip>
     </div>
   );
 }
-
-export default TerminalSearchBar;

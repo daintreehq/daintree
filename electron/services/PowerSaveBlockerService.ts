@@ -2,7 +2,7 @@ import { powerSaveBlocker } from "electron";
 import { events } from "./events.js";
 import type { AgentState } from "../../shared/types/agent.js";
 
-const ACTIVE_STATES = new Set<AgentState>(["working", "running"]);
+const ACTIVE_STATES = new Set<AgentState>(["working"]);
 const SAFETY_TIMEOUT_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 export class PowerSaveBlockerService {

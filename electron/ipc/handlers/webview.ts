@@ -1,8 +1,8 @@
-import { BrowserWindow, ipcMain, webContents } from "electron";
+import { BrowserWindow, webContents } from "electron";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { CHANNELS } from "../channels.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
-import { broadcastToRenderer, sendToRenderer } from "../utils.js";
+import { broadcastToRenderer, sendToRenderer, typedHandle } from "../utils.js";
 import { startOAuthLoopback } from "../../services/OAuthLoopbackService.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
@@ -12,6 +12,9 @@ import type {
   SerializedConsoleRow,
   CdpPropertyDescriptor,
 } from "../../../shared/types/ipc/webviewConsole.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { AppError } from "../../utils/errorTypes.js";
+import { logError, logWarn } from "../../utils/logger.js";
 
 interface CdpSession {
   runtimeEnabled: boolean;
@@ -217,7 +220,6 @@ function cleanupSession(wcId: number): void {
 
 export function registerWebviewHandlers(_deps: HandlerDependencies): () => void {
   const handleSetLifecycleState = async (
-    _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,
     frozen: unknown
   ): Promise<void> => {
@@ -237,7 +239,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         state: frozen ? "frozen" : "active",
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err, "CDP lifecycle state failed");
       const isExpected =
         message.includes("Target closed") ||
         message.includes("Inspected target navigated") ||
@@ -250,7 +252,6 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
   };
 
   const handleStartConsoleCapture = async (
-    _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,
     paneId: unknown
   ): Promise<void> => {
@@ -344,7 +345,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         wc.debugger.on("detach", detachListener);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err, "CDP console capture start failed");
       const isExpected =
         message.includes("Target closed") ||
         message.includes("Cannot attach") ||
@@ -413,7 +414,6 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
   }
 
   const handleStopConsoleCapture = async (
-    _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,
     paneId: unknown
   ): Promise<void> => {
@@ -447,7 +447,6 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
   };
 
   const handleClearConsoleCapture = async (
-    _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,
     paneId: unknown
   ): Promise<void> => {
@@ -467,7 +466,6 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
   };
 
   const handleGetConsoleProperties = async (
-    _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,
     objectId: unknown
   ): Promise<{ properties: CdpPropertyDescriptor[] }> => {
@@ -511,7 +509,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
 
       return { properties };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err, "Failed to get object properties");
       if (message.includes("Could not find object")) {
         return { properties: [] };
       }
@@ -519,10 +517,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     }
   };
 
-  const handleRegisterPanel = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ): Promise<void> => {
+  const handleRegisterPanel = async (payload: unknown): Promise<void> => {
     if (
       !payload ||
       typeof payload !== "object" ||
@@ -535,10 +530,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     getWebviewDialogService().registerPanel(webContentsId, panelId);
   };
 
-  const handleDialogResponse = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ): Promise<void> => {
+  const handleDialogResponse = async (payload: unknown): Promise<void> => {
     if (
       !payload ||
       typeof payload !== "object" ||
@@ -556,12 +548,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
   };
 
   const handleOAuthLoopback = async (
-    _event: Electron.IpcMainInvokeEvent,
     authUrl: unknown,
     panelId: unknown,
     webContentsId: unknown,
     providedSessionStorageSnapshot: unknown
-  ): Promise<{ success: boolean; error?: string } | null> => {
+  ): Promise<{ success: true } | null> => {
     if (
       typeof authUrl !== "string" ||
       typeof panelId !== "string" ||
@@ -591,7 +582,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     const wc = webContents.fromId(webContentsId);
     if (!wc || wc.isDestroyed()) {
       console.error("[OAuthLoopback] WebContents not found or destroyed:", webContentsId);
-      return { success: false, error: "WebView no longer available" };
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: "WebView no longer available",
+        context: { webContentsId, panelId },
+      });
     }
 
     let sessionStorageSnapshot =
@@ -643,6 +638,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     let interceptorListener:
       | ((event: Electron.Event, method: string, params: unknown) => void)
       | null = null;
+    let navigationError: Error | null = null;
 
     try {
       if (!wc.debugger.isAttached()) {
@@ -718,10 +714,18 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
             p.request.postData?.includes("grant_type=authorization_code");
 
           if (!isTokenExchange) {
-            // Not the token exchange — let it through
+            // Not the token exchange — let it through. Failure here is usually
+            // a teardown race (debugger detached, request superseded). Surface
+            // at warn so it's visible in logs without polluting error metrics.
             wc.debugger
               .sendCommand("Fetch.continueRequest", { requestId: p.requestId })
-              .catch(() => {});
+              .catch((err) => {
+                logWarn("OAuth CDP non-token continueRequest failed", {
+                  panelId,
+                  url: p.request.url,
+                  error: formatErrorMessage(err, "CDP continueRequest failed"),
+                });
+              });
             return;
           }
 
@@ -747,7 +751,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
               postData: Buffer.from(rewrittenBody).toString("base64"),
             })
             .catch((err) => {
-              console.error("[OAuthLoopback] CDP continueRequest failed:", err);
+              logError("OAuth CDP token-exchange continueRequest failed", err, { panelId });
             });
 
           clearTimeout(timeout);
@@ -760,18 +764,29 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         // The page will load, the app's JS will fire the token exchange fetch,
         // and our CDP listener will intercept and rewrite it.
         wc.loadURL(callbackUrl).catch((err) => {
-          console.error("[OAuthLoopback] Failed to navigate webview:", err);
+          // Capture so the outer scope can throw after CDP cleanup runs;
+          // resolving the promise here lets the `finally` block tear down
+          // listeners and Fetch.disable cleanly before the error propagates.
+          navigationError = err instanceof Error ? err : new Error(String(err));
+          logError("OAuth callback webview navigation failed", err, { panelId });
           clearTimeout(timeout);
           finishIntercept();
         });
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = formatErrorMessage(err, "CDP setup failed");
       console.error("[OAuthLoopback] CDP setup failed:", msg);
       // Still try to navigate even without interception — might work for providers
-      // that don't enforce strict redirect_uri matching at token exchange
+      // that don't enforce strict redirect_uri matching at token exchange.
+      // Intentional: the primary CDP failure was already logged + rethrown above;
+      // this fallback navigation's failure adds no actionable signal.
       wc.loadURL(callbackUrl).catch(() => {});
-      return { success: false, error: `CDP interception failed: ${msg}` };
+      throw new AppError({
+        code: "INTERNAL",
+        message: `CDP interception failed: ${msg}`,
+        context: { panelId },
+        cause: err instanceof Error ? err : undefined,
+      });
     } finally {
       // Clean up CDP Fetch — remove listener and disable
       if (interceptorListener) {
@@ -782,34 +797,61 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
           .sendCommand("Page.removeScriptToEvaluateOnNewDocument", {
             identifier: restoreScriptIdentifier,
           })
-          .catch(() => {});
+          .catch(() => {
+            // Intentional: post-flow CDP cleanup. Any primary failure was
+            // already surfaced; cleanup race conditions add no signal.
+          });
       }
       if (fetchEnabled && !wc.isDestroyed()) {
-        wc.debugger.sendCommand("Fetch.disable").catch(() => {});
+        wc.debugger.sendCommand("Fetch.disable").catch(() => {
+          // Intentional: post-flow CDP cleanup (see above).
+        });
       }
+    }
+
+    if (navigationError) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: `OAuth callback navigation failed: ${(navigationError as Error).message}`,
+        context: { panelId },
+        cause: navigationError,
+      });
     }
 
     return { success: true };
   };
 
-  ipcMain.handle(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, handleSetLifecycleState);
-  ipcMain.handle(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel);
-  ipcMain.handle(CHANNELS.WEBVIEW_DIALOG_RESPONSE, handleDialogResponse);
-  ipcMain.handle(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE, handleStartConsoleCapture);
-  ipcMain.handle(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, handleStopConsoleCapture);
-  ipcMain.handle(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, handleClearConsoleCapture);
-  ipcMain.handle(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, handleGetConsoleProperties);
-  ipcMain.handle(CHANNELS.WEBVIEW_OAUTH_LOOPBACK, handleOAuthLoopback);
+  const handleReloadIgnoringCache = async (
+    webContentsId: unknown,
+    panelId: unknown
+  ): Promise<void> => {
+    if (typeof webContentsId !== "number" || typeof panelId !== "string") {
+      throw new Error("Invalid arguments: webContentsId must be number, panelId must be string");
+    }
+
+    if (getWebviewDialogService().getPanelId(webContentsId) !== panelId) return;
+
+    const wc = webContents.fromId(webContentsId);
+    if (!wc || wc.isDestroyed()) return;
+
+    wc.reloadIgnoringCache();
+  };
+
+  const cleanups: Array<() => void> = [
+    typedHandle(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, handleSetLifecycleState),
+    typedHandle(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel),
+    typedHandle(CHANNELS.WEBVIEW_DIALOG_RESPONSE, handleDialogResponse),
+    typedHandle(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE, handleStartConsoleCapture),
+    typedHandle(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, handleStopConsoleCapture),
+    typedHandle(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, handleClearConsoleCapture),
+    typedHandle(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, handleGetConsoleProperties),
+    // @ts-expect-error: result type contains {success} | null — pending migration to throw AppError. See #6020.
+    typedHandle(CHANNELS.WEBVIEW_OAUTH_LOOPBACK, handleOAuthLoopback),
+    typedHandle(CHANNELS.WEBVIEW_RELOAD_IGNORING_CACHE, handleReloadIgnoringCache),
+  ];
 
   return () => {
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_REGISTER_PANEL);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_DIALOG_RESPONSE);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_OAUTH_LOOPBACK);
+    for (const cleanup of cleanups) cleanup();
 
     // Clean up all sessions
     for (const wcId of sessions.keys()) {

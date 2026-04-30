@@ -1,5 +1,7 @@
 import { useEffect } from "react";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { logError, logWarn } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTerminalFontStore, useScreenReaderStore } from "@/store";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
@@ -38,16 +40,9 @@ export function useTerminalConfig() {
           // Hydrate directly to avoid polluting the recently-used list on startup
           useTerminalColorSchemeStore.setState({ selectedSchemeId: config.colorSchemeId.trim() });
         }
-        if (typeof config.customSchemes === "string" && config.customSchemes.trim()) {
-          try {
-            const schemes = JSON.parse(config.customSchemes);
-            if (Array.isArray(schemes)) {
-              for (const scheme of schemes) {
-                addCustomScheme(scheme);
-              }
-            }
-          } catch {
-            // ignore malformed custom schemes
+        if (Array.isArray(config.customSchemes)) {
+          for (const scheme of config.customSchemes) {
+            addCustomScheme(scheme);
           }
         }
         if (Array.isArray(config.recentSchemeIds)) {
@@ -59,7 +54,7 @@ export function useTerminalConfig() {
         }
       })
       .catch((error) => {
-        console.error("Failed to load terminal config:", error);
+        logError("Failed to load terminal config", error);
       });
 
     return () => {
@@ -79,7 +74,13 @@ export function useTerminalConfig() {
           useScreenReaderStore.getState().setOsAccessibilityEnabled(enabled);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        // Background probe — `onSupportChanged` will repopulate state when the
+        // OS event fires. Falling through with the prior store value is fine.
+        logWarn("Failed to read OS accessibility state", {
+          error: formatErrorMessage(err, "Accessibility probe failed"),
+        });
+      });
 
     const cleanup = window.electron.accessibility.onSupportChanged(({ enabled }) => {
       if (!cancelled) {
@@ -95,6 +96,7 @@ export function useTerminalConfig() {
 
   const colorVisionMode = useAppThemeStore((state) => state.colorVisionMode);
   const appThemeId = useAppThemeStore((state) => state.selectedSchemeId);
+  const appPreviewSchemeId = useAppThemeStore((state) => state.previewSchemeId);
 
   useEffect(() => {
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
@@ -107,6 +109,7 @@ export function useTerminalConfig() {
     // customSchemes in deps ensures re-run when a custom scheme is added/changed
     // colorVisionMode in deps ensures terminal ANSI colors update when CVD mode changes
     // appThemeId in deps ensures terminal updates when app theme changes while "daintree" is selected
+    // appPreviewSchemeId in deps ensures terminal updates when app theme preview changes
     // screenReaderEnabled in deps ensures terminals update when screen reader mode changes
   }, [
     selectedSchemeId,
@@ -116,6 +119,7 @@ export function useTerminalConfig() {
     fontFamily,
     colorVisionMode,
     appThemeId,
+    appPreviewSchemeId,
     screenReaderEnabled,
   ]);
 }

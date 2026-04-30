@@ -2,8 +2,11 @@ import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useSta
 import { createPortal } from "react-dom";
 import type { StagingStatus, GitStatus } from "@shared/types";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
+import type { GitOperationReason } from "@shared/types/ipc/errors";
+import { isClientAppError } from "@/utils/clientAppError";
 import { cn } from "@/lib/utils";
 import { useOverlayState } from "@/hooks";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import {
   X,
   RefreshCw,
@@ -17,6 +20,7 @@ import {
 import { Spinner } from "@/components/ui/Spinner";
 import { FileStageRow } from "./FileStageRow";
 import { CommitPanel } from "./CommitPanel";
+import { ConflictPanel } from "./ConflictPanel";
 import { FileDiffModal } from "../FileDiffModal";
 import { BaseBranchDiffModal } from "./BaseBranchDiffModal";
 import { Button } from "@/components/ui/button";
@@ -24,6 +28,8 @@ import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useShallow } from "zustand/react/shallow";
 import { githubClient } from "@/clients/githubClient";
+import { actionService } from "@/services/ActionService";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface ReviewHubProps {
   isOpen: boolean;
@@ -32,6 +38,53 @@ interface ReviewHubProps {
 }
 
 type DiffMode = "working-tree" | "base-branch";
+
+interface PushErrorState {
+  reason: GitOperationReason;
+  rawMessage: string;
+}
+
+type PushBannerCta = { kind: "settings-github"; label: string } | { kind: "retry"; label: string };
+
+interface PushBannerConfig {
+  message: string;
+  showRaw: boolean;
+  cta?: PushBannerCta;
+}
+
+function getPushBannerConfig(reason: GitOperationReason): PushBannerConfig {
+  switch (reason) {
+    case "auth-failed":
+      return {
+        message: "Authentication failed — check your credentials or SSH key.",
+        showRaw: false,
+        cta: { kind: "settings-github", label: "Open GitHub settings" },
+      };
+    case "push-rejected-outdated":
+      return {
+        message: "The remote has new commits. Pull or rebase before pushing.",
+        showRaw: false,
+      };
+    case "push-rejected-policy":
+      return {
+        message: "The remote rejected this push (protected branch or repository rule).",
+        showRaw: true,
+      };
+    case "hook-rejected":
+      return {
+        message: "A server-side hook rejected the push.",
+        showRaw: true,
+      };
+    case "network-unavailable":
+      return {
+        message: "Could not reach the remote. Check your internet connection.",
+        showRaw: false,
+        cta: { kind: "retry", label: "Retry push" },
+      };
+    default:
+      return { message: "Push failed. See details below.", showRaw: true };
+  }
+}
 
 function statusLabel(status: string): { label: string; className: string } {
   switch (status) {
@@ -50,13 +103,49 @@ function statusLabel(status: string): { label: string; className: string } {
   }
 }
 
+interface BaseBranchFileRowProps {
+  file: CrossWorktreeFile;
+  onClick: () => void;
+}
+
+function BaseBranchFileRow({ file, onClick }: BaseBranchFileRowProps) {
+  const { label, className: statusClass } = statusLabel(file.status);
+  const filename = file.path.split(/[/\\]/).filter(Boolean).pop() || file.path;
+  const dirPath = /[/\\]/.test(file.path)
+    ? file.path.substring(0, Math.max(file.path.lastIndexOf("/"), file.path.lastIndexOf("\\")))
+    : "";
+
+  return (
+    <TruncatedTooltip content={file.path}>
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          "w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-xs",
+          "hover:bg-tint/[0.05] transition-colors",
+          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
+        )}
+      >
+        <span className={cn("font-mono font-bold shrink-0 w-3 text-center", statusClass)}>
+          {label}
+        </span>
+        <FileIcon className="w-3 h-3 shrink-0 text-daintree-text/40" />
+        <span className="text-daintree-text/80 truncate min-w-0">{filename}</span>
+        <span className="text-daintree-text/30 truncate min-w-0 text-[10px] ml-auto pl-2">
+          {dirPath}
+        </span>
+      </button>
+    </TruncatedTooltip>
+  );
+}
+
 export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
   const [status, setStatus] = useState<StagingStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [pushError, setPushError] = useState<string | null>(null);
+  const [pushError, setPushError] = useState<PushErrorState | null>(null);
   const [commitMessage, setCommitMessage] = useState("");
   const [selectedFile, setSelectedFile] = useState<{
     path: string;
@@ -109,7 +198,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
       }
     } catch (err) {
       if (refreshIdRef.current === requestId) {
-        setLoadError(err instanceof Error ? err.message : String(err));
+        setLoadError(formatErrorMessage(err, "Failed to load staging status"));
       }
     } finally {
       if (refreshIdRef.current === requestId) {
@@ -164,7 +253,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
       setBaseBranchFiles(res.files);
     } catch (err) {
       if (baseBranchRequestRef.current !== requestId) return;
-      setBaseBranchError(err instanceof Error ? err.message : "Failed to load base branch diff");
+      setBaseBranchError(formatErrorMessage(err, "Failed to load base branch diff"));
     } finally {
       if (baseBranchRequestRef.current === requestId) setBaseBranchLoading(false);
     }
@@ -230,7 +319,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
         await window.electron.git.stageFile(worktreePath, filePath);
         await refresh();
       } catch (err) {
-        setActionError(err instanceof Error ? err.message : String(err));
+        setActionError(formatErrorMessage(err, "Failed to stage file"));
       }
     },
     [worktreePath, refresh]
@@ -244,7 +333,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
         await window.electron.git.unstageFile(worktreePath, filePath);
         await refresh();
       } catch (err) {
-        setActionError(err instanceof Error ? err.message : String(err));
+        setActionError(formatErrorMessage(err, "Failed to unstage file"));
       }
     },
     [worktreePath, refresh]
@@ -257,7 +346,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
       await window.electron.git.stageAll(worktreePath);
       await refresh();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      setActionError(formatErrorMessage(err, "Failed to stage all files"));
     }
   }, [worktreePath, refresh]);
 
@@ -268,7 +357,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
       await window.electron.git.unstageAll(worktreePath);
       await refresh();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      setActionError(formatErrorMessage(err, "Failed to unstage all files"));
     }
   }, [worktreePath, refresh]);
 
@@ -280,12 +369,71 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
         await window.electron.git.commit(worktreePath, message);
         await refresh();
       } catch (err) {
-        setActionError(err instanceof Error ? err.message : String(err));
+        setActionError(formatErrorMessage(err, "Failed to commit changes"));
         throw err;
       }
     },
     [worktreePath, refresh]
   );
+
+  const handleAbortOperation = useCallback(async () => {
+    setActionError(null);
+    debouncedBgRefreshRef.current?.cancel();
+    try {
+      await window.electron.git.abortRepositoryOperation(worktreePath);
+      await refresh();
+    } catch (err) {
+      setActionError(formatErrorMessage(err, "Failed to abort repository operation"));
+      throw err;
+    }
+  }, [worktreePath, refresh]);
+
+  const handleContinueOperation = useCallback(async () => {
+    setActionError(null);
+    debouncedBgRefreshRef.current?.cancel();
+    try {
+      await window.electron.git.continueRepositoryOperation(worktreePath);
+      await refresh();
+    } catch (err) {
+      setActionError(formatErrorMessage(err, "Failed to continue repository operation"));
+      throw err;
+    }
+  }, [worktreePath, refresh]);
+
+  const handleOpenInEditor = useCallback(
+    async (filePath: string) => {
+      setActionError(null);
+      try {
+        const base = worktreePath.replace(/\\/g, "/").replace(/\/+$/, "");
+        const tail = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
+        await window.electron.system.openInEditor({ path: `${base}/${tail}` });
+      } catch (err) {
+        setActionError(formatErrorMessage(err, "Failed to open file in editor"));
+      }
+    },
+    [worktreePath]
+  );
+
+  const runPush = useCallback(async () => {
+    try {
+      await window.electron.git.push(worktreePath);
+      setPushError(null);
+    } catch (err) {
+      // GitOperationError carries `gitReason` (auth-failed, push-rejected-*, etc.).
+      // AppError carries `code` from a different union (RATE_LIMITED, etc.) — fall
+      // back to "unknown" so getPushBannerConfig surfaces the raw message rather
+      // than rendering an unmapped reason.
+      const gitReason = (err as { gitReason?: GitOperationReason }).gitReason;
+      const isRateLimited =
+        isClientAppError(err) && (err as { code?: string }).code === "RATE_LIMITED";
+      setPushError({
+        reason: gitReason ?? "unknown",
+        rawMessage: isRateLimited
+          ? "Too many push attempts in a short window — wait a moment and try again."
+          : formatErrorMessage(err, "Failed to push"),
+      });
+    }
+  }, [worktreePath]);
 
   const handleCommitAndPush = useCallback(
     async (message: string) => {
@@ -295,21 +443,20 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
       try {
         await window.electron.git.commit(worktreePath, message);
       } catch (err) {
-        setActionError(err instanceof Error ? err.message : String(err));
+        setActionError(formatErrorMessage(err, "Failed to commit changes"));
         throw err;
       }
       await refresh();
-      try {
-        const result = await window.electron.git.push(worktreePath);
-        if (!result.success) {
-          setPushError(`Push failed: ${result.error}`);
-        }
-      } catch (err) {
-        setPushError(`Push failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      await runPush();
     },
-    [worktreePath, refresh]
+    [worktreePath, refresh, runPush]
   );
+
+  const handleRetryPush = useCallback(async () => {
+    setPushError(null);
+    debouncedBgRefreshRef.current?.cancel();
+    await runPush();
+  }, [runPush]);
 
   useLayoutEffect(() => {
     if (scrollContainerRef.current && status) {
@@ -375,6 +522,12 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     (status?.unstaged.length ?? 0) +
     (status?.conflicted.length ?? 0);
   const hasConflicts = (status?.conflicted.length ?? 0) > 0;
+  const repoState = status?.repoState ?? "CLEAN";
+  const isOperationState =
+    repoState === "MERGING" ||
+    repoState === "REBASING" ||
+    repoState === "CHERRY_PICKING" ||
+    repoState === "REVERTING";
 
   return createPortal(
     <>
@@ -411,13 +564,12 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 Review & Commit
               </h2>
               {status?.currentBranch && (
-                <span
-                  title={status.currentBranch}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-daintree-text/60 font-mono truncate max-w-[200px]"
-                >
-                  <GitBranch className="w-3 h-3 shrink-0" />
-                  <span className="truncate">{status.currentBranch}</span>
-                </span>
+                <TruncatedTooltip content={status.currentBranch}>
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-daintree-text/60 font-mono truncate max-w-[200px]">
+                    <GitBranch className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{status.currentBranch}</span>
+                  </span>
+                </TruncatedTooltip>
               )}
               {status?.hasRemote && worktreePR && worktreePR.prUrl && (
                 <button
@@ -427,7 +579,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                     "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono",
                     "bg-tint/[0.07] border border-tint/[0.08]",
                     "hover:bg-tint/[0.12] transition-colors cursor-pointer",
-                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent"
+                    "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
                   )}
                   aria-label={`Open pull request #${worktreePR.prNumber} on GitHub`}
                 >
@@ -481,7 +633,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                   onClick={() => handleDiffModeChange("working-tree")}
                   className={cn(
                     "px-2 py-1 transition-colors",
-                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent",
+                    "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent",
                     diffMode === "working-tree"
                       ? "bg-tint/[0.12] text-daintree-text"
                       : "text-daintree-text/50 hover:text-daintree-text hover:bg-tint/[0.06]"
@@ -495,7 +647,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                   disabled={!status?.currentBranch || status.currentBranch === mainBranch}
                   className={cn(
                     "px-2 py-1 transition-colors border-l border-tint/[0.08]",
-                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent",
+                    "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent",
                     "disabled:opacity-40 disabled:cursor-not-allowed",
                     diffMode === "base-branch"
                       ? "bg-tint/[0.12] text-daintree-text"
@@ -514,7 +666,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                   className={cn(
                     "p-1.5 rounded transition-colors",
                     "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                    "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                   )}
                   aria-label="Refresh"
                 >
@@ -532,7 +684,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 className={cn(
                   "p-1.5 rounded transition-colors",
                   "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                 )}
                 aria-label="Close"
                 data-testid="review-hub-close"
@@ -549,12 +701,63 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
               <span>{actionError}</span>
             </div>
           )}
-          {pushError && (
-            <div className="px-4 py-2 text-xs text-status-warning bg-status-warning/10 flex items-start gap-2 shrink-0">
-              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-              <span>Committed locally. {pushError}</span>
-            </div>
-          )}
+          {pushError &&
+            (() => {
+              const config = getPushBannerConfig(pushError.reason);
+              const onCtaClick = () => {
+                if (!config.cta) return;
+                if (config.cta.kind === "settings-github") {
+                  void actionService.dispatch(
+                    "app.settings.openTab",
+                    { tab: "github" },
+                    { source: "user" }
+                  );
+                } else {
+                  void handleRetryPush();
+                }
+              };
+              return (
+                <div
+                  role="alert"
+                  data-testid="review-hub-push-error"
+                  data-reason={pushError.reason}
+                  className="px-4 py-2 text-xs text-status-warning bg-status-warning/10 flex items-start gap-2 shrink-0"
+                >
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div>
+                      <span className="font-medium">Committed locally.</span>{" "}
+                      <span>{config.message}</span>
+                    </div>
+                    {config.showRaw && pushError.rawMessage && (
+                      <pre
+                        data-testid="review-hub-push-error-details"
+                        className="mt-1 text-[10px] font-mono whitespace-pre-wrap break-all opacity-70"
+                      >
+                        {pushError.rawMessage}
+                      </pre>
+                    )}
+                    {config.cta && (
+                      <div className="mt-1.5">
+                        <button
+                          type="button"
+                          onClick={onCtaClick}
+                          data-testid="review-hub-push-error-cta"
+                          className={cn(
+                            "inline-flex items-center gap-1 px-2 py-0.5 rounded",
+                            "bg-status-warning/20 hover:bg-status-warning/30",
+                            "text-status-warning text-[11px] font-medium transition-colors",
+                            "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning"
+                          )}
+                        >
+                          {config.cta.label}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
           {/* Content */}
           <div
@@ -592,44 +795,13 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                     </span>
                   </div>
                   <div className="px-2 py-1 flex flex-col gap-0.5">
-                    {baseBranchFiles.map((file) => {
-                      const { label, className: statusClass } = statusLabel(file.status);
-                      return (
-                        <button
-                          key={`${file.status}:${file.path}`}
-                          onClick={() => setSelectedBaseBranchFile(file)}
-                          className={cn(
-                            "w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-xs",
-                            "hover:bg-tint/[0.05] transition-colors",
-                            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent"
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "font-mono font-bold shrink-0 w-3 text-center",
-                              statusClass
-                            )}
-                          >
-                            {label}
-                          </span>
-                          <FileIcon className="w-3 h-3 shrink-0 text-daintree-text/40" />
-                          <span
-                            className="text-daintree-text/80 truncate min-w-0"
-                            title={file.path}
-                          >
-                            {file.path.split(/[/\\]/).filter(Boolean).pop()}
-                          </span>
-                          <span className="text-daintree-text/30 truncate min-w-0 text-[10px] ml-auto pl-2">
-                            {/[/\\]/.test(file.path)
-                              ? file.path.substring(
-                                  0,
-                                  Math.max(file.path.lastIndexOf("/"), file.path.lastIndexOf("\\"))
-                                )
-                              : ""}
-                          </span>
-                        </button>
-                      );
-                    })}
+                    {baseBranchFiles.map((file) => (
+                      <BaseBranchFileRow
+                        key={`${file.status}:${file.path}`}
+                        file={file}
+                        onClick={() => setSelectedBaseBranchFile(file)}
+                      />
+                    ))}
                   </div>
                 </div>
               ) : null
@@ -647,6 +819,14 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                       Retry
                     </Button>
                   </div>
+                ) : status && isOperationState ? (
+                  <ConflictPanel
+                    status={status}
+                    onMarkResolved={handleStageFile}
+                    onOpenInEditor={handleOpenInEditor}
+                    onAbort={handleAbortOperation}
+                    onContinue={handleContinueOperation}
+                  />
                 ) : status && totalChanges === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 text-daintree-text/50">
                     <CheckSquare className="w-8 h-8 mb-2 text-daintree-text/30" />
@@ -756,19 +936,23 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
             )}
           </div>
 
-          {/* Commit panel — only in working-tree mode */}
-          {diffMode === "working-tree" && status && totalChanges > 0 && !loadError && (
-            <CommitPanel
-              stagedCount={status.staged.length}
-              isDetachedHead={status.isDetachedHead}
-              hasConflicts={hasConflicts}
-              hasRemote={status.hasRemote}
-              commitMessage={commitMessage}
-              onCommitMessageChange={setCommitMessage}
-              onCommit={handleCommit}
-              onCommitAndPush={handleCommitAndPush}
-            />
-          )}
+          {/* Commit panel — only in working-tree mode, and never during a conflict op */}
+          {diffMode === "working-tree" &&
+            status &&
+            totalChanges > 0 &&
+            !loadError &&
+            !isOperationState && (
+              <CommitPanel
+                stagedCount={status.staged.length}
+                isDetachedHead={status.isDetachedHead}
+                hasConflicts={hasConflicts}
+                hasRemote={status.hasRemote}
+                commitMessage={commitMessage}
+                onCommitMessageChange={setCommitMessage}
+                onCommit={handleCommit}
+                onCommitAndPush={handleCommitAndPush}
+              />
+            )}
         </div>
       </div>
 

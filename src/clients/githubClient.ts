@@ -4,6 +4,10 @@ import type {
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
+  GitHubRateLimitPayload,
+  GitHubTokenHealthPayload,
+  RepoStatsAndPagePayload,
+  GitHubFirstPageCachePayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -19,6 +23,10 @@ import type {
 export const githubClient = {
   getRepoStats: (cwd: string, bypassCache = false): Promise<RepositoryStats> => {
     return window.electron.github.getRepoStats(cwd, bypassCache);
+  },
+
+  getFirstPageCache: (cwd: string): Promise<GitHubFirstPageCachePayload | null> => {
+    return window.electron.github.getFirstPageCache(cwd);
   },
 
   getProjectHealth: (cwd: string, bypassCache = false): Promise<ProjectHealthData> => {
@@ -95,6 +103,22 @@ export const githubClient = {
 
   onIssueNotFound: (callback: (data: IssueNotFoundPayload) => void): (() => void) => {
     return window.electron.github.onIssueNotFound(callback);
+  },
+
+  onRateLimitChanged: (callback: (data: GitHubRateLimitPayload) => void): (() => void) => {
+    return window.electron.github.onRateLimitChanged(callback);
+  },
+
+  onTokenHealthChanged: (callback: (data: GitHubTokenHealthPayload) => void): (() => void) => {
+    return window.electron.github.onTokenHealthChanged(callback);
+  },
+
+  onRepoStatsAndPageUpdated: (callback: (data: RepoStatsAndPagePayload) => void): (() => void) => {
+    return window.electron.github.onRepoStatsAndPageUpdated(callback);
+  },
+
+  getTokenHealth: (): Promise<GitHubTokenHealthPayload> => {
+    return window.electron.github.getTokenHealth();
   },
 
   getIssueUrl: (cwd: string, issueNumber: number): Promise<string | null> => {

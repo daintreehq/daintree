@@ -1,12 +1,40 @@
 // @vitest-environment jsdom
+import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { PanelHeader } from "../PanelHeader";
 import type { PanelHeaderProps } from "../PanelHeader";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
   return { ...actual, createPortal: (children: React.ReactNode) => children };
+});
+
+vi.mock("framer-motion", () => {
+  const MotionDiv = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+    ({ children, ...props }, ref) => {
+      const {
+        layoutId: _layoutId,
+        layout: _layout,
+        transition: _transition,
+        ...rest
+      } = props as Record<string, unknown>;
+      return (
+        <div ref={ref} {...(rest as React.HTMLAttributes<HTMLDivElement>)}>
+          {children}
+        </div>
+      );
+    }
+  );
+  return {
+    LayoutGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    LazyMotion: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    domAnimation: {},
+    domMax: {},
+    m: { div: MotionDiv },
+    motion: { div: MotionDiv },
+  };
 });
 
 const mockScrollLeft = vi.fn();
@@ -53,6 +81,13 @@ let mockHasPty = false;
 vi.mock("@shared/config/panelKindRegistry", () => ({
   panelKindCanRestart: () => false,
   panelKindHasPty: () => mockHasPty,
+  getPanelKindConfig: (kind: string) =>
+    kind === "browser"
+      ? { id: "browser", name: "Browser", iconId: "globe", color: "#38bdf8" }
+      : kind === "dev-preview"
+        ? { id: "dev-preview", name: "Dev Preview", iconId: "monitor-play", color: "#38bdf8" }
+        : { id: "terminal", name: "Terminal", iconId: "terminal", color: "#9ca3af" },
+  getPanelKindColor: () => "#9ca3af",
 }));
 
 const mockDispatch = vi.fn().mockResolvedValue({ ok: true });
@@ -115,10 +150,17 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 }));
 
 function makeProps(overrides: Partial<PanelHeaderProps> = {}): PanelHeaderProps {
+  const chrome =
+    overrides.chrome ??
+    deriveTerminalChrome({
+      kind: overrides.kind ?? "terminal",
+      presetColor: overrides.presetColor,
+    });
   return {
     id: "test-panel",
     title: "Test Panel",
     kind: "terminal",
+    chrome,
     isFocused: true,
     isEditingTitle: false,
     editingValue: "",
@@ -181,24 +223,36 @@ describe("PanelHeader", () => {
       expect(findMenuButton(menu, "Duplicate")).toBeDefined();
     });
 
-    it("renders Lock Input and View Terminal Info for PTY panels", () => {
+    it("renders Lock Input for PTY panels", () => {
       mockHasPty = true;
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Lock Input")).toBeDefined();
-      expect(findMenuButton(menu, "View Terminal Info")).toBeDefined();
     });
 
-    it("does not render Lock Input or View Terminal Info for non-PTY panels", () => {
+    it("does not render View Terminal Info on any panel kind (#5957)", () => {
+      mockHasPty = true;
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+      const menu = screen.getByTestId("overflow-menu");
+      expect(findMenuButton(menu, "View Terminal Info")).toBeUndefined();
+    });
+
+    it("does not render Lock Input for non-PTY panels", () => {
       mockHasPty = false;
       render(<PanelHeader {...makeProps({ kind: "browser" })} />);
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Lock Input")).toBeUndefined();
-      expect(findMenuButton(menu, "View Terminal Info")).toBeUndefined();
     });
 
     it("renders Watch for unwatched agent panels", () => {
-      render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
+      render(
+        <PanelHeader
+          {...makeProps({
+            agentId: "claude",
+            chrome: deriveTerminalChrome({ detectedAgentId: "claude" }),
+          })}
+        />
+      );
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Watch")).toBeDefined();
       expect(findMenuButton(menu, "Cancel Watch")).toBeUndefined();
@@ -209,7 +263,14 @@ describe("PanelHeader", () => {
         ...mockStoreState,
         watchedPanels: new Set(["test-panel"]),
       };
-      render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
+      render(
+        <PanelHeader
+          {...makeProps({
+            agentId: "claude",
+            chrome: deriveTerminalChrome({ detectedAgentId: "claude" }),
+          })}
+        />
+      );
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Cancel Watch")).toBeDefined();
       expect(findMenuButton(menu, "Watch")).toBeUndefined();
@@ -264,18 +325,6 @@ describe("PanelHeader", () => {
       );
     });
 
-    it("dispatches terminal.viewInfo when clicking View Terminal Info", () => {
-      mockHasPty = true;
-      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
-      const menu = screen.getByTestId("overflow-menu");
-      findMenuButton(menu, "View Terminal Info")?.click();
-      expect(mockDispatch).toHaveBeenCalledWith(
-        "terminal.viewInfo",
-        { terminalId: "test-panel" },
-        { source: "menu" }
-      );
-    });
-
     it("dispatches terminal.trash when clicking Trash", () => {
       render(<PanelHeader {...makeProps()} />);
       const menu = screen.getByTestId("overflow-menu");
@@ -288,7 +337,14 @@ describe("PanelHeader", () => {
     });
 
     it("calls watchPanel when clicking Watch on unwatched agent panel", () => {
-      render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
+      render(
+        <PanelHeader
+          {...makeProps({
+            agentId: "claude",
+            chrome: deriveTerminalChrome({ detectedAgentId: "claude" }),
+          })}
+        />
+      );
       const menu = screen.getByTestId("overflow-menu");
       findMenuButton(menu, "Watch")?.click();
       expect(mockWatchPanel).toHaveBeenCalledWith("test-panel");
@@ -299,7 +355,14 @@ describe("PanelHeader", () => {
         ...mockStoreState,
         watchedPanels: new Set(["test-panel"]),
       };
-      render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
+      render(
+        <PanelHeader
+          {...makeProps({
+            agentId: "claude",
+            chrome: deriveTerminalChrome({ detectedAgentId: "claude" }),
+          })}
+        />
+      );
       const menu = screen.getByTestId("overflow-menu");
       findMenuButton(menu, "Cancel Watch")?.click();
       expect(mockUnwatchPanel).toHaveBeenCalledWith("test-panel");
@@ -395,8 +458,20 @@ describe("PanelHeader", () => {
 
   describe("tab scroll arrows", () => {
     const twoTabs = [
-      { id: "t1", title: "Tab 1", kind: "terminal" as const, isActive: true },
-      { id: "t2", title: "Tab 2", kind: "terminal" as const, isActive: false },
+      {
+        id: "t1",
+        title: "Tab 1",
+        kind: "terminal" as const,
+        chrome: deriveTerminalChrome(),
+        isActive: true,
+      },
+      {
+        id: "t2",
+        title: "Tab 2",
+        kind: "terminal" as const,
+        chrome: deriveTerminalChrome(),
+        isActive: false,
+      },
     ];
 
     it("renders scroll arrows when tabs overflow", () => {
@@ -465,6 +540,110 @@ describe("PanelHeader", () => {
       const closeButton = screen.getByTestId("panel-close");
       fireEvent.dblClick(closeButton);
       expect(mockDispatch).not.toHaveBeenCalledWith("nav.toggleFocusMode");
+    });
+  });
+
+  describe("multi-select title bar", () => {
+    it("does not tag the header when isSelected is false", () => {
+      const { container } = render(<PanelHeader {...makeProps({ isFocused: false })} />);
+      const header = container.firstElementChild as HTMLElement;
+      expect(header.getAttribute("data-selected")).toBeNull();
+      expect(header.className).toContain("bg-transparent");
+    });
+
+    it("tags selected panes with data-selected and lifts the header bg", () => {
+      const { container } = render(
+        <PanelHeader {...makeProps({ isFocused: false, isSelected: true })} />
+      );
+      const header = container.firstElementChild as HTMLElement;
+      expect(header.getAttribute("data-selected")).toBe("true");
+      // Selected header matches the focused overlay tint — one unified
+      // "active" title bar treatment for both focus and selection.
+      expect(header.className).toContain("bg-overlay-subtle");
+      expect(header.className).not.toContain("bg-transparent");
+    });
+
+    it("does not add an accent border or accent title on selected panes", () => {
+      const { container } = render(
+        <PanelHeader {...makeProps({ isFocused: true, isSelected: true })} />
+      );
+      const header = container.firstElementChild as HTMLElement;
+      expect(header.className).not.toContain("panel-fleet-primary");
+      expect(header.className).not.toContain("panel-fleet-member");
+      const title = screen
+        .getAllByText("Test Panel")
+        .find((el) => el.className.includes("font-medium"));
+      expect(title?.className).not.toContain("text-accent-primary");
+    });
+
+    it("does not apply selection bg when the pane is maximized", () => {
+      const { container } = render(
+        <PanelHeader {...makeProps({ isSelected: true, isMaximized: true })} />
+      );
+      const header = container.firstElementChild as HTMLElement;
+      expect(header.className).not.toContain("bg-overlay-subtle");
+    });
+  });
+
+  describe("dangerous flags indicator", () => {
+    it("shows red dot indicator when agentLaunchFlags contain dangerous flag", () => {
+      render(
+        <PanelHeader
+          {...makeProps({
+            agentLaunchFlags: ["--dangerously-skip-permissions"],
+          })}
+        />
+      );
+
+      const indicator = screen.getByLabelText("Launched with dangerous permissions");
+      expect(indicator).toBeDefined();
+      expect(indicator.className).toContain("bg-status-danger");
+    });
+
+    it("shows red dot indicator for all dangerous flag types", () => {
+      const dangerousFlags = [
+        ["--dangerously-skip-permissions"],
+        ["--yolo"],
+        ["--dangerously-bypass-approvals-and-sandbox"],
+        ["--force"],
+      ];
+
+      for (const flags of dangerousFlags) {
+        const { unmount } = render(<PanelHeader {...makeProps({ agentLaunchFlags: flags })} />);
+        const indicator = screen.getByLabelText("Launched with dangerous permissions");
+        expect(indicator).toBeDefined();
+        unmount();
+      }
+    });
+
+    it("does not show indicator when agentLaunchFlags does not contain dangerous flag", () => {
+      render(<PanelHeader {...makeProps({ agentLaunchFlags: ["--model", "claude-3-7"] })} />);
+
+      const indicator = screen.queryByLabelText("Launched with dangerous permissions");
+      expect(indicator).toBeNull();
+    });
+
+    it("does not show indicator when agentLaunchFlags is undefined", () => {
+      render(<PanelHeader {...makeProps()} />);
+
+      const indicator = screen.queryByLabelText("Launched with dangerous permissions");
+      expect(indicator).toBeNull();
+    });
+
+    it("does not show indicator when agentLaunchFlags is empty array", () => {
+      render(<PanelHeader {...makeProps({ agentLaunchFlags: [] })} />);
+
+      const indicator = screen.queryByLabelText("Launched with dangerous permissions");
+      expect(indicator).toBeNull();
+    });
+
+    it("shows tooltip with correct text for dangerous flags", () => {
+      render(<PanelHeader {...makeProps({ agentLaunchFlags: ["--yolo"] })} />);
+
+      const tooltipContent = screen.queryByText(
+        "Launched with dangerous permissions — agent can modify files without prompting"
+      );
+      expect(tooltipContent).toBeDefined();
     });
   });
 });

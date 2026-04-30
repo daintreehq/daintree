@@ -4,7 +4,7 @@ import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortabl
 import { useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   usePanelStore,
   useProjectStore,
@@ -17,6 +17,12 @@ import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
 import { BackgroundContainer } from "./BackgroundContainer";
 import { HelpAgentDockButton } from "./HelpAgentDockButton";
+import { DockLaunchButton } from "./DockLaunchButton";
+import {
+  DockLaunchMenuItems,
+  type DockLaunchAgent,
+  type DockLaunchMenuComponents,
+} from "./DockLaunchMenuItems";
 import {
   SortableDockItem,
   SortableDockPlaceholder,
@@ -24,28 +30,32 @@ import {
 } from "@/components/DragDrop";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useHorizontalScrollControls } from "@/hooks";
+import { useProjectSettings } from "@/hooks/useProjectSettings";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import type { ActionSource } from "@shared/types/actions";
 import { actionService } from "@/services/ActionService";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 
-import { AGENT_REGISTRY } from "@/config/agents";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { getAgentConfig, getAgentIds } from "@/config/agents";
+import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
-
-const AGENT_OPTIONS = [
-  ...BUILT_IN_AGENT_IDS.map((id) => ({
-    type: id,
-    label: AGENT_REGISTRY[id]?.name ?? id,
-  })),
-  { type: "terminal" as const, label: "Terminal" },
-  { type: "browser" as const, label: "Browser" },
-];
-
+import { buildDockRenderItems, type DockRenderItem } from "./dockRenderItems";
 import type { DockDensity } from "@/store/preferencesStore";
+
+const CONTEXT_MENU_COMPONENTS: DockLaunchMenuComponents = {
+  Item: ContextMenuItem,
+  Label: ContextMenuLabel,
+  Separator: ContextMenuSeparator,
+};
+
 export type { DockDensity } from "@/store/preferencesStore";
 
 interface ContentDockProps {
@@ -63,13 +73,19 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const openDockTerminal = usePanelStore((state) => state.openDockTerminal);
   const currentProject = useProjectStore((s) => s.currentProject);
   const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
+  const agentSettings = useAgentSettingsStore((s) => s.settings);
+  const agentAvailability = useCliAvailabilityStore((s) => s.availability);
+  const { settings: projectSettings } = useProjectSettings();
+  const hasDevPreview = Boolean(projectSettings?.devServerCommand?.trim());
 
   // Get tab groups for the dock, excluding the help panel terminal
   const tabGroups = useMemo(() => {
+    void storeTerminalIds;
+    void panelsById;
+    void trashedTerminals;
     const groups = getTabGroups("dock", activeWorktreeId ?? undefined);
     if (!helpTerminalId) return groups;
     return groups.filter((g) => !(g.panelIds.length === 1 && g.panelIds[0] === helpTerminalId));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds/panelsById/trashedTerminals are intentional trigger deps
   }, [
     getTabGroups,
     activeWorktreeId,
@@ -79,10 +95,50 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     helpTerminalId,
   ]);
 
+  const dockTerminals = useMemo(() => {
+    return storeTerminalIds
+      .map((id) => panelsById[id])
+      .filter(
+        (terminal): terminal is TerminalInstance =>
+          terminal !== undefined &&
+          terminal.location === "dock" &&
+          !trashedTerminals.has(terminal.id) &&
+          terminal.id !== helpTerminalId &&
+          (terminal.worktreeId == null || terminal.worktreeId === activeWorktreeId)
+      );
+  }, [storeTerminalIds, panelsById, trashedTerminals, helpTerminalId, activeWorktreeId]);
+
   const { worktrees } = useWorktrees();
 
   const activeWorktree = activeWorktreeId ? worktrees.find((w) => w.id === activeWorktreeId) : null;
   const cwd = activeWorktree?.path ?? currentProject?.path ?? "";
+
+  const launchAgents = useMemo<DockLaunchAgent[]>(() => {
+    const baseIds = getAgentIds();
+    const settingsIds = agentSettings?.agents ? Object.keys(agentSettings.agents) : [];
+    const extraIds = settingsIds.filter((id) => !baseIds.includes(id)).sort();
+    return [...baseIds, ...extraIds]
+      .filter((id) => isAgentInstalled(agentAvailability?.[id]))
+      .map((id) => {
+        const config = getAgentConfig(id);
+        return {
+          id,
+          name: config?.name ?? id,
+          icon: config?.icon,
+          brandColor: config?.color,
+          isEnabled: isAgentLaunchable(agentAvailability?.[id]),
+        };
+      });
+  }, [agentAvailability, agentSettings]);
+
+  const recipeContext = activeWorktree
+    ? {
+        issueNumber: activeWorktree.issueNumber,
+        prNumber: activeWorktree.prNumber,
+        branchName: activeWorktree.branch,
+        worktreePath: activeWorktree.path,
+      }
+    : undefined;
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const { canScrollLeft, canScrollRight, scrollLeft, scrollRight } =
@@ -105,7 +161,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   );
 
   const handleAddTerminal = useCallback(
-    async (agentId: string) => {
+    async (agentId: string, source: ActionSource = "menu") => {
       const result = await actionService.dispatch<{ terminalId: string | null }>(
         "agent.launch",
         {
@@ -114,7 +170,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           cwd,
           worktreeId: activeWorktreeId || undefined,
         },
-        { source: "context-menu" }
+        { source }
       );
 
       if (result.ok && result.result?.terminalId) {
@@ -134,14 +190,23 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     trashedInfo: typeof trashedTerminals extends Map<string, infer V> ? V : never;
   }[];
 
+  const dockItems = useMemo<DockRenderItem[]>(() => {
+    return buildDockRenderItems(
+      tabGroups,
+      (groupId) => getTabGroupPanels(groupId, "dock"),
+      helpTerminalId,
+      dockTerminals
+    );
+  }, [tabGroups, getTabGroupPanels, helpTerminalId, dockTerminals]);
+
   // Tab group IDs for SortableContext
   const panelIds = useMemo(() => {
-    if (tabGroups.length === 0) {
+    if (dockItems.length === 0) {
       return [DOCK_PLACEHOLDER_ID];
     }
     // Use first panel's ID for each group (consistent with terminal-based DnD)
-    return tabGroups.map((g) => g.panelIds[0] ?? g.id);
-  }, [tabGroups]);
+    return dockItems.map((item) => item.panels[0]?.id ?? item.group.id);
+  }, [dockItems]);
 
   const isCompact = density === "compact";
 
@@ -159,29 +224,38 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           )}
           data-dock-density={density}
         >
+          <div className="shrink-0 flex items-center">
+            <DockLaunchButton
+              agents={launchAgents}
+              hasDevPreview={hasDevPreview}
+              onLaunchAgent={(agentId) => void handleAddTerminal(agentId, "menu")}
+              activeWorktreeId={activeWorktreeId}
+              cwd={cwd}
+              recipeContext={recipeContext}
+            />
+          </div>
+
           <div className="relative flex-1 min-w-0">
             {/* Left Scroll Chevron - Overlay */}
             {canScrollLeft && (
               <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-r from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pr-4">
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={scrollLeft}
-                        className={cn(
-                          "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
-                          "rounded-[var(--radius-md)] transition-colors",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                        )}
-                        aria-label="Scroll left"
-                      >
-                        <ChevronLeft className="w-4 h-4" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Scroll left</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={scrollLeft}
+                      className={cn(
+                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
+                        "rounded-[var(--radius-md)] transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                      )}
+                      aria-label="Scroll left"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Scroll left</TooltipContent>
+                </Tooltip>
               </div>
             )}
 
@@ -200,16 +274,13 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                 strategy={horizontalListSortingStrategy}
               >
                 <div className="flex items-center gap-[var(--dock-gap)] min-w-[100px] min-h-[calc(var(--dock-item-height)-4px)]">
-                  {tabGroups.length === 0 ? (
+                  {dockItems.length === 0 ? (
                     <SortableDockPlaceholder />
                   ) : (
-                    tabGroups.map((group, index) => {
-                      const groupPanels = getTabGroupPanels(group.id, "dock");
-                      if (groupPanels.length === 0) return null;
-
+                    dockItems.map(({ group, panels }, index) => {
                       // Single-panel group: render DockedTerminalItem directly
-                      if (groupPanels.length === 1) {
-                        const terminal = groupPanels[0];
+                      if (panels.length === 1) {
+                        const terminal = panels[0]!;
                         return (
                           <SortableDockItem key={group.id} terminal={terminal} sourceIndex={index}>
                             <DockedTerminalItem terminal={terminal} />
@@ -218,7 +289,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                       }
 
                       // Multi-panel group: pass group context for group-aware DnD
-                      const firstPanel = groupPanels[0];
+                      const firstPanel = panels[0]!;
                       return (
                         <SortableDockItem
                           key={group.id}
@@ -227,7 +298,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                           groupId={group.id}
                           groupPanelIds={group.panelIds}
                         >
-                          <DockedTabGroup group={group} panels={groupPanels} />
+                          <DockedTabGroup group={group} panels={panels} />
                         </SortableDockItem>
                       );
                     })
@@ -239,31 +310,29 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             {/* Right Scroll Chevron - Overlay */}
             {canScrollRight && (
               <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-l from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pl-4">
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={scrollRight}
-                        className={cn(
-                          "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
-                          "rounded-[var(--radius-md)] transition-colors",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                        )}
-                        aria-label="Scroll right"
-                      >
-                        <ChevronRight className="w-4 h-4" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Scroll right</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={scrollRight}
+                      className={cn(
+                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
+                        "rounded-[var(--radius-md)] transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                      )}
+                      aria-label="Scroll right"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Scroll right</TooltipContent>
+                </Tooltip>
               </div>
             )}
           </div>
 
           {/* Separator between terminals and action containers */}
-          {tabGroups.length > 0 && (
+          {dockItems.length > 0 && (
             <div className="w-px h-5 bg-[var(--dock-border)] mx-1 shrink-0" />
           )}
 
@@ -274,18 +343,22 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             <TrashContainer trashedTerminals={trashedItems} compact={isCompact} />
           </div>
 
-          {/* Help button — right-aligned, always last */}
-          <div className="ml-auto shrink-0">
+          {/* Right-aligned cluster: help */}
+          <div className="ml-auto shrink-0 flex items-center gap-2">
             <HelpAgentDockButton />
           </div>
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        {AGENT_OPTIONS.map(({ type, label }) => (
-          <ContextMenuItem key={type} onSelect={() => void handleAddTerminal(type)}>
-            New {label}
-          </ContextMenuItem>
-        ))}
+        <DockLaunchMenuItems
+          components={CONTEXT_MENU_COMPONENTS}
+          agents={launchAgents}
+          hasDevPreview={hasDevPreview}
+          activeWorktreeId={activeWorktreeId}
+          cwd={cwd}
+          recipeContext={recipeContext}
+          onLaunchAgent={(agentId) => void handleAddTerminal(agentId, "context-menu")}
+        />
       </ContextMenuContent>
     </ContextMenu>
   );

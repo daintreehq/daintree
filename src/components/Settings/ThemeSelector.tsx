@@ -44,14 +44,14 @@ export function ThemeSelector<T extends { id: string }>({
   previewAnnouncement,
 }: ThemeSelectorProps<T>) {
   const [query, setQuery] = useState("");
-  const getNameRef = useRef(getName);
-  getNameRef.current = getName;
 
   // Single rAF handle shared across all cards so rapid pointer moves between
   // cards cancel any pending revert before the next preview fires.
   const revertRafRef = useRef<number | null>(null);
   const onPreviewEndRef = useRef(onPreviewEnd);
-  onPreviewEndRef.current = onPreviewEnd;
+  useEffect(() => {
+    onPreviewEndRef.current = onPreviewEnd;
+  }, [onPreviewEnd]);
 
   const cancelPendingRevert = () => {
     if (revertRafRef.current !== null) {
@@ -84,20 +84,18 @@ export function ThemeSelector<T extends { id: string }>({
     return groups
       .map((g) => ({
         ...g,
-        items: lq
-          ? g.items.filter((item) => getNameRef.current(item).toLowerCase().includes(lq))
-          : g.items,
+        items: lq ? g.items.filter((item) => getName(item).toLowerCase().includes(lq)) : g.items,
       }))
       .filter((g) => g.items.length > 0);
-  }, [groups, query]);
+  }, [groups, query, getName]);
 
   const filteredItems = useMemo(() => {
     if (groups) return null;
     const all = items ?? [];
     if (!query) return all;
     const lq = query.toLowerCase();
-    return all.filter((item) => getNameRef.current(item).toLowerCase().includes(lq));
-  }, [items, groups, query]);
+    return all.filter((item) => getName(item).toLowerCase().includes(lq));
+  }, [items, groups, query, getName]);
 
   const isEmpty = filteredGroups ? filteredGroups.length === 0 : (filteredItems?.length ?? 0) === 0;
 
@@ -128,7 +126,7 @@ export function ThemeSelector<T extends { id: string }>({
         "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
         "[&>*]:pointer-events-none",
         item.id === selectedId
-          ? "border-daintree-accent bg-daintree-accent/10"
+          ? "border-border-strong bg-overlay-selected"
           : "border-daintree-border bg-daintree-bg hover:border-daintree-text/30"
       )}
     >
@@ -158,7 +156,7 @@ export function ThemeSelector<T extends { id: string }>({
             }}
             placeholder="Filter themes..."
             aria-label="Filter themes"
-            className="w-full pl-7 pr-2 py-1.5 text-xs rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text placeholder:text-daintree-text/40 focus:outline-none focus:border-daintree-accent"
+            className="w-full pl-7 pr-2 py-1.5 text-xs rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden focus:border-daintree-accent"
           />
         </div>
       </div>

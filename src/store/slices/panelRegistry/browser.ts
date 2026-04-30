@@ -13,6 +13,8 @@ export const createBrowserActions = (
   | "setBrowserZoom"
   | "setBrowserConsoleOpen"
   | "setDevPreviewConsoleOpen"
+  | "setViewportPreset"
+  | "setDevPreviewScrollPosition"
   | "setDevServerState"
   | "setSpawnError"
   | "clearSpawnError"
@@ -84,6 +86,43 @@ export const createBrowserActions = (
       const newById = {
         ...state.panelsById,
         [id]: { ...terminal, devPreviewConsoleOpen: isOpen },
+      };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
+  },
+
+  setViewportPreset: (id, preset) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      if (terminal.kind !== "dev-preview") return state;
+      if (terminal.viewportPreset === preset) return state;
+
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, viewportPreset: preset },
+      };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
+  },
+
+  setDevPreviewScrollPosition: (id, position) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      if (terminal.kind !== "dev-preview") return state;
+
+      const existing = terminal.devPreviewScrollPosition;
+      if (existing === position) return state;
+      if (existing?.url === position?.url && existing?.scrollY === position?.scrollY) {
+        return state;
+      }
+
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, devPreviewScrollPosition: position },
       };
       saveNormalized(newById, state.panelIds);
       return { panelsById: newById };

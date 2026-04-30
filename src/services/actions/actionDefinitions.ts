@@ -1,4 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "./actionTypes";
+import { registerActionActions } from "./definitions/actionActions";
 import { registerAgentActions } from "./definitions/agentActions";
 import { registerFileActions } from "./definitions/fileActions";
 import { registerAppActions } from "./definitions/appActions";
@@ -10,7 +11,6 @@ import { registerGitActions } from "./definitions/gitActions";
 import { registerIntrospectionActions } from "./definitions/introspectionActions";
 import { registerLogActions } from "./definitions/logActions";
 import { registerNavigationActions } from "./definitions/navigationActions";
-import { registerNotesActions } from "./definitions/notesActions";
 import { registerPanelActions } from "./definitions/panelActions";
 import { registerPreferencesActions } from "./definitions/preferencesActions";
 import { registerProjectActions } from "./definitions/projectActions";
@@ -23,6 +23,7 @@ import { registerTerminalNavigationActions } from "./definitions/terminalNavigat
 import { registerTerminalLayoutActions } from "./definitions/terminalLayoutActions";
 import { registerTerminalInputActions } from "./definitions/terminalInputActions";
 import { registerTerminalWorktreeActions } from "./definitions/terminalWorktreeActions";
+import { registerFleetActions } from "./definitions/fleetActions";
 import { registerVoiceActions } from "./definitions/voiceActions";
 import { registerWorktreeActions } from "./definitions/worktreeActions";
 import { registerWorktreeSessionActions } from "./definitions/worktreeSessionActions";
@@ -40,6 +41,7 @@ export function createActionDefinitions(callbacks: ActionCallbacks): ActionRegis
   registerTerminalLayoutActions(actions, callbacks);
   registerTerminalInputActions(actions, callbacks);
   registerTerminalWorktreeActions(actions, callbacks);
+  registerFleetActions(actions);
   registerAgentActions(actions, callbacks);
   registerPanelActions(actions, callbacks);
   registerWorktreeActions(actions, callbacks);
@@ -55,12 +57,12 @@ export function createActionDefinitions(callbacks: ActionCallbacks): ActionRegis
   registerAppActions(actions, callbacks);
   registerPreferencesActions(actions, callbacks);
   registerBrowserActions(actions, callbacks);
-  registerNotesActions(actions, callbacks);
   registerIntrospectionActions(actions, callbacks);
   registerDevServerActions(actions, callbacks);
   registerWorkflowActions(actions);
   registerFileActions(actions, callbacks);
   registerVoiceActions(actions);
+  registerActionActions(actions);
 
   return actions;
 }

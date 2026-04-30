@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { useErrorStore, type RetryAction } from "@/store";
+import { logError } from "@/utils/logger";
 import { errorsClient } from "@/clients";
 
 export function useErrorRetry() {
@@ -12,7 +13,7 @@ export function useErrorRetry() {
         await errorsClient.retry(errorId, action, args);
         removeError(errorId);
       } catch (error) {
-        console.error("Error retry failed:", error);
+        logError("Error retry failed", error);
       } finally {
         clearRetryProgress(errorId);
       }

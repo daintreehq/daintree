@@ -22,8 +22,8 @@ describe("paletteStore", () => {
   });
 
   it("closePalette clears when id matches", () => {
-    usePaletteStore.getState().openPalette("notes");
-    usePaletteStore.getState().closePalette("notes");
+    usePaletteStore.getState().openPalette("theme");
+    usePaletteStore.getState().closePalette("theme");
     expect(usePaletteStore.getState().activePaletteId).toBeNull();
   });
 
@@ -42,7 +42,7 @@ describe("paletteStore", () => {
     const { openPalette } = usePaletteStore.getState();
     openPalette("new-terminal");
     openPalette("quick-switcher");
-    openPalette("notes");
+    openPalette("theme");
     openPalette("action");
     expect(usePaletteStore.getState().activePaletteId).toBe("action");
   });

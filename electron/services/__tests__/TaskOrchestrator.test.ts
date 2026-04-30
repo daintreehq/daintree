@@ -83,8 +83,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -104,8 +104,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "waiting",
         },
       ]);
@@ -124,8 +124,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "working",
         },
       ]);
@@ -155,12 +155,67 @@ describe("TaskOrchestrator", () => {
       expect(updatedTask?.status).toBe("queued");
     });
 
+    it("assigns queued task to plain terminal with detected agent", async () => {
+      const task = await queueService.createTask({ title: "Test task" });
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-detected",
+          kind: "terminal",
+          detectedAgentId: "claude",
+          agentState: "idle",
+        },
+      ]);
+
+      await queueService.enqueueTask(task.id);
+      await settle();
+
+      const updatedTask = await queueService.getTask(task.id);
+      expect(updatedTask?.status).toBe("running");
+      // assignedAgentId persists the logical agent identity (detectedAgentId),
+      // not the terminal id.
+      expect(updatedTask?.assignedAgentId).toBe("claude");
+      expect(updatedTask?.runId).toBeDefined();
+    });
+
+    it("tracks two panels with the same agentId independently", async () => {
+      const task1 = await queueService.createTask({ title: "Task 1", priority: 10 });
+      const task2 = await queueService.createTask({ title: "Task 2", priority: 5 });
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-a",
+          kind: "terminal",
+          launchAgentId: "claude",
+          agentState: "idle",
+        },
+        {
+          id: "term-b",
+          kind: "terminal",
+          launchAgentId: "claude",
+          agentState: "idle",
+        },
+      ]);
+
+      await queueService.enqueueTask(task1.id);
+      await queueService.enqueueTask(task2.id);
+      await settle();
+
+      const running1 = await queueService.getTask(task1.id);
+      const running2 = await queueService.getTask(task2.id);
+      // Both tasks assigned — historically with agentId-keyed tracking, the
+      // second would stay queued because the "claude" slot was "taken".
+      expect(running1?.status).toBe("running");
+      expect(running2?.status).toBe("running");
+      expect(running1?.runId).not.toBe(running2?.runId);
+    });
+
     it("does not assign when no tasks queued", async () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -177,8 +232,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -205,8 +260,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -233,8 +288,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -255,6 +310,40 @@ describe("TaskOrchestrator", () => {
       expect(updated?.status).toBe("running");
     });
 
+    it("handleAgentStateChange accepts terminalId-only payloads (defensive)", async () => {
+      // AgentStateService currently guards on `terminal.agentId` before
+      // emitting agent:state-changed, so a terminalId-only payload does not
+      // fire in production for runtime-detected agents. This test locks the
+      // orchestrator's behaviour in case that guard is relaxed upstream: a
+      // payload carrying only terminalId still wakes the scheduler.
+      const task = await queueService.createTask({ title: "Test task" });
+      await queueService.enqueueTask(task.id);
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-detected",
+          kind: "terminal",
+          detectedAgentId: "gemini",
+          agentState: "idle",
+        },
+      ]);
+
+      events.emit("agent:state-changed", {
+        terminalId: "term-detected",
+        state: "idle",
+        previousState: "working",
+        timestamp: Date.now(),
+        trigger: "output",
+        confidence: 1.0,
+      });
+
+      await settle();
+
+      const updated = await queueService.getTask(task.id);
+      expect(updated?.status).toBe("running");
+      expect(updated?.assignedAgentId).toBe("gemini");
+    });
+
     it("triggers assignment when agent becomes waiting", async () => {
       const task = await queueService.createTask({ title: "Test task" });
       await queueService.enqueueTask(task.id);
@@ -262,8 +351,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "waiting",
         },
       ]);
@@ -316,8 +405,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -343,6 +432,84 @@ describe("TaskOrchestrator", () => {
       expect(completedTask?.status).toBe("completed");
     });
 
+    it("correlates completion by terminalId when payload includes it", async () => {
+      const task1 = await queueService.createTask({ title: "Task 1", priority: 10 });
+      const task2 = await queueService.createTask({ title: "Task 2", priority: 5 });
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-a",
+          kind: "terminal",
+          launchAgentId: "claude",
+          agentState: "idle",
+        },
+        {
+          id: "term-b",
+          kind: "terminal",
+          launchAgentId: "claude",
+          agentState: "idle",
+        },
+      ]);
+
+      await queueService.enqueueTask(task1.id);
+      await queueService.enqueueTask(task2.id);
+      await settle();
+
+      const running1 = await queueService.getTask(task1.id);
+      const running2 = await queueService.getTask(task2.id);
+      expect(running1?.status).toBe("running");
+      expect(running2?.status).toBe("running");
+
+      // Complete only the second panel — the orchestrator must route the
+      // completion to task2 via terminalId, not just pick the first claude.
+      events.emit("agent:completed", {
+        agentId: "claude",
+        terminalId: "term-b",
+        exitCode: 0,
+        duration: 1000,
+        timestamp: Date.now(),
+      });
+
+      await settle();
+
+      const updated1 = await queueService.getTask(task1.id);
+      const updated2 = await queueService.getTask(task2.id);
+      expect(updated1?.status).toBe("running");
+      expect(updated2?.status).toBe("completed");
+    });
+
+    it("ignores completion when payload terminalId is not tracked", async () => {
+      const task = await queueService.createTask({ title: "Test task" });
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-1",
+          kind: "terminal",
+          launchAgentId: "claude",
+          agentState: "idle",
+        },
+      ]);
+
+      await queueService.enqueueTask(task.id);
+      await settle();
+
+      // Emit completion for an untracked terminal (event carries terminalId
+      // but it doesn't match any tracked run).
+      events.emit("agent:completed", {
+        agentId: "claude",
+        terminalId: "term-untracked",
+        exitCode: 0,
+        duration: 1000,
+        timestamp: Date.now(),
+      });
+
+      await settle();
+
+      // Task must remain running — no mis-correlation.
+      const updated = await queueService.getTask(task.id);
+      expect(updated?.status).toBe("running");
+    });
+
     it("ignores completion for unknown agents", async () => {
       // Emit completion for agent with no tracked task
       events.emit("agent:completed", {
@@ -363,8 +530,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -392,7 +559,116 @@ describe("TaskOrchestrator", () => {
     });
   });
 
+  describe("agent exit handling (runtime-detected agents)", () => {
+    it("frees a detected-only terminal when agent:exited fires, and runs the next task", async () => {
+      const task1 = await queueService.createTask({ title: "Task 1", priority: 10 });
+      const task2 = await queueService.createTask({ title: "Task 2", priority: 5 });
+
+      // First poll: detected-only terminal is idle.
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-detected",
+          kind: "terminal",
+          detectedAgentId: "claude",
+          agentState: "idle",
+        },
+      ]);
+
+      await queueService.enqueueTask(task1.id);
+      await queueService.enqueueTask(task2.id);
+      await settle();
+
+      // Task 1 runs on the detected terminal; task 2 stays queued.
+      const running1 = await queueService.getTask(task1.id);
+      const queued2 = await queueService.getTask(task2.id);
+      expect(running1?.status).toBe("running");
+      expect(running1?.assignedAgentId).toBe("claude");
+      expect(queued2?.status).toBe("queued");
+
+      // CLI exits — only agent:exited fires for a detected-only terminal.
+      events.emit("agent:exited", {
+        terminalId: "term-detected",
+        agentType: "claude",
+        timestamp: Date.now(),
+      });
+
+      await settle();
+
+      // Task 1 must move out of "running" so the terminal slot clears.
+      const completed1 = await queueService.getTask(task1.id);
+      expect(completed1?.status).toBe("completed");
+
+      // Task 2 must be assigned to the now-free terminal.
+      const running2 = await queueService.getTask(task2.id);
+      expect(running2?.status).toBe("running");
+      expect(running2?.assignedAgentId).toBe("claude");
+    });
+
+    it("ignores agent:exited for untracked terminals", async () => {
+      // No orchestrator bookkeeping exists — this should be a silent no-op.
+      events.emit("agent:exited", {
+        terminalId: "term-untracked",
+        agentType: "claude",
+        timestamp: Date.now(),
+      });
+      await settle();
+      // No assertion needed beyond "did not throw". The test passes the
+      // guard implicitly by reaching this point without error.
+    });
+  });
+
   describe("worktree removal handling", () => {
+    it("cleans up tracking for a task on a runtime-detected terminal", async () => {
+      const task = await queueService.createTask({
+        title: "Detected-terminal task",
+        worktreeId: "wt-1",
+      });
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-detected",
+          kind: "terminal",
+          detectedAgentId: "claude",
+          agentState: "idle",
+          worktreeId: "wt-1",
+        },
+      ]);
+
+      await queueService.enqueueTask(task.id);
+      await settle();
+
+      const running = await queueService.getTask(task.id);
+      expect(running?.status).toBe("running");
+
+      events.emit("sys:worktree:remove", {
+        worktreeId: "wt-1",
+        timestamp: Date.now(),
+      });
+      await settle();
+
+      const cancelled = await queueService.getTask(task.id);
+      expect(cancelled?.status).toBe("cancelled");
+
+      // Queue a follow-up task — if tracking wasn't cleaned up, the terminal
+      // would still be locked and the new task would stay queued. Leave the
+      // follow-up task's worktreeId unset so the worktree-match predicate in
+      // findAvailableAgent doesn't interfere with the availability check.
+      const follow = await queueService.createTask({ title: "Follow-up" });
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-detected",
+          kind: "terminal",
+          detectedAgentId: "claude",
+          agentState: "idle",
+        },
+      ]);
+      await queueService.enqueueTask(follow.id);
+      await settle();
+
+      const runningFollow = await queueService.getTask(follow.id);
+      expect(runningFollow?.status).toBe("running");
+    });
+
     it("cancels tasks for removed worktree", async () => {
       const task1 = await queueService.createTask({
         title: "Task 1",
@@ -437,8 +713,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "idle",
           worktreeId: "wt-1",
         },
@@ -477,8 +753,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -518,8 +794,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "routed-agent",
+          kind: "terminal",
+          launchAgentId: "routed-agent",
           agentState: "idle",
         },
       ]);
@@ -555,8 +831,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "fallback-agent",
+          kind: "terminal",
+          launchAgentId: "fallback-agent",
           agentState: "idle",
         },
       ]);
@@ -575,8 +851,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "any-agent",
+          kind: "terminal",
+          launchAgentId: "any-agent",
           agentState: "idle",
         },
       ]);
@@ -607,8 +883,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "different-agent",
+          kind: "terminal",
+          launchAgentId: "different-agent",
           agentState: "idle",
         },
       ]);
@@ -652,8 +928,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -674,8 +950,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -700,8 +976,8 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
+          kind: "terminal",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);

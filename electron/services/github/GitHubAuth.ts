@@ -1,7 +1,110 @@
 import { graphql } from "@octokit/graphql";
+import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 export const GITHUB_API_TIMEOUT_MS = 15_000;
 export const GITHUB_AUTH_TIMEOUT_MS = 10_000;
+
+/**
+ * SSO re-authorization URLs returned via `X-GitHub-SSO` expire one hour
+ * after issuance. Expose a bounded window so stale URLs aren't surfaced
+ * to the renderer.
+ */
+const SSO_URL_TTL_MS = 60 * 60 * 1000;
+
+export interface GitHubAuthMetadata {
+  /** Re-authorization URL extracted from `X-GitHub-SSO: required; url=...` */
+  ssoUrl?: string;
+  /** Wall-clock ms at which the SSO URL was observed (for TTL enforcement) */
+  ssoCapturedAt?: number;
+  /** Expiry date parsed from `GitHub-Authentication-Token-Expiration`, or null */
+  tokenExpiresAt?: Date | null;
+}
+
+let lastAuthMetadata: GitHubAuthMetadata | null = null;
+
+function clearAuthMetadata(): void {
+  lastAuthMetadata = null;
+}
+
+/**
+ * Parse the `X-GitHub-SSO` header. GitHub emits two shapes:
+ *   - `required; url=https://github.com/orgs/<org>/sso?authorization_request=<id>`
+ *   - `partial-results; organizations=<csv>`
+ * Only the first form carries a re-auth URL; return it when present.
+ *
+ * Validates that the URL is HTTPS and hosted on `github.com` (or a
+ * subdomain) — a spoofed `api.github.com` response could otherwise
+ * inject a phishing URL into the error message shown to the user.
+ */
+export function parseSsoHeader(headerValue: string | null): string | null {
+  if (!headerValue) return null;
+  const match = /url=(\S+)/.exec(headerValue);
+  if (!match) return null;
+  const url = match[1];
+  if (!url || !url.startsWith("https://")) return null;
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname !== "github.com" && !hostname.endsWith(".github.com")) {
+      return null;
+    }
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function parseTokenExpirationHeader(headerValue: string | null): Date | null {
+  if (!headerValue) return null;
+  const ms = Date.parse(headerValue);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms);
+}
+
+/**
+ * Capture passive auth metadata from a GitHub response. Safe to call on every
+ * response — no-ops when headers are absent. Kept module-level so the fetch
+ * wrapper can feed it without introducing a circular dependency on the
+ * {@link GitHubAuth} class.
+ */
+export function captureAuthMetadata(headers: { get(name: string): string | null }): void {
+  const ssoUrl = parseSsoHeader(headers.get("x-github-sso"));
+  const tokenExpiresAt = parseTokenExpirationHeader(
+    headers.get("github-authentication-token-expiration")
+  );
+
+  if (!ssoUrl && !tokenExpiresAt) return;
+
+  const next: GitHubAuthMetadata = { ...(lastAuthMetadata ?? {}) };
+  if (ssoUrl) {
+    next.ssoUrl = ssoUrl;
+    next.ssoCapturedAt = Date.now();
+  }
+  if (tokenExpiresAt) {
+    next.tokenExpiresAt = tokenExpiresAt;
+  }
+  lastAuthMetadata = next;
+}
+
+/**
+ * Snapshot the most recent auth metadata, dropping any SSO URL that has
+ * exceeded the GitHub-documented 1-hour TTL.
+ */
+export function getLastAuthMetadata(): GitHubAuthMetadata | null {
+  if (!lastAuthMetadata) return null;
+  const snapshot: GitHubAuthMetadata = { ...lastAuthMetadata };
+  if (
+    snapshot.ssoUrl &&
+    snapshot.ssoCapturedAt !== undefined &&
+    Date.now() - snapshot.ssoCapturedAt > SSO_URL_TTL_MS
+  ) {
+    delete snapshot.ssoUrl;
+    delete snapshot.ssoCapturedAt;
+  }
+  if (!snapshot.ssoUrl && !snapshot.tokenExpiresAt) return null;
+  return snapshot;
+}
 
 export interface GitHubTokenConfig {
   hasToken: boolean;
@@ -75,6 +178,8 @@ export class GitHubAuth {
     this.cachedUsername = null;
     this.cachedAvatarUrl = null;
     this.cachedScopes = [];
+    gitHubRateLimitService.clear();
+    clearAuthMetadata();
   }
 
   static hasToken(): boolean {
@@ -93,6 +198,8 @@ export class GitHubAuth {
     this.cachedUsername = null;
     this.cachedAvatarUrl = null;
     this.cachedScopes = [];
+    gitHubRateLimitService.clear();
+    clearAuthMetadata();
   }
 
   static clearToken(): void {
@@ -103,6 +210,8 @@ export class GitHubAuth {
     this.tokenVersion++;
     this.pendingValidation = null;
     this.storage.delete();
+    gitHubRateLimitService.clear();
+    clearAuthMetadata();
   }
 
   private static pendingValidation: Promise<void> | null = null;
@@ -177,6 +286,9 @@ export class GitHubAuth {
       headers: {
         authorization: `token ${token}`,
       },
+      request: {
+        fetch: rateLimitAwareFetch,
+      },
     });
   }
 
@@ -225,7 +337,7 @@ export class GitHubAuth {
         avatarUrl: userData.avatar_url,
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to validate GitHub token");
       const isTimeout = error instanceof Error && error.name === "TimeoutError";
       if (
         isTimeout ||
@@ -247,4 +359,65 @@ export class GitHubAuth {
       return { valid: false, scopes: [], error: message };
     }
   }
+}
+
+/**
+ * Custom fetch wrapper used by `@octokit/graphql` via
+ * `graphql.defaults({ request: { fetch } })`.
+ *
+ * `@octokit/graphql` v9 resolves to the parsed `data.data` payload — the raw
+ * `Response` (and its headers) are dropped before the promise resolves.
+ * Installing this fetch wrapper is the only reliable place to observe GitHub
+ * rate-limit headers on every response (both 2xx and error paths).
+ *
+ * The wrapper is intentionally two-phase: a synchronous header-only
+ * classification runs first so the response can return to Octokit
+ * immediately, and the body-text classification (used to detect secondary
+ * rate limits that GitHub reports via a 403 body rather than a `retry-after`
+ * header) runs off the critical path. This prevents a stuck response body
+ * from blocking every GitHub call behind the fetch wrapper.
+ */
+async function rateLimitAwareFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<Response> {
+  const response = await globalThis.fetch(input, init);
+
+  // Phase 1 — header-only classification runs immediately so the Response
+  // can flow back to Octokit without waiting on the body.
+  try {
+    gitHubRateLimitService.update(response.headers, response.status);
+  } catch {
+    // Rate-limit bookkeeping must never break the underlying request.
+  }
+
+  // Passive auth-metadata capture: SSO re-authorization URL and token expiry
+  // date. Same fire-and-forget contract as rate-limit bookkeeping.
+  try {
+    captureAuthMetadata(response.headers);
+  } catch {
+    // Metadata capture must never break the underlying request.
+  }
+
+  // Phase 2 — secondary-limit fallback classification when the 403/429
+  // response carries no `retry-after` but explains the block in its body.
+  // Scheduled off the hot path; any failures are swallowed.
+  if (!response.ok && (response.status === 403 || response.status === 429)) {
+    void response
+      .clone()
+      .text()
+      .then((bodyText) => {
+        try {
+          gitHubRateLimitService.update(response.headers, response.status, bodyText);
+        } catch {
+          // Swallow — see Phase 1 comment.
+        }
+      })
+      .catch(() => {
+        // Cloning can fail on aborted streams; header-only classification
+        // is already safe.
+      });
+  }
+
+  return response;
 }

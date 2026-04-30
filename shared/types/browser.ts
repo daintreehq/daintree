@@ -9,4 +9,5 @@ export interface UrlHistoryEntry {
   title: string;
   visitCount: number;
   lastVisitAt: number;
+  favicon?: string;
 }

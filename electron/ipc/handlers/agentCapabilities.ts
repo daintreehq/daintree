@@ -1,6 +1,6 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
+import { CcrConfigService } from "../../services/CcrConfigService.js";
 import {
   AGENT_REGISTRY,
   getEffectiveRegistry,
@@ -10,6 +10,7 @@ import {
 } from "../../../shared/config/agentRegistry.js";
 import type { AgentMetadata } from "../../../shared/types/ipc/agentCapabilities.js";
 import { isAgentPinned } from "../../../shared/utils/agentPinned.js";
+import { typedHandle } from "../utils.js";
 
 function toAgentMetadata(config: AgentConfig, agentId: string): AgentMetadata {
   const isBuiltIn = agentId in AGENT_REGISTRY;
@@ -41,19 +42,14 @@ export function registerAgentCapabilitiesHandlers(): () => void {
   const handleGetRegistry = async () => {
     return getEffectiveRegistry();
   };
-  ipcMain.handle(CHANNELS.AGENT_CAPABILITIES_GET_REGISTRY, handleGetRegistry);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_CAPABILITIES_GET_REGISTRY));
+  handlers.push(typedHandle(CHANNELS.AGENT_CAPABILITIES_GET_REGISTRY, handleGetRegistry));
 
   const handleGetAgentIds = async () => {
     return getEffectiveAgentIds();
   };
-  ipcMain.handle(CHANNELS.AGENT_CAPABILITIES_GET_AGENT_IDS, handleGetAgentIds);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_CAPABILITIES_GET_AGENT_IDS));
+  handlers.push(typedHandle(CHANNELS.AGENT_CAPABILITIES_GET_AGENT_IDS, handleGetAgentIds));
 
-  const handleGetAgentMetadata = async (
-    _event: Electron.IpcMainInvokeEvent,
-    agentId: string
-  ): Promise<AgentMetadata | null> => {
+  const handleGetAgentMetadata = async (agentId: string): Promise<AgentMetadata | null> => {
     if (!agentId || typeof agentId !== "string") {
       throw new Error("Invalid agentId");
     }
@@ -66,13 +62,11 @@ export function registerAgentCapabilitiesHandlers(): () => void {
     }
     return toAgentMetadata(config, agentId);
   };
-  ipcMain.handle(CHANNELS.AGENT_CAPABILITIES_GET_AGENT_METADATA, handleGetAgentMetadata);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_CAPABILITIES_GET_AGENT_METADATA));
+  handlers.push(
+    typedHandle(CHANNELS.AGENT_CAPABILITIES_GET_AGENT_METADATA, handleGetAgentMetadata)
+  );
 
-  const handleIsAgentEnabled = async (
-    _event: Electron.IpcMainInvokeEvent,
-    agentId: string
-  ): Promise<boolean> => {
+  const handleIsAgentEnabled = async (agentId: string): Promise<boolean> => {
     if (!agentId || typeof agentId !== "string") {
       throw new Error("Invalid agentId");
     }
@@ -87,8 +81,12 @@ export function registerAgentCapabilitiesHandlers(): () => void {
     const agentEntry = agentSettings?.agents?.[agentId];
     return isAgentPinned(agentEntry);
   };
-  ipcMain.handle(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED, handleIsAgentEnabled);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED));
+  handlers.push(typedHandle(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED, handleIsAgentEnabled));
+
+  const handleGetCcrPresets = async () => {
+    return CcrConfigService.getInstance().getPresets();
+  };
+  handlers.push(typedHandle(CHANNELS.AGENT_CAPABILITIES_GET_CCR_PRESETS, handleGetCcrPresets));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

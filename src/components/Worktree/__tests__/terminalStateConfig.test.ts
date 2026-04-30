@@ -29,14 +29,7 @@ describe("getEffectiveStateIcon", () => {
   });
 
   it("returns correct defaults for all states", () => {
-    const states: AgentState[] = [
-      "working",
-      "running",
-      "waiting",
-      "directing",
-      "idle",
-      "completed",
-    ];
+    const states: AgentState[] = ["working", "waiting", "directing", "idle", "completed"];
     for (const state of states) {
       expect(getEffectiveStateIcon(state)).toBe(STATE_ICONS[state]);
     }

@@ -14,7 +14,9 @@ export function saveNormalized(
   panelsById: Record<string, TerminalInstance>,
   panelIds: string[]
 ): void {
-  panelPersistence.save(panelIds.map((id) => panelsById[id]).filter(Boolean));
+  panelPersistence.save(
+    panelIds.map((id) => panelsById[id]).filter((t): t is TerminalInstance => Boolean(t))
+  );
 }
 
 export function saveTabGroups(tabGroups: Map<string, TabGroup>): void {

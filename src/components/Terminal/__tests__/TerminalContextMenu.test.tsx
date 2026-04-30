@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { AGENT_IDS, getAgentConfig } from "@/config/agents";
+import type { CliAvailability } from "@shared/types";
 import type { MenuItemOption } from "@shared/types";
-import { extractUrlAtPoint, buildCreateNoteArgs } from "../TerminalContextMenu";
+import { computeGridSelectedAgentIds } from "../contentGridAgentFilter";
 
 describe("TerminalContextMenu - Convert To Submenu", () => {
   describe("Agent configuration", () => {
@@ -22,13 +23,28 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
 
   describe("Submenu generation logic", () => {
     function buildConvertToSubmenu(
-      terminal: { type: string; kind?: string; agentId?: string | null } | null
+      terminal: {
+        kind?: string;
+        launchAgentId?: string | null;
+        detectedAgentId?: string | null;
+      } | null,
+      isAvailabilityInitialized: boolean = false,
+      availability?: CliAvailability
     ): MenuItemOption[] {
       if (!terminal) return [];
 
-      const currentAgentId =
-        terminal.agentId ?? (terminal.type !== "terminal" ? terminal.type : null);
-      const isPlainTerminal = terminal.type === "terminal" || terminal.kind === "terminal";
+      const currentAgentId = terminal.detectedAgentId ?? terminal.launchAgentId ?? undefined;
+      const isPlainTerminal = terminal.kind === "terminal";
+
+      const visibleAgentIds = (() => {
+        const filtered = computeGridSelectedAgentIds(
+          isAvailabilityInitialized,
+          availability,
+          AGENT_IDS
+        );
+        if (!currentAgentId || filtered === undefined) return filtered;
+        return new Set([...filtered, currentAgentId]);
+      })();
 
       const items: MenuItemOption[] = [];
 
@@ -40,7 +56,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
         });
       }
 
-      for (const agentId of AGENT_IDS) {
+      for (const agentId of visibleAgentIds ?? AGENT_IDS) {
         const config = getAgentConfig(agentId);
         if (!config) continue;
         const isCurrent = currentAgentId === agentId;
@@ -54,9 +70,9 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
       return items;
     }
 
-    it("should include all agents for plain terminal", () => {
-      const terminal = { type: "terminal", kind: "terminal" };
-      const submenu = buildConvertToSubmenu(terminal);
+    it("should include all agents for plain terminal (pre-probe)", () => {
+      const terminal = { kind: "terminal" };
+      const submenu = buildConvertToSubmenu(terminal, false);
 
       expect(submenu.length).toBeGreaterThan(0);
 
@@ -74,8 +90,43 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
       }
     });
 
+    it("should filter to only installed agents after initialization", () => {
+      const terminal = { kind: "terminal" };
+      const availability: CliAvailability = Object.fromEntries(
+        AGENT_IDS.map((id) => [id, AGENT_IDS.indexOf(id) === 0 ? "installed" : "missing"])
+      ) as CliAvailability;
+      const submenu = buildConvertToSubmenu(terminal, true, availability);
+
+      const agentItems = submenu.filter(
+        (item) => item.type !== "separator" && item.id.startsWith("convert-to:")
+      );
+      expect(agentItems.length).toBe(1);
+
+      const firstAgentId = AGENT_IDS[0];
+      const item = submenu.find((i) => i.id === `convert-to:${firstAgentId}`);
+      expect(item).toBeDefined();
+      if (item && item.type !== "separator") {
+        expect(item.enabled).toBe(true);
+      }
+
+      for (const agentId of AGENT_IDS.slice(1)) {
+        const item = submenu.find((i) => i.id === `convert-to:${agentId}`);
+        expect(item).toBeUndefined();
+      }
+    });
+
+    it("should show all agents when availability is undefined", () => {
+      const terminal = { kind: "terminal" };
+      const submenu = buildConvertToSubmenu(terminal, false, undefined);
+
+      const agentItems = submenu.filter(
+        (item) => item.type !== "separator" && item.id.startsWith("convert-to:")
+      );
+      expect(agentItems.length).toBe(AGENT_IDS.length);
+    });
+
     it("should include Terminal option and agents for agent terminal", () => {
-      const terminal = { type: "claude", kind: "agent", agentId: "claude" };
+      const terminal = { kind: "terminal", launchAgentId: "claude" };
       const submenu = buildConvertToSubmenu(terminal);
 
       expect(submenu.length).toBeGreaterThan(0);
@@ -103,10 +154,24 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should disable current agent in submenu", () => {
-      const terminal = { type: "gemini", kind: "agent", agentId: "gemini" };
+      const terminal = { kind: "terminal", launchAgentId: "gemini" };
       const submenu = buildConvertToSubmenu(terminal);
 
       const currentAgentItem = submenu.find((i) => i.id === "convert-to:gemini");
+      expect(currentAgentItem).toBeDefined();
+      if (currentAgentItem && currentAgentItem.type !== "separator") {
+        expect(currentAgentItem.enabled).toBe(false);
+      }
+    });
+
+    it("should keep current agent visible even if missing after initialization", () => {
+      const terminal = { kind: "terminal", launchAgentId: "claude" };
+      const availability: CliAvailability = Object.fromEntries(
+        AGENT_IDS.map((id) => [id, "missing"])
+      ) as CliAvailability;
+      const submenu = buildConvertToSubmenu(terminal, true, availability);
+
+      const currentAgentItem = submenu.find((i) => i.id === "convert-to:claude");
       expect(currentAgentItem).toBeDefined();
       if (currentAgentItem && currentAgentItem.type !== "separator") {
         expect(currentAgentItem.enabled).toBe(false);
@@ -118,9 +183,9 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
       expect(submenu).toEqual([]);
     });
 
-    it("should handle legacy agent terminal (type without agentId)", () => {
-      const agentType = AGENT_IDS[0];
-      const terminal = { type: agentType, kind: "agent" };
+    it("should handle legacy agent terminal (launchAgentId only)", () => {
+      const agentType = AGENT_IDS[0]!;
+      const terminal = { kind: "terminal", launchAgentId: agentType };
       const submenu = buildConvertToSubmenu(terminal);
 
       const terminalItem = submenu.find((i) => i.id === "convert-to:terminal");
@@ -137,15 +202,15 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should not include Terminal option for plain terminal", () => {
-      const terminal = { type: "terminal", kind: "terminal" };
+      const terminal = { kind: "terminal" };
       const submenu = buildConvertToSubmenu(terminal);
 
       const terminalItem = submenu.find((i) => i.id === "convert-to:terminal");
       expect(terminalItem).toBeUndefined();
     });
 
-    it("should handle transitional state (type and agentId mismatch)", () => {
-      const terminal = { type: "terminal", kind: "terminal", agentId: AGENT_IDS[0] };
+    it("should handle transitional state (kind=terminal with launchAgentId)", () => {
+      const terminal = { kind: "terminal", launchAgentId: AGENT_IDS[0] };
       const submenu = buildConvertToSubmenu(terminal);
 
       const terminalItem = submenu.find((i) => i.id === "convert-to:terminal");
@@ -159,7 +224,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should handle unknown agent type gracefully", () => {
-      const terminal = { type: "some-unknown-agent", kind: "agent" };
+      const terminal = { kind: "terminal", launchAgentId: "some-unknown-agent" };
       const submenu = buildConvertToSubmenu(terminal);
 
       const terminalItem = submenu.find((i) => i.id === "convert-to:terminal");
@@ -178,7 +243,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should return empty array if agents unavailable (edge case)", () => {
-      const terminal = { type: "terminal", kind: "terminal" };
+      const terminal = { kind: "terminal" };
       const submenu = buildConvertToSubmenu(terminal);
 
       if (AGENT_IDS.length === 0) {
@@ -187,128 +252,63 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
         expect(submenu.length).toBeGreaterThan(0);
       }
     });
-  });
-});
 
-describe("extractUrlAtPoint", () => {
-  function makeMockTerminal(opts: {
-    text: string;
-    cols?: number;
-    rows?: number;
-    rect?: { left: number; top: number; width: number; height: number };
-    elementNull?: boolean;
-    viewportY?: number;
-  }) {
-    const cols = opts.cols ?? 80;
-    const rows = opts.rows ?? 24;
-    const rect = opts.rect ?? { left: 0, top: 0, width: 800, height: 480, right: 800, bottom: 480 };
-    return {
-      element: opts.elementNull
-        ? undefined
-        : {
-            getBoundingClientRect: () => ({
-              ...rect,
-              right: rect.left + rect.width,
-              bottom: rect.top + rect.height,
-            }),
-          },
-      cols,
-      rows,
-      buffer: {
-        active: {
-          viewportY: opts.viewportY ?? 0,
-          getLine: () => ({
-            translateToString: () => opts.text,
-          }),
-        },
-      },
-    } as never;
-  }
+    it("should hide plain terminal convert submenu when no agents installed", () => {
+      const terminal = { kind: "terminal" };
+      const availability: CliAvailability = Object.fromEntries(
+        AGENT_IDS.map((id) => [id, "missing"])
+      ) as CliAvailability;
+      const submenu = buildConvertToSubmenu(terminal, true, availability);
 
-  it("returns URL when click lands on a URL in the line", () => {
-    const text = "Visit https://example.com for more info";
-    const terminal = makeMockTerminal({
-      text,
-      cols: 80,
-      rows: 24,
-      rect: { left: 0, top: 0, width: 800, height: 480 },
+      const agentItems = submenu.filter(
+        (item) => item.type !== "separator" && item.id.startsWith("convert-to:")
+      );
+      expect(agentItems.length).toBe(0);
     });
-    // "https://example.com" starts at index 6, length 19
-    // col 6 = clientX = (6/80)*800 + some offset to land in the cell
-    const clientX = (6.5 / 80) * 800;
-    const clientY = (0.5 / 24) * 480;
-    expect(extractUrlAtPoint(terminal, clientX, clientY)).toBe("https://example.com");
-  });
 
-  it("returns null when click is outside the URL", () => {
-    const text = "Visit https://example.com for more info";
-    const terminal = makeMockTerminal({ text });
-    const clientX = (0.5 / 80) * 800;
-    const clientY = (0.5 / 24) * 480;
-    expect(extractUrlAtPoint(terminal, clientX, clientY)).toBeNull();
-  });
+    it("should prefer detectedAgentId over launch-time agentId", () => {
+      const detected = AGENT_IDS[0]!;
+      const launched = AGENT_IDS[1] ?? AGENT_IDS[0]!;
+      const terminal = {
+        kind: "terminal",
+        launchAgentId: launched,
+        detectedAgentId: detected,
+      };
+      const submenu = buildConvertToSubmenu(terminal);
 
-  it("strips trailing punctuation from matched URL", () => {
-    const text = "See https://example.com/path.";
-    const terminal = makeMockTerminal({ text });
-    // URL starts at index 4, "https://example.com/path." -> stripped to "https://example.com/path"
-    const clientX = (10.5 / 80) * 800;
-    const clientY = (0.5 / 24) * 480;
-    expect(extractUrlAtPoint(terminal, clientX, clientY)).toBe("https://example.com/path");
-  });
+      // Detected agent is current — disabled
+      const detectedItem = submenu.find((i) => i.id === `convert-to:${detected}`);
+      expect(detectedItem).toBeDefined();
+      if (detectedItem && detectedItem.type !== "separator") {
+        expect(detectedItem.enabled).toBe(false);
+      }
 
-  it("returns null when no URL on line", () => {
-    const text = "just some plain text here";
-    const terminal = makeMockTerminal({ text });
-    const clientX = (5.5 / 80) * 800;
-    const clientY = (0.5 / 24) * 480;
-    expect(extractUrlAtPoint(terminal, clientX, clientY)).toBeNull();
-  });
-
-  it("returns null when terminal.element is null/undefined", () => {
-    const terminal = makeMockTerminal({ text: "https://example.com", elementNull: true });
-    expect(extractUrlAtPoint(terminal, 100, 100)).toBeNull();
-  });
-
-  it("returns null when click is outside terminal element bounds", () => {
-    const text = "https://example.com";
-    const terminal = makeMockTerminal({
-      text,
-      rect: { left: 100, top: 100, width: 800, height: 480 },
+      // Launched-only agent (if different) is not marked current — enabled
+      if (launched !== detected) {
+        const launchedItem = submenu.find((i) => i.id === `convert-to:${launched}`);
+        expect(launchedItem).toBeDefined();
+        if (launchedItem && launchedItem.type !== "separator") {
+          expect(launchedItem.enabled).toBe(true);
+        }
+      }
     });
-    // Click at (50, 50) which is outside the rect starting at (100, 100)
-    expect(extractUrlAtPoint(terminal, 50, 50)).toBeNull();
-  });
-});
 
-describe("buildCreateNoteArgs", () => {
-  it("builds note with selection text and worktree", () => {
-    const result = buildCreateNoteArgs("Claude", "feature/login", "console.log('hello')", "wt-1");
-    expect(result.title).toMatch(/^Note from Claude — /);
-    expect(result.content).toContain("**Agent:** Claude");
-    expect(result.content).toContain("**Worktree:** feature/login");
-    expect(result.content).toContain("**Time:**");
-    expect(result.content).toContain("> console.log('hello')");
-    expect(result.scope).toBe("worktree");
-    expect(result.worktreeId).toBe("wt-1");
-  });
+    it("should show all states including ready", () => {
+      const terminal = { kind: "terminal" };
+      const availability: CliAvailability = Object.fromEntries(
+        AGENT_IDS.map((id, idx) => [id, idx === 0 ? "installed" : idx === 1 ? "ready" : "missing"])
+      ) as CliAvailability;
+      const submenu = buildConvertToSubmenu(terminal, true, availability);
 
-  it("omits quote block when selection is empty", () => {
-    const result = buildCreateNoteArgs("Gemini", "main", "", "wt-2");
-    expect(result.content).toContain("**Agent:** Gemini");
-    expect(result.content).not.toContain(">");
-    expect(result.scope).toBe("worktree");
-  });
+      const agentItems = submenu.filter(
+        (item) => item.type !== "separator" && item.id.startsWith("convert-to:")
+      );
+      expect(agentItems.length).toBe(2);
 
-  it("falls back to project scope when no worktreeId", () => {
-    const result = buildCreateNoteArgs("Claude", undefined, "selected text", undefined);
-    expect(result.scope).toBe("project");
-    expect(result.worktreeId).toBeUndefined();
-    expect(result.content).not.toContain("**Worktree:**");
-  });
-
-  it("handles multiline selection text", () => {
-    const result = buildCreateNoteArgs("Claude", "main", "line1\nline2\nline3", "wt-1");
-    expect(result.content).toContain("> line1\n> line2\n> line3");
+      const firstAgent = submenu.find((i) => i.id === `convert-to:${AGENT_IDS[0]}`);
+      const secondAgent = submenu.find((i) => i.id === `convert-to:${AGENT_IDS[1]}`);
+      expect(firstAgent).toBeDefined();
+      expect(secondAgent).toBeDefined();
+    });
   });
 });

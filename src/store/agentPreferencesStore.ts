@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { createSafeJSONStorage, readLocalStorageItemSafely } from "./persistence/safeStorage";
+import {
+  createSafeJSONStorage,
+  readLocalStorageItemSafely,
+  safeJSONParse,
+} from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 
 export type DefaultAgentId = BuiltInAgentId;
@@ -30,6 +35,8 @@ export const useAgentPreferencesStore = create<AgentPreferencesState>()(
     {
       name: "daintree-agent-preferences",
       storage: createSafeJSONStorage(),
+      version: 0,
+      migrate: (persistedState) => persistedState as AgentPreferencesState,
       merge: (persistedState, currentState) => {
         const persisted = persistedState as Partial<AgentPreferencesState> | null;
 
@@ -49,14 +56,12 @@ export const useAgentPreferencesStore = create<AgentPreferencesState>()(
         // a Promise in async storage implementations, but localStorage is always synchronous.
         try {
           const oldRaw = readLocalStorageItemSafely("daintree-toolbar-preferences");
-          if (oldRaw) {
-            const oldData = JSON.parse(oldRaw) as {
-              state?: { launcher?: { defaultAgent?: unknown } };
-            };
-            const migrated = oldData?.state?.launcher?.defaultAgent;
-            if (isValidAgentId(migrated)) {
-              return { ...currentState, defaultAgent: migrated };
-            }
+          const oldData = safeJSONParse<{
+            state?: { launcher?: { defaultAgent?: unknown } };
+          }>(oldRaw, { store: "agentPreferencesStore", key: "daintree-toolbar-preferences" }, {});
+          const migrated = oldData?.state?.launcher?.defaultAgent;
+          if (isValidAgentId(migrated)) {
+            return { ...currentState, defaultAgent: migrated };
           }
         } catch {
           // Migration failure is non-fatal — fall through to default.
@@ -67,3 +72,9 @@ export const useAgentPreferencesStore = create<AgentPreferencesState>()(
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "agentPreferencesStore",
+  store: useAgentPreferencesStore,
+  persistedStateType: "{ defaultAgent: DefaultAgentId | undefined }",
+});

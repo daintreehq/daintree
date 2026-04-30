@@ -69,9 +69,9 @@ test.describe.serial("Core: Settings Pages Load", () => {
       timeout: T_SHORT,
     });
 
-    // App subtab (default) should show the inline theme list
+    // App subtab (default) should show the accent color section
     const settingsPanel = window.locator('[role="dialog"]');
-    await expect(settingsPanel.locator('[role="listbox"][aria-label="Theme list"]')).toBeVisible({
+    await expect(settingsPanel.locator('section[aria-label="Accent color"]')).toBeVisible({
       timeout: T_SHORT,
     });
 
@@ -300,9 +300,9 @@ test.describe.serial("Core: Settings Pages Load", () => {
     await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
-    // Switch to Project scope
-    const scopeSelect = window.locator('[aria-label="Settings scope"]');
-    await scopeSelect.selectOption("project");
+    // Switch to Project scope (Radix Select)
+    await window.locator('[aria-label="Settings scope"]').click();
+    await window.locator('[role="option"]', { hasText: "Project" }).click();
     await window.waitForTimeout(T_SETTLE);
 
     // Click Variables tab
@@ -331,9 +331,9 @@ test.describe.serial("Core: Settings Pages Load", () => {
     await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
-    // Switch to Project scope
-    const scopeSelect = window.locator('[aria-label="Settings scope"]');
-    await scopeSelect.selectOption("project");
+    // Switch to Project scope (Radix Select)
+    await window.locator('[aria-label="Settings scope"]').click();
+    await window.locator('[role="option"]', { hasText: "Project" }).click();
     await window.waitForTimeout(T_SETTLE);
 
     // Click Worktree Setup tab (resources are now embedded here)

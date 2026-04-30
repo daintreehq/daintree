@@ -28,7 +28,7 @@ export type AgentStateChangeTrigger =
   | "title";
 
 /** Agent state */
-export type AgentState = "idle" | "working" | "running" | "waiting" | "completed" | "exited";
+export type AgentState = "idle" | "working" | "waiting" | "directing" | "completed" | "exited";
 
 /** Payload for agent state change events */
 export interface AgentStateChangePayload {
@@ -82,6 +82,39 @@ export interface AgentExitedPayload {
   agentType?: AgentId;
   /** Timestamp when exited */
   timestamp: number;
+  /**
+   * Identifies the kind of exit. `"subcommand"` means the detected agent
+   * process stopped while the shell PTY is still alive (user quit to shell,
+   * process-tree demotion). `"terminal"` means the PTY itself exited but the
+   * preserved panel still needs renderer-side live identity cleared.
+   *
+   * The `agent:exited` channel is dual-purpose: it ALSO fires to clear
+   * renderer-side live-detection fields when a plain process icon
+   * (npm/vite/etc.) exits. In that case both `agentType` and `exitKind`
+   * are undefined, and consumers that care only about actual agent exits
+   * should gate on `exitKind === "subcommand" || exitKind === "terminal"`
+   * or `agentType !== undefined`.
+   * #5807
+   */
+  exitKind?: "subcommand" | "terminal";
+}
+
+/**
+ * Emitted when an agent PTY exits with an error classified as fallback-eligible
+ * (connection failure or hard auth). The renderer consumes this to walk the
+ * preset's `fallbacks` chain and respawn the panel with the next preset.
+ */
+export interface AgentFallbackTriggeredPayload {
+  terminalId: string;
+  agentId: string;
+  /** Preset that was active when the PTY exited. */
+  fromPresetId: string;
+  /** Original user-selected preset ID; unchanged across fallback hops. */
+  originalPresetId?: string;
+  /** Why the classifier decided this was a fallback-eligible exit. */
+  reason: "connection" | "auth";
+  exitCode: number;
+  timestamp: number;
 }
 
 /** Artifact detected payload */
@@ -108,12 +141,10 @@ export interface SaveArtifactOptions {
   cwd?: string;
 }
 
-/** Result from saving an artifact */
+/** Result from saving an artifact. `null` is returned when the user cancels the save dialog; failures throw `AppError`. */
 export interface SaveArtifactResult {
   /** Path where the file was saved */
   filePath: string;
-  /** Whether the operation succeeded */
-  success: boolean;
 }
 
 /** Options for applying a patch */
@@ -124,14 +155,10 @@ export interface ApplyPatchOptions {
   cwd: string;
 }
 
-/** Result from applying a patch */
+/** Result from applying a patch. Failures throw `AppError`. */
 export interface ApplyPatchResult {
-  /** Whether the patch applied successfully */
-  success: boolean;
-  /** Error message if the patch failed */
-  error?: string;
   /** Files that were modified */
-  modifiedFiles?: string[];
+  modifiedFiles: string[];
 }
 
 export interface AgentHelpRequest {

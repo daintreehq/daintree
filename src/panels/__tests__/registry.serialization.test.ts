@@ -23,7 +23,6 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
       const result = config!.serialize!(
         makePanel({
           kind: "terminal",
-          type: "terminal",
           cwd: "/home",
           command: "  ls -la  ",
           createdAt: 100,
@@ -31,8 +30,7 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
         })
       );
       expect(result).toEqual({
-        type: "terminal",
-        agentId: undefined,
+        launchAgentId: undefined,
         cwd: "/home",
         command: "ls -la",
         createdAt: 100,
@@ -45,7 +43,6 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
       const result = config!.serialize!(
         makePanel({
           kind: "terminal",
-          type: "terminal",
           cwd: "/home",
           agentSessionId: "sess-1",
           agentLaunchFlags: ["--flag"],
@@ -67,21 +64,6 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
       const config = getPanelKindConfig("terminal");
       const result = config!.serialize!(makePanel({ kind: "terminal", command: "   " }));
       expect(result.command).toBeUndefined();
-    });
-  });
-
-  describe("agent", () => {
-    it("serializes identically to terminal", () => {
-      const termConfig = getPanelKindConfig("terminal");
-      const agentConfig = getPanelKindConfig("agent");
-      const panel = makePanel({
-        type: "claude",
-        agentId: "claude",
-        cwd: "/project",
-        command: "claude",
-        agentSessionId: "s1",
-      });
-      expect(agentConfig!.serialize!(panel)).toEqual(termConfig!.serialize!(panel));
     });
   });
 
@@ -112,34 +94,12 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
     });
   });
 
-  describe("notes", () => {
-    it("serializes note fields", () => {
-      const config = getPanelKindConfig("notes");
-      const result = config!.serialize!(
-        makePanel({
-          kind: "notes",
-          notePath: "/notes/test.md",
-          noteId: "note-1",
-          scope: "project",
-          createdAt: 1234567890,
-        })
-      );
-      expect(result).toEqual({
-        notePath: "/notes/test.md",
-        noteId: "note-1",
-        scope: "project",
-        createdAt: 1234567890,
-      });
-    });
-  });
-
   describe("dev-preview", () => {
     it("serializes dev-preview fields with devCommand as command", () => {
       const config = getPanelKindConfig("dev-preview");
       const result = config!.serialize!(
         makePanel({
           kind: "dev-preview",
-          type: "terminal",
           cwd: "/project",
           devCommand: "  npm run dev  ",
           browserUrl: "http://localhost:5173",
@@ -150,7 +110,6 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
         })
       );
       expect(result).toEqual({
-        type: "terminal",
         cwd: "/project",
         command: "npm run dev",
         browserUrl: "http://localhost:5173",

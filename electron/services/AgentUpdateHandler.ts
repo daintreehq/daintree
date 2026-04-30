@@ -118,24 +118,21 @@ export class AgentUpdateHandler {
       return null;
     }
 
+    const updates = config.update as Record<string, string | undefined>;
+
     if (method) {
-      if (method === "npm") return config.update.npm ?? null;
-      if (method === "brew") return config.update.brew ?? null;
-      if (config.update.other && config.update.other[method]) return config.update.other[method];
-      return null;
+      return updates[method] ?? null;
     }
 
-    if (config.update.npm) {
-      return config.update.npm;
+    if (updates.npm) {
+      return updates.npm;
     }
-    if (config.update.brew) {
-      return config.update.brew;
+    if (updates.brew) {
+      return updates.brew;
     }
-    if (config.update.other) {
-      const otherMethods = Object.values(config.update.other);
-      if (otherMethods.length > 0) {
-        return otherMethods[0];
-      }
+    for (const [key, value] of Object.entries(updates)) {
+      if (key === "npm" || key === "brew") continue;
+      if (typeof value === "string" && value) return value;
     }
 
     return null;
@@ -147,14 +144,10 @@ export class AgentUpdateHandler {
       return [];
     }
 
+    const updates = config.update as Record<string, string | undefined>;
     const methods = new Set<string>();
-    if (config.update.npm) methods.add("npm");
-    if (config.update.brew) methods.add("brew");
-    if (config.update.other) {
-      for (const method of Object.keys(config.update.other)) {
-        if (method === "npm" || method === "brew") continue;
-        methods.add(method);
-      }
+    for (const [key, value] of Object.entries(updates)) {
+      if (typeof value === "string" && value) methods.add(key);
     }
     return [...methods];
   }

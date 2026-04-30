@@ -8,12 +8,24 @@ import {
   serializeError,
 } from "../../shared/utils/ipcErrorSerialization.js";
 import { FAULT_MODE_ENABLED, applyInvokeFault, initFaultRegistry } from "../ipc/faultRegistry.js";
+import { markIpcSecurityReady } from "../ipc/ipcGuard.js";
+import { scrubSecrets } from "../utils/secretScrubber.js";
 
 function sanitizePaths(msg: string): string {
   return msg
     .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
     .replace(/[A-Z]:[/\\](?:Users|Program Files|Windows|ProgramData)[^\s:]*/gi, "<path>")
     .replace(/\\\\(?:[^\s\\]+)\\(?:[^\s:]+)/g, "<path>");
+}
+
+/**
+ * @internal Exported for testing. Strip filesystem paths and pattern-known
+ * secret sigils from an IPC error message before it leaves the main process.
+ * Path normalization runs first so a token embedded inside a path is still
+ * caught after the path is collapsed to `<path>`.
+ */
+export function sanitizeErrorForRenderer(msg: string): string {
+  return scrubSecrets(sanitizePaths(msg));
 }
 
 // Wrap ipcMain.handle globally to enforce sender validation on ALL IPC handlers
@@ -45,7 +57,10 @@ export function enforceIpcSenderValidation(): void {
         if (app.isPackaged) {
           console.error(`[IPC] Error on channel ${channel}:`, error);
           const serialized = serializeError(error);
-          serialized.message = sanitizePaths(serialized.message);
+          serialized.message = sanitizeErrorForRenderer(serialized.message);
+          if (typeof serialized.userMessage === "string") {
+            serialized.userMessage = sanitizeErrorForRenderer(serialized.userMessage);
+          }
           serialized.stack = undefined;
           serialized.path = undefined;
           serialized.context = undefined;
@@ -80,7 +95,7 @@ export function enforceIpcSenderValidation(): void {
           if (app.isPackaged) {
             console.error(`[IPC] Error on channel ${channel}:`, error);
             const serialized = serializeError(error);
-            serialized.message = sanitizePaths(serialized.message);
+            serialized.message = sanitizeErrorForRenderer(serialized.message);
             serialized.stack = undefined;
             serialized.path = undefined;
             serialized.context = undefined;
@@ -145,6 +160,7 @@ export function enforceIpcSenderValidation(): void {
   } as typeof ipcMain.removeAllListeners;
 
   console.log("[MAIN] IPC sender validation enforced globally (handle + on)");
+  markIpcSecurityReady();
 }
 
 /**

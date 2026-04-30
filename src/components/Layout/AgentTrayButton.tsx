@@ -3,39 +3,58 @@ import {
   useMemo,
   useRef,
   useState,
+  useCallback,
   type ComponentType,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Plug, Pin, Settings2 } from "lucide-react";
+import { Plug, Pin, Settings2, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { getAgentConfig, type AgentIconProps } from "@/config/agents";
+import { BrandMark } from "@/components/icons";
+import {
+  getAgentConfig,
+  getMergedPresets,
+  type AgentIconProps,
+  type AgentPreset,
+} from "@/config/agents";
 import { actionService } from "@/services/ActionService";
+import { useActionMruStore } from "@/store/actionMruStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useShallow } from "zustand/react/shallow";
 import { useKeybindingDisplay } from "@/hooks";
+import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 import type { CliAvailability, AgentState } from "@shared/types";
-import { isAgentReady, isAgentInstalled } from "../../../shared/utils/agentAvailability";
+import { resolveEffectivePresetId } from "@shared/types";
+import { isAgentLaunchable, isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import {
   getDominantAgentState,
   agentStateDotColor,
 } from "@/components/Worktree/AgentStatusIndicator";
 import { cn } from "@/lib/utils";
+import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 
 interface AgentTrayButtonProps {
   agentAvailability?: CliAvailability;
@@ -48,12 +67,15 @@ type AgentRow = {
   Icon: ComponentType<AgentIconProps>;
   pinned: boolean;
   dominantState: AgentState | null;
+  isNew: boolean;
+  presets?: AgentPreset[];
+  projectPresetIds: Set<string>;
+  savedPresetId?: string;
 };
 
 const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
   "idle",
   "working",
-  "running",
   "waiting",
   "directing",
 ]);
@@ -61,23 +83,190 @@ const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentSt
 function buildAgentRow(
   id: BuiltInAgentId,
   pinned: boolean,
-  dominantState: AgentState | null
+  dominantState: AgentState | null,
+  isNew: boolean,
+  customPresets?: AgentPreset[],
+  ccrPresets?: AgentPreset[],
+  projectPresets?: AgentPreset[],
+  savedPresetId?: string
 ): AgentRow | null {
   const config = getAgentConfig(id);
   if (!config) return null;
-  return { id, name: config.name, Icon: config.icon, pinned, dominantState };
+  const presets = getMergedPresets(id, customPresets, ccrPresets, projectPresets);
+  const hasPresets = presets.length > 0;
+  return {
+    id,
+    name: config.name,
+    Icon: config.icon,
+    pinned,
+    dominantState,
+    isNew,
+    presets: hasPresets ? presets : undefined,
+    projectPresetIds: new Set((projectPresets ?? []).map((f) => f.id)),
+    savedPresetId,
+  };
 }
 
 function RunningDot({ state }: { state: AgentState | null }) {
-  if (!state) return null;
+  const color = state ? agentStateDotColor(state) : null;
+  if (!color) return null;
   return (
     <span
       className={cn(
-        "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-daintree-sidebar",
-        agentStateDotColor(state)
+        "absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-sidebar",
+        color
       )}
       aria-hidden="true"
     />
+  );
+}
+
+type SplitLaunchItemProps = {
+  row: AgentRow;
+  onLaunch: (agentId: BuiltInAgentId, presetId?: string | null) => void;
+};
+
+function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
+  const leftAreaRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    const el = leftAreaRef.current;
+    if (!el) return;
+    const handler = (e: PointerEvent) => {
+      // Prevent Radix from opening the submenu when clicking the main area
+      e.stopPropagation();
+      e.preventDefault();
+      onLaunch(row.id, null);
+    };
+    el.addEventListener("pointerdown", handler, true);
+    return () => el.removeEventListener("pointerdown", handler, true);
+  }, [row.id, onLaunch]);
+
+  // Keyboard: Enter/Space on the SubTrigger must launch default (primary action)
+  // rather than Radix's default of opening the submenu. ArrowRight still opens
+  // the submenu for picking a specific preset. Without this, keyboard users
+  // cannot trigger the left-side default launch at all.
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      e.stopPropagation();
+      onLaunch(row.id, null);
+    }
+  };
+
+  // Project membership beats the ccr- prefix so a project preset with a
+  // ccr-* id still lands under "Project Shared". Everything not-ccr and
+  // not-project falls through to "Custom" — preserves historical display
+  // for presets whose provenance can't be determined from id alone.
+  const projectPresets = (row.presets ?? []).filter((f) => row.projectPresetIds.has(f.id));
+  const ccrPresets = (row.presets ?? []).filter(
+    (f) => !row.projectPresetIds.has(f.id) && f.id.startsWith("ccr-")
+  );
+  const customPresets = (row.presets ?? []).filter(
+    (f) => !row.projectPresetIds.has(f.id) && !f.id.startsWith("ccr-")
+  );
+  const groupCount =
+    (ccrPresets.length > 0 ? 1 : 0) +
+    (projectPresets.length > 0 ? 1 : 0) +
+    (customPresets.length > 0 ? 1 : 0);
+  const hasMultipleGroups = groupCount > 1;
+
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger
+        className="p-0 [&>svg:last-child]:hidden overflow-hidden"
+        data-testid="submenu-trigger"
+        onKeyDown={handleKeyDown}
+        aria-label={`${row.name} (press Enter to launch, Right Arrow for presets)`}
+      >
+        <span ref={leftAreaRef} className="flex flex-1 items-center gap-2 px-2.5 py-1.5">
+          <span className="inline-flex h-4 w-4 items-center justify-center shrink-0">
+            <BrandMark brandColor={getBrandColorHex(row.id)}>
+              <row.Icon brandColor={getBrandColorHex(row.id)} />
+            </BrandMark>
+          </span>
+          {row.name}
+        </span>
+        <span
+          className="flex items-center px-2 py-1.5 border-l border-daintree-border/50"
+          aria-hidden="true"
+        >
+          <ChevronRight className="h-3.5 w-3.5 text-daintree-text/40" />
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent data-testid="submenu-content">
+        <DropdownMenuRadioGroup value={row.savedPresetId ?? ""}>
+          <DropdownMenuRadioItem value="" onSelect={() => onLaunch(row.id, null)}>
+            <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+              <BrandMark brandColor={getBrandColorHex(row.id)}>
+                <row.Icon brandColor={getBrandColorHex(row.id)} />
+              </BrandMark>
+            </span>
+            Default
+          </DropdownMenuRadioItem>
+          {ccrPresets.length > 0 && (
+            <>
+              {hasMultipleGroups && <DropdownMenuSeparator />}
+              {hasMultipleGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
+              {ccrPresets.map((preset) => (
+                <DropdownMenuRadioItem
+                  key={preset.id}
+                  value={preset.id}
+                  onSelect={() => onLaunch(row.id, preset.id)}
+                >
+                  <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                    <BrandMark brandColor={preset.color ?? getBrandColorHex(row.id)}>
+                      <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
+                    </BrandMark>
+                  </span>
+                  {preset.name.replace(/^CCR:\s*/, "")}
+                </DropdownMenuRadioItem>
+              ))}
+            </>
+          )}
+          {projectPresets.length > 0 && (
+            <>
+              {hasMultipleGroups && <DropdownMenuSeparator />}
+              {hasMultipleGroups && <DropdownMenuLabel>Project Shared</DropdownMenuLabel>}
+              {projectPresets.map((preset) => (
+                <DropdownMenuRadioItem
+                  key={preset.id}
+                  value={preset.id}
+                  onSelect={() => onLaunch(row.id, preset.id)}
+                >
+                  <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                    <BrandMark brandColor={preset.color ?? getBrandColorHex(row.id)}>
+                      <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
+                    </BrandMark>
+                  </span>
+                  {preset.name}
+                </DropdownMenuRadioItem>
+              ))}
+            </>
+          )}
+          {customPresets.length > 0 && (
+            <>
+              {hasMultipleGroups && <DropdownMenuSeparator />}
+              {hasMultipleGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
+              {customPresets.map((preset) => (
+                <DropdownMenuRadioItem
+                  key={preset.id}
+                  value={preset.id}
+                  onSelect={() => onLaunch(row.id, preset.id)}
+                >
+                  <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                    <BrandMark brandColor={preset.color ?? getBrandColorHex(row.id)}>
+                      <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
+                    </BrandMark>
+                  </span>
+                  {preset.name}
+                </DropdownMenuRadioItem>
+              ))}
+            </>
+          )}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }
 
@@ -86,13 +275,27 @@ export function AgentTrayButton({
   "data-toolbar-item": dataToolbarItem,
 }: AgentTrayButtonProps) {
   const agentSettings = useAgentSettingsStore((s) => s.settings);
+  const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
+  const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
   const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
+  const updateWorktreePreset = useAgentSettingsStore((s) => s.updateWorktreePreset);
+
+  const getSortedActionMruList = useActionMruStore(useShallow((s) => s.getSortedActionMruList));
 
   const refreshAvailability = useCliAvailabilityStore((s) => s.refresh);
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
 
-  const panelsById = usePanelStore((s) => s.panelsById);
-  const panelIds = usePanelStore((s) => s.panelIds);
+  const {
+    loaded: onboardingLoaded,
+    seenAgentIds,
+    welcomeCardDismissed,
+    markAgentsSeen,
+  } = useAgentDiscoveryOnboarding();
+
+  const [open, setOpen] = useState(false);
+
+  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
+  const panelIds = usePanelStore(useShallow((s) => s.panelIds));
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
   // Before the first real availability result lands we can't distinguish
@@ -101,13 +304,19 @@ export function AgentTrayButton({
   const lastPinActionAt = useRef(0);
 
   // Radix Tooltip reopens whenever the trigger receives focus, including
-  // programmatic focus restoration from DropdownMenu's onCloseAutoFocus. Gate
-  // the Tooltip via controlled state and suppress open=true for one tick
-  // after the dropdown closes so the refocused button doesn't flash the
-  // tooltip back into view. See issue #5153.
+  // programmatic focus restoration from DropdownMenu's onCloseAutoFocus and
+  // from any AppDialog opened via a menu item (Customise Toolbar, Manage
+  // Agents, etc.) when that dialog closes much later. Gate the Tooltip via
+  // controlled state and hold the suppression open until the next genuine
+  // pointer hover on the button — a timer can't bridge an arbitrarily long
+  // dialog lifetime. See issue #5153.
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const isRestoringFocusRef = useRef(false);
-  const restoreFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set in onPointerDownOutside, read in onCloseAutoFocus. Lets us
+  // preventDefault() the focus restoration only for pointer dismissals so the
+  // tray button doesn't keep its accent focus-visible ring; keyboard close
+  // (Escape/Enter) still gets default focus return for WAI-ARIA.
+  const wasPointerCloseRef = useRef(false);
 
   // Re-probe on view visibility changes (Electron LRU reactivation, tab
   // switches). The window-focus trigger is handled once globally in
@@ -127,14 +336,6 @@ export function AgentTrayButton({
     };
   }, [refreshAvailability]);
 
-  useEffect(() => {
-    return () => {
-      if (restoreFocusTimerRef.current != null) {
-        clearTimeout(restoreFocusTimerRef.current);
-      }
-    };
-  }, []);
-
   const handleTooltipOpenChange = (open: boolean) => {
     if (open && isRestoringFocusRef.current) return;
     setTooltipOpen(open);
@@ -143,32 +344,27 @@ export function AgentTrayButton({
   const suppressTooltipDuringFocusRestore = () => {
     setTooltipOpen(false);
     isRestoringFocusRef.current = true;
-    if (restoreFocusTimerRef.current != null) {
-      clearTimeout(restoreFocusTimerRef.current);
-    }
-    restoreFocusTimerRef.current = setTimeout(() => {
-      isRestoringFocusRef.current = false;
-      restoreFocusTimerRef.current = null;
-    }, 0);
+  };
+
+  const clearFocusRestoreSuppression = () => {
+    isRestoringFocusRef.current = false;
   };
 
   const agentDominantStates = useMemo(() => {
     const statesPerAgent = new Map<string, (AgentState | undefined)[]>();
     for (const pid of panelIds) {
       const p = panelsById[pid];
-      if (
-        !p ||
-        p.kind !== "agent" ||
-        !p.agentId ||
-        p.location === "trash" ||
-        p.location === "background"
-      )
-        continue;
+      // Runtime identity wins so a plain shell that starts Claude/Codex is
+      // tracked under the same tray entry. Launch intent is only a boot-window
+      // fallback before any detector result has committed.
+      if (!p || p.location === "trash" || p.location === "background") continue;
+      const agentId = getRuntimeOrBootAgentId(p);
+      if (!agentId) continue;
       if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
       if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
-      const arr = statesPerAgent.get(p.agentId) ?? [];
+      const arr = statesPerAgent.get(agentId) ?? [];
       arr.push(p.agentState);
-      statesPerAgent.set(p.agentId, arr);
+      statesPerAgent.set(agentId, arr);
     }
     const result = new Map<string, AgentState | null>();
     for (const [agentId, states] of statesPerAgent) {
@@ -176,6 +372,39 @@ export function AgentTrayButton({
     }
     return result;
   }, [panelsById, panelIds, activeWorktreeId]);
+
+  const readyAgentIds = useMemo(() => {
+    return BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id]));
+  }, [agentAvailability]);
+
+  const hasNoPinnedAgents = useMemo(() => {
+    if (!agentSettings?.agents) return true;
+    return !BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
+  }, [agentSettings]);
+
+  // While the first-run welcome card is actually being rendered, suppress
+  // the tray discovery badge so the card and badge don't both fire for the
+  // same agents. Critically, this is gated on whether the card would render
+  // right now — not whether the dismiss flag is false — so a user who pins
+  // via the tray/settings (which leaves `welcomeCardDismissed: false`)
+  // still gets Day-N discovery for agents installed later.
+  const welcomeCardRenderable =
+    onboardingLoaded &&
+    hasRealData &&
+    !welcomeCardDismissed &&
+    readyAgentIds.length > 0 &&
+    hasNoPinnedAgents;
+
+  const newAgentIds = useMemo<ReadonlySet<string>>(() => {
+    if (!onboardingLoaded || welcomeCardRenderable) return new Set<string>();
+    const set = new Set<string>();
+    for (const id of readyAgentIds) {
+      if (!seenAgentIds.includes(id)) set.add(id);
+    }
+    return set;
+  }, [onboardingLoaded, welcomeCardRenderable, readyAgentIds, seenAgentIds]);
+
+  const showDiscoveryBadge = newAgentIds.size > 0;
 
   const { launchable, needsSetup, fallbackSetup } = useMemo(() => {
     const launchable: AgentRow[] = [];
@@ -185,16 +414,33 @@ export function AgentTrayButton({
     for (const id of BUILT_IN_AGENT_IDS) {
       const pinned = isAgentPinned(agentSettings?.agents?.[id]);
       const dominant = agentDominantStates.get(id) ?? null;
-      const row = buildAgentRow(id, pinned, dominant);
+      const entry = agentSettings?.agents?.[id];
+      const customPresets = entry?.customPresets;
+      const ccrPresets = ccrPresetsByAgent[id];
+      const projectPresets = projectPresetsByAgent[id];
+      const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
+      const row = buildAgentRow(
+        id,
+        pinned,
+        dominant,
+        newAgentIds.has(id),
+        customPresets,
+        ccrPresets,
+        projectPresets,
+        savedPresetId
+      );
       if (!row) continue;
 
       const state = agentAvailability?.[id];
-      if (isAgentReady(state)) {
+      if (isAgentLaunchable(state)) {
+        // Launchable. Passive auth discovery (`authConfirmed: false`) never
+        // moves an agent out of Launch — clicking starts the CLI, which
+        // prompts for sign-in on first run. The decoupling goal of
+        // #5483 requires this path to stay hot.
         launchable.push(row);
       } else if (isAgentInstalled(state)) {
-        // "installed" means the CLI is on PATH but not fully authenticated
-        // or configured yet. These belong in "Also Available" with a setup
-        // badge. Missing agents do NOT get promoted here.
+        // Reached for WSL `installed`, blocked agents, and any future
+        // non-launchable installed state.
         needsSetup.push(row);
       }
       // Always build a fallback row so we can offer discovery when
@@ -202,12 +448,54 @@ export function AgentTrayButton({
       fallbackSetup.push(row);
     }
 
-    return { launchable, needsSetup, fallbackSetup };
-  }, [agentAvailability, agentSettings, agentDominantStates]);
+    // Sort Launch by palette frecency (higher score = more recent). Untracked
+    // agents keep their natural BUILT_IN_AGENT_IDS order after any tracked
+    // ones. Only palette dispatches populate frecency; tray launches
+    // don't record, but palette-sourced frecency is the signal we have.
+    const frecencyEntries = getSortedActionMruList();
+    const frecencyScoreMap = new Map<string, number>();
+    frecencyEntries.forEach(({ id, score }) => frecencyScoreMap.set(id, score));
 
-  const handleLaunch = (row: AgentRow) => {
-    void actionService.dispatch("agent.launch", { agentId: row.id }, { source: "user" });
-  };
+    launchable.sort((a, b) => {
+      const aScore = frecencyScoreMap.get(`agent.${a.id}`) ?? -Infinity;
+      const bScore = frecencyScoreMap.get(`agent.${b.id}`) ?? -Infinity;
+      if (aScore === -Infinity && bScore === -Infinity) return 0;
+      if (aScore === -Infinity) return 1;
+      if (bScore === -Infinity) return -1;
+      return bScore - aScore;
+    });
+
+    return { launchable, needsSetup, fallbackSetup };
+  }, [
+    agentAvailability,
+    agentSettings,
+    agentDominantStates,
+    getSortedActionMruList,
+    newAgentIds,
+    ccrPresetsByAgent,
+    projectPresetsByAgent,
+    activeWorktreeId,
+  ]);
+
+  const handleLaunch = useCallback(
+    (agentId: BuiltInAgentId, presetId?: string | null) => {
+      setOpen(false);
+      // Persist the pick to the worktree-scoped slot so a subsequent main-
+      // button press on this worktree relaunches the same preset while other
+      // worktrees keep their own. `null` clears the scoped override (and
+      // dispatches with presetId: null to force a preset-free launch);
+      // `undefined` is the plain MRU fall-through and writes nothing.
+      if (activeWorktreeId && presetId !== undefined) {
+        void updateWorktreePreset(agentId, activeWorktreeId, presetId ?? undefined);
+      }
+      void actionService.dispatch(
+        "agent.launch",
+        { agentId, ...(presetId !== undefined ? { presetId } : {}) },
+        { source: "user" }
+      );
+    },
+    [activeWorktreeId, updateWorktreePreset]
+  );
 
   const handleSetup = (agentId: BuiltInAgentId) => {
     void actionService.dispatch(
@@ -225,11 +513,18 @@ export function AgentTrayButton({
     void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
   };
 
+  const handleOpenAgentSetupWizard = () => {
+    window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
+  };
+
   const handleOpenChange = (open: boolean) => {
     setTooltipOpen(false);
     if (!open) return;
     // Fire-and-forget: the store throttle absorbs rapid reopens.
     void refreshAvailability().catch(() => {});
+    if (readyAgentIds.length > 0) {
+      void markAgentsSeen(readyAgentIds);
+    }
   };
 
   const togglePin = (row: AgentRow) => {
@@ -257,32 +552,70 @@ export function AgentTrayButton({
   // availability data has landed.
   const showFallback = !isAvailabilityLoading && !hasAnyContent && fallbackSetup.length > 0;
 
+  const renderLaunchItem = (row: AgentRow) => {
+    if (row.presets && row.presets.length > 0) {
+      return <SplitLaunchItem key={`launch-${row.id}`} row={row} onLaunch={handleLaunch} />;
+    }
+
+    return (
+      <LaunchRow
+        key={`launch-${row.id}`}
+        row={row}
+        onLaunch={handleLaunch}
+        onKeyDown={handleRowKeyDown}
+        onTogglePin={togglePin}
+        stopPointer={stopPointer}
+      />
+    );
+  };
+
   return (
-    <DropdownMenu onOpenChange={handleOpenChange}>
-      <TooltipProvider>
-        <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                data-toolbar-item={dataToolbarItem}
-                className="toolbar-agent-button text-daintree-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] transition-colors"
-                aria-label="Agent tray"
-              >
+    <DropdownMenu
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        handleOpenChange(o);
+      }}
+    >
+      <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              data-toolbar-item={dataToolbarItem}
+              className="toolbar-agent-button text-daintree-text transition-colors"
+              aria-label={showDiscoveryBadge ? "Agent tray — new agents detected" : "Agent tray"}
+              onPointerEnter={clearFocusRestoreSuppression}
+            >
+              <span className="relative inline-flex items-center justify-center">
                 <Plug />
-              </Button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Agent Tray</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+                {showDiscoveryBadge && (
+                  <span
+                    data-testid="agent-tray-discovery-badge"
+                    className="absolute top-0 right-0 size-1.5 rounded-full bg-status-info ring-1 ring-daintree-sidebar"
+                    aria-hidden="true"
+                  />
+                )}
+              </span>
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Agent Tray</TooltipContent>
+      </Tooltip>
       <DropdownMenuContent
         align="start"
         sideOffset={4}
         className="min-w-[16rem]"
-        onCloseAutoFocus={() => {
+        onPointerDownOutside={() => {
+          wasPointerCloseRef.current = true;
+        }}
+        onCloseAutoFocus={(e) => {
           suppressTooltipDuringFocusRestore();
+          if (wasPointerCloseRef.current) {
+            e.preventDefault();
+            wasPointerCloseRef.current = false;
+          }
         }}
       >
         {isAvailabilityLoading && (
@@ -291,24 +624,23 @@ export function AgentTrayButton({
 
         {launchable.length > 0 && (
           <>
-            <DropdownMenuLabel>Agents</DropdownMenuLabel>
-            {launchable.map((row) => (
-              <LaunchRow
-                key={`launch-${row.id}`}
-                row={row}
-                onLaunch={handleLaunch}
-                onKeyDown={handleRowKeyDown}
-                onTogglePin={togglePin}
-                stopPointer={stopPointer}
-              />
-            ))}
+            <DropdownMenuLabel>Launch</DropdownMenuLabel>
+            {hasNoPinnedAgents && !isAvailabilityLoading && (
+              <DropdownMenuLabel
+                data-testid="agent-tray-pin-hint"
+                className="text-daintree-text/50 font-normal text-[11px] -mt-1 pb-1.5"
+              >
+                Hover an agent and click the pin to keep it on the toolbar.
+              </DropdownMenuLabel>
+            )}
+            {launchable.map((row) => renderLaunchItem(row))}
           </>
         )}
 
         {needsSetup.length > 0 && (
           <>
             {launchable.length > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuLabel>Also Available</DropdownMenuLabel>
+            <DropdownMenuLabel>Needs Setup</DropdownMenuLabel>
             {needsSetup.map((row) => (
               <DropdownMenuItem
                 key={`setup-${row.id}`}
@@ -316,7 +648,9 @@ export function AgentTrayButton({
                 className="group h-7"
               >
                 <span className="mr-2 inline-flex h-4 w-4 items-center justify-center grayscale opacity-50">
-                  <row.Icon brandColor={getBrandColorHex(row.id)} />
+                  <BrandMark brandColor={getBrandColorHex(row.id)}>
+                    <row.Icon brandColor={getBrandColorHex(row.id)} />
+                  </BrandMark>
                 </span>
                 <span className="flex-1 text-daintree-text/70">{row.name}</span>
                 <span className="ml-2 shrink-0 rounded border border-daintree-text/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-daintree-text/50">
@@ -338,7 +672,9 @@ export function AgentTrayButton({
                 data-testid={`agent-tray-fallback-${row.id}`}
               >
                 <span className="mr-2 inline-flex h-4 w-4 items-center justify-center grayscale opacity-50">
-                  <row.Icon brandColor={getBrandColorHex(row.id)} />
+                  <BrandMark brandColor={getBrandColorHex(row.id)}>
+                    <row.Icon brandColor={getBrandColorHex(row.id)} />
+                  </BrandMark>
                 </span>
                 <span className="flex-1 text-daintree-text/70">{row.name}</span>
                 <span className="ml-2 shrink-0 rounded border border-daintree-text/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-daintree-text/50">
@@ -352,11 +688,15 @@ export function AgentTrayButton({
         {(hasAnyContent || showFallback) && <DropdownMenuSeparator />}
         <DropdownMenuItem onSelect={handleManageAgents} className="h-7">
           <Settings2 className="mr-2 h-3.5 w-3.5 opacity-60" />
-          Manage Agents…
+          Manage Agents
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={handleCustomizeToolbar} className="h-7">
           <Settings2 className="mr-2 h-3.5 w-3.5 opacity-60" />
-          Customize Toolbar…
+          Customize Toolbar
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={handleOpenAgentSetupWizard} className="h-7">
+          <Plug className="mr-2 h-3.5 w-3.5" />
+          Set Up Agents
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -371,7 +711,7 @@ function LaunchRow({
   stopPointer,
 }: {
   row: AgentRow;
-  onLaunch: (row: AgentRow) => void;
+  onLaunch: (agentId: BuiltInAgentId, presetId?: string) => void;
   onKeyDown: (e: KeyboardEvent<HTMLDivElement>, row: AgentRow) => void;
   onTogglePin: (row: AgentRow) => void;
   stopPointer: (e: ReactPointerEvent) => void;
@@ -380,17 +720,28 @@ function LaunchRow({
 
   return (
     <DropdownMenuItem
-      onSelect={() => onLaunch(row)}
+      onSelect={() => onLaunch(row.id)}
       onKeyDown={(e) => onKeyDown(e, row)}
       className="group h-7"
       data-testid={`agent-tray-row-${row.id}`}
     >
       <span className="relative mr-2 inline-flex h-4 w-4 items-center justify-center">
-        <row.Icon brandColor={getBrandColorHex(row.id)} />
+        <BrandMark brandColor={getBrandColorHex(row.id)}>
+          <row.Icon brandColor={getBrandColorHex(row.id)} />
+        </BrandMark>
         <RunningDot state={row.dominantState} />
       </span>
 
       <span className="flex-1">{row.name}</span>
+
+      {row.isNew && (
+        <span
+          data-testid={`agent-tray-new-pill-${row.id}`}
+          className="ml-2 shrink-0 rounded border border-status-info/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-status-info"
+        >
+          New
+        </span>
+      )}
 
       {displayCombo && <DropdownMenuShortcut>{displayCombo}</DropdownMenuShortcut>}
 

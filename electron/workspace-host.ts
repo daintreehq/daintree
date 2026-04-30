@@ -1,23 +1,36 @@
-// Silence EPIPE on stdout/stderr — the main process may close the pipe
-// at any time during shutdown or host restart.
+// Dead-fd errnos that must not propagate on GUI launch (AppImage/Wayland, no
+// terminal). EPIPE is a closed pipe; EIO is a disconnected pty (the primary
+// errno for AppImage desktop launches where fd 2 points to an orphaned pty
+// slave); EBADF is a closed fd; ECONNRESET is a socket-backed stdio reset.
+// ENOSPC is intentionally NOT swallowed — it's a real error condition.
+const STDIO_DEAD_CODES = new Set(["EPIPE", "EIO", "EBADF", "ECONNRESET"]);
 for (const stream of [process.stdout, process.stderr]) {
   if (stream && typeof stream.on === "function") {
     stream.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "EPIPE") return;
+      if (err.code && STDIO_DEAD_CODES.has(err.code)) return;
       throw err;
     });
   }
 }
 
+import nodeV8 from "node:v8";
+// Auto-dump up to two heap snapshots when this utility process is genuinely
+// close to V8's heap limit. Snapshot path follows the parent's `--diagnostic-dir`
+// execArgv (set in WorkspaceHostProcess).
+nodeV8.setHeapSnapshotNearHeapLimit(2);
+
 import { MessagePort } from "node:worker_threads";
-import { initializeLogger } from "./utils/logger.js";
+import { initializeLogger, setLogLevelOverrides } from "./utils/logger.js";
 import { copyTreeService } from "./services/CopyTreeService.js";
 import { fileTreeService } from "./services/FileTreeService.js";
 import { projectPulseService } from "./services/ProjectPulseService.js";
 import type { CopyTreeProgress } from "../shared/types/ipc.js";
 import type { WorkspaceHostRequest, WorkspaceHostEvent } from "../shared/types/workspace-host.js";
+import type { WorktreePortRequest } from "../shared/types/worktree-port.js";
 import { WorkspaceService } from "./workspace-host/WorkspaceService.js";
+import { gitHubRateLimitService } from "./services/github/index.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
+import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
@@ -55,14 +68,13 @@ function sendToWorktreePorts(event: WorkspaceHostEvent): void {
 
 async function handleWorktreePortRequest(
   rPort: MessagePort,
-  id: string,
-  action: string,
-  payload: Record<string, unknown>
+  msg: WorktreePortRequest
 ): Promise<void> {
+  const { id } = msg;
   try {
     let result: unknown;
 
-    switch (action) {
+    switch (msg.action) {
       case "get-all-states": {
         const states = workspaceService.getSnapshotsSync();
         result = { states };
@@ -71,25 +83,21 @@ async function handleWorktreePortRequest(
 
       case "set-active": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        workspaceService.setActiveWorktree(requestId, payload.worktreeId as string);
+        workspaceService.setActiveWorktree(requestId, msg.payload.worktreeId);
         result = { ok: true };
         break;
       }
 
       case "refresh": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await workspaceService.refresh(requestId, payload.worktreeId as string | undefined);
+        await workspaceService.refresh(requestId, msg.payload.worktreeId);
         result = { ok: true };
         break;
       }
 
       case "create-worktree": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await workspaceService.createWorktree(
-          requestId,
-          payload.rootPath as string,
-          payload.options as any
-        );
+        await workspaceService.createWorktree(requestId, msg.payload.rootPath, msg.payload.options);
         result = { ok: true };
         break;
       }
@@ -98,9 +106,9 @@ async function handleWorktreePortRequest(
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await workspaceService.deleteWorktree(
           requestId,
-          payload.worktreeId as string,
-          payload.force as boolean | undefined,
-          payload.deleteBranch as boolean | undefined
+          msg.payload.worktreeId,
+          msg.payload.force,
+          msg.payload.deleteBranch
         );
         result = { ok: true };
         break;
@@ -108,14 +116,14 @@ async function handleWorktreePortRequest(
 
       case "list-branches": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await workspaceService.listBranches(requestId, payload.rootPath as string);
+        await workspaceService.listBranches(requestId, msg.payload.rootPath);
         result = { ok: true };
         break;
       }
 
       case "get-recent-branches": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await workspaceService.getRecentBranches(requestId, payload.rootPath as string);
+        await workspaceService.getRecentBranches(requestId, msg.payload.rootPath);
         result = { ok: true };
         break;
       }
@@ -131,8 +139,8 @@ async function handleWorktreePortRequest(
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const actionResult = await workspaceService.runResourceAction(
           requestId,
-          payload.worktreeId as string,
-          payload.action as "provision" | "teardown" | "resume" | "pause" | "status"
+          msg.payload.worktreeId,
+          msg.payload.action
         );
         if (!actionResult.success) {
           rPort.postMessage({ id, error: actionResult.error ?? "Resource action failed" });
@@ -146,21 +154,25 @@ async function handleWorktreePortRequest(
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await workspaceService.switchWorktreeEnvironment(
           requestId,
-          payload.worktreeId as string,
-          payload.envKey as string
+          msg.payload.worktreeId,
+          msg.payload.envKey
         );
         result = { ok: true };
         break;
       }
 
       case "has-resource-config": {
-        const hasConfig = await workspaceService.hasResourceConfig(payload.rootPath as string);
+        const hasConfig = await workspaceService.hasResourceConfig(msg.payload.rootPath);
         result = { hasConfig };
         break;
       }
 
-      default:
-        throw new Error(`Unknown worktree port action: ${action}`);
+      default: {
+        const _exhaustive: never = msg;
+        throw new Error(
+          `Unknown worktree port action: ${(_exhaustive as { action: string }).action}`
+        );
+      }
     }
 
     rPort.postMessage({ id, result });
@@ -174,10 +186,19 @@ function attachWorktreePort(newPort: MessagePort): void {
   worktreePorts.push(newPort);
 
   newPort.on("message", (rawMsg: any) => {
-    const msg = rawMsg?.data ? rawMsg.data : rawMsg;
-    if (!msg?.id || !msg?.action) return;
+    const raw = rawMsg?.data ? rawMsg.data : rawMsg;
+    if (!raw?.id || !raw?.action) return;
 
-    handleWorktreePortRequest(newPort, msg.id, msg.action, msg.payload || {}).catch((err) => {
+    // Renderer is trusted; runtime validation happens at the input boundary in
+    // `WorktreePortClient.request<K>` via the typed protocol map. Cast here so
+    // the dispatcher body can stay free of per-field `as` casts.
+    const msg = {
+      id: raw.id,
+      action: raw.action,
+      payload: raw.payload ?? {},
+    } as WorktreePortRequest;
+
+    handleWorktreePortRequest(newPort, msg).catch((err) => {
       try {
         newPort.postMessage({ id: msg.id, error: (err as Error).message });
       } catch {
@@ -204,7 +225,7 @@ process.on("unhandledRejection", (reason) => {
   console.error("[WorkspaceHost] Unhandled Rejection:", reason);
   sendEvent({
     type: "error",
-    error: String(reason instanceof Error ? reason.message : reason),
+    error: formatErrorMessage(reason, "Unhandled rejection in workspace host"),
   });
 });
 
@@ -215,7 +236,7 @@ function sendEvent(event: WorkspaceHostEvent): void {
   } catch (error) {
     console.error(
       `[WorkspaceHost] Failed to send event type "${(event as any).type}":`,
-      error instanceof Error ? error.message : String(error)
+      formatErrorMessage(error, "Failed to send workspace event")
     );
 
     try {
@@ -225,7 +246,7 @@ function sendEvent(event: WorkspaceHostEvent): void {
     } catch (sanitizeError) {
       console.error(
         `[WorkspaceHost] Failed to sanitize event, sending error event instead:`,
-        sanitizeError instanceof Error ? sanitizeError.message : String(sanitizeError)
+        formatErrorMessage(sanitizeError, "Failed to sanitize workspace event")
       );
       port.postMessage({
         type: "error",
@@ -247,6 +268,17 @@ const shutdownController = new AbortController();
 
 // Create singleton instance
 const workspaceService = new WorkspaceService(sendEvent);
+
+// Forward GitHub rate-limit state changes observed by utility-process HTTP
+// calls (e.g. PullRequestService polling) up to the main process so they
+// reach the toolbar countdown and block main-process GitHub calls too.
+// `broadcastToRenderer` is BrowserWindow-backed and therefore main-only;
+// this relay is how utility-side limits ever become visible elsewhere.
+// Register synchronously before `ready` is sent — otherwise the first
+// event emitted during startup racing polling would be silently dropped.
+gitHubRateLimitService.onStateChange((state) => {
+  sendEvent({ type: "github-rate-limit-changed", state });
+});
 
 // Handle requests from Main
 port.on("message", async (rawMsg: any) => {
@@ -274,8 +306,13 @@ port.on("message", async (rawMsg: any) => {
         await workspaceService.loadProject(
           request.requestId,
           request.rootPath,
-          request.globalEnvVars
+          request.globalEnvVars,
+          request.wslGitByWorktree
         );
+        break;
+
+      case "set-wsl-opt-in":
+        workspaceService.setWslOptIn(request.worktreeId, request.enabled, request.dismissed);
         break;
 
       case "sync":
@@ -315,6 +352,10 @@ port.on("message", async (rawMsg: any) => {
 
       case "refresh":
         await workspaceService.refresh(request.requestId, request.worktreeId);
+        break;
+
+      case "refresh-on-wake":
+        await workspaceService.refreshOnWake(request.requestId);
         break;
 
       case "refresh-prs":
@@ -401,6 +442,18 @@ port.on("message", async (rawMsg: any) => {
         shutdownController.abort();
         workspaceService.dispose();
         break;
+
+      case "set-log-level-overrides": {
+        const overrides = (request.overrides ?? {}) as Record<string, unknown>;
+        const sanitized: Record<string, string> = {};
+        for (const [key, value] of Object.entries(overrides)) {
+          if (typeof key === "string" && typeof value === "string") {
+            sanitized[key] = value;
+          }
+        }
+        setLogLevelOverrides(sanitized);
+        break;
+      }
 
       case "copytree:generate": {
         const { requestId, operationId, rootPath, options } = request;

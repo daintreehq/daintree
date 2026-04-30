@@ -53,7 +53,9 @@ test.describe.serial("Core: SAB Fallback (IPC-only terminal output)", () => {
     await searchInput.fill("SAB_FALLBACK_OK");
     await window.waitForTimeout(T_SETTLE);
 
-    await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
+    // Status may be "Found" (no count) or "N of M" depending on match-results
+    // availability. Either indicates a successful search hit.
+    await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(/^(Found|\d+ of \d+)$/, {
       timeout: T_MEDIUM,
     });
 

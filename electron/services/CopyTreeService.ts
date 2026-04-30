@@ -4,6 +4,7 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import type { CopyTreeOptions, CopyTreeResult, CopyTreeProgress } from "../types/index.js";
 import { logWarn } from "../utils/logger.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export type { CopyTreeOptions, CopyTreeResult, CopyTreeProgress };
 
@@ -201,7 +202,7 @@ class CopyTreeService {
         includedFiles: 0,
         includedSize: 0,
         excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: formatErrorMessage(error, "Failed to generate context"),
       };
     }
   }

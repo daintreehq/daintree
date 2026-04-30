@@ -4,16 +4,26 @@ import { existsSync } from "fs";
 import { resilientAtomicWriteFile, resilientRename, resilientUnlink } from "../utils/fs.js";
 import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 import { getProjectStateDir, stateFilePath } from "./projectStorePaths.js";
+import { PERF_MARKS } from "../../shared/perf/marks.js";
+import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
 
 const PROJECT_STATE_CACHE_TTL_MS = 60_000;
+
+export const PROJECT_STATE_SCHEMA_VERSION = 1;
 
 interface ProjectStateCacheEntry {
   expiresAt: number;
   value: ProjectState | null;
 }
 
+export interface ProjectStateReadResult {
+  state: ProjectState | null;
+  quarantinedPath?: string;
+}
+
 export class ProjectStateManager {
   private projectStateCache = new Map<string, ProjectStateCacheEntry>();
+  private pendingQuarantines = new Map<string, string>();
 
   constructor(private projectsConfigDir: string) {}
 
@@ -69,11 +79,22 @@ export class ProjectStateManager {
       ),
     };
 
+    const writePayload = {
+      ...validatedState,
+      _schemaVersion: PROJECT_STATE_SCHEMA_VERSION,
+    };
+    const jsonString = JSON.stringify(writePayload, null, 2);
+    const bytes = Buffer.byteLength(jsonString, "utf-8");
+
     const attemptSave = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await resilientAtomicWriteFile(filePath, JSON.stringify(validatedState, null, 2), "utf-8");
+      await withPerformanceSpan(
+        PERF_MARKS.PROJECT_STATE_WRITE,
+        () => resilientAtomicWriteFile(filePath, jsonString, "utf-8"),
+        { projectId, bytes }
+      );
     };
 
     try {
@@ -115,8 +136,42 @@ export class ProjectStateManager {
     }
 
     try {
-      const content = await fs.readFile(filePath, "utf-8");
+      const content = await withPerformanceSpan(
+        PERF_MARKS.PROJECT_STATE_READ,
+        () => fs.readFile(filePath, "utf-8"),
+        { projectId }
+      );
       const parsed = JSON.parse(content);
+
+      const rawVersion = parsed._schemaVersion;
+      const onDiskVersion =
+        typeof rawVersion === "number" && Number.isInteger(rawVersion) && rawVersion >= 0
+          ? rawVersion
+          : 0;
+      if (onDiskVersion > PROJECT_STATE_SCHEMA_VERSION) {
+        // Avoid a deterministic destination so neither POSIX silently
+        // clobbers a prior quarantine nor Windows throws EEXIST. A previously
+        // quarantined .future-v{N} file is preserved with a timestamp suffix.
+        let quarantinePath = `${filePath}.future-v${onDiskVersion}`;
+        if (existsSync(quarantinePath)) {
+          quarantinePath = `${quarantinePath}.${Date.now()}`;
+        }
+        markPerformance(PERF_MARKS.PROJECT_STATE_QUARANTINE, { projectId });
+        try {
+          await resilientRename(filePath, quarantinePath);
+          this.pendingQuarantines.set(projectId, quarantinePath);
+          console.warn(
+            `[ProjectStateManager] state.json for ${projectId} was written by a newer app (v${onDiskVersion} > v${PROJECT_STATE_SCHEMA_VERSION}); quarantined to ${quarantinePath}`
+          );
+        } catch (renameError) {
+          console.error(
+            `[ProjectStateManager] Failed to quarantine future-version state for ${projectId}:`,
+            renameError
+          );
+        }
+        this.setProjectStateCache(projectId, null);
+        return null;
+      }
 
       const rawTerminals = Array.isArray(parsed.terminals) ? parsed.terminals : [];
       const validTerminals = filterValidTerminalEntries(
@@ -161,8 +216,10 @@ export class ProjectStateManager {
     } catch (error) {
       console.error(`[ProjectStateManager] Failed to load state for project ${projectId}:`, error);
       try {
-        const quarantinePath = `${filePath}.corrupted`;
+        const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
+        markPerformance(PERF_MARKS.PROJECT_STATE_QUARANTINE, { projectId });
         await resilientRename(filePath, quarantinePath);
+        this.pendingQuarantines.set(projectId, quarantinePath);
         console.warn(`[ProjectStateManager] Corrupted state file moved to ${quarantinePath}`);
       } catch {
         // Ignore
@@ -170,6 +227,16 @@ export class ProjectStateManager {
       this.setProjectStateCache(projectId, null);
       return null;
     }
+  }
+
+  async getProjectStateWithRecovery(projectId: string): Promise<ProjectStateReadResult> {
+    const state = await this.getProjectState(projectId);
+    const quarantinedPath = this.pendingQuarantines.get(projectId);
+    if (quarantinedPath !== undefined) {
+      this.pendingQuarantines.delete(projectId);
+      return { state, quarantinedPath };
+    }
+    return { state };
   }
 
   async clearProjectState(projectId: string): Promise<void> {

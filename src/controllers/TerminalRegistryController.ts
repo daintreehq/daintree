@@ -14,22 +14,19 @@
 
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import type { TerminalType, PanelLocation, AgentState } from "@/types";
+import type { PanelLocation, AgentState } from "@/types";
 import type {
   TerminalSpawnOptions,
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
+  AgentFallbackTriggeredPayload,
   TerminalActivityPayload,
   TerminalStatusPayload,
   SpawnResult,
 } from "@shared/types";
-import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
-import { useScrollbackStore } from "@/store/scrollbackStore";
-import { usePerformanceModeStore } from "@/store/performanceModeStore";
-import { useTerminalFontStore } from "@/store/terminalFontStore";
-import { useScreenReaderStore } from "@/store/screenReaderStore";
-import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
+import { getAgentConfig } from "@/config/agents";
+import { getTerminalAppearanceSnapshot } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
 import { TerminalRefreshTier } from "@/types";
@@ -50,9 +47,9 @@ const DOCK_PREWARM_HEIGHT_PX = 800;
  */
 export interface SpawnTerminalOptions {
   id?: string;
-  kind?: "terminal" | "agent";
-  type?: TerminalType;
-  agentId?: string;
+  kind?: "terminal";
+  /** Launch hint — agent this terminal will run. Not identity. */
+  launchAgentId?: string;
   title?: string;
   worktreeId?: string;
   cwd: string;
@@ -67,25 +64,17 @@ export interface SpawnTerminalOptions {
  */
 export interface SpawnTerminalResult {
   id: string;
-  kind: "terminal" | "agent";
-  type: TerminalType;
-  agentId?: string;
+  kind: "terminal";
+  /** Launch hint — agent this terminal was launched to run, if any. */
+  launchAgentId?: string;
   title: string;
   agentState?: AgentState;
 }
 
-function getDefaultTitle(type?: TerminalType, agentId?: string): string {
-  if (agentId) {
-    const config = getAgentConfig(agentId);
-    if (config) {
-      return config.name;
-    }
-  }
-  if (type && type !== "terminal") {
-    const config = getAgentConfig(type);
-    if (config) {
-      return config.name;
-    }
+function getDefaultTitle(launchAgentId?: string): string {
+  if (launchAgentId) {
+    const config = getAgentConfig(launchAgentId);
+    if (config) return config.name;
   }
   return "Terminal";
 }
@@ -100,11 +89,9 @@ class TerminalRegistryController {
    * Returns spawn result with derived values (kind, agentId, title, etc.)
    */
   async spawn(options: SpawnTerminalOptions): Promise<SpawnTerminalResult> {
-    const requestedKind = options.kind ?? (options.agentId ? "agent" : "terminal");
-    const legacyType: TerminalType = options.type || "terminal";
-    const agentId = options.agentId ?? (isRegisteredAgent(legacyType) ? legacyType : undefined);
-    const kind: "terminal" | "agent" = agentId ? "agent" : requestedKind;
-    const title = options.title || getDefaultTitle(legacyType, agentId);
+    const launchAgentId = options.launchAgentId;
+    const kind = "terminal" as const;
+    const title = options.title || getDefaultTitle(launchAgentId);
 
     const commandToExecute = options.skipCommandExecution ? undefined : options.command;
 
@@ -116,8 +103,7 @@ class TerminalRegistryController {
       rows: 24,
       command: commandToExecute,
       kind,
-      type: legacyType,
-      agentId,
+      launchAgentId,
       title,
     };
 
@@ -126,10 +112,9 @@ class TerminalRegistryController {
     return {
       id,
       kind,
-      type: legacyType,
-      agentId,
+      launchAgentId,
       title,
-      agentState: kind === "agent" ? "idle" : undefined,
+      agentState: launchAgentId ? "idle" : undefined,
     };
   }
 
@@ -137,37 +122,32 @@ class TerminalRegistryController {
    * Prewarm a terminal's renderer-side xterm instance.
    * Call this after spawning to ensure no output is lost.
    */
-  prewarm(
-    id: string,
-    type: TerminalType,
-    kind: "terminal" | "agent",
-    location: PanelLocation
-  ): void {
+  prewarm(id: string, location: PanelLocation, launchAgentId?: string): void {
+    const isAgent = Boolean(launchAgentId);
     try {
-      const { scrollbackLines } = useScrollbackStore.getState();
-      const { performanceMode } = usePerformanceModeStore.getState();
-      const { fontSize, fontFamily } = useTerminalFontStore.getState();
+      const appearance = getTerminalAppearanceSnapshot();
+      const { fontSize, fontFamily, performanceMode } = appearance;
 
+      // Project-level scrollback override applies to plain terminals only
+      const projectScrollback = isAgent ? undefined : appearance.projectScrollback;
       const effectiveScrollback = performanceMode
         ? PERFORMANCE_MODE_SCROLLBACK
-        : getScrollbackForType(type, scrollbackLines);
+        : getScrollbackForType(isAgent, projectScrollback ?? appearance.scrollbackLines);
 
-      const { getEffectiveTheme } = useTerminalColorSchemeStore.getState();
-      const screenReaderMode = useScreenReaderStore.getState().resolvedScreenReaderEnabled();
       const terminalOptions = getXtermOptions({
         fontSize,
         fontFamily,
         scrollback: effectiveScrollback,
         performanceMode,
-        theme: getEffectiveTheme(),
-        screenReaderMode,
+        theme: appearance.effectiveTheme,
+        screenReaderMode: appearance.screenReaderMode,
       });
 
       const offscreen = location === "dock";
       const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
       const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
 
-      terminalInstanceService.prewarmTerminal(id, type, terminalOptions, {
+      terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
         offscreen,
         widthPx,
         heightPx,
@@ -176,7 +156,7 @@ class TerminalRegistryController {
       // For offscreen agents, prewarmTerminal's fit() already handles initial
       // PTY resize through settled strategy. Only send explicit resize for
       // active grid spawns where fit() is skipped.
-      if (kind === "agent" && !offscreen) {
+      if (isAgent && !offscreen) {
         const cellWidth = Math.max(6, Math.floor(fontSize * 0.6));
         const cellHeight = Math.max(10, Math.floor(fontSize * 1.1));
         const cols = Math.max(20, Math.min(500, Math.floor(widthPx / cellWidth)));
@@ -299,6 +279,10 @@ class TerminalRegistryController {
 
   onAgentExited(handler: (data: AgentExitedPayload) => void) {
     return terminalClient.onAgentExited(handler);
+  }
+
+  onFallbackTriggered(handler: (data: AgentFallbackTriggeredPayload) => void) {
+    return terminalClient.onFallbackTriggered(handler);
   }
 
   onActivity(handler: (data: TerminalActivityPayload) => void) {

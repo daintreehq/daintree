@@ -6,16 +6,38 @@ vi.mock("node:http", () => ({ default: { request: vi.fn() }, request: vi.fn() })
 vi.mock("node:https", () => ({ default: { request: vi.fn() }, request: vi.fn() }));
 
 const broadcastMock = vi.hoisted(() => vi.fn());
+const ipcMainMock = vi.hoisted(() => ({
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+}));
 
 vi.mock("../../utils.js", () => ({
   broadcastToRenderer: broadcastMock,
+  typedHandle: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: null,
+          projectId: null,
+        };
+        return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 vi.mock("electron", () => ({
-  ipcMain: {
-    handle: vi.fn(),
-    removeHandler: vi.fn(),
-  },
+  ipcMain: ipcMainMock,
 }));
 
 const scanOutputMock = vi.fn();
@@ -573,6 +595,91 @@ describe("dev preview session handlers", () => {
     expect(firstLookup.panelId).toBe(firstRequest.panelId);
     expect(secondLookup.projectId).toBe(secondRequest.projectId);
     expect(secondLookup.panelId).toBe(secondRequest.panelId);
+  });
+
+  it("returns the session state for a known worktree via get-by-worktree", async () => {
+    const ensureHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { terminalId: string | null; panelId: string; projectId: string }
+    >(CHANNELS.DEV_PREVIEW_ENSURE);
+    const getByWorktreeHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      {
+        panelId: string;
+        worktreeId: string;
+        status: string;
+        url: string | null;
+        assignedUrl: string | null;
+      } | null
+    >(CHANNELS.DEV_PREVIEW_GET_BY_WORKTREE);
+
+    expect(ensureHandler).toBeDefined();
+    expect(getByWorktreeHandler).toBeDefined();
+
+    const ensured = await ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: "panel-wt-lookup",
+      projectId: "project-wt-lookup",
+      cwd: "/repo",
+      devCommand: "npm run dev",
+      worktreeId: "wt-lookup",
+    });
+    expect(ensured.terminalId).toBeTruthy();
+
+    scanOutputMock.mockReturnValue({ buffer: "", url: "http://localhost:5174/", error: null });
+    ptyClient.emitData(ensured.terminalId!, "ready");
+
+    await vi.waitFor(async () => {
+      const state = await getByWorktreeHandler!({} as Electron.IpcMainInvokeEvent, {
+        worktreeId: "wt-lookup",
+      });
+      expect(state?.status).toBe("running");
+      expect(state?.panelId).toBe("panel-wt-lookup");
+      expect(state?.worktreeId).toBe("wt-lookup");
+      expect(state?.url).toBe("http://localhost:5174/");
+      expect(state?.assignedUrl).toMatch(/^http:\/\/localhost:\d+/);
+    });
+  });
+
+  it("returns null from get-by-worktree for an unknown worktree", async () => {
+    const getByWorktreeHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      unknown
+    >(CHANNELS.DEV_PREVIEW_GET_BY_WORKTREE);
+    expect(getByWorktreeHandler).toBeDefined();
+
+    const state = await getByWorktreeHandler!({} as Electron.IpcMainInvokeEvent, {
+      worktreeId: "wt-does-not-exist",
+    });
+    expect(state).toBeNull();
+  });
+
+  it("rejects get-by-worktree calls with missing or malformed request shape", async () => {
+    const getByWorktreeHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, unknown],
+      unknown
+    >(CHANNELS.DEV_PREVIEW_GET_BY_WORKTREE);
+    expect(getByWorktreeHandler).toBeDefined();
+
+    // Guards against the regression in #5615: bare string instead of { worktreeId }.
+    await expect(
+      getByWorktreeHandler!({} as Electron.IpcMainInvokeEvent, "wt-1" as unknown)
+    ).rejects.toThrow("worktreeId is required");
+
+    await expect(getByWorktreeHandler!({} as Electron.IpcMainInvokeEvent, null)).rejects.toThrow(
+      "worktreeId is required"
+    );
+
+    await expect(getByWorktreeHandler!({} as Electron.IpcMainInvokeEvent, {})).rejects.toThrow(
+      "worktreeId is required"
+    );
+
+    await expect(
+      getByWorktreeHandler!({} as Electron.IpcMainInvokeEvent, { worktreeId: "" })
+    ).rejects.toThrow("worktreeId is required");
+
+    await expect(
+      getByWorktreeHandler!({} as Electron.IpcMainInvokeEvent, { worktreeId: "   " })
+    ).rejects.toThrow("worktreeId is required");
   });
 
   it("kills active dev preview terminals when handlers are cleaned up", async () => {

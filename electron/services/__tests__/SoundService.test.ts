@@ -154,7 +154,10 @@ describe("SoundService", () => {
   it("cancel sends sound:cancel IPC via broadcast", () => {
     soundService.cancel();
 
-    expect(mockBroadcastToRenderer).toHaveBeenCalledWith("sound:cancel");
+    expect(mockBroadcastToRenderer).toHaveBeenCalledWith("events:push", {
+      name: "sound:cancel",
+      payload: undefined,
+    });
   });
 
   it("preview sends the base file without variant selection via IPC", () => {
@@ -177,6 +180,51 @@ describe("SoundService", () => {
       volume: 1,
     });
     expect(mockPlaySound).not.toHaveBeenCalled();
+  });
+
+  // -- Pulse detune forwarding --
+
+  it("playPulse forwards detune in the sound:trigger payload when renderer is available", () => {
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+
+    soundService.playPulse("pulse.wav", 12);
+
+    expect(mockBroadcastToRenderer).toHaveBeenCalledWith("sound:trigger", {
+      soundFile: "pulse.wav",
+      detune: 12,
+    });
+    expect(mockPlaySound).not.toHaveBeenCalled();
+  });
+
+  it("playPulse omits detune from the payload when not provided", () => {
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+
+    soundService.playPulse("pulse.wav");
+
+    expect(mockBroadcastToRenderer).toHaveBeenCalledWith("sound:trigger", {
+      soundFile: "pulse.wav",
+    });
+  });
+
+  it("playPulse preserves an explicit detune of 0 in the payload", () => {
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+
+    soundService.playPulse("pulse.wav", 0);
+
+    expect(mockBroadcastToRenderer).toHaveBeenCalledWith("sound:trigger", {
+      soundFile: "pulse.wav",
+      detune: 0,
+    });
+  });
+
+  it("playPulse falls back to OS process without detune when no renderer", () => {
+    mockGetAllWindows.mockReturnValue([]);
+
+    soundService.playPulse("pulse.wav", 12);
+
+    expect(mockBroadcastToRenderer).not.toHaveBeenCalled();
+    expect(mockPlaySound).toHaveBeenCalledWith(expect.stringContaining("pulse.wav"));
+    expect(mockPlaySound.mock.calls[0][1]).toBeUndefined();
   });
 
   // -- Path resolution --

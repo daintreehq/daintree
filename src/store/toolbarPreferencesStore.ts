@@ -6,6 +6,7 @@ import type {
   AnyToolbarButtonId,
 } from "@/../../shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
 const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
@@ -20,7 +21,6 @@ const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "voice-recording",
   "github-stats",
   "notification-center",
-  "notes",
   "copy-tree",
   "settings",
   "problems",
@@ -60,7 +60,7 @@ function mergeButtonList(
 
   // Find buttons in defaults that aren't in persisted (new buttons)
   for (let i = 0; i < defaults.length; i++) {
-    const buttonId = defaults[i];
+    const buttonId = defaults[i]!;
     if (!persistedSet.has(buttonId)) {
       // Insert at the same position as in defaults, or at end if beyond length
       const insertIndex = Math.min(i, result.length);
@@ -152,7 +152,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "daintree-toolbar-preferences",
-      version: 4,
+      version: 6,
       storage: createSafeJSONStorage(),
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
@@ -205,6 +205,30 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             layout.hiddenButtons = drop(layout.hiddenButtons);
           }
         }
+        if (version < 5) {
+          // Agent visibility moved to `agentSettingsStore.settings.agents[id].pinned`.
+          // Stale agent IDs in `hiddenButtons` from older versions would shadow the
+          // canonical pinned state after this migration, so strip them.
+          const layout = state.layout as { hiddenButtons?: string[] } | undefined;
+          if (layout?.hiddenButtons) {
+            const agentIds = new Set<string>(BUILT_IN_AGENT_IDS);
+            layout.hiddenButtons = layout.hiddenButtons.filter((id) => !agentIds.has(id));
+          }
+        }
+        if (version < 6) {
+          // The Notes panel feature was removed (#5616). Strip any persisted
+          // "notes" entries from button lists so existing users don't see a
+          // ghost button referring to a missing kind.
+          const layout = state.layout as
+            | { leftButtons?: string[]; rightButtons?: string[]; hiddenButtons?: string[] }
+            | undefined;
+          if (layout) {
+            const drop = (buttons?: string[]) => buttons?.filter((id) => id !== "notes");
+            layout.leftButtons = drop(layout.leftButtons);
+            layout.rightButtons = drop(layout.rightButtons);
+            layout.hiddenButtons = drop(layout.hiddenButtons);
+          }
+        }
         return state as unknown as ToolbarPreferencesState;
       },
       partialize: (state) => ({
@@ -235,3 +259,10 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "toolbarPreferencesStore",
+  store: useToolbarPreferencesStore,
+  persistedStateType:
+    "{ layout: ToolbarPreferences['layout']; launcher: Pick<ToolbarPreferences['launcher'], 'alwaysShowDevServer' | 'defaultSelection'> }",
+});

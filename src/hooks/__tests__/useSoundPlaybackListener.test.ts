@@ -17,7 +17,7 @@ vi.mock("@/services/WebAudioService", () => ({
 import { useSoundPlaybackListener } from "../useSoundPlaybackListener";
 
 describe("useSoundPlaybackListener", () => {
-  let triggerCallback: ((payload: { soundFile: string }) => void) | null = null;
+  let triggerCallback: ((payload: { soundFile: string; detune?: number }) => void) | null = null;
   let cancelCallback: (() => void) | null = null;
   const cleanupTrigger = vi.fn();
   const cleanupCancel = vi.fn();
@@ -33,7 +33,7 @@ describe("useSoundPlaybackListener", () => {
 
     window.electron = {
       sound: {
-        onTrigger: vi.fn((cb: (payload: { soundFile: string }) => void) => {
+        onTrigger: vi.fn((cb: (payload: { soundFile: string; detune?: number }) => void) => {
           triggerCallback = cb;
           return cleanupTrigger;
         }),
@@ -62,7 +62,21 @@ describe("useSoundPlaybackListener", () => {
     renderHook(() => useSoundPlaybackListener());
     triggerCallback!({ soundFile: "chime.wav" });
 
-    expect(mockPlaySound).toHaveBeenCalledWith("chime.wav");
+    expect(mockPlaySound).toHaveBeenCalledWith("chime.wav", undefined);
+  });
+
+  it("forwards detune from the trigger payload to playSound", () => {
+    renderHook(() => useSoundPlaybackListener());
+    triggerCallback!({ soundFile: "pulse.wav", detune: 9 });
+
+    expect(mockPlaySound).toHaveBeenCalledWith("pulse.wav", 9);
+  });
+
+  it("forwards explicit detune of 0 (does not coerce to undefined)", () => {
+    renderHook(() => useSoundPlaybackListener());
+    triggerCallback!({ soundFile: "pulse.wav", detune: 0 });
+
+    expect(mockPlaySound).toHaveBeenCalledWith("pulse.wav", 0);
   });
 
   it("calls cancelSound when cancel event fires", () => {

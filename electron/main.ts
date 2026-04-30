@@ -1,8 +1,17 @@
 // Environment setup must run first (GC exposure, userData, flags, sandbox)
 import "./setup/environment.js";
 
+import nodeV8 from "node:v8";
 import { app, BrowserWindow, crashReporter, protocol } from "electron";
+
+// Ask V8 to auto-dump a heap snapshot when the main process is genuinely close
+// to its heap limit. Complements the existing dev-only 600 MB RSS heuristic in
+// ProcessMemoryMonitor, but works in packaged builds too. Snapshot files land
+// in the process CWD (or wherever `--diagnostic-dir` points). count=2 caps
+// lifetime auto-dumps so a thrashing process can't fill the disk.
+nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
+import { startDevDiagnostics } from "./setup/devDiagnostics.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -25,8 +34,10 @@ import {
 } from "./window/windowRef.js";
 import { WindowRegistry } from "./window/WindowRegistry.js";
 import { ProjectViewManager } from "./window/ProjectViewManager.js";
+import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { distributePortsToView } from "./window/portDistribution.js";
+import { toDisposable } from "./utils/lifecycle.js";
 import {
   setupWindowServices,
   getPtyClient,
@@ -52,10 +63,15 @@ import {
   setupWindowFocusThrottle,
   registerWindowForFocusThrottle,
 } from "./window/powerMonitor.js";
-import { getProjectStatsService } from "./ipc/handlers/projectCrud.js";
+import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
 import { isSmokeTest } from "./setup/environment.js";
 import { store } from "./store.js";
-import { pruneOldLogs, initializeLogger, registerLoggerTransport } from "./utils/logger.js";
+import {
+  pruneOldLogs,
+  initializeLogger,
+  registerLoggerTransport,
+  setLogLevelOverrides,
+} from "./utils/logger.js";
 import { broadcastToRenderer } from "./ipc/utils.js";
 import { registerCommands } from "./services/commands/index.js";
 import { initializeCrashRecoveryService } from "./services/CrashRecoveryService.js";
@@ -64,6 +80,7 @@ import { initializeTrashedPidCleanup } from "./services/TrashedPidTracker.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
 import { initializeDatabaseMaintenance } from "./services/DatabaseMaintenanceService.js";
 import { readLastActiveProjectIdSync } from "./services/persistence/readLastProjectId.js";
+import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 
 // CRITICAL: Run IPC sender validation before any handlers are registered
 enforceIpcSenderValidation();
@@ -133,6 +150,11 @@ if (!gotTheLock) {
 
   initializeLogger(app.getPath("userData"));
 
+  // Seed per-module level overrides from persisted store so main-process
+  // logging filters correctly from the very first log line. Utility processes
+  // receive the same map after their first `ready` event.
+  setLogLevelOverrides(store.get("logLevelOverrides") ?? {});
+
   registerLoggerTransport(broadcastToRenderer, () => BrowserWindow.getAllWindows().length > 0);
 
   registerCommands();
@@ -140,6 +162,10 @@ if (!gotTheLock) {
   crashReporter.start({ uploadToServer: false });
   initializeCrashLoopGuard();
   registerGlobalErrorHandlers();
+
+  if (!app.isPackaged) {
+    startDevDiagnostics();
+  }
 
   const distPath = path.join(__dirname, "../../dist");
 
@@ -177,17 +203,55 @@ if (!gotTheLock) {
       dirname: __dirname,
       onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId),
       windowRegistry,
-      cachedProjectViews:
-        store.get("terminalConfig")?.cachedProjectViews ??
-        // E2E tests add and switch projects rapidly. Keeping more than one
-        // cached view alive is required so the wizard rendered in the
-        // originating project view survives a switch into a freshly added
-        // project view. Increase the cache only when the e2e harness flag is
-        // set so production behavior is unchanged.
-        (process.env.DAINTREE_E2E_MODE ? 4 : undefined),
+      // Resolve to the same value the IPC handler returns so the main-process
+      // LRU cap and the renderer's Settings view agree on first boot. Invalid
+      // persisted values fall through to the E2E override or RAM-based default
+      // instead of leaking into ProjectViewManager.
+      cachedProjectViews: effectiveCachedProjectViews(
+        store.get("terminalConfig")?.cachedProjectViews
+      ),
       onViewEvicted: (wcId) => {
-        getWorkspaceClientRef()?.removeDirectPort(wcId);
-        getWorktreePortBrokerRef()?.closePortsForView(wcId);
+        // Each cleanup is isolated: if removeDirectPort throws, the worktree
+        // port must still close. Partial cleanup leaves a live producer
+        // posting into a soon-to-be-destroyed renderer.
+        try {
+          getWorkspaceClientRef()?.removeDirectPort(wcId);
+        } catch (err) {
+          console.error("[main] removeDirectPort failed during eviction:", err);
+        }
+        try {
+          getWorktreePortBrokerRef()?.closePortsForView(wcId);
+        } catch (err) {
+          console.error("[main] closePortsForView failed during eviction:", err);
+        }
+      },
+      onViewCached: (wcId) => {
+        // Same producer cleanup as eviction: a cached view becomes
+        // freeze-eligible once setBackgroundThrottling(true) is applied.
+        // Live worktree/workspace ports would otherwise queue messages
+        // into a frozen renderer (#6273). Reactivation re-brokers a fresh
+        // port via activateProjectView in projectCrud/switch.ts.
+        // Each cleanup is isolated so a throw in one path can't leave the
+        // other producer alive — that's the exact failure mode this PR
+        // exists to prevent.
+        try {
+          getWorkspaceClientRef()?.removeDirectPort(wcId);
+        } catch (err) {
+          console.error("[main] removeDirectPort failed during cache:", err);
+        }
+        try {
+          getWorktreePortBrokerRef()?.closePortsForView(wcId);
+        } catch (err) {
+          console.error("[main] closePortsForView failed during cache:", err);
+        }
+      },
+      onViewCrashed: () => {
+        // Tear down the per-window PTY MessagePort on renderer crash so the
+        // pty-host's PortQueueManager can drop stale queue accounting before
+        // reload re-issues a fresh port. Without this, a stale port keeps the
+        // safety-timeout pause loop wedged for the entire reload window (#6244).
+        if (win.isDestroyed()) return;
+        getPtyClient()?.disconnectMessagePort(win.id);
       },
       onViewReady: (wc) => {
         // Re-distribute PTY MessagePort on every view load/reload.
@@ -221,11 +285,25 @@ if (!gotTheLock) {
     });
     setProjectViewManager(pvm);
 
-    // Clean up ProjectViewManager when window closes
-    win.once("closed", () => {
-      pvm.dispose();
-      setProjectViewManager(null);
-    });
+    // E2E hooks: expose PVM accessor and heap-snapshot writer so the
+    // nightly evicted-view leak spec can read main-process state and
+    // dump a v8 snapshot from app.evaluate(). Mirrors the
+    // __daintreeResetRateLimits / __daintreeFaultRegistry pattern.
+    if (process.env.DAINTREE_E2E_MODE === "1") {
+      (globalThis as Record<string, unknown>).__daintreeGetPvm = getProjectViewManager;
+      (globalThis as Record<string, unknown>).__daintreeWriteHeapSnapshot = (filePath: string) =>
+        nodeV8.writeHeapSnapshot(filePath);
+    }
+
+    // Clean up ProjectViewManager when the window's cleanup runs.
+    // Registered before setupWindowServices so pvm.dispose() runs first —
+    // views must close before per-window ports/event-buffer disconnect.
+    ctx.cleanup.add(
+      toDisposable(() => {
+        pvm.dispose();
+        setProjectViewManager(null);
+      })
+    );
 
     await setupWindowServices(win, {
       loadRenderer,
@@ -292,6 +370,17 @@ if (!gotTheLock) {
       getCrashLoopGuard().startStabilityTimer();
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
+      // Startup crashes hard-exit without running before-quit, which means
+      // markCleanExit() never fires and the CrashLoopGuard counts this as a
+      // crash. That is correct — but without an on-disk trace the next
+      // session has no way to diagnose the loop, since main-crash.log never
+      // captures this path (it only logs from globalErrorHandlers). Wire it
+      // here so a repeating startup failure leaves a stack behind.
+      try {
+        emergencyLogMainFatal("STARTUP_FAILED", error);
+      } catch {
+        // best-effort
+      }
       app.exit(1);
     }
   });

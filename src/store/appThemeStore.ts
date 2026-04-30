@@ -15,6 +15,8 @@ interface AppThemeState {
   preferredLightSchemeId: string;
   recentSchemeIds: string[];
   accentColorOverride: string | null;
+  previewSchemeId: string | null;
+  setPreviewSchemeId: (id: string | null) => void;
   setSelectedSchemeId: (id: string) => void;
   /**
    * Updates Zustand state for a deliberate scheme selection (selectedSchemeId
@@ -42,9 +44,9 @@ interface AppThemeState {
 
 function injectSchemeToDOM(scheme: AppColorScheme): void {
   // Read accent override + CVD from the store on every injection so the
-  // modal-close revert, follow-system switch, unmount cleanup, and hover
-  // preview paths all pick up the current user overrides without each
-  // callsite having to reapply them.
+  // modal-close revert, follow-system switch, and unmount cleanup paths
+  // all pick up the current user overrides without each callsite having
+  // to reapply them.
   const { colorVisionMode, accentColorOverride } = useAppThemeStore.getState();
   const effective = applyAccentOverrideToScheme(scheme, accentColorOverride);
   applyAppThemeToRoot(document.documentElement, effective);
@@ -63,6 +65,9 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   preferredLightSchemeId: "bondi",
   recentSchemeIds: [],
   accentColorOverride: null,
+  previewSchemeId: null,
+
+  setPreviewSchemeId: (id) => set({ previewSchemeId: id }),
 
   setSelectedSchemeId: (id) => {
     const { customSchemes } = useAppThemeStore.getState();
@@ -102,8 +107,7 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     })),
 
   removeCustomScheme: (id) => {
-    const { selectedSchemeId } = useAppThemeStore.getState();
-    const needsFallback = selectedSchemeId === id;
+    const needsFallback = useAppThemeStore.getState().selectedSchemeId === id;
     set((state) => ({
       customSchemes: state.customSchemes.filter((s) => s.id !== id),
       selectedSchemeId: needsFallback ? DEFAULT_APP_SCHEME_ID : state.selectedSchemeId,
@@ -132,8 +136,6 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
 
   setAccentColorOverride: (color) => {
     set({ accentColorOverride: color });
-    // Re-inject the currently active scheme so the override (or its removal)
-    // takes effect immediately via the single injectSchemeToDOM pipeline.
     const { selectedSchemeId, customSchemes } = useAppThemeStore.getState();
     const scheme = resolveAppTheme(selectedSchemeId, customSchemes);
     injectSchemeToDOM(scheme);

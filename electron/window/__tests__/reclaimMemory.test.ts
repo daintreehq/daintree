@@ -74,8 +74,9 @@ describe("reclaimMemory — minimize debounce", () => {
 
     vi.advanceTimersByTime(5000);
     expect(mockSendToRenderer).toHaveBeenCalledOnce();
-    expect(mockSendToRenderer).toHaveBeenCalledWith(win, CHANNELS.WINDOW_RECLAIM_MEMORY, {
-      reason: "minimize",
+    expect(mockSendToRenderer).toHaveBeenCalledWith(win, CHANNELS.EVENTS_PUSH, {
+      name: "window:reclaim-memory",
+      payload: { reason: "minimize" },
     });
   });
 
@@ -158,8 +159,9 @@ function createReclaimHelper(win: ReturnType<typeof createMockWindow>) {
       reclaimTimer = setTimeout(() => {
         reclaimTimer = null;
         if (!win.isDestroyed() && win.isMinimized()) {
-          vi.mocked(sendToRenderer)(win as never, CHANNELS.WINDOW_RECLAIM_MEMORY, {
-            reason: "minimize",
+          vi.mocked(sendToRenderer)(win as never, CHANNELS.EVENTS_PUSH, {
+            name: "window:reclaim-memory",
+            payload: { reason: "minimize" },
           });
         }
       }, RECLAIM_DELAY_MS);

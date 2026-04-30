@@ -1,8 +1,14 @@
 # Contributing to Daintree
 
-Thanks for your interest in contributing. Daintree is an Electron-based workspace for orchestrating AI coding agents, and we welcome bug fixes, features, tests, and docs from the community.
+Thanks for your interest in contributing.
 
-This document is the rulebook. If something here is unclear or seems wrong, open an issue — the contribution guide is code too.
+**A good issue is more valuable than a pull request.** Bug reports, feature ideas, and well-described problems shape Daintree more than code does, so if you're choosing between writing one or the other, write the issue. Pull requests are welcome too — the rest of this document covers how to send one — but please open an issue first so we can agree on the shape before you spend time on code.
+
+If something here is unclear, open an issue — the contribution guide is code too.
+
+## License
+
+Contributions to Daintree are licensed under the [Apache License 2.0](LICENSE), the same license as the rest of the project. You retain copyright in your contributions. The Daintree name and logo are not covered by that license — see [TRADEMARKS.md](TRADEMARKS.md).
 
 ## Code of Conduct
 
@@ -33,6 +39,16 @@ npm run build      # production build
 npm run package    # build distributables
 npm run rebuild    # rebuild native modules against Electron
 ```
+
+## Demo development
+
+Demo authoring — the Stage DSL, scene runner, and recording pipeline — lives in a separate repo: [`daintreehq/demo-studio`](https://github.com/daintreehq/demo-studio). Clone it into the `demo/` directory at the root of this repo:
+
+```bash
+git clone https://github.com/daintreehq/demo-studio.git demo
+```
+
+`demo/` is gitignored here and excluded from packaged builds, so the clone won't pollute `git status` or ship in releases. The app-side surface demo-studio drives (the `--demo-mode` flag, IPC handlers, and `DemoCursor`/`DemoOverlay` components) lives in this repo and is maintained here. See the demo-studio README for authoring workflow.
 
 ## Branching model
 

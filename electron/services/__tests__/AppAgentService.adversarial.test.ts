@@ -73,16 +73,28 @@ describe("AppAgentService adversarial", () => {
     expect(result).toEqual({ valid: true });
   });
 
-  it("testApiKey returns a stable friendly message when fetch rejects with a non-Error value", async () => {
+  it("testApiKey returns a stable friendly message when fetch rejects with an opaque value", async () => {
     mockFetch(
       vi.fn(async () => {
-        throw "string rejection" as unknown as Error;
+        throw 42 as unknown as Error;
       }) as unknown as typeof fetch
     );
 
     const result = await new AppAgentService().testApiKey("k");
     expect(result.valid).toBe(false);
     expect(result.error).toBe("Failed to connect to API");
+  });
+
+  it("testApiKey surfaces a thrown string verbatim (formatErrorMessage treats strings as messages)", async () => {
+    mockFetch(
+      vi.fn(async () => {
+        throw "rate limit exceeded" as unknown as Error;
+      }) as unknown as typeof fetch
+    );
+
+    const result = await new AppAgentService().testApiKey("k");
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe("rate limit exceeded");
   });
 
   it("testApiKey 401 maps to 'Invalid API key'", async () => {

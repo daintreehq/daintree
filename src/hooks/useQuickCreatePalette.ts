@@ -9,6 +9,7 @@ import { getAutoAssign } from "@shared/types/project";
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { notify } from "@/lib/notify";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export type QuickCreateItem =
   | (TerminalRecipe & { _kind: "recipe" })
@@ -39,10 +40,13 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
   const [isPending, startTransition] = useTransition();
   const [assignToSelf, setAssignToSelf] = useState(true);
 
-  const items: QuickCreateItem[] = [
-    ...recipes.map((r): QuickCreateItem => ({ ...r, _kind: "recipe" })),
-    { _kind: "customize", id: "__customize__", name: "Customize…" },
-  ];
+  const hasRecipes = recipes.length > 0;
+  const items: QuickCreateItem[] = hasRecipes
+    ? [
+        ...recipes.map((r): QuickCreateItem => ({ ...r, _kind: "recipe" })),
+        { _kind: "customize", id: "__customize__", name: "Customize…" },
+      ]
+    : [];
 
   const filterItems = useCallback(
     (allItems: QuickCreateItem[], query: string): QuickCreateItem[] => {
@@ -75,13 +79,20 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
     palette.results.length > 0 &&
     palette.selectedIndex >= 0 &&
     palette.selectedIndex < palette.results.length
-      ? palette.results[palette.selectedIndex]
+      ? (palette.results[palette.selectedIndex] ?? null)
       : null;
 
   const doConfirm = useCallback(
     (item: QuickCreateItem | null) => {
       if (isPending) return;
       if (!item) {
+        if (palette.results.length === 0) {
+          // No recipes at all — open recipe manager so user can create one
+          closeQuickCreate();
+          palette.close();
+          void actionService.dispatch("recipe.manager.open", undefined, { source: "user" });
+          return;
+        }
         palette.close();
         return;
       }
@@ -156,7 +167,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
             const worktreeMsg = `${branch}${assignMsg}`;
             notify({
               type: "success",
-              title: "Worktree Created",
+              title: "Worktree created",
               message: worktreeMsg,
               priority: "high",
               countable: false,
@@ -174,15 +185,15 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
           } else {
             notify({
               type: "error",
-              title: "Creation Failed",
-              message: result.error.message,
+              title: "Couldn't create worktree",
+              message: formatErrorMessage(result.error, "Failed to create worktree"),
             });
           }
         } catch (error) {
           notify({
             type: "error",
-            title: "Creation Failed",
-            message: error instanceof Error ? error.message : "Unknown error",
+            title: "Couldn't create worktree",
+            message: formatErrorMessage(error, "Failed to create worktree"),
           });
         } finally {
           closeQuickCreate();

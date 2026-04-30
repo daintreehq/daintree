@@ -4,6 +4,7 @@ import { debounce } from "@/utils/debounce";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
+import { logError } from "@/utils/logger";
 
 type ProjectClientType = typeof projectClient;
 
@@ -14,7 +15,24 @@ export interface PanelPersistenceOptions {
   getProjectId?: () => string | null;
 }
 
-export function panelToSnapshot(t: TerminalInstance): PanelSnapshot {
+// Base fields that panelToSnapshot always writes. Used to isolate kind-specific
+// fields when preserving a previous snapshot for an unregistered kind. If new
+// base fields are added to the `base` object below, they MUST be added here too,
+// or unknown-kind snapshots will silently carry stale copies of the new field.
+const BASE_PANEL_FIELDS = new Set<string>([
+  "id",
+  "kind",
+  "title",
+  "worktreeId",
+  "location",
+  "extensionState",
+  "pluginId",
+]);
+
+export function panelToSnapshot(
+  t: TerminalInstance,
+  previousSnapshot?: PanelSnapshot
+): PanelSnapshot {
   const base: PanelSnapshot = {
     id: t.id,
     kind: t.kind,
@@ -22,11 +40,30 @@ export function panelToSnapshot(t: TerminalInstance): PanelSnapshot {
     worktreeId: t.worktreeId,
     location: t.location === "trash" || t.location === "background" ? "grid" : t.location,
     ...(t.extensionState !== undefined && { extensionState: t.extensionState }),
+    ...(t.pluginId !== undefined && { pluginId: t.pluginId }),
   };
 
   const config = getPanelKindConfig(t.kind ?? "terminal");
-  const fragment = config?.serialize?.(t) ?? {};
 
+  if (!config?.serialize) {
+    // Unregistered kind (extension disabled mid-session, plugin not yet loaded,
+    // or renamed in code). Preserve previously-persisted kind-specific fields
+    // so a save cycle doesn't silently erase extension state.
+    if (previousSnapshot && previousSnapshot.id === t.id && previousSnapshot.kind === t.kind) {
+      const preserved: Record<string, unknown> = {};
+      const prev = previousSnapshot as unknown as Record<string, unknown>;
+      for (const key of Object.keys(prev)) {
+        if (!BASE_PANEL_FIELDS.has(key) && prev[key] !== undefined) {
+          preserved[key] = prev[key];
+        }
+      }
+      // Spread order: live base wins over stale preserved fields if any overlap.
+      return { ...preserved, ...base };
+    }
+    return base;
+  }
+
+  const fragment = config.serialize(t);
   return { ...base, ...fragment };
 }
 
@@ -143,7 +180,7 @@ export class PanelPersistence {
       const payloadBytes = collectPerf ? estimatePayloadBytes(transformed) : null;
 
       this.pendingPersist = this.client.setTerminals(projectId, transformed).catch((error) => {
-        console.error("Failed to persist terminals:", error);
+        logError("Failed to persist terminals", error);
         if (collectPerf) {
           const now = typeof performance !== "undefined" ? performance.now() : Date.now();
           markRendererPerformance("persistence_terminals_save", {
@@ -198,7 +235,7 @@ export class PanelPersistence {
       this.pendingTabGroupPersist = this.client
         .setTabGroups(projectId, tabGroups)
         .catch((error) => {
-          console.error("Failed to persist tab groups:", error);
+          logError("Failed to persist tab groups", error);
           if (collectPerf) {
             const now = typeof performance !== "undefined" ? performance.now() : Date.now();
             markRendererPerformance("persistence_tab_groups_save", {
@@ -242,7 +279,17 @@ export class PanelPersistence {
     }
 
     const filtered = terminals.filter(this.options.filter);
-    const transformed = filtered.map(this.options.transform);
+    // When using the default transform (panelToSnapshot), thread the previously-
+    // persisted snapshot per panel so unregistered kinds preserve their
+    // kind-specific fields across save cycles. Custom transforms own their
+    // output entirely and bypass preservation.
+    let transformed: PanelSnapshot[];
+    if (this.options.transform === panelToSnapshot) {
+      const prevById = this.getPreviousSnapshotMap(resolvedProjectId);
+      transformed = filtered.map((t) => panelToSnapshot(t, prevById?.get(t.id)));
+    } else {
+      transformed = filtered.map(this.options.transform);
+    }
     if (snapshotsEqual(this.queuedTerminalsByProject.get(resolvedProjectId), transformed)) {
       return;
     }
@@ -300,6 +347,35 @@ export class PanelPersistence {
 
   setProjectIdGetter(getter: () => string | null | undefined): void {
     this.options.getProjectId = () => getter() ?? null;
+  }
+
+  /**
+   * Seed the previously-persisted snapshot cache for a project from hydration.
+   * Without this, the first save after app launch has no "previous" snapshot
+   * to preserve kind-specific fields from, and an unregistered kind's state
+   * would be dropped on the very first save. Only primes if not already
+   * present to avoid clobbering a post-hydration save that may have already
+   * run through `save()`.
+   */
+  primeProject(projectId: string, snapshots: PanelSnapshot[]): void {
+    if (this.persistedTerminalsByProject.has(projectId)) return;
+    this.persistedTerminalsByProject.set(projectId, snapshots);
+  }
+
+  /**
+   * Returns a map of panel id → most-recent snapshot for the given project,
+   * or `undefined` if no snapshots are tracked. Used by callers outside the
+   * debounced save path (e.g., the synchronous outgoing-state capture on
+   * project switch) so they can thread `previousSnapshot` into
+   * `panelToSnapshot` and preserve unregistered-kind fragments. Prefers
+   * queued (in-flight) state over persisted (on-disk) state.
+   */
+  getPreviousSnapshotMap(projectId: string): Map<string, PanelSnapshot> | undefined {
+    const snapshots =
+      this.queuedTerminalsByProject.get(projectId) ??
+      this.persistedTerminalsByProject.get(projectId);
+    if (!snapshots) return undefined;
+    return new Map(snapshots.map((s) => [s.id, s]));
   }
 }
 

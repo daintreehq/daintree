@@ -10,11 +10,17 @@ type AgentStateHandler = (data: {
 }) => void;
 type AgentDetectedHandler = (data: {
   terminalId: string;
+  agentType?: string;
   processIconId?: string;
   processName: string;
   timestamp: number;
 }) => void;
-type AgentExitedHandler = (data: { terminalId: string; timestamp: number }) => void;
+type AgentExitedHandler = (data: {
+  terminalId: string;
+  agentType?: string;
+  timestamp: number;
+  exitKind?: "subcommand" | "terminal";
+}) => void;
 type ActivityHandler = (data: {
   terminalId: string;
   headline: string;
@@ -130,6 +136,7 @@ vi.mock("@/clients", () => ({
     onAgentStateChanged: onAgentStateChangedMock,
     onAgentDetected: onAgentDetectedMock,
     onAgentExited: onAgentExitedMock,
+    onFallbackTriggered: vi.fn(() => vi.fn()),
     onActivity: onActivityMock,
     onTrashed: onTrashedMock,
     onRestored: onRestoredMock,
@@ -156,6 +163,9 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+const applyAgentPromotionMock = vi.fn();
+const clearAgentPromotionMock = vi.fn();
+
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     prewarmTerminal: vi.fn(),
@@ -174,6 +184,8 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     detachForProjectSwitch: vi.fn(),
     handleBackendRecovery: vi.fn(),
     cleanup: vi.fn(),
+    applyAgentPromotion: applyAgentPromotionMock,
+    clearAgentPromotion: clearAgentPromotionMock,
   },
 }));
 
@@ -212,7 +224,6 @@ describe("terminalStore process detection listeners", () => {
 
     const term1 = {
       id: "term-1",
-      type: "terminal" as const,
       kind: "terminal" as const,
       title: "Terminal",
       cwd: "/tmp",
@@ -279,6 +290,341 @@ describe("terminalStore process detection listeners", () => {
       timestamp: Date.now(),
     });
     expect(usePanelStore.getState().panelsById["term-1"]?.detectedProcessId).toBeUndefined();
+    cleanup();
+  });
+
+  // Regression for #5765: once runtime detection sees an agent, the renderer must
+  // mirror the sticky everDetectedAgent flag so the onExit guard can preserve the
+  // panel even if snapshot IPC lags behind the exit event.
+  it("sets everDetectedAgent when agent:detected carries an agentType", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "claude",
+      processIconId: "claude",
+      processName: "claude",
+      timestamp: Date.now(),
+    });
+
+    expect(usePanelStore.getState().panelsById["term-1"]?.everDetectedAgent).toBe(true);
+    cleanup();
+  });
+
+  it("does not set everDetectedAgent for non-agent detections", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    detected?.({
+      terminalId: "term-1",
+      processIconId: "npm",
+      processName: "npm",
+      timestamp: Date.now(),
+    });
+
+    expect(usePanelStore.getState().panelsById["term-1"]?.everDetectedAgent).toBeUndefined();
+    cleanup();
+  });
+
+  it("stores detectedAgentId when agent:detected carries a BuiltInAgentId", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+    const timestamp = Date.now();
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "claude",
+      processIconId: "claude",
+      processName: "claude",
+      timestamp,
+    });
+
+    const panel = usePanelStore.getState().panelsById["term-1"];
+    expect(panel?.detectedAgentId).toBe("claude");
+    expect(panel?.runtimeIdentity).toMatchObject({
+      kind: "agent",
+      id: "claude",
+      iconId: "claude",
+      agentId: "claude",
+      processId: "claude",
+    });
+    expect(panel?.agentState).toBe("idle");
+    expect(panel?.lastStateChange).toBe(timestamp);
+    cleanup();
+  });
+
+  it("promotes from a stale process runtime identity to agent runtime identity", () => {
+    usePanelStore.setState((s) => ({
+      panelsById: {
+        ...s.panelsById,
+        "term-1": {
+          ...s.panelsById["term-1"]!,
+          detectedProcessId: "npm",
+          runtimeIdentity: {
+            kind: "process",
+            id: "npm",
+            iconId: "npm",
+            processId: "npm",
+          },
+        },
+      },
+    }));
+
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    applyAgentPromotionMock.mockClear();
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "claude",
+      processIconId: "claude",
+      processName: "claude",
+      timestamp: Date.now(),
+    });
+
+    const panel = usePanelStore.getState().panelsById["term-1"];
+    expect(panel?.detectedAgentId).toBe("claude");
+    expect(panel?.detectedProcessId).toBe("claude");
+    expect(panel?.runtimeIdentity).toMatchObject({
+      kind: "agent",
+      id: "claude",
+      agentId: "claude",
+      processId: "claude",
+    });
+    expect(panel?.agentState).toBe("idle");
+    expect(applyAgentPromotionMock).toHaveBeenCalledWith("term-1", "claude");
+    cleanup();
+  });
+
+  it("ignores unknown agentType values for detectedAgentId", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "not-a-real-agent",
+      processIconId: "mystery",
+      processName: "mystery",
+      timestamp: Date.now(),
+    });
+
+    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBeUndefined();
+    cleanup();
+  });
+
+  it("does not set detectedAgentId for non-agent detections", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    detected?.({
+      terminalId: "term-1",
+      processIconId: "npm",
+      processName: "npm",
+      timestamp: Date.now(),
+    });
+
+    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBeUndefined();
+    cleanup();
+  });
+
+  it("clears detectedAgentId when agent:exited fires", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+    const exited = handlers.agentExited;
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "gemini",
+      processIconId: "gemini",
+      processName: "gemini",
+      timestamp: Date.now(),
+    });
+    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBe("gemini");
+
+    exited?.({ terminalId: "term-1", timestamp: Date.now() });
+    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBeUndefined();
+    cleanup();
+  });
+
+  it("clears renderer runtime agent capability when agent:exited fires", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const exited = handlers.agentExited;
+
+    clearAgentPromotionMock.mockClear();
+
+    exited?.({ terminalId: "term-1", agentType: "claude", timestamp: Date.now() });
+
+    expect(clearAgentPromotionMock).toHaveBeenCalledWith("term-1");
+    cleanup();
+  });
+
+  // Issue #5776: when a plain terminal is runtime-promoted to host an agent,
+  // the renderer must apply the agent scrollback policy to the live xterm —
+  // the only in-process repair available for spawn-sealed terminals.
+  it("calls applyAgentPromotion when a plain terminal (no agentId) detects a built-in agent", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    applyAgentPromotionMock.mockClear();
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "claude",
+      processIconId: "claude",
+      processName: "claude",
+      timestamp: Date.now(),
+    });
+
+    expect(applyAgentPromotionMock).toHaveBeenCalledWith("term-1", "claude");
+    cleanup();
+  });
+
+  it("applies runtime promotion for cold-spawned agent panels too", () => {
+    usePanelStore.setState((s) => ({
+      panelsById: {
+        ...s.panelsById,
+        "term-1": { ...s.panelsById["term-1"]!, launchAgentId: "claude" },
+      },
+    }));
+
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    applyAgentPromotionMock.mockClear();
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "claude",
+      processIconId: "claude",
+      processName: "claude",
+      timestamp: Date.now(),
+    });
+
+    expect(applyAgentPromotionMock).toHaveBeenCalledWith("term-1", "claude");
+    cleanup();
+  });
+
+  it("does not call applyAgentPromotion when agentType is not a built-in agent", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    applyAgentPromotionMock.mockClear();
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "not-a-real-agent",
+      processIconId: "mystery",
+      processName: "mystery",
+      timestamp: Date.now(),
+    });
+
+    expect(applyAgentPromotionMock).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  // Regression for #5807: agent:exited is a subcommand/demotion signal, not
+  // a PTY exit. The sealed launch-intent `launchAgentId` must survive so
+  // that restart decisions correctly relaunch a cold-launched agent terminal
+  // after the user types `/quit`.
+  it("preserves launchAgentId on agent:exited for cold-launched agent panels", () => {
+    usePanelStore.setState((s) => ({
+      panelsById: {
+        ...s.panelsById,
+        "term-1": {
+          ...s.panelsById["term-1"]!,
+          launchAgentId: "claude",
+          detectedAgentId: "claude",
+        },
+      },
+    }));
+
+    const cleanup = setupTerminalStoreListeners();
+    const exited = handlers.agentExited;
+
+    exited?.({ terminalId: "term-1", agentType: "claude", timestamp: Date.now() });
+
+    const panel = usePanelStore.getState().panelsById["term-1"];
+    expect(panel?.launchAgentId).toBe("claude");
+    expect(panel?.detectedAgentId).toBeUndefined();
+    cleanup();
+  });
+
+  // Regression for #5807: a non-agent process exit (e.g., npm) in a plain
+  // shell with no launchAgentId must leave launchAgentId untouched.
+  it("leaves launchAgentId untouched on non-agent process exit in a plain shell", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+    const exited = handlers.agentExited;
+
+    detected?.({
+      terminalId: "term-1",
+      processIconId: "npm",
+      processName: "npm",
+      timestamp: Date.now(),
+    });
+
+    exited?.({ terminalId: "term-1", timestamp: Date.now() });
+
+    const panel = usePanelStore.getState().panelsById["term-1"];
+    expect(panel?.launchAgentId).toBeUndefined();
+    expect(panel?.detectedProcessId).toBeUndefined();
+    cleanup();
+  });
+
+  it("keeps everDetectedAgent true after agent:exited fires (sticky flag)", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+    const exited = handlers.agentExited;
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "claude",
+      processIconId: "claude",
+      processName: "claude",
+      timestamp: Date.now(),
+    });
+    expect(usePanelStore.getState().panelsById["term-1"]?.everDetectedAgent).toBe(true);
+
+    exited?.({ terminalId: "term-1", timestamp: Date.now() });
+    expect(usePanelStore.getState().panelsById["term-1"]?.everDetectedAgent).toBe(true);
+    cleanup();
+  });
+
+  // End-to-end regression for #5765: a plain terminal that ran an agent must not
+  // be trashed on clean exit — the sticky flag is what the onExit handler reads.
+  it("does not trash a plain terminal on clean exit after an agent was detected", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+    const exit = handlers.exit;
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "claude",
+      processIconId: "claude",
+      processName: "claude",
+      timestamp: Date.now(),
+    });
+
+    exit?.("term-1", 0);
+
+    const panel = usePanelStore.getState().panelsById["term-1"];
+    expect(panel).toBeDefined();
+    expect(panel?.location).not.toBe("trash");
+    expect(panel?.everDetectedAgent).toBe(true);
+    cleanup();
+  });
+
+  it("still trashes a plain terminal on clean exit when no agent was ever detected", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const exit = handlers.exit;
+
+    exit?.("term-1", 0);
+
+    const panel = usePanelStore.getState().panelsById["term-1"];
+    // Either moved to trash (location === "trash") or removed entirely.
+    expect(panel === undefined || panel.location === "trash").toBe(true);
     cleanup();
   });
 

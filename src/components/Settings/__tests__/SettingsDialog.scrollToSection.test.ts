@@ -139,7 +139,7 @@ describe("Settings scroll-to-section retry logic", () => {
 
     // Simulate element becoming visible on next frame
     visible = true;
-    rafCallbacks[0](performance.now());
+    rafCallbacks[0]!(performance.now());
 
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "instant", block: "start" });
     expect(getAttempts()).toBe(1);

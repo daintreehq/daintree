@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useId, createContext, useContext } from
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
+import { logError } from "@/utils/logger";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import { usePortalStore } from "@/store";
@@ -133,7 +134,7 @@ export function AppDialog({
       const canClose = await onBeforeClose();
       if (canClose) onClose();
     } catch (error) {
-      console.error("AppDialog onBeforeClose failed", error);
+      logError("AppDialog onBeforeClose failed", error);
     } finally {
       closeInFlightRef.current = false;
     }
@@ -160,8 +161,8 @@ export function AppDialog({
         return;
       }
 
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
 
       if (e.shiftKey && document.activeElement === first) {
         e.preventDefault();
@@ -239,7 +240,7 @@ export function AppDialog({
             isVisible
               ? "opacity-100 translate-y-0 scale-100"
               : "opacity-0 translate-y-1 scale-[0.98]",
-            "outline-none",
+            "outline-hidden",
             className
           )}
           style={{
@@ -353,6 +354,7 @@ interface AppDialogFooterProps {
   className?: string;
   primaryAction?: DialogAction;
   secondaryAction?: DialogAction;
+  hint?: React.ReactNode;
 }
 
 AppDialog.Footer = function AppDialogFooter({
@@ -360,6 +362,7 @@ AppDialog.Footer = function AppDialogFooter({
   className,
   primaryAction,
   secondaryAction,
+  hint,
 }: AppDialogFooterProps) {
   const context = useContext(AppDialogContext);
   const dialogVariant = context?.variant ?? "default";
@@ -374,31 +377,39 @@ AppDialog.Footer = function AppDialogFooter({
   return (
     <div
       className={cn(
-        "px-6 py-4 border-t border-daintree-border flex justify-end gap-3 shrink-0",
+        "px-6 py-4 border-t border-daintree-border flex items-center gap-3 shrink-0",
+        hint ? "justify-between" : "justify-end",
         className
       )}
     >
-      {children}
-      {!children && secondaryAction && (
-        <Button
-          variant="ghost"
-          onClick={secondaryAction.onClick}
-          disabled={secondaryAction.disabled || secondaryAction.loading}
-          className="text-daintree-text/70 hover:text-daintree-text"
-        >
-          {secondaryAction.loading && <Spinner />}
-          {secondaryAction.label}
-        </Button>
+      {hint && (
+        <div className="text-[12px] text-daintree-text/55 flex items-center gap-1">{hint}</div>
       )}
-      {!children && primaryAction && (
-        <Button
-          variant={getPrimaryVariant()}
-          onClick={primaryAction.onClick}
-          disabled={primaryAction.disabled || primaryAction.loading}
-        >
-          {primaryAction.loading && <Spinner />}
-          {primaryAction.label}
-        </Button>
+      {children}
+      {!children && (
+        <div className="flex items-center gap-3">
+          {secondaryAction && (
+            <Button
+              variant="ghost"
+              onClick={secondaryAction.onClick}
+              disabled={secondaryAction.disabled || secondaryAction.loading}
+              className="text-daintree-text/70 hover:text-daintree-text"
+            >
+              {secondaryAction.loading && <Spinner />}
+              {secondaryAction.label}
+            </Button>
+          )}
+          {primaryAction && (
+            <Button
+              variant={getPrimaryVariant()}
+              onClick={primaryAction.onClick}
+              disabled={primaryAction.disabled || primaryAction.loading}
+            >
+              {primaryAction.loading && <Spinner />}
+              {primaryAction.label}
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );

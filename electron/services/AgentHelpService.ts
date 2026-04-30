@@ -2,6 +2,8 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { getEffectiveAgentConfig } from "../../shared/config/agentRegistry.js";
 import type { AgentHelpResult } from "../../shared/types/ipc/agent.js";
+import { buildProbeEnv } from "../utils/spawnEnv.js";
+import { scrubSecrets } from "../utils/secretScrubber.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -68,6 +70,7 @@ export class AgentHelpService {
         maxBuffer: this.MAX_BUFFER,
         shell: false,
         windowsHide: true,
+        env: buildProbeEnv(),
       });
 
       stdout = out || "";
@@ -108,8 +111,8 @@ export class AgentHelpService {
     }
 
     return {
-      stdout,
-      stderr,
+      stdout: scrubSecrets(stdout),
+      stderr: scrubSecrets(stderr),
       exitCode,
       timedOut,
       truncated,

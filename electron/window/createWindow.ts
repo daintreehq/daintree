@@ -15,8 +15,13 @@ import {
 import path from "path";
 import { createWindowWithState } from "../windowState.js";
 import { store } from "../store.js";
-import { resolveAppTheme, normalizeAppColorScheme } from "../../shared/theme/index.js";
+import { resolveAppTheme } from "../../shared/theme/index.js";
 import type { AppColorScheme } from "../../shared/theme/index.js";
+import {
+  appCustomSchemesReadSchema,
+  appCustomSchemesWriteSchema,
+  migrateCustomSchemes,
+} from "../schemas/customSchemes.js";
 
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
@@ -28,6 +33,7 @@ import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { injectSkeletonCss } from "./skeletonCss.js";
+import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
 import { isSmokeTest } from "../setup/environment.js";
@@ -145,20 +151,28 @@ export function setupBrowserWindow(
     colorSchemeId = nativeTheme.shouldUseDarkColors ? "daintree" : "bondi";
   }
 
+  // Apply lazy migration for legacy string-encoded customSchemes
   let customSchemes: AppColorScheme[] = [];
-  if (
-    themeConfig &&
-    typeof themeConfig === "object" &&
-    !Array.isArray(themeConfig) &&
-    "customSchemes" in themeConfig &&
-    typeof themeConfig.customSchemes === "string"
-  ) {
-    try {
-      const parsed = JSON.parse(themeConfig.customSchemes);
-      if (Array.isArray(parsed))
-        customSchemes = parsed.map((s: AppColorScheme) => normalizeAppColorScheme(s));
-    } catch {
-      // Malformed custom schemes — fall back to built-in only
+  const rawSchemes =
+    themeConfig && typeof themeConfig === "object" && !Array.isArray(themeConfig)
+      ? (themeConfig as Record<string, unknown>).customSchemes
+      : undefined;
+  if (rawSchemes !== undefined) {
+    const result = migrateCustomSchemes(
+      rawSchemes,
+      appCustomSchemesReadSchema,
+      appCustomSchemesWriteSchema
+    );
+    customSchemes = result.schemes;
+    if (result.migrated) {
+      try {
+        store.set("appTheme", {
+          ...(themeConfig as Record<string, unknown>),
+          customSchemes: result.schemes.length > 0 ? result.schemes : [],
+        });
+      } catch {
+        // Non-fatal: config persisted but migration write failed
+      }
     }
   }
 
@@ -239,18 +253,12 @@ export function setupBrowserWindow(
 
   // The app view's webContents is the "renderer" for all purposes
   const appWebContents = appView.webContents;
+  attachRendererConsoleCapture(appWebContents);
 
-  // Defer showing the window until first paint to prevent background flash
-  let isShown = false;
-  const showWindow = () => {
-    if (isShown || win.isDestroyed()) return;
-    isShown = true;
-    clearTimeout(showTimeout);
-    win.show();
-  };
-  appWebContents.once("did-finish-load", showWindow);
-  const showTimeout = setTimeout(showWindow, 2500);
-  win.once("closed", () => clearTimeout(showTimeout));
+  // Match the appView's background to the window chrome so the frame and
+  // content area reveal a single colour when the window is shown before the
+  // first paint; WebContentsView defaults to white otherwise.
+  appView.setBackgroundColor(windowBg);
 
   if (isSmokeTest) {
     win.on("unresponsive", () => {
@@ -270,17 +278,19 @@ export function setupBrowserWindow(
       dialog
         .showMessageBox(win, {
           type: "warning",
-          buttons: ["Wait", "Reload"],
+          buttons: ["Wait", "Restart view"],
           defaultId: 0,
           title: "Window Not Responding",
           message: "The window is not responding.",
-          detail: "You can wait for it to recover or reload the window.",
+          detail:
+            "You can wait for it to recover, or force-restart the view. Force-restarting will immediately terminate and recover the view.",
         })
         .then(({ response }) => {
           if (dialogId !== unresponsiveDialogId) return;
           unresponsiveDialogOpen = false;
           if (response === 1 && !win.isDestroyed()) {
-            appWebContents.reload();
+            console.warn("[MAIN] User triggered force-restart of unresponsive renderer");
+            appWebContents.forcefullyCrashRenderer();
           }
         })
         .catch(() => {
@@ -302,7 +312,13 @@ export function setupBrowserWindow(
     if (!win || win.isDestroyed() || rendererLoadRequested) return;
     rendererLoadRequested = true;
 
-    injectSkeletonCss(appWebContents);
+    // insertCSS is navigation-scoped, so re-inject once the new document has
+    // parsed. Listen for every dom-ready (not once) so the skeleton survives
+    // renderer-crash auto-reloads. Inline fallbacks in index.html cover the
+    // gap before dom-ready fires.
+    appWebContents.on("dom-ready", () => {
+      injectSkeletonCss(appWebContents);
+    });
 
     const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
     console.log(`[MAIN] Loading renderer (${reason})...`);
@@ -314,6 +330,11 @@ export function setupBrowserWindow(
       console.log("[MAIN] Loading production build via app:// protocol");
       appWebContents.loadURL(`app://daintree/index.html${qs}`);
     }
+
+    // Show the window as soon as the navigation is in flight so the HTML
+    // skeleton in index.html paints during bundle parse instead of leaving
+    // the user with a blank background while JS loads.
+    if (!win.isDestroyed()) win.show();
   };
 
   // Window open handler — on the app view's webContents
@@ -468,18 +489,16 @@ export function setupBrowserWindow(
   });
 
   // Fullscreen events
-  win.on("enter-full-screen", () => {
-    sendToRenderer(win, CHANNELS.WINDOW_FULLSCREEN_CHANGE, true);
-  });
-  win.on("leave-full-screen", () => {
-    sendToRenderer(win, CHANNELS.WINDOW_FULLSCREEN_CHANGE, false);
-  });
-  win.on("enter-html-full-screen", () => {
-    sendToRenderer(win, CHANNELS.WINDOW_FULLSCREEN_CHANGE, true);
-  });
-  win.on("leave-html-full-screen", () => {
-    sendToRenderer(win, CHANNELS.WINDOW_FULLSCREEN_CHANGE, false);
-  });
+  const sendFullscreen = (isFullscreen: boolean) => {
+    sendToRenderer(win, CHANNELS.EVENTS_PUSH, {
+      name: "window:fullscreen-change",
+      payload: isFullscreen,
+    });
+  };
+  win.on("enter-full-screen", () => sendFullscreen(true));
+  win.on("leave-full-screen", () => sendFullscreen(false));
+  win.on("enter-html-full-screen", () => sendFullscreen(true));
+  win.on("leave-html-full-screen", () => sendFullscreen(false));
 
   // Memory reclamation: clear renderer caches after sustained minimize
   const RECLAIM_DELAY_MS = 5_000;
@@ -490,7 +509,10 @@ export function setupBrowserWindow(
     reclaimTimer = setTimeout(() => {
       reclaimTimer = null;
       if (!win.isDestroyed() && win.isMinimized()) {
-        sendToRenderer(win, CHANNELS.WINDOW_RECLAIM_MEMORY, { reason: "minimize" });
+        sendToRenderer(win, CHANNELS.EVENTS_PUSH, {
+          name: "window:reclaim-memory",
+          payload: { reason: "minimize" },
+        });
       }
     }, RECLAIM_DELAY_MS);
   });
@@ -518,6 +540,10 @@ export function setupBrowserWindow(
 
   function getRecoveryUrl(reason: string, exitCode: number): string {
     const params = new URLSearchParams({ reason, exitCode: String(exitCode) });
+    const backupTimestamp = getCrashRecoveryService().getLastBackupTimestamp();
+    if (backupTimestamp !== null) {
+      params.set("backupTimestamp", String(backupTimestamp));
+    }
     if (process.env.NODE_ENV === "development") {
       const devServerUrl = getDevServerUrl();
       return `${devServerUrl}/recovery.html?${params}`;

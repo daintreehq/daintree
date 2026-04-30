@@ -61,8 +61,6 @@ function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
   return {
     shell: "/bin/zsh",
     args: ["-l"],
-    isAgentTerminal: false,
-    agentId: undefined,
     env: {},
     ...overrides,
   };
@@ -81,10 +79,9 @@ function createTerminal(
     cols: 80,
     rows: 24,
     kind: "terminal" as const,
-    type: "terminal" as const,
     ...options,
   };
-  const ctx = defaultSpawnContext({ isAgentTerminal: false });
+  const ctx = defaultSpawnContext();
   return new TerminalProcess(
     "t1",
     merged,

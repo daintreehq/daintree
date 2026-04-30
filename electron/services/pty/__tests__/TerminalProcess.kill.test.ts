@@ -60,8 +60,6 @@ function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
   return {
     shell: "/bin/zsh",
     args: ["-l"],
-    isAgentTerminal: false,
-    agentId: undefined,
     env: {},
     ...overrides,
   };
@@ -80,17 +78,9 @@ function createTerminal(
     cols: 80,
     rows: 24,
     kind: "terminal" as const,
-    type: "terminal" as const,
     ...options,
   };
-  const isAgent =
-    merged.kind === "agent" || !!merged.agentId || (!!merged.type && merged.type !== "terminal");
-  const ctx = defaultSpawnContext({
-    isAgentTerminal: isAgent,
-    agentId: isAgent
-      ? (((merged as Record<string, unknown>).agentId as string) ?? merged.type)
-      : undefined,
-  });
+  const ctx = defaultSpawnContext();
   return new TerminalProcess(
     "t1",
     merged,
@@ -116,7 +106,7 @@ describe("TerminalProcess.kill — agent state event", () => {
     const emitAgentKilledSpy = vi.fn();
 
     const terminal = createTerminal(
-      { kind: "agent", type: "claude", agentId: "claude" },
+      { kind: "terminal", launchAgentId: "claude" },
       {
         agentStateService: {
           handleActivityState: () => {},
@@ -129,10 +119,36 @@ describe("TerminalProcess.kill — agent state event", () => {
     terminal.kill("user requested");
 
     expect(updateAgentStateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "claude" }),
+      expect.objectContaining({ launchAgentId: "claude" }),
       { type: "kill" }
     );
     expect(emitAgentKilledSpy).toHaveBeenCalled();
+  });
+
+  // The state machine collapses kill / dispose / onExit into a single
+  // idempotent teardown. Calling kill() twice must not double-fire
+  // agent:killed or attempt to flush persistence twice.
+  it("is idempotent — second kill() is a no-op", () => {
+    const updateAgentStateSpy = vi.fn();
+    const emitAgentKilledSpy = vi.fn();
+
+    const terminal = createTerminal(
+      { kind: "terminal", launchAgentId: "claude" },
+      {
+        agentStateService: {
+          handleActivityState: () => {},
+          updateAgentState: updateAgentStateSpy,
+          emitAgentKilled: emitAgentKilledSpy,
+        } as never,
+      }
+    );
+
+    terminal.kill("first");
+    terminal.kill("second");
+
+    // Each agent-state hook fires exactly once even though kill() was called twice.
+    expect(updateAgentStateSpy).toHaveBeenCalledTimes(1);
+    expect(emitAgentKilledSpy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -153,7 +169,7 @@ describe("TerminalProcess.kill — session persistence", () => {
   });
 
   it("does not persist session for agent terminals on kill", () => {
-    const terminal = createTerminal({ kind: "agent", type: "claude" });
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
 
     vi.spyOn(terminal, "getSerializedState").mockReturnValue("scrollback-data");
 
@@ -241,7 +257,7 @@ describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process 
 
     // Now SIGKILL should have been sent to descendant + shell
     const sigkillAfter = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
-    expect(sigkillAfter).toHaveLength(2); // pid 456 + pid 123 (shell)
+    expect(sigkillAfter.map((c: unknown[]) => c[0])).toEqual([456, 123]);
   });
 
   it("sends SIGKILL immediately on dispose()", () => {
@@ -309,5 +325,38 @@ describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process 
 
     const terminal = createTerminal(undefined, { processTreeCache: mockCache });
     expect(() => terminal.kill("test")).not.toThrow();
+  });
+
+  it("re-reads descendants at SIGKILL time so children spawned in the grace window are reaped", () => {
+    // SIGTERM pass sees [456]; before the 500ms SIGKILL escalation a new
+    // child (789) forks and registers in the cache. The escalation must
+    // observe the fresh list rather than the snapshot from kill() time.
+    const getDescendantPids = vi
+      .fn<(pid: number) => number[]>()
+      .mockReturnValueOnce([456])
+      .mockReturnValue([456, 789]);
+    const mockCache = {
+      ...createMockProcessTreeCache(),
+      getDescendantPids,
+    } as unknown as ProcessTreeCache;
+
+    const terminal = createTerminal(undefined, { processTreeCache: mockCache });
+    terminal.kill("test");
+
+    // SIGTERM pass used the initial snapshot [456]
+    const sigTermCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGTERM");
+    expect(sigTermCalls).toEqual([[456, "SIGTERM"]]);
+
+    // Advance to fire the SIGKILL sweep
+    vi.advanceTimersByTime(500);
+
+    const sigkillCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
+    const sigkillPids = sigkillCalls.map((c: unknown[]) => c[0]);
+    // The late-forked 789 must be SIGKILL'd alongside 456 and the shell pid 123.
+    expect(sigkillPids).toEqual([456, 789, 123]);
+    // Cache was queried at SIGTERM time and again at SIGKILL time.
+    expect(getDescendantPids).toHaveBeenCalledTimes(2);
+    expect(getDescendantPids).toHaveBeenNthCalledWith(1, 123);
+    expect(getDescendantPids).toHaveBeenNthCalledWith(2, 123);
   });
 });

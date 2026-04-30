@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ActionDefinition } from "@shared/types/actions";
-import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
+import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const systemClientMock = vi.hoisted(() => ({ openExternal: vi.fn() }));
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
@@ -18,7 +17,7 @@ function setupActions() {
   return async (id: string, args?: unknown): Promise<unknown> => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
-    const def = factory() as ActionDefinition<unknown, unknown>;
+    const def = factory() as AnyActionDefinition;
     return def.run(args, {} as never);
   };
 }
@@ -61,7 +60,7 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     await run("browser.navigate", { url: "https://a.example" });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail: { id: string; url: string };
     };
@@ -74,7 +73,7 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     await run("browser.navigate", { url: "https://a.example", terminalId: "b2" });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       detail: { id: string };
     };
     expect(event.detail.id).toBe("b2");
@@ -144,7 +143,7 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     await run("browser.setZoomLevel", { zoomFactor: 1.5 });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail: { id: string; zoomFactor: number };
     };
@@ -164,7 +163,7 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     await run("browser.reload", { terminalId: "other" });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       detail: { id: string };
     };
     expect(event.detail.id).toBe("other");

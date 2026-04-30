@@ -34,7 +34,7 @@ function getSingleWorktreeId(entries: NotificationHistoryEntry[]): string | null
   for (const e of entries) {
     if (e.context?.worktreeId) ids.add(e.context.worktreeId);
   }
-  return ids.size === 1 ? [...ids][0] : null;
+  return ids.size === 1 ? ([...ids][0] ?? null) : null;
 }
 
 const EMPTY: ReEntrySummaryState = {

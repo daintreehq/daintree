@@ -12,6 +12,7 @@ import {
 import {
   Activity,
   CircleDot,
+  Clock,
   Code,
   Copy,
   FileText,
@@ -23,7 +24,8 @@ import {
   LayoutGrid,
   Layers,
   Link,
-  Monitor,
+  MonitorPlay,
+  CheckSquare,
   Maximize2,
   PanelTopClose,
   PanelTopOpen,
@@ -32,16 +34,16 @@ import {
   Play,
   Plug,
   RefreshCw,
-  RotateCcw,
   Save,
   Server,
+  PanelBottomClose,
   Pause,
   SquareTerminal,
   Trash2,
   Undo2,
-  X,
+  Zap,
 } from "lucide-react";
-import { MoveToDockIcon, CopyTreeIcon, TerminalRecipeIcon } from "@/components/icons";
+import { Folders, Workflow } from "@/components/icons";
 
 type MenuComponent = React.ElementType;
 type LaunchAgentIcon = React.ComponentType<{ className?: string }>;
@@ -71,7 +73,6 @@ export interface WorktreeLaunchAgentItem {
   name: string;
   isEnabled: boolean;
   icon?: LaunchAgentIcon;
-  shortcut?: string | null;
 }
 
 export interface WorktreeMenuItemsProps {
@@ -80,7 +81,6 @@ export interface WorktreeMenuItemsProps {
   launchAgents: WorktreeLaunchAgentItem[];
   recipes: Array<{ id: string; name: string }>;
   runningRecipeId: string | null;
-  isRestartValidating: boolean;
   isPinned?: boolean;
   counts: {
     grid: number;
@@ -88,6 +88,8 @@ export interface WorktreeMenuItemsProps {
     active: number;
     completed: number;
     all: number;
+    waiting: number;
+    working: number;
   };
   onLaunchAgent?: (agentId: string) => void;
   onCopyContextFull: () => void;
@@ -110,11 +112,10 @@ export interface WorktreeMenuItemsProps {
   isCollapsed?: boolean;
   onDockAll: () => void;
   onMaximizeAll: () => void;
-  onRestartAll: () => void;
   onResetRenderers: () => void;
-  onCloseCompleted: () => void;
-  onCloseAll: () => void;
-  onEndAll: () => void;
+  onSelectAllAgents: () => void;
+  onSelectWaitingAgents: () => void;
+  onSelectWorkingAgents: () => void;
   onOpenPanelPalette?: () => void;
   onDeleteWorktree?: () => void;
   onRevertAgentChanges?: () => void;
@@ -138,7 +139,6 @@ export function WorktreeMenuItems({
   launchAgents,
   recipes,
   runningRecipeId,
-  isRestartValidating,
   isPinned,
   counts,
   onLaunchAgent,
@@ -162,11 +162,10 @@ export function WorktreeMenuItems({
   isCollapsed,
   onDockAll,
   onMaximizeAll,
-  onRestartAll,
   onResetRenderers,
-  onCloseCompleted,
-  onCloseAll,
-  onEndAll,
+  onSelectAllAgents,
+  onSelectWaitingAgents,
+  onSelectWorkingAgents,
   onOpenPanelPalette,
   onDeleteWorktree,
   onRevertAgentChanges,
@@ -187,7 +186,6 @@ export function WorktreeMenuItems({
   const hasIssueOrPrSection = hasIssueSub || hasPRSub;
   const hasRecipes = recipes.length > 0;
   const hasRecipeSection = hasRecipes || (onSaveLayout && counts.active > 0);
-  const hasSessions = counts.all > 0;
 
   return (
     <>
@@ -225,7 +223,7 @@ export function WorktreeMenuItems({
             Open Browser
           </C.Item>
           <C.Item onSelect={() => onLaunchAgent?.("dev-preview")} disabled={!onLaunchAgent}>
-            <Monitor className="w-3.5 h-3.5 mr-2 text-status-success" />
+            <MonitorPlay className="w-3.5 h-3.5 mr-2 text-status-success" />
             Open Dev Preview
           </C.Item>
         </C.SubContent>
@@ -247,7 +245,7 @@ export function WorktreeMenuItems({
         </C.SubTrigger>
         <C.SubContent>
           <C.Item onSelect={onDockAll} disabled={counts.grid === 0}>
-            <MoveToDockIcon className="w-3.5 h-3.5 mr-2" />
+            <PanelBottomClose className="w-3.5 h-3.5 mr-2" />
             Dock All
             <C.Shortcut>({counts.grid})</C.Shortcut>
           </C.Item>
@@ -255,16 +253,6 @@ export function WorktreeMenuItems({
             <Maximize2 className="w-3.5 h-3.5 mr-2" />
             Maximize All
             <C.Shortcut>({counts.dock})</C.Shortcut>
-          </C.Item>
-
-          <C.Separator />
-
-          <C.Item onSelect={onRestartAll} disabled={counts.active === 0 || isRestartValidating}>
-            <RotateCcw
-              className={`w-3.5 h-3.5 mr-2 ${isRestartValidating ? "animate-spin" : ""}`}
-            />
-            {isRestartValidating ? "Checking..." : "Restart All"}
-            <C.Shortcut>({counts.active})</C.Shortcut>
           </C.Item>
           <C.Item onSelect={onResetRenderers} disabled={counts.active === 0}>
             <RefreshCw className="w-3.5 h-3.5 mr-2" />
@@ -274,21 +262,20 @@ export function WorktreeMenuItems({
 
           <C.Separator />
 
-          <C.Item onSelect={onCloseCompleted} disabled={counts.completed === 0}>
-            Close Completed
-            <C.Shortcut>({counts.completed})</C.Shortcut>
-          </C.Item>
-          <C.Separator />
-
-          <C.Item onSelect={onCloseAll} disabled={counts.active === 0}>
-            <Trash2 className="w-3.5 h-3.5 mr-2" />
-            Close All (Trash)
-            <C.Shortcut>({counts.active})</C.Shortcut>
-          </C.Item>
-          <C.Item onSelect={onEndAll} disabled={!hasSessions} destructive>
-            <X className="w-3.5 h-3.5 mr-2" />
-            End All (Kill)
+          <C.Item onSelect={onSelectAllAgents} disabled={counts.all === 0}>
+            <CheckSquare className="w-3.5 h-3.5 mr-2" />
+            Select All Terminals
             <C.Shortcut>({counts.all})</C.Shortcut>
+          </C.Item>
+          <C.Item onSelect={onSelectWaitingAgents} disabled={counts.waiting === 0}>
+            <Clock className="w-3.5 h-3.5 mr-2" />
+            Select Waiting Agents
+            <C.Shortcut>({counts.waiting})</C.Shortcut>
+          </C.Item>
+          <C.Item onSelect={onSelectWorkingAgents} disabled={counts.working === 0}>
+            <Zap className="w-3.5 h-3.5 mr-2" />
+            Select Working Agents
+            <C.Shortcut>({counts.working})</C.Shortcut>
           </C.Item>
         </C.SubContent>
       </C.Sub>
@@ -424,7 +411,7 @@ export function WorktreeMenuItems({
       {/* Copy Context submenu */}
       <C.Sub>
         <C.SubTrigger>
-          <CopyTreeIcon className="w-3.5 h-3.5 mr-2" />
+          <Folders className="w-3.5 h-3.5 mr-2" />
           Copy Context
         </C.SubTrigger>
         <C.SubContent>
@@ -512,7 +499,7 @@ export function WorktreeMenuItems({
       {hasRecipes && (
         <C.Sub>
           <C.SubTrigger>
-            <TerminalRecipeIcon className="w-3.5 h-3.5 mr-2" />
+            <Workflow className="w-3.5 h-3.5 mr-2" />
             Run Recipe
           </C.SubTrigger>
           <C.SubContent>

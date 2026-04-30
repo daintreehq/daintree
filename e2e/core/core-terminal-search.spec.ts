@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, refreshActiveWindow, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openProject, dismissTelemetryConsent } from "../helpers/project";
 import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
@@ -46,7 +46,7 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
 
       // After onboarding, the ProjectViewManager creates a new WebContentsView.
       // Re-acquire the active page so subsequent tests use the correct view.
-      ctx.window = await getActiveAppWindow(ctx.app);
+      ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
     });
 
     test("worktree dashboard appears", async () => {
@@ -94,9 +94,10 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       await input.fill("SEARCH_SENTINEL_XYZ");
       await window.waitForTimeout(T_SETTLE);
 
-      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
-        timeout: T_SHORT,
-      });
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(
+        /^(?:\d+ of \d+\+?|\d+\+? matches|Found)$/,
+        { timeout: T_SHORT }
+      );
     });
 
     test("typing a non-matching query shows No matches status", async () => {
@@ -171,9 +172,12 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       // Search lowercase variant — case-insensitive finds CaseMark_Upper
       await input.fill("casemark_upper");
       await window.waitForTimeout(T_SETTLE);
-      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
-        timeout: T_SHORT,
-      });
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(
+        /^(?:\d+ of \d+\+?|\d+\+? matches|Found)$/,
+        {
+          timeout: T_SHORT,
+        }
+      );
 
       // Toggle case ON
       await caseToggle.click();
@@ -188,9 +192,12 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       // Exact case match should still work
       await input.fill("CaseMark_Upper");
       await window.waitForTimeout(T_SETTLE);
-      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
-        timeout: T_SHORT,
-      });
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(
+        /^(?:\d+ of \d+\+?|\d+\+? matches|Found)$/,
+        {
+          timeout: T_SHORT,
+        }
+      );
 
       // Toggle case OFF and close
       await caseToggle.click();
@@ -222,9 +229,12 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       // Regex pattern matches item1_found, item2_found, item3_found
       await input.fill("item\\d+_found");
       await window.waitForTimeout(T_SETTLE);
-      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
-        timeout: T_SHORT,
-      });
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(
+        /^(?:\d+ of \d+\+?|\d+\+? matches|Found)$/,
+        {
+          timeout: T_SHORT,
+        }
+      );
 
       // Disable regex — literal "item\d+_found" doesn't exist
       await regexToggle.click();
@@ -262,34 +272,49 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       // Search for a term with multiple matches
       await input.fill("item");
       await window.waitForTimeout(T_SETTLE);
-      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
-        timeout: T_SHORT,
-      });
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(
+        /^(?:\d+ of \d+\+?|\d+\+? matches|Found)$/,
+        {
+          timeout: T_SHORT,
+        }
+      );
 
       // Click Next multiple times — status stays "Found"
       const nextBtn = panel.locator(SEL.terminal.searchNext);
       const prevBtn = panel.locator(SEL.terminal.searchPrevious);
 
       await nextBtn.click();
-      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
-        timeout: T_SHORT,
-      });
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(
+        /^(?:\d+ of \d+\+?|\d+\+? matches|Found)$/,
+        {
+          timeout: T_SHORT,
+        }
+      );
 
       await nextBtn.click();
-      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
-        timeout: T_SHORT,
-      });
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(
+        /^(?:\d+ of \d+\+?|\d+\+? matches|Found)$/,
+        {
+          timeout: T_SHORT,
+        }
+      );
 
       // Click Previous — status stays "Found"
       await prevBtn.click();
-      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
-        timeout: T_SHORT,
-      });
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(
+        /^(?:\d+ of \d+\+?|\d+\+? matches|Found)$/,
+        {
+          timeout: T_SHORT,
+        }
+      );
 
       await prevBtn.click();
-      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
-        timeout: T_SHORT,
-      });
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(
+        /^(?:\d+ of \d+\+?|\d+\+? matches|Found)$/,
+        {
+          timeout: T_SHORT,
+        }
+      );
 
       // Close search
       await window.keyboard.press("Escape");

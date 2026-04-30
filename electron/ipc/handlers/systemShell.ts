@@ -1,4 +1,4 @@
-import { ipcMain, shell } from "electron";
+import { shell } from "electron";
 import os from "os";
 import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
@@ -9,41 +9,33 @@ import {
   SystemOpenInEditorPayloadSchema,
 } from "../../schemas/index.js";
 import type { HandlerDependencies } from "../types.js";
+import { typedHandle, typedHandleValidated } from "../utils.js";
+import type {
+  SystemOpenExternalPayload,
+  SystemOpenPathPayload,
+  SystemOpenInEditorPayload,
+} from "../../schemas/ipc.js";
 
 export function registerSystemShellHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleSystemOpenExternal = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ) => {
-    const parseResult = SystemOpenExternalPayloadSchema.safeParse(payload);
-    if (!parseResult.success) {
-      console.error("[IPC] system:open-external validation failed:", parseResult.error.format());
-      throw new Error(`Invalid payload: ${parseResult.error.message}`);
-    }
-
-    const { url } = parseResult.data;
-    console.log("[IPC] system:open-external called with:", url);
+  const handleSystemOpenExternal = async ({ url }: SystemOpenExternalPayload) => {
     try {
       await openExternalUrl(url);
-      console.log("[IPC] system:open-external completed successfully");
     } catch (error) {
       console.error("[IPC] Failed to open external URL:", error);
       throw error;
     }
   };
-  ipcMain.handle(CHANNELS.SYSTEM_OPEN_EXTERNAL, handleSystemOpenExternal);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_OPEN_EXTERNAL));
+  handlers.push(
+    typedHandleValidated(
+      CHANNELS.SYSTEM_OPEN_EXTERNAL,
+      SystemOpenExternalPayloadSchema,
+      handleSystemOpenExternal
+    )
+  );
 
-  const handleSystemOpenPath = async (_event: Electron.IpcMainInvokeEvent, payload: unknown) => {
-    const parseResult = SystemOpenPathPayloadSchema.safeParse(payload);
-    if (!parseResult.success) {
-      console.error("[IPC] system:open-path validation failed:", parseResult.error.format());
-      throw new Error(`Invalid payload: ${parseResult.error.message}`);
-    }
-
-    const { path: targetPath } = parseResult.data;
+  const handleSystemOpenPath = async ({ path: targetPath }: SystemOpenPathPayload) => {
     const fs = await import("fs");
     const pathModule = await import("path");
 
@@ -61,20 +53,20 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       throw error;
     }
   };
-  ipcMain.handle(CHANNELS.SYSTEM_OPEN_PATH, handleSystemOpenPath);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_OPEN_PATH));
+  handlers.push(
+    typedHandleValidated(
+      CHANNELS.SYSTEM_OPEN_PATH,
+      SystemOpenPathPayloadSchema,
+      handleSystemOpenPath
+    )
+  );
 
-  const handleSystemOpenInEditor = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ) => {
-    const parseResult = SystemOpenInEditorPayloadSchema.safeParse(payload);
-    if (!parseResult.success) {
-      throw new Error(`Invalid payload: ${parseResult.error.message}`);
-    }
-
-    const { path: targetPath, line, col, projectId } = parseResult.data;
-
+  const handleSystemOpenInEditor = async ({
+    path: targetPath,
+    line,
+    col,
+    projectId,
+  }: SystemOpenInEditorPayload) => {
     let editorConfig = null;
     if (projectId) {
       try {
@@ -88,13 +80,15 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
     const { openFile } = await import("../../services/EditorService.js");
     await openFile(targetPath, line, col, editorConfig);
   };
-  ipcMain.handle(CHANNELS.SYSTEM_OPEN_IN_EDITOR, handleSystemOpenInEditor);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR));
+  handlers.push(
+    typedHandleValidated(
+      CHANNELS.SYSTEM_OPEN_IN_EDITOR,
+      SystemOpenInEditorPayloadSchema,
+      handleSystemOpenInEditor
+    )
+  );
 
-  const handleSystemCheckCommand = async (
-    _event: Electron.IpcMainInvokeEvent,
-    command: string
-  ): Promise<boolean> => {
+  const handleSystemCheckCommand = async (command: string): Promise<boolean> => {
     if (typeof command !== "string" || !command.trim()) {
       return false;
     }
@@ -113,13 +107,9 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       return false;
     }
   };
-  ipcMain.handle(CHANNELS.SYSTEM_CHECK_COMMAND, handleSystemCheckCommand);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_CHECK_COMMAND));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_CHECK_COMMAND, handleSystemCheckCommand));
 
-  const handleSystemCheckDirectory = async (
-    _event: Electron.IpcMainInvokeEvent,
-    directoryPath: string
-  ): Promise<boolean> => {
+  const handleSystemCheckDirectory = async (directoryPath: string): Promise<boolean> => {
     if (typeof directoryPath !== "string" || !directoryPath.trim()) {
       return false;
     }
@@ -138,20 +128,17 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       return false;
     }
   };
-  ipcMain.handle(CHANNELS.SYSTEM_CHECK_DIRECTORY, handleSystemCheckDirectory);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_CHECK_DIRECTORY));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_CHECK_DIRECTORY, handleSystemCheckDirectory));
 
   const handleSystemGetHomeDir = async () => {
     return os.homedir();
   };
-  ipcMain.handle(CHANNELS.SYSTEM_GET_HOME_DIR, handleSystemGetHomeDir);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_HOME_DIR));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_GET_HOME_DIR, handleSystemGetHomeDir));
 
   const handleSystemGetTmpDir = async () => {
     return os.tmpdir();
   };
-  ipcMain.handle(CHANNELS.SYSTEM_GET_TMP_DIR, handleSystemGetTmpDir);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_TMP_DIR));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_GET_TMP_DIR, handleSystemGetTmpDir));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

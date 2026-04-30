@@ -4,6 +4,8 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
+import { logError } from "@/utils/logger";
+import { useGlobalSecondTicker } from "@/hooks/useGlobalSecondTicker";
 
 const MAX_VISIBLE = 5;
 const AUTO_CLEAR_DELAY = 3000;
@@ -60,11 +62,12 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
     (t) => deriveTaskStatus(t) === "running" || deriveTaskStatus(t) === "restarting"
   );
 
+  // Shared visibility-aware ticker; pauses while the document is hidden.
+  const tick = useGlobalSecondTicker();
   useEffect(() => {
     if (!hasRunning) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [hasRunning]);
+    setNow(Date.now());
+  }, [tick, hasRunning]);
 
   // Auto-clear successful tasks after delay, and clear dismiss/timers on restart
   useEffect(() => {
@@ -120,7 +123,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   }, [quickRunTerminals]);
 
   const handleStop = useCallback((id: string) => {
-    terminalClient.kill(id).catch(console.error);
+    terminalClient.kill(id).catch((err) => logError("Failed to kill terminal", err));
   }, []);
 
   const handleFocus = useCallback(
@@ -283,8 +286,8 @@ function StatusDot({ status }: { status: TaskStatus }) {
     <span
       className={cn(
         "h-1.5 w-1.5 rounded-full shrink-0",
-        status === "running" && "bg-status-success animate-agent-pulse",
-        status === "restarting" && "bg-status-warning animate-agent-pulse",
+        status === "running" && "bg-status-success animate-activity-pulse",
+        status === "restarting" && "bg-status-warning animate-activity-pulse",
         status === "success" && "bg-status-success",
         status === "failed" && "bg-status-error"
       )}

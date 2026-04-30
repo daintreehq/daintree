@@ -5,7 +5,10 @@ import { usePanelStore, type TerminalInstance } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isUselessTitle } from "@shared/utils/isUselessTitle";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 
 interface TrashBinItemProps {
   terminal: TerminalInstance;
@@ -53,16 +56,25 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
     removePanel(terminal.id);
   }, [removePanel, terminal.id]);
 
-  const terminalName = terminal.title || terminal.type || "Terminal";
+  const terminalName = (() => {
+    const observed = terminal.lastObservedTitle;
+    if (observed && !isUselessTitle(observed)) return observed;
+    // Launch-intent only: trash labels should read the stable launch identity
+    // so a terminal's name doesn't change as runtime detection flips after trashing.
+    if (terminal.launchAgentId) {
+      if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
+      const agentConfig = getEffectiveAgentConfig(terminal.launchAgentId);
+      return agentConfig?.name ?? terminal.launchAgentId;
+    }
+    return terminal.title || "Terminal";
+  })();
 
   return (
     <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors group">
       <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
         <TerminalIcon
-          type={terminal.type}
           kind={terminal.kind}
-          agentId={terminal.agentId}
-          detectedProcessId={terminal.detectedProcessId}
+          chrome={deriveTerminalChrome(terminal)}
           className="w-3 h-3"
         />
       </div>
@@ -84,51 +96,47 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
       </div>
 
       <div className="flex gap-1">
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <Button
-                  variant="ghost-success"
-                  size="icon-sm"
-                  onClick={handleRestore}
-                  disabled={!canRestore}
-                  aria-label={
-                    isOrphan
-                      ? canRestore
-                        ? `Adopt ${terminalName} to current worktree`
-                        : "No active worktree to restore to"
-                      : `Restore ${terminalName}`
-                  }
-                >
-                  <RotateCcw aria-hidden="true" />
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {isOrphan
-                ? canRestore
-                  ? "Adopt to current worktree"
-                  : "No active worktree - select a worktree first"
-                : `Restore ${terminalName}`}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
               <Button
-                variant="ghost-danger"
+                variant="ghost-success"
                 size="icon-sm"
-                onClick={handleKill}
-                aria-label={`Remove ${terminalName} permanently`}
+                onClick={handleRestore}
+                disabled={!canRestore}
+                aria-label={
+                  isOrphan
+                    ? canRestore
+                      ? `Adopt ${terminalName} to current worktree`
+                      : "No active worktree to restore to"
+                    : `Restore ${terminalName}`
+                }
               >
-                <X aria-hidden="true" />
+                <RotateCcw aria-hidden="true" />
               </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {isOrphan
+              ? canRestore
+                ? "Adopt to current worktree"
+                : "No active worktree - select a worktree first"
+              : `Restore ${terminalName}`}
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost-danger"
+              size="icon-sm"
+              onClick={handleKill}
+              aria-label={`Remove ${terminalName} permanently`}
+            >
+              <X aria-hidden="true" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );

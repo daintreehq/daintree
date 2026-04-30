@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { projectClient, systemClient } from "@/clients";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { logError } from "@/utils/logger";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
 import type { BulkProjectStatsEntry } from "@shared/types/ipc/project";
 import type { Project } from "@shared/types";
@@ -162,8 +163,8 @@ function ProjectBreakdown({
           >
             <span className="text-daintree-text/60 truncate max-w-[140px]">{entry.name}</span>
             <div className="flex gap-2 text-daintree-text/40 shrink-0">
-              <span>{entry.stats.terminalCount} terms</span>
-              <span>{entry.stats.estimatedMemoryMB}MB</span>
+              <span>{entry.stats!.terminalCount} terms</span>
+              <span>{entry.stats!.estimatedMemoryMB}MB</span>
             </div>
           </div>
         ))}
@@ -184,7 +185,7 @@ function DiagnosticsSection({
   const [expanded, setExpanded] = useState(false);
 
   const trendDeltaMB =
-    trendSamples.length >= 2 ? trendSamples[trendSamples.length - 1] - trendSamples[0] : 0;
+    trendSamples.length >= 2 ? trendSamples[trendSamples.length - 1]! - trendSamples[0]! : 0;
   const trendText =
     trend === "up"
       ? `Memory grew ${Math.abs(Math.round(trendDeltaMB))}MB in last 2 min`
@@ -226,9 +227,11 @@ export function ProjectResourceBadge() {
   const [open, setOpen] = useState(false);
   const [popoverData, setPopoverData] = useState<PopoverData | null>(null);
   const samplesRef = useRef<number[]>([]);
+  // Mirror into state so JSX doesn't read the ref during render (React Compiler).
+  const [samples, setSamples] = useState<number[]>([]);
 
   const memoryState = getMemoryState(stats.totalMemoryMB);
-  const trend = getTrendDirection(samplesRef.current);
+  const trend = getTrendDirection(samples);
   const projectIdsKey = useMemo(() => stats.projects.map((p) => p.id).join(","), [stats.projects]);
 
   const fetchStats = useCallback(async () => {
@@ -244,39 +247,71 @@ export function ProjectResourceBadge() {
         if ((currentStats[p.id]?.processCount ?? 0) > 0) running++;
       }
 
-      samplesRef.current = [
+      const nextSamples = [
         ...samplesRef.current.slice(-(MAX_SAMPLES - 1)),
         appMetrics.totalMemoryMB,
       ];
 
       return {
+        nextSamples,
         runningProjects: running,
         totalMemoryMB: appMetrics.totalMemoryMB,
         projects: projects.map((p: Project) => ({ id: p.id, name: p.name })),
       };
     } catch (error) {
-      console.error("[ProjectResourceBadge] Failed to fetch stats:", error);
+      logError("[ProjectResourceBadge] Failed to fetch stats", error);
       return null;
     }
   }, []);
 
   useEffect(() => {
     let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
 
     const runFetch = async () => {
       const result = await fetchStats();
       if (!cancelled && result) {
-        setStats(result);
+        samplesRef.current = result.nextSamples;
+        setSamples(result.nextSamples);
+        setStats({
+          runningProjects: result.runningProjects,
+          totalMemoryMB: result.totalMemoryMB,
+          projects: result.projects,
+        });
         setIsLoading(false);
       }
     };
 
-    void runFetch();
-    const interval = setInterval(() => void runFetch(), BADGE_POLL_MS);
+    const startInterval = () => {
+      if (interval !== null) return;
+      interval = setInterval(() => void runFetch(), BADGE_POLL_MS);
+    };
+
+    const stopInterval = () => {
+      if (interval === null) return;
+      clearInterval(interval);
+      interval = null;
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stopInterval();
+      } else {
+        void runFetch();
+        startInterval();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    if (!document.hidden) {
+      void runFetch();
+      startInterval();
+    }
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      stopInterval();
     };
   }, [fetchStats]);
 
@@ -304,7 +339,7 @@ export function ProjectResourceBadge() {
           setPopoverData({ processMetrics, heapStats, diagnosticsInfo, projectStats });
         }
       } catch (error) {
-        console.error("[ProjectResourceBadge] Failed to fetch popover data:", error);
+        logError("[ProjectResourceBadge] Failed to fetch popover data", error);
       }
     };
 
@@ -352,7 +387,7 @@ export function ProjectResourceBadge() {
               <DiagnosticsSection
                 diagnosticsInfo={popoverData.diagnosticsInfo}
                 trend={trend}
-                trendSamples={samplesRef.current}
+                trendSamples={samples}
               />
             </>
           ) : (

@@ -145,7 +145,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
           "rounded-[var(--radius-sm)] p-1",
           "text-status-warning/60 transition-colors",
           "hover:text-status-warning hover:bg-status-warning/10",
-          "focus:outline-none focus:ring-1 focus:ring-status-warning/50"
+          "focus:outline-hidden focus:ring-1 focus:ring-status-warning/50"
         )}
         aria-label="Dismiss warning"
       >
@@ -154,5 +154,3 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
     </div>
   );
 }
-
-export default TerminalCountWarning;

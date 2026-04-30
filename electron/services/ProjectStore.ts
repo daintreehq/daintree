@@ -6,6 +6,7 @@ import type {
   TerminalRecipe,
 } from "../types/index.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
+import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
 import fs from "fs/promises";
 import { existsSync } from "fs";
@@ -13,6 +14,7 @@ import { app } from "electron";
 import { GitService } from "./GitService.js";
 import { isDaintreeError } from "../utils/errorTypes.js";
 import { logError } from "../utils/logger.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { store } from "../store.js";
 import { getSharedDb } from "./persistence/db.js";
 import {
@@ -23,13 +25,15 @@ import {
 import { eq, desc } from "drizzle-orm";
 import { generateProjectId, getProjectStateDir } from "./projectStorePaths.js";
 import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
-import { ProjectStateManager } from "./ProjectStateManager.js";
+import { ProjectStateManager, type ProjectStateReadResult } from "./ProjectStateManager.js";
 import { ProjectFileStore } from "./ProjectFileStore.js";
 import { GlobalFileStore } from "./GlobalFileStore.js";
 import { ProjectIdentityFiles } from "./ProjectIdentityFiles.js";
 import { cleanupQuarantinedProjectFiles } from "./projectQuarantineCleanup.js";
+import { safeRecipeFilename } from "../utils/recipeFilename.js";
 
 import { computeFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
+import { getWritesSuppressed } from "./diskPressureState.js";
 
 export const DEFAULT_PROJECT_EMOJI = "🌲";
 
@@ -112,6 +116,10 @@ export class ProjectStore {
     return this.identityFiles.deleteInRepoRecipe(projectPath, recipeName);
   }
 
+  async readInRepoPresets(projectPath: string): Promise<Record<string, AgentPreset[]>> {
+    return this.identityFiles.readInRepoPresets(projectPath);
+  }
+
   // --- DB CRUD ---
 
   private async getGitRoot(projectPath: string): Promise<string> {
@@ -126,7 +134,8 @@ export class ProjectStore {
     try {
       gitRoot = await this.getGitRoot(projectPath);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to add project");
+
       const causeMessage =
         isDaintreeError(error) && error.cause instanceof Error ? error.cause.message : undefined;
       const combined = [message, causeMessage].filter(Boolean).join("\n");
@@ -156,6 +165,12 @@ export class ProjectStore {
     const existing = await this.getProjectByPath(normalizedPath);
     if (existing) {
       const now = Date.now();
+      // Skip frecency churn under disk pressure — these are non-critical
+      // ranking-signal writes. `lastOpened` is also non-critical here (the
+      // existing project row is unchanged for the user's purposes).
+      if (getWritesSuppressed()) {
+        return existing;
+      }
       const newScore = computeFrecencyScore(
         existing.frecencyScore ?? FRECENCY_COLD_START,
         existing.lastAccessedAt ?? 0,
@@ -496,11 +511,17 @@ export class ProjectStore {
     const db = getSharedDb();
 
     const now = Date.now();
-    const newScore = computeFrecencyScore(
-      project.frecencyScore ?? FRECENCY_COLD_START,
-      project.lastAccessedAt ?? 0,
-      now
-    );
+    // Suppress frecency-signal columns under disk pressure but keep the
+    // critical state updates (currentProjectId pointer + active/background
+    // status) unconditional — those are session state the user depends on.
+    const writesSuppressed = getWritesSuppressed();
+    const newScore = writesSuppressed
+      ? null
+      : computeFrecencyScore(
+          project.frecencyScore ?? FRECENCY_COLD_START,
+          project.lastAccessedAt ?? 0,
+          now
+        );
 
     db.transaction((tx) => {
       if (previousProjectId && previousProjectId !== projectId) {
@@ -514,15 +535,18 @@ export class ProjectStore {
         .values({ key: "currentProjectId", value: projectId })
         .onConflictDoUpdate({ target: appStateTable.key, set: { value: projectId } })
         .run();
-      tx.update(projectsTable)
-        .set({
-          lastOpened: now,
-          status: "active",
-          frecencyScore: newScore,
-          lastAccessedAt: now,
-        })
-        .where(eq(projectsTable.id, projectId))
-        .run();
+      const activeUpdate: {
+        status: "active";
+        lastOpened?: number;
+        frecencyScore?: number;
+        lastAccessedAt?: number;
+      } = { status: "active" };
+      if (!writesSuppressed && newScore !== null) {
+        activeUpdate.lastOpened = now;
+        activeUpdate.frecencyScore = newScore;
+        activeUpdate.lastAccessedAt = now;
+      }
+      tx.update(projectsTable).set(activeUpdate).where(eq(projectsTable.id, projectId)).run();
     });
 
     if (process.env.DAINTREE_VERBOSE) {
@@ -551,6 +575,10 @@ export class ProjectStore {
     return this.stateManager.getProjectState(projectId);
   }
 
+  async getProjectStateWithRecovery(projectId: string): Promise<ProjectStateReadResult> {
+    return this.stateManager.getProjectStateWithRecovery(projectId);
+  }
+
   async clearProjectState(projectId: string): Promise<void> {
     return this.stateManager.clearProjectState(projectId);
   }
@@ -573,6 +601,121 @@ export class ProjectStore {
 
   async getRecipes(projectId: string): Promise<TerminalRecipe[]> {
     return this.fileStore.getRecipes(projectId);
+  }
+
+  /**
+   * Reconcile the two recipe stores so ProjectFileStore matches the canonical
+   * .daintree/recipes/ files. Handles four cases:
+   *
+   * 1. Recipe in both stores → in-repo wins (canonical), overrides ProjectFileStore
+   * 2. Recipe only in .daintree/ → backfill to ProjectFileStore
+   * 3. Recipe only in ProjectFileStore, non-inrepo id → promote to .daintree/
+   *    (legacy from migration 003), then backfill
+   * 4. Recipe only in ProjectFileStore, inrepo- id → remove stale copy
+   *    (was deleted from .daintree/ but lingered in ProjectFileStore)
+   *
+   * When backfilling to ProjectFileStore, runtime-only fields (env values,
+   * projectId, worktreeId, lastUsedAt, usageHistory) are preserved from the
+   * existing fileStore copy so that secrets and usage metadata survive.
+   *
+   * Idempotent: running twice produces no additional writes.
+   */
+  async reconcileProjectRecipes(projectPath: string, projectId: string): Promise<void> {
+    const inRepoRecipes = await this.identityFiles.readInRepoRecipes(projectPath);
+    const fileStoreRecipes = await this.fileStore.getRecipes(projectId);
+
+    const inRepoById = new Map(inRepoRecipes.map((r) => [r.id, r]));
+    const fileStoreById = new Map(fileStoreRecipes.map((r) => [r.id, r]));
+
+    let promoted = false;
+    const seenFilenames = new Map<string, string>();
+    for (const recipe of inRepoById.values()) {
+      seenFilenames.set(safeRecipeFilename(recipe.name), recipe.id);
+    }
+
+    for (const recipe of fileStoreRecipes) {
+      if (inRepoById.has(recipe.id)) continue;
+      if (recipe.id.startsWith("inrepo-")) continue; // stale, removed below
+
+      const filename = safeRecipeFilename(recipe.name);
+      const ownerId = seenFilenames.get(filename);
+      if (ownerId !== undefined && ownerId !== recipe.id) {
+        console.error(
+          `[ProjectStore] Skipping promotion of "${recipe.name}" (${recipe.id}): ` +
+            `filename "${filename}" collision with ${ownerId}`
+        );
+        continue;
+      }
+
+      await this.identityFiles.writeInRepoRecipe(projectPath, recipe);
+      inRepoById.set(recipe.id, recipe);
+      seenFilenames.set(filename, recipe.id);
+      promoted = true;
+    }
+
+    const hasStale = fileStoreRecipes.some(
+      (r) => r.id.startsWith("inrepo-") && !inRepoById.has(r.id)
+    );
+
+    const reconciledIds = new Set(inRepoById.keys());
+    const sizeChanged = reconciledIds.size !== fileStoreById.size;
+    const idsChanged = ![...reconciledIds].every((id) => fileStoreById.has(id));
+
+    if (!promoted && !hasStale && !sizeChanged && !idsChanged) {
+      // IDs match perfectly — check content before skipping
+      let contentDiffers = false;
+      for (const recipe of inRepoById.values()) {
+        const existing = fileStoreById.get(recipe.id);
+        if (!existing) continue;
+        const {
+          projectId: _p1,
+          worktreeId: _w1,
+          ...inRepoNorm
+        } = recipe as unknown as Record<string, unknown>;
+        const {
+          projectId: _p2,
+          worktreeId: _w2,
+          ...fsNorm
+        } = existing as unknown as Record<string, unknown>;
+        if (JSON.stringify(inRepoNorm) !== JSON.stringify(fsNorm)) {
+          contentDiffers = true;
+          break;
+        }
+      }
+      if (!contentDiffers) return;
+    }
+
+    // Build reconciled list: start from in-repo canonical, merge fileStore-only
+    // fields (env values, metadata) so they survive the write-back.
+    const reconciled: TerminalRecipe[] = [];
+    for (const recipe of inRepoById.values()) {
+      const existing = fileStoreById.get(recipe.id);
+      if (!existing) {
+        reconciled.push(recipe);
+        continue;
+      }
+
+      const mergedTerminals = recipe.terminals.map((inRepoT, i) => {
+        const existingT = existing.terminals[i];
+        if (!existingT?.env || Object.keys(existingT.env).length === 0) return inRepoT;
+        const env: Record<string, string> = {};
+        for (const key of Object.keys(inRepoT.env ?? {})) {
+          env[key] = existingT.env[key] ?? "";
+        }
+        return { ...inRepoT, env };
+      });
+
+      reconciled.push({
+        ...recipe,
+        terminals: mergedTerminals,
+        projectId: existing.projectId,
+        worktreeId: existing.worktreeId,
+        lastUsedAt: existing.lastUsedAt,
+        usageHistory: existing.usageHistory,
+      });
+    }
+
+    await this.fileStore.saveRecipes(projectId, reconciled);
   }
 
   async saveRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void> {

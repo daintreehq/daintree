@@ -3,6 +3,7 @@ import { isElectronAvailable } from "./useElectron";
 import { actionService } from "@/services/ActionService";
 import type { ActionId } from "@shared/types/actions";
 import type { SettingsNavTarget } from "@/components/Settings";
+import { logError } from "@/utils/logger";
 
 export interface UseMenuActionsOptions {
   onOpenSettings: () => void;
@@ -44,7 +45,9 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
             { source: "menu" }
           );
           if (!result.ok) {
-            console.error(`[Menu] Failed to launch agent "${agentId}":`, result.error);
+            logError(`[Menu] Failed to launch agent "${agentId}"`, undefined, {
+              error: result.error,
+            });
           }
           return;
         }
@@ -56,7 +59,7 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
               source: "menu",
             });
             if (!result.ok) {
-              console.error("[Menu] Failed to open settings:", result.error);
+              logError("[Menu] Failed to open settings", undefined, { error: result.error });
             }
             return;
           }
@@ -67,7 +70,9 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
               { source: "menu" }
             );
             if (!result.ok) {
-              console.error(`[Menu] Failed to open settings tab "${tab}":`, result.error);
+              logError(`[Menu] Failed to open settings tab "${tab}"`, undefined, {
+                error: result.error,
+              });
             }
           }
           return;
@@ -80,6 +85,7 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
 
         const menuToActionMap: Record<string, ActionId> = {
           "clone-repo": "project.cloneRepo",
+          "close-project": "project.closeActive",
           "duplicate-panel": "terminal.duplicate",
           "new-terminal": "terminal.new",
           "new-window": "app.newWindow",
@@ -96,13 +102,13 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
         if (actionId) {
           const result = await actionService.dispatch(actionId, undefined, { source: "menu" });
           if (!result.ok) {
-            console.error(`[Menu] Action "${actionId}" failed:`, result.error);
+            logError(`[Menu] Action "${actionId}" failed`, undefined, { error: result.error });
           }
         } else {
           console.warn("[Menu] Unhandled action:", action);
         }
       } catch (error) {
-        console.error("[Menu] Failed to process action:", action, error);
+        logError("[Menu] Failed to process action", error, { action });
       }
     });
 

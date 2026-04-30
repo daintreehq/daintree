@@ -73,14 +73,14 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
 
     test("Cmd+B toggles sidebar off and on", async () => {
       const { window } = ctx;
-      const sidebar = window.locator("aside").first();
-      await expect(sidebar).toBeVisible({ timeout: T_SHORT });
+      const resizer = window.locator('[role="separator"][aria-label="Resize sidebar"]');
+      await expect(resizer).not.toHaveAttribute("aria-valuenow", "0", { timeout: T_SHORT });
 
       await window.keyboard.press(`${mod}+b`);
-      await expect(sidebar).not.toBeVisible({ timeout: T_SHORT });
+      await expect(resizer).toHaveAttribute("aria-valuenow", "0", { timeout: T_SHORT });
 
       await window.keyboard.press(`${mod}+b`);
-      await expect(sidebar).toBeVisible({ timeout: T_SHORT });
+      await expect(resizer).not.toHaveAttribute("aria-valuenow", "0", { timeout: T_SHORT });
     });
 
     test("Cmd+W closes focused panel", async () => {

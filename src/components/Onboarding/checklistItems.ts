@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
-import { FolderOpen, Mail } from "lucide-react";
-import { DaintreeAgentIcon, WorktreeIcon } from "@/components/icons";
+import { FolderOpen } from "lucide-react";
+import { Plug, FolderGit2, Sprout } from "@/components/icons";
 import type { ActionId } from "@shared/types/actions";
 import type { ChecklistItemId } from "@shared/types/ipc/maps";
 
@@ -26,23 +26,22 @@ export const CHECKLIST_ITEMS: ChecklistItemDef[] = [
     id: "launchedAgent",
     label: "Ask AI to help with your code",
     description: "Agents can write code, fix bugs, and answer questions about your codebase.",
-    icon: DaintreeAgentIcon,
+    icon: Sprout,
     actionId: "panel.palette",
   },
   {
     id: "createdWorktree",
     label: "Start a parallel task",
     description: "Work on two things at once without switching branches.",
-    icon: WorktreeIcon,
+    icon: FolderGit2,
     actionId: "worktree.createDialog.open",
   },
   {
-    id: "subscribedNewsletter",
-    label: "Stay in the loop",
-    description: "Get product updates and tips in your inbox.",
-    icon: Mail,
-    actionId: "system.openExternal",
-    actionArgs: { url: "https://daintree.org/newsletter" },
-    markOnClick: true,
+    id: "ranSecondParallelAgent",
+    label: "Run two agents in parallel",
+    description:
+      "Kick off a second agent while the first keeps working — that's the Daintree superpower.",
+    icon: Plug,
+    actionId: "worktree.createDialog.open",
   },
 ];

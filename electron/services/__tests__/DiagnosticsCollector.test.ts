@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { scrubSecrets } from "../../utils/secretScrubber.js";
 
 // We test the module-level helpers by importing them indirectly.
 // Since redactDeep and withTimeout are not exported, we test them
 // through collectDiagnostics or by extracting testable behavior.
 
-// For now, test the redaction regex and timeout logic via isolated reproductions.
+// URL basic-auth stripping now lives in scrubSecrets — see secretScrubber.test.ts
+// for the canonical coverage. The blocks below mirror DiagnosticsCollector's
+// internal pipeline so the file documents the contract end-to-end.
 
 describe("DiagnosticsCollector helpers", () => {
   const SENSITIVE_KEY_PATTERN =
@@ -51,24 +54,27 @@ describe("DiagnosticsCollector helpers", () => {
     });
   });
 
-  describe("URL credential stripping", () => {
-    const stripCredentials = (str: string) =>
-      str.replace(/https?:\/\/[^@\s]+@/g, "https://<redacted>@");
-
+  describe("URL credential stripping (via scrubSecrets)", () => {
     it("strips basic auth from HTTPS URLs", () => {
-      expect(stripCredentials("https://user:pass@github.com/repo.git")).toBe(
+      expect(scrubSecrets("https://user:pass@github.com/repo.git")).toBe(
         "https://<redacted>@github.com/repo.git"
       );
     });
 
     it("strips token-style auth from URLs", () => {
-      expect(stripCredentials("https://x-access-token:ghp_abc123@github.com/repo.git")).toBe(
+      expect(scrubSecrets("https://x-access-token:ghp_abc123@github.com/repo.git")).toBe(
         "https://<redacted>@github.com/repo.git"
       );
     });
 
+    it("preserves the protocol scheme on http URLs", () => {
+      expect(scrubSecrets("http://user:pass@internal.example/path")).toBe(
+        "http://<redacted>@internal.example/path"
+      );
+    });
+
     it("leaves URLs without credentials unchanged", () => {
-      expect(stripCredentials("https://github.com/repo.git")).toBe("https://github.com/repo.git");
+      expect(scrubSecrets("https://github.com/repo.git")).toBe("https://github.com/repo.git");
     });
   });
 
@@ -102,7 +108,7 @@ describe("DiagnosticsCollector helpers", () => {
     function redactDeep(value: unknown): unknown {
       if (value === null || value === undefined) return value;
       if (typeof value === "string") {
-        return value.replace(/https?:\/\/[^@\s]+@/g, "https://<redacted>@");
+        return scrubSecrets(value);
       }
       if (Array.isArray(value)) return value.map(redactDeep);
       if (typeof value === "object") {

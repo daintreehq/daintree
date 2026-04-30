@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useStore } from "zustand";
 import { cn } from "@/lib/utils";
@@ -16,10 +16,11 @@ export function ShortcutHint() {
   const activeHint = useStore(shortcutHintStore, (s) => s.activeHint);
   const hide = useStore(shortcutHintStore, (s) => s.hide);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastHintRef = useRef(activeHint);
-
-  if (activeHint) {
-    lastHintRef.current = activeHint;
+  // Keep the last visible hint in state so we can keep rendering it while
+  // the exit animation plays (after activeHint has cleared).
+  const [lastHint, setLastHint] = useState(activeHint);
+  if (activeHint && activeHint !== lastHint) {
+    setLastHint(activeHint);
   }
 
   const isOpen = activeHint !== null;
@@ -45,7 +46,7 @@ export function ShortcutHint() {
     };
   }, [activeHint, hide]);
 
-  const hint = lastHintRef.current;
+  const hint = lastHint;
   if (!shouldRender || !hint) return null;
 
   const vw = window.innerWidth;

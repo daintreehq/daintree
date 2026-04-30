@@ -20,7 +20,7 @@ function formatRelativeTime(timestamp: number): string {
 }
 
 function truncatePrompt(text: string, maxLen = 80): string {
-  const firstLine = text.split("\n")[0];
+  const firstLine = text.split("\n")[0] ?? "";
   if (firstLine.length <= maxLen) return firstLine;
   return firstLine.slice(0, maxLen) + "…";
 }
@@ -67,7 +67,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
         className={cn(
           "flex items-center justify-between gap-2 px-3 py-2 rounded-[var(--radius-md)] cursor-pointer text-sm",
           isSelected
-            ? "bg-daintree-accent/15 text-daintree-text"
+            ? "bg-overlay-soft text-daintree-text"
             : "text-daintree-text/80 hover:bg-daintree-sidebar"
         )}
         onClick={() => selectEntry(item)}

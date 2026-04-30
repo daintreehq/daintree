@@ -69,7 +69,7 @@ export function goBackBrowserHistory(history: BrowserHistory): BrowserHistory {
   }
 
   const present = history.present;
-  const previousUrl = past[past.length - 1];
+  const previousUrl = past[past.length - 1]!;
   const nextPast = past.slice(0, -1);
   const nextFuture = present ? trimFuture([present, ...normalizeEntryList(history.future)]) : [];
 
@@ -93,7 +93,7 @@ export function goForwardBrowserHistory(history: BrowserHistory): BrowserHistory
 
   return {
     past: nextPast,
-    present: nextUrl,
+    present: nextUrl!,
     future: restFuture,
   };
 }

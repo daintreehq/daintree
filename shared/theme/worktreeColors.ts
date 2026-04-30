@@ -37,9 +37,9 @@ export function computeWorktreeColorMap(
   const sorted = Array.from(worktrees.entries()).sort((a, b) => a[1].path.localeCompare(b[1].path));
 
   const map: Record<string, string> = {};
-  for (let i = 0; i < sorted.length; i++) {
-    const token = WORKTREE_COLOR_PALETTE[i % WORKTREE_COLOR_PALETTE.length];
-    map[sorted[i][0]] = `var(--theme-${token})`;
+  for (const [i, entry] of sorted.entries()) {
+    const token = WORKTREE_COLOR_PALETTE[i % WORKTREE_COLOR_PALETTE.length]!;
+    map[entry[0]] = `var(--theme-${token})`;
   }
   return map;
 }

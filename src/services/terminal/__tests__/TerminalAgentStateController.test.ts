@@ -13,17 +13,21 @@ vi.mock("@/store/panelStore", () => ({
 }));
 
 vi.mock("@/utils/logger", () => ({
+  logDebug: vi.fn(),
   logError: vi.fn(),
 }));
 
 function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
-  return {
-    kind: "agent",
+  const managed = {
+    kind: "terminal",
+    launchAgentId: "claude",
     agentState: undefined,
     canonicalAgentState: undefined,
     agentStateSubscribers: new Set(),
     ...overrides,
   } as unknown as ManagedTerminal;
+  managed.runtimeAgentId ??= managed.launchAgentId;
+  return managed;
 }
 
 describe("TerminalAgentStateController", () => {
@@ -124,6 +128,7 @@ describe("TerminalAgentStateController", () => {
     it("does not set directing for non-agent terminals", () => {
       const managed = makeMockManaged({
         kind: "terminal",
+        launchAgentId: undefined,
         canonicalAgentState: "waiting",
         agentState: "waiting",
       });
@@ -505,6 +510,7 @@ describe("TerminalAgentStateController", () => {
     it("no-ops for non-agent terminals", () => {
       const managed = makeMockManaged({
         kind: "terminal",
+        launchAgentId: undefined,
         canonicalAgentState: "waiting",
         agentState: "waiting",
       });
@@ -626,6 +632,181 @@ describe("TerminalAgentStateController", () => {
     });
   });
 
+  describe("checkStaleDirecting", () => {
+    it("reverts directing when no timer is tracking it (rehydration)", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "directing",
+      });
+      instances.set("t1", managed);
+
+      controller.checkStaleDirecting("t1");
+      expect(managed.agentState).toBe("waiting");
+      expect(mockUpdateAgentState).toHaveBeenCalledWith("t1", "waiting");
+    });
+
+    it("preserves directing when an active timer is tracking it", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      controller.onUserInput("t1", "a");
+      expect(managed.agentState).toBe("directing");
+      mockUpdateAgentState.mockClear();
+
+      controller.checkStaleDirecting("t1");
+      expect(managed.agentState).toBe("directing");
+      expect(mockUpdateAgentState).not.toHaveBeenCalled();
+    });
+
+    it("no-ops when terminal is not directing", () => {
+      const managed = makeMockManaged({ agentState: "waiting" });
+      instances.set("t1", managed);
+
+      controller.checkStaleDirecting("t1");
+      expect(managed.agentState).toBe("waiting");
+      expect(mockUpdateAgentState).not.toHaveBeenCalled();
+    });
+
+    it("no-ops for unknown terminal", () => {
+      controller.checkStaleDirecting("nonexistent");
+    });
+
+    it("reverts to canonical state when set", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "completed",
+        agentState: "directing",
+      });
+      instances.set("t1", managed);
+
+      controller.checkStaleDirecting("t1");
+      expect(managed.agentState).toBe("completed");
+    });
+  });
+
+  describe("wall-clock guardrail (visibilitychange)", () => {
+    it("clears stuck directing on visibility restore after threshold", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      controller.onUserInput("t1", "a");
+      expect(managed.agentState).toBe("directing");
+
+      // Simulate Chromium IntensiveWakeUpThrottling: wall clock advances past
+      // the 15s cap, but the backgrounded debounce timer never fires.
+      vi.setSystemTime(Date.now() + 20000);
+      document.dispatchEvent(new Event("visibilitychange"));
+
+      expect(managed.agentState).toBe("waiting");
+      expect(mockUpdateAgentState).toHaveBeenCalledWith("t1", "waiting");
+    });
+
+    it("does not clear entries newer than the cap", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      controller.onUserInput("t1", "a");
+      expect(managed.agentState).toBe("directing");
+
+      vi.setSystemTime(Date.now() + 5000);
+      document.dispatchEvent(new Event("visibilitychange"));
+
+      expect(managed.agentState).toBe("directing");
+    });
+
+    it("sweeps multiple stuck terminals in a single pass", () => {
+      const m1 = makeMockManaged({ canonicalAgentState: "waiting", agentState: "waiting" });
+      const m2 = makeMockManaged({ canonicalAgentState: "waiting", agentState: "waiting" });
+      instances.set("t1", m1);
+      instances.set("t2", m2);
+
+      controller.onUserInput("t1", "a");
+      controller.onUserInput("t2", "b");
+
+      vi.setSystemTime(Date.now() + 20000);
+      document.dispatchEvent(new Event("visibilitychange"));
+
+      expect(m1.agentState).toBe("waiting");
+      expect(m2.agentState).toBe("waiting");
+    });
+
+    it("refreshes wall-clock on each keystroke (active typing not swept)", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      // Simulate a long typing session where each keystroke advances the
+      // wall clock but the user keeps interacting (the debounce timer is
+      // continuously reset).
+      controller.onUserInput("t1", "a");
+      vi.setSystemTime(Date.now() + 7000);
+      controller.onUserInput("t1", "b");
+      vi.setSystemTime(Date.now() + 7000);
+      controller.onUserInput("t1", "c");
+      vi.setSystemTime(Date.now() + 7000);
+
+      // Total elapsed: 21s. Last keystroke was 7s ago — under the cap.
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(managed.agentState).toBe("directing");
+    });
+
+    it("sweeps when last keystroke was 15s+ ago even if a timer is still pending", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      // Single keystroke schedules a 1500ms debounce. setSystemTime advances
+      // the wall clock without firing the queued timer — this models
+      // Chromium IntensiveWakeUpThrottling delaying the timer in a
+      // backgrounded view.
+      controller.onUserInput("t1", "a");
+      vi.setSystemTime(Date.now() + 20000);
+
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(managed.agentState).toBe("waiting");
+    });
+
+    it("does not sweep when visibilityState is hidden", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      controller.onUserInput("t1", "a");
+
+      const original = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+
+      try {
+        vi.setSystemTime(Date.now() + 20000);
+        document.dispatchEvent(new Event("visibilitychange"));
+        expect(managed.agentState).toBe("directing");
+      } finally {
+        if (original) {
+          Object.defineProperty(Document.prototype, "visibilityState", original);
+        } else {
+          delete (document as { visibilityState?: unknown }).visibilityState;
+        }
+      }
+    });
+  });
+
   describe("dispose", () => {
     it("cancels all timers", () => {
       const m1 = makeMockManaged({ canonicalAgentState: "waiting", agentState: "waiting" });
@@ -664,6 +845,26 @@ describe("TerminalAgentStateController", () => {
 
       vi.advanceTimersByTime(1);
       expect(m2.agentState).toBe("waiting");
+    });
+
+    it("removes the visibilitychange listener", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      controller.onUserInput("t1", "a");
+      expect(managed.agentState).toBe("directing");
+
+      controller.dispose();
+
+      // After dispose, a stale visibility event must not touch the (still
+      // "directing") managed instance — the listener is gone.
+      vi.setSystemTime(Date.now() + 20000);
+      const before = mockUpdateAgentState.mock.calls.length;
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(mockUpdateAgentState.mock.calls.length).toBe(before);
     });
   });
 });

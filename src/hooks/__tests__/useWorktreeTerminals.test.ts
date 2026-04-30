@@ -17,7 +17,6 @@ function calculateWorktreeCounts(terminals: TerminalInstance[], worktreeId: stri
   const byState: Record<AgentState, number> = {
     idle: 0,
     working: 0,
-    running: 0,
     waiting: 0,
     directing: 0,
     completed: 0,
@@ -47,7 +46,6 @@ describe("useWorktreeTerminals logic", () => {
     expect(result.counts.byState).toEqual({
       idle: 0,
       working: 0,
-      running: 0,
       waiting: 0,
       directing: 0,
       completed: 0,
@@ -60,7 +58,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-1",
         worktreeId: "worktree-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/path/1",
         cols: 80,
@@ -70,7 +67,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-2",
         worktreeId: "worktree-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/path/2",
         cols: 80,
@@ -80,7 +76,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-3",
         worktreeId: "worktree-1",
-        type: "claude",
         title: "Claude",
         cwd: "/path/1",
         cols: 80,
@@ -101,7 +96,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-1",
         worktreeId: "worktree-1",
-        type: "terminal",
         title: "Shell",
         cwd: "/path/1",
         cols: 80,
@@ -112,7 +106,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-2",
         worktreeId: "worktree-1",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/path/1",
         cols: 80,
@@ -134,7 +127,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-1",
         worktreeId: "worktree-1",
-        type: "claude",
         title: "Claude 1",
         cwd: "/path/1",
         cols: 80,
@@ -145,7 +137,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-2",
         worktreeId: "worktree-1",
-        type: "claude",
         title: "Claude 2",
         cwd: "/path/1",
         cols: 80,
@@ -156,7 +147,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-3",
         worktreeId: "worktree-1",
-        type: "gemini",
         title: "Gemini",
         cwd: "/path/1",
         cols: 80,
@@ -167,7 +157,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-4",
         worktreeId: "worktree-1",
-        type: "claude",
         title: "Claude 3",
         cwd: "/path/1",
         cols: 80,
@@ -190,7 +179,6 @@ describe("useWorktreeTerminals logic", () => {
     const terminals: TerminalInstance[] = [
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell",
         cwd: "/path/1",
         cols: 80,
@@ -201,7 +189,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-2",
         worktreeId: "worktree-1",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/path/1",
         cols: 80,
@@ -213,7 +200,7 @@ describe("useWorktreeTerminals logic", () => {
     const result = calculateWorktreeCounts(terminals, "worktree-1");
 
     expect(result.terminals).toHaveLength(1);
-    expect(result.terminals[0].id).toBe("term-2");
+    expect(result.terminals[0]!.id).toBe("term-2");
     expect(result.counts.total).toBe(1);
   });
 
@@ -222,7 +209,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-1",
         worktreeId: "worktree-1",
-        type: "claude",
         title: "Claude",
         cwd: "/path/1",
         cols: 80,
@@ -233,7 +219,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-2",
         worktreeId: "worktree-1",
-        type: "terminal",
         title: "Shell",
         cwd: "/path/1",
         cols: 80,
@@ -244,7 +229,6 @@ describe("useWorktreeTerminals logic", () => {
       {
         id: "term-3",
         worktreeId: "worktree-1",
-        type: "gemini",
         title: "Gemini",
         cwd: "/path/1",
         cols: 80,
@@ -262,23 +246,21 @@ describe("useWorktreeTerminals logic", () => {
     expect(result.counts.byState.completed).toBe(1);
   });
 
-  it("counts shell terminals in running state", () => {
+  it("counts shell terminals with mixed agent states", () => {
     const terminals: TerminalInstance[] = [
       {
         id: "term-1",
         worktreeId: "worktree-1",
-        type: "terminal",
         title: "Shell",
         cwd: "/path/1",
         cols: 80,
         rows: 24,
         location: "grid",
-        agentState: "running",
+        agentState: "working",
       },
       {
         id: "term-2",
         worktreeId: "worktree-1",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/path/1",
         cols: 80,
@@ -291,7 +273,7 @@ describe("useWorktreeTerminals logic", () => {
     const result = calculateWorktreeCounts(terminals, "worktree-1");
 
     expect(result.counts.total).toBe(2);
-    expect(result.counts.byState.running).toBe(1);
+    expect(result.counts.byState.working).toBe(1);
     expect(result.counts.byState.idle).toBe(1);
   });
 });

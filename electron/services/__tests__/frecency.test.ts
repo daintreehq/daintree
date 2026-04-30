@@ -1,7 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeFrecencyScore } from "../frecency.js";
-
-const HALF_LIFE_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
+import { computeFrecencyScore, FRECENCY_HALF_LIFE_MS } from "../../../shared/utils/frecency.js";
 
 describe("computeFrecencyScore", () => {
   const NOW = 1_700_000_000_000;
@@ -12,13 +10,13 @@ describe("computeFrecencyScore", () => {
   });
 
   it("decays score by half after one half-life", () => {
-    const score = computeFrecencyScore(4.0, NOW - HALF_LIFE_MS, NOW);
+    const score = computeFrecencyScore(4.0, NOW - FRECENCY_HALF_LIFE_MS, NOW);
     // 4.0 * 0.5 + 1.0 = 3.0
     expect(score).toBeCloseTo(3.0);
   });
 
   it("decays score by 75% after two half-lives", () => {
-    const score = computeFrecencyScore(4.0, NOW - 2 * HALF_LIFE_MS, NOW);
+    const score = computeFrecencyScore(4.0, NOW - 2 * FRECENCY_HALF_LIFE_MS, NOW);
     // 4.0 * 0.25 + 1.0 = 2.0
     expect(score).toBeCloseTo(2.0);
   });

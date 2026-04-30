@@ -83,6 +83,33 @@ describe("useWorktreeActions", () => {
 
     expect(message).toBe("Copied 0 files to clipboard");
   });
+
+  it("handleLaunchAgent dispatches agent.launch through the ActionService", () => {
+    dispatchMock.mockResolvedValueOnce({ ok: true, result: { terminalId: "term-1" } });
+
+    const { result } = renderHook(() => useWorktreeActions());
+    result.current.handleLaunchAgent("wt-1", "claude");
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "agent.launch",
+      { agentId: "claude", worktreeId: "wt-1", location: "grid" },
+      { source: "user" }
+    );
+  });
+
+  it("handleLaunchAgent dispatches agent.launch for dev-preview panels", () => {
+    dispatchMock.mockResolvedValueOnce({ ok: true, result: { terminalId: "term-dev" } });
+
+    const { result } = renderHook(() => useWorktreeActions());
+    result.current.handleLaunchAgent("wt-1", "dev-preview");
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "agent.launch",
+      { agentId: "dev-preview", worktreeId: "wt-1", location: "grid" },
+      { source: "user" }
+    );
+  });
 });
 
 describe("formatCopyResultMessage", () => {

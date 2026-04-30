@@ -136,13 +136,22 @@ describe("macroFocusStore", () => {
   });
 
   describe("focus side effects", () => {
-    it("calls focus() on the registered ref when cycling", () => {
+    it("calls focus({ preventScroll: true }) on the registered ref when cycling next", () => {
       const el = document.createElement("div");
       el.focus = vi.fn();
       const store = useMacroFocusStore.getState();
       store.setRegionRef("grid", el);
       store.cycleNext(); // grid
-      expect(el.focus).toHaveBeenCalled();
+      expect(el.focus).toHaveBeenCalledWith({ preventScroll: true });
+    });
+
+    it("calls focus({ preventScroll: true }) on the registered ref when cycling prev", () => {
+      const el = document.createElement("div");
+      el.focus = vi.fn();
+      const store = useMacroFocusStore.getState();
+      store.setRegionRef("sidebar", el);
+      store.cyclePrev(); // sidebar
+      expect(el.focus).toHaveBeenCalledWith({ preventScroll: true });
     });
 
     it("recovers when focusedRegion is stale (no longer visible)", () => {

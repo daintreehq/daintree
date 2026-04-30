@@ -3,7 +3,7 @@ import type { AgentAvailabilityStore } from "../services/AgentAvailabilityStore.
 
 type Dialog = typeof import("electron").dialog;
 
-const ACTIVE_STATES = new Set(["working", "running"]);
+const ACTIVE_STATES = new Set(["working"]);
 
 export function getActiveAgentCount(store: AgentAvailabilityStore): number {
   return store.getAgentsByAvailability().filter((a) => ACTIVE_STATES.has(a.state)).length;

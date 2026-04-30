@@ -1,6 +1,7 @@
 import { exec } from "child_process";
 import os from "node:os";
 import { promisify } from "util";
+import { logDebug } from "../utils/logger.js";
 
 const execAsync = promisify(exec);
 
@@ -30,6 +31,7 @@ export class ProcessTreeCache {
   private isWindows: boolean = process.platform === "win32";
   private refreshCallbacks: Set<RefreshCallback> = new Set();
   private lastError: Error | null = null;
+  private loggedZeroSubscriberSkip: boolean = false;
   private cpuSnapshots = new Map<
     string,
     { kernelTicks: bigint; userTicks: bigint; wallMs: number }
@@ -117,11 +119,23 @@ export class ProcessTreeCache {
   async refresh(): Promise<void> {
     // Skip refresh if nobody is listening - saves CPU especially on Windows
     if (this.refreshCallbacks.size === 0) {
+      // Log once per lifecycle when we skip due to no subscribers. If
+      // ProcessDetector instances aren't registering, detection goes silent —
+      // this surfaces the cause instead of failing silently (#5813). Verbose-gated
+      // because normal startup briefly has no subscribers between cache.start()
+      // and the first ProcessDetector attaching.
+      if (!this.loggedZeroSubscriberSkip) {
+        this.loggedZeroSubscriberSkip = true;
+        logDebug(
+          "[ProcessTreeCache] refresh skipped — no subscribers (ProcessDetector not attached?)"
+        );
+      }
       if (!this.disposed) {
         this.schedulePoll(this.currentIntervalMs);
       }
       return;
     }
+    this.loggedZeroSubscriberSkip = false;
 
     if (this.isRefreshing) {
       return;
@@ -138,10 +152,20 @@ export class ProcessTreeCache {
       this.lastRefreshTime = Date.now();
       this.lastError = null;
     } catch (error) {
-      this.lastError = error instanceof Error ? error : new Error(String(error));
-      if (process.env.DAINTREE_VERBOSE) {
-        console.error("[ProcessTreeCache] Refresh failed:", error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      // Only log on transition into failure or each subsequent distinct error
+      // message — don't spam once per poll while a persistent failure lasts.
+      // This is always-on (not DAINTREE_VERBOSE-gated) because silent ps
+      // failures have burned us before: the utility-process sandbox on
+      // macOS can block `ps` and detection silently returns empty.
+      const prevMsg = this.lastError?.message ?? null;
+      if (prevMsg !== err.message) {
+        console.error(
+          "[ProcessTreeCache] ps refresh failed — detection will be blind until it recovers:",
+          err
+        );
       }
+      this.lastError = err;
     } finally {
       this.isRefreshing = false;
 

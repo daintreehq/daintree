@@ -3,9 +3,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { ipcMain, BrowserWindow, shell } from "electron";
 import { CHANNELS } from "./channels.js";
 import { getLogFilePath, logError as logErrorUtil } from "../utils/logger.js";
-import { broadcastToRenderer } from "./utils.js";
+import { broadcastToRenderer, typedHandle } from "./utils.js";
+import { ValidationError } from "./validationError.js";
 import {
   GitError,
+  GitOperationError,
   ProcessError,
   FileSystemError,
   ConfigError,
@@ -13,11 +15,13 @@ import {
   getErrorDetails,
   isTransientError,
 } from "../utils/errorTypes.js";
+import { getGitRecoveryAction, getGitRecoveryHint } from "../../shared/utils/gitOperationErrors.js";
 import { store } from "../store.js";
 import { FAULT_MODE_ENABLED } from "./faultRegistry.js";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
-import type { AppError, ErrorType, RetryAction } from "../../shared/types/ipc/errors.js";
+import type { ErrorRecord, ErrorType, RetryAction } from "../../shared/types/ipc/errors.js";
+import type { SpawnResult } from "../../shared/types/pty-host.js";
 
 interface RetryPayload {
   errorId: string;
@@ -36,6 +40,7 @@ const MAX_RETRY_ATTEMPTS: Record<RetryAction, number> = {
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_CAP_MS = 10_000;
 const BACKOFF_FLOOR_MS = 100;
+const TERMINAL_RETRY_SPAWN_TIMEOUT_MS = 30_000;
 
 function computeRetryDelay(attempt: number): number {
   const exponentialCeil = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * Math.pow(2, attempt));
@@ -79,7 +84,43 @@ function parseRetryPayload(payload: unknown): RetryPayload {
   };
 }
 
+// TLS error codes emitted by Node when an upstream cert chain doesn't validate.
+// In corporate environments these almost always mean a TLS-inspection proxy is
+// re-signing traffic with a private CA that isn't in Node's bundled root store
+// — surface a recovery hint that points at NODE_EXTRA_CA_CERTS / NODE_USE_SYSTEM_CA
+// rather than a generic "check your network" message.
+const TLS_PROXY_CODES = new Set([
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "CERT_UNTRUSTED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
+
+function isTlsProxyError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && TLS_PROXY_CODES.has(code)) {
+    return true;
+  }
+  // Fallback for cases where libraries strip `error.code` but preserve the
+  // OpenSSL message verbatim. Kept narrow to the canonical OpenSSL phrasings
+  // so unrelated "unable to verify ..." or "certificate ..." errors don't
+  // get pushed to the NODE_EXTRA_CA_CERTS recovery path. Case-insensitive in
+  // case a wrapper transforms the message.
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (!message) return false;
+  return (
+    message.includes("unable to verify the first certificate") ||
+    message.includes("self signed certificate") ||
+    message.includes("self-signed certificate") ||
+    message.includes("unable to get local issuer certificate")
+  );
+}
+
 function getErrorType(error: unknown): ErrorType {
+  if (error instanceof ValidationError) return "validation";
   if (error instanceof GitError) return "git";
   if (error instanceof ProcessError) return "process";
   if (error instanceof FileSystemError) return "filesystem";
@@ -88,6 +129,9 @@ function getErrorType(error: unknown): ErrorType {
   if (error && typeof error === "object") {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ECONNREFUSED" || code === "ENOTFOUND" || code === "ETIMEDOUT") {
+      return "network";
+    }
+    if (isTlsProxyError(error)) {
       return "network";
     }
   }
@@ -108,6 +152,10 @@ function getRecoveryHint(error: unknown): string | undefined {
     return "The terminal process could not start.";
   }
 
+  if (error instanceof GitOperationError) {
+    return getGitRecoveryHint(error.reason);
+  }
+
   if (error instanceof GitError) {
     const msg = error.message + (error.cause ? ` ${error.cause.message}` : "");
     if (msg.includes("not a git repository")) {
@@ -124,6 +172,10 @@ function getRecoveryHint(error: unknown): string | undefined {
   }
 
   if (!error || typeof error !== "object") return undefined;
+
+  if (isTlsProxyError(error)) {
+    return "TLS inspection proxy detected. Set NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem (or NODE_USE_SYSTEM_CA=1 to use the OS keychain), then restart Daintree.";
+  }
 
   const code = (error as NodeJS.ErrnoException).code;
   const spawn = isSpawnSyscall(error);
@@ -163,17 +215,20 @@ function generateErrorId(): string {
   return `error-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function createAppError(
+function createErrorRecord(
   error: unknown,
   options: {
     source?: string;
-    context?: AppError["context"];
+    context?: ErrorRecord["context"];
     retryAction?: RetryAction;
     retryArgs?: Record<string, unknown>;
   } = {}
-): AppError {
+): ErrorRecord {
   const details = getErrorDetails(error);
   const correlationId = randomUUID();
+
+  const gitReason = error instanceof GitOperationError ? error.reason : undefined;
+  const recoveryAction = gitReason ? getGitRecoveryAction(gitReason) : undefined;
 
   return {
     id: generateErrorId(),
@@ -189,6 +244,8 @@ function createAppError(
     retryArgs: options.retryArgs,
     correlationId,
     recoveryHint: getRecoveryHint(error),
+    gitReason,
+    recoveryAction,
   };
 }
 
@@ -203,7 +260,7 @@ function isAbortError(error: unknown): boolean {
 class ErrorService {
   private worktreeService: WorkspaceClient | null = null;
   private ptyClient: PtyClient | null = null;
-  private pendingQueue: AppError[] = [];
+  private pendingQueue: ErrorRecord[] = [];
   private isFlushing = false;
   private activeRetries = new Map<string, AbortController>();
 
@@ -218,7 +275,7 @@ class ErrorService {
     );
   }
 
-  private bufferError(error: AppError): void {
+  private bufferError(error: ErrorRecord): void {
     this.pendingQueue.push(error);
     if (this.pendingQueue.length > MAX_PENDING_ERRORS) {
       this.pendingQueue.shift();
@@ -229,9 +286,9 @@ class ErrorService {
     }
   }
 
-  private persistError(error: AppError): void {
+  private persistError(error: ErrorRecord): void {
     try {
-      const existing = (store.get("pendingErrors") as AppError[] | undefined) ?? [];
+      const existing = (store.get("pendingErrors") as ErrorRecord[] | undefined) ?? [];
       const updated = [...existing, error].slice(-MAX_PENDING_ERRORS);
       store.set("pendingErrors", updated);
     } catch {
@@ -247,7 +304,7 @@ class ErrorService {
     }
   }
 
-  sendError(error: AppError) {
+  sendError(error: ErrorRecord) {
     if (!this.canSendToRenderer()) {
       this.bufferError(error);
       return;
@@ -256,8 +313,8 @@ class ErrorService {
     broadcastToRenderer(CHANNELS.ERROR_NOTIFY, error);
   }
 
-  notifyError(error: unknown, options: Parameters<typeof createAppError>[1] = {}) {
-    const appError = createAppError(error, options);
+  notifyError(error: unknown, options: Parameters<typeof createErrorRecord>[1] = {}) {
+    const appError = createErrorRecord(error, options);
     logErrorUtil(`[${appError.correlationId}] ${appError.message}`, error, {
       correlationId: appError.correlationId,
       type: appError.type,
@@ -288,9 +345,9 @@ class ErrorService {
     }
   }
 
-  getPendingPersistedErrors(): AppError[] {
+  getPendingPersistedErrors(): ErrorRecord[] {
     try {
-      const persisted = (store.get("pendingErrors") as AppError[] | undefined) ?? [];
+      const persisted = (store.get("pendingErrors") as ErrorRecord[] | undefined) ?? [];
       this.clearPersistedErrors();
       return persisted.map((e) => ({ ...e, fromPreviousSession: true }));
     } catch {
@@ -314,15 +371,24 @@ class ErrorService {
     }
   }
 
-  private async executeAction(action: RetryAction, args?: Record<string, unknown>): Promise<void> {
+  private async executeAction(
+    action: RetryAction,
+    args?: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<void> {
     switch (action) {
       case "terminal":
         if (this.ptyClient && typeof args?.id === "string" && typeof args?.cwd === "string") {
-          this.ptyClient.spawn(args.id, {
-            cwd: args.cwd,
-            cols: normalizeTerminalDimension(args.cols, 80),
-            rows: normalizeTerminalDimension(args.rows, 30),
-          });
+          await this.spawnTerminalAndAwaitResult(
+            this.ptyClient,
+            args.id,
+            {
+              cwd: args.cwd,
+              cols: normalizeTerminalDimension(args.cols, 80),
+              rows: normalizeTerminalDimension(args.rows, 30),
+            },
+            signal
+          );
         }
         break;
 
@@ -338,6 +404,87 @@ class ErrorService {
         }
         break;
     }
+  }
+
+  private spawnTerminalAndAwaitResult(
+    ptyClient: PtyClient,
+    id: string,
+    options: { cwd: string; cols: number; rows: number },
+    signal?: AbortSignal
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      const cleanup = () => {
+        ptyClient.off("spawn-result", onSpawnResult);
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+        if (signal) {
+          signal.removeEventListener("abort", onAbort);
+        }
+      };
+
+      const settle = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn();
+      };
+
+      const onSpawnResult = (eventId: string, result: SpawnResult) => {
+        if (eventId !== id) return;
+        if (result.success) {
+          settle(() => resolve());
+          return;
+        }
+        const error = new Error(
+          result.error?.message ?? `Terminal spawn failed for ${id}`
+        ) as NodeJS.ErrnoException;
+        if (result.error?.code) {
+          error.code = result.error.code;
+        }
+        settle(() => reject(error));
+      };
+
+      const onAbort = () => {
+        settle(() =>
+          reject(
+            signal?.reason instanceof Error
+              ? signal.reason
+              : new DOMException("The operation was aborted", "AbortError")
+          )
+        );
+      };
+
+      // Listener MUST be attached before spawn() — PENDING_SPAWNS_CAPPED emits synchronously.
+      ptyClient.on("spawn-result", onSpawnResult);
+
+      if (signal) {
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      timer = setTimeout(() => {
+        // Non-transient: retry storm from a wedged host won't help; each attempt
+        // would wait another TERMINAL_RETRY_SPAWN_TIMEOUT_MS.
+        const error = new Error(
+          `Terminal spawn for ${id} did not complete within ${TERMINAL_RETRY_SPAWN_TIMEOUT_MS}ms`
+        );
+        settle(() => reject(error));
+      }, TERMINAL_RETRY_SPAWN_TIMEOUT_MS);
+
+      try {
+        ptyClient.spawn(id, options);
+      } catch (err) {
+        settle(() => reject(err));
+      }
+    });
   }
 
   async handleRetry(payload: RetryPayload): Promise<void> {
@@ -360,7 +507,7 @@ class ErrorService {
         this.sendRetryProgress(errorId, attempt, maxAttempts);
 
         try {
-          await this.executeAction(action, args);
+          await this.executeAction(action, args, signal);
           return;
         } catch (error) {
           if (isAbortError(error)) throw error;
@@ -411,8 +558,8 @@ export function flushPendingErrors(): void {
 
 export function notifyError(
   error: unknown,
-  options: Parameters<typeof createAppError>[1] = {}
-): AppError {
+  options: Parameters<typeof createErrorRecord>[1] = {}
+): ErrorRecord {
   return errorService.notifyError(error, options);
 }
 
@@ -424,7 +571,7 @@ export function registerErrorHandlers(
 
   errorService.initialize(worktreeService, ptyClient);
 
-  const handleRetry = async (_event: Electron.IpcMainInvokeEvent, payload: unknown) => {
+  const handleRetry = async (payload: unknown) => {
     let actionForError: RetryAction | undefined;
     let argsForError: Record<string, unknown> | undefined;
 
@@ -445,8 +592,7 @@ export function registerErrorHandlers(
       throw error;
     }
   };
-  ipcMain.handle(CHANNELS.ERROR_RETRY, handleRetry);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.ERROR_RETRY));
+  handlers.push(typedHandle(CHANNELS.ERROR_RETRY, handleRetry));
 
   const handleRetryCancelListener = (_event: Electron.IpcMainEvent, errorId: unknown) => {
     if (typeof errorId === "string") {
@@ -461,14 +607,12 @@ export function registerErrorHandlers(
   const handleOpenLogs = async () => {
     await errorService.openLogs();
   };
-  ipcMain.handle(CHANNELS.ERROR_OPEN_LOGS, handleOpenLogs);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.ERROR_OPEN_LOGS));
+  handlers.push(typedHandle(CHANNELS.ERROR_OPEN_LOGS, handleOpenLogs));
 
   const handleGetPending = () => {
     return errorService.getPendingPersistedErrors();
   };
-  ipcMain.handle(CHANNELS.ERROR_GET_PENDING, handleGetPending);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.ERROR_GET_PENDING));
+  handlers.push(typedHandle(CHANNELS.ERROR_GET_PENDING, handleGetPending));
 
   return () => {
     handlers.forEach((cleanup) => cleanup());

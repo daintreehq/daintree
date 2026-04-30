@@ -4,9 +4,10 @@ import { existsSync } from "fs";
 import { readFile, stat } from "fs/promises";
 import { logDebug, logError, logWarn } from "../utils/logger.js";
 import type { GitStatus, WorktreeChanges } from "../../shared/types/index.js";
-import { WorktreeRemovedError, GitError } from "../utils/errorTypes.js";
+import { WorktreeRemovedError, GitError, toGitOperationError } from "../utils/errorTypes.js";
 import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "../../shared/types/ipc/git.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -62,7 +63,7 @@ export class GitService {
       return branches;
     } catch (error) {
       logError("Failed to list branches", { error: (error as Error).message });
-      throw new Error(`Failed to list branches: ${(error as Error).message}`);
+      throw toGitOperationError(error, { cwd: this.rootPath, op: "list-branches" });
     }
   }
 
@@ -487,7 +488,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     try {
       return await operation();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, `Git operation failed: ${context}`);
 
       if (
         errorMessage.includes("ENOENT") ||

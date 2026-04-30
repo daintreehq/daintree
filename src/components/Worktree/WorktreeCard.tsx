@@ -1,7 +1,8 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { GitHubIssue } from "@shared/types/github";
+import { logError } from "@/utils/logger";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
@@ -20,12 +21,13 @@ import { cn } from "../../lib/utils";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { getAgentSettingsEntry } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
-import { isAgentReady } from "../../../shared/utils/agentAvailability";
+import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { WorktreeDetailsSection } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
+import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
 import {
   MainWorktreeSummaryRows,
   type AggregateCounts,
@@ -34,6 +36,7 @@ import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { CONTEXT_COMPONENTS, WorktreeMenuItems } from "./WorktreeMenuItems";
+import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { computeChipState, type ChipState } from "./utils/computeChipState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -79,6 +82,11 @@ export function worktreeCardPropsAreEqual(
       a.taskId !== b.taskId ||
       a.hasPlanFile !== b.hasPlanFile ||
       a.planFilePath !== b.planFilePath ||
+      a.isWslPath !== b.isWslPath ||
+      a.wslDistro !== b.wslDistro ||
+      a.wslGitEligible !== b.wslGitEligible ||
+      a.wslGitOptIn !== b.wslGitOptIn ||
+      a.wslGitDismissed !== b.wslGitDismissed ||
       a.worktreeChanges !== b.worktreeChanges
     ) {
       return false;
@@ -229,9 +237,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       if (!canCollapse) return;
-      // Don't toggle when double-clicking interactive elements
-      const target = e.target as HTMLElement;
-      if (target.closest("button, a, [role='menuitem'], input, textarea, select")) return;
       e.stopPropagation();
       toggleWorktreeCollapsed(worktree.id);
     },
@@ -284,20 +289,64 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     }
   }, [worktree.id]);
 
-  const { counts: terminalCounts, terminals: worktreeTerminals } = useWorktreeTerminals(
-    worktree.id
-  );
+  const {
+    counts: terminalCounts,
+    terminals: worktreeTerminals,
+    dominantAgentState,
+  } = useWorktreeTerminals(worktree.id);
+
+  // Border accent flash — fires once when the dominant *execution* state for
+  // this card meaningfully changes. `directing` is excluded because it's
+  // driven by the user's local typing cycle (start typing → directing,
+  // submit/clear → null), which would flash the card on every keystroke
+  // rather than on real agent activity. The flashKey counter remounts the
+  // overlay on each transition so back-to-back changes restart the
+  // animation rather than dropping silently.
+  const prevAgentStateRef = useRef(dominantAgentState);
+  const [flashKey, setFlashKey] = useState(0);
+
+  useEffect(() => {
+    const prev = prevAgentStateRef.current;
+    if (prev !== dominantAgentState) {
+      prevAgentStateRef.current = dominantAgentState;
+      if (
+        dominantAgentState !== null &&
+        dominantAgentState !== "directing" &&
+        prev !== "directing"
+      ) {
+        setFlashKey((k) => k + 1);
+      }
+    }
+  }, [dominantAgentState]);
   const setFocused = usePanelStore((state) => state.setFocused);
   const pingTerminal = usePanelStore((state) => state.pingTerminal);
   const openDockTerminal = usePanelStore((state) => state.openDockTerminal);
-  const getCountByWorktree = usePanelStore((state) => state.getCountByWorktree);
   const completedCount = terminalCounts.byState.completed + terminalCounts.byState.exited;
   const totalTerminalCount = terminalCounts.total;
-  const allTerminalCount = getCountByWorktree(worktree.id);
   const gridCount = worktreeTerminals.filter(
     (t) => t.location === "grid" || t.location === undefined
   ).length;
   const dockCount = worktreeTerminals.filter((t) => t.location === "dock").length;
+  // Counts for the Sessions submenu's Select * items. "All" follows Fleet
+  // broadcast membership (any live PTY); state-specific items are meaningful
+  // only for terminals with agent state.
+  const eligibleTerminals = useMemo(
+    () => worktreeTerminals.filter(isFleetArmEligible),
+    [worktreeTerminals]
+  );
+  const eligibleTerminalCount = eligibleTerminals.length;
+  const waitingAgentCount = useMemo(
+    () =>
+      eligibleTerminals.filter((t) => isAgentFleetActionEligible(t) && t.agentState === "waiting")
+        .length,
+    [eligibleTerminals]
+  );
+  const workingAgentCount = useMemo(
+    () =>
+      eligibleTerminals.filter((t) => isAgentFleetActionEligible(t) && t.agentState === "working")
+        .length,
+    [eligibleTerminals]
+  );
 
   const worktreeErrors = useErrorStore(
     useShallow((state) =>
@@ -313,7 +362,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         await errorsClient.retry(errorId, action, args);
         removeError(errorId);
       } catch (error) {
-        console.error("Error retry failed:", error);
+        logError("Error retry failed", error);
       }
     },
     [removeError]
@@ -345,24 +394,20 @@ export const WorktreeCard = React.memo(function WorktreeCard({
 
   const {
     runningRecipeId,
-    isRestartValidating,
     confirmDialog,
     showDeleteDialog,
     setShowDeleteDialog,
     closeConfirmDialog,
     handlePathClick,
     handleRunRecipe,
-    handleCloseCompleted,
     handleDockAll,
     handleMaximizeAll,
-    handleCloseAll,
-    handleEndAll,
-    handleRestartAll,
+    handleSelectAllAgents,
+    handleSelectWaitingAgents,
+    handleSelectWorkingAgents,
   } = useWorktreeActions({
     worktree,
     onCopyTree,
-    totalTerminalCount,
-    allTerminalCount,
   });
 
   const handleOpenIssuePortal = useCallback(() => {
@@ -473,8 +518,8 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   const [showReviewHub, setShowReviewHub] = useState(false);
   const [showPlanViewer, setShowPlanViewer] = useState(false);
 
-  const onCloseReviewHub = useCallback(() => setShowReviewHub(false), []);
-  const onClosePlanViewer = useCallback(() => setShowPlanViewer(false), []);
+  const onCloseReviewHub = () => setShowReviewHub(false);
+  const onClosePlanViewer = () => setShowPlanViewer(false);
 
   const handleAttachIssue = useCallback(
     async (issue: GitHubIssue) => {
@@ -577,13 +622,12 @@ export const WorktreeCard = React.memo(function WorktreeCard({
       .filter((agentId) => isAgentPinned(getAgentSettingsEntry(agentSettings, agentId)))
       .map((agentId) => {
         const config = getAgentConfig(agentId);
-        const available = isAgentReady(agentAvailability?.[agentId]);
+        const available = isAgentLaunchable(agentAvailability?.[agentId]);
 
         return {
           id: agentId,
           name: config?.name ?? agentId,
           icon: config?.icon,
-          shortcut: config?.shortcut ?? null,
           isEnabled: available,
         };
       });
@@ -601,15 +645,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         waitingTerminalCount: terminalCounts.byState.waiting,
         lifecycleStage,
         isComplete,
-        hasActiveAgent: terminalCounts.byState.working > 0 || terminalCounts.byState.running > 0,
+        hasActiveAgent: terminalCounts.byState.working > 0,
       }),
-    [
-      terminalCounts.byState.waiting,
-      terminalCounts.byState.working,
-      terminalCounts.byState.running,
-      lifecycleStage,
-      isComplete,
-    ]
+    [terminalCounts.byState.waiting, terminalCounts.byState.working, lifecycleStage, isComplete]
   );
 
   const { setNodeRef, isOver } = useDroppable({
@@ -642,7 +680,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         <div
           ref={droppableRef}
           className={cn(
-            "sidebar-worktree-card group/card relative transition duration-200",
+            "sidebar-worktree-card group/card relative transition duration-150",
             variant === "sidebar" && "border-b border-border-default",
             variant === "grid" && "rounded-lg border border-divider bg-overlay-subtle",
             isActive &&
@@ -650,47 +688,52 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               "bg-surface-panel-elevated shadow-[var(--theme-shadow-ambient)]",
             !isActive &&
               variant === "grid" &&
-              "hover:bg-[var(--sidebar-hover-bg,var(--theme-overlay-hover))]",
+              "hover:bg-overlay-subtle hover:shadow-[var(--theme-shadow-ambient)]",
             variant === "sidebar" && !isActive && "bg-transparent",
-            variant === "grid" &&
-              isActive &&
-              "border-accent-primary/70 shadow-[var(--theme-shadow-floating)]",
-            variant === "grid" &&
-              !isActive &&
-              "hover:border-accent-primary/50 hover:shadow-[var(--theme-shadow-floating)]",
-            isFocused &&
-              !isActive &&
-              variant === "grid" &&
-              "bg-[var(--sidebar-hover-bg,var(--theme-overlay-hover))]",
+            isFocused && !isActive && variant === "grid" && "bg-overlay-soft",
             isOver &&
               !isActive &&
-              "ring-2 ring-accent-primary bg-accent-primary/10 border-accent-primary/50 transition-colors duration-200",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              "ring-2 ring-overlay bg-overlay-soft border-overlay transition-colors",
+            worktree.isCurrent &&
+              "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
           )}
           data-active={isActive && variant === "sidebar" ? "true" : undefined}
           data-hoverable={!isActive && variant === "sidebar" ? "true" : undefined}
           data-hovered={isFocused && !isActive && variant === "sidebar" ? "true" : undefined}
-          onClick={onSelect}
-          onDoubleClick={handleDoubleClick}
-          onKeyDown={(e) => {
-            if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
-              e.preventDefault();
-              onSelect();
-            }
-          }}
-          tabIndex={0}
-          role="button"
           data-worktree-branch={branchLabel}
           data-worktree-is-main={isMainWorktree ? "true" : undefined}
           data-resource-status={resourceStatusLabel ?? undefined}
+          role="group"
           aria-label={`Worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}${isActive ? " (selected)" : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${hasChanges ? ", has uncommitted changes" : ""}`}
+          onClick={onSelect}
+          onDoubleClick={handleDoubleClick}
         >
+          <button
+            type="button"
+            className={cn(
+              "absolute inset-0 z-0",
+              variant === "grid" && "rounded-lg",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+              (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
+            )}
+            aria-label={`Select worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}`}
+          />
           {isOver && !isActive && (
             <div
               className={cn(
-                "absolute inset-0 z-50 bg-accent-primary/10 border-2 border-accent-primary pointer-events-none animate-in fade-in duration-150",
+                "absolute inset-0 z-50 bg-overlay-soft border-2 border-overlay pointer-events-none animate-in fade-in duration-150",
                 variant === "grid" && "rounded-lg"
               )}
+            />
+          )}
+          {flashKey > 0 && (
+            <div
+              key={flashKey}
+              className={cn(
+                "absolute inset-0 z-20 pointer-events-none border border-overlay animate-border-flash",
+                variant === "grid" && "rounded-lg"
+              )}
+              aria-hidden="true"
             />
           )}
           {chipState !== null && (
@@ -727,14 +770,14 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               </TooltipContent>
             </Tooltip>
           )}
-          <div className="flex">
+          <div className="relative z-10 flex">
             {dragHandleListeners && (
               <div
                 ref={dragHandleActivatorRef}
                 className={cn(
                   "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none transition-colors",
                   isDraggingSort
-                    ? "bg-accent-primary/20 text-accent-primary"
+                    ? "bg-overlay-emphasis text-text-primary"
                     : isWorktreeSortDragging
                       ? "text-text-primary/30 hover:text-text-primary/50 hover:bg-overlay-soft"
                       : "text-transparent hover:text-text-primary/30 hover:bg-overlay-soft"
@@ -769,6 +812,11 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                 resourceEndpoint={worktree.resourceStatus?.endpoint}
                 resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
                 onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
+                onCleanupWorktree={
+                  chipState === "cleanup" && !isMainWorktree
+                    ? () => setShowDeleteDialog(true)
+                    : undefined
+                }
                 badges={{
                   onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
                   onOpenPR: worktree.prNumber ? handleOpenPRExternal : undefined,
@@ -778,13 +826,14 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                   launchAgents,
                   recipes,
                   runningRecipeId,
-                  isRestartValidating,
                   counts: {
                     grid: gridCount,
                     dock: dockCount,
                     active: totalTerminalCount,
                     completed: completedCount,
-                    all: allTerminalCount,
+                    all: eligibleTerminalCount,
+                    waiting: waitingAgentCount,
+                    working: workingAgentCount,
                   },
                   onCopyContextFull: handleCopyContextFull,
                   onCopyContextModified: handleCopyContextModified,
@@ -816,11 +865,10 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                   },
                   onDockAll: handleDockAll,
                   onMaximizeAll: handleMaximizeAll,
-                  onRestartAll: () => void handleRestartAll(),
                   onResetRenderers: handleResetRenderers,
-                  onCloseCompleted: handleCloseCompleted,
-                  onCloseAll: handleCloseAll,
-                  onEndAll: handleEndAll,
+                  onSelectAllAgents: handleSelectAllAgents,
+                  onSelectWaitingAgents: handleSelectWaitingAgents,
+                  onSelectWorkingAgents: handleSelectWorkingAgents,
                   onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,
                   onRevertAgentChanges: handleRevertAgentChanges,
                   hasSnapshot,
@@ -842,6 +890,13 @@ export const WorktreeCard = React.memo(function WorktreeCard({
 
               {!effectiveIsCollapsed && (
                 <div id={`worktree-body-${worktree.id}`}>
+                  {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
+                    <WslGitBanner
+                      worktreeId={worktree.id}
+                      wslDistro={worktree.wslDistro}
+                      wslGitEligible={worktree.wslGitEligible}
+                    />
+                  )}
                   {isMainWorktree && (
                     <MainWorktreeSummaryRows
                       aggregateCounts={aggregateCounts}
@@ -915,14 +970,15 @@ export const WorktreeCard = React.memo(function WorktreeCard({
           launchAgents={launchAgents}
           recipes={recipes.map((r) => ({ id: r.id, name: r.name }))}
           runningRecipeId={runningRecipeId}
-          isRestartValidating={isRestartValidating}
           isPinned={isPinned}
           counts={{
             grid: gridCount,
             dock: dockCount,
             active: totalTerminalCount,
             completed: completedCount,
-            all: allTerminalCount,
+            all: eligibleTerminalCount,
+            waiting: waitingAgentCount,
+            working: workingAgentCount,
           }}
           onLaunchAgent={onLaunchAgent}
           onCopyContextFull={handleCopyContextFull}
@@ -947,11 +1003,10 @@ export const WorktreeCard = React.memo(function WorktreeCard({
           isCollapsed={effectiveIsCollapsed}
           onDockAll={handleDockAll}
           onMaximizeAll={handleMaximizeAll}
-          onRestartAll={() => void handleRestartAll()}
           onResetRenderers={handleResetRenderers}
-          onCloseCompleted={handleCloseCompleted}
-          onCloseAll={handleCloseAll}
-          onEndAll={handleEndAll}
+          onSelectAllAgents={handleSelectAllAgents}
+          onSelectWaitingAgents={handleSelectWaitingAgents}
+          onSelectWorkingAgents={handleSelectWorkingAgents}
           onOpenPanelPalette={handleOpenPanelPalette}
           onDeleteWorktree={!isMainWorktree ? () => setShowDeleteDialog(true) : undefined}
           hasResourceConfig={hasResourceConfig}

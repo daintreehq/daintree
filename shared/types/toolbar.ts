@@ -22,7 +22,6 @@ export type ToolbarButtonId =
   | "dev-server"
   | "voice-recording"
   | "github-stats"
-  | "notes"
   | "copy-tree"
   | "settings"
   | "problems"
@@ -66,7 +65,6 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   "dev-server": 3,
   settings: 5,
   "notification-center": 5,
-  notes: 5,
   "copy-tree": 5,
   problems: 5,
 };

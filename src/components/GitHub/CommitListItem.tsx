@@ -4,8 +4,9 @@ import { GitCommitHorizontal, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import type { GitCommit } from "@shared/types/github";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { parseConventionalCommit } from "./commitListUtils";
+import { logError } from "@/utils/logger";
 
 interface CommitListItemProps {
   commit: GitCommit;
@@ -43,7 +44,7 @@ export function CommitListItem({ commit, optionId, isActive }: CommitListItemPro
       setCopied(true);
       timeoutRef.current = window.setTimeout(() => setCopied(false), 2000);
     } catch (error) {
-      console.error("Failed to copy:", error);
+      logError("Failed to copy", error);
     }
   };
 
@@ -88,60 +89,52 @@ export function CommitListItem({ commit, optionId, isActive }: CommitListItemPro
         <div className="flex-1 min-w-0">
           {/* Title row: message + trailing #hash copy */}
           <div className="flex items-center gap-1.5 min-w-0">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>{renderMessage()}</TooltipTrigger>
-                <TooltipContent side="bottom">{commit.message}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>{renderMessage()}</TooltipTrigger>
+              <TooltipContent side="bottom">{commit.message}</TooltipContent>
+            </Tooltip>
 
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={handleCopyHash}
-                    className={cn(
-                      "shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5 font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-1",
-                      copied && "text-status-success"
-                    )}
-                    aria-label={`Copy hash ${commit.shortHash}`}
-                  >
-                    {copied ? <Check className="w-3 h-3 text-status-success" /> : <span>#</span>}
-                    <span>{commit.shortHash}</span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {copied ? "Copied!" : "Click to copy hash"}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleCopyHash}
+                  className={cn(
+                    "shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5 font-mono focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded px-1",
+                    copied && "text-status-success"
+                  )}
+                  aria-label={`Copy hash ${commit.shortHash}`}
+                >
+                  {copied ? <Check className="w-3 h-3 text-status-success" /> : <span>#</span>}
+                  <span>{commit.shortHash}</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {copied ? "Copied!" : "Click to copy hash"}
+              </TooltipContent>
+            </Tooltip>
           </div>
 
           {/* Metadata row: author · time */}
           <div className="flex items-center gap-1.5 mt-0.5 text-xs text-muted-foreground">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span>{commit.author.name}</span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{commit.author.email}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span>{commit.author.name}</span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{commit.author.email}</TooltipContent>
+            </Tooltip>
             <span>&middot;</span>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span>{formatTimeAgo(commit.date)}</span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {(() => {
-                    const d = new Date(commit.date);
-                    return isNaN(d.getTime()) ? "Unknown" : d.toLocaleString();
-                  })()}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span>{formatTimeAgo(commit.date)}</span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {(() => {
+                  const d = new Date(commit.date);
+                  return isNaN(d.getTime()) ? "Unknown" : d.toLocaleString();
+                })()}
+              </TooltipContent>
+            </Tooltip>
           </div>
         </div>
       </div>

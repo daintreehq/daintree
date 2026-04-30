@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef, useMemo } from "react";
+import { useEffect, useEffectEvent, useCallback, useState, useRef, useMemo } from "react";
 import type { ViewType } from "react-diff-view";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { DiffViewer } from "@/components/Worktree/DiffViewer";
@@ -10,9 +10,11 @@ import { ExternalLink, Copy, Check, Image as ImageIcon } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/formatBytes";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
+import { isClientAppError } from "@/utils/clientAppError";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
+import { logError } from "@/utils/logger";
 
 export interface FileViewerModalProps {
   isOpen: boolean;
@@ -48,9 +50,11 @@ function buildDaintreeFileUrl(filePath: string, rootPath: string): string {
 const ERROR_MESSAGES: Record<FileReadErrorCode, string> = {
   BINARY_FILE: "Binary file — cannot display",
   FILE_TOO_LARGE: "File too large to display (> 500 KB)",
+  LFS_POINTER: "Git LFS pointer — run `git lfs pull` to download the file contents",
   NOT_FOUND: "File no longer exists",
   OUTSIDE_ROOT: "File is outside the project root",
   INVALID_PATH: "Invalid file path",
+  PERMISSION: "Permission denied — you don't have access to this file",
 };
 
 export function FileViewerModal({
@@ -102,7 +106,9 @@ export function FileViewerModal({
     };
   }, []);
 
-  useEffect(() => {
+  // Non-reactive: reads defaultMode/hasDiff/initialLine/imageFile/svgFile at call
+  // time so the effect only re-runs on isOpen/filePath/effectiveRootPath changes.
+  const loadFile = useEffectEvent(() => {
     if (!isOpen) {
       setContent(null);
       setLoadState("loading");
@@ -128,33 +134,34 @@ export function FileViewerModal({
 
     filesClient
       .read({ path: filePath, rootPath: effectiveRootPath })
-      .then((result) => {
+      .then(({ content: fileContent }) => {
         if (!isMountedRef.current || requestRef.current !== requestId) return;
-        if (result.ok) {
-          if (svgFile) {
-            const sanitized = sanitizeSvg(result.content);
-            if (sanitized.ok) {
-              setSanitizedSvg(sanitized.svg);
-              setLoadState("svg");
-            } else {
-              setErrorCode("INVALID_PATH");
-              setLoadState("error");
-            }
+        if (svgFile) {
+          const sanitized = sanitizeSvg(fileContent);
+          if (sanitized.ok) {
+            setSanitizedSvg(sanitized.svg);
+            setLoadState("svg");
           } else {
-            setContent(result.content);
-            setLoadState("loaded");
+            setErrorCode("INVALID_PATH");
+            setLoadState("error");
           }
         } else {
-          setErrorCode(result.code);
-          setLoadState("error");
+          setContent(fileContent);
+          setLoadState("loaded");
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!isMountedRef.current || requestRef.current !== requestId) return;
-        setErrorCode("INVALID_PATH");
+        const code = isClientAppError(error) ? (error.code as FileReadErrorCode) : "INVALID_PATH";
+        setErrorCode(code);
         setLoadState("error");
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  });
+  useEffect(() => {
+    void isOpen;
+    void filePath;
+    void effectiveRootPath;
+    loadFile();
   }, [isOpen, filePath, effectiveRootPath]);
 
   // When diff arrives after mount (FileDiffModal async pattern), switch to diff mode once
@@ -172,7 +179,7 @@ export function FileViewerModal({
         { path: filePath, line: initialLine, col: initialCol },
         { source: "user" }
       )
-      .catch((err) => console.error("[FileViewerModal] openInEditor failed:", err));
+      .catch((err) => logError("[FileViewerModal] openInEditor failed", err));
   }, [filePath, initialLine, initialCol]);
 
   const handleImageError = useCallback(() => {
@@ -183,7 +190,7 @@ export function FileViewerModal({
   const handleOpenInImageViewer = useCallback(() => {
     actionService
       .dispatch("file.openImageViewer", { path: filePath }, { source: "user" })
-      .catch((err) => console.error("[FileViewerModal] openImageViewer failed:", err));
+      .catch((err) => logError("[FileViewerModal] openImageViewer failed", err));
   }, [filePath]);
 
   const handleCopyDiff = useCallback(async () => {
@@ -256,22 +263,20 @@ export function FileViewerModal({
     >
       <AppDialog.Header className="py-3">
         <div className="flex items-center gap-3 min-w-0">
-          <TooltipProvider>
-            <Tooltip>
-              <AppDialog.Title className="text-sm font-medium min-w-0">
-                <TooltipTrigger asChild>
-                  <span className="truncate cursor-default">
-                    {branch && <span className="text-muted-foreground/70 mr-1.5">{branch}</span>}
-                    {relativeDir && <span className="text-muted-foreground">{relativeDir}</span>}
-                    <span className="text-daintree-text">{fileName}</span>
-                  </span>
-                </TooltipTrigger>
-              </AppDialog.Title>
-              <TooltipContent side="bottom" className="max-w-lg break-all">
-                {filePath}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <AppDialog.Title className="text-sm font-medium min-w-0">
+              <TooltipTrigger asChild>
+                <span className="truncate cursor-default">
+                  {branch && <span className="text-muted-foreground/70 mr-1.5">{branch}</span>}
+                  {relativeDir && <span className="text-muted-foreground">{relativeDir}</span>}
+                  <span className="text-daintree-text">{fileName}</span>
+                </span>
+              </TooltipTrigger>
+            </AppDialog.Title>
+            <TooltipContent side="bottom" className="max-w-lg break-all">
+              {filePath}
+            </TooltipContent>
+          </Tooltip>
 
           {/* Show view/diff toggle only when both are potentially available */}
           {hasDiff && !imageFile && (canShowView || loadState !== "loading") && (
@@ -284,7 +289,7 @@ export function FileViewerModal({
                   "px-2.5 py-1 text-xs font-medium rounded transition-colors",
                   mode === "view"
                     ? "bg-daintree-border text-daintree-text"
-                    : "text-muted-foreground hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed"
+                    : "text-muted-foreground hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                 )}
               >
                 View
@@ -338,23 +343,21 @@ export function FileViewerModal({
 
           {/* Copy diff — only visible in diff mode */}
           {mode === "diff" && hasDiff && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={handleCopyDiff}
-                    aria-label={diffCopied ? "Copied!" : "Copy diff to clipboard"}
-                    className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
-                  >
-                    {diffCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {diffCopied ? "Copied!" : "Copy diff to clipboard"}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleCopyDiff}
+                  aria-label={diffCopied ? "Copied!" : "Copy diff to clipboard"}
+                  className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+                >
+                  {diffCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {diffCopied ? "Copied!" : "Copy diff to clipboard"}
+              </TooltipContent>
+            </Tooltip>
           )}
 
           {imageFile ? (

@@ -5,7 +5,6 @@ import type { TerminalInstance } from "@/store";
 function createTerminal(id: string): TerminalInstance {
   return {
     id,
-    type: "terminal",
     title: id,
     cwd: "/project",
     cols: 80,

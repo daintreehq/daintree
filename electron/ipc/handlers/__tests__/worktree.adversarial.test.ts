@@ -50,6 +50,27 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
 vi.mock("../../utils.js", () => ({
   checkRateLimit: checkRateLimitMock,
   waitForRateLimitSlot: waitForRateLimitSlotMock,
+  typedHandle: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: getWindowForWebContentsMock(event?.sender),
+          projectId: null,
+        };
+        return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 vi.mock("../../../store.js", () => ({ store: storeMock }));
@@ -84,7 +105,7 @@ vi.mock("../../../utils/logger.js", () => ({
   logError: vi.fn(),
 }));
 
-import { registerWorktreeHandlers } from "../worktree.js";
+import { registerWorktreeHandlers } from "../worktree/index.js";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 
@@ -174,6 +195,8 @@ describe("worktree IPC adversarial", () => {
     });
 
     expect(result).toBe("wt-1");
+    // Sound is fire-and-forget via dynamic import — drain microtasks first
+    await new Promise((resolve) => setImmediate(resolve));
     expect(soundMock.play).toHaveBeenCalledWith("worktree-create");
   });
 

@@ -1,13 +1,17 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import { AlertTriangle, RefreshCw, Settings } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import type {
-  TerminalType,
-  TerminalRestartError,
-  SpawnError,
-  TerminalReconnectError,
-} from "@/types";
+import type { TerminalRestartError, SpawnError, TerminalReconnectError } from "@/types";
 import { cn } from "@/lib/utils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
@@ -23,31 +27,45 @@ import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { ContentPanel } from "@/components/Panel";
 import { useIsDragging } from "@/components/DragDrop";
+import { MissingCliGate } from "./MissingCliGate";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import type { AgentCliDetail } from "@shared/types/ipc";
 import {
   useErrorStore,
   usePanelStore,
   getTerminalRefreshTier,
   useTerminalInputStore,
 } from "@/store";
+import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
-import type { BuiltInAgentId } from "@shared/config/agentIds";
+import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { actionService } from "@/services/ActionService";
 import { InputTracker } from "@/services/clearCommandDetection";
-import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { getAgentConfig, getMergedPresets } from "@/config/agents";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
 import type { HybridInputBarHandle } from "./HybridInputBar";
 const LazyHybridInputBar = lazy(() =>
   import("./HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
 );
-import { getTerminalFocusTarget, shouldSuppressUnfocusedClick } from "./terminalFocus";
+import {
+  getTerminalFocusTarget,
+  shouldShowHybridInputBar,
+  shouldSuppressUnfocusedClick,
+} from "./terminalFocus";
+import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
+import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
-export type { TerminalType };
+export type {};
 
 export interface ActivityState {
   headline: string;
@@ -58,8 +76,16 @@ export interface ActivityState {
 export interface TerminalPaneProps {
   id: string;
   title: string;
-  type?: TerminalType;
+  /** Launch hint — the agent this terminal was launched to run, if any. */
   agentId?: string;
+  /** Runtime-detected agent identity (cleared on agent exit). Drives panel chrome (icons, badges). */
+  detectedAgentId?: BuiltInAgentId;
+  runtimeIdentity?: TerminalRuntimeIdentity;
+  chrome?: TerminalChromeDescriptor;
+  /** Sticky flag: has an agent ever been live-detected. Drives the chrome demotion rule. */
+  everDetectedAgent?: boolean;
+  agentPresetId?: string;
+  presetColor?: string;
   worktreeId?: string;
   cwd: string;
   isFocused: boolean;
@@ -84,6 +110,9 @@ export interface TerminalPaneProps {
   detectedProcessId?: string;
   // Group-level ambient state: highest-urgency state across all tabs, for container border styling
   ambientAgentState?: AgentState;
+  // Fleet scope render-time override: force-locks input without mutating the
+  // stored TerminalInstance.isInputLocked flag.
+  isInputLocked?: boolean;
   // Tab support
   tabs?: import("@/components/Panel/TabButton").TabInfo[];
   onTabClick?: (tabId: string) => void;
@@ -95,8 +124,13 @@ export interface TerminalPaneProps {
 function TerminalPaneComponent({
   id,
   title,
-  type,
   agentId,
+  detectedAgentId,
+  runtimeIdentity,
+  chrome: chromeProp,
+  everDetectedAgent,
+  agentPresetId,
+  presetColor,
   worktreeId,
   cwd,
   isFocused,
@@ -120,6 +154,7 @@ function TerminalPaneComponent({
   gridPanelCount,
   detectedProcessId,
   ambientAgentState,
+  isInputLocked: isInputLockedOverride,
   tabs,
   onTabClick,
   onTabClose,
@@ -129,7 +164,7 @@ function TerminalPaneComponent({
   "use memo";
   const containerRef = useRef<HTMLDivElement>(null);
   const prevFocusedRef = useRef(isFocused);
-  const justFocusedUntilRef = useRef<number>(0);
+  const [justFocusedUntil, setJustFocusedUntil] = useState(0);
   const inputBarRef = useRef<HybridInputBarHandle>(null);
   const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -139,12 +174,12 @@ function TerminalPaneComponent({
   const autoRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoRestartAttemptRef = useRef(0);
   const processStartTimeRef = useRef<number>(0);
-
-  if (isFocused && !prevFocusedRef.current) {
-    justFocusedUntilRef.current = performance.now() + 250;
-  }
+  const [inputTracker] = useState(() => new InputTracker());
 
   useEffect(() => {
+    if (isFocused && !prevFocusedRef.current) {
+      setJustFocusedUntil(performance.now() + 250);
+    }
     prevFocusedRef.current = isFocused;
   }, [isFocused]);
 
@@ -160,10 +195,10 @@ function TerminalPaneComponent({
 
   useEffect(() => {
     setDismissedRestartPrompt(false);
-    inputTrackerRef.current?.reset();
+    inputTracker.reset();
     // Track process start time on each restart for backoff stability window
     processStartTimeRef.current = Date.now();
-  }, [restartKey]);
+  }, [restartKey, inputTracker]);
 
   const updateVisibility = usePanelStore((state) => state.updateVisibility);
   const getTerminal = usePanelStore((state) => state.getTerminal);
@@ -171,9 +206,54 @@ function TerminalPaneComponent({
   const trashPanel = usePanelStore((state) => state.trashPanel);
   const setFocused = usePanelStore((state) => state.setFocused);
   const updateLastCommand = usePanelStore((state) => state.updateLastCommand);
+  const addPanel = usePanelStore((state) => state.addPanel);
+  const removePanel = usePanelStore((state) => state.removePanel);
   const backendStatus = usePanelStore((state) => state.backendStatus);
   const lastCrashType = usePanelStore((state) => state.lastCrashType);
   const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
+
+  const cliDetails = useCliAvailabilityStore((state) => state.details);
+  const getPanelCliDetail = useCallback((): AgentCliDetail | undefined => {
+    if (!agentId) return undefined;
+    return cliDetails[agentId];
+  }, [agentId, cliDetails]);
+
+  const handleRunAnyway = useCallback(() => {
+    const panel = usePanelStore.getState().panelsById[id];
+    if (!panel || !agentId) return;
+
+    const presetEnv = panel.extensionState?.presetEnv as Record<string, string> | undefined;
+
+    removePanel(id);
+    void addPanel({
+      kind: "terminal",
+      launchAgentId: agentId,
+      command: panel.command,
+      title: panel.title,
+      cwd: panel.cwd ?? "",
+      worktreeId: panel.worktreeId,
+      location: panel.location as "grid" | "dock" | undefined,
+      agentLaunchFlags: panel.agentLaunchFlags,
+      agentModelId: panel.agentModelId,
+      agentPresetId: panel.agentPresetId,
+      env: presetEnv,
+    });
+  }, [id, agentId, addPanel, removePanel]);
+
+  // Fleet arming store for multi-select gestures. Selection treatment is
+  // identical to focus: a pane is "selected" any time it's armed. A
+  // single-armed pane lights up the same way as a focused unarmed pane,
+  // so the visual rule is just "bright header = part of the active set".
+  // The fleet ribbon (which only mounts at size>=2) tells the user when
+  // typing actually broadcasts.
+  const armedIds = useFleetArmingStore((state) => state.armedIds);
+  const isArmed = armedIds.has(id);
+  const isSelected = isArmed;
+  // A "follower" is any armed pane that isn't currently the focused/origin
+  // pane while the fleet is broadcasting (size >= 2). The follower stripe
+  // is suppressed on a single-armed seed selection because nothing fans out
+  // until a second pane joins.
+  const isFleetFollower = isArmed && !isFocused && armedIds.size >= 2;
 
   // Consolidate terminal state selectors to avoid multiple scans and ensure consistent snapshots
   const terminalState = usePanelStore(
@@ -185,12 +265,23 @@ function TerminalPaneComponent({
         isRestarting: terminal?.isRestarting ?? false,
         exitBehavior: terminal?.exitBehavior,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
+        spawnStatus: terminal?.spawnStatus,
       };
     })
   );
 
-  const { isInputLocked, stateChangeTrigger, isRestarting, exitBehavior, isTrashedOrRemoved } =
-    terminalState;
+  const {
+    isInputLocked: storeInputLocked,
+    stateChangeTrigger,
+    isRestarting,
+    exitBehavior,
+    isTrashedOrRemoved,
+    spawnStatus,
+  } = terminalState;
+  // Fleet-scope mounts pass `isInputLocked: true` to render the panel as a
+  // read-only broadcast view. Prop takes precedence over the stored flag so
+  // unwinding scope reverts to the user-toggled lock state automatically.
+  const isInputLocked = isInputLockedOverride ?? storeInputLocked;
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
@@ -208,24 +299,75 @@ function TerminalPaneComponent({
   }, [isRestartingService]);
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
-  const effectiveAgentId = (
-    agentId && isRegisteredAgent(agentId)
-      ? agentId
-      : type && isRegisteredAgent(type)
-        ? type
-        : undefined
-  ) as BuiltInAgentId | undefined;
-  const isAgentTerminal = effectiveAgentId !== undefined;
-  const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
-
+  // Panel kind is always "terminal" for PTY panels; live identity is runtime chrome.
+  const kind = "terminal" as const;
   const queueCount = usePanelStore((state) => state.commandQueueCountById[id] ?? 0);
+
+  // Live preset color — re-derives from settings whenever the user edits a preset's color
+  const presetCustomPresets = useAgentSettingsStore((s) =>
+    agentId ? s.settings?.agents?.[agentId]?.customPresets : undefined
+  );
+  const presetCcrPresets = useCcrPresetsStore((s) =>
+    agentId ? s.ccrPresetsByAgent[agentId] : undefined
+  );
+  const presetProjectPresets = useProjectPresetsStore((s) =>
+    agentId ? s.presetsByAgent[agentId] : undefined
+  );
+  const livePresetColor = useMemo(() => {
+    if (!agentPresetId || !agentId) return presetColor;
+    const preset = getMergedPresets(
+      agentId,
+      presetCustomPresets,
+      presetCcrPresets,
+      presetProjectPresets
+    ).find((f) => f.id === agentPresetId);
+    return preset?.color ?? presetColor;
+  }, [
+    agentPresetId,
+    agentId,
+    presetCustomPresets,
+    presetCcrPresets,
+    presetProjectPresets,
+    presetColor,
+  ]);
+  const chrome = useMemo(
+    () =>
+      chromeProp && chromeProp.color === livePresetColor
+        ? chromeProp
+        : deriveTerminalChrome({
+            kind,
+            launchAgentId: agentId,
+            runtimeIdentity,
+            detectedAgentId,
+            detectedProcessId,
+            agentState,
+            presetColor: livePresetColor,
+          }),
+    [
+      chromeProp,
+      kind,
+      agentId,
+      runtimeIdentity,
+      detectedAgentId,
+      detectedProcessId,
+      agentState,
+      livePresetColor,
+    ]
+  );
+  const effectiveAgentId = isBuiltInAgentId(chrome.agentId) ? chrome.agentId : undefined;
+  const showHybridInputBar = shouldShowHybridInputBar({
+    hasAgentIdentity: effectiveAgentId !== undefined,
+    hybridInputEnabled,
+    isFleetArmed: isArmed,
+    fleetSize: armedIds.size,
+  });
 
   const pingedIdSelector = useMemo(
     () => (state: ReturnType<typeof usePanelStore.getState>) => state.pingedId === id,
     [id]
   );
   const isPinged = usePanelStore(pingedIdSelector);
-  const wasJustSelected = isPinged && isFocused && performance.now() < justFocusedUntilRef.current;
+  const wasJustSelected = isPinged && isFocused && performance.now() < justFocusedUntil;
 
   const terminalErrors = useErrorStore(
     useShallow((state) => state.errors.filter((e) => e.context?.terminalId === id && !e.dismissed))
@@ -257,14 +399,10 @@ function TerminalPaneComponent({
     }
   }, [isTrashedOrRemoved]);
 
-  // Auto-restart logic: when exitBehavior === "restart" and terminal exits (any code except 130)
-  useEffect(() => {
-    if (!isExited) return;
-    if (exitBehavior !== "restart") return;
-    if (exitCode === 130) return;
-    if (isTrashedOrRemoved) return;
-    if (isRestarting) return;
-
+  // Auto-restart logic: when exitBehavior === "restart" and terminal exits (any code except 130).
+  // The scheduling body reads non-reactive values (id, restartTerminal, refs) and is wrapped
+  // in useEffectEvent so the React Compiler can memoize this component.
+  const scheduleAutoRestart = useEffectEvent(() => {
     if (autoRestartTimerRef.current !== null) {
       clearTimeout(autoRestartTimerRef.current);
       autoRestartTimerRef.current = null;
@@ -294,6 +432,16 @@ function TerminalPaneComponent({
       restartTerminal(id);
       setIsAutoRestarting(false);
     }, delay);
+  });
+
+  useEffect(() => {
+    if (!isExited) return;
+    if (exitBehavior !== "restart") return;
+    if (exitCode === 130) return;
+    if (isTrashedOrRemoved) return;
+    if (isRestarting) return;
+
+    scheduleAutoRestart();
 
     return () => {
       if (autoRestartTimerRef.current !== null) {
@@ -302,8 +450,7 @@ function TerminalPaneComponent({
         setIsAutoRestarting(false);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved]);
+  }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved, isRestarting]);
 
   // Track drag state in a ref to avoid useEffect cleanup timing issues.
   // If isDragging is in the dependency array, cleanup runs on drag START
@@ -325,7 +472,7 @@ function TerminalPaneComponent({
     const observer = new IntersectionObserver(
       ([entry]) => {
         // Don't update visibility during drag - CSS transforms cause false negatives
-        if (isDraggingRef.current) return;
+        if (isDraggingRef.current || !entry) return;
 
         updateVisibility(id, entry.isIntersecting);
         terminalInstanceService.setVisible(id, entry.isIntersecting, gen);
@@ -353,18 +500,9 @@ function TerminalPaneComponent({
 
   const handleReady = useCallback(() => {}, []);
 
-  const inputTrackerRef = useRef<InputTracker | null>(null);
-
-  if (!inputTrackerRef.current) {
-    inputTrackerRef.current = new InputTracker();
-  }
-
   const handleInput = useCallback(
     (data: string) => {
-      const tracker = inputTrackerRef.current;
-      if (!tracker) return;
-
-      const results = tracker.process(data);
+      const results = inputTracker.process(data);
 
       for (const result of results) {
         if (result.isClear) {
@@ -383,7 +521,7 @@ function TerminalPaneComponent({
         }
       }
     },
-    [id, updateLastCommand]
+    [id, updateLastCommand, inputTracker]
   );
 
   useEffect(() => {
@@ -449,10 +587,61 @@ function TerminalPaneComponent({
         e?.preventDefault();
         return;
       }
+
+      // Chrome-level multi-select gestures only fire when the click
+      // originates inside pane chrome (the title bar) AND not on an
+      // interactive child of the chrome (overflow menu, close, restore,
+      // title input, etc). Without the interactive guard, clicking the
+      // overflow trigger of a pane while a fleet is armed would clear
+      // the fleet before the menu opens.
+      const target = e?.target as HTMLElement | null;
+      const isChromeClick = !!target?.closest("[data-pane-chrome]");
+      const isInteractiveChild = !!target?.closest(
+        "button, input, textarea, select, a, [role='button'], [role='menuitem']"
+      );
+
+      if (e && isChromeClick && !isInteractiveChild) {
+        const terminal = getTerminal(id);
+        const isEligible = !!(terminal && isFleetArmEligible(terminal));
+        const armingStore = useFleetArmingStore.getState();
+        const action = decideChromeAction(
+          { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey },
+          {
+            isEligible,
+            isArmed: armingStore.armedIds.has(id),
+            armedSize: armingStore.armedIds.size,
+          }
+        );
+
+        if (action.type === "toggle") {
+          // Empty fleet + shift/cmd-click on an unarmed pane: the focused
+          // pane is the implicit "first member" so the user ends up with
+          // a 2-pane fleet rather than a lonely toggled pane. Mirrors the
+          // mental model of "I have one selected, now add another".
+          if (armingStore.armedIds.size === 0 && !armingStore.armedIds.has(id)) {
+            const focusedId = usePanelStore.getState().focusedId;
+            if (focusedId && focusedId !== id) {
+              const focusedTerminal = usePanelStore.getState().panelsById[focusedId];
+              if (focusedTerminal && isFleetArmEligible(focusedTerminal)) {
+                armingStore.armId(focusedId);
+              }
+            }
+          }
+          armingStore.toggleId(id);
+          e.preventDefault();
+          return;
+        }
+        if (action.type === "clear") {
+          armingStore.clear();
+          // fall through — setFocused below makes the clicked pane the
+          // new exclusive selection.
+        }
+      }
+
       setFocused(id);
       terminalInstanceService.boostRefreshRate(id);
     },
-    [id, setFocused]
+    [id, setFocused, getTerminal]
   );
 
   const handleXtermPointerDownCapture = useCallback(
@@ -464,7 +653,7 @@ function TerminalPaneComponent({
       if (!xtermElement) return;
 
       const focusTarget = getTerminalFocusTarget({
-        isAgentTerminal,
+        hasHybridInputSurface: showHybridInputBar,
         isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
         hybridInputEnabled,
         hybridInputAutoFocus,
@@ -494,7 +683,7 @@ function TerminalPaneComponent({
     [
       id,
       location,
-      isAgentTerminal,
+      showHybridInputBar,
       hybridInputEnabled,
       hybridInputAutoFocus,
       isBackendDisconnected,
@@ -507,8 +696,8 @@ function TerminalPaneComponent({
 
   const handleRestart = useCallback(() => {
     restartTerminal(id);
-    inputTrackerRef.current?.reset();
-  }, [restartTerminal, id]);
+    inputTracker.reset();
+  }, [restartTerminal, id, inputTracker]);
 
   const handleUpdateCwd = useCallback(() => {
     setIsUpdateCwdOpen(true);
@@ -528,7 +717,7 @@ function TerminalPaneComponent({
     if (!isFocused) return;
 
     const focusTarget = getTerminalFocusTarget({
-      isAgentTerminal,
+      hasHybridInputSurface: showHybridInputBar,
       isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
       hybridInputEnabled,
       hybridInputAutoFocus,
@@ -552,7 +741,7 @@ function TerminalPaneComponent({
   }, [
     id,
     isFocused,
-    isAgentTerminal,
+    showHybridInputBar,
     hybridInputEnabled,
     hybridInputAutoFocus,
     isBackendDisconnected,
@@ -564,7 +753,7 @@ function TerminalPaneComponent({
     if (!showHybridInputBar) return;
     return registerPanelFocusHandler(id, () => {
       const focusTarget = getTerminalFocusTarget({
-        isAgentTerminal,
+        hasHybridInputSurface: showHybridInputBar,
         isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
         hybridInputEnabled,
         hybridInputAutoFocus,
@@ -575,7 +764,6 @@ function TerminalPaneComponent({
   }, [
     id,
     showHybridInputBar,
-    isAgentTerminal,
     isBackendDisconnected,
     isBackendRecovering,
     isInputLocked,
@@ -590,9 +778,6 @@ function TerminalPaneComponent({
 
   const isWorking = agentState === "working";
   const allowPing = !isMaximized && (location !== "grid" || (gridPanelCount ?? 2) > 1);
-
-  // Determine panel kind based on agent
-  const kind = effectiveAgentId ? "agent" : "terminal";
 
   const agentHeaderActions = useMemo(() => {
     if (!effectiveAgentId) return undefined;
@@ -620,8 +805,12 @@ function TerminalPaneComponent({
       id={id}
       title={title}
       kind={kind}
-      type={type}
       agentId={agentId}
+      detectedAgentId={detectedAgentId}
+      runtimeIdentity={runtimeIdentity}
+      chrome={chrome}
+      everDetectedAgent={everDetectedAgent}
+      presetColor={livePresetColor}
       isFocused={isFocused}
       isMaximized={isMaximized}
       location={location}
@@ -647,6 +836,8 @@ function TerminalPaneComponent({
       isPinged={isPinged}
       wasJustSelected={wasJustSelected}
       ambientAgentState={ambientAgentState}
+      isSelected={isSelected}
+      isFleetFollower={isFleetFollower}
       tabs={tabs}
       onTabClick={onTabClick}
       onTabClose={onTabClose}
@@ -663,15 +854,17 @@ function TerminalPaneComponent({
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role="group"
+      data-armed={isArmed || undefined}
       aria-label={(() => {
+        const armedSuffix = isArmed ? " (armed)" : "";
         if (!effectiveAgentId) {
-          return `Terminal: ${title}`;
+          return `Terminal: ${title}${armedSuffix}`;
         }
         const agentConfig = getAgentConfig(effectiveAgentId);
         if (agentConfig) {
-          return `${agentConfig.name} agent: ${title}`;
+          return `${agentConfig.name} agent: ${title}${armedSuffix}`;
         }
-        return `${effectiveAgentId} session: ${title}`;
+        return `${effectiveAgentId} session: ${title}${armedSuffix}`;
       })()}
     >
       {terminalErrors.length > 0 && (
@@ -739,158 +932,172 @@ function TerminalPaneComponent({
       />
 
       <div className="flex-1 min-h-0 bg-daintree-bg flex flex-col">
-        <div className="flex-1 relative min-h-0">
-          <div
-            className={cn(
-              "absolute inset-0",
-              (isBackendDisconnected || isBackendRecovering) && "pointer-events-none opacity-50"
-            )}
-            onPointerDownCapture={handleXtermPointerDownCapture}
-          >
-            <XtermAdapter
-              key={`${id}-${restartKey}`}
-              terminalId={id}
-              terminalType={type}
-              isInputLocked={isInputLocked}
-              onReady={handleReady}
-              onExit={handleExit}
-              onInput={handleInput}
-              className="absolute inset-0"
-              getRefreshTier={getRefreshTierCallback}
-              cwd={cwd}
-              hasBottomBar={showHybridInputBar}
-            />
-            <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
-            {isSearchOpen && (
-              <TerminalSearchBar
-                terminalId={id}
-                onClose={() => {
-                  setIsSearchOpen(false);
-                  requestAnimationFrame(() => terminalInstanceService.focus(id));
-                }}
-              />
-            )}
-          </div>
+        {spawnStatus === "missing-cli" && agentId ? (
+          <MissingCliGate
+            agentId={agentId}
+            detail={getPanelCliDetail() ?? { state: "missing", resolvedPath: null, via: null }}
+            onRunAnyway={handleRunAnyway}
+          />
+        ) : (
+          <>
+            <div className="flex-1 relative min-h-0">
+              <div
+                className={cn(
+                  "absolute inset-0",
+                  (isBackendDisconnected || isBackendRecovering) && "pointer-events-none opacity-50"
+                )}
+                onPointerDownCapture={handleXtermPointerDownCapture}
+              >
+                <Suspense fallback={null}>
+                  <XtermAdapter
+                    key={`${id}-${restartKey}`}
+                    terminalId={id}
+                    launchAgentId={agentId}
+                    detectedAgentId={detectedAgentId}
+                    isInputLocked={isInputLocked}
+                    onReady={handleReady}
+                    onExit={handleExit}
+                    onInput={handleInput}
+                    className="absolute inset-0"
+                    getRefreshTier={getRefreshTierCallback}
+                    cwd={cwd}
+                    hasBottomBar={showHybridInputBar}
+                  />
+                </Suspense>
+                <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
+                {isSearchOpen && (
+                  <TerminalSearchBar
+                    terminalId={id}
+                    onClose={() => {
+                      setIsSearchOpen(false);
+                      requestAnimationFrame(() => terminalInstanceService.focus(id));
+                    }}
+                  />
+                )}
+              </div>
 
-          <TerminalScrollIndicator terminalId={id} />
+              <TerminalScrollIndicator terminalId={id} />
 
-          {/* Backend Disconnect Overlay */}
-          {(isBackendDisconnected || isBackendRecovering) && (
-            <div
-              className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-strong backdrop-blur-sm"
-              role={isBackendRecovering ? "status" : "alert"}
-              aria-live={isBackendRecovering ? "polite" : "assertive"}
-            >
-              {isBackendRecovering ? (
-                <div className="flex flex-col items-center gap-3">
-                  <Spinner size="2xl" className="text-status-warning" />
-                  <span className="text-text-inverse font-medium">Reconnecting...</span>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center gap-4 p-6 bg-daintree-sidebar border border-daintree-border rounded-xl shadow-[var(--theme-shadow-dialog)] max-w-md text-center">
-                  <div className="flex items-center gap-3 text-status-error">
-                    <AlertTriangle className="w-6 h-6" />
-                    <h3 className="font-semibold text-lg">
-                      {lastCrashType === "OUT_OF_MEMORY"
-                        ? "Memory Limit Exceeded"
-                        : lastCrashType === "SIGNAL_TERMINATED"
-                          ? "Terminal Service Terminated"
-                          : "Connection Lost"}
-                    </h3>
-                  </div>
+              {/* Backend Disconnect Overlay */}
+              {(isBackendDisconnected || isBackendRecovering) && (
+                <div
+                  className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-strong backdrop-blur-sm"
+                  role={isBackendRecovering ? "status" : "alert"}
+                  aria-live={isBackendRecovering ? "polite" : "assertive"}
+                >
+                  {isBackendRecovering ? (
+                    <div className="flex flex-col items-center gap-3">
+                      <Spinner size="2xl" className="text-status-warning" />
+                      <span className="text-text-inverse font-medium">Reconnecting...</span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-4 p-6 bg-daintree-sidebar border border-daintree-border rounded-xl shadow-[var(--theme-shadow-dialog)] max-w-md text-center">
+                      <div className="flex items-center gap-3 text-status-error">
+                        <AlertTriangle className="w-6 h-6" />
+                        <h3 className="font-semibold text-lg">
+                          {lastCrashType === "OUT_OF_MEMORY"
+                            ? "Memory Limit Exceeded"
+                            : lastCrashType === "SIGNAL_TERMINATED"
+                              ? "Terminal Service Terminated"
+                              : "Connection Lost"}
+                        </h3>
+                      </div>
 
-                  {lastCrashType === "OUT_OF_MEMORY" && (
-                    <div className="text-sm text-daintree-text/80">
-                      <p className="mb-3">
-                        The terminal backend ran out of memory processing high-throughput output.
-                      </p>
-                      <p className="font-medium text-daintree-text/90 mb-2">Suggestions:</p>
-                      <ul className="list-disc list-inside text-left space-y-1">
-                        <li>Reduce agent output volume</li>
-                        <li>Split long-running tasks into smaller sessions</li>
-                        <li>Close unused terminals</li>
-                      </ul>
+                      {lastCrashType === "OUT_OF_MEMORY" && (
+                        <div className="text-sm text-daintree-text/80">
+                          <p className="mb-3">
+                            The terminal backend ran out of memory processing high-throughput
+                            output.
+                          </p>
+                          <p className="font-medium text-daintree-text/90 mb-2">Suggestions:</p>
+                          <ul className="list-disc list-inside text-left space-y-1">
+                            <li>Reduce agent output volume</li>
+                            <li>Split long-running tasks into smaller sessions</li>
+                            <li>Close unused terminals</li>
+                          </ul>
+                        </div>
+                      )}
+
+                      {lastCrashType === "SIGNAL_TERMINATED" && (
+                        <p className="text-sm text-daintree-text/80">
+                          The terminal backend became unresponsive and was automatically restarted
+                          by the watchdog. Automatic recovery is in progress.
+                        </p>
+                      )}
+
+                      {(lastCrashType === "UNKNOWN_CRASH" ||
+                        lastCrashType === "ASSERTION_FAILURE" ||
+                        !lastCrashType ||
+                        (lastCrashType !== "OUT_OF_MEMORY" &&
+                          lastCrashType !== "SIGNAL_TERMINATED")) && (
+                        <p className="text-sm text-daintree-text/80">
+                          The terminal backend process terminated unexpectedly. Automatic recovery
+                          is in progress.
+                        </p>
+                      )}
+
+                      <div className="flex flex-col gap-2 w-full">
+                        <button
+                          onClick={() => {
+                            setIsRestartingService(true);
+                            terminalClient.restartService().catch(() => {
+                              setIsRestartingService(false);
+                            });
+                          }}
+                          disabled={isRestartingService}
+                          className="px-4 py-2 border border-daintree-border text-daintree-text/80 hover:bg-overlay-soft hover:text-daintree-text rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none flex items-center justify-center gap-2"
+                        >
+                          {isRestartingService ? (
+                            <Spinner size="md" />
+                          ) : (
+                            <RefreshCw className="w-4 h-4" />
+                          )}
+                          {isRestartingService ? "Restarting..." : "Restart Terminal Service"}
+                        </button>
+                        <button
+                          onClick={() =>
+                            void actionService.dispatch("ui.refresh", undefined, { source: "user" })
+                          }
+                          className="px-4 py-2 bg-status-error/10 hover:bg-status-error/20 text-daintree-text/60 rounded-lg border border-daintree-border transition-colors text-sm"
+                        >
+                          Restart Application
+                        </button>
+                      </div>
                     </div>
                   )}
-
-                  {lastCrashType === "SIGNAL_TERMINATED" && (
-                    <p className="text-sm text-daintree-text/80">
-                      The terminal backend became unresponsive and was automatically restarted by
-                      the watchdog. Automatic recovery is in progress.
-                    </p>
-                  )}
-
-                  {(lastCrashType === "UNKNOWN_CRASH" ||
-                    lastCrashType === "ASSERTION_FAILURE" ||
-                    !lastCrashType ||
-                    (lastCrashType !== "OUT_OF_MEMORY" &&
-                      lastCrashType !== "SIGNAL_TERMINATED")) && (
-                    <p className="text-sm text-daintree-text/80">
-                      The terminal backend process terminated unexpectedly. Automatic recovery is in
-                      progress.
-                    </p>
-                  )}
-
-                  <div className="flex flex-col gap-2 w-full">
-                    <button
-                      onClick={() => {
-                        setIsRestartingService(true);
-                        terminalClient.restartService().catch(() => {
-                          setIsRestartingService(false);
-                        });
-                      }}
-                      disabled={isRestartingService}
-                      className="px-4 py-2 bg-daintree-accent/20 hover:bg-daintree-accent/30 text-daintree-accent rounded-lg border border-daintree-accent/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                    >
-                      {isRestartingService ? (
-                        <Spinner size="md" />
-                      ) : (
-                        <RefreshCw className="w-4 h-4" />
-                      )}
-                      {isRestartingService ? "Restarting..." : "Restart Terminal Service"}
-                    </button>
-                    <button
-                      onClick={() =>
-                        void actionService.dispatch("ui.refresh", undefined, { source: "user" })
-                      }
-                      className="px-4 py-2 bg-status-error/10 hover:bg-status-error/20 text-daintree-text/60 rounded-lg border border-daintree-border transition-colors text-sm"
-                    >
-                      Restart Application
-                    </button>
-                  </div>
                 </div>
               )}
             </div>
-          )}
-        </div>
 
-        {showHybridInputBar && (
-          <Suspense fallback={null}>
-            <LazyHybridInputBar
-              ref={inputBarRef}
-              terminalId={id}
-              disabled={isBackendDisconnected || isBackendRecovering || isInputLocked}
-              cwd={cwd}
-              agentId={effectiveAgentId}
-              agentHasLifecycleEvent={stateChangeTrigger !== undefined}
-              agentState={agentState}
-              restartKey={restartKey}
-              onActivate={handleClick}
-              onSend={({ trackerData, text }) => {
-                if (!isInputLocked) {
-                  terminalInstanceService.notifyUserInput(id);
-                  terminalClient.submit(id, text);
-                  handleInput(trackerData);
-                }
-              }}
-              onSendKey={(key) => {
-                if (!isInputLocked) {
-                  terminalInstanceService.notifyUserInput(id);
-                  terminalClient.sendKey(id, key);
-                }
-              }}
-            />
-          </Suspense>
+            {showHybridInputBar && (
+              <Suspense fallback={null}>
+                <LazyHybridInputBar
+                  ref={inputBarRef}
+                  terminalId={id}
+                  disabled={isBackendDisconnected || isBackendRecovering || isInputLocked}
+                  cwd={cwd}
+                  agentId={effectiveAgentId}
+                  agentHasLifecycleEvent={stateChangeTrigger !== undefined}
+                  agentState={agentState}
+                  restartKey={restartKey}
+                  onActivate={handleClick}
+                  onSend={({ trackerData, text }) => {
+                    if (!isInputLocked) {
+                      terminalInstanceService.notifyUserInput(id);
+                      terminalClient.submit(id, text);
+                      handleInput(trackerData);
+                    }
+                  }}
+                  onSendKey={(key) => {
+                    if (!isInputLocked) {
+                      terminalInstanceService.notifyUserInput(id);
+                      terminalClient.sendKey(id, key);
+                    }
+                  }}
+                />
+              </Suspense>
+            )}
+          </>
         )}
       </div>
 
@@ -905,5 +1112,3 @@ function TerminalPaneComponent({
 }
 
 export const TerminalPane = React.memo(TerminalPaneComponent);
-
-export default TerminalPane;

@@ -13,21 +13,21 @@ import {
   Check,
   ChevronsUpDown,
   Globe,
-  Monitor,
+  MonitorPlay,
   Bell,
   Ellipsis,
   GitBranch,
-  StickyNote,
   Plug,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { CopyTreeIcon, McpServerIcon } from "@/components/icons";
+import { Folders, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
 import { AgentButton } from "./AgentButton";
 import { AgentTrayButton } from "./AgentTrayButton";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
-import { useKeybindingDisplay } from "@/hooks";
+import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useProjectStore } from "@/store/projectStore";
@@ -73,6 +73,45 @@ const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
+const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors relative";
+
+export function PluginToolbarButton({
+  pluginId,
+  config,
+  "data-toolbar-item": dataToolbarItem,
+}: {
+  pluginId: string;
+  config: NonNullable<ReturnType<ReturnType<typeof usePluginToolbarButtons>["configs"]["get"]>>;
+  "data-toolbar-item"?: string;
+}) {
+  const hover = useShortcutHintHover(config.actionId as string);
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          {...hover}
+          variant="ghost"
+          size="icon"
+          data-toolbar-item={dataToolbarItem}
+          onClick={() => {
+            void actionService.dispatch(
+              config.actionId as Parameters<typeof actionService.dispatch>[0],
+              undefined,
+              { source: "user" }
+            );
+          }}
+          className={toolbarIconButtonClass}
+          aria-label={config?.label ?? pluginId}
+        >
+          <McpServerIcon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 export const OVERFLOW_MENU_META: Partial<Record<AnyToolbarButtonId, OverflowMenuMeta>> = {
   ...(Object.fromEntries(
     BUILT_IN_AGENT_IDS.map((id) => [
@@ -83,11 +122,10 @@ export const OVERFLOW_MENU_META: Partial<Record<AnyToolbarButtonId, OverflowMenu
   "agent-tray": { label: "Agent Tray", icon: Plug },
   terminal: { label: "Terminal", icon: SquareTerminal },
   browser: { label: "Browser", icon: Globe },
-  "dev-server": { label: "Dev Preview", icon: Monitor },
+  "dev-server": { label: "Dev Preview", icon: MonitorPlay },
   "github-stats": { label: "GitHub Stats", icon: GitPullRequest },
   "notification-center": { label: "Notifications", icon: Bell },
-  notes: { label: "Notes", icon: StickyNote },
-  "copy-tree": { label: "Copy Context", icon: CopyTreeIcon },
+  "copy-tree": { label: "Copy Context", icon: Folders },
   settings: { label: "Settings", icon: SlidersHorizontal },
   problems: { label: "Problems", icon: AlertCircle },
 };
@@ -169,11 +207,19 @@ export function Toolbar({
   const rightGroupRef = useRef<HTMLDivElement>(null);
   const activeToolbarIndexRef = useRef<number>(0);
   const githubStatsRef = useRef<GitHubStatsHandle>(null);
+  // Set in onPointerDownOutside, read in onCloseAutoFocus on the overflow
+  // dropdown. Suppresses focus restoration for pointer dismissals so the
+  // ellipsis button doesn't keep its accent focus-visible ring; keyboard
+  // close (Escape/Enter) still gets default focus return for WAI-ARIA.
+  const overflowMenuPointerCloseRef = useRef(false);
 
   const { handleCopyTree } = useWorktreeActions();
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
-  const notesShortcut = useKeybindingDisplay("notes.openPalette");
   const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
+
+  const sidebarHintHover = useShortcutHintHover("nav.toggleSidebar");
+  const devServerHintHover = useShortcutHintHover("devServer.start");
+  const copyTreeHintHover = useShortcutHintHover("worktree.copyTree");
 
   const handleOpenProjectSettings = useCallback(() => {
     projectSwitcher.close();
@@ -316,13 +362,12 @@ export function Toolbar({
         e.preventDefault();
         activeToolbarIndexRef.current = newIdx;
         syncToolbarTabStops(items, newIdx);
-        items[newIdx].focus();
+        items[newIdx]!.focus();
       }
     },
     [getToolbarItems, syncToolbarTabStops]
   );
 
-  const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
   const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1";
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
@@ -333,29 +378,29 @@ export function Toolbar({
     () => ({
       "sidebar-toggle": {
         render: () => (
-          <TooltipProvider key="sidebar-toggle">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={onToggleFocusMode}
-                  className={toolbarIconButtonClass}
-                  aria-label="Toggle Sidebar"
-                  aria-pressed={!isFocusMode}
-                >
-                  {isFocusMode ? <PanelLeftOpen /> : <PanelLeftClose />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut(
-                  isFocusMode ? "Show Sidebar" : "Hide Sidebar",
-                  sidebarShortcut
-                )}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                {...sidebarHintHover}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item=""
+                onClick={onToggleFocusMode}
+                className={toolbarIconButtonClass}
+                aria-label="Toggle Sidebar"
+                aria-pressed={!isFocusMode}
+              >
+                {isFocusMode ? <PanelLeftOpen /> : <PanelLeftClose />}
+                <ShortcutRevealChip actionId="nav.toggleSidebar" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipWithShortcut(
+                isFocusMode ? "Show Sidebar" : "Hide Sidebar",
+                sidebarShortcut
+              )}
+            </TooltipContent>
+          </Tooltip>
         ),
         isAvailable: true,
       },
@@ -411,25 +456,24 @@ export function Toolbar({
       },
       "dev-server": {
         render: () => (
-          <TooltipProvider key="dev-server">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={() =>
-                    actionService.dispatch("devServer.start", undefined, { source: "user" })
-                  }
-                  className={toolbarIconButtonClass}
-                  aria-label="Open Dev Preview"
-                >
-                  <Monitor />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Open Dev Preview</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                {...devServerHintHover}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item=""
+                onClick={() =>
+                  actionService.dispatch("devServer.start", undefined, { source: "user" })
+                }
+                className={toolbarIconButtonClass}
+                aria-label="Open Dev Preview"
+              >
+                <MonitorPlay />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Open Dev Preview</TooltipContent>
+          </Tooltip>
         ),
         isAvailable: !!currentProject,
       },
@@ -454,67 +498,45 @@ export function Toolbar({
         ),
         isAvailable: notificationsEnabled,
       },
-      notes: {
-        render: () => (
-          <TooltipProvider key="notes">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={() => actionService.dispatch("notes.create", {}, { source: "user" })}
-                  className={toolbarIconButtonClass}
-                  aria-label="Open notes palette"
-                >
-                  <StickyNote />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Notes", notesShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        ),
-        isAvailable: true,
-      },
       "copy-tree": {
         render: () => (
-          <TooltipProvider key="copy-tree">
-            <Tooltip open={treeCopied || undefined} delayDuration={treeCopied ? 0 : 300}>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={handleCopyTreeClick}
-                  disabled={isCopyingTree || !activeWorktree}
-                  className={cn(
-                    "toolbar-icon-button transition-colors",
-                    treeCopied ? "text-status-success bg-status-success/10" : "text-daintree-text",
-                    isCopyingTree && "cursor-wait opacity-70",
-                    !activeWorktree && "opacity-50"
-                  )}
-                  aria-label={
-                    isCopyingTree ? "Copying…" : treeCopied ? "Context Copied" : "Copy Context"
-                  }
-                >
-                  {isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <CopyTreeIcon />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="font-medium">
-                {isCopyingTree ? (
-                  "Copying…"
-                ) : treeCopied ? (
-                  <span role="status" aria-live="polite">
-                    {copyFeedback}
-                  </span>
-                ) : (
-                  createTooltipWithShortcut("Copy Context", copyTreeShortcut)
+          <Tooltip open={treeCopied || undefined} delayDuration={treeCopied ? 0 : 300}>
+            <TooltipTrigger asChild>
+              <Button
+                {...copyTreeHintHover}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item=""
+                onClick={handleCopyTreeClick}
+                disabled={isCopyingTree || !activeWorktree}
+                className={cn(
+                  "toolbar-icon-button transition-colors relative",
+                  treeCopied ? "text-status-success bg-status-success/10" : "text-daintree-text",
+                  isCopyingTree && "cursor-wait opacity-70",
+                  !activeWorktree && "opacity-50"
                 )}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+                aria-label={
+                  isCopyingTree ? "Copying…" : treeCopied ? "Context Copied" : "Copy Context"
+                }
+              >
+                {isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <Folders />}
+                {!treeCopied && !isCopyingTree && (
+                  <ShortcutRevealChip actionId="worktree.copyTree" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="font-medium">
+              {isCopyingTree ? (
+                "Copying…"
+              ) : treeCopied ? (
+                <span role="status" aria-live="polite">
+                  {copyFeedback}
+                </span>
+              ) : (
+                createTooltipWithShortcut("Copy Context", copyTreeShortcut)
+              )}
+            </TooltipContent>
+          </Tooltip>
         ),
         isAvailable: true,
       },
@@ -551,29 +573,7 @@ export function Toolbar({
             pluginId,
             {
               render: () => (
-                <TooltipProvider key={pluginId}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        data-toolbar-item=""
-                        onClick={() => {
-                          void actionService.dispatch(
-                            config!.actionId as Parameters<typeof actionService.dispatch>[0],
-                            undefined,
-                            { source: "user" }
-                          );
-                        }}
-                        className={toolbarIconButtonClass}
-                        aria-label={config?.label ?? pluginId}
-                      >
-                        <McpServerIcon />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <PluginToolbarButton key={pluginId} pluginId={pluginId} config={config!} />
               ),
               isAvailable: true,
             },
@@ -588,7 +588,6 @@ export function Toolbar({
       effectiveAgentSettings,
       onLaunchAgent,
       sidebarShortcut,
-      notesShortcut,
       copyTreeShortcut,
       hasActiveVoiceRecording,
       currentProject,
@@ -668,7 +667,7 @@ export function Toolbar({
           )}
           aria-hidden={visibleSet.has(id) ? undefined : true}
         >
-          {buttonRegistry[id].render()}
+          {buttonRegistry[id]!.render()}
         </div>
       ));
   };
@@ -691,7 +690,7 @@ export function Toolbar({
           className={cn("app-no-drag", !isVisible && "invisible absolute pointer-events-none")}
           aria-hidden={isVisible ? undefined : true}
         >
-          {buttonRegistry[id].render()}
+          {buttonRegistry[id]!.render()}
         </div>
       );
     }
@@ -747,9 +746,6 @@ export function Toolbar({
       "notification-center": () => {
         useUIStore.getState().toggleNotificationCenter();
       },
-      notes: () => {
-        void actionService.dispatch("notes.create", {}, { source: "user" });
-      },
       "copy-tree": () => {
         void handleCopyTreeClick();
       },
@@ -787,25 +783,35 @@ export function Toolbar({
     if (overflowIds.length === 0) return null;
     return (
       <DropdownMenu>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  className={toolbarIconButtonClass}
-                  aria-label={`${overflowIds.length} more toolbar items`}
-                >
-                  <Ellipsis />
-                </Button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">More items</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-        <DropdownMenuContent align={side === "left" ? "start" : "end"} sideOffset={4}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                data-toolbar-item=""
+                className={toolbarIconButtonClass}
+                aria-label={`${overflowIds.length} more toolbar items`}
+              >
+                <Ellipsis />
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">More items</TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent
+          align={side === "left" ? "start" : "end"}
+          sideOffset={4}
+          onPointerDownOutside={() => {
+            overflowMenuPointerCloseRef.current = true;
+          }}
+          onCloseAutoFocus={(e) => {
+            if (overflowMenuPointerCloseRef.current) {
+              e.preventDefault();
+              overflowMenuPointerCloseRef.current = false;
+            }
+          }}
+        >
           {overflowIds.flatMap((id, idx) => {
             if (id === "github-stats") {
               const ghStats = githubStatsRef.current?.stats;
@@ -856,7 +862,7 @@ export function Toolbar({
   }, [projectSwitcher]);
 
   return (
-    <>
+    <header>
       <div
         ref={toolbarRef}
         role="toolbar"
@@ -876,12 +882,12 @@ export function Toolbar({
           {isMac() && (
             <div
               className={cn(
-                "shrink-0 transition-[width] duration-200",
+                "shrink-0 transition-[width] duration-150",
                 isFullscreen ? "w-0" : "w-16"
               )}
             />
           )}
-          <div className="app-no-drag">{buttonRegistry["sidebar-toggle"].render()}</div>
+          <div className="app-no-drag">{buttonRegistry["sidebar-toggle"]!.render()}</div>
 
           <div className={toolbarDividerClass} />
 
@@ -926,7 +932,7 @@ export function Toolbar({
           >
             <button
               data-toolbar-item=""
-              className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-none"
+              className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden"
               data-testid="project-switcher-trigger"
               onClick={() => projectSwitcher.open("dropdown")}
             >
@@ -954,7 +960,7 @@ export function Toolbar({
                   <span className="text-xs font-medium text-daintree-text tracking-wide truncate min-w-0">
                     Daintree
                   </span>
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-daintree-accent/20 text-daintree-accent shrink-0">
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info shrink-0">
                     Beta
                   </span>
                   <ChevronsUpDown className="toolbar-project-meta ml-0.5 h-3 w-3 shrink-0" />
@@ -980,9 +986,9 @@ export function Toolbar({
 
           <div className={toolbarDividerClass} />
 
-          <div className="app-no-drag">{buttonRegistry["portal-toggle"].render()}</div>
+          <div className="app-no-drag">{buttonRegistry["portal-toggle"]!.render()}</div>
         </div>
       </div>
-    </>
+    </header>
   );
 }

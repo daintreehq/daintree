@@ -107,11 +107,17 @@ export class PortQueueManager {
       });
 
       const safetyTimeout = setTimeout(() => {
-        this.pausedTerminals.delete(id);
-        this.pauseStartTimes.delete(id);
-
+        // Capture utilization BEFORE clearing queuedBytes so the reliability
+        // metric reports the at-resume queue depth, not the post-clear 0%.
         const currentUtilization = this.getUtilization(id);
         const pauseDuration = Date.now() - pauseStartTime;
+
+        this.pausedTerminals.delete(id);
+        this.pauseStartTimes.delete(id);
+        // Drop stale byte accounting alongside the pause maps. Without this,
+        // the next addBytes call immediately re-triggers applyBackpressure
+        // and the pause loop wedges across the entire renderer reload (#6244).
+        this.queuedBytes.delete(id);
 
         const coordinator = this.deps.getPauseCoordinator(id);
         if (coordinator) {

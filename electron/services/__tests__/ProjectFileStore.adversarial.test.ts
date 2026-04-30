@@ -65,7 +65,7 @@ describe("ProjectFileStore adversarial", () => {
     expect(result).toEqual([]);
     expect(utilsMock.resilientRename).toHaveBeenCalledWith(
       EXPECTED_RECIPES_FILE,
-      `${EXPECTED_RECIPES_FILE}.corrupted`
+      expect.stringMatching(/^\/tmp\/daintree-projects\/a{64}\/recipes\.json\.corrupted\.\d+$/)
     );
   });
 
@@ -83,18 +83,64 @@ describe("ProjectFileStore adversarial", () => {
     fsSyncMock.existsSync.mockReturnValue(true);
     fsMock.readFile.mockResolvedValue(
       JSON.stringify([
-        { id: "r1", name: "valid", terminals: [] },
+        { id: "r1", name: "valid", terminals: [], createdAt: 1000 },
         null,
         "string",
-        { id: "r2" }, // missing name/terminals
+        { id: "r2" }, // missing name/terminals/createdAt
         { id: "r3", name: "no terminals array" },
-        { id: "r4", name: "valid again", terminals: [{ title: "t" }] },
+        { id: "r4", name: "valid again", terminals: [{ type: "terminal" }], createdAt: 1000 },
       ])
     );
 
     const result = await store.getRecipes(VALID_ID);
 
     expect(result.map((r) => r.id)).toEqual(["r1", "r4"]);
+  });
+
+  it("filters out recipes with deeply malformed terminal entries", async () => {
+    fsSyncMock.existsSync.mockReturnValue(true);
+    fsMock.readFile.mockResolvedValue(
+      JSON.stringify([
+        { id: "r1", name: "valid", terminals: [{ type: "terminal" }], createdAt: 1 },
+        {
+          id: "r2",
+          name: "command is number",
+          terminals: [{ type: "terminal", command: 123 }],
+          createdAt: 2,
+        },
+        {
+          id: "r3",
+          name: "env is not a record",
+          terminals: [{ type: "terminal", env: ["array", "not", "record"] }],
+          createdAt: 3,
+        },
+        {
+          id: "r4",
+          name: "invalid exitBehavior",
+          terminals: [{ type: "terminal", exitBehavior: "destroy" }],
+          createdAt: 4,
+        },
+        { id: "r5", name: "also valid", terminals: [], createdAt: 5 },
+      ])
+    );
+
+    const result = await store.getRecipes(VALID_ID);
+
+    expect(result.map((r) => r.id)).toEqual(["r1", "r5"]);
+  });
+
+  it("filters out recipes with missing terminal type", async () => {
+    fsSyncMock.existsSync.mockReturnValue(true);
+    fsMock.readFile.mockResolvedValue(
+      JSON.stringify([
+        { id: "r1", name: "valid", terminals: [{ type: "terminal" }], createdAt: 1 },
+        { id: "r2", name: "no terminal type", terminals: [{ title: "T" }], createdAt: 2 },
+      ])
+    );
+
+    const result = await store.getRecipes(VALID_ID);
+
+    expect(result.map((r) => r.id)).toEqual(["r1"]);
   });
 
   it("ENOENT on first write triggers mkdir + retry and eventually succeeds", async () => {
@@ -151,8 +197,8 @@ describe("ProjectFileStore adversarial", () => {
     fsSyncMock.existsSync.mockReturnValue(true);
     fsMock.readFile.mockResolvedValue(
       JSON.stringify([
-        { id: "keep", name: "k", terminals: [] },
-        { id: "drop", name: "d", terminals: [] },
+        { id: "keep", name: "k", terminals: [], createdAt: 1000 },
+        { id: "drop", name: "d", terminals: [], createdAt: 1000 },
       ])
     );
 

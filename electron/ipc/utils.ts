@@ -1,4 +1,5 @@
 import { BrowserWindow, ipcMain } from "electron";
+import { z } from "zod";
 import {
   getWindowForWebContents,
   getAppWebContents,
@@ -7,6 +8,8 @@ import {
 import { getProjectViewManager } from "../window/windowRef.js";
 import type { IpcInvokeMap, IpcEventMap } from "../types/index.js";
 import type { IpcContext } from "./types.js";
+import { ValidationError } from "./validationError.js";
+import type { ForbidIpcEnvelopeKeys } from "../../shared/types/ipc/errors.js";
 import { performance } from "node:perf_hooks";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
@@ -14,6 +17,30 @@ import {
   markPerformance,
   sampleIpcTiming,
 } from "../utils/performance.js";
+import { AppError } from "../utils/errorTypes.js";
+import { assertIpcSecurityReady } from "./ipcGuard.js";
+
+/**
+ * Parse the first argument of an IPC payload against a Zod schema. On
+ * failure: log the full Zod issue list locally (main process only) and throw
+ * a sanitized {@link ValidationError}. The Zod issues, field paths, and
+ * user-supplied values are NEVER included in the thrown message.
+ *
+ * Returns the parsed `z.output<S>` so transform-bearing schemas (e.g. clamps,
+ * defaults) pass their post-parse value into the handler.
+ */
+function parseIpcPayload<S extends z.ZodTypeAny>(
+  channel: string,
+  schema: S,
+  payload: unknown
+): z.output<S> {
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) {
+    console.error(`[IPC] Validation failed for ${channel}:`, parsed.error.flatten());
+    throw new ValidationError(channel);
+  }
+  return parsed.data;
+}
 
 const rateLimitTimestamps = new Map<string, number[]>();
 
@@ -41,7 +68,12 @@ export function checkRateLimit(channel: string, maxCalls: number, windowMs: numb
   const now = Date.now();
   const timestamps = (rateLimitTimestamps.get(key) ?? []).filter((t) => now - t < windowMs);
   if (timestamps.length >= maxCalls) {
-    throw new Error("Rate limit exceeded");
+    throw new AppError({
+      code: "RATE_LIMITED",
+      message: "Rate limit exceeded",
+      userMessage: "Slow down — too many requests in a short window.",
+      context: { channel, maxCalls, windowMs },
+    });
   }
   timestamps.push(now);
   rateLimitTimestamps.set(key, timestamps);
@@ -150,9 +182,10 @@ function scheduleDrain(state: RateLimitState, maxCalls: number, windowMs: number
  *
  * 2. `waitForRateLimitSlot(key, maxCalls, windowMs)` — **sliding window.**
  *    Up to `maxCalls` callers may run within any `windowMs` window; excess
- *    callers queue and drain as the window rolls forward. Used by batch-
- *    tolerant callers (e.g. terminal spawn) that accept bursts but need an
- *    overall cap.
+ *    callers queue and drain as the window rolls forward. Suited to callers
+ *    that accept bursts but need an overall cap. Note that this variant
+ *    produces step-function pauses for sustained batches once `maxCalls` is
+ *    hit — prefer the leaky-bucket form for smooth batch cadence.
  */
 export async function waitForRateLimitSlot(key: string, intervalMs: number): Promise<void>;
 export async function waitForRateLimitSlot(
@@ -177,7 +210,12 @@ async function waitForLeakyBucketSlot(key: string, intervalMs: number): Promise<
   const state = getOrCreateLeakyState(key);
 
   if (state.pendingCount >= MAX_QUEUE_DEPTH) {
-    throw new Error("Spawn queue full");
+    throw new AppError({
+      code: "RATE_LIMITED",
+      message: "Spawn queue full",
+      userMessage: "Too many pending operations — wait a moment and try again.",
+      context: { key, queueDepth: state.pendingCount, maxDepth: MAX_QUEUE_DEPTH },
+    });
   }
 
   // Synchronous slot reservation — MUST happen before any await so that
@@ -223,7 +261,12 @@ async function waitForSlidingWindowSlot(
   }
 
   if (state.queue.length >= MAX_QUEUE_DEPTH) {
-    throw new Error("Spawn queue full");
+    throw new AppError({
+      code: "RATE_LIMITED",
+      message: "Spawn queue full",
+      userMessage: "Too many pending operations — wait a moment and try again.",
+      context: { key, queueDepth: state.queue.length, maxDepth: MAX_QUEUE_DEPTH },
+    });
   }
 
   return new Promise<void>((resolve, reject) => {
@@ -319,16 +362,25 @@ export function typedHandle<K extends keyof IpcInvokeMap>(
   channel: K,
   handler: (
     ...args: IpcInvokeMap[K]["args"]
-  ) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
+  ) =>
+    | Promise<ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>>
+    | ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>
 ): () => void {
+  assertIpcSecurityReady(channel as string);
   const captureEnabled = isPerformanceCaptureEnabled();
   let requestCounter = 0;
 
-  ipcMain.handle(channel as string, async (_event, ...args) => {
-    if (!captureEnabled) {
-      return await handler(...(args as IpcInvokeMap[K]["args"]));
-    }
+  // Fast path: when perf capture is disabled, skip the async wrapper so
+  // synchronous handlers stay synchronous (preserves existing behavior for
+  // handlers that returned values directly when registered via ipcMain.handle).
+  if (!captureEnabled) {
+    ipcMain.handle(channel as string, (_event, ...args) =>
+      handler(...(args as IpcInvokeMap[K]["args"]))
+    );
+    return () => ipcMain.removeHandler(channel as string);
+  }
 
+  ipcMain.handle(channel as string, async (_event, ...args) => {
     const traceId = `${String(channel)}-${Date.now().toString(36)}-${(++requestCounter).toString(36)}`;
     const startedAt = performance.now();
     markPerformance(PERF_MARKS.IPC_REQUEST_START, {
@@ -337,7 +389,7 @@ export function typedHandle<K extends keyof IpcInvokeMap>(
       argCount: args.length,
     });
 
-    let responsePayload: IpcInvokeMap[K]["result"] | undefined;
+    let responsePayload: ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]> | undefined;
     let errored = false;
 
     try {
@@ -365,25 +417,62 @@ export function typedHandle<K extends keyof IpcInvokeMap>(
   return () => ipcMain.removeHandler(channel as string);
 }
 
+/**
+ * Same as {@link typedHandle}, but parses the first argument with `schema`
+ * before invoking the handler. On parse failure: log issues locally, throw a
+ * sanitized {@link ValidationError}. The handler receives `z.output<S>`.
+ *
+ * Use for ad-hoc handlers that aren't (yet) wired through `defineIpcNamespace`.
+ * For namespace-bound handlers prefer `opValidated()` from `./define.js`.
+ */
+export function typedHandleValidated<K extends keyof IpcInvokeMap, S extends z.ZodTypeAny>(
+  channel: K,
+  schema: S,
+  handler: (payload: z.output<S>) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
+): () => void {
+  assertIpcSecurityReady(channel as string);
+  // Wrap as async so a synchronous throw from `parseIpcPayload` always
+  // surfaces as a rejected promise. `ipcMain.handle` accepts both forms in
+  // production, but normalising here keeps test mocks consistent and makes
+  // the contract explicit.
+  const wrapped = (async (...args: unknown[]) => {
+    const parsed = parseIpcPayload(channel as string, schema, args[0]);
+    return handler(parsed);
+  }) as unknown as (
+    ...args: IpcInvokeMap[K]["args"]
+  ) => Promise<ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>>;
+  return typedHandle(channel, wrapped);
+}
+
 export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
   channel: K,
   handler: (
     ctx: IpcContext,
     ...args: IpcInvokeMap[K]["args"]
-  ) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
+  ) =>
+    | Promise<ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>>
+    | ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>
 ): () => void {
+  assertIpcSecurityReady(channel as string);
   const captureEnabled = isPerformanceCaptureEnabled();
   let requestCounter = 0;
+
+  if (!captureEnabled) {
+    ipcMain.handle(channel as string, (event, ...args) => {
+      const webContentsId = event.sender.id;
+      const senderWindow = getWindowForWebContents(event.sender);
+      const projectId = getProjectViewManager()?.getProjectIdForWebContents(webContentsId) ?? null;
+      const ctx: IpcContext = { event, webContentsId, senderWindow, projectId };
+      return handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
+    });
+    return () => ipcMain.removeHandler(channel as string);
+  }
 
   ipcMain.handle(channel as string, async (event, ...args) => {
     const webContentsId = event.sender.id;
     const senderWindow = getWindowForWebContents(event.sender);
     const projectId = getProjectViewManager()?.getProjectIdForWebContents(webContentsId) ?? null;
     const ctx: IpcContext = { event, webContentsId, senderWindow, projectId };
-
-    if (!captureEnabled) {
-      return await handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
-    }
 
     const traceId = `${String(channel)}-${Date.now().toString(36)}-${(++requestCounter).toString(36)}`;
     const startedAt = performance.now();
@@ -393,7 +482,7 @@ export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
       argCount: args.length,
     });
 
-    let responsePayload: IpcInvokeMap[K]["result"] | undefined;
+    let responsePayload: ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]> | undefined;
     let errored = false;
 
     try {
@@ -419,6 +508,35 @@ export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
     }
   });
   return () => ipcMain.removeHandler(channel as string);
+}
+
+/**
+ * Same as {@link typedHandleWithContext}, but parses the first argument with
+ * `schema` before invoking the handler. On parse failure: log issues locally,
+ * throw a sanitized {@link ValidationError}. The handler receives `ctx` and
+ * `z.output<S>`.
+ */
+export function typedHandleWithContextValidated<
+  K extends keyof IpcInvokeMap,
+  S extends z.ZodTypeAny,
+>(
+  channel: K,
+  schema: S,
+  handler: (
+    ctx: IpcContext,
+    payload: z.output<S>
+  ) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
+): () => void {
+  assertIpcSecurityReady(channel as string);
+  // Wrap as async so synchronous parse throws become rejected promises.
+  const wrapped = (async (ctx: IpcContext, ...args: unknown[]) => {
+    const parsed = parseIpcPayload(channel as string, schema, args[0]);
+    return handler(ctx, parsed);
+  }) as unknown as (
+    ctx: IpcContext,
+    ...args: IpcInvokeMap[K]["args"]
+  ) => Promise<ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>>;
+  return typedHandleWithContext(channel, wrapped);
 }
 
 export function typedBroadcast<K extends keyof IpcEventMap>(

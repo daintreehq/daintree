@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { AppAgentConfig } from "@shared/types";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface AppAgentState {
   hasApiKey: boolean;
@@ -41,7 +42,7 @@ export const useAppAgentStore = create<AppAgentStore>()((set, get) => ({
         set({ hasApiKey, config, enabled: config.enabled !== false, isInitialized: true });
       } catch (e) {
         set({
-          error: e instanceof Error ? e.message : "Failed to initialize app agent",
+          error: formatErrorMessage(e, "Failed to initialize app agent"),
           isInitialized: true,
         });
       }
@@ -56,7 +57,7 @@ export const useAppAgentStore = create<AppAgentStore>()((set, get) => ({
       const hasApiKey = await window.electron.appAgent.hasApiKey();
       set({ config, hasApiKey, enabled: config.enabled !== false, error: null });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : "Failed to set API key" });
+      set({ error: formatErrorMessage(e, "Failed to set API key") });
       throw e;
     }
   },
@@ -66,7 +67,7 @@ export const useAppAgentStore = create<AppAgentStore>()((set, get) => ({
       const config = await window.electron.appAgent.setConfig({ model });
       set({ config, enabled: config.enabled !== false, error: null });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : "Failed to set model" });
+      set({ error: formatErrorMessage(e, "Failed to set model") });
       throw e;
     }
   },
@@ -76,7 +77,7 @@ export const useAppAgentStore = create<AppAgentStore>()((set, get) => ({
       const config = await window.electron.appAgent.setConfig({ enabled });
       set({ config, enabled, error: null });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : "Failed to update enabled state" });
+      set({ error: formatErrorMessage(e, "Failed to update enabled state") });
       throw e;
     }
   },

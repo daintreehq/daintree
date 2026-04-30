@@ -19,6 +19,7 @@ async function createRegistry() {
     onCloseWorktreeOverview: () => {},
     onOpenPanelPalette: () => {},
     onOpenProjectSwitcherPalette: () => {},
+    onConfirmCloseActiveProject: () => {},
     onOpenShortcuts: () => {},
     onLaunchAgent: async () => null,
     onInject: () => {},
@@ -52,6 +53,7 @@ describe("createActionDefinitions", () => {
     expect(actions.has("app.forceQuit")).toBe(true);
     expect(actions.has("project.add")).toBe(true);
     expect(actions.has("project.openDialog")).toBe(true);
+    expect(actions.has("project.muteNotifications")).toBe(true);
     expect(actions.has("errors.clearAll")).toBe(true);
     expect(actions.has("eventInspector.clear")).toBe(true);
     expect(actions.has("ui.refresh")).toBe(true);
@@ -81,13 +83,24 @@ describe("createActionDefinitions", () => {
     const ids = new Set<string>();
     const regex = /\|\s*"([^"]+)"/g;
     for (const match of section.matchAll(regex)) {
-      ids.add(match[1]);
+      ids.add(match[1]!);
     }
 
     const missing = Array.from(ids)
       .filter((id) => !actions.has(id as any))
       .sort();
     expect(missing).toEqual([]);
+  });
+
+  it("registers action.repeatLast with nonRepeatable set", async () => {
+    const actions = await createRegistry();
+
+    expect(actions.has("action.repeatLast")).toBe(true);
+    const factory = actions.get("action.repeatLast");
+    expect(factory).toBeDefined();
+    const def = factory!();
+    expect(def.nonRepeatable).toBe(true);
+    expect(def.danger).toBe("safe");
   });
 
   it("covers all configured keybindings", async () => {

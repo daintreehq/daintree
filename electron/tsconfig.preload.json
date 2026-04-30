@@ -4,7 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022", "DOM"],
-    "outDir": "../dist-electron/electron",
+    "outDir": "../dist-typecheck/electron",
     "rootDir": ".",
     "strict": true,
     "esModuleInterop": true,
@@ -19,5 +19,5 @@
   },
   "include": ["preload.cts"],
   "exclude": ["node_modules"],
-  "references": [{ "path": "../shared/tsconfig.json" }]
+  "references": [{ "path": "../shared/tsconfig.json" }, { "path": "./tsconfig.json" }]
 }

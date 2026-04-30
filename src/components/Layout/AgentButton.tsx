@@ -1,9 +1,21 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { getAgentConfig } from "@/config/agents";
+import { BrandMark } from "@/components/icons";
+import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { useKeybindingDisplay } from "@/hooks";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { actionService } from "@/services/ActionService";
@@ -11,31 +23,41 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-
+import { ChevronDown, PanelBottom, Unplug } from "lucide-react";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
-import { isAgentReady, isAgentInstalled } from "../../../shared/utils/agentAvailability";
+import {
+  isAgentLaunchable,
+  isAgentInstalled,
+  isAgentUnauthenticated,
+} from "../../../shared/utils/agentAvailability";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+
+import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useShallow } from "zustand/react/shallow";
+import { resolveEffectivePresetId } from "@shared/types";
 import {
   getDominantAgentState,
   agentStateDotColor,
 } from "@/components/Worktree/AgentStatusIndicator";
-import { Unplug } from "lucide-react";
+import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 
 type AgentType = BuiltInAgentId;
 
 const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
   "idle",
   "working",
-  "running",
   "waiting",
   "directing",
 ]);
@@ -46,6 +68,80 @@ interface AgentButtonProps {
   "data-toolbar-item"?: string;
 }
 
+const stopPointer = (e: ReactPointerEvent) => {
+  e.stopPropagation();
+};
+
+interface WorktreeMenuItemsProps {
+  agentType: AgentType;
+  worktrees: ReturnType<typeof useWorktrees>["worktrees"];
+}
+
+// Flattens the worktree picker from a nested 3-deep submenu (worktree →
+// Grid/Dock) into one row per worktree. Row click (and keyboard Enter)
+// launches in grid; the inline Dock affordance gives mouse users the
+// secondary location without a second submenu hop, mirroring the pin
+// button pattern in AgentTrayButton.
+//
+// Closing-the-menu mechanics: Radix ContextMenu Root has no `open` prop,
+// so we can't use a controlled-state shortcut. Instead, the inline Dock
+// click is allowed to bubble to the parent ContextMenuItem so Radix's
+// normal handleSelect → onClose chain still fires (which is what closes
+// the menu). To avoid double-firing the row's grid dispatch on top of
+// the dock dispatch, the inline button sets a ref before bubbling; the
+// row's onSelect honors the ref and skips the grid dispatch when set.
+// pointerDown/pointerUp still stopPropagation to keep Radix from
+// treating the icon press as the row's primary selection event.
+function WorktreeMenuItems({ agentType, worktrees }: WorktreeMenuItemsProps) {
+  const dockClickedRef = useRef(false);
+  return (
+    <>
+      {worktrees.map((wt) => {
+        const label = wt.isMainWorktree ? wt.name : wt.branch?.trim() || wt.name;
+        return (
+          <ContextMenuItem
+            key={wt.id}
+            className="group/wt-row pr-1"
+            data-testid={`agent-context-worktree-${wt.id}`}
+            onSelect={() => {
+              if (dockClickedRef.current) {
+                dockClickedRef.current = false;
+                return;
+              }
+              void actionService.dispatch(
+                "agent.launch",
+                { agentId: agentType, worktreeId: wt.id, location: "grid" },
+                { source: "context-menu" }
+              );
+            }}
+          >
+            <span className="flex-1 truncate">{label}</span>
+            <span
+              role="presentation"
+              aria-hidden="true"
+              data-testid={`agent-context-worktree-dock-${wt.id}`}
+              title="Launch in dock"
+              onPointerDown={stopPointer}
+              onPointerUp={stopPointer}
+              onClick={() => {
+                dockClickedRef.current = true;
+                void actionService.dispatch(
+                  "agent.launch",
+                  { agentId: agentType, worktreeId: wt.id, location: "dock" },
+                  { source: "context-menu" }
+                );
+              }}
+              className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-emphasis hover:text-daintree-text group-data-[highlighted]/wt-row:opacity-100"
+            >
+              <PanelBottom className="h-3 w-3" />
+            </span>
+          </ContextMenuItem>
+        );
+      })}
+    </>
+  );
+}
+
 export function AgentButton({
   type,
   availability,
@@ -53,10 +149,47 @@ export function AgentButton({
 }: AgentButtonProps) {
   const { worktrees } = useWorktrees();
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
+  const agentSettings = useAgentSettingsStore((s) => s.settings);
+  const ccrPresets = useCcrPresetsStore((s) => s.ccrPresetsByAgent[type]);
+  const projectPresets = useProjectPresetsStore((s) => s.presetsByAgent[type]);
 
-  const panelsById = usePanelStore((s) => s.panelsById);
-  const panelIds = usePanelStore((s) => s.panelIds);
+  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
+  const panelIds = usePanelStore(useShallow((s) => s.panelIds));
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+
+  // Radix Tooltip reopens on focus restoration. When the chevron's
+  // DropdownMenu closes, Radix returns focus to the chevron trigger and the
+  // tooltip would reopen on top of the freshly-launched action's surfaces.
+  // Gate both halves' tooltips on controlled state and hold suppression open
+  // until the next genuine pointer hover. Same pattern as AgentTrayButton.
+  const [primaryTooltipOpen, setPrimaryTooltipOpen] = useState(false);
+  const [chevronTooltipOpen, setChevronTooltipOpen] = useState(false);
+  const isRestoringFocusRef = useRef(false);
+  // Set in onPointerDownOutside, read in onCloseAutoFocus. Lets us
+  // preventDefault() the focus restoration only for pointer dismissals so the
+  // chevron doesn't keep its accent focus-visible ring; keyboard close
+  // (Escape/Enter) still gets default focus return for WAI-ARIA.
+  const wasPointerCloseRef = useRef(false);
+
+  const handlePrimaryTooltipOpenChange = (open: boolean) => {
+    if (open && isRestoringFocusRef.current) return;
+    setPrimaryTooltipOpen(open);
+  };
+
+  const handleChevronTooltipOpenChange = (open: boolean) => {
+    if (open && isRestoringFocusRef.current) return;
+    setChevronTooltipOpen(open);
+  };
+
+  const suppressTooltipsDuringFocusRestore = () => {
+    setPrimaryTooltipOpen(false);
+    setChevronTooltipOpen(false);
+    isRestoringFocusRef.current = true;
+  };
+
+  const clearFocusRestoreSuppression = () => {
+    isRestoringFocusRef.current = false;
+  };
 
   const activeSession = useMemo(() => {
     const states: (AgentState | undefined)[] = [];
@@ -65,8 +198,7 @@ export function AgentButton({
       const p = panelsById[pid];
       if (
         !p ||
-        p.kind !== "agent" ||
-        p.agentId !== type ||
+        getRuntimeOrBootAgentId(p) !== type ||
         p.location === "trash" ||
         p.location === "background"
       )
@@ -86,31 +218,81 @@ export function AgentButton({
   const isSessionActive = activeSession !== null;
   const dominantState = activeSession?.dominantState ?? null;
 
+  const entry = agentSettings?.agents?.[type] ?? {};
+  const presets = getMergedPresets(type, entry.customPresets, ccrPresets, projectPresets);
+  // Show the split/chevron UI when there is at least one named preset; the
+  // dropdown always renders the implicit "Default" entry alongside it, so one
+  // named preset already gives the user two real launch choices.
+  const hasPresets = presets.length >= 1;
+  // Worktree-scoped pick wins over the agent-level default so switching
+  // worktrees doesn't silently surface another worktree's selection.
+  const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
+  const activePreset = savedPresetId ? presets.find((p) => p.id === savedPresetId) : undefined;
+  // CCR presets carry the routing prefix in their stored name; strip it for
+  // display so the tooltip and menu surfaces show the same human label.
+  const activePresetName = activePreset ? activePreset.name.replace(/^CCR:\s*/, "") : null;
+  // Group by source. Project presets are identified by membership so that a
+  // project preset whose id happens to start with "ccr-" still lands in
+  // "Project Shared" rather than being stolen by the CCR group. Everything
+  // that isn't CCR-prefixed or project-member falls through to the "Custom"
+  // bucket — this preserves the historical rendering for user-authored
+  // presets regardless of whether they're also in `entry.customPresets`.
+  const projectPresetIds = new Set((projectPresets ?? []).map((f) => f.id));
+  const projectPresetGroup = presets.filter((f) => projectPresetIds.has(f.id));
+  const ccrPresetGroup = presets.filter(
+    (f) => !projectPresetIds.has(f.id) && f.id.startsWith("ccr-")
+  );
+  const customPresetGroup = presets.filter(
+    (f) => !projectPresetIds.has(f.id) && !f.id.startsWith("ccr-")
+  );
+  const presetGroupCount =
+    (ccrPresetGroup.length > 0 ? 1 : 0) +
+    (projectPresetGroup.length > 0 ? 1 : 0) +
+    (customPresetGroup.length > 0 ? 1 : 0);
+  const hasMultiplePresetGroups = presetGroupCount > 1;
+
   const tooltipDetails = config.tooltip ? ` — ${config.tooltip}` : "";
   const shortcut = displayCombo ? ` (${displayCombo})` : "";
   const isLoading = availability === undefined;
-  const isReady = isAgentReady(availability);
-  const isInstalledOnly = isAgentInstalled(availability);
-  const needsSetup = isInstalledOnly && !isReady;
+  const isLaunchable = isAgentLaunchable(availability);
+  // `installed` now only fires for WSL-capped binaries (launch not wired
+  // through wsl.exe yet); all other binary-on-PATH agents reach `ready`.
+  // `needsSetup` dims the button and routes clicks to Settings for these
+  // genuinely non-launchable cases.
+  const needsSetup = isAgentInstalled(availability) && !isLaunchable;
+  // Surfaced in the tooltip only — launchable agents whose passive auth
+  // probe came back empty get a soft cue rather than a disabled look,
+  // because the CLI itself will prompt for sign-in on first run.
+  const signInUnconfirmed = isAgentUnauthenticated(availability);
 
+  const presetSegment = activePresetName ? ` · ${activePresetName}` : "";
   const tooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
-    : isReady
-      ? `Start ${config.name}${tooltipDetails}${shortcut}`
+    : isLaunchable
+      ? signInUnconfirmed
+        ? `Start ${config.name}${presetSegment} — sign-in not detected${shortcut}`
+        : `Start ${config.name}${presetSegment}${tooltipDetails}${shortcut}`
       : needsSetup
         ? `${config.name} needs setup. Click to configure.`
         : `${config.name} CLI not found. Click to install.`;
+  const chevronTooltip = `Set ${config.name} preset`;
 
   const ariaLabel = isLoading
     ? `Checking ${config.name} availability`
-    : isReady
+    : isLaunchable
       ? `Start ${config.name} Agent`
       : needsSetup
         ? `${config.name} needs setup`
         : `${config.name} CLI not installed`;
 
   const handleClick = () => {
-    if (isReady) {
+    if (isLaunchable) {
+      // Defer all preset resolution to useAgentLauncher. Forwarding the
+      // resolved savedPresetId explicitly would block the launcher's
+      // stale-fallback path: when a worktree-scoped pick references a
+      // deleted preset, an explicit presetId bypasses the agent-level
+      // default and launches preset-free instead. Omitting presetId lets
+      // the launcher run resolveEffectivePresetId + fallback in one place.
       void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
     } else {
       void actionService.dispatch(
@@ -125,11 +307,41 @@ export function AgentButton({
     void useAgentSettingsStore.getState().setAgentPinned(type, false);
   };
 
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <TooltipProvider>
-          <Tooltip>
+  // Persist the toolbar pick to the worktree-scoped slot so repeated launches
+  // on the same worktree stay stable, while other worktrees keep their own
+  // defaults. Pass `undefined` to clear the worktree override (returning the
+  // button to the agent-level default). Guard on activeWorktreeId — when no
+  // worktree is active we skip persistence entirely rather than polluting the
+  // global scope.
+  const persistWorktreePick = (presetId: string | undefined) => {
+    if (!activeWorktreeId) return;
+    void useAgentSettingsStore.getState().updateWorktreePreset(type, activeWorktreeId, presetId);
+  };
+
+  const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
+  const toolbarBrandColor = getBrandColorHex(type);
+  const iconElement = (
+    <div className="relative">
+      <BrandMark brandColor={toolbarBrandColor}>
+        <config.icon brandColor={toolbarBrandColor} />
+      </BrandMark>
+      {isSessionActive && dotColor && (
+        <span
+          className={cn(
+            "absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-sidebar",
+            dotColor
+          )}
+          aria-hidden="true"
+        />
+      )}
+    </div>
+  );
+
+  if (!hasPresets) {
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
             <TooltipTrigger asChild>
               <span className="inline-flex">
                 <Button
@@ -138,36 +350,259 @@ export function AgentButton({
                   onClick={handleClick}
                   disabled={isLoading}
                   data-toolbar-item={dataToolbarItem}
+                  onPointerEnter={clearFocusRestoreSuppression}
                   className={cn(
-                    "toolbar-agent-button text-daintree-text transition-colors",
-                    isReady &&
-                      "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
+                    "toolbar-agent-button text-daintree-text transition-colors relative",
                     needsSetup && "opacity-70"
                   )}
                   aria-label={ariaLabel}
                 >
-                  <div className="relative">
-                    <config.icon brandColor={getBrandColorHex(type)} />
-                    {isSessionActive && dominantState && (
-                      <span
-                        className={cn(
-                          "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-daintree-sidebar",
-                          agentStateDotColor(dominantState)
-                        )}
-                        aria-hidden="true"
-                      />
-                    )}
-                  </div>
+                  {iconElement}
+                  <ShortcutRevealChip actionId={`agent.${type}`} />
                 </Button>
               </span>
             </TooltipTrigger>
             <TooltipContent side="bottom">{tooltip}</TooltipContent>
           </Tooltip>
-        </TooltipProvider>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+          <ContextMenuItem
+            disabled={!isLaunchable}
+            onSelect={() =>
+              void actionService.dispatch(
+                "agent.launch",
+                { agentId: type },
+                { source: "context-menu" }
+              )
+            }
+          >
+            Launch {config.name}
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={!isLaunchable}
+            onSelect={() =>
+              void actionService.dispatch(
+                "agent.launch",
+                { agentId: type, location: "dock" },
+                { source: "context-menu" }
+              )
+            }
+          >
+            Launch {config.name} in Dock
+          </ContextMenuItem>
+          {worktrees.length > 0 && (
+            <ContextMenuSub>
+              <ContextMenuSubTrigger disabled={!isLaunchable}>
+                Launch in Worktree
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                <WorktreeMenuItems agentType={type} worktrees={worktrees} />
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={handleUnpinFromToolbar}>
+            <Unplug className="mr-2 h-3.5 w-3.5" />
+            Unpin from Toolbar
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={() =>
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "agents", subtab: type, sectionId: "agents-presets" },
+                { source: "context-menu" }
+              )
+            }
+          >
+            Manage {config.name} Presets...
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={() =>
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "agents", subtab: type },
+                { source: "context-menu" }
+              )
+            }
+          >
+            {config.name} Settings...
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  }
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <span className="inline-flex">
+          <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleClick}
+                disabled={isLoading}
+                data-toolbar-item={dataToolbarItem}
+                onPointerEnter={clearFocusRestoreSuppression}
+                className={cn(
+                  "toolbar-agent-button text-daintree-text transition-colors rounded-r-none border-r border-transparent relative",
+                  needsSetup && "opacity-70"
+                )}
+                aria-label={ariaLabel}
+              >
+                {iconElement}
+                <ShortcutRevealChip actionId={`agent.${type}`} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{tooltip}</TooltipContent>
+          </Tooltip>
+          <DropdownMenu
+            onOpenChange={(open) => {
+              if (open) {
+                setPrimaryTooltipOpen(false);
+                setChevronTooltipOpen(false);
+              }
+            }}
+          >
+            <Tooltip open={chevronTooltipOpen} onOpenChange={handleChevronTooltipOpenChange}>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    disabled={isLoading || !isLaunchable}
+                    data-toolbar-item={dataToolbarItem}
+                    onPointerEnter={clearFocusRestoreSuppression}
+                    className={cn(
+                      "toolbar-agent-button text-daintree-text transition-colors rounded-l-none",
+                      "h-8 w-6 p-0 flex items-center justify-center",
+                      !isLaunchable && !isLoading && "opacity-60"
+                    )}
+                    aria-label={chevronTooltip}
+                  >
+                    <ChevronDown className="h-3 w-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{chevronTooltip}</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent
+              align="start"
+              sideOffset={4}
+              className="min-w-[12rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+              onPointerDownOutside={() => {
+                wasPointerCloseRef.current = true;
+              }}
+              onCloseAutoFocus={(e) => {
+                suppressTooltipsDuringFocusRestore();
+                if (wasPointerCloseRef.current) {
+                  e.preventDefault();
+                  wasPointerCloseRef.current = false;
+                }
+              }}
+            >
+              <DropdownMenuRadioGroup value={savedPresetId ?? ""}>
+                <DropdownMenuRadioItem
+                  value=""
+                  onSelect={() => {
+                    persistWorktreePick(undefined);
+                  }}
+                >
+                  <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                    <BrandMark brandColor={getBrandColorHex(type)}>
+                      <config.icon brandColor={getBrandColorHex(type)} />
+                    </BrandMark>
+                  </span>
+                  Agent default
+                </DropdownMenuRadioItem>
+                {ccrPresetGroup.length > 0 && (
+                  <>
+                    {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                    {hasMultiplePresetGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
+                    {ccrPresetGroup.map((preset) => (
+                      <DropdownMenuRadioItem
+                        key={preset.id}
+                        value={preset.id}
+                        onSelect={() => {
+                          persistWorktreePick(preset.id);
+                        }}
+                      >
+                        <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                          <BrandMark brandColor={preset.color ?? getBrandColorHex(type)}>
+                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                          </BrandMark>
+                        </span>
+                        {preset.name.replace(/^CCR:\s*/, "")}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </>
+                )}
+                {projectPresetGroup.length > 0 && (
+                  <>
+                    {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                    {hasMultiplePresetGroups && (
+                      <DropdownMenuLabel>Project Shared</DropdownMenuLabel>
+                    )}
+                    {projectPresetGroup.map((preset) => (
+                      <DropdownMenuRadioItem
+                        key={preset.id}
+                        value={preset.id}
+                        onSelect={() => {
+                          persistWorktreePick(preset.id);
+                        }}
+                      >
+                        <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                          <BrandMark brandColor={preset.color ?? getBrandColorHex(type)}>
+                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                          </BrandMark>
+                        </span>
+                        {preset.name}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </>
+                )}
+                {customPresetGroup.length > 0 && (
+                  <>
+                    {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                    {hasMultiplePresetGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
+                    {customPresetGroup.map((preset) => (
+                      <DropdownMenuRadioItem
+                        key={preset.id}
+                        value={preset.id}
+                        onSelect={() => {
+                          persistWorktreePick(preset.id);
+                        }}
+                      >
+                        <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                          <BrandMark brandColor={preset.color ?? getBrandColorHex(type)}>
+                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                          </BrandMark>
+                        </span>
+                        {preset.name}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </>
+                )}
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() =>
+                  void actionService.dispatch(
+                    "app.settings.openTab",
+                    { tab: "agents", subtab: type, sectionId: "agents-presets" },
+                    { source: "user" }
+                  )
+                }
+              >
+                Manage Presets...
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </span>
       </ContextMenuTrigger>
-      <ContextMenuContent>
+      <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         <ContextMenuItem
-          disabled={!isReady}
+          disabled={!isLaunchable}
           onSelect={() =>
             void actionService.dispatch(
               "agent.launch",
@@ -179,7 +614,7 @@ export function AgentButton({
           Launch {config.name}
         </ContextMenuItem>
         <ContextMenuItem
-          disabled={!isReady}
+          disabled={!isLaunchable}
           onSelect={() =>
             void actionService.dispatch(
               "agent.launch",
@@ -190,42 +625,56 @@ export function AgentButton({
         >
           Launch {config.name} in Dock
         </ContextMenuItem>
+        {hasPresets && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger disabled={!isLaunchable}>
+              Launch with Preset
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent
+              data-testid="context-submenu-content"
+              className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+            >
+              <ContextMenuRadioGroup value={savedPresetId ?? ""}>
+                <ContextMenuRadioItem
+                  value=""
+                  onSelect={() => {
+                    persistWorktreePick(undefined);
+                    void actionService.dispatch(
+                      "agent.launch",
+                      { agentId: type, presetId: null },
+                      { source: "context-menu" }
+                    );
+                  }}
+                >
+                  Agent default
+                </ContextMenuRadioItem>
+                {presets.map((preset) => (
+                  <ContextMenuRadioItem
+                    key={preset.id}
+                    value={preset.id}
+                    onSelect={() => {
+                      persistWorktreePick(preset.id);
+                      void actionService.dispatch(
+                        "agent.launch",
+                        { agentId: type, presetId: preset.id },
+                        { source: "context-menu" }
+                      );
+                    }}
+                  >
+                    {preset.name.replace(/^CCR:\s*/, "")}
+                  </ContextMenuRadioItem>
+                ))}
+              </ContextMenuRadioGroup>
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        )}
         {worktrees.length > 0 && (
           <ContextMenuSub>
-            <ContextMenuSubTrigger disabled={!isReady}>Launch in Worktree</ContextMenuSubTrigger>
-            <ContextMenuSubContent>
-              {worktrees.map((wt) => {
-                const label = wt.isMainWorktree ? wt.name : wt.branch?.trim() || wt.name;
-                return (
-                  <ContextMenuSub key={wt.id}>
-                    <ContextMenuSubTrigger>{label}</ContextMenuSubTrigger>
-                    <ContextMenuSubContent>
-                      <ContextMenuItem
-                        onSelect={() =>
-                          void actionService.dispatch(
-                            "agent.launch",
-                            { agentId: type, worktreeId: wt.id, location: "grid" },
-                            { source: "context-menu" }
-                          )
-                        }
-                      >
-                        Grid
-                      </ContextMenuItem>
-                      <ContextMenuItem
-                        onSelect={() =>
-                          void actionService.dispatch(
-                            "agent.launch",
-                            { agentId: type, worktreeId: wt.id, location: "dock" },
-                            { source: "context-menu" }
-                          )
-                        }
-                      >
-                        Dock
-                      </ContextMenuItem>
-                    </ContextMenuSubContent>
-                  </ContextMenuSub>
-                );
-              })}
+            <ContextMenuSubTrigger disabled={!isLaunchable}>
+              Launch in Worktree
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+              <WorktreeMenuItems agentType={type} worktrees={worktrees} />
             </ContextMenuSubContent>
           </ContextMenuSub>
         )}
@@ -233,6 +682,17 @@ export function AgentButton({
         <ContextMenuItem onSelect={handleUnpinFromToolbar}>
           <Unplug className="mr-2 h-3.5 w-3.5" />
           Unpin from Toolbar
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() =>
+            void actionService.dispatch(
+              "app.settings.openTab",
+              { tab: "agents", subtab: type, sectionId: "agents-presets" },
+              { source: "context-menu" }
+            )
+          }
+        >
+          Manage {config.name} Presets...
         </ContextMenuItem>
         <ContextMenuItem
           onSelect={() =>

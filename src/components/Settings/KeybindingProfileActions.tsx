@@ -81,7 +81,7 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
           "flex items-center gap-1.5 px-3 py-2 text-sm border border-daintree-border rounded transition-colors",
           isLoading
             ? "opacity-50 cursor-not-allowed text-daintree-text/40"
-            : "text-daintree-text/60 hover:text-daintree-text hover:border-daintree-accent"
+            : "text-daintree-text/60 hover:text-daintree-text hover:border-daintree-border"
         )}
       >
         <Download className="w-3.5 h-3.5" />
@@ -94,7 +94,7 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
           "flex items-center gap-1.5 px-3 py-2 text-sm border border-daintree-border rounded transition-colors",
           isLoading
             ? "opacity-50 cursor-not-allowed text-daintree-text/40"
-            : "text-daintree-text/60 hover:text-daintree-text hover:border-daintree-accent"
+            : "text-daintree-text/60 hover:text-daintree-text hover:border-daintree-border"
         )}
       >
         <Upload className="w-3.5 h-3.5" />

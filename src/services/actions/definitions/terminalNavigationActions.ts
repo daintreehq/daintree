@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionId } from "@shared/types/actions";
 import { usePanelStore } from "@/store/panelStore";
+import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 export function registerTerminalNavigationActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -14,6 +15,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       usePanelStore.getState().focusNext();
     },
@@ -27,8 +29,24 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       usePanelStore.getState().focusPrevious();
+    },
+  }));
+
+  actions.set("terminal.focusAlternate", () => ({
+    id: "terminal.focusAlternate",
+    title: "Focus Alternate Panel",
+    description: "Toggle focus between the current panel and the previously focused one",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    keywords: ["last", "previous", "swap", "toggle", "tmux", "back"],
+    run: async () => {
+      usePanelStore.getState().focusAlternate();
     },
   }));
 
@@ -40,6 +58,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const nav = callbacks.getGridNavigation();
       if (nav.getCurrentLocation() === "grid") {
@@ -56,6 +75,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const nav = callbacks.getGridNavigation();
       if (nav.getCurrentLocation() === "grid") {
@@ -72,6 +92,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const nav = callbacks.getGridNavigation();
       const location = nav.getCurrentLocation();
@@ -91,6 +112,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const nav = callbacks.getGridNavigation();
       const location = nav.getCurrentLocation();
@@ -112,6 +134,7 @@ export function registerTerminalNavigationActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ index: z.number().int().min(1).max(9) }),
+    nonRepeatable: true,
     run: async (args: unknown) => {
       const { index } = args as { index: number };
       const nav = callbacks.getGridNavigation();
@@ -130,6 +153,7 @@ export function registerTerminalNavigationActions(
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      nonRepeatable: true,
       run: async () => {
         const nav = callbacks.getGridNavigation();
         usePanelStore.getState().focusByIndex(index, nav.findByIndex);
@@ -145,6 +169,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const state = usePanelStore.getState();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
@@ -160,7 +185,7 @@ export function registerTerminalNavigationActions(
 
       const targetId =
         (state.activeDockTerminalId &&
-          dockTerminals.some((t) => t.id === state.activeDockTerminalId) &&
+          dockTerminals.some((t) => t!.id === state.activeDockTerminalId) &&
           state.activeDockTerminalId) ||
         dockTerminals[0]!.id;
       const group = state.getPanelGroup(targetId);
@@ -182,8 +207,6 @@ export function registerTerminalNavigationActions(
     run: async () => {
       const focusedId = usePanelStore.getState().focusedId;
       if (!focusedId) return;
-      const { terminalInstanceService } =
-        await import("@/services/terminal/TerminalInstanceService");
       terminalInstanceService.scrollToLastActivity(focusedId);
     },
   }));

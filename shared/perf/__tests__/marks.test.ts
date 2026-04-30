@@ -5,6 +5,7 @@ describe("PERF_MARKS", () => {
   it("contains required instrumentation marks", () => {
     expect(PERF_MARKS.APP_BOOT_START).toBe("app_boot_start");
     expect(PERF_MARKS.MAIN_WINDOW_CREATED).toBe("main_window_created");
+    expect(PERF_MARKS.WINDOW_SERVICES_START).toBe("window_services_start");
     expect(PERF_MARKS.RENDERER_READY).toBe("renderer_ready");
     expect(PERF_MARKS.HYDRATE_START).toBe("hydrate_start");
     expect(PERF_MARKS.HYDRATE_COMPLETE).toBe("hydrate_complete");
@@ -27,6 +28,10 @@ describe("PERF_MARKS", () => {
     expect(PERF_MARKS.HYDRATE_RESTORE_SNAPSHOTS_CRITICAL).toBe(
       "hydrate_restore_snapshots_critical"
     );
+
+    expect(PERF_MARKS.PROJECT_STATE_WRITE).toBe("project_state_write");
+    expect(PERF_MARKS.PROJECT_STATE_READ).toBe("project_state_read");
+    expect(PERF_MARKS.PROJECT_STATE_QUARANTINE).toBe("project_state_quarantine");
   });
 
   it("has unique values", () => {

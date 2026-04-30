@@ -3,6 +3,13 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { TerminalRestartStatusBanner } from "../TerminalRestartStatusBanner";
 
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -79,7 +86,7 @@ describe("TerminalRestartStatusBanner", () => {
         onDismiss={onDismiss}
       />
     );
-    const button = screen.getByRole("button", { name: /dismiss restart prompt/i });
+    const button = screen.getByRole("button", { name: "Dismiss" });
     fireEvent.click(button);
     expect(onDismiss).toHaveBeenCalledOnce();
   });

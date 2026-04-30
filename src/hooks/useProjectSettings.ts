@@ -3,7 +3,9 @@ import type { ProjectSettings, RunCommand } from "../types";
 import { useProjectStore } from "../store/projectStore";
 import { useProjectSettingsStore } from "../store/projectSettingsStore";
 import { projectClient } from "@/clients";
+import { logError } from "@/utils/logger";
 import { updateBrandingCache } from "./useProjectBranding";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface UseProjectSettingsReturn {
   settings: ProjectSettings | null;
@@ -43,7 +45,9 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
   const [localError, setLocalError] = useState<string | null>(null);
 
   const latestTargetIdRef = useRef(targetId);
-  latestTargetIdRef.current = targetId;
+  useEffect(() => {
+    latestTargetIdRef.current = targetId;
+  }, [targetId]);
 
   const fetchLocalSettings = useCallback(async () => {
     if (!targetId) {
@@ -72,9 +76,9 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
         setLocalDetectedRunners(newDetected);
       }
     } catch (err) {
-      console.error("Failed to load project settings:", err);
+      logError("Failed to load project settings", err);
       if (requestedProjectId === latestTargetIdRef.current) {
-        setLocalError(err instanceof Error ? err.message : "Unknown error");
+        setLocalError(formatErrorMessage(err, "Failed to load project settings"));
         setLocalSettings({ runCommands: [] });
         setLocalDetectedRunners([]);
         setLocalAllDetectedRunners([]);
@@ -143,8 +147,8 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
 
         setLocalError(null);
       } catch (err) {
-        console.error("Failed to save project settings:", err);
-        const errorMsg = err instanceof Error ? err.message : "Unknown error";
+        logError("Failed to save project settings", err);
+        const errorMsg = formatErrorMessage(err, "Failed to save project settings");
         setLocalError(errorMsg);
         throw err;
       }
@@ -198,8 +202,8 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
 
         setLocalError(null);
       } catch (err) {
-        console.error("Failed to promote command:", err);
-        setLocalError(err instanceof Error ? err.message : "Unknown error");
+        logError("Failed to promote command", err);
+        setLocalError(formatErrorMessage(err, "Failed to promote command"));
         throw err;
       }
     },
@@ -260,8 +264,8 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
 
         setLocalError(null);
       } catch (err) {
-        console.error("Failed to remove command:", err);
-        setLocalError(err instanceof Error ? err.message : "Unknown error");
+        logError("Failed to remove command", err);
+        setLocalError(formatErrorMessage(err, "Failed to remove command"));
         throw err;
       }
     },

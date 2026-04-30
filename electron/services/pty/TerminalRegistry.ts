@@ -150,7 +150,7 @@ export class TerminalRegistry {
           return {
             id: info.id.slice(0, 8),
             projectId: info.projectId?.slice(0, 8) ?? "undefined",
-            type: info.type,
+            launchAgentId: info.launchAgentId,
           };
         }),
       });
@@ -171,7 +171,7 @@ export class TerminalRegistry {
     const terminalTypes = projectTerminals.reduce(
       (acc, t) => {
         const info = t.getInfo();
-        const type = info.type || "terminal";
+        const type = info.launchAgentId || "terminal";
         acc[type] = (acc[type] || 0) + 1;
         return acc;
       },

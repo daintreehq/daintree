@@ -4,7 +4,7 @@ import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const INPUT_CLASSES =
-  "w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
 
 interface SettingsInputProps extends Omit<ComponentPropsWithoutRef<"input">, "id"> {
   label: string;
@@ -13,6 +13,7 @@ interface SettingsInputProps extends Omit<ComponentPropsWithoutRef<"input">, "id
   isModified?: boolean;
   onReset?: () => void;
   resetAriaLabel?: string;
+  scope?: "default" | "global" | "project";
   ref?: Ref<HTMLInputElement>;
 }
 
@@ -23,6 +24,7 @@ export function SettingsInput({
   isModified,
   onReset,
   resetAriaLabel,
+  scope,
   disabled,
   className,
   ref,
@@ -38,21 +40,36 @@ export function SettingsInput({
       .filter(Boolean)
       .join(" ") || undefined;
 
+  const scopeBadge = scope ? (
+    <span
+      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+        scope === "project"
+          ? "bg-status-info/10 text-status-info"
+          : scope === "global"
+            ? "bg-status-info/10 text-status-info"
+            : "bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20"
+      }`}
+    >
+      {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
+    </span>
+  ) : null;
+
   return (
-    <div className="group flex flex-col gap-2">
+    <div className="group grid grid-cols-subgrid gap-2 col-span-full">
       <div className="flex items-center gap-2">
-        <label htmlFor={id} className="text-sm text-daintree-text/70">
+        <label htmlFor={id} className="text-sm text-text-secondary">
           {label}
         </label>
+        {scopeBadge}
         {isModified && (
-          <span className="w-1.5 h-1.5 rounded-full bg-daintree-accent" aria-hidden="true" />
+          <span className="w-1.5 h-1.5 rounded-full bg-state-modified" aria-hidden="true" />
         )}
         {showReset && (
           <button
             type="button"
             aria-label={resetAriaLabel ?? `Reset ${label} to default`}
             className={cn(
-              "p-0.5 rounded-sm text-daintree-text/40 hover:text-daintree-accent",
+              "p-0.5 rounded-sm text-text-muted hover:text-daintree-text",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
               "transition-colors"
@@ -69,15 +86,11 @@ export function SettingsInput({
         disabled={disabled}
         aria-describedby={describedBy}
         aria-invalid={error ? true : undefined}
-        className={cn(
-          INPUT_CLASSES,
-          error && "border-status-error focus:border-status-error",
-          className
-        )}
+        className={cn(INPUT_CLASSES, error && "border-status-error", className)}
         {...props}
       />
       {description && !error && (
-        <p id={descriptionId} className="text-xs text-daintree-text/40 select-text">
+        <p id={descriptionId} className="text-xs text-text-muted select-text">
           {description}
         </p>
       )}

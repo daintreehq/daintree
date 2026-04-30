@@ -49,6 +49,9 @@ export function markRendererPerformance(
   window.__DAINTREE_PERF_MARKS__.push(payload);
 
   if (captureEnabled) {
+    // DevTools-only perf trail for `DAINTREE_PERF_CAPTURE`; intentionally
+    // bypasses the IPC logger to keep the breadcrumb visible in-page.
+    // eslint-disable-next-line no-console
     console.debug("[perf]", payload.mark, payload.meta ?? {});
   }
 }

@@ -2,7 +2,8 @@ import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/agent.js";
-import type { TerminalType, PanelKind } from "../../../shared/types/panel.js";
+import type { PanelKind, PanelTitleMode } from "../../../shared/types/panel.js";
+import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 
@@ -16,6 +17,11 @@ export type PtySpawnOptions = PtyHostSpawnOptions;
  * - State persistence
  * - IPC payloads
  * - External APIs
+ *
+ * Identity fields follow the canonical model in
+ * `docs/architecture/terminal-identity.md`: `detectedAgentId` is live
+ * detection, while `launchAgentId` is durable launch affinity until a strong
+ * exit signal (`agentState: "exited"` / terminal exit) demotes the terminal.
  */
 export interface TerminalPublicState {
   id: string;
@@ -23,9 +29,14 @@ export interface TerminalPublicState {
   cwd: string;
   shell: string;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  /**
+   * Durable launch affinity — the agent this terminal was launched to run.
+   * Used to key agent-specific settings, auto-inject commands, and keep
+   * restored agent terminals branded until explicit exit.
+   */
+  launchAgentId?: AgentId;
   title?: string;
+  titleMode?: PanelTitleMode;
   spawnedAt: number;
   wasKilled?: boolean;
   isExited?: boolean;
@@ -37,7 +48,19 @@ export interface TerminalPublicState {
   lastInputTime: number;
   lastOutputTime: number;
   lastCheckTime: number;
-  detectedAgentType?: TerminalType;
+  /**
+   * Live detected identity — the agent currently running in this PTY. The ONE
+   * field that drives chrome. Cleared when the detected agent exits.
+   * Not persisted. See `docs/architecture/terminal-identity.md`.
+   */
+  detectedAgentId?: BuiltInAgentId;
+  /** Runtime-detected non-agent process icon id (npm, yarn, python, etc.). Cleared when the process exits. */
+  detectedProcessIconId?: string;
+  /**
+   * Sticky live-session flag. True once runtime detection fires in this session,
+   * even if no agent is currently detected. Not persisted.
+   */
+  everDetectedAgent?: boolean;
   restartCount: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;
@@ -55,6 +78,16 @@ export interface TerminalPublicState {
   spawnArgs?: string[];
   /** Exit code from the PTY process (set on clean exit) */
   exitCode?: number;
+  /** Worktree the terminal was spawned in; used when persisting agent session history */
+  worktreeId?: string;
+  /** Last non-useless title observed from xterm OSC updates (renderer-synced) */
+  lastObservedTitle?: string;
+  /** Currently active preset ID (updated on each fallback hop). */
+  agentPresetId?: string;
+  /** Preset brand color captured at launch time. */
+  agentPresetColor?: string;
+  /** User-originally-selected preset ID; immutable across fallback hops. */
+  originalAgentPresetId?: string;
 }
 
 /**
@@ -67,8 +100,6 @@ export interface TerminalRuntime {
   headlessTerminal?: HeadlessTerminal;
   serializeAddon?: SerializeAddon;
   processDetector?: ProcessDetector;
-  inputWriteQueue: string[];
-  inputWriteTimeout: NodeJS.Timeout | null;
   outputBuffer: string;
   semanticBuffer: string[];
   rawOutputBuffer?: string;
@@ -91,10 +122,6 @@ export interface TerminalInfo extends TerminalPublicState {
   serializeAddon?: SerializeAddon;
   /** @deprecated Internal to TerminalProcess */
   processDetector?: ProcessDetector;
-  /** @deprecated Internal queue - use TerminalProcess.write() */
-  inputWriteQueue: string[];
-  /** @deprecated Internal timer */
-  inputWriteTimeout: NodeJS.Timeout | null;
   /** @deprecated Use TerminalProcess.getOutputBuffer() */
   outputBuffer: string;
   /** @deprecated Use TerminalProcess.getSemanticBuffer() */
@@ -109,6 +136,57 @@ export interface PtyManagerEvents {
   error: (id: string, error: string) => void;
 }
 
+/**
+ * Why a TerminalProcess transitioned out of `alive`. Used by `teardown()` to
+ * route observers (forensics, fallback classifier, agent state machine) and
+ * to derive the IPC-visible `wasKilled` flag.
+ *
+ * - `kill`: explicit `kill()` call (user action, registry cleanup).
+ * - `graceful-shutdown`: `gracefulShutdown()` finished and routed through
+ *   `kill()` to capture the agent session ID before tearing down.
+ * - `dispose`: `dispose()` called without a prior PTY exit — typically LRU
+ *   eviction or app shutdown. SIGKILL is sent immediately.
+ * - `natural`: the underlying PTY emitted `onExit` on its own (clean exit,
+ *   crash, or external signal).
+ */
+export type ExitReason = "kill" | "graceful-shutdown" | "dispose" | "natural";
+
+/**
+ * Explicit lifecycle for a `TerminalProcess`. Replaces the previous trio of
+ * implicit booleans (`wasKilled`, `isExited`, `exitCode`) with a single
+ * discriminated union so every code path that gates on lifecycle state can
+ * narrow on a single field.
+ *
+ * Transition graph:
+ * ```
+ *   alive ──► shutting-down ──► exited
+ *     │           │               │
+ *     │           ▼               ▼
+ *     └───────► disposed ◄────────┘
+ * ```
+ *
+ * `alive` is the initial state — the PTY is passed live to the constructor.
+ * `shutting-down` is set the moment `teardown(reason)` begins (kill, dispose,
+ * or natural exit). `exited` is the preserve-on-exit terminal state for
+ * agents that exited cleanly; the headless buffer is retained so the user
+ * can inspect output. `disposed` is the final state — headless buffer torn
+ * down, PTY descendants killed.
+ *
+ * The `wasKilled` and `isExited` fields on `TerminalPublicState` remain in
+ * the IPC contract for backward compatibility and are derived from this
+ * state in `getPublicState()`.
+ */
+export type PtyState =
+  | { readonly kind: "alive" }
+  | { readonly kind: "shutting-down"; readonly reason: ExitReason }
+  | {
+      readonly kind: "exited";
+      readonly code: number;
+      readonly signal?: number;
+      readonly reason: ExitReason;
+    }
+  | { readonly kind: "disposed"; readonly reason: ExitReason };
+
 export interface TerminalSnapshot {
   id: string;
   lines: string[];
@@ -116,8 +194,8 @@ export interface TerminalSnapshot {
   lastOutputTime: number;
   lastCheckTime: number;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  /** Launch hint — agent this terminal was launched to run. Not identity. */
+  launchAgentId?: AgentId;
   agentState?: AgentState;
   lastStateChange?: number;
   spawnedAt: number;
@@ -133,11 +211,11 @@ export const WRITE_MAX_CHUNK_SIZE = 50;
 export const WRITE_INTERVAL_MS = 5;
 
 // Scrollback configuration
-// Headless PTY scrollback is intentionally equal to the renderer default (1000)
-// because headless terminals only need enough buffer for agent state detection,
-// not full user-visible scroll history.
-export const DEFAULT_SCROLLBACK = 1000;
-export const AGENT_SCROLLBACK = 10000;
+// All PTY panels get a generous scrollback; there is no "agent tier" scrollback
+// decision any more. The headless analysis buffer is small because only recent
+// output is needed for state detection; the renderer-visible scrollback is
+// larger so long agent runs don't truncate.
+export const DEFAULT_SCROLLBACK = 10000;
 
 // Raw output buffer for non-headless terminals (100KB max)
 export const RAW_OUTPUT_BUFFER_MAX_SIZE = 100 * 1024;
@@ -147,6 +225,9 @@ export { TRASH_TTL_MS } from "../../../shared/config/trash.js";
 // Graceful shutdown configuration
 export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 2500;
 export const GRACEFUL_SHUTDOWN_BUFFER_SIZE = 8 * 1024;
+// Delay between writing the input-clear prelude and the quit command. Without this gap,
+// the target CLI's async event loop can drop or corrupt the quit command bytes under load.
+export const GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS = 100;
 
 // IPC Flow Control Configuration
 export const IPC_MAX_QUEUE_BYTES = 8 * 1024 * 1024; // 8MB max per terminal

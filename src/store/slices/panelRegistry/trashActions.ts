@@ -1,4 +1,4 @@
-import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
 import type { TrashExpiryHelpers } from "./trash";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -8,6 +8,7 @@ import { TRASH_TTL_MS } from "@shared/config/trash";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { stopDevPreviewByPanelId } from "./helpers";
+import { logError } from "@/utils/logger";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -47,14 +48,16 @@ export const createTrashActions = (
     // Only call PTY operations for PTY-backed terminals
     if (panelKindHasPty(terminal.kind ?? "terminal")) {
       terminalClient.trash(id).catch((error) => {
-        console.error("Failed to trash terminal:", error);
+        logError("Failed to trash terminal", error);
       });
     }
 
     set((state) => {
-      const newById = {
+      const existing = state.panelsById[id];
+      if (!existing) return state;
+      const newById: Record<string, TerminalInstance> = {
         ...state.panelsById,
-        [id]: { ...state.panelsById[id], location: "trash" as const },
+        [id]: { ...existing, location: "trash" as const },
       };
       const newTrashed = new Map(state.trashedTerminals);
       newTrashed.set(id, { id, expiresAt, originalLocation });
@@ -117,7 +120,7 @@ export const createTrashActions = (
     }
 
     const expiresAt = Date.now() + TRASH_TTL_MS;
-    const groupRestoreId = `group-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const groupRestoreId = `group-${crypto.randomUUID()}`;
     const panelIds = [...group.panelIds];
     const activeTabId = group.activeTabId ?? panelIds[0] ?? "";
     const state = get();
@@ -152,23 +155,23 @@ export const createTrashActions = (
       }
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalClient.trash(id).catch((error) => {
-          console.error("Failed to trash terminal:", error);
+          logError("Failed to trash terminal", error);
         });
       }
     }
 
     set((state) => {
-      const newById = { ...state.panelsById };
+      const newById: Record<string, TerminalInstance> = { ...state.panelsById };
       for (const tid of trashPanelIds) {
-        if (newById[tid]) {
-          newById[tid] = { ...newById[tid], location: "trash" as const };
+        const current = newById[tid];
+        if (current) {
+          newById[tid] = { ...current, location: "trash" as const };
         }
       }
 
       const newTrashed = new Map(state.trashedTerminals);
 
-      for (let i = 0; i < trashPanelIds.length; i++) {
-        const id = trashPanelIds[i];
+      for (const [i, id] of trashPanelIds.entries()) {
         const isAnchor = i === 0;
         newTrashed.set(id, {
           id,
@@ -214,7 +217,7 @@ export const createTrashActions = (
 
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
       terminalClient.restore(id).catch((error) => {
-        console.error("Failed to restore terminal:", error);
+        logError("Failed to restore terminal", error);
       });
     }
 
@@ -271,7 +274,7 @@ export const createTrashActions = (
       const terminal = get().panelsById[id];
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalClient.restore(id).catch((error) => {
-          console.error("Failed to restore terminal:", error);
+          logError("Failed to restore terminal", error);
         });
       }
     }
@@ -380,9 +383,14 @@ export const createTrashActions = (
         }),
         ...(existingTrashed?.groupMetadata && { groupMetadata: existingTrashed.groupMetadata }),
       });
-      const newById = {
+      const existing = state.panelsById[id];
+      if (!existing) {
+        saveNormalized(state.panelsById, state.panelIds);
+        return { trashedTerminals: newTrashed };
+      }
+      const newById: Record<string, TerminalInstance> = {
         ...state.panelsById,
-        [id]: { ...state.panelsById[id], location: "trash" as const },
+        [id]: { ...existing, location: "trash" as const },
       };
       saveNormalized(newById, state.panelIds);
       return { trashedTerminals: newTrashed, panelsById: newById };

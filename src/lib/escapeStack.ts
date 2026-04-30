@@ -1,3 +1,5 @@
+import { logError } from "@/utils/logger";
+
 type EscapeHandler = () => void;
 
 interface EscapeEntry {
@@ -26,11 +28,11 @@ export function updateHandler(id: symbol, handler: EscapeHandler): void {
 
 export function dispatchEscape(): boolean {
   if (stack.length === 0) return false;
-  const top = stack[stack.length - 1];
+  const top = stack[stack.length - 1]!;
   try {
     top.handler();
   } catch (err) {
-    console.error("Escape handler threw:", err);
+    logError("Escape handler threw", err);
   }
   return true;
 }

@@ -148,7 +148,7 @@ describe("useProjectSettingsForm", () => {
     expect(result.current.githubRemote).toBe("origin");
     expect(result.current.runCommands).toHaveLength(1);
     expect(result.current.environmentVariables).toHaveLength(1);
-    expect(result.current.environmentVariables[0].key).toBe("NODE_ENV");
+    expect(result.current.environmentVariables[0]!.key).toBe("NODE_ENV");
     expect(result.current.excludedPaths).toEqual(["node_modules"]);
   });
 
@@ -455,7 +455,7 @@ describe("useProjectSettingsForm", () => {
     });
 
     expect(mockSaveSettings).toHaveBeenCalled();
-    const savedSettings = mockSaveSettings.mock.calls[0][0];
+    const savedSettings = mockSaveSettings.mock.calls[0]![0];
     expect(savedSettings.environmentVariables).toEqual({ VALID_KEY: "good" });
     vi.useRealTimers();
   });

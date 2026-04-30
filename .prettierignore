@@ -1,6 +1,7 @@
 # Build outputs
 dist/
 dist-electron/
+dist-typecheck/
 release/
 
 # Dependencies

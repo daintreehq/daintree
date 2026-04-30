@@ -6,10 +6,23 @@ import type { CliAvailabilityService } from "./services/CliAvailabilityService.j
 import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
 import * as CliInstallService from "./services/CliInstallService.js";
 import { getWindowRegistry, getProjectViewManager } from "./window/windowRef.js";
-import { autoUpdaterService } from "./services/AutoUpdaterService.js";
+import {
+  getPtyClient,
+  getWorkspaceClientRef,
+  getWorktreePortBrokerRef,
+} from "./window/windowServices.js";
+import { distributePortsToView } from "./window/portDistribution.js";
+// Auto-updater is dynamically imported on click to keep it out of the eager
+// graph — the menu is built at startup but "Check for Updates" only fires on
+// user action.
+async function checkForUpdatesManually(): Promise<void> {
+  const { autoUpdaterService } = await import("./services/AutoUpdaterService.js");
+  autoUpdaterService.checkForUpdatesManually();
+}
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
+import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 
 app.setAboutPanelOptions({
   applicationName: PRODUCT_NAME,
@@ -139,6 +152,12 @@ export function createApplicationMenu(
           ? [{ type: "separator" as const }, ...buildPluginMenuItems("file")]
           : []),
         { type: "separator" },
+        {
+          label: "Close Project",
+          enabled: !!projectStore.getCurrentProjectId(),
+          click: (_item, browserWindow) =>
+            sendAction("close-project", getTargetBrowserWindow(browserWindow)),
+        },
         {
           label: "Close Window",
           role: "close",
@@ -351,7 +370,7 @@ export function createApplicationMenu(
               }
               createApplicationMenu(mainWindow, cliAvailabilityService);
             } catch (err) {
-              const message = err instanceof Error ? err.message : String(err);
+              const message = formatErrorMessage(err, "Failed to install CLI");
               if (targetWin && !targetWin.isDestroyed()) {
                 const wc = getAppWebContents(targetWin);
                 if (!wc.isDestroyed()) {
@@ -403,7 +422,11 @@ export function createApplicationMenu(
               { type: "separator" as const },
               {
                 label: "Check for Updates...",
-                click: () => autoUpdaterService.checkForUpdatesManually(),
+                click: () => {
+                  checkForUpdatesManually().catch((err) =>
+                    console.error("[menu] checkForUpdatesManually failed:", err)
+                  );
+                },
               },
             ]
           : []),
@@ -423,7 +446,11 @@ export function createApplicationMenu(
           ? [
               {
                 label: "Check for Updates...",
-                click: () => autoUpdaterService.checkForUpdatesManually(),
+                click: () => {
+                  checkForUpdatesManually().catch((err) =>
+                    console.error("[menu] checkForUpdatesManually failed:", err)
+                  );
+                },
               },
             ]
           : []),
@@ -487,8 +514,41 @@ export async function handleDirectoryOpen(
     // Use ProjectViewManager for multi-view switching when available
     const pvm = getProjectViewManager();
     if (pvm) {
-      await pvm.switchTo(project.id, project.path);
+      const { view } = await pvm.switchTo(project.id, project.path);
       await projectStore.setCurrentProject(project.id);
+
+      // Re-attach producer ports for cached-view reactivation. The IPC switch
+      // handler (projectCrud/switch.ts:activateProjectView) does this in the
+      // primary path; the menu path must mirror it because cached views have
+      // their worktree port + workspace direct port closed on cache to avoid
+      // freeze accumulation (#6273), and the PTY MessagePort is per-window
+      // and was replaced when the user last switched away.
+      if (!view.webContents.isDestroyed()) {
+        const wsClient = getWorkspaceClientRef();
+        const broker = getWorktreePortBrokerRef();
+        if (wsClient) {
+          try {
+            await wsClient.loadProject(project.path, targetWindow.id);
+            wsClient.attachDirectPort(targetWindow.id, view.webContents);
+            const host = wsClient.getHostForProject(project.path);
+            if (host && broker) {
+              broker.brokerPort(host, view.webContents);
+            }
+          } catch (err) {
+            console.error("[menu] Failed to restore worktree ports:", err);
+          }
+        }
+
+        // Distribute fresh PTY MessagePort + notify pty-host of project switch
+        const ptyClient = getPtyClient();
+        if (ptyClient) {
+          ptyClient.onProjectSwitch(targetWindow.id, project.id, project.path);
+        }
+        const ctx = getWindowRegistry()?.getByWindowId(targetWindow.id);
+        if (ctx) {
+          distributePortsToView(targetWindow, ctx, view.webContents, ptyClient ?? null);
+        }
+      }
     } else {
       // Fallback: legacy single-view switch
       const registry = getWindowRegistry();

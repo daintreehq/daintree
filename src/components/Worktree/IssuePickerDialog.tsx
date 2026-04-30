@@ -7,6 +7,9 @@ import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients";
 import type { GitHubIssue } from "@shared/types/github";
 import type { WorktreeState } from "@/types";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 interface IssuePickerDialogProps {
   isOpen: boolean;
@@ -18,6 +21,54 @@ interface IssuePickerDialogProps {
 }
 
 type StateFilter = "open" | "closed" | "all";
+
+interface IssueOptionRowProps {
+  issue: GitHubIssue;
+  isSelected: boolean;
+  isCurrentlyAttached: boolean;
+  onClick: () => void;
+}
+
+function IssueOptionRow({ issue, isSelected, isCurrentlyAttached, onClick }: IssueOptionRowProps) {
+  const { ref, isTruncated } = useTruncationDetection();
+
+  return (
+    <TruncatedTooltip content={issue.title} isTruncated={isTruncated}>
+      <button
+        type="button"
+        role="option"
+        aria-selected={isSelected}
+        onClick={onClick}
+        className={cn(
+          "w-full text-left px-3 py-2.5 rounded-[var(--radius-md)] transition-colors flex items-start gap-3",
+          isSelected
+            ? "bg-overlay-soft border border-border-strong"
+            : "hover:bg-tint/5 border border-transparent",
+          isCurrentlyAttached && "ring-1 ring-status-success/30"
+        )}
+      >
+        {issue.state === "OPEN" ? (
+          <CircleDot className="w-4 h-4 text-github-open shrink-0 mt-0.5" />
+        ) : (
+          <CircleCheck className="w-4 h-4 text-github-merged shrink-0 mt-0.5" />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span ref={ref} className="text-sm text-daintree-text truncate">
+              {issue.title}
+            </span>
+            {isCurrentlyAttached && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-success/10 text-status-success shrink-0">
+                attached
+              </span>
+            )}
+          </div>
+          <span className="text-xs text-daintree-text/50 font-mono">#{issue.number}</span>
+        </div>
+      </button>
+    </TruncatedTooltip>
+  );
+}
 
 export function IssuePickerDialog({
   isOpen,
@@ -50,7 +101,7 @@ export function IssuePickerDialog({
         setIssues(result.items);
         setSelectedIndex(0);
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to load issues");
+        setError(formatErrorMessage(e, "Failed to load issues"));
         setIssues([]);
       } finally {
         setIsLoading(false);
@@ -142,7 +193,7 @@ export function IssuePickerDialog({
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search issues by title or number..."
-            className="w-full pl-10 pr-4 py-2 bg-tint/5 border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text placeholder:text-text-muted focus:outline-none focus:border-daintree-accent"
+            className="w-full pl-10 pr-4 py-2 bg-tint/5 border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent"
           />
         </div>
 
@@ -154,8 +205,8 @@ export function IssuePickerDialog({
               className={cn(
                 "px-3 py-1 text-xs rounded-full transition-colors capitalize",
                 stateFilter === state
-                  ? "bg-daintree-accent/20 text-daintree-accent"
-                  : "text-daintree-text/50 hover:text-daintree-text/80 hover:bg-tint/5"
+                  ? "bg-overlay-medium text-daintree-text border border-border-strong"
+                  : "border border-transparent text-daintree-text/50 hover:text-daintree-text/80 hover:bg-tint/5"
               )}
             >
               {state}
@@ -178,41 +229,15 @@ export function IssuePickerDialog({
           </div>
         ) : (
           <div ref={listRef} className="space-y-1" role="listbox">
-            {issues.map((issue, index) => {
-              const isCurrentlyAttached = issue.number === currentIssueNumber;
-              return (
-                <button
-                  key={issue.number}
-                  role="option"
-                  aria-selected={index === selectedIndex}
-                  onClick={() => handleSelectIssue(issue)}
-                  className={cn(
-                    "w-full text-left px-3 py-2.5 rounded-[var(--radius-md)] transition-colors flex items-start gap-3",
-                    index === selectedIndex
-                      ? "bg-daintree-accent/10 border border-daintree-accent/30"
-                      : "hover:bg-tint/5 border border-transparent",
-                    isCurrentlyAttached && "ring-1 ring-status-success/30"
-                  )}
-                >
-                  {issue.state === "OPEN" ? (
-                    <CircleDot className="w-4 h-4 text-github-open shrink-0 mt-0.5" />
-                  ) : (
-                    <CircleCheck className="w-4 h-4 text-github-merged shrink-0 mt-0.5" />
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-daintree-text truncate">{issue.title}</span>
-                      {isCurrentlyAttached && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-success/10 text-status-success shrink-0">
-                          attached
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-xs text-daintree-text/50 font-mono">#{issue.number}</span>
-                  </div>
-                </button>
-              );
-            })}
+            {issues.map((issue, index) => (
+              <IssueOptionRow
+                key={issue.number}
+                issue={issue}
+                isSelected={index === selectedIndex}
+                isCurrentlyAttached={issue.number === currentIssueNumber}
+                onClick={() => handleSelectIssue(issue)}
+              />
+            ))}
           </div>
         )}
       </div>

@@ -1,10 +1,12 @@
 import { useCallback, useMemo } from "react";
 import type { WorktreeSnapshot, RecipeTerminal } from "@/types";
-import { useErrorStore, type AppError } from "@/store";
+import { useErrorStore, type ErrorRecord } from "@/store";
 import { useRecipeStore } from "@/store/recipeStore";
+import { logError } from "@/utils/logger";
 import { useNotificationStore } from "@/store/notificationStore";
 import { formatBytes } from "@/lib/formatBytes";
 import { actionService } from "@/services/ActionService";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export function formatCopyResultMessage(payload: {
   fileCount: number;
@@ -25,6 +27,11 @@ export async function copyContextWithFeedback(
   worktreeId: string,
   options?: { modified?: boolean }
 ): Promise<void> {
+  // Direct store call: this is a spinner-then-update pattern that depends on
+  // an unconditional toast id. notify() returns "" when notifications are
+  // disabled (or quiet hours apply), which would silently break the
+  // updateNotification handoff below. The user just clicked "copy context",
+  // so feedback is required regardless of quiet-hour preferences.
   const store = useNotificationStore.getState();
   const toastId = store.addNotification({
     type: "info",
@@ -67,7 +74,7 @@ export async function copyContextWithFeedback(
       dismissed: false,
     });
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Failed to copy context to clipboard";
+    const message = formatErrorMessage(e, "Failed to copy context to clipboard");
     store.updateNotification(toastId, {
       type: "error",
       message: `Copy context failed: ${message}`,
@@ -75,7 +82,7 @@ export async function copyContextWithFeedback(
       dismissed: false,
     });
 
-    let errorType: AppError["type"] = "process";
+    let errorType: ErrorRecord["type"] = "process";
     if (message.includes("not available") || message.includes("not installed")) {
       errorType = "config";
     } else if (
@@ -100,7 +107,6 @@ export async function copyContextWithFeedback(
 
 export interface UseWorktreeActionsOptions {
   onOpenRecipeEditor?: (worktreeId: string, initialTerminals?: RecipeTerminal[]) => void;
-  launchAgent?: (agentId: string, options: { worktreeId: string; location: "grid" }) => void;
 }
 
 export interface WorktreeActions {
@@ -114,7 +120,6 @@ export interface WorktreeActions {
 
 export function useWorktreeActions({
   onOpenRecipeEditor,
-  launchAgent,
 }: UseWorktreeActionsOptions = {}): WorktreeActions {
   const addError = useErrorStore((state) => state.addError);
 
@@ -141,10 +146,10 @@ export function useWorktreeActions({
         };
         return formatCopyResultMessage(payload);
       } catch (e) {
-        const message = e instanceof Error ? e.message : "Failed to copy context to clipboard";
+        const message = formatErrorMessage(e, "Failed to copy context to clipboard");
         const details = e instanceof Error ? e.stack : undefined;
 
-        let errorType: AppError["type"] = "process";
+        let errorType: ErrorRecord["type"] = "process";
         if (message.includes("not available") || message.includes("not installed")) {
           errorType = "config";
         } else if (
@@ -167,7 +172,7 @@ export function useWorktreeActions({
           correlationId: crypto.randomUUID(),
         });
 
-        console.error("Failed to copy context:", message);
+        logError("Failed to copy context", undefined, { message });
         return undefined;
       }
     },
@@ -222,12 +227,13 @@ export function useWorktreeActions({
     [addError, onOpenRecipeEditor]
   );
 
-  const handleLaunchAgent = useCallback(
-    (worktreeId: string, agentId: string) => {
-      launchAgent?.(agentId, { worktreeId, location: "grid" });
-    },
-    [launchAgent]
-  );
+  const handleLaunchAgent = useCallback((worktreeId: string, agentId: string) => {
+    void actionService.dispatch(
+      "agent.launch",
+      { agentId, worktreeId, location: "grid" },
+      { source: "user" }
+    );
+  }, []);
 
   return useMemo(
     () => ({

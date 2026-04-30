@@ -27,7 +27,7 @@ export const logsClient = {
     return window.electron.logs.openFile();
   },
 
-  setVerbose: (enabled: boolean): Promise<{ success: boolean }> => {
+  setVerbose: (enabled: boolean): Promise<void> => {
     return window.electron.logs.setVerbose(enabled);
   },
 
@@ -41,5 +41,21 @@ export const logsClient = {
 
   onBatch: (callback: (entries: LogEntry[]) => void): (() => void) => {
     return window.electron.logs.onBatch(callback);
+  },
+
+  getLevelOverrides: (): Promise<Record<string, string>> => {
+    return window.electron.logs.getLevelOverrides();
+  },
+
+  setLevelOverrides: (overrides: Record<string, string>): Promise<{ success: boolean }> => {
+    return window.electron.logs.setLevelOverrides(overrides);
+  },
+
+  clearLevelOverrides: (): Promise<{ success: boolean }> => {
+    return window.electron.logs.clearLevelOverrides();
+  },
+
+  getRegistry: (): Promise<string[]> => {
+    return window.electron.logs.getRegistry();
   },
 } as const;

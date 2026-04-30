@@ -2,13 +2,12 @@ import { performance } from "node:perf_hooks";
 
 export interface PanelState {
   id: string;
-  kind: "terminal" | "agent" | "browser" | "notes" | "dev-preview";
+  kind: "terminal" | "agent" | "browser" | "dev-preview";
   worktreeId: string | null;
   title: string;
   cwd: string;
   command?: string;
   browserUrl?: string;
-  notePath?: string;
 }
 
 export interface PersistedLayout {
@@ -22,13 +21,7 @@ export interface DevPreviewLogFrame {
   hasUrl: boolean;
 }
 
-const KIND_SEQUENCE: PanelState["kind"][] = [
-  "terminal",
-  "agent",
-  "browser",
-  "notes",
-  "dev-preview",
-];
+const KIND_SEQUENCE: PanelState["kind"][] = ["terminal", "agent", "browser", "dev-preview"];
 
 export function createRng(seed = 1337): () => number {
   let state = seed >>> 0;
@@ -82,7 +75,6 @@ export function createPersistedLayout(
         kind === "browser" || kind === "dev-preview"
           ? `http://localhost:${3000 + (index % 20)}`
           : undefined,
-      notePath: kind === "notes" ? `/repo/notes/note-${index}.md` : undefined,
     };
   });
 
@@ -120,7 +112,6 @@ export function simulateLayoutHydration(layout: PersistedLayout): {
 
     if (panel.command) checksum += panel.command.length;
     if (panel.browserUrl) checksum += panel.browserUrl.length;
-    if (panel.notePath) checksum += panel.notePath.length;
   }
 
   let restoredGroups = 0;

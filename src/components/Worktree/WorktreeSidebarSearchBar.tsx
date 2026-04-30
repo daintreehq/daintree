@@ -8,6 +8,14 @@ interface WorktreeSidebarSearchBarProps {
   inputRef?: React.Ref<HTMLInputElement>;
 }
 
+function assignForwardedRef<T>(ref: React.Ref<T> | undefined, value: T | null): void {
+  if (typeof ref === "function") {
+    ref(value);
+  } else if (ref && typeof ref === "object") {
+    (ref as React.MutableRefObject<T | null>).current = value;
+  }
+}
+
 export function WorktreeSidebarSearchBar({ inputRef }: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
   const setQuery = useWorktreeFilterStore((state) => state.setQuery);
@@ -73,11 +81,7 @@ export function WorktreeSidebarSearchBar({ inputRef }: WorktreeSidebarSearchBarP
   const setRefs = useCallback(
     (el: HTMLInputElement | null) => {
       internalRef.current = el;
-      if (typeof inputRef === "function") {
-        inputRef(el);
-      } else if (inputRef && typeof inputRef === "object") {
-        (inputRef as React.MutableRefObject<HTMLInputElement | null>).current = el;
-      }
+      assignForwardedRef(inputRef, el);
     },
     [inputRef]
   );
@@ -106,7 +110,7 @@ export function WorktreeSidebarSearchBar({ inputRef }: WorktreeSidebarSearchBarP
           onKeyDown={handleKeyDown}
           placeholder="Search worktrees..."
           aria-label="Search worktrees"
-          className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder-daintree-text/40 focus:outline-none"
+          className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder-daintree-text/40 focus:outline-hidden"
         />
         <div className="flex shrink-0 items-center gap-0.5">
           {showClear && (

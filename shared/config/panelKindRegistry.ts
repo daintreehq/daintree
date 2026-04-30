@@ -65,17 +65,6 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     keepAliveOnProjectSwitch: true,
     showInPalette: false,
   },
-  agent: {
-    id: "agent",
-    name: "Agent",
-    iconId: "agent",
-    color: PANEL_KIND_BRAND_COLORS.agent,
-    hasPty: true,
-    canRestart: true,
-    canConvert: true,
-    keepAliveOnProjectSwitch: true,
-    showInPalette: false,
-  },
   browser: {
     id: "browser",
     name: "Browser",
@@ -88,22 +77,10 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     showInPalette: true,
     searchAliases: ["web", "chrome", "internet", "www"],
   },
-  notes: {
-    id: "notes",
-    name: "Notes",
-    iconId: "sticky-note",
-    color: PANEL_KIND_BRAND_COLORS.notes,
-    hasPty: false,
-    canRestart: false,
-    canConvert: false,
-    keepAliveOnProjectSwitch: true,
-    showInPalette: true,
-    searchAliases: ["md", "markdown", "text", "memo"],
-  },
   "dev-preview": {
     id: "dev-preview",
     name: "Dev Preview",
-    iconId: "monitor",
+    iconId: "monitor-play",
     color: PANEL_KIND_BRAND_COLORS["dev-preview"],
     hasPty: false,
     canRestart: false,
@@ -119,12 +96,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
  * Default fields for extension panel kinds that don't provide a createDefaults factory.
  */
 export function getExtensionFallbackDefaults(): Partial<TerminalInstance> {
-  return {
-    type: "terminal" as const,
-    cwd: "",
-    cols: 80,
-    rows: 24,
-  };
+  return {};
 }
 
 /**
@@ -138,6 +110,25 @@ export function registerPanelKind(config: PanelKindConfig): void {
     console.warn(`Panel kind "${config.id}" already registered, overwriting`);
   }
   PANEL_KIND_REGISTRY[config.id] = config;
+}
+
+/**
+ * Unregister all panel kinds owned by a given plugin.
+ * Only removes entries whose `extensionId` matches. Built-in panel kinds
+ * have no `extensionId` and will never match a real plugin ID. The input
+ * guard rejects empty or non-string pluginIds so a caller that accidentally
+ * passes `undefined` (via a type cast or JS-side mistake) cannot match
+ * built-in entries whose `extensionId` is also `undefined`.
+ *
+ * @param pluginId - The plugin whose contributed panel kinds should be removed
+ */
+export function unregisterPluginPanelKinds(pluginId: string): void {
+  if (typeof pluginId !== "string" || pluginId.length === 0) return;
+  for (const [key, config] of Object.entries(PANEL_KIND_REGISTRY)) {
+    if (config.extensionId === pluginId) {
+      delete PANEL_KIND_REGISTRY[key];
+    }
+  }
 }
 
 /**
@@ -173,12 +164,13 @@ export function isRegisteredPanelKind(kind: PanelKind): boolean {
  * Get the default title for a panel based on its kind and optional agent ID.
  *
  * @param kind - The panel kind
- * @param agentId - Optional agent ID for agent panels
+ * @param agentId - Optional agent ID; when present on a PTY panel, the agent's
+ *   display name takes precedence over the kind's default title
  * @returns The default title for the panel
  */
 export function getDefaultPanelTitle(kind: PanelKind, agentId?: string): string {
-  // Agent panels use agent-specific title
-  if (kind === "agent" && agentId) {
+  // Agent identity (via agentId) takes precedence over the generic kind title.
+  if (agentId) {
     const agentConfig = getAgentConfig(agentId);
     if (agentConfig) return agentConfig.name;
   }
@@ -195,12 +187,13 @@ export function getDefaultPanelTitle(kind: PanelKind, agentId?: string): string 
  * Get the color for a panel based on its kind and optional agent ID.
  *
  * @param kind - The panel kind
- * @param agentId - Optional agent ID for agent panels
+ * @param agentId - Optional agent ID; when present on a PTY panel, the agent's
+ *   brand color takes precedence over the kind's default color
  * @returns The hex color for the panel
  */
 export function getPanelKindColor(kind: PanelKind, agentId?: string): string {
-  // Agent panels use agent-specific color
-  if (kind === "agent" && agentId) {
+  // Agent identity (via agentId) takes precedence over the generic kind color.
+  if (agentId) {
     const agentConfig = getAgentConfig(agentId);
     if (agentConfig) return agentConfig.color;
   }
@@ -236,9 +229,8 @@ export function panelKindHasPty(kind: PanelKind): boolean {
  * @returns True if the panel kind supports restart, false otherwise (including unregistered kinds)
  *
  * @example
- * // Terminal and agent panels can be restarted
+ * // Terminal panels can be restarted (agent terminals are just terminals with agentId set)
  * panelKindCanRestart('terminal') // true
- * panelKindCanRestart('agent')    // true
  *
  * // Browser panels cannot be restarted
  * panelKindCanRestart('browser')  // false
@@ -278,5 +270,21 @@ export function panelKindKeepsAliveOnProjectSwitch(kind: PanelKind): boolean {
  * Get all built-in panel kinds.
  */
 export function getBuiltInPanelKinds(): BuiltInPanelKind[] {
-  return ["terminal", "agent", "browser", "notes", "dev-preview"];
+  return ["terminal", "browser", "dev-preview"];
+}
+
+/**
+ * Remove all extension-contributed panel kinds while preserving built-ins.
+ *
+ * Built-in entries have no `extensionId` field, so this deletes only entries
+ * registered via plugins. Intended for test cleanup — in a singleFork Vitest
+ * pool the module-level registry persists across tests, so integration tests
+ * must clear extension entries between cases.
+ */
+export function clearPanelKindRegistry(): void {
+  for (const [key, config] of Object.entries(PANEL_KIND_REGISTRY)) {
+    if (config.extensionId !== undefined) {
+      delete PANEL_KIND_REGISTRY[key];
+    }
+  }
 }

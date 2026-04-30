@@ -100,7 +100,6 @@ describe("resetWithoutKilling", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -109,7 +108,6 @@ describe("resetWithoutKilling", () => {
       },
       {
         id: "term-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/test",
         cols: 80,
@@ -118,7 +116,6 @@ describe("resetWithoutKilling", () => {
       },
       {
         id: "term-3",
-        type: "terminal",
         title: "Shell 3",
         cwd: "/test",
         cols: 80,
@@ -127,7 +124,6 @@ describe("resetWithoutKilling", () => {
       },
       {
         id: "term-4",
-        type: "terminal",
         title: "Shell 4",
         cwd: "/test",
         cols: 80,
@@ -154,7 +150,6 @@ describe("resetWithoutKilling", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -163,7 +158,6 @@ describe("resetWithoutKilling", () => {
       },
       {
         id: "term-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/test",
         cols: 80,
@@ -185,7 +179,6 @@ describe("resetWithoutKilling", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -194,7 +187,6 @@ describe("resetWithoutKilling", () => {
       },
       {
         id: "term-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/test",
         cols: 80,
@@ -214,7 +206,6 @@ describe("resetWithoutKilling", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -223,7 +214,6 @@ describe("resetWithoutKilling", () => {
       },
       {
         id: "term-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/test",
         cols: 80,
@@ -245,7 +235,6 @@ describe("resetWithoutKilling", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -254,7 +243,6 @@ describe("resetWithoutKilling", () => {
       },
       {
         id: "term-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/test",
         cols: 80,
@@ -276,7 +264,6 @@ describe("resetWithoutKilling", () => {
     setTerminals([
       {
         id: "term-keep",
-        type: "terminal",
         title: "Keep",
         cwd: "/test",
         cols: 80,
@@ -285,7 +272,6 @@ describe("resetWithoutKilling", () => {
       },
       {
         id: "term-drop",
-        type: "terminal",
         title: "Drop",
         cwd: "/test",
         cols: 80,
@@ -342,7 +328,6 @@ describe("resetWithoutKilling", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -369,7 +354,6 @@ describe("resetWithoutKilling", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -416,7 +400,6 @@ describe("resetWithoutKilling", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -425,7 +408,6 @@ describe("resetWithoutKilling", () => {
       },
       {
         id: "term-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/test",
         cols: 80,
@@ -434,7 +416,6 @@ describe("resetWithoutKilling", () => {
       },
       {
         id: "term-3",
-        type: "terminal",
         title: "Shell 3",
         cwd: "/test",
         cols: 80,
@@ -488,7 +469,6 @@ describe("resetWithoutKilling", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,

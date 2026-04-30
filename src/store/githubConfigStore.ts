@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { GitHubTokenConfig } from "@/types";
 import { githubClient } from "@/clients";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface GitHubConfigState {
   config: GitHubTokenConfig | null;
@@ -37,7 +38,7 @@ export const useGitHubConfigStore = create<GitHubConfigStore>()((set, get) => ({
         set({ config, isLoading: false, isInitialized: true });
       } catch (e) {
         set({
-          error: e instanceof Error ? e.message : "Failed to load GitHub config",
+          error: formatErrorMessage(e, "Failed to load GitHub config"),
           isLoading: false,
           isInitialized: true,
         });
@@ -53,7 +54,7 @@ export const useGitHubConfigStore = create<GitHubConfigStore>()((set, get) => ({
       const config = await githubClient.getConfig();
       set({ config });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : "Failed to refresh GitHub config" });
+      set({ error: formatErrorMessage(e, "Failed to refresh GitHub config") });
     }
   },
 

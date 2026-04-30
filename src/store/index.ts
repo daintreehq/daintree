@@ -7,10 +7,11 @@ export { useWorktreeSelectionStore } from "./worktreeStore";
 export { getCurrentViewStore, cleanupOrphanedTerminals } from "./createWorktreeStore";
 export type { WorktreeViewStoreApi } from "./createWorktreeStore";
 
-export { useLogsStore, filterLogs } from "./logsStore";
+export { useLogsStore, filterLogs, collapseConsecutiveDuplicates } from "./logsStore";
+export type { DisplayEntry } from "./logsStore";
 
 export { useErrorStore } from "./errorStore";
-export type { AppError, ErrorType, RetryAction } from "./errorStore";
+export type { ErrorRecord, ErrorType, RetryAction } from "./errorStore";
 
 export { useEventStore } from "./eventStore";
 
@@ -55,6 +56,10 @@ export {
   HELP_PANEL_DEFAULT_WIDTH,
 } from "./helpPanelStore";
 
+export { useThemeBrowserStore } from "./themeBrowserStore";
+
+export { useSettingsStore } from "./settingsStore";
+
 export { useUIStore } from "./uiStore";
 
 export { usePaletteStore } from "./paletteStore";
@@ -80,6 +85,9 @@ export type { DefaultAgentId } from "./agentPreferencesStore";
 export { useVoiceRecordingStore } from "./voiceRecordingStore";
 
 export { useDockStore } from "./dockStore";
+
+export { useFleetScopeFlagStore } from "./fleetScopeFlagStore";
+export type { FleetScopeMode } from "./fleetScopeFlagStore";
 
 export { useTwoPaneSplitStore } from "./twoPaneSplitStore";
 export type { TwoPaneSplitConfig, WorktreeRatioEntry } from "./twoPaneSplitStore";

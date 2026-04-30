@@ -33,15 +33,15 @@ test.describe.serial("Core: Error Boundaries", () => {
 
     // Verify fullscreen variant content
     await expect(fallback).toHaveAttribute("data-variant", "fullscreen");
-    await expect(window.locator(SEL.errorBoundary.title)).toContainText("Application Error");
-    await expect(window.locator(SEL.errorBoundary.restartButton)).toContainText(
-      "Restart Application"
+    await expect(window.locator(SEL.errorBoundary.title)).toContainText(
+      "Daintree hit an unrecoverable error"
     );
+    await expect(window.locator(SEL.errorBoundary.restartButton)).toContainText("Reload window");
     await expect(window.locator(SEL.errorBoundary.reportButton)).toBeVisible();
     await expect(window.locator(SEL.errorBoundary.logsButton)).toBeVisible();
   });
 
-  test("Restart Application button recovers the app", async () => {
+  test("Reload window button recovers the app", async () => {
     const { window } = ctx;
 
     // Fallback should still be visible from previous test

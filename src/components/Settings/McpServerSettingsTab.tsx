@@ -1,9 +1,14 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Copy, Check, AlertCircle, Key, Hash, Shield, Eye, EyeOff, RefreshCw } from "lucide-react";
 import { McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { notify } from "@/lib/notify";
+import { logError } from "@/utils/logger";
 
 interface McpServerStatus {
   enabled: boolean;
@@ -24,6 +29,8 @@ export function McpServerSettingsTab() {
   const [error, setError] = useState<string | null>(null);
   const [portInput, setPortInput] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let settled = false;
@@ -31,6 +38,13 @@ export function McpServerSettingsTab() {
       settled = true;
       setError("Settings load timed out");
       setLoading(false);
+      notify({
+        type: "error",
+        title: "MCP status failed",
+        message: "Loading MCP server status timed out. The settings panel may be out of date.",
+        priority: "low",
+      });
+      logError("MCP status load timed out");
     }, 10_000);
     window.electron.mcpServer
       .getStatus()
@@ -42,7 +56,14 @@ export function McpServerSettingsTab() {
       })
       .catch((err) => {
         if (settled) return;
-        setError(err instanceof Error ? err.message : "Failed to load MCP status");
+        setError(formatErrorMessage(err, "Failed to load MCP status"));
+        notify({
+          type: "error",
+          title: "MCP status failed",
+          message: "Couldn't load MCP server status. The settings panel may be out of date.",
+          priority: "low",
+        });
+        logError("Failed to load MCP status", err);
       })
       .finally(() => {
         settled = true;
@@ -50,7 +71,10 @@ export function McpServerSettingsTab() {
         setLoading(false);
       });
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
   }, []);
 
   const handleToggle = useCallback(async () => {
@@ -59,7 +83,14 @@ export function McpServerSettingsTab() {
       const newStatus = await window.electron.mcpServer.setEnabled(!status.enabled);
       setStatus(newStatus);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update MCP server");
+      setError(formatErrorMessage(err, "Failed to update MCP server"));
+      notify({
+        type: "error",
+        title: "MCP server update failed",
+        message: "Couldn't update the MCP server state. Try again.",
+        priority: "low",
+      });
+      logError("Failed to update MCP server", err);
     }
   }, [status.enabled]);
 
@@ -70,7 +101,14 @@ export function McpServerSettingsTab() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to copy config");
+      setError(formatErrorMessage(err, "Failed to copy config"));
+      notify({
+        type: "error",
+        title: "Config copy failed",
+        message: "Couldn't copy the MCP config. The server may not be running.",
+        priority: "low",
+      });
+      logError("Failed to copy MCP config", err);
     }
   }, []);
 
@@ -87,7 +125,14 @@ export function McpServerSettingsTab() {
       setStatus(newStatus);
       setPortInput(newStatus.configuredPort?.toString() ?? "");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update port");
+      setError(formatErrorMessage(err, "Failed to update port"));
+      notify({
+        type: "error",
+        title: "Port update failed",
+        message: "Couldn't save the port setting. Check the value and try again.",
+        priority: "low",
+      });
+      logError("Failed to update MCP port", err);
     }
   }, [portInput]);
 
@@ -97,8 +142,16 @@ export function McpServerSettingsTab() {
       const key = await window.electron.mcpServer.generateApiKey();
       setStatus((prev) => ({ ...prev, apiKey: key }));
       setShowApiKey(true);
+      setCopiedKey(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate API key");
+      setError(formatErrorMessage(err, "Failed to generate API key"));
+      notify({
+        type: "error",
+        title: "API key generation failed",
+        message: "Couldn't generate a new API key. Try again.",
+        priority: "low",
+      });
+      logError("Failed to generate MCP API key", err);
     }
   }, []);
 
@@ -107,10 +160,29 @@ export function McpServerSettingsTab() {
       setError(null);
       const newStatus = await window.electron.mcpServer.setApiKey("");
       setStatus(newStatus);
+      setCopiedKey(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to clear API key");
+      setError(formatErrorMessage(err, "Failed to clear API key"));
+      notify({
+        type: "error",
+        title: "API key removal failed",
+        message: "Couldn't remove the API key. Try again.",
+        priority: "low",
+      });
+      logError("Failed to clear MCP API key", err);
     }
   }, []);
+
+  const handleCopyApiKey = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(status.apiKey);
+      setCopiedKey(true);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopiedKey(false), 2000);
+    } catch {
+      // clipboard write failed — silently ignore
+    }
+  }, [status.apiKey]);
 
   const sseUrl = status.port ? `http://127.0.0.1:${status.port}/sse` : null;
 
@@ -126,6 +198,22 @@ export function McpServerSettingsTab() {
         disabled={loading}
       />
 
+      {!status.enabled && !loading && !error && (
+        <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+          <EmptyState
+            variant="zero-data"
+            icon={<McpServerIcon />}
+            title="MCP server is off"
+            description="Turn it on to expose Daintree's actions as MCP tools agents can call."
+            action={
+              <Button variant="outline" size="sm" onClick={() => void handleToggle()}>
+                Turn on MCP server
+              </Button>
+            }
+          />
+        </div>
+      )}
+
       {status.enabled && (
         <>
           {/* Connection Status */}
@@ -137,7 +225,7 @@ export function McpServerSettingsTab() {
             {loading ? (
               <p className="text-xs text-daintree-text/50">Loading…</p>
             ) : status.port ? (
-              <div className="space-y-3">
+              <div className="contents">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-status-success shrink-0" />
                   <span className="text-xs text-daintree-text/60">
@@ -191,7 +279,7 @@ export function McpServerSettingsTab() {
                   if (e.key === "Enter") handlePortSave();
                 }}
                 placeholder="45454"
-                className="w-40 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 font-mono focus:outline-none focus:ring-1 focus:ring-daintree-accent"
+                className="w-40 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 font-mono focus:outline-hidden focus:ring-1 focus:ring-daintree-accent"
               />
               <button
                 onClick={handlePortSave}
@@ -221,24 +309,21 @@ export function McpServerSettingsTab() {
             description="Optionally require a bearer token for MCP connections. Recommended if other users share this machine. Not needed for typical local-only use."
           >
             {status.apiKey ? (
-              <div className="space-y-3">
+              <div className="contents">
                 <div className="flex items-center gap-1.5 text-xs text-status-success">
                   <Key className="w-3 h-3" />
                   API key active — clients must send an Authorization header
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 relative">
-                    <input
-                      type={showApiKey ? "text" : "password"}
-                      value={status.apiKey}
-                      readOnly
-                      className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 pr-10 font-mono text-xs text-daintree-text/80 focus:outline-none select-all"
-                    />
+                  <div className="flex-1 flex items-center gap-2 rounded-[var(--radius-md)] bg-surface-disabled border border-daintree-border px-3 py-2 font-mono text-xs text-daintree-text/80 select-all">
+                    <span className="flex-1 truncate">
+                      {showApiKey ? status.apiKey : "•".repeat(status.apiKey.length)}
+                    </span>
                     <button
                       type="button"
                       onClick={() => setShowApiKey((v) => !v)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-daintree-text/40 hover:text-daintree-text/70"
+                      className="shrink-0 text-daintree-text/40 hover:text-daintree-text/70"
                       aria-label={showApiKey ? "Hide API key" : "Show API key"}
                     >
                       {showApiKey ? (
@@ -248,6 +333,25 @@ export function McpServerSettingsTab() {
                       )}
                     </button>
                   </div>
+                  <button
+                    type="button"
+                    onClick={handleCopyApiKey}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] transition-colors",
+                      "border border-daintree-border hover:bg-overlay-soft",
+                      copiedKey
+                        ? "text-status-success border-status-success/30"
+                        : "text-daintree-text/70 hover:text-daintree-text"
+                    )}
+                    aria-label="Copy API key"
+                  >
+                    {copiedKey ? (
+                      <Check className="w-3.5 h-3.5" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                    {copiedKey ? "Copied!" : "Copy"}
+                  </button>
                   <button
                     onClick={handleGenerateApiKey}
                     className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
@@ -265,7 +369,7 @@ export function McpServerSettingsTab() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="contents">
                 <div className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border">
                   <div className="w-2 h-2 rounded-full bg-daintree-text/30" />
                   <span className="text-xs text-daintree-text/60">

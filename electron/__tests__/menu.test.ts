@@ -51,6 +51,12 @@ vi.mock("electron", () => ({
     isPackaged: false,
     getVersion: vi.fn(() => "1.0.0"),
     setAboutPanelOptions: vi.fn(),
+    setPath: vi.fn(),
+    getPath: vi.fn(() => "/mock/path"),
+    commandLine: {
+      appendSwitch: vi.fn(),
+      appendArgument: vi.fn(),
+    },
   },
   webContents: {
     getFocusedWebContents: vi.fn(() => mockFocusedWebContents),
@@ -69,11 +75,17 @@ vi.mock("../ipc/channels.js", () => ({
 }));
 
 vi.mock("../../shared/config/agentRegistry.js", () => ({
+  AGENT_REGISTRY: {},
   getEffectiveRegistry: vi.fn(() => ({})),
 }));
 
 vi.mock("../services/CliAvailabilityService.js", () => ({}));
 vi.mock("../services/CliInstallService.js", () => ({}));
+vi.mock("../window/windowServices.js", () => ({
+  getPtyClient: vi.fn(),
+  getWorkspaceClientRef: vi.fn(),
+  getWorktreePortBrokerRef: vi.fn(),
+}));
 
 vi.mock("../window/windowRef.js", () => ({
   getWindowRegistry: vi.fn(() => null),

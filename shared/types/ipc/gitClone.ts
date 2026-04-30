@@ -12,9 +12,10 @@ export interface CloneRepoProgressEvent {
   timestamp: number;
 }
 
+/**
+ * Successful clone result. Failures throw `AppError`:
+ * `code: "CANCELLED"` when the user aborted the clone, otherwise `INTERNAL`.
+ */
 export interface CloneRepoResult {
-  success: boolean;
-  clonedPath?: string;
-  error?: string;
-  cancelled?: boolean;
+  clonedPath: string;
 }

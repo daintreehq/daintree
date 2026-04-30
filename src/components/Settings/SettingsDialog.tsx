@@ -4,12 +4,15 @@ import {
   startTransition,
   useState,
   useEffect,
+  useEffectEvent,
   useDeferredValue,
   useMemo,
   useRef,
   useCallback,
+  useContext,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { logError } from "@/utils/logger";
 import {
   usePortalStore,
   usePerformanceModeStore,
@@ -18,6 +21,7 @@ import {
   useTerminalInputStore,
   useTwoPaneSplitStore,
   usePreferencesStore,
+  useSettingsStore,
 } from "@/store";
 import {
   X,
@@ -34,7 +38,6 @@ import {
   Bell,
   Search,
   ChevronRight,
-  ChevronDown,
   KeyRound,
   Shield,
   FileCode,
@@ -42,14 +45,16 @@ import {
   Command,
   AlertTriangle,
 } from "lucide-react";
-import {
-  WorktreeIcon,
-  DaintreeAgentIcon,
-  TerminalRecipeIcon,
-  McpServerIcon,
-} from "@/components/icons";
+import { FolderGit2, Plug, Workflow, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { appClient } from "@/clients";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { GeneralTab } from "./GeneralTab";
@@ -152,6 +157,10 @@ import { RecipesTab as ProjectRecipesTab } from "@/components/Project/RecipesTab
 import { CommandOverridesTab } from "./CommandOverridesTab";
 import { ProjectNotificationsTab } from "@/components/Project/ProjectNotificationsTab";
 import { GitHubTab as ProjectGitHubTab } from "@/components/Project/GitHubTab";
+import {
+  SettingsValidationProvider,
+  SettingsValidationContext,
+} from "./SettingsValidationRegistry";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
@@ -204,7 +213,17 @@ function scopeForTab(tab: SettingsTab): SettingsScope {
   return tab.startsWith("project:") ? "project" : "global";
 }
 
-export function SettingsDialog({
+export function SettingsDialog(props: SettingsDialogProps) {
+  // Provider must wrap SettingsDialogInner: the inner component reads the registry
+  // via useContext to render nav-sidebar error dots.
+  return (
+    <SettingsValidationProvider>
+      <SettingsDialogInner {...props} />
+    </SettingsValidationProvider>
+  );
+}
+
+function SettingsDialogInner({
   isOpen,
   onClose,
   defaultTab,
@@ -252,6 +271,8 @@ export function SettingsDialog({
   const deferredQuery = useDeferredValue(searchQuery);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const setPortalOpen = usePortalStore((state) => state.setOpen);
+  const setTab = useSettingsStore((s) => s.setTab);
+  const setSubtab = useSettingsStore((s) => s.setSubtab);
 
   useEffect(() => {
     if (isOpen) {
@@ -261,7 +282,9 @@ export function SettingsDialog({
 
   const [appVersion, setAppVersion] = useState<string>("Loading...");
 
-  useEffect(() => {
+  // activeTab is read non-reactively via useEffectEvent to avoid re-running
+  // this reset-on-open effect when the user changes tabs mid-session.
+  const handleOpenChange = useEffectEvent(() => {
     if (isOpen && defaultTab) {
       markTabVisited(defaultTab);
       if (defaultTab !== activeTab) {
@@ -285,7 +308,13 @@ export function SettingsDialog({
       setSearchQuery("");
       setHiddenSettingBanner(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  });
+  useEffect(() => {
+    void isOpen;
+    void defaultTab;
+    void defaultSubtab;
+    void defaultSectionId;
+    handleOpenChange();
   }, [isOpen, defaultTab, defaultSubtab, defaultSectionId]);
 
   useEffect(() => {
@@ -294,7 +323,7 @@ export function SettingsDialog({
         .getVersion()
         .then(setAppVersion)
         .catch((error) => {
-          console.error("Failed to fetch app version:", error);
+          logError("Failed to fetch app version", error);
           setAppVersion("Unavailable");
         });
     }
@@ -306,6 +335,12 @@ export function SettingsDialog({
       setSearchQuery("");
     }
   }, [isOpen]);
+
+  // Sync active tab to store for theme browser bridge
+  useEffect(() => {
+    setTab(activeTab);
+    setSubtab(activeSubtabs[activeTab] ?? null);
+  }, [activeTab, activeSubtabs, setTab, setSubtab]);
 
   // Keyboard shortcut: "/" or Cmd+F focuses search
   useEffect(() => {
@@ -393,13 +428,21 @@ export function SettingsDialog({
   const projectLabel =
     projectForm.currentProject?.name ?? projectForm.currentProject?.id ?? "project";
 
+  // Validation error tracking from the registry provider
+  const validationRegistry = useContext(SettingsValidationContext);
+  const tabsWithErrors = validationRegistry?.tabsWithErrors ?? new Set();
+
   const [globalEnvVars, setGlobalEnvVars] = useState<Record<string, string>>({});
   useEffect(() => {
     if (!isOpen) return;
     window.electron.globalEnv
       .get()
       .then(setGlobalEnvVars)
-      .catch(() => {});
+      .catch((err) => {
+        // Log only — EnvironmentSettingsTab owns the user-visible failure path
+        // when the user opens that tab. Avoid double-toasting the same IPC fail.
+        logError("Failed to preload global env vars for agent settings", err);
+      });
   }, [isOpen]);
 
   const handleBeforeClose = useCallback(async () => {
@@ -470,10 +513,12 @@ export function SettingsDialog({
       } else if (e.key === "Enter" && activeResultIndex >= 0) {
         e.preventDefault();
         const result = searchResults[activeResultIndex];
-        handleResultClick(
-          { tab: result.tab, subtab: result.subtab, sectionId: result.id },
-          result.requiresEnabled
-        );
+        if (result) {
+          handleResultClick(
+            { tab: result.tab, subtab: result.subtab, sectionId: result.id },
+            result.requiresEnabled
+          );
+        }
       }
     }
   };
@@ -562,8 +607,8 @@ export function SettingsDialog({
       }
 
       e.preventDefault();
-      tabs[nextIndex].focus();
-      const tabId = tabs[nextIndex].dataset.tab as SettingsTab | undefined;
+      tabs[nextIndex]!.focus();
+      const tabId = tabs[nextIndex]!.dataset.tab as SettingsTab | undefined;
       if (tabId) handleNavSelect(tabId);
     },
     [handleNavSelect]
@@ -602,8 +647,8 @@ export function SettingsDialog({
     keyboard: <Keyboard className="w-5 h-5 text-text-secondary" />,
     terminal: <LayoutGrid className="w-5 h-5 text-text-secondary" />,
     terminalAppearance: <SquareTerminal className="w-5 h-5 text-text-secondary" />,
-    worktree: <WorktreeIcon className="w-5 h-5 text-text-secondary" />,
-    agents: <DaintreeAgentIcon className="w-5 h-5 text-text-secondary" />,
+    worktree: <FolderGit2 className="w-5 h-5 text-text-secondary" />,
+    agents: <Plug className="w-5 h-5 text-text-secondary" />,
     github: <Github className="w-5 h-5 text-text-secondary" />,
     portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
     toolbar: <SettingsIcon className="w-5 h-5 text-text-secondary" />,
@@ -619,7 +664,7 @@ export function SettingsDialog({
     "project:context": <FileCode className="w-5 h-5 text-text-secondary" />,
     "project:variables": <KeyRound className="w-5 h-5 text-text-secondary" />,
     "project:automation": <GitBranch className="w-5 h-5 text-text-secondary" />,
-    "project:recipes": <TerminalRecipeIcon className="w-5 h-5 text-text-secondary" />,
+    "project:recipes": <Workflow className="w-5 h-5 text-text-secondary" />,
     "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
     "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
     "project:github": <Github className="w-5 h-5 text-text-secondary" />,
@@ -639,24 +684,21 @@ export function SettingsDialog({
           <div className="flex items-center justify-between mb-3 pl-2">
             <h2 className="text-sm font-semibold text-daintree-text">Settings</h2>
             {hasProject && (
-              <div className="relative flex items-center">
-                <select
-                  value={activeScope}
+              <Select
+                value={activeScope}
+                onValueChange={(v) => handleScopeSwitch(v as SettingsScope)}
+              >
+                <SelectTrigger
                   aria-label="Settings scope"
-                  onChange={(e) => {
-                    handleScopeSwitch(e.target.value as SettingsScope);
-                    e.target.blur();
-                  }}
-                  className="appearance-none text-xs py-1 pl-2 pr-6 rounded-[var(--radius-md)] bg-transparent border border-border-strong text-text-secondary hover:text-daintree-text hover:border-daintree-text/30 focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20 outline-none cursor-pointer transition-colors"
+                  className="text-xs py-1 pl-2 pr-2 h-auto w-auto gap-1 bg-transparent text-text-secondary hover:text-daintree-text hover:border-daintree-text/30"
                 >
-                  <option value="global">Global</option>
-                  <option value="project">Project</option>
-                </select>
-                <ChevronDown
-                  size={12}
-                  className="pointer-events-none absolute right-1.5 text-text-secondary"
-                />
-              </div>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Global</SelectItem>
+                  <SelectItem value="project">Project</SelectItem>
+                </SelectContent>
+              </Select>
             )}
           </div>
 
@@ -679,7 +721,7 @@ export function SettingsDialog({
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
               aria-label="Search settings"
-              className="settings-search-input flex-1 min-w-0 text-xs bg-transparent text-daintree-text focus:outline-none"
+              className="settings-search-input flex-1 min-w-0 text-xs bg-transparent text-daintree-text focus:outline-hidden"
             />
             {searchQuery && (
               <button
@@ -724,6 +766,7 @@ export function SettingsDialog({
                     isSearching={isSearching}
                     matchCount={matchCounts.general}
                     modified={modifiedTabs.has("general")}
+                    hasError={tabsWithErrors.has("general")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -734,6 +777,7 @@ export function SettingsDialog({
                     isSearching={isSearching}
                     matchCount={matchCounts.terminalAppearance}
                     modified={modifiedTabs.has("terminalAppearance")}
+                    hasError={tabsWithErrors.has("terminalAppearance")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -743,6 +787,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.keyboard}
+                    hasError={tabsWithErrors.has("keyboard")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -752,6 +797,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.notifications}
+                    hasError={tabsWithErrors.has("notifications")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -761,6 +807,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.privacy}
+                    hasError={tabsWithErrors.has("privacy")}
                     onSelect={handleNavSelect}
                   />
                 </NavGroup>
@@ -773,15 +820,17 @@ export function SettingsDialog({
                     isSearching={isSearching}
                     matchCount={matchCounts.terminal}
                     modified={modifiedTabs.has("terminal")}
+                    hasError={tabsWithErrors.has("terminal")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
                     tab="worktree"
-                    icon={<WorktreeIcon className="w-4 h-4" />}
+                    icon={<FolderGit2 className="w-4 h-4" />}
                     label="Worktree"
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.worktree}
+                    hasError={tabsWithErrors.has("worktree")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -791,6 +840,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.toolbar}
+                    hasError={tabsWithErrors.has("toolbar")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -800,17 +850,19 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.environment}
+                    hasError={tabsWithErrors.has("environment")}
                     onSelect={handleNavSelect}
                   />
                 </NavGroup>
                 <NavGroup label="Integrations">
                   <NavItem
                     tab="agents"
-                    icon={<DaintreeAgentIcon className="w-4 h-4" />}
+                    icon={<Plug className="w-4 h-4" />}
                     label="CLI Agents"
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.agents}
+                    hasError={tabsWithErrors.has("agents")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -820,6 +872,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.github}
+                    hasError={tabsWithErrors.has("github")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -829,6 +882,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.integrations}
+                    hasError={tabsWithErrors.has("integrations")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -838,6 +892,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.voice}
+                    hasError={tabsWithErrors.has("voice")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -847,6 +902,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.portal}
+                    hasError={tabsWithErrors.has("portal")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -856,6 +912,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.mcp}
+                    hasError={tabsWithErrors.has("mcp")}
                     onSelect={handleNavSelect}
                   />
                 </NavGroup>
@@ -868,6 +925,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.troubleshooting}
+                    hasError={tabsWithErrors.has("troubleshooting")}
                     onSelect={handleNavSelect}
                   />
                 </NavGroup>
@@ -881,6 +939,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:general"]}
+                  hasError={tabsWithErrors.has("project:general")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -890,6 +949,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:context"]}
+                  hasError={tabsWithErrors.has("project:context")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -899,6 +959,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:variables"]}
+                  hasError={tabsWithErrors.has("project:variables")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -908,15 +969,17 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:automation"]}
+                  hasError={tabsWithErrors.has("project:automation")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
                   tab="project:recipes"
-                  icon={<TerminalRecipeIcon className="w-4 h-4" />}
+                  icon={<Workflow className="w-4 h-4" />}
                   label="Recipes"
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:recipes"]}
+                  hasError={tabsWithErrors.has("project:recipes")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -926,6 +989,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:commands"]}
+                  hasError={tabsWithErrors.has("project:commands")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -935,6 +999,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:notifications"]}
+                  hasError={tabsWithErrors.has("project:notifications")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -944,6 +1009,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:github"]}
+                  hasError={tabsWithErrors.has("project:github")}
                   onSelect={handleNavSelect}
                 />
               </NavGroup>
@@ -1101,6 +1167,7 @@ export function SettingsDialog({
                         onSubtabChange={(id) =>
                           setActiveSubtabs((prev) => ({ ...prev, terminalAppearance: id }))
                         }
+                        onClose={handleClose}
                       />
                     </Suspense>
                   )}
@@ -1534,6 +1601,7 @@ interface NavItemProps {
   isSearching: boolean;
   matchCount?: number;
   modified?: boolean;
+  hasError?: boolean;
   onSelect: (tab: SettingsTab) => void;
 }
 
@@ -1545,6 +1613,7 @@ function NavItem({
   isSearching,
   matchCount,
   modified,
+  hasError,
   onSelect,
 }: NavItemProps) {
   const active = activeTab === tab && !isSearching;
@@ -1570,10 +1639,13 @@ function NavItem({
     >
       <span className="relative">
         {icon}
-        {modified && (
+        {(hasError || modified) && (
           <span
-            className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-daintree-accent"
-            title="Modified from default"
+            className={cn(
+              "absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full",
+              hasError ? "bg-status-warning" : "bg-state-modified"
+            )}
+            title={hasError ? "Contains validation errors" : "Modified from default"}
           />
         )}
       </span>

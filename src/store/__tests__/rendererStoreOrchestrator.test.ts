@@ -115,7 +115,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -141,7 +140,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-2": {
           id: "term-2",
-          type: "terminal",
           title: "T2",
           cwd: "/test",
           cols: 80,
@@ -164,7 +162,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -188,7 +185,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         [panelId]: {
           id: panelId,
-          type: "terminal",
           kind: "browser",
           title: "Browser",
           cwd: "/test",
@@ -226,7 +222,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -249,7 +244,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -275,7 +269,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -298,7 +291,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -325,7 +317,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -335,7 +326,6 @@ describe("rendererStoreOrchestrator", () => {
         },
         "term-2": {
           id: "term-2",
-          type: "terminal",
           title: "T2",
           cwd: "/test",
           cols: 80,
@@ -362,7 +352,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -383,7 +372,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "t-1": {
           id: "t-1",
-          type: "terminal",
           kind: "browser",
           title: "B1",
           cwd: "/test",
@@ -393,7 +381,6 @@ describe("rendererStoreOrchestrator", () => {
         },
         "t-2": {
           id: "t-2",
-          type: "terminal",
           kind: "browser",
           title: "B2",
           cwd: "/test",
@@ -442,7 +429,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -467,7 +453,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "bg-1": {
           id: "bg-1",
-          type: "terminal",
           title: "BG",
           cwd: "/test",
           cols: 80,
@@ -491,7 +476,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "dock-bg-1": {
           id: "dock-bg-1",
-          type: "terminal",
           title: "Dock BG",
           cwd: "/test",
           cols: 80,
@@ -516,7 +500,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "grid-1": {
           id: "grid-1",
-          type: "terminal",
           title: "Grid",
           cwd: "/test",
           cols: 80,
@@ -542,7 +525,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         [panelId]: {
           id: panelId,
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -567,7 +549,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-no-voice": {
           id: "term-no-voice",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -590,7 +571,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -611,7 +591,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,
@@ -632,7 +611,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "t-a": {
           id: "t-a",
-          type: "terminal",
           title: "A",
           cwd: "/test",
           cols: 80,
@@ -641,7 +619,6 @@ describe("rendererStoreOrchestrator", () => {
         },
         "t-b": {
           id: "t-b",
-          type: "terminal",
           title: "B",
           cwd: "/test",
           cols: 80,
@@ -669,7 +646,6 @@ describe("rendererStoreOrchestrator", () => {
         panelsById: {
           "t-1": {
             id: "t-1",
-            type: "terminal",
             title: "T1",
             cwd: "/test",
             cols: 80,
@@ -679,7 +655,6 @@ describe("rendererStoreOrchestrator", () => {
           },
           "t-2": {
             id: "t-2",
-            type: "terminal",
             title: "T2",
             cwd: "/test",
             cols: 80,
@@ -689,7 +664,6 @@ describe("rendererStoreOrchestrator", () => {
           },
           "t-3": {
             id: "t-3",
-            type: "terminal",
             title: "T3",
             cwd: "/test",
             cols: 80,
@@ -723,7 +697,6 @@ describe("rendererStoreOrchestrator", () => {
         panelsById: {
           "t-1": {
             id: "t-1",
-            type: "terminal",
             title: "T1",
             cwd: "/test",
             cols: 80,
@@ -758,7 +731,6 @@ describe("rendererStoreOrchestrator", () => {
         panelsById: {
           "t-1": {
             id: "t-1",
-            type: "terminal",
             title: "T1",
             cwd: "/test",
             cols: 80,
@@ -790,7 +762,6 @@ describe("rendererStoreOrchestrator", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "T1",
           cwd: "/test",
           cols: 80,

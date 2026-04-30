@@ -24,6 +24,8 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsTextarea } from "./SettingsTextarea";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
+import { logWarn } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { CORE_CORRECTION_PROMPT } from "@shared/config/voiceCorrection";
 import type {
   VoiceInputSettings,
@@ -130,7 +132,12 @@ export function VoiceInputSettingsTab() {
       .then((status) => {
         if (status) setMicPermission(status);
       })
-      .catch(() => {});
+      .catch((err) => {
+        // Background probe — UI shows fallback "unknown" state.
+        logWarn("Failed to check microphone permission", {
+          error: formatErrorMessage(err, "Mic permission probe failed"),
+        });
+      });
 
     return () => clearTimeout(timer);
   }, []);
@@ -239,28 +246,20 @@ export function VoiceInputSettingsTab() {
             <SettingsSelect
               label="Language"
               value={settings.language}
-              onChange={(e) => update({ language: e.target.value })}
-            >
-              {LANGUAGES.map(({ code, label }) => (
-                <option key={code} value={code}>
-                  {label}
-                </option>
-              ))}
-            </SettingsSelect>
+              onValueChange={(v) => update({ language: v })}
+              options={LANGUAGES.map(({ code, label }) => ({ value: code, label }))}
+            />
 
             <SettingsSelect
               label="Transcription Model"
               value={settings.transcriptionModel}
-              onChange={(e) =>
-                update({ transcriptionModel: e.target.value as VoiceTranscriptionModel })
-              }
-            >
-              {TRANSCRIPTION_MODELS.map(({ value, label, description }) => (
-                <option key={value} value={value}>
-                  {label} — {description}
-                </option>
-              ))}
-            </SettingsSelect>
+              onValueChange={(v) => update({ transcriptionModel: v as VoiceTranscriptionModel })}
+              options={TRANSCRIPTION_MODELS.map(({ value, label, description }) => ({
+                value,
+                label,
+                description,
+              }))}
+            />
 
             <ParagraphingStrategyRow
               value={settings.paragraphingStrategy ?? "spoken-command"}
@@ -312,16 +311,13 @@ export function VoiceInputSettingsTab() {
               <SettingsSelect
                 label="Correction Model"
                 value={settings.correctionModel}
-                onChange={(e) =>
-                  update({ correctionModel: e.target.value as VoiceCorrectionModel })
-                }
-              >
-                {CORRECTION_MODELS.map(({ value, label, description }) => (
-                  <option key={value} value={value}>
-                    {label} — {description}
-                  </option>
-                ))}
-              </SettingsSelect>
+                onValueChange={(v) => update({ correctionModel: v as VoiceCorrectionModel })}
+                options={CORRECTION_MODELS.map(({ value, label, description }) => ({
+                  value,
+                  label,
+                  description,
+                }))}
+              />
 
               {settings.correctionApiKey && (
                 <>
@@ -436,7 +432,7 @@ function ApiKeyRow({
           ) : (
             <button
               onClick={() => window.electron?.system?.openExternal(helpUrl)}
-              className="text-xs text-daintree-accent hover:underline flex items-center gap-1"
+              className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline flex items-center gap-1"
             >
               {helpLabel}
               <ExternalLink className="w-3 h-3" />
@@ -458,7 +454,7 @@ function ApiKeyRow({
               }
             }}
             placeholder={value ? "Enter new key to replace" : placeholder}
-            className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-daintree-text placeholder:text-text-muted focus:outline-none focus:border-daintree-accent transition-colors"
+            className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent transition-colors"
             autoComplete="new-password"
             spellCheck={false}
             disabled={validation === "testing"}
@@ -566,7 +562,7 @@ function MicPermissionRow({
             <div className="flex gap-2">
               <button
                 onClick={onOpenSettings}
-                className="text-xs text-daintree-accent hover:underline flex items-center gap-1"
+                className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline flex items-center gap-1"
               >
                 Open {settingsLabel}
                 <ExternalLink className="w-3 h-3" />
@@ -667,11 +663,12 @@ function ParagraphingStrategyRow({
       label="Paragraph Breaks"
       description={description}
       value={value}
-      onChange={(e) => onChange(e.target.value as VoiceParagraphingStrategy)}
-    >
-      <option value="spoken-command">Spoken commands</option>
-      <option value="manual">Manual Enter only</option>
-    </SettingsSelect>
+      onValueChange={(v) => onChange(v as VoiceParagraphingStrategy)}
+      options={[
+        { value: "spoken-command", label: "Spoken commands" },
+        { value: "manual", label: "Manual Enter only" },
+      ]}
+    />
   );
 }
 
@@ -715,7 +712,7 @@ function DictionarySection({
             }
           }}
           placeholder="Add term…"
-          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-none focus:border-daintree-accent transition-colors"
+          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent transition-colors"
         />
         <Button
           onClick={onAdd}

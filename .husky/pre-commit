@@ -1,1 +1,8 @@
 npx lint-staged
+
+# Refuse to commit .planning/ files — they are gitignored internal workflow artifacts.
+if git diff --cached --name-only | grep -q "^\.planning/"; then
+  echo "error: .planning/ files must not be committed (gitignored workflow artifacts)"
+  echo "       Run: git restore --staged '.planning/*'"
+  exit 1
+fi

@@ -290,7 +290,6 @@ describe("AgentAvailabilityStore", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -306,7 +305,6 @@ describe("AgentAvailabilityStore", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -324,13 +322,11 @@ describe("AgentAvailabilityStore", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
       events.emit("agent:spawned", {
         agentId: "agent-2",
         terminalId: "term-2",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -347,13 +343,11 @@ describe("AgentAvailabilityStore", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
       events.emit("agent:spawned", {
         agentId: "agent-2",
         terminalId: "term-2",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -372,7 +366,6 @@ describe("AgentAvailabilityStore", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -385,7 +378,6 @@ describe("AgentAvailabilityStore", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -404,7 +396,6 @@ describe("AgentAvailabilityStore", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -417,7 +408,6 @@ describe("AgentAvailabilityStore", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -430,7 +420,6 @@ describe("AgentAvailabilityStore", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -461,7 +450,6 @@ describe("AgentAvailabilityStore", () => {
       events.emit("agent:spawned", {
         agentId: "agent-help",
         terminalId: "term-help",
-        type: "claude",
         timestamp: Date.now(),
       });
       store.markAsHelp("term-help");
@@ -478,7 +466,6 @@ describe("AgentAvailabilityStore", () => {
       events.emit("agent:spawned", {
         agentId: "agent-help",
         terminalId: "term-help",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -493,7 +480,6 @@ describe("AgentAvailabilityStore", () => {
       events.emit("agent:spawned", {
         agentId: "agent-help",
         terminalId: "term-help",
-        type: "claude",
         timestamp: Date.now(),
       });
       store.markAsHelp("term-help");

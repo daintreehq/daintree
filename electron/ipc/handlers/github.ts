@@ -1,7 +1,8 @@
-import { ipcMain, shell } from "electron";
+import { shell } from "electron";
 import fs from "fs/promises";
 import path from "path";
 import { CHANNELS } from "../channels.js";
+import { broadcastToRenderer, checkRateLimit, typedHandle } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   RepositoryStats,
@@ -9,8 +10,12 @@ import type {
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
+  RepoStatsAndPagePayload,
+  GitHubFirstPageCachePayload,
 } from "../../types/index.js";
+import { gitHubRateLimitService, gitHubTokenHealthService } from "../../services/github/index.js";
 import { getWorkspaceClient } from "../../services/WorkspaceClient.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 export function buildGitHubSearchQuery(
   searchText: string | undefined,
@@ -52,11 +57,36 @@ export function buildGitHubSearchQuery(
 export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
+  // Main-process transport: every time the main-process rate-limit singleton
+  // changes state (either from a local fetch observation or a forwarded
+  // utility-process observation via WorkspaceClient.routeHostEvent), push
+  // the new state to every renderer window.
+  const unsubscribeRateLimit = gitHubRateLimitService.onStateChange((state) => {
+    broadcastToRenderer(CHANNELS.GITHUB_RATE_LIMIT_CHANGED, state);
+  });
+  handlers.push(unsubscribeRateLimit);
+
+  // Main-process transport: push token-health state changes to every
+  // renderer so a "Reconnect to GitHub" banner can surface when the
+  // background probe detects a dead token.
+  const unsubscribeTokenHealth = gitHubTokenHealthService.onStateChange((state) => {
+    broadcastToRenderer(CHANNELS.GITHUB_TOKEN_HEALTH_CHANGED, state);
+  });
+  handlers.push(unsubscribeTokenHealth);
+
+  // Invoke handler: renderer subscribers call this on mount to replay the
+  // current state — guarantees a second window, or a window that mounts
+  // after the initial probe completed, can surface the banner without
+  // waiting for the next state transition (which might never come while
+  // the token stays unhealthy).
+  const handleGetTokenHealth = async () => gitHubTokenHealthService.getState();
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_TOKEN_HEALTH, handleGetTokenHealth));
+
   const handleGitHubGetRepoStats = async (
-    _event: Electron.IpcMainInvokeEvent,
     cwd: string,
     bypassCache = false
   ): Promise<RepositoryStats> => {
+    checkRateLimit(CHANNELS.GITHUB_GET_REPO_STATS, 10, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -64,7 +94,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       throw new Error("Working directory must be an absolute path");
     }
 
-    const { getRepoStats } = await import("../../services/GitHubService.js");
+    const { getRepoStatsAndPage } = await import("../../services/GitHubService.js");
     const { getCommitCount } = await import("../../utils/git.js");
 
     try {
@@ -80,11 +110,18 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
         };
       }
 
-      const statsResult = await getRepoStats(resolved, bypassCache);
+      // Combined query: counts + first page of open issues + open PRs in one
+      // round-trip. The first-page payload is broadcast to renderers below so
+      // their `githubResourceCache` gets primed for the (open, created)
+      // default-filter cache key — meaning the dropdown opens against hot
+      // cache with no spinner.
+      const statsResult = await getRepoStatsAndPage(resolved, bypassCache);
 
       const commitCount = await getCommitCount(resolved).catch(() => 0);
 
-      return {
+      const rateLimitState = gitHubRateLimitService.getState();
+
+      const repositoryStats: RepositoryStats = {
         commitCount,
         issueCount: statsResult.stats?.issueCount ?? null,
         prCount: statsResult.stats?.prCount ?? null,
@@ -92,9 +129,36 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
         ghError: statsResult.error,
         stale: statsResult.stats?.stale,
         lastUpdated: statsResult.stats?.lastUpdated,
+        rateLimitResetAt:
+          rateLimitState.blocked && rateLimitState.resetAt ? rateLimitState.resetAt : undefined,
+        rateLimitKind: rateLimitState.blocked ? (rateLimitState.kind ?? undefined) : undefined,
       };
+
+      // Broadcast only after a real network fetch (`source === "network"`).
+      // Skipping the in-memory short-circuit prevents extending the renderer
+      // cache TTL with a fresh wall-clock timestamp on data the backend
+      // already considered cached — the renderer's TtlCache.set() resets
+      // expiry from write time, so a re-broadcast of cache-extended data
+      // would mask staleness.
+      if (
+        statsResult.issues &&
+        statsResult.prs &&
+        statsResult.source === "network" &&
+        !statsResult.stats?.stale
+      ) {
+        const payload: RepoStatsAndPagePayload = {
+          projectPath: resolved,
+          stats: repositoryStats,
+          issues: statsResult.issues,
+          prs: statsResult.prs,
+          fetchedAt: Date.now(),
+        };
+        broadcastToRenderer(CHANNELS.GITHUB_REPO_STATS_AND_PAGE_UPDATED, payload);
+      }
+
+      return repositoryStats;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err, "Failed to fetch GitHub repo stats");
       return {
         commitCount: 0,
         issueCount: null,
@@ -104,14 +168,56 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       };
     }
   };
-  ipcMain.handle(CHANNELS.GITHUB_GET_REPO_STATS, handleGitHubGetRepoStats);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_REPO_STATS));
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_REPO_STATS, handleGitHubGetRepoStats));
+
+  // Cold-start hydration: returns the disk-persisted first page for a project
+  // (open issues + open PRs in the default-created sort) so the renderer can
+  // seed `githubResourceCache` BEFORE the first poll completes. Combined with
+  // the broadcast push, this makes the very first dropdown click after app
+  // launch resolve against real data instead of a skeleton.
+  const handleGitHubGetFirstPageCache = async (
+    cwd: string
+  ): Promise<GitHubFirstPageCachePayload | null> => {
+    // Rate-limit at the same shape as `getRepoStats` — the renderer only
+    // calls this once per hook mount, but that includes every project view
+    // and we want a hard ceiling against accidental call-loops.
+    checkRateLimit(CHANNELS.GITHUB_GET_FIRST_PAGE_CACHE, 10, 10_000);
+    if (typeof cwd !== "string" || !cwd) return null;
+    if (!path.isAbsolute(cwd)) return null;
+
+    try {
+      const resolved = path.resolve(cwd);
+      const stat = await fs.stat(resolved);
+      if (!stat.isDirectory()) return null;
+
+      const { GitHubFirstPageCache } = await import("../../services/GitHubFirstPageCache.js");
+      const { getRepoContext } = await import("../../services/GitHubService.js");
+      const context = await getRepoContext(resolved);
+      if (!context) return null;
+      const repoKey = `${context.owner}/${context.repo}`;
+      const entry = GitHubFirstPageCache.getInstance().get(repoKey);
+      if (!entry) return null;
+
+      return {
+        projectPath: resolved,
+        issues: entry.issues,
+        prs: entry.prs,
+        lastUpdated: entry.lastUpdated,
+      };
+    } catch {
+      // Disk-cache reads are best-effort: a missing cache file, malformed
+      // JSON, or a transient repo-context lookup failure should not surface
+      // as a renderer error — the network poll fallback will populate the UI.
+      return null;
+    }
+  };
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_FIRST_PAGE_CACHE, handleGitHubGetFirstPageCache));
 
   const handleGitHubGetProjectHealth = async (
-    _event: Electron.IpcMainInvokeEvent,
     cwd: string,
     bypassCache = false
   ): Promise<ProjectHealthData> => {
+    checkRateLimit(CHANNELS.GITHUB_GET_PROJECT_HEALTH, 10, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -163,7 +269,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
         error: result.error,
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err, "Failed to fetch GitHub project health");
       return {
         ciStatus: "none",
         issueCount: 0,
@@ -178,15 +284,10 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       };
     }
   };
-  ipcMain.handle(CHANNELS.GITHUB_GET_PROJECT_HEALTH, handleGitHubGetProjectHealth);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_PROJECT_HEALTH));
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_PROJECT_HEALTH, handleGitHubGetProjectHealth));
 
-  const handleGitHubOpenIssues = async (
-    _event: Electron.IpcMainInvokeEvent,
-    cwd: string,
-    query?: string,
-    state?: string
-  ) => {
+  const handleGitHubOpenIssues = async (cwd: string, query?: string, state?: string) => {
+    checkRateLimit(CHANNELS.GITHUB_OPEN_ISSUES, 20, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -202,15 +303,10 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const url = q ? `${repoUrl}/issues?q=${encodeURIComponent(q)}` : `${repoUrl}/issues`;
     await shell.openExternal(url);
   };
-  ipcMain.handle(CHANNELS.GITHUB_OPEN_ISSUES, handleGitHubOpenIssues);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_ISSUES));
+  handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_ISSUES, handleGitHubOpenIssues));
 
-  const handleGitHubOpenPRs = async (
-    _event: Electron.IpcMainInvokeEvent,
-    cwd: string,
-    query?: string,
-    state?: string
-  ) => {
+  const handleGitHubOpenPRs = async (cwd: string, query?: string, state?: string) => {
+    checkRateLimit(CHANNELS.GITHUB_OPEN_PRS, 20, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -226,14 +322,10 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const url = q ? `${repoUrl}/pulls?q=${encodeURIComponent(q)}` : `${repoUrl}/pulls`;
     await shell.openExternal(url);
   };
-  ipcMain.handle(CHANNELS.GITHUB_OPEN_PRS, handleGitHubOpenPRs);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_PRS));
+  handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_PRS, handleGitHubOpenPRs));
 
-  const handleGitHubOpenCommits = async (
-    _event: Electron.IpcMainInvokeEvent,
-    cwd: string,
-    branch?: string
-  ) => {
+  const handleGitHubOpenCommits = async (cwd: string, branch?: string) => {
+    checkRateLimit(CHANNELS.GITHUB_OPEN_COMMITS, 20, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -251,13 +343,10 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const url = branch ? `${repoUrl}/commits/${encodeURIComponent(branch)}` : `${repoUrl}/commits`;
     await shell.openExternal(url);
   };
-  ipcMain.handle(CHANNELS.GITHUB_OPEN_COMMITS, handleGitHubOpenCommits);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_COMMITS));
+  handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_COMMITS, handleGitHubOpenCommits));
 
-  const handleGitHubOpenIssue = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; issueNumber: number }
-  ) => {
+  const handleGitHubOpenIssue = async (payload: { cwd: string; issueNumber: number }) => {
+    checkRateLimit(CHANNELS.GITHUB_OPEN_ISSUE, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -277,10 +366,10 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     }
     await shell.openExternal(issueUrl);
   };
-  ipcMain.handle(CHANNELS.GITHUB_OPEN_ISSUE, handleGitHubOpenIssue);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_ISSUE));
+  handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_ISSUE, handleGitHubOpenIssue));
 
-  const handleGitHubOpenPR = async (_event: Electron.IpcMainInvokeEvent, prUrl: string) => {
+  const handleGitHubOpenPR = async (prUrl: string) => {
+    checkRateLimit(CHANNELS.GITHUB_OPEN_PR, 20, 10_000);
     if (typeof prUrl !== "string" || !prUrl) {
       throw new Error("Invalid PR URL");
     }
@@ -290,34 +379,31 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
         throw new Error(`Only https:// or http:// PR URLs are allowed, got ${url.protocol}`);
       }
     } catch (error) {
-      throw new Error(`Invalid PR URL: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(formatErrorMessage(error, "Invalid PR URL"));
     }
     await shell.openExternal(prUrl);
   };
-  ipcMain.handle(CHANNELS.GITHUB_OPEN_PR, handleGitHubOpenPR);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_PR));
+  handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_PR, handleGitHubOpenPR));
 
   const handleGitHubCheckCli = async (): Promise<GitHubCliStatus> => {
+    checkRateLimit(CHANNELS.GITHUB_CHECK_CLI, 10, 10_000);
     const { hasGitHubToken } = await import("../../services/GitHubService.js");
     if (hasGitHubToken()) {
       return { available: true };
     }
     return { available: false, error: "GitHub token not configured. Set it in Settings." };
   };
-  ipcMain.handle(CHANNELS.GITHUB_CHECK_CLI, handleGitHubCheckCli);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_CHECK_CLI));
+  handlers.push(typedHandle(CHANNELS.GITHUB_CHECK_CLI, handleGitHubCheckCli));
 
   const handleGitHubGetConfig = async (): Promise<GitHubTokenConfig> => {
+    checkRateLimit(CHANNELS.GITHUB_GET_CONFIG, 10, 10_000);
     const { getGitHubConfigAsync } = await import("../../services/GitHubService.js");
     return getGitHubConfigAsync();
   };
-  ipcMain.handle(CHANNELS.GITHUB_GET_CONFIG, handleGitHubGetConfig);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_CONFIG));
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_CONFIG, handleGitHubGetConfig));
 
-  const handleGitHubSetToken = async (
-    _event: Electron.IpcMainInvokeEvent,
-    token: string
-  ): Promise<GitHubTokenValidation> => {
+  const handleGitHubSetToken = async (token: string): Promise<GitHubTokenValidation> => {
+    checkRateLimit(CHANNELS.GITHUB_SET_TOKEN, 5, 10_000);
     if (typeof token !== "string" || !token.trim()) {
       return { valid: false, scopes: [], error: "Token is required" };
     }
@@ -346,14 +432,19 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       } catch {
         // WorkspaceClient may not be initialized yet
       }
+
+      // Reset any lingering health state so a previously-surfaced
+      // "Reconnect" banner is cleared before the next probe runs.
+      gitHubTokenHealthService.resetState();
+      void gitHubTokenHealthService.refresh({ force: true });
     }
 
     return validation;
   };
-  ipcMain.handle(CHANNELS.GITHUB_SET_TOKEN, handleGitHubSetToken);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_SET_TOKEN));
+  handlers.push(typedHandle(CHANNELS.GITHUB_SET_TOKEN, handleGitHubSetToken));
 
   const handleGitHubClearToken = async (): Promise<void> => {
+    checkRateLimit(CHANNELS.GITHUB_CLEAR_TOKEN, 5, 10_000);
     const { clearGitHubToken } = await import("../../services/GitHubService.js");
     clearGitHubToken();
 
@@ -363,14 +454,14 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     } catch {
       // WorkspaceClient may not be initialized yet
     }
-  };
-  ipcMain.handle(CHANNELS.GITHUB_CLEAR_TOKEN, handleGitHubClearToken);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_CLEAR_TOKEN));
 
-  const handleGitHubValidateToken = async (
-    _event: Electron.IpcMainInvokeEvent,
-    token: string
-  ): Promise<GitHubTokenValidation> => {
+    // Token removed: drop any lingering health state and banner.
+    gitHubTokenHealthService.resetState();
+  };
+  handlers.push(typedHandle(CHANNELS.GITHUB_CLEAR_TOKEN, handleGitHubClearToken));
+
+  const handleGitHubValidateToken = async (token: string): Promise<GitHubTokenValidation> => {
+    checkRateLimit(CHANNELS.GITHUB_VALIDATE_TOKEN, 5, 10_000);
     if (typeof token !== "string" || !token.trim()) {
       return { valid: false, scopes: [], error: "Token is required" };
     }
@@ -378,20 +469,17 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { validateGitHubToken } = await import("../../services/GitHubService.js");
     return validateGitHubToken(token.trim());
   };
-  ipcMain.handle(CHANNELS.GITHUB_VALIDATE_TOKEN, handleGitHubValidateToken);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_VALIDATE_TOKEN));
+  handlers.push(typedHandle(CHANNELS.GITHUB_VALIDATE_TOKEN, handleGitHubValidateToken));
 
-  const handleGitHubListIssues = async (
-    _event: Electron.IpcMainInvokeEvent,
-    options: {
-      cwd: string;
-      search?: string;
-      state?: "open" | "closed" | "all";
-      cursor?: string;
-      bypassCache?: boolean;
-      sortOrder?: "created" | "updated";
-    }
-  ) => {
+  const handleGitHubListIssues = async (options: {
+    cwd: string;
+    search?: string;
+    state?: "open" | "closed" | "all";
+    cursor?: string;
+    bypassCache?: boolean;
+    sortOrder?: "created" | "updated";
+  }) => {
+    checkRateLimit(CHANNELS.GITHUB_LIST_ISSUES, 10, 10_000);
     if (!options || typeof options.cwd !== "string" || !options.cwd) {
       throw new Error("Invalid options: cwd is required");
     }
@@ -402,20 +490,17 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { listIssues } = await import("../../services/GitHubService.js");
     return listIssues(options);
   };
-  ipcMain.handle(CHANNELS.GITHUB_LIST_ISSUES, handleGitHubListIssues);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_LIST_ISSUES));
+  handlers.push(typedHandle(CHANNELS.GITHUB_LIST_ISSUES, handleGitHubListIssues));
 
-  const handleGitHubListPRs = async (
-    _event: Electron.IpcMainInvokeEvent,
-    options: {
-      cwd: string;
-      search?: string;
-      state?: "open" | "closed" | "merged" | "all";
-      cursor?: string;
-      bypassCache?: boolean;
-      sortOrder?: "created" | "updated";
-    }
-  ) => {
+  const handleGitHubListPRs = async (options: {
+    cwd: string;
+    search?: string;
+    state?: "open" | "closed" | "merged" | "all";
+    cursor?: string;
+    bypassCache?: boolean;
+    sortOrder?: "created" | "updated";
+  }) => {
+    checkRateLimit(CHANNELS.GITHUB_LIST_PRS, 10, 10_000);
     if (!options || typeof options.cwd !== "string" || !options.cwd) {
       throw new Error("Invalid options: cwd is required");
     }
@@ -426,13 +511,14 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { listPullRequests } = await import("../../services/GitHubService.js");
     return listPullRequests(options);
   };
-  ipcMain.handle(CHANNELS.GITHUB_LIST_PRS, handleGitHubListPRs);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_LIST_PRS));
+  handlers.push(typedHandle(CHANNELS.GITHUB_LIST_PRS, handleGitHubListPRs));
 
-  const handleGitHubAssignIssue = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; issueNumber: number; username: string }
-  ): Promise<void> => {
+  const handleGitHubAssignIssue = async (payload: {
+    cwd: string;
+    issueNumber: number;
+    username: string;
+  }): Promise<void> => {
+    checkRateLimit(CHANNELS.GITHUB_ASSIGN_ISSUE, 5, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -457,13 +543,10 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { assignIssue } = await import("../../services/GitHubService.js");
     await assignIssue(payload.cwd.trim(), payload.issueNumber, trimmedUsername);
   };
-  ipcMain.handle(CHANNELS.GITHUB_ASSIGN_ISSUE, handleGitHubAssignIssue);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_ASSIGN_ISSUE));
+  handlers.push(typedHandle(CHANNELS.GITHUB_ASSIGN_ISSUE, handleGitHubAssignIssue));
 
-  const handleGitHubGetIssueTooltip = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; issueNumber: number }
-  ) => {
+  const handleGitHubGetIssueTooltip = async (payload: { cwd: string; issueNumber: number }) => {
+    checkRateLimit(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -484,13 +567,10 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getIssueTooltip } = await import("../../services/GitHubService.js");
     return getIssueTooltip(payload.cwd.trim(), payload.issueNumber);
   };
-  ipcMain.handle(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, handleGitHubGetIssueTooltip);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP));
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, handleGitHubGetIssueTooltip));
 
-  const handleGitHubGetPRTooltip = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; prNumber: number }
-  ) => {
+  const handleGitHubGetPRTooltip = async (payload: { cwd: string; prNumber: number }) => {
+    checkRateLimit(CHANNELS.GITHUB_GET_PR_TOOLTIP, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -511,13 +591,13 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getPRTooltip } = await import("../../services/GitHubService.js");
     return getPRTooltip(payload.cwd.trim(), payload.prNumber);
   };
-  ipcMain.handle(CHANNELS.GITHUB_GET_PR_TOOLTIP, handleGitHubGetPRTooltip);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_PR_TOOLTIP));
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_PR_TOOLTIP, handleGitHubGetPRTooltip));
 
-  const handleGitHubGetIssueUrl = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; issueNumber: number }
-  ): Promise<string | null> => {
+  const handleGitHubGetIssueUrl = async (payload: {
+    cwd: string;
+    issueNumber: number;
+  }): Promise<string | null> => {
+    checkRateLimit(CHANNELS.GITHUB_GET_ISSUE_URL, 10, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -538,13 +618,10 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getIssueUrl } = await import("../../services/GitHubService.js");
     return getIssueUrl(payload.cwd.trim(), payload.issueNumber);
   };
-  ipcMain.handle(CHANNELS.GITHUB_GET_ISSUE_URL, handleGitHubGetIssueUrl);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_ISSUE_URL));
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_ISSUE_URL, handleGitHubGetIssueUrl));
 
-  const handleGitHubGetIssueByNumber = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; issueNumber: number }
-  ) => {
+  const handleGitHubGetIssueByNumber = async (payload: { cwd: string; issueNumber: number }) => {
+    checkRateLimit(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, 25, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -565,13 +642,10 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getIssueByNumber } = await import("../../services/GitHubService.js");
     return getIssueByNumber(payload.cwd.trim(), payload.issueNumber);
   };
-  ipcMain.handle(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, handleGitHubGetIssueByNumber);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER));
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, handleGitHubGetIssueByNumber));
 
-  const handleGitHubGetPRByNumber = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; prNumber: number }
-  ) => {
+  const handleGitHubGetPRByNumber = async (payload: { cwd: string; prNumber: number }) => {
+    checkRateLimit(CHANNELS.GITHUB_GET_PR_BY_NUMBER, 25, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -592,15 +666,14 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getPRByNumber } = await import("../../services/GitHubService.js");
     return getPRByNumber(payload.cwd.trim(), payload.prNumber);
   };
-  ipcMain.handle(CHANNELS.GITHUB_GET_PR_BY_NUMBER, handleGitHubGetPRByNumber);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_PR_BY_NUMBER));
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_PR_BY_NUMBER, handleGitHubGetPRByNumber));
 
   const handleGitHubListRemotes = async (
-    _event: Electron.IpcMainInvokeEvent,
     cwd: string
   ): Promise<
     Array<{ name: string; fetchUrl: string; parsedRepo: { owner: string; repo: string } | null }>
   > => {
+    checkRateLimit(CHANNELS.GITHUB_LIST_REMOTES, 10, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -627,8 +700,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
 
     return result;
   };
-  ipcMain.handle(CHANNELS.GITHUB_LIST_REMOTES, handleGitHubListRemotes);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_LIST_REMOTES));
+  handlers.push(typedHandle(CHANNELS.GITHUB_LIST_REMOTES, handleGitHubListRemotes));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

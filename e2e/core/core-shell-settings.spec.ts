@@ -127,27 +127,27 @@ test.describe.serial("Core: Shell & Settings", () => {
     test("Cmd+B toggles sidebar off and on", async () => {
       const { window } = ctx;
 
-      const sidebar = window.locator("aside").first();
-      await expect(sidebar).toBeVisible({ timeout: T_SHORT });
+      const handle = window.locator(SEL.sidebar.resizeHandle);
+      await expect(handle).toHaveAttribute("aria-valuenow", /^[1-9]/, { timeout: T_SHORT });
 
       await window.keyboard.press(`${mod}+b`);
-      await expect(sidebar).not.toBeVisible({ timeout: T_SHORT });
+      await expect(handle).toHaveAttribute("aria-valuenow", "0", { timeout: T_SHORT });
 
       await window.keyboard.press(`${mod}+b`);
-      await expect(sidebar).toBeVisible({ timeout: T_SHORT });
+      await expect(handle).toHaveAttribute("aria-valuenow", /^[1-9]/, { timeout: T_SHORT });
     });
 
     test("toolbar button toggles sidebar off and on", async () => {
       const { window } = ctx;
 
-      const sidebar = window.locator(SEL.sidebar.resizeHandle);
-      await expect(sidebar).toBeVisible({ timeout: T_MEDIUM });
+      const handle = window.locator(SEL.sidebar.resizeHandle);
+      await expect(handle).toHaveAttribute("aria-valuenow", /^[1-9]/, { timeout: T_MEDIUM });
 
       await window.locator(SEL.toolbar.toggleSidebar).click();
-      await expect(sidebar).not.toBeVisible({ timeout: T_SHORT });
+      await expect(handle).toHaveAttribute("aria-valuenow", "0", { timeout: T_SHORT });
 
       await window.locator(SEL.toolbar.toggleSidebar).click();
-      await expect(sidebar).toBeVisible({ timeout: T_SHORT });
+      await expect(handle).toHaveAttribute("aria-valuenow", /^[1-9]/, { timeout: T_SHORT });
     });
 
     test("Cmd+, opens settings", async () => {
@@ -253,10 +253,11 @@ test.describe.serial("Core: Shell & Settings", () => {
 
       const fontSelect = window.locator(SEL.settings.fontFamilySelect);
       await expect(fontSelect).toBeVisible({ timeout: T_MEDIUM });
-      await expect(fontSelect).toHaveValue("jetbrains", { timeout: T_MEDIUM });
+      await expect(fontSelect).toContainText("JetBrains Mono", { timeout: T_MEDIUM });
 
-      await fontSelect.selectOption("system");
-      await expect(fontSelect).toHaveValue("system", { timeout: T_MEDIUM });
+      await fontSelect.click();
+      await window.locator('[role="option"]', { hasText: "System monospace" }).click();
+      await expect(fontSelect).toContainText("System monospace", { timeout: T_MEDIUM });
     });
 
     test("close and reopen settings — changes persist", async () => {
@@ -295,7 +296,7 @@ test.describe.serial("Core: Shell & Settings", () => {
       );
       await terminalSubtab.click();
       const fontSelect = window.locator(SEL.settings.fontFamilySelect);
-      await expect(fontSelect).toHaveValue("system", { timeout: T_MEDIUM });
+      await expect(fontSelect).toContainText("System monospace", { timeout: T_MEDIUM });
 
       await window.keyboard.press("Escape");
     });
@@ -321,8 +322,8 @@ test.describe.serial("Core: Shell & Settings", () => {
       await expect(heading).toBeVisible({ timeout: T_MEDIUM });
 
       // Verify project scope is selected
-      const scopeSelect = window.locator(".settings-sidebar select");
-      await expect(scopeSelect).toHaveValue("project", { timeout: T_SHORT });
+      const scopeTrigger = window.locator('[aria-label="Settings scope"]');
+      await expect(scopeTrigger).toContainText("Project", { timeout: T_SHORT });
     });
 
     test("project name is displayed", async () => {

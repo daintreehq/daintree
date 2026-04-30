@@ -3,10 +3,12 @@ import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
+  AgentFallbackTriggeredPayload,
   TerminalActivityPayload,
   BackendTerminalInfo,
   TerminalReconnectResult,
   TerminalStatusPayload,
+  BroadcastWriteResultPayload,
   SpawnResult,
 } from "@shared/types";
 import type { PtyHostToRendererMessage } from "@shared/types/pty-host";
@@ -170,6 +172,38 @@ export const terminalClient = {
     window.electron.terminal.sendKey(id, key);
   },
 
+  /**
+   * Send a double-Escape to each terminal in the batch, with a per-PTY delay
+   * scheduled inside the PTY host utility process. Used by fleet.interrupt to
+   * drop each armed agent out of sub-menus/dialogs without the sub-10ms
+   * timing collapse that renderer-side setTimeout exhibits under IPC jitter.
+   */
+  batchDoubleEscape: (ids: string[]): void => {
+    if (ids.length === 0) return;
+    window.electron.terminal.batchDoubleEscape(ids);
+  },
+
+  /**
+   * Fan one data payload to every armed PTY in a single IPC round-trip.
+   * Used by fleet broadcast: for each keystroke we send one main→host
+   * message, the host writes to each PTY in a tight loop. Keeps renderer
+   * latency bounded regardless of fleet size.
+   */
+  broadcast: (ids: string[], data: string): void => {
+    if (ids.length === 0 || data.length === 0) return;
+    window.electron.terminal.broadcastWrite(ids, data);
+  },
+
+  /**
+   * Listen for per-target results emitted after every fleet broadcast write.
+   * Used by `fleetRawInputBroadcast` to surface the failure chip and to
+   * auto-disarm targets whose pty is permanently gone (EPIPE/EIO/EBADF/
+   * ECONNRESET).
+   */
+  onBroadcastResult: (callback: (data: BroadcastWriteResultPayload) => void): (() => void) => {
+    return window.electron.terminal.onBroadcastWriteResult(callback);
+  },
+
   resize: (id: string, cols: number, rows: number): void => {
     if (messagePort) {
       try {
@@ -259,6 +293,10 @@ export const terminalClient = {
 
   onAgentExited: (callback: (data: AgentExitedPayload) => void): (() => void) => {
     return window.electron.terminal.onAgentExited(callback);
+  },
+
+  onFallbackTriggered: (callback: (data: AgentFallbackTriggeredPayload) => void): (() => void) => {
+    return window.electron.terminal.onFallbackTriggered(callback);
   },
 
   onActivity: (callback: (data: TerminalActivityPayload) => void): (() => void) => {
@@ -367,7 +405,7 @@ export const terminalClient = {
    * Force resume a terminal that may be paused due to backpressure.
    * User-initiated action to unblock a terminal.
    */
-  forceResume: (id: string): Promise<{ success: boolean; error?: string }> => {
+  forceResume: (id: string): Promise<void> => {
     return window.electron.terminal.forceResume(id);
   },
 

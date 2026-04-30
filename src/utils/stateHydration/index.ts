@@ -5,15 +5,17 @@ import { useLayoutConfigStore } from "@/store";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { notify } from "@/lib/notify";
 import type {
-  TerminalType,
   AgentState,
   PanelKind,
+  PanelSnapshot,
   TerminalReconnectError,
   TabGroup,
 } from "@/types";
+import type { ActionFrecencyEntry } from "@shared/types/actions";
 import { keybindingService } from "@/services/KeybindingService";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { panelPersistence } from "@/store/persistence/panelPersistence";
+import { getPanelKindConfig, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
@@ -25,20 +27,23 @@ import {
 } from "@/utils/performance";
 import { isDaintreeEnvEnabled } from "@/utils/env";
 import { useSafeModeStore } from "@/store/safeModeStore";
+import type { AgentPreset } from "@/config/agents";
 import {
   type TerminalRestoreTask,
   splitSnapshotRestoreTasks,
   scheduleBackgroundFetchAndRestore,
   registerLazyScrollRestore,
-  runInBatches,
   RESTORE_SPAWN_BATCH_SIZE,
   RESTORE_SPAWN_BATCH_DELAY_MS,
+  delay,
 } from "./batchScheduler";
+import type { HydrationBatchToken } from "@/store/slices/panelRegistry/types";
 import { normalizeAndApplyScrollback } from "./scrollbackConfig";
 import { reconnectWithTimeout } from "./reconnectManager";
 import {
   inferKind,
   resolveAgentId,
+  inferAgentIdFromTitle,
   buildArgsForBackendTerminal,
   buildArgsForReconnectedFallback,
   buildArgsForRespawn,
@@ -55,6 +60,10 @@ function logHydrationInfo(message: string, context?: Record<string, unknown>): v
 }
 
 let hydrationBootstrapPromise: Promise<void> | null = null;
+
+// One-shot guard so the GPU-disabled toast fires at most once per renderer
+// lifecycle. Per-window module singleton; reset on app restart.
+let gpuAccelNotified = false;
 
 async function ensureHydrationBootstrap(): Promise<void> {
   if (!hydrationBootstrapPromise) {
@@ -110,8 +119,7 @@ function scheduleScrollbackRestore(
 export interface HydrationOptions {
   addPanel: (options: {
     kind?: PanelKind;
-    type?: TerminalType;
-    agentId?: string;
+    launchAgentId?: string;
     title?: string;
     cwd: string;
     worktreeId?: string;
@@ -126,10 +134,6 @@ export interface HydrationOptions {
     browserUrl?: string; // URL for browser panes
     browserHistory?: import("@shared/types/browser").BrowserHistory;
     browserZoom?: number;
-    notePath?: string; // Path to note file (kind === 'notes')
-    noteId?: string; // Note ID (kind === 'notes')
-    scope?: "worktree" | "project"; // Note scope (kind === 'notes')
-    createdAt?: number; // Note creation timestamp (kind === 'notes')
     devCommand?: string; // Dev command override for dev-preview panels
     devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
     devServerUrl?: string | null;
@@ -141,7 +145,14 @@ export interface HydrationOptions {
     agentSessionId?: string;
     agentLaunchFlags?: string[];
     agentModelId?: string;
+    agentPresetId?: string;
+    agentPresetColor?: string;
+    originalPresetId?: string;
+    isUsingFallback?: boolean;
+    fallbackChainIndex?: number;
+    env?: Record<string, string>;
     extensionState?: Record<string, unknown>;
+    pluginId?: string;
     restore?: boolean;
     bypassLimits?: boolean;
   }) => Promise<string>;
@@ -155,8 +166,17 @@ export interface HydrationOptions {
   setReconnectError?: (id: string, error: TerminalReconnectError) => void;
   hydrateTabGroups?: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
   hydrateMru?: (list: string[]) => void;
-  hydrateActionMru?: (list: string[]) => void;
+  hydrateActionMru?: (list: ActionFrecencyEntry[] | string[]) => void;
   restoreTerminalOrder?: (orderedIds: string[]) => void;
+  /**
+   * Optional hydration-batch hooks. When both are provided, each restore phase is
+   * wrapped in a begin/flush pair so the N `addPanel` mutations within the phase
+   * collapse into a single store commit. Leaving them undefined keeps the legacy
+   * per-panel commit behavior (tests and callers that don't care about render
+   * reduction don't need to pass these).
+   */
+  beginHydrationBatch?: () => HydrationBatchToken;
+  flushHydrationBatch?: (token: HydrationBatchToken) => void;
 }
 
 export async function hydrateAppState(
@@ -165,8 +185,34 @@ export async function hydrateAppState(
   isCurrent?: () => boolean,
   prefetchedHydrateResult?: import("@shared/types/ipc/app").HydrateResult
 ): Promise<void> {
-  const { addPanel, setActiveWorktree, loadRecipes, openDiagnosticsDock } = options;
+  const {
+    addPanel,
+    setActiveWorktree,
+    loadRecipes,
+    openDiagnosticsDock,
+    beginHydrationBatch,
+    flushHydrationBatch,
+  } = options;
   const hydrationStartedAt = Date.now();
+
+  /**
+   * Wrap a restore phase in a hydration batch so every `addPanel` call inside `run`
+   * collapses into a single store commit when the phase completes. If the caller
+   * didn't wire the batch hooks (e.g. tests), fall through to the legacy per-panel
+   * commit behavior.
+   */
+  const withHydrationBatch = async (run: () => Promise<void>): Promise<void> => {
+    if (!beginHydrationBatch || !flushHydrationBatch) {
+      await run();
+      return;
+    }
+    const token = beginHydrationBatch();
+    try {
+      await run();
+    } finally {
+      flushHydrationBatch(token);
+    }
+  };
   let panelRestoreStartedAt: number | null = null;
   let panelRestoreCount = 0;
   let tabGroupRestoreCount = 0;
@@ -213,7 +259,27 @@ export async function hydrateAppState(
     terminalInstanceService.setGPUHardwareAvailable(gpuWebGLHardware ?? true);
 
     if (hydrateResult.safeMode) {
-      useSafeModeStore.getState().setSafeMode(true);
+      useSafeModeStore.getState().setSafeMode(true, {
+        crashCount: hydrateResult.crashCount,
+        skippedPanelCount: hydrateResult.skippedPanelCount,
+        lastCrashAt: hydrateResult.lastCrashAt,
+      });
+    } else {
+      // Clear stale state when the main process has exited safe mode
+      // (e.g. stability timer fired or user restarted normally).
+      useSafeModeStore.getState().setSafeMode(false);
+    }
+
+    if (hydrateResult.gpuHardwareAccelerationDisabled && !gpuAccelNotified) {
+      gpuAccelNotified = true;
+      notify({
+        type: "warning",
+        title: "Hardware acceleration disabled",
+        message:
+          "Daintree disabled GPU acceleration after repeated GPU crashes. Performance may be reduced — re-enable it in Settings > Troubleshooting.",
+        priority: "watch",
+        duration: 0,
+      });
     }
 
     if (hydrateResult.settingsRecovery) {
@@ -225,7 +291,7 @@ export async function hydrateAppState(
       if (recovery.kind === "restored-from-backup") {
         notify({
           type: "warning",
-          title: "Settings Restored from Backup",
+          title: "Settings restored from backup",
           message: `Your settings file was corrupted and has been restored from a backup. Some recent changes may have been lost.${pathNote}`,
           priority: "high",
           duration: 8000,
@@ -233,12 +299,23 @@ export async function hydrateAppState(
       } else {
         notify({
           type: "warning",
-          title: "Settings Reset to Defaults",
+          title: "Settings reset to defaults",
           message: `Your settings file was corrupted and no backup was available. Settings have been reset to defaults.${pathNote}`,
           priority: "high",
           duration: 0,
         });
       }
+    }
+
+    if (hydrateResult.projectStateRecovery) {
+      const { quarantinedPath } = hydrateResult.projectStateRecovery;
+      notify({
+        type: "warning",
+        title: "Project state corrupted",
+        message: `Your project state was corrupted and has been reset. The corrupt file is preserved at: ${quarantinedPath}`,
+        priority: "high",
+        duration: 0,
+      });
     }
 
     normalizeAndApplyScrollback(terminalConfig, logHydrationInfo);
@@ -293,6 +370,15 @@ export async function hydrateAppState(
           })
       : Promise.resolve(emptyDraftInputs);
 
+    const emptyProjectPresets: Record<string, AgentPreset[]> = {};
+    const projectPresetsPromise: Promise<Record<string, AgentPreset[]>> =
+      currentProjectId && typeof projectClient.getInRepoPresets === "function"
+        ? projectClient.getInRepoPresets(currentProjectId).catch((error) => {
+            logWarn("Failed to prefetch project presets during hydration", { error });
+            return emptyProjectPresets;
+          })
+        : Promise.resolve(emptyProjectPresets);
+
     const recipeLoadPromise = currentProjectId
       ? loadRecipes(currentProjectId).catch((error) => {
           logWarn("Failed to load recipes", { error });
@@ -332,7 +418,7 @@ export async function hydrateAppState(
             terminals: backendTerminals.map((t) => ({
               id: t.id.slice(0, 8),
               kind: t.kind,
-              agentId: t.agentId,
+              agentId: t.launchAgentId,
               projectId: t.projectId?.slice(0, 8),
             })),
           });
@@ -346,9 +432,25 @@ export async function hydrateAppState(
         if (!checkCurrent()) return;
 
         const activeWorktreeId = appState.activeWorktreeId ?? null;
+        const projectPresetsByAgent = await projectPresetsPromise;
+        if (!checkCurrent()) return;
 
         // Restore all panels in saved order (mix of PTY reconnects and non-PTY recreations)
         if (appState.terminals && appState.terminals.length > 0) {
+          // Seed the persistence cache so the first save after launch can
+          // preserve kind-specific fields for unregistered kinds (e.g., an
+          // extension that hasn't re-registered yet). Without this priming,
+          // a first save cycle would drop those fields — see issue #5201.
+          // appState.terminals is TerminalState[] (IPC wire type, more
+          // lenient); the on-disk data was written by panelToSnapshot so is
+          // structurally PanelSnapshot[].
+          if (currentProjectId) {
+            panelPersistence.primeProject(
+              currentProjectId,
+              appState.terminals as unknown as PanelSnapshot[]
+            );
+          }
+
           panelRestoreStartedAt = Date.now();
           panelRestoreCount = appState.terminals.length;
           markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_PANELS_START, {
@@ -371,6 +473,7 @@ export async function hydrateAppState(
 
           for (let savedIndex = 0; savedIndex < appState.terminals.length; savedIndex++) {
             const saved = appState.terminals[savedIndex];
+            if (saved === undefined) continue;
             if (isSmokeTestTerminalId(saved.id)) {
               logHydrationInfo(`Skipping smoke test terminal snapshot: ${saved.id}`);
               continue;
@@ -397,11 +500,10 @@ export async function hydrateAppState(
               isPty: taskIsPty,
               execute: async () => {
                 if (backendTerminal) {
-                  // Skip dead agent backend terminals — they create phantom idle panels
+                  // Skip dead agent backend terminals — they create phantom idle panels.
                   const isDeadAgentBackend =
                     backendTerminal.hasPty === false &&
-                    (backendTerminal.kind === "agent" ||
-                      resolveAgentId(backendTerminal.agentId, backendTerminal.type) !== undefined);
+                    resolveAgentId(backendTerminal.launchAgentId) !== undefined;
                   if (isDeadAgentBackend) {
                     logHydrationInfo(`Skipping dead agent backend terminal: ${backendTerminal.id}`);
                     backendTerminalMap.delete(saved.id);
@@ -424,7 +526,7 @@ export async function hydrateAppState(
                   logHydrationInfo(`[HYDRATION] Adding terminal from backend:`, {
                     id: backendTerminal.id,
                     kind: args.kind,
-                    agentId: args.agentId,
+                    launchAgentId: args.launchAgentId,
                     location,
                     worktreeId: args.worktreeId,
                     title: backendTerminal.title,
@@ -530,8 +632,16 @@ export async function hydrateAppState(
                       // panels that no longer exist in the backend — they are phantoms.
                       // On cold app restart (_switchId undefined), not_found simply means the
                       // PTY process was killed on quit and needs to be respawned.
-                      const isAgentKind =
-                        kind === "agent" || resolveAgentId(saved.agentId, saved.type) !== undefined;
+                      // Mirror buildArgsForRespawn's title-inference recovery so legacy
+                      // `kind: "agent"` panels with cleared agentId still skip as phantoms.
+                      const inferredAgentId = inferAgentIdFromTitle(
+                        saved.title,
+                        kind,
+                        resolveAgentId(saved.launchAgentId),
+                        saved.id,
+                        "switch-guard"
+                      );
+                      const isAgentKind = inferredAgentId !== undefined;
                       if (
                         isAgentKind &&
                         reconnectOutcome.status === "not_found" &&
@@ -549,7 +659,8 @@ export async function hydrateAppState(
                         projectRoot || "",
                         agentSettings,
                         reconnectTimedOut,
-                        clipboardDirectory
+                        clipboardDirectory,
+                        projectPresetsByAgent
                       );
 
                       // Assign to active worktree if the saved terminal has no worktreeId
@@ -558,13 +669,13 @@ export async function hydrateAppState(
                       }
 
                       logHydrationInfo(
-                        `Respawning PTY panel: ${saved.id} (${respawnArgs.kind === "agent" ? "agent" : "terminal"})`
+                        `Respawning PTY panel: ${saved.id} (${respawnArgs.launchAgentId ? "agent" : "terminal"})`
                       );
 
                       logHydrationInfo(`[HYDRATION-RESPAWN] Adding terminal:`, {
                         id: saved.id,
                         kind: respawnArgs.kind,
-                        agentId: respawnArgs.agentId,
+                        launchAgentId: respawnArgs.launchAgentId,
                         location: respawnArgs.location,
                         savedLocation: saved.location,
                         worktreeId: saved.worktreeId,
@@ -593,6 +704,21 @@ export async function hydrateAppState(
                       }
                     }
                   } else {
+                    // Unregistered kind. Restore when the panel carries a
+                    // pluginId (current-format plugin panel) OR the kind string
+                    // contains a dot (legacy pre-#5580 plugin panel whose kind
+                    // was persisted as "${manifest.name}.${panel.id}" without a
+                    // pluginId field). Both cases let the renderer surface a
+                    // PluginMissingPanel placeholder (#5580) instead of silently
+                    // dropping the panel. Non-dotted unregistered kinds (e.g.
+                    // the "notes" built-in removed in #5616) are still skipped
+                    // to avoid "Unknown Panel Type" ghosts.
+                    if (!getPanelKindConfig(kind) && !saved.pluginId && !kind.includes(".")) {
+                      logHydrationInfo(
+                        `Skipping persisted panel with unregistered kind: ${saved.id} (${kind})`
+                      );
+                      return;
+                    }
                     logHydrationInfo(`Recreating ${kind} panel: ${saved.id}`);
                     const nonPtyId = await addPanel(
                       buildArgsForNonPtyRecreation(saved, kind, projectRoot || "")
@@ -611,51 +737,70 @@ export async function hydrateAppState(
           const ptyPriorityTasks = panelTasks.filter((t) => t.isPty && t.priority === 0);
           const ptyBackgroundTasks = panelTasks.filter((t) => t.isPty && t.priority === 1);
 
-          // Restore all non-PTY panels concurrently (browser, notes, dev-preview).
+          // Restore all non-PTY panels concurrently (browser, dev-preview).
           // These only perform synchronous store mutations, so no throttling is needed.
+          // The begin/flush wrapper collapses the N addPanel mutations into one store
+          // commit, reducing this phase from N re-renders to 1.
           if (nonPtyTasks.length > 0) {
             logHydrationInfo(`Restoring ${nonPtyTasks.length} non-PTY panel(s) concurrently`);
-            await Promise.allSettled(
-              nonPtyTasks.map(async (task) => {
+            await withHydrationBatch(async () => {
+              await Promise.allSettled(
+                nonPtyTasks.map(async (task) => {
+                  try {
+                    await task.execute();
+                  } catch (error) {
+                    logWarn("Failed to restore non-PTY panel", { error });
+                  }
+                })
+              );
+            });
+          }
+
+          if (!checkCurrent()) return;
+
+          // Restore priority PTY panels sequentially (active worktree, for instant
+          // interactivity). Batched so the sequential `await`s — which normally break
+          // React 19 auto-batching and cause one render per panel — collapse into a
+          // single store commit at phase end.
+          if (ptyPriorityTasks.length > 0) {
+            await withHydrationBatch(async () => {
+              for (const task of ptyPriorityTasks) {
                 try {
                   await task.execute();
                 } catch (error) {
-                  logWarn("Failed to restore non-PTY panel", { error });
+                  logWarn("Failed to restore priority panel", { error });
                 }
-              })
-            );
+              }
+            });
           }
 
           if (!checkCurrent()) return;
 
-          // Restore priority PTY panels sequentially (active worktree, for instant interactivity)
-          for (const task of ptyPriorityTasks) {
-            try {
-              await task.execute();
-            } catch (error) {
-              logWarn("Failed to restore priority panel", { error });
-            }
-          }
-
-          if (!checkCurrent()) return;
-
-          // Restore background PTY panels in staggered batches
+          // Restore background PTY panels in staggered batches. Each batch is its own
+          // hydration batch: we still want staggered spawning to throttle PTY pressure,
+          // but within a batch the N panels commit in one render rather than N.
+          // N background panels -> ceil(N / RESTORE_SPAWN_BATCH_SIZE) renders instead of N.
           if (ptyBackgroundTasks.length > 0) {
             logHydrationInfo(
               `Staggering ${ptyBackgroundTasks.length} background PTY panel(s) in batches of ${RESTORE_SPAWN_BATCH_SIZE}`
             );
-            await runInBatches(
-              ptyBackgroundTasks,
-              RESTORE_SPAWN_BATCH_SIZE,
-              RESTORE_SPAWN_BATCH_DELAY_MS,
-              async (task) => {
-                try {
-                  await task.execute();
-                } catch (error) {
-                  logWarn("Failed to restore background panel", { error });
-                }
+            for (let i = 0; i < ptyBackgroundTasks.length; i += RESTORE_SPAWN_BATCH_SIZE) {
+              const batch = ptyBackgroundTasks.slice(i, i + RESTORE_SPAWN_BATCH_SIZE);
+              await withHydrationBatch(async () => {
+                await Promise.allSettled(
+                  batch.map(async (task) => {
+                    try {
+                      await task.execute();
+                    } catch (error) {
+                      logWarn("Failed to restore background panel", { error });
+                    }
+                  })
+                );
+              });
+              if (i + RESTORE_SPAWN_BATCH_SIZE < ptyBackgroundTasks.length) {
+                await delay(RESTORE_SPAWN_BATCH_DELAY_MS);
               }
-            );
+            }
           }
 
           // Restore saved panel order. The three-phase restore (non-PTY first, then
@@ -692,64 +837,71 @@ export async function hydrateAppState(
           // back to activeWorktreeId so they still appear in the grid.
           const worktreesForInfer = await worktreesPromise;
 
-          await runInBatches(
-            orphanedTerminals,
-            RESTORE_SPAWN_BATCH_SIZE,
-            RESTORE_SPAWN_BATCH_DELAY_MS,
-            async (terminal) => {
-              try {
-                logHydrationInfo(`Reconnecting to orphaned terminal: ${terminal.id}`);
+          const restoreOrphan = async (
+            terminal: (typeof orphanedTerminals)[number]
+          ): Promise<void> => {
+            try {
+              logHydrationInfo(`Reconnecting to orphaned terminal: ${terminal.id}`);
 
-                const orphanArgs = buildArgsForOrphanedTerminal(terminal, projectRoot || "");
-                // Orphaned backend terminals no longer carry worktreeId — infer it
-                // from cwd against the loaded worktrees, then fall back to the
-                // active worktree so the panel still appears in the grid filter.
-                const inferred = inferWorktreeIdFromCwd(
-                  terminal.cwd,
-                  worktreesForInfer ?? undefined
+              const orphanArgs = buildArgsForOrphanedTerminal(terminal, projectRoot || "");
+              // Orphaned backend terminals no longer carry worktreeId — infer it
+              // from cwd against the loaded worktrees, then fall back to the
+              // active worktree so the panel still appears in the grid filter.
+              const inferred = inferWorktreeIdFromCwd(terminal.cwd, worktreesForInfer ?? undefined);
+              if (inferred) {
+                orphanArgs.worktreeId = inferred;
+              } else if (activeWorktreeId) {
+                orphanArgs.worktreeId = activeWorktreeId;
+              }
+              const restoredTerminalId = await addPanel(orphanArgs);
+
+              if (terminal.activityTier) {
+                terminalInstanceService.initializeBackendTier(
+                  restoredTerminalId,
+                  terminal.activityTier
                 );
-                if (inferred) {
-                  orphanArgs.worktreeId = inferred;
-                } else if (activeWorktreeId) {
-                  orphanArgs.worktreeId = activeWorktreeId;
-                }
-                const restoredTerminalId = await addPanel(orphanArgs);
+              }
 
-                if (terminal.activityTier) {
-                  terminalInstanceService.initializeBackendTier(
+              if (terminalSizes && typeof terminalSizes === "object") {
+                const savedSize = terminalSizes[restoredTerminalId];
+                if (
+                  savedSize &&
+                  Number.isFinite(savedSize.cols) &&
+                  Number.isFinite(savedSize.rows) &&
+                  savedSize.cols > 0 &&
+                  savedSize.rows > 0
+                ) {
+                  terminalInstanceService.setTargetSize(
                     restoredTerminalId,
-                    terminal.activityTier
+                    savedSize.cols,
+                    savedSize.rows
                   );
                 }
-
-                if (terminalSizes && typeof terminalSizes === "object") {
-                  const savedSize = terminalSizes[restoredTerminalId];
-                  if (
-                    savedSize &&
-                    Number.isFinite(savedSize.cols) &&
-                    Number.isFinite(savedSize.rows) &&
-                    savedSize.cols > 0 &&
-                    savedSize.rows > 0
-                  ) {
-                    terminalInstanceService.setTargetSize(
-                      restoredTerminalId,
-                      savedSize.cols,
-                      savedSize.rows
-                    );
-                  }
-                }
-
-                restoreTasks.push({
-                  terminalId: restoredTerminalId,
-                  label: terminal.id,
-                  worktreeId: orphanArgs.worktreeId,
-                  location: "grid",
-                });
-              } catch (error) {
-                logWarn(`Failed to reconnect to orphaned terminal ${terminal.id}`, { error });
               }
+
+              restoreTasks.push({
+                terminalId: restoredTerminalId,
+                label: terminal.id,
+                worktreeId: orphanArgs.worktreeId,
+                location: "grid",
+              });
+            } catch (error) {
+              logWarn(`Failed to reconnect to orphaned terminal ${terminal.id}`, { error });
             }
-          );
+          };
+
+          // Same staggered-batch pattern as the background PTY phase: one hydration
+          // batch per spawn batch so orphan restores commit once per batch rather
+          // than once per terminal.
+          for (let i = 0; i < orphanedTerminals.length; i += RESTORE_SPAWN_BATCH_SIZE) {
+            const batch = orphanedTerminals.slice(i, i + RESTORE_SPAWN_BATCH_SIZE);
+            await withHydrationBatch(async () => {
+              await Promise.allSettled(batch.map(restoreOrphan));
+            });
+            if (i + RESTORE_SPAWN_BATCH_SIZE < orphanedTerminals.length) {
+              await delay(RESTORE_SPAWN_BATCH_DELAY_MS);
+            }
+          }
         }
 
         const { criticalTasks, deferredTasks } = splitSnapshotRestoreTasks(
@@ -864,7 +1016,7 @@ export async function hydrateAppState(
           if (!a.isMainWorktree && b.isMainWorktree) return 1;
           return a.name.localeCompare(b.name);
         });
-        const fallbackWorktree = sortedWorktrees[0];
+        const fallbackWorktree = sortedWorktrees[0]!;
         logHydrationInfo(
           `Active worktree ${savedActiveId ?? "(none)"} not found, falling back to: ${fallbackWorktree.name}`
         );

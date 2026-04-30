@@ -47,9 +47,9 @@ test.describe.serial("Core: Advanced", () => {
     server?.close();
   });
 
-  // ── Browser, Portal & Notes (4 tests) ───────────────────
+  // ── Browser & Portal (3 tests) ───────────────────
 
-  test.describe.serial("Browser, Portal & Notes", () => {
+  test.describe.serial("Browser & Portal", () => {
     test.afterAll(async () => {
       // Best-effort: close browser panel so Worktree tests start with clean grid
       try {
@@ -86,24 +86,6 @@ test.describe.serial("Core: Advanced", () => {
       await expect(addressBar).toHaveValue(new RegExp(`127\\.0\\.0\\.1:${port}`), {
         timeout: T_MEDIUM,
       });
-    });
-
-    test("notes palette opens and shows editor", async () => {
-      const { window } = ctx;
-
-      const notesBtn = window.locator(SEL.toolbar.notesButton);
-      if (!(await notesBtn.isVisible().catch(() => false))) {
-        test.skip();
-        return;
-      }
-
-      await notesBtn.click();
-
-      const palette = window.locator(SEL.notes.palette);
-      await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-
-      await window.keyboard.press("Escape");
-      await expect(palette).not.toBeVisible({ timeout: T_SHORT });
     });
   });
 
@@ -156,9 +138,21 @@ test.describe.serial("Core: Advanced", () => {
       const { window } = ctx;
 
       const newCard = window.locator(SEL.worktree.card("e2e/test-worktree"));
+      // Ensure the card is in the viewport and settled before clicking —
+      // freshly-created cards can be mid-animation or still mounting their
+      // click handler when the test reaches this step.
+      await expect(newCard).toBeVisible({ timeout: T_MEDIUM });
+      await newCard.scrollIntoViewIfNeeded();
       await newCard.click();
 
-      await expect(newCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+      // If the first click didn't stick (e.g., Radix focus stole the event),
+      // try once more before failing.
+      try {
+        await expect(newCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+      } catch {
+        await newCard.click();
+        await expect(newCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+      }
     });
 
     test("delete worktree via dropdown menu", async () => {

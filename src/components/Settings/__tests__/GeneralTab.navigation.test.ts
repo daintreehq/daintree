@@ -36,7 +36,7 @@ describe("onNavigateToAgents callback contract", () => {
     onNavigateToAgents("claude");
     expect(setActiveSubtabs).toHaveBeenCalledTimes(1);
 
-    const updater = setActiveSubtabs.mock.calls[0][0];
+    const updater = setActiveSubtabs.mock.calls[0]![0];
     const result = updater({});
     expect(result).toEqual({ agents: "claude" });
   });
@@ -45,7 +45,7 @@ describe("onNavigateToAgents callback contract", () => {
     const { onNavigateToAgents, setActiveSubtabs } = createSettingsDialogCallback();
     onNavigateToAgents("gemini");
 
-    const updater = setActiveSubtabs.mock.calls[0][0];
+    const updater = setActiveSubtabs.mock.calls[0]![0];
     const result = updater({ general: "overview", keyboard: "shortcuts" });
     expect(result).toEqual({ general: "overview", keyboard: "shortcuts", agents: "gemini" });
   });
@@ -67,7 +67,7 @@ describe("onNavigateToAgents callback contract", () => {
       const { onNavigateToAgents, setActiveSubtabs } = createSettingsDialogCallback();
       onNavigateToAgents(id);
 
-      const updater = setActiveSubtabs.mock.calls[0][0];
+      const updater = setActiveSubtabs.mock.calls[0]![0];
       expect(updater({})).toEqual({ agents: id });
     }
   });

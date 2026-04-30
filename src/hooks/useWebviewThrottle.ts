@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { usePanelStore } from "@/store";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 /**
  * Freezes a webview's JS execution via CDP when the panel is in the dock
@@ -37,7 +38,9 @@ export function useWebviewThrottle(
       } catch {
         return;
       }
-      void window.electron.webview.setLifecycleState(webContentsId, false);
+      safeFireAndForget(window.electron.webview.setLifecycleState(webContentsId, false), {
+        context: "Unfreezing webview lifecycle state",
+      });
       return;
     }
 
@@ -50,7 +53,9 @@ export function useWebviewThrottle(
       } catch {
         return;
       }
-      void window.electron.webview.setLifecycleState(webContentsId, true);
+      safeFireAndForget(window.electron.webview.setLifecycleState(webContentsId, true), {
+        context: "Freezing webview lifecycle state",
+      });
     }, 500);
 
     return () => {

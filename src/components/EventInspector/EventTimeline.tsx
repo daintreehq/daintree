@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import type { EventRecord, EventCategory } from "@/store/eventStore";
 import { Circle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EVENT_CATEGORY_STYLES } from "@/config/categoryColors";
 
 interface EventTimelineProps {
@@ -112,21 +112,19 @@ export function EventTimeline({
         )}
       >
         <div className="flex items-start gap-2">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  className={cn(
-                    "flex-shrink-0 inline-flex items-center justify-center w-8 px-1 py-0.5 rounded text-[11px] font-medium border",
-                    categoryStyle.color
-                  )}
-                >
-                  {categoryStyle.label}
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{event.category}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className={cn(
+                  "flex-shrink-0 inline-flex items-center justify-center w-8 px-1 py-0.5 rounded text-[11px] font-medium border",
+                  categoryStyle.color
+                )}
+              >
+                {categoryStyle.label}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{event.category}</TooltipContent>
+          </Tooltip>
           <div className="flex-1 min-w-0 space-y-1">
             <div className="flex items-center gap-2">
               <span className="font-mono text-xs text-muted-foreground">

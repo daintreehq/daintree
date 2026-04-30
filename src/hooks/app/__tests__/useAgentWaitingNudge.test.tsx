@@ -9,10 +9,11 @@ const onboardingMock = {
       completed: true,
       currentStep: null as string | null,
       agentSetupIds: [] as string[],
-      migratedFromLocalStorage: true,
       firstRunToastSeen: false,
       newsletterPromptSeen: false,
       waitingNudgeSeen: false,
+      seenAgentIds: [] as string[],
+      welcomeCardDismissed: false,
       checklist: {
         dismissed: false,
         celebrationShown: false,
@@ -118,10 +119,11 @@ describe("useAgentWaitingNudge", () => {
       completed: true,
       currentStep: null,
       agentSetupIds: [],
-      migratedFromLocalStorage: true,
       firstRunToastSeen: false,
       newsletterPromptSeen: false,
       waitingNudgeSeen: true,
+      seenAgentIds: [],
+      welcomeCardDismissed: false,
       checklist: {
         dismissed: false,
         celebrationShown: false,
@@ -142,10 +144,11 @@ describe("useAgentWaitingNudge", () => {
       completed: false,
       currentStep: "themeSelection",
       agentSetupIds: [],
-      migratedFromLocalStorage: true,
       firstRunToastSeen: false,
       newsletterPromptSeen: false,
       waitingNudgeSeen: false,
+      seenAgentIds: [],
+      welcomeCardDismissed: false,
       checklist: {
         dismissed: false,
         celebrationShown: false,
@@ -187,7 +190,7 @@ describe("useAgentWaitingNudge", () => {
 
     expect(onboardingMock.markWaitingNudgeSeen).toHaveBeenCalledOnce();
     expect(notifyMock).toHaveBeenCalledOnce();
-    const payload = notifyMock.mock.calls[0][0] as Record<string, unknown>;
+    const payload = notifyMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(payload.placement).toBe("grid-bar");
     expect(payload.duration).toBe(0);
     expect(payload.type).toBe("info");
@@ -231,10 +234,10 @@ describe("useAgentWaitingNudge", () => {
       emitStoreUpdate([{ id: "t1", agentState: "waiting" }]);
     });
 
-    const payload = notifyMock.mock.calls[0][0] as {
+    const payload = notifyMock.mock.calls[0]![0] as {
       actions: Array<{ label: string; onClick: () => void }>;
     };
-    const enableAction = payload.actions.find((a) => a.label === "Enable Notifications")!;
+    const enableAction = payload.actions.find((a) => a.label === "Enable notifications")!;
 
     act(() => {
       enableAction.onClick();
@@ -244,7 +247,7 @@ describe("useAgentWaitingNudge", () => {
     expect(removeNotificationMock).toHaveBeenCalledWith("notif-123");
   });
 
-  it("No Thanks action removes notification without enabling", async () => {
+  it("No thanks action removes notification without enabling", async () => {
     renderHook(() => useAgentWaitingNudge(true));
     await act(async () => {});
 
@@ -252,10 +255,10 @@ describe("useAgentWaitingNudge", () => {
       emitStoreUpdate([{ id: "t1", agentState: "waiting" }]);
     });
 
-    const payload = notifyMock.mock.calls[0][0] as {
+    const payload = notifyMock.mock.calls[0]![0] as {
       actions: Array<{ label: string; onClick: () => void }>;
     };
-    const noThanks = payload.actions.find((a) => a.label === "No Thanks")!;
+    const noThanks = payload.actions.find((a) => a.label === "No thanks")!;
 
     act(() => {
       noThanks.onClick();

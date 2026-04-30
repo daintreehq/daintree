@@ -13,11 +13,19 @@ export interface FileReadPayload {
   rootPath: string;
 }
 
+/**
+ * Subset of `AppErrorCode` thrown by `files:read`. Renderer consumers narrow
+ * caught `AppError`s with `if (e.code === "BINARY_FILE") { ... }` style checks.
+ */
 export type FileReadErrorCode =
   | "BINARY_FILE"
   | "FILE_TOO_LARGE"
+  | "LFS_POINTER"
   | "NOT_FOUND"
   | "OUTSIDE_ROOT"
-  | "INVALID_PATH";
+  | "INVALID_PATH"
+  | "PERMISSION";
 
-export type FileReadResult = { ok: true; content: string } | { ok: false; code: FileReadErrorCode };
+export interface FileReadResult {
+  content: string;
+}

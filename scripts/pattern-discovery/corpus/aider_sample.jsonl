@@ -1,0 +1,15 @@
+{"time":0.0,"chunk":"Aider v0.86.0","detectedState":"initializing","confidence":0.9,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":0.2,"chunk":"Main model: claude-3-5-sonnet-20241022 with diff edit format, prompt cache","detectedState":"initializing","confidence":0.9,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":0.4,"chunk":"Git repo: .git with 142 files","detectedState":"initializing","confidence":0.9,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":0.6,"chunk":"Repo-map: using 1024 tokens, auto refresh","detectedState":"initializing","confidence":0.9,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":0.8,"chunk":"Use /help <question> for help, run \"aider --help\" to see cmd line args","detectedState":"waiting","confidence":0.85,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":1.0,"chunk":"> ","detectedState":"waiting","confidence":0.85,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":2.0,"chunk":"░░░░░░░░░█ Waiting for claude-3-5-sonnet-20241022","detectedState":"working","confidence":0.95,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":2.4,"chunk":"░░░░██░░░░ Waiting for claude-3-5-sonnet-20241022","detectedState":"working","confidence":0.95,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":2.8,"chunk":"█░░░░░░░░░ Waiting for claude-3-5-sonnet-20241022","detectedState":"working","confidence":0.95,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":3.2,"chunk":"=====#==== Waiting for gpt-4o","detectedState":"working","confidence":0.7,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":4.0,"chunk":"Applied edit to src/components/Button.tsx","detectedState":"completed","confidence":0.9,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":4.2,"chunk":"Applied edit to src/components/index.ts","detectedState":"completed","confidence":0.9,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":4.6,"chunk":"Commit a1b2c3d feat: add Button variant prop","detectedState":"completed","confidence":0.9,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":5.0,"chunk":"Tokens: 1.5k sent, 432 received. Cost: $0.02 message, $0.08 session.","detectedState":"completed","confidence":0.9,"agentId":"aider","agentVersion":"0.86.0"}
+{"time":5.4,"chunk":"architect> ","detectedState":"waiting","confidence":0.85,"agentId":"aider","agentVersion":"0.86.0"}

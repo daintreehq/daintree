@@ -1,6 +1,7 @@
 export {
   createPanelRegistrySlice,
   flushPanelPersistence,
+  isHydrationBatchActive,
   selectOrderedTerminals,
   type PanelRegistrySlice,
   type TerminalInstance,

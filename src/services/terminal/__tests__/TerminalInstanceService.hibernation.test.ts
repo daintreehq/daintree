@@ -123,7 +123,7 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     open: vi.fn(),
   };
 
-  return {
+  const managed = {
     terminal,
     type: "terminal",
     kind: "terminal",
@@ -167,6 +167,17 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     ipcListenerCount: 0,
     ...overrides,
   };
+  const runtimeManaged = managed as typeof managed & {
+    runtimeAgentId?: string;
+    launchAgentId?: string;
+  };
+  if (
+    runtimeManaged.runtimeAgentId === undefined &&
+    typeof runtimeManaged.launchAgentId === "string"
+  ) {
+    runtimeManaged.runtimeAgentId = runtimeManaged.launchAgentId;
+  }
+  return runtimeManaged;
 }
 
 describe("TerminalInstanceService - Hibernation", () => {
@@ -237,8 +248,8 @@ describe("TerminalInstanceService - Hibernation", () => {
 
     it("should never hibernate active agent terminals", () => {
       const managed = makeMockManaged({
-        kind: "agent",
-        type: "claude",
+        kind: "terminal",
+        launchAgentId: "claude",
         canonicalAgentState: "working",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -251,8 +262,8 @@ describe("TerminalInstanceService - Hibernation", () => {
 
     it("should never hibernate waiting agent terminals", () => {
       const managed = makeMockManaged({
-        kind: "agent",
-        type: "claude",
+        kind: "terminal",
+        launchAgentId: "claude",
         canonicalAgentState: "waiting",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -265,8 +276,8 @@ describe("TerminalInstanceService - Hibernation", () => {
 
     it("should hibernate completed agent terminals", () => {
       const managed = makeMockManaged({
-        kind: "agent",
-        type: "claude",
+        kind: "terminal",
+        launchAgentId: "claude",
         canonicalAgentState: "completed",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -369,8 +380,11 @@ describe("TerminalInstanceService - Hibernation", () => {
   });
 
   describe("Hibernation timer via tier transitions", () => {
-    it("should start hibernation timer when entering BACKGROUND for non-agent terminal", () => {
-      const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
+    it("should start hibernation timer when an offscreen terminal drops to BACKGROUND", () => {
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        isVisible: false,
+      });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
       service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
@@ -379,8 +393,28 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(managed.hibernationTimer).toBeDefined();
     });
 
-    it("should hibernate after HIBERNATION_DELAY_MS in BACKGROUND", () => {
-      const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
+    it("should NOT start hibernation timer while terminal is visible on screen", () => {
+      // A non-focused split-view terminal goes BACKGROUND but stays on screen.
+      // We must not hibernate it — the user is looking at it.
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        isVisible: true,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(600); // past hysteresis
+      vi.advanceTimersByTime(HIBERNATION_DELAY_MS);
+
+      expect(managed.hibernationTimer).toBeUndefined();
+      expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("should hibernate an offscreen terminal after HIBERNATION_DELAY_MS in BACKGROUND", () => {
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        isVisible: false,
+      });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
       service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
@@ -393,8 +427,9 @@ describe("TerminalInstanceService - Hibernation", () => {
     it("should NOT start hibernation timer for active agent terminals", () => {
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
-        kind: "agent",
-        type: "claude",
+        isVisible: false,
+        kind: "terminal",
+        launchAgentId: "claude",
         canonicalAgentState: "working",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -405,11 +440,12 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(managed.hibernationTimer).toBeUndefined();
     });
 
-    it("should start hibernation timer for completed agent terminals in BACKGROUND", () => {
+    it("should start hibernation timer for offscreen completed agent terminals in BACKGROUND", () => {
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
-        kind: "agent",
-        type: "claude",
+        isVisible: false,
+        kind: "terminal",
+        launchAgentId: "claude",
         canonicalAgentState: "completed",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -420,11 +456,12 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(managed.hibernationTimer).toBeDefined();
     });
 
-    it("should hibernate completed agent after HIBERNATION_DELAY_MS in BACKGROUND", () => {
+    it("should hibernate offscreen completed agent after HIBERNATION_DELAY_MS in BACKGROUND", () => {
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
-        kind: "agent",
-        type: "claude",
+        isVisible: false,
+        kind: "terminal",
+        launchAgentId: "claude",
         canonicalAgentState: "completed",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -437,7 +474,10 @@ describe("TerminalInstanceService - Hibernation", () => {
     });
 
     it("should cancel hibernation timer when upgraded from BACKGROUND", () => {
-      const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        isVisible: false,
+      });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
       // Downgrade to BACKGROUND
@@ -451,6 +491,42 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(managed.hibernationTimer).toBeUndefined();
 
       // Advance past hibernation delay — should NOT hibernate
+      vi.advanceTimersByTime(HIBERNATION_DELAY_MS);
+      expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("should schedule hibernation when a BACKGROUND terminal becomes invisible", () => {
+      // Simulates: non-focused split-view terminal (BACKGROUND, visible) → user
+      // switches panels away, so it goes offscreen. Timer must start now.
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        isVisible: true,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.setVisible("t1", false);
+
+      expect(managed.hibernationTimer).toBeDefined();
+
+      vi.advanceTimersByTime(HIBERNATION_DELAY_MS);
+      expect(managed.isHibernated).toBe(true);
+    });
+
+    it("should cancel hibernation when an offscreen terminal becomes visible again", () => {
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        isVisible: false,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(600);
+      expect(managed.hibernationTimer).toBeDefined();
+
+      service.setVisible("t1", true);
+
+      expect(managed.hibernationTimer).toBeUndefined();
+
       vi.advanceTimersByTime(HIBERNATION_DELAY_MS);
       expect(managed.isHibernated).toBeFalsy();
     });
@@ -541,10 +617,10 @@ describe("TerminalInstanceService - Hibernation", () => {
     });
 
     it("should clear hibernation timer on destroy", () => {
-      const managed = makeMockManaged();
+      const managed = makeMockManaged({ isVisible: false });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
-      // Start hibernation timer
+      // Start hibernation timer (offscreen terminal dropping to BACKGROUND)
       service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
       vi.advanceTimersByTime(600);
       expect(managed.hibernationTimer).toBeDefined();
@@ -632,13 +708,14 @@ describe("TerminalInstanceService - Hibernation", () => {
       service.unhibernate("t1");
       const nonAgentListenerCount = nonAgent.listeners.length;
 
-      // Agent terminal
+      // Runtime agent terminal. Listener scaffolding is installed for every
+      // terminal; runtime identity only decides whether the listeners act.
       const agent = makeMockManaged({
         isHibernated: true,
         isOpened: false,
-        kind: "agent",
-        type: "claude",
-        agentId: "claude",
+        kind: "terminal",
+        launchAgentId: "claude",
+        runtimeAgentId: "claude",
         ipcListenerCount: 0,
       });
       agent.listeners = [];
@@ -646,8 +723,7 @@ describe("TerminalInstanceService - Hibernation", () => {
       service.unhibernate("t2");
       const agentListenerCount = agent.listeners.length;
 
-      // Agent should have 2 more listeners: title-state + enter-key
-      expect(agentListenerCount).toBe(nonAgentListenerCount + 2);
+      expect(agentListenerCount).toBe(nonAgentListenerCount);
     });
 
     it("should install enter-key listener but not title listener when no titleStatePatterns", () => {
@@ -666,13 +742,14 @@ describe("TerminalInstanceService - Hibernation", () => {
       service.unhibernate("t1");
       const nonAgentListenerCount = nonAgent.listeners.length;
 
-      // Agent without title patterns
+      // Runtime agent without title patterns. It still has the same dormant
+      // scaffolding as a standard terminal.
       const agent = makeMockManaged({
         isHibernated: true,
         isOpened: false,
-        kind: "agent",
-        type: "claude",
-        agentId: "claude",
+        kind: "terminal",
+        launchAgentId: "claude",
+        runtimeAgentId: "claude",
         ipcListenerCount: 0,
       });
       agent.listeners = [];
@@ -680,8 +757,7 @@ describe("TerminalInstanceService - Hibernation", () => {
       service.unhibernate("t2");
       const agentListenerCount = agent.listeners.length;
 
-      // Agent should have 1 more listener: enter-key only (no title-state)
-      expect(agentListenerCount).toBe(nonAgentListenerCount + 1);
+      expect(agentListenerCount).toBe(nonAgentListenerCount);
     });
 
     it("should preserve onInput callback on ManagedTerminal through unhibernate", () => {
@@ -711,9 +787,8 @@ describe("TerminalInstanceService - Hibernation", () => {
 
       const managed = makeMockManaged({
         ipcListenerCount: 2,
-        kind: "agent",
-        type: "claude",
-        agentId: "claude",
+        kind: "terminal",
+        launchAgentId: "claude",
         canonicalAgentState: "completed",
         onInput: vi.fn(),
       });

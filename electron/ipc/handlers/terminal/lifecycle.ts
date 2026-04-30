@@ -2,22 +2,88 @@
  * Terminal lifecycle handlers - spawn, kill, trash, restore.
  */
 
-import { ipcMain } from "electron";
 import crypto from "crypto";
 import os from "os";
+import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
-import { waitForRateLimitSlot, consumeRestoreQuota } from "../../utils.js";
+import {
+  waitForRateLimitSlot,
+  consumeRestoreQuota,
+  typedHandle,
+  typedHandleValidated,
+} from "../../utils.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import type { HandlerDependencies } from "../../types.js";
-import type { TerminalSpawnOptions } from "../../../types/index.js";
 import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
-import { getDefaultShell } from "../../../services/pty/terminalShell.js";
+
+type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
 import {
   listAgentSessions,
   clearAgentSessions,
 } from "../../../services/pty/agentSessionHistory.js";
+import { getDefaultShell } from "../../../services/pty/terminalShell.js";
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 
-export const COMMAND_DELAY_MS = 100;
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function supportsCommandLaunchShell(shell: string): boolean {
+  const name = shell.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  return (
+    name === "zsh" ||
+    name === "bash" ||
+    name === "sh" ||
+    name.endsWith("zsh") ||
+    name.endsWith("bash") ||
+    name.endsWith("sh")
+  );
+}
+
+// Trust boundary: `command` is interpolated raw into the shell script below.
+// Shell metacharacters (pipes, redirects, env-var expansion, $()) are
+// intentional — QuickRun and resource-connect commands rely on them. Defenses
+// upstream of this point: (1) TerminalSpawnOptionsSchema rejects control
+// characters at the IPC boundary; (2) the multiline guard in the spawn handler
+// drops embedded \n / \r as defense-in-depth; (3) WorktreeLifecycleService.
+// substituteVariables shell-quotes every templated fragment via
+// shellEscapeValue before it reaches the command field. Anyone adding a new
+// call site that interpolates user-controlled data into `command` MUST quote
+// the substituted fragment, not rely on this layer.
+function buildCommandLaunchShell(
+  command: string,
+  configuredShell: string | undefined
+): { shell: string; args: string[] } | null {
+  if (process.platform === "win32" || command.length === 0) {
+    return null;
+  }
+
+  const shell = configuredShell || getDefaultShell();
+  if (!supportsCommandLaunchShell(shell)) {
+    return null;
+  }
+
+  const name = shell.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  const execInteractiveShell =
+    name.includes("zsh") || name.includes("bash")
+      ? `exec ${shellQuote(shell)} -l`
+      : `exec ${shellQuote(shell)}`;
+
+  // Run the command as interactive shell startup work instead of typing it into
+  // the PTY. This prevents the tail of long absolute launch commands from being
+  // echoed while preserving job control: zsh/bash only move the launched CLI
+  // into the PTY foreground process group when the shell is interactive. The
+  // foreground-pgid detector relies on that, and agent CLIs rely on it for raw
+  // input. The wrapper shell traps SIGINT so Ctrl-C reaches the foreground
+  // agent without killing the wrapper before it can exec the follow-up shell.
+  // Use a no-op trap rather than SIG_IGN so child CLIs don't inherit ignored
+  // SIGINT.
+  const script = `trap : INT\n${command}\ntrap - INT\n${execInteractiveShell}`;
+  const args =
+    name.includes("zsh") || name.includes("bash") ? ["-lic", script] : ["-i", "-c", script];
+
+  return { shell, args };
+}
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -27,37 +93,18 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   const handlers: Array<() => void> = [];
 
   const handleTerminalSpawn = async (
-    _event: Electron.IpcMainInvokeEvent,
-    options: TerminalSpawnOptions
+    validatedOptions: ValidatedTerminalSpawnOptions
   ): Promise<string> => {
-    const parseResult = TerminalSpawnOptionsSchema.safeParse(options);
-    if (!parseResult.success) {
-      console.error("[IPC] Invalid terminal spawn options:", parseResult.error.format());
-      throw new Error(`Invalid spawn options: ${parseResult.error.message}`);
-    }
-
-    const validatedOptions = parseResult.data;
-
     const bypassedRateLimit = validatedOptions.restore === true && consumeRestoreQuota();
     if (!bypassedRateLimit) {
-      await waitForRateLimitSlot("terminalSpawn", 10, 30_000);
+      await waitForRateLimitSlot("terminalSpawn", 1_000);
     }
 
     const cols = Math.max(1, Math.min(500, Math.floor(validatedOptions.cols) || 80));
     const rows = Math.max(1, Math.min(500, Math.floor(validatedOptions.rows) || 30));
 
-    const type = validatedOptions.type || "terminal";
-
-    // Normalize kind and agentId from type when type is a registered agent
-    // This ensures agent terminals are consistently identified across all layers
-    // Override kind when type is an agent to prevent mixed metadata
-    const { isRegisteredAgent } = await import("../../../../shared/config/agentRegistry.js");
-    const isAgentType = type !== "terminal" && isRegisteredAgent(type);
-
-    const kind = isAgentType
-      ? "agent"
-      : validatedOptions.kind || (validatedOptions.agentId ? "agent" : "terminal");
-    const agentId = validatedOptions.agentId || (isAgentType ? type : undefined);
+    const kind = "terminal";
+    const launchAgentId = validatedOptions.launchAgentId;
     const title = validatedOptions.title;
 
     const id = validatedOptions.id || crypto.randomUUID();
@@ -78,11 +125,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const projectId = resolvedProject?.id;
     const projectPath = resolvedProject?.path;
 
-    // Fetch project-level terminal overrides for non-agent terminals
+    // Fetch project-level terminal overrides when there's no agent launch
+    // hint. Agent launches intentionally use the default shell configuration
+    // (user shell + default args) to keep behaviour predictable — project
+    // overrides can shape plain-shell UX without leaking into agent launches.
     let projectShell: string | undefined;
     let projectArgs: string[] | undefined;
     let projectCwd: string | undefined;
-    if (projectId && kind !== "agent") {
+    if (projectId && !launchAgentId) {
       const projSettings = await projectStore.getProjectSettings(projectId);
       const ts = projSettings.terminalSettings;
       if (ts) {
@@ -134,7 +184,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         projectId: projectId?.slice(0, 8) ?? "undefined",
         projectName: resolvedProject?.name ?? "none",
         kind,
-        type,
+        launchAgentId,
       });
     }
 
@@ -146,172 +196,135 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       );
     }
 
-    // Resolve shell and args: project overrides > spawn options > defaults
-    const resolvedShell = validatedOptions.shell || projectShell;
-    const resolvedArgs = projectArgs;
-
-    // For agent terminals on Unix with a command, pass it via shell -c flag
-    // instead of writing to stdin. This avoids all shell init noise (echoed
-    // commands, prompts, stty tricks) since the shell runs the command directly
-    // after sourcing rc files, with no interactive prompt.
     const trimmedCommand = validatedOptions.command?.trim() || "";
-    const isAgent = kind === "agent" || Boolean(agentId);
-    const useShellExec = isAgent && trimmedCommand.length > 0 && process.platform !== "win32";
+    const hasMultilineCommand =
+      trimmedCommand.length > 0 && (trimmedCommand.includes("\n") || trimmedCommand.includes("\r"));
 
-    let spawnArgs = resolvedArgs;
-    if (useShellExec) {
-      if (trimmedCommand.includes("\n") || trimmedCommand.includes("\r")) {
-        console.error("Multi-line commands not allowed for security, ignoring");
-      } else {
-        const agentCommand = `exec ${trimmedCommand}`;
-        const shellToUse = (resolvedShell || getDefaultShell()).toLowerCase();
-        if (shellToUse.includes("zsh") || shellToUse.includes("bash")) {
-          // -l: login shell (sources .zprofile/.bash_profile)
-          // -i: interactive (sources .zshrc/.bashrc for PATH setup like nvm)
-          // -c: run command then exit (no prompt displayed)
-          spawnArgs = ["-lic", agentCommand];
-        } else {
-          spawnArgs = ["-c", agentCommand];
-        }
-      }
+    if (hasMultilineCommand) {
+      console.error("Multi-line commands not allowed for security, ignoring");
     }
+    const safeCommand = hasMultilineCommand ? "" : trimmedCommand;
+
+    // Resolve shell and args: project overrides > spawn options > defaults.
+    // For command launches on POSIX, run the command through the shell's
+    // startup script instead of echoing it into the PTY.
+    const resolvedShell = validatedOptions.shell || projectShell;
+    const commandLaunchShell = buildCommandLaunchShell(safeCommand, resolvedShell);
+    const resolvedArgs = commandLaunchShell ? commandLaunchShell.args : projectArgs;
+    const spawnShell = commandLaunchShell ? commandLaunchShell.shell : resolvedShell;
 
     try {
+      // Every terminal is an interactive shell. Agent launches inject their
+      // command after the shell's first prompt renders — never `exec`'d over
+      // the shell, so when the agent exits the shell reclaims the foreground.
+      // SIGINT routes to the agent (the foreground process group) via the
+      // kernel's TTY line discipline; the shell stays pristine.
       ptyClient.spawn(id, {
         cwd,
-        shell: resolvedShell,
-        args: spawnArgs,
+        shell: spawnShell,
+        args: resolvedArgs,
         cols,
         rows,
+        command: safeCommand || undefined,
         env: validatedOptions.env,
         kind,
-        type,
-        agentId,
+        launchAgentId,
         title,
         projectId,
         restore: validatedOptions.restore,
         isEphemeral: validatedOptions.isEphemeral,
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
+        worktreeId: validatedOptions.worktreeId,
+        agentPresetId: validatedOptions.agentPresetId,
+        agentPresetColor: validatedOptions.agentPresetColor,
+        originalAgentPresetId:
+          validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
       });
 
-      // For non-agent terminals (or Windows agent terminals), write command to stdin
-      if (trimmedCommand.length > 0 && !useShellExec) {
-        if (trimmedCommand.includes("\n") || trimmedCommand.includes("\r")) {
-          console.error("Multi-line commands not allowed for security, ignoring");
-        } else {
-          let finalCommand = trimmedCommand;
-          if (isAgent) {
-            if (process.platform === "win32") {
-              const shell = (resolvedShell || getDefaultShell()).toLowerCase();
-              const shellBasename = shell.split(/[\\/]/).pop() ?? shell;
-              if (shellBasename === "cmd.exe" || shellBasename === "cmd") {
-                finalCommand = `${trimmedCommand} & exit`;
-              } else {
-                finalCommand = `${trimmedCommand}; exit`;
-              }
-            }
-          }
-
-          setTimeout(() => {
-            if (ptyClient.hasTerminal(id)) {
-              ptyClient.write(id, `${finalCommand}\r`);
-            }
-          }, COMMAND_DELAY_MS);
+      if (safeCommand.length > 0 && !commandLaunchShell) {
+        // Execute immediately. node-pty queues the write against the spawned
+        // shell, so users do not stare at a blank prompt while we wait for RC
+        // files/prompt detection. The shell still remains the parent process;
+        // when the command exits, the terminal returns to a normal shell.
+        if (ptyClient.hasTerminal(id)) {
+          ptyClient.write(id, `${safeCommand}\r`);
         }
       }
 
       return id;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to spawn terminal");
       throw new Error(`Failed to spawn terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_SPAWN, handleTerminalSpawn);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_SPAWN));
+  handlers.push(
+    typedHandleValidated(CHANNELS.TERMINAL_SPAWN, TerminalSpawnOptionsSchema, handleTerminalSpawn)
+  );
 
-  const handleTerminalKill = async (_event: Electron.IpcMainInvokeEvent, id: string) => {
+  const handleTerminalKill = async (id: string) => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
       }
       ptyClient.kill(id);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to kill terminal");
       throw new Error(`Failed to kill terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_KILL, handleTerminalKill);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_KILL));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_KILL, handleTerminalKill));
 
-  const handleTerminalGracefulKill = async (
-    _event: Electron.IpcMainInvokeEvent,
-    id: string
-  ): Promise<string | null> => {
+  const handleTerminalGracefulKill = async (id: string): Promise<string | null> => {
     if (typeof id !== "string") {
       throw new Error("Invalid terminal ID: must be a string");
     }
     return ptyClient.gracefulKill(id);
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GRACEFUL_KILL, handleTerminalGracefulKill);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GRACEFUL_KILL));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GRACEFUL_KILL, handleTerminalGracefulKill));
 
-  const handleTerminalTrash = async (_event: Electron.IpcMainInvokeEvent, id: string) => {
+  const handleTerminalTrash = async (id: string) => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
       }
       ptyClient.trash(id);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to trash terminal");
       throw new Error(`Failed to trash terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_TRASH, handleTerminalTrash);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_TRASH));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_TRASH, handleTerminalTrash));
 
-  const handleTerminalRestore = async (
-    _event: Electron.IpcMainInvokeEvent,
-    id: string
-  ): Promise<boolean> => {
+  const handleTerminalRestore = async (id: string): Promise<boolean> => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
       }
       return ptyClient.restore(id);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to restore terminal");
       throw new Error(`Failed to restore terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_RESTORE, handleTerminalRestore);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_RESTORE));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_RESTORE, handleTerminalRestore));
 
   const handleTerminalRestartService = async () => {
     ptyClient.manualRestart();
   };
-  ipcMain.handle(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_RESTART_SERVICE));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService));
 
-  const handleAgentSessionList = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { worktreeId?: string }
-  ) => {
+  const handleAgentSessionList = async (payload: { worktreeId?: string }) => {
     const { app } = await import("electron");
     return listAgentSessions(payload?.worktreeId, app.getPath("userData"));
   };
-  ipcMain.handle(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_SESSION_LIST));
+  handlers.push(typedHandle(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList));
 
-  const handleAgentSessionClear = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { worktreeId?: string }
-  ) => {
+  const handleAgentSessionClear = async (payload: { worktreeId?: string }) => {
     const { app } = await import("electron");
     await clearAgentSessions(payload?.worktreeId, app.getPath("userData"));
   };
-  ipcMain.handle(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_SESSION_CLEAR));
+  handlers.push(typedHandle(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

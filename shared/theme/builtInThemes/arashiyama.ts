@@ -75,6 +75,7 @@ export const theme: BuiltInThemeSource = {
     },
   },
   tokens: {
+    "accent-foreground": "#0D0C0B",
     "border-strong": "rgba(241,235,228,0.14)",
     "border-subtle": "rgba(241,235,228,0.07)",
     "focus-ring": "rgba(196,98,64,0.30)",

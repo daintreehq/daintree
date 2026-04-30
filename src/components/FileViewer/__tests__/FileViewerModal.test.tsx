@@ -73,7 +73,7 @@ vi.mock("@shared/utils/svgSanitizer", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockRead.mockResolvedValue({ ok: true, content: "file content" });
+  mockRead.mockResolvedValue({ content: "file content" });
 });
 
 describe("FileViewerModal", () => {
@@ -125,7 +125,6 @@ describe("FileViewerModal", () => {
 
   it("renders sanitized SVG inline", async () => {
     mockRead.mockResolvedValue({
-      ok: true,
       content: '<svg xmlns="http://www.w3.org/2000/svg"><circle r="10"/></svg>',
     });
 
@@ -143,7 +142,9 @@ describe("FileViewerModal", () => {
   });
 
   it("shows binary error with Open in Editor for non-image binaries", async () => {
-    mockRead.mockResolvedValue({ ok: false, code: "BINARY_FILE" });
+    mockRead.mockRejectedValue(
+      Object.assign(new Error("Binary file"), { name: "AppError", code: "BINARY_FILE" })
+    );
 
     render(<FileViewerModal {...defaultProps} filePath="/project/app.wasm" />);
 
@@ -210,7 +211,7 @@ describe("FileViewerModal", () => {
   });
 
   it("renders metadata bar with line count, size, and encoding when file is loaded", async () => {
-    mockRead.mockResolvedValue({ ok: true, content: "line1\nline2\nline3" });
+    mockRead.mockResolvedValue({ content: "line1\nline2\nline3" });
 
     render(<FileViewerModal {...defaultProps} />);
 
@@ -232,7 +233,9 @@ describe("FileViewerModal", () => {
   });
 
   it("does not render metadata bar when file fails to load", async () => {
-    mockRead.mockResolvedValue({ ok: false, code: "NOT_FOUND" });
+    mockRead.mockRejectedValue(
+      Object.assign(new Error("File not found"), { name: "AppError", code: "NOT_FOUND" })
+    );
 
     render(<FileViewerModal {...defaultProps} />);
 

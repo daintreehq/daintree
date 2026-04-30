@@ -207,6 +207,9 @@ export function createDaintreeTokens(
     "surface-inset": tokens["surface-inset"] ?? withAlpha(overlayTone, dark ? 0.03 : 0.04),
     "surface-hover": tokens["surface-hover"] ?? withAlpha(overlayTone, dark ? 0.05 : 0.03),
     "surface-active": tokens["surface-active"] ?? withAlpha(overlayTone, dark ? 0.08 : 0.06),
+    "surface-disabled":
+      tokens["surface-disabled"] ??
+      `color-mix(in oklab, ${tokens["surface-input"] ?? (dark ? tokens["surface-panel-elevated"] : tokens["surface-panel"])} 70%, ${tokens["surface-canvas"]})`,
     "text-placeholder":
       tokens["text-placeholder"] ?? withAlpha(tokens["text-primary"], dark ? 0.35 : 0.32),
     "text-link": tokens["text-link"] ?? tokens["accent-primary"],
@@ -236,6 +239,9 @@ export function createDaintreeTokens(
     "panel-state-edge-radius": tokens["panel-state-edge-radius"] ?? "2px",
     "focus-ring-offset": tokens["focus-ring-offset"] ?? "2px",
     "chrome-noise-texture": tokens["chrome-noise-texture"] ?? "none",
+    "knob-base": tokens["knob-base"] ?? (dark ? "oklch(0.98 0.003 90)" : "oklch(0.18 0.01 240)"),
+    "state-modified":
+      tokens["state-modified"] ?? `color-mix(in oklab, ${tokens["status-info"]} 90%, ${tint})`,
     "diff-insert-background":
       tokens["diff-insert-background"] ?? withAlpha(tokens["status-success"], dark ? 0.18 : 0.1),
     "diff-insert-edit-background":
@@ -251,6 +257,8 @@ export function createDaintreeTokens(
     "diff-selected-background":
       tokens["diff-selected-background"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.06),
     "diff-omit-gutter-line": tokens["diff-omit-gutter-line"] ?? tokens["activity-idle"],
+    "status-danger-surface":
+      tokens["status-danger-surface"] ?? withAlpha(tokens["status-danger"], dark ? 0.1 : 0.08),
     ...tokens,
   };
 }
@@ -479,12 +487,12 @@ export function getAppThemeById(
 export function getBuiltInAppSchemeForType(type: "dark" | "light"): AppColorScheme {
   return (
     BUILT_IN_APP_SCHEMES.find((scheme) => scheme.type === type) ??
-    (type === "light" ? INTERNAL_LIGHT_FALLBACK_SCHEME : BUILT_IN_APP_SCHEMES[0])
+    (type === "light" ? INTERNAL_LIGHT_FALLBACK_SCHEME : BUILT_IN_APP_SCHEMES[0]!)
   );
 }
 
 export function resolveAppTheme(id: string, customSchemes: AppColorScheme[] = []): AppColorScheme {
-  return getAppThemeById(id, customSchemes) ?? BUILT_IN_APP_SCHEMES[0];
+  return getAppThemeById(id, customSchemes) ?? BUILT_IN_APP_SCHEMES[0]!;
 }
 
 export function getAppThemeCssVariables(scheme: AppColorScheme): Record<string, string> {
@@ -506,7 +514,7 @@ export function getAppThemeCssVariables(scheme: AppColorScheme): Record<string, 
 
 export function normalizeAppThemeTokens(
   maybeTokens: Record<string, unknown>,
-  fallback: AppColorSchemeTokens = BUILT_IN_APP_SCHEMES[0].tokens
+  fallback: AppColorSchemeTokens = BUILT_IN_APP_SCHEMES[0]!.tokens
 ): AppColorSchemeTokens {
   const normalized = { ...fallback };
   for (const token of Object.keys(fallback) as AppThemeTokenKey[]) {
@@ -581,7 +589,7 @@ function pickReadableForeground(background: string, candidates: string[]): strin
   if (!isHexColor(background) || validCandidates.length === 0) {
     return "#000000";
   }
-  let bestCandidate = validCandidates[0];
+  let bestCandidate = validCandidates[0]!;
   let bestContrast = contrastRatio(bestCandidate, background);
   for (const candidate of validCandidates.slice(1)) {
     const candidateContrast = contrastRatio(candidate, background);
@@ -693,7 +701,7 @@ function compilePaletteToTokens(palette: ThemePalette): AppColorSchemeTokens {
 
 export function normalizeAppColorScheme(
   maybeScheme: Partial<Omit<AppColorScheme, "tokens">> & { tokens?: Record<string, unknown> },
-  fallback: AppColorScheme = BUILT_IN_APP_SCHEMES[0]
+  fallback: AppColorScheme = BUILT_IN_APP_SCHEMES[0]!
 ): AppColorScheme {
   const palette = maybeScheme.palette;
   const explicitType =
@@ -711,6 +719,7 @@ export function normalizeAppColorScheme(
   const resolvedType = explicitType ?? fallback.type;
   const baseScheme =
     fallback.type === resolvedType ? fallback : getBuiltInAppSchemeForType(resolvedType);
+  const tint = resolvedType === "dark" ? "#ffffff" : "#000000";
   const rawTokens = (palette ? compilePaletteToTokens(palette) : maybeScheme.tokens) as
     | Record<string, unknown>
     | undefined;
@@ -725,6 +734,25 @@ export function normalizeAppColorScheme(
       normalizedTokens["accent-primary"],
       [normalizedTokens["text-inverse"], normalizedTokens["text-primary"], "#ffffff", "#000000"]
     );
+  }
+
+  if (!palette && typeof rawTokens === "object") {
+    if (
+      typeof normalizedTokens["status-danger-surface"] !== "string" &&
+      typeof normalizedTokens["status-danger"] === "string"
+    ) {
+      normalizedTokens["status-danger-surface"] = withAlpha(
+        normalizedTokens["status-danger"],
+        resolvedType === "dark" ? 0.1 : 0.08
+      );
+    }
+    if (
+      typeof normalizedTokens["state-modified"] !== "string" &&
+      typeof normalizedTokens["status-info"] === "string"
+    ) {
+      normalizedTokens["state-modified"] =
+        `color-mix(in oklab, ${normalizedTokens["status-info"]} 90%, ${tint})`;
+    }
   }
   const result: AppColorScheme = {
     id:

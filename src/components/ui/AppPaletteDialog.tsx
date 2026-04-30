@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { CircleHelp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
@@ -10,6 +11,8 @@ import { usePaletteStore } from "@/store/paletteStore";
 import {
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
+  UI_PALETTE_ENTER_DURATION,
+  UI_PALETTE_EXIT_DURATION,
   UI_ENTER_EASING,
   UI_EXIT_EASING,
   getUiTransitionDuration,
@@ -110,6 +113,7 @@ export function AppPaletteDialog({
       )}
       style={{
         transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+        transitionTimingFunction: "linear",
       }}
       onClick={handleBackdropClick}
       role="dialog"
@@ -119,16 +123,16 @@ export function AppPaletteDialog({
       <div
         ref={dialogRef}
         className={cn(
-          "w-full max-w-xl mx-4 bg-daintree-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden",
+          "w-full max-w-xl mx-4 bg-daintree-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden origin-top",
           "transition-[opacity,transform]",
-          "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
-          isVisible
-            ? "opacity-100 translate-y-0 scale-100"
-            : "opacity-0 -translate-y-3 scale-[0.97]",
+          "motion-reduce:transition-opacity motion-reduce:scale-100",
+          isVisible ? "opacity-100 scale-100" : "opacity-0 scale-[0.96]",
           className
         )}
         style={{
-          transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+          transitionDuration: isVisible
+            ? `${UI_PALETTE_ENTER_DURATION}ms`
+            : `${UI_PALETTE_EXIT_DURATION}ms`,
           transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
         }}
         onClick={(e) => e.stopPropagation()}
@@ -290,7 +294,7 @@ AppPaletteDialog.Input = function AppPaletteInput({
         "w-full px-3 py-2 text-sm",
         "bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)]",
         "text-daintree-text placeholder:text-text-muted",
-        "focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20",
+        "focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20",
         className
       )}
       {...props}
@@ -311,10 +315,17 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
   noMatchMessage,
   children,
 }: AppPaletteEmptyProps) {
+  const trimmedQuery = query.trim();
+  if (trimmedQuery) {
+    return (
+      <EmptyState
+        variant="filtered-empty"
+        title={noMatchMessage || `No items match "${trimmedQuery}"`}
+        className="px-3 py-8"
+      />
+    );
+  }
   return (
-    <div className="px-3 py-8 text-center text-daintree-text/50 text-sm">
-      {query.trim() ? <>{noMatchMessage || `No items match "${query}"`}</> : <>{emptyMessage}</>}
-      {!query.trim() && children}
-    </div>
+    <EmptyState variant="zero-data" title={emptyMessage} action={children} className="px-3 py-8" />
   );
 };

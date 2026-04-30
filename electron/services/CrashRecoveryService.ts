@@ -8,8 +8,10 @@ import type {
   PanelSummary,
   PendingCrash,
 } from "../../shared/types/ipc/crashRecovery.js";
-import { store } from "../store.js";
+import { coerceAgentState } from "../../shared/types/agent.js";
+import { store, windowStatesStore } from "../store.js";
 import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
+import { getActionBreadcrumbService } from "./ActionBreadcrumbService.js";
 
 const MAX_CRASH_LOGS = 10;
 const MARKER_FILENAME = "running.lock";
@@ -49,6 +51,11 @@ export class CrashRecoveryService {
 
   getPendingCrash(): PendingCrash | null {
     return this.pendingCrash;
+  }
+
+  getLastBackupTimestamp(): number | null {
+    const info = this.readBackupInfo();
+    return info.exists && typeof info.timestamp === "number" ? info.timestamp : null;
   }
 
   getConfig(): CrashRecoveryConfig {
@@ -184,6 +191,7 @@ export class CrashRecoveryService {
         hasSeenWelcome: true,
         panelGridConfig: { strategy: "automatic" as const, value: 3 },
       });
+      this.cachedBackupSnapshot = null;
       console.log("[CrashRecovery] Reset to fresh state");
     } catch (err) {
       console.error("[CrashRecovery] Failed to reset to fresh:", err);
@@ -197,6 +205,7 @@ export class CrashRecoveryService {
       this.deleteMarker();
       console.log("[CrashRecovery] Clean exit — marker removed");
     }
+    this.cachedBackupSnapshot = null;
   }
 
   private consumeMarker(): PendingCrash | null {
@@ -274,7 +283,7 @@ export class CrashRecoveryService {
           typeof t.createdAt === "number"
             ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
             : false,
-        agentState: typeof t.agentState === "string" ? t.agentState : undefined,
+        agentState: coerceAgentState(t.agentState),
         lastStateChange: typeof t.lastStateChange === "number" ? t.lastStateChange : undefined,
       }));
     } catch {
@@ -330,6 +339,7 @@ export class CrashRecoveryService {
 
     this.enrichWithEnvironmentMetadata(entry);
     this.enrichWithPanelData(entry, store.get("appState"));
+    this.enrichWithRecentActions(entry);
 
     return entry;
   }
@@ -349,8 +359,20 @@ export class CrashRecoveryService {
     this.enrichWithEnvironmentMetadata(entry);
     const backupAppState = this.cachedBackupSnapshot?.appState;
     this.enrichWithPanelData(entry, backupAppState);
+    this.enrichWithRecentActions(entry);
 
     return entry;
+  }
+
+  private enrichWithRecentActions(entry: CrashLogEntry): void {
+    try {
+      const recent = getActionBreadcrumbService().getRecentActions();
+      if (recent.length > 0) {
+        entry.recentActions = recent;
+      }
+    } catch {
+      // best-effort
+    }
   }
 
   private enrichWithEnvironmentMetadata(entry: CrashLogEntry): void {
@@ -443,8 +465,7 @@ export class CrashRecoveryService {
     return {
       capturedAt: Date.now(),
       appState: store.get("appState"),
-      windowState: store.get("windowState"),
-      windowStates: store.get("windowStates"),
+      windowStates: windowStatesStore.get("windowStates"),
     };
   }
 
@@ -452,11 +473,8 @@ export class CrashRecoveryService {
     if (isValidAppStateSnapshot(snapshot.appState)) {
       store.set("appState", snapshot.appState);
     }
-    if (isPlainObject(snapshot.windowState)) {
-      store.set("windowState", snapshot.windowState);
-    }
     if (isPlainObject(snapshot.windowStates)) {
-      store.set("windowStates", snapshot.windowStates);
+      windowStatesStore.set("windowStates", snapshot.windowStates as Record<string, unknown>);
     }
   }
 
@@ -519,7 +537,6 @@ interface MarkerFile {
 interface SessionSnapshot {
   capturedAt: number;
   appState?: unknown;
-  windowState?: unknown;
   windowStates?: unknown;
 }
 
@@ -550,11 +567,7 @@ function isValidAppStateSnapshot(value: unknown): value is Record<string, unknow
 }
 
 function hasRestorableSnapshotContent(snapshot: SessionSnapshot): boolean {
-  return (
-    isValidAppStateSnapshot(snapshot.appState) ||
-    isPlainObject(snapshot.windowState) ||
-    isPlainObject(snapshot.windowStates)
-  );
+  return isValidAppStateSnapshot(snapshot.appState) || isPlainObject(snapshot.windowStates);
 }
 
 let instance: CrashRecoveryService | null = null;

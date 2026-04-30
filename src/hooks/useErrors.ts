@@ -1,16 +1,92 @@
 import { useEffect, useCallback, useRef } from "react";
-import { useErrorStore, type AppError, type RetryAction } from "@/store";
+import { useErrorStore, type ErrorRecord, type RetryAction } from "@/store";
 import { isElectronAvailable } from "./useElectron";
 import { errorsClient } from "@/clients";
 import { logErrorWithContext } from "@/utils/errorContext";
-import { notify } from "@/lib/notify";
-import type { NotificationPriority } from "@/store/notificationStore";
+import { notify, shouldEscalateTransientError, consumeEscalation } from "@/lib/notify";
+import type { NotificationAction, NotificationPriority } from "@/store/notificationStore";
+import { humanizeAppError } from "@shared/utils/errorMessage";
 
 export function getErrorPriority(
-  error: Pick<AppError, "type" | "isTransient">
+  error: Pick<ErrorRecord, "type" | "isTransient">
 ): NotificationPriority {
   if (error.isTransient) return "low";
   return "high";
+}
+
+function buildCopyDetailsAction(error: ErrorRecord): NotificationAction {
+  return {
+    label: "Copy details",
+    variant: "secondary",
+    onClick: () => {
+      const payload = JSON.stringify(
+        {
+          type: error.type,
+          source: error.source,
+          message: error.message,
+          gitReason: error.gitReason,
+          recoveryHint: error.recoveryHint,
+          correlationId: error.correlationId,
+          context: error.context,
+          details: error.details,
+        },
+        null,
+        2
+      );
+      try {
+        const result = navigator.clipboard?.writeText(payload);
+        if (result && typeof result.catch === "function") {
+          result.catch(() => {
+            // Clipboard writes can reject in non-HTTPS or unfocused contexts.
+            // Failure is non-fatal — the toast already showed the user the
+            // friendly summary; the raw payload is recoverable from logs.
+          });
+        }
+      } catch {
+        // navigator.clipboard may be undefined in restricted contexts.
+      }
+    },
+  };
+}
+
+function routeError(error: ErrorRecord): void {
+  const escalated = shouldEscalateTransientError(error);
+  const priority = escalated ? "high" : getErrorPriority(error);
+
+  useErrorStore.getState().addError({
+    type: error.type,
+    message: error.message,
+    details: error.details,
+    source: error.source,
+    context: error.context,
+    isTransient: error.isTransient,
+    retryAction: error.retryAction,
+    retryArgs: error.retryArgs,
+    fromPreviousSession: error.fromPreviousSession,
+    correlationId: error.correlationId,
+    recoveryHint: error.recoveryHint,
+    gitReason: error.gitReason,
+  });
+
+  const { title, body } = humanizeAppError(error);
+
+  // "Copy details" is omitted for low-priority errors: those route to the
+  // history inbox without a toast, so the action would never be reachable —
+  // and notify() auto-promotes action-bearing toasts to sticky.
+  const action = priority === "low" ? undefined : buildCopyDetailsAction(error);
+
+  const toastId = notify({
+    type: "error",
+    title,
+    message: body,
+    correlationId: error.correlationId,
+    priority,
+    action,
+  });
+
+  if (escalated && toastId) {
+    consumeEscalation(error);
+  }
 }
 
 let ipcListenerAttached = false;
@@ -37,28 +113,8 @@ export function useErrors() {
     ipcListenerAttached = true;
     didAttachListener.current = true;
 
-    const unsubscribeError = errorsClient.onError((error: AppError) => {
-      addError({
-        type: error.type,
-        message: error.message,
-        details: error.details,
-        source: error.source,
-        context: error.context,
-        isTransient: error.isTransient,
-        retryAction: error.retryAction,
-        retryArgs: error.retryArgs,
-        fromPreviousSession: error.fromPreviousSession,
-        correlationId: error.correlationId,
-        recoveryHint: error.recoveryHint,
-      });
-
-      notify({
-        type: "error",
-        title: error.source,
-        message: error.message,
-        correlationId: error.correlationId,
-        priority: getErrorPriority(error),
-      });
+    const unsubscribeError = errorsClient.onError((error: ErrorRecord) => {
+      routeError(error);
     });
 
     const unsubscribeProgress = errorsClient.onRetryProgress((payload) => {
@@ -69,27 +125,7 @@ export function useErrors() {
       .getPending()
       .then((pending) => {
         for (const error of pending) {
-          addError({
-            type: error.type,
-            message: error.message,
-            details: error.details,
-            source: error.source,
-            context: error.context,
-            isTransient: error.isTransient,
-            retryAction: error.retryAction,
-            retryArgs: error.retryArgs,
-            fromPreviousSession: error.fromPreviousSession,
-            correlationId: error.correlationId,
-            recoveryHint: error.recoveryHint,
-          });
-
-          notify({
-            type: "error",
-            title: error.source,
-            message: error.message,
-            correlationId: error.correlationId,
-            priority: getErrorPriority(error),
-          });
+          routeError(error);
         }
       })
       .catch(() => {
@@ -156,5 +192,3 @@ export function useErrors() {
     getTerminalErrors,
   };
 }
-
-export default useErrors;

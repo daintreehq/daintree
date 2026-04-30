@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { pathToFileURL } from "url";
+import path from "path";
 
 type WebContentsCreatedListener = (event: unknown, contents: MockWebContents) => void;
 
@@ -40,8 +42,11 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("../../utils/webviewCsp.js", () => ({
-  classifyPartition: vi.fn(() => "browser"),
-  getLocalhostDevCSP: vi.fn(() => "default-src 'self'"),
+  classifyPartition: vi.fn((partition: string) =>
+    partition === "persist:daintree" ? "project" : "browser"
+  ),
+  getDaintreeAppCSP: vi.fn(() => "default-src 'self' /* daintree */"),
+  getLocalhostDevCSP: vi.fn(() => "default-src 'self' /* browser */"),
   mergeCspHeaders: vi.fn((_details: unknown, csp: string) => ({
     "Content-Security-Policy": [csp],
   })),
@@ -64,6 +69,10 @@ vi.mock("../../utils/appProtocol.js", () => ({
   resolveAppUrlToDistPath: vi.fn(),
   getMimeType: vi.fn(),
   buildHeaders: vi.fn(),
+}));
+
+vi.mock("fs/promises", () => ({
+  realpath: vi.fn(),
 }));
 
 const mockSend = vi.fn();
@@ -633,6 +642,113 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
   });
 });
 
+describe("setupWebviewCSP — partition CSP wiring", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    webContentsCreatedListeners.length = 0;
+  });
+
+  it("registers CSP on persist:browser and persist:daintree", async () => {
+    const { session } = await import("electron");
+    const fromPartition = vi.mocked(session.fromPartition);
+
+    setupWebviewCSP();
+
+    const partitions = fromPartition.mock.calls.map((call) => call[0]);
+    expect(partitions).toContain("persist:browser");
+    expect(partitions).toContain("persist:daintree");
+  });
+
+  it("uses the daintree app CSP for persist:daintree (and skips localhost dev CSP for browser)", async () => {
+    const { getDaintreeAppCSP, getLocalhostDevCSP } = await import("../../utils/webviewCsp.js");
+    const daintreeCspMock = vi.mocked(getDaintreeAppCSP);
+    const localhostCspMock = vi.mocked(getLocalhostDevCSP);
+
+    setupWebviewCSP();
+
+    expect(daintreeCspMock).toHaveBeenCalledTimes(1);
+    expect(localhostCspMock).not.toHaveBeenCalled();
+  });
+
+  it("passes isDev=false to getDaintreeAppCSP when NODE_ENV is not 'development'", async () => {
+    const { getDaintreeAppCSP } = await import("../../utils/webviewCsp.js");
+    const daintreeCspMock = vi.mocked(getDaintreeAppCSP);
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+
+    try {
+      setupWebviewCSP();
+      expect(daintreeCspMock).toHaveBeenCalledWith(false);
+    } finally {
+      process.env.NODE_ENV = original;
+    }
+  });
+
+  it("passes isDev=true to getDaintreeAppCSP when NODE_ENV is 'development'", async () => {
+    const { getDaintreeAppCSP } = await import("../../utils/webviewCsp.js");
+    const daintreeCspMock = vi.mocked(getDaintreeAppCSP);
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+
+    try {
+      setupWebviewCSP();
+      expect(daintreeCspMock).toHaveBeenCalledWith(true);
+    } finally {
+      process.env.NODE_ENV = original;
+    }
+  });
+
+  it("attaches an onHeadersReceived listener for persist:daintree only (browser is excluded)", async () => {
+    const { session } = await import("electron");
+    const fromPartition = vi.mocked(session.fromPartition);
+    const onHeadersReceivedRegistrations: string[] = [];
+    fromPartition.mockImplementation((partition: string) => {
+      const onHeadersReceived = vi.fn(() => {
+        onHeadersReceivedRegistrations.push(partition);
+      });
+      return {
+        webRequest: { onHeadersReceived },
+      } as unknown as Electron.Session;
+    });
+
+    setupWebviewCSP();
+
+    expect(onHeadersReceivedRegistrations).toEqual(["persist:daintree"]);
+  });
+
+  it("invokes the callback with the daintree CSP string for the persist:daintree session", async () => {
+    const { session } = await import("electron");
+    const fromPartition = vi.mocked(session.fromPartition);
+    const callbacksByPartition = new Map<
+      string,
+      (details: unknown, callback: (response: unknown) => void) => void
+    >();
+    fromPartition.mockImplementation((partition: string) => {
+      const onHeadersReceived = vi.fn((listener) => {
+        callbacksByPartition.set(partition, listener);
+      });
+      return {
+        webRequest: { onHeadersReceived },
+      } as unknown as Electron.Session;
+    });
+
+    setupWebviewCSP();
+
+    const daintreeListener = callbacksByPartition.get("persist:daintree");
+    expect(daintreeListener).toBeDefined();
+    expect(callbacksByPartition.has("persist:browser")).toBe(false);
+
+    let daintreeResponse: { responseHeaders?: Record<string, string[]> } | undefined;
+    daintreeListener!({ responseHeaders: {} }, (response: unknown) => {
+      daintreeResponse = response as typeof daintreeResponse;
+    });
+
+    expect(daintreeResponse?.responseHeaders?.["Content-Security-Policy"]?.[0]).toContain(
+      "/* daintree */"
+    );
+  });
+});
+
 describe("protocol registration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -657,5 +773,231 @@ describe("protocol registration", () => {
 
     expect(protocol.handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
     expect(protocol.handle).toHaveBeenCalledWith("canopy-file", expect.any(Function));
+  });
+});
+
+describe("createDaintreeFileProtocolHandler — symlink containment", () => {
+  type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
+
+  async function captureHandler(scheme: "daintree-file" | "canopy-file"): Promise<ProtocolHandler> {
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+    const call = handle.mock.calls.find((c) => c[0] === scheme);
+    if (!call) throw new Error(`handler for ${scheme} not registered`);
+    return call[1] as ProtocolHandler;
+  }
+
+  function makeRequest(filePath: string, rootPath: string): GlobalRequest {
+    const url = new URL("daintree-file://serve");
+    url.searchParams.set("path", filePath);
+    url.searchParams.set("root", rootPath);
+    return new Request(url.toString()) as GlobalRequest;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const electron = await import("electron");
+    vi.mocked(electron.net.fetch).mockResolvedValue(
+      new Response(new ArrayBuffer(4), { status: 200 })
+    );
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("text/plain");
+  });
+
+  it("serves a normal file inside root using the realpath-resolved path", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => Promise.resolve(p as string));
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/src/index.ts", "/project"));
+
+    expect(response.status).toBe(200);
+    const electron = await import("electron");
+    expect(electron.net.fetch).toHaveBeenCalledTimes(1);
+    const fetchUrl = vi.mocked(electron.net.fetch).mock.calls[0][0] as string;
+    expect(fetchUrl).toBe(pathToFileURL("/project/src/index.ts").toString());
+  });
+
+  it("blocks a symlink whose path is inside root but whose target is outside root", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => {
+      if (p === "/project") return Promise.resolve("/project");
+      if (p === "/project/escape") return Promise.resolve("/etc/passwd");
+      return Promise.resolve(p as string);
+    });
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/escape", "/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for a dangling symlink (ENOENT)", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => {
+      if (p === "/project") return Promise.resolve("/project");
+      const err = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      return Promise.reject(err);
+    });
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/dangling", "/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for a symlink loop (ELOOP)", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => {
+      if (p === "/project") return Promise.resolve("/project");
+      const err = Object.assign(new Error("ELOOP"), { code: "ELOOP" });
+      return Promise.reject(err);
+    });
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/loop", "/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the root itself fails to resolve (EACCES)", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation(() => {
+      const err = Object.assign(new Error("EACCES"), { code: "EACCES" });
+      return Promise.reject(err);
+    });
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/file.txt", "/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("blocks a Windows cross-drive escape where path.relative returns an absolute path", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => {
+      if (p === "/project") return Promise.resolve("/project");
+      // Simulate a symlink resolving to a path with a leading slash that path.relative
+      // treats as absolute relative to the root — same shape as Windows cross-drive escape
+      // (path.relative('D:\\project', 'C:\\windows') === 'C:\\windows').
+      if (p === "/project/winlink") return Promise.resolve("/totally/elsewhere");
+      return Promise.resolve(p as string);
+    });
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/winlink", "/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("permits a symlink whose resolved target stays inside root", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => {
+      if (p === "/project") return Promise.resolve("/project");
+      if (p === "/project/link") return Promise.resolve("/project/real/file.txt");
+      return Promise.resolve(p as string);
+    });
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/link", "/project"));
+
+    expect(response.status).toBe(200);
+    const electron = await import("electron");
+    expect(electron.net.fetch).toHaveBeenCalledTimes(1);
+    const fetchUrl = vi.mocked(electron.net.fetch).mock.calls[0][0] as string;
+    // The fetch URL should be the resolved real path, not the symlink path.
+    expect(fetchUrl).toBe(pathToFileURL("/project/real/file.txt").toString());
+  });
+
+  it("applies the same containment to canopy-file:// alias", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => {
+      if (p === "/project") return Promise.resolve("/project");
+      if (p === "/project/escape") return Promise.resolve("/etc/passwd");
+      return Promise.resolve(p as string);
+    });
+
+    const handler = await captureHandler("canopy-file");
+    const response = await handler(makeRequest("/project/escape", "/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 (not 404) for missing parameters — input validation precedes realpath", async () => {
+    const handler = await captureHandler("daintree-file");
+    const url = new URL("daintree-file://serve");
+    const response = await handler(new Request(url.toString()) as GlobalRequest);
+
+    expect(response.status).toBe(400);
+  });
+
+  it("permits files whose name starts with '..' but isn't parent traversal", async () => {
+    // Regression for the bare startsWith('..') guard — '..hidden/file.txt' is a
+    // legitimate in-root path and must not be misclassified as escape.
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => Promise.resolve(p as string));
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/..hidden/file.txt", "/project"));
+
+    expect(response.status).toBe(200);
+    const electron = await import("electron");
+    expect(electron.net.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a prefix-sibling escape (root=/tmp/project, target=/tmp/project-evil/...)", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => Promise.resolve(p as string));
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/tmp/project-evil/secret.env", "/tmp/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("blocks via the path.isAbsolute(rel) branch (Windows cross-drive simulation)", async () => {
+    // Force path.relative to return an absolute path, isolating the isAbsolute guard
+    // from the '..' branch. This is the shape of path.relative on Windows when root
+    // and target are on different drives (e.g. relative('D:\\proj','C:\\win')==='C:\\win').
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => Promise.resolve(p as string));
+    const relativeSpy = vi.spyOn(path, "relative").mockReturnValue("/absolute/elsewhere");
+
+    try {
+      const handler = await captureHandler("daintree-file");
+      const response = await handler(makeRequest("/project/file.txt", "/project"));
+
+      expect(response.status).toBe(404);
+      const electron = await import("electron");
+      expect(electron.net.fetch).not.toHaveBeenCalled();
+    } finally {
+      relativeSpy.mockRestore();
+    }
   });
 });

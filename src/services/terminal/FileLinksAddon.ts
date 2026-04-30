@@ -2,6 +2,7 @@ import type { Terminal, ILinkProvider, ILink, IBufferRange } from "@xterm/xterm"
 import { systemClient } from "@/clients";
 import * as path from "path-browserify";
 import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 
 interface ResolvedFilePath {
   absolutePath: string;
@@ -14,13 +15,17 @@ const FILE_PATH_REGEX =
 
 const WINDOWS_ABS = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 
+export type HoverCallback = (link: ILink | null) => void;
+
 export class FileLinksAddon implements ILinkProvider {
   private _terminal: Terminal;
   private _getCwd: () => string;
+  private _onHover?: HoverCallback;
 
-  constructor(terminal: Terminal, getCwd: () => string) {
+  constructor(terminal: Terminal, getCwd: () => string, onHover?: HoverCallback) {
     this._terminal = terminal;
     this._getCwd = getCwd;
+    this._onHover = onHover;
   }
 
   provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
@@ -41,6 +46,7 @@ export class FileLinksAddon implements ILinkProvider {
 
     while ((match = regex.exec(lineText)) !== null) {
       const fullMatch = match[1];
+      if (fullMatch === undefined) continue;
       if (this._isExcluded(fullMatch)) {
         continue;
       }
@@ -50,7 +56,7 @@ export class FileLinksAddon implements ILinkProvider {
         continue;
       }
 
-      const startIndex = match.index + match[0].indexOf(fullMatch);
+      const startIndex = match.index + match[0]!.indexOf(fullMatch);
 
       const range: IBufferRange = {
         start: { x: startIndex + 1, y: bufferLineNumber },
@@ -64,7 +70,8 @@ export class FileLinksAddon implements ILinkProvider {
           resolved.absolutePath,
           resolved.line,
           resolved.col,
-          this._getCwd()
+          this._getCwd(),
+          this._onHover
         )
       );
     }
@@ -86,6 +93,7 @@ export class FileLinksAddon implements ILinkProvider {
     const match = /^(.*)(?::(\d+)(?::(\d+))?)?$/.exec(text);
     if (!match) return null;
     const pathPart = match[1];
+    if (pathPart === undefined) return null;
     const linePart = match[2] ? Number(match[2]) : undefined;
     const colPart = match[3] ? Number(match[3]) : undefined;
 
@@ -123,7 +131,8 @@ class FileLink implements ILink {
     private _absolutePath: string,
     private _line?: number,
     private _col?: number,
-    private _rootPath?: string
+    private _rootPath?: string,
+    private _onHover?: HoverCallback
   ) {}
 
   activate(event: MouseEvent, _text: string): void {
@@ -145,7 +154,9 @@ class FileLink implements ILink {
           });
         })
         .catch((error) => {
-          console.error("[FileLinksAddon] Failed to open in editor:", this._absolutePath, error);
+          logError("[FileLinksAddon] Failed to open in editor", error, {
+            absolutePath: this._absolutePath,
+          });
         });
     } else {
       actionService
@@ -159,14 +170,20 @@ class FileLink implements ILink {
           return systemClient.openPath(this._absolutePath);
         })
         .catch((error) => {
-          console.error("[FileLinksAddon] Failed to view file:", this._absolutePath, error);
+          logError("[FileLinksAddon] Failed to view file", error, {
+            absolutePath: this._absolutePath,
+          });
         });
     }
   }
 
-  hover?(_event: MouseEvent, _text: string): void {}
+  hover?(_event: MouseEvent, _text: string): void {
+    this._onHover?.(this);
+  }
 
-  leave?(_event: MouseEvent, _text: string): void {}
+  leave?(_event: MouseEvent, _text: string): void {
+    this._onHover?.(null);
+  }
 
   dispose?(): void {}
 }

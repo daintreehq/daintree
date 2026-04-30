@@ -74,13 +74,6 @@ describe("PowerSaveBlockerService", () => {
       expect(service.getActiveCount()).toBe(0);
     });
 
-    it("starts blocker for running state", () => {
-      emitStateChanged("term-1", "running", { agentId: "agent-1" });
-
-      expect(powerSaveBlocker.start).toHaveBeenCalledWith("prevent-app-suspension");
-      expect(service.isBlocking()).toBe(true);
-    });
-
     it("does not start blocker for waiting state", () => {
       emitStateChanged("term-1", "waiting", { agentId: "agent-1" });
 
@@ -119,7 +112,7 @@ describe("PowerSaveBlockerService", () => {
 
     it("stops blocker when all agents become idle", () => {
       emitStateChanged("term-1", "working", { agentId: "agent-1" });
-      emitStateChanged("term-2", "running", { agentId: "agent-2" });
+      emitStateChanged("term-2", "working", { agentId: "agent-2" });
 
       emitStateChanged("term-1", "idle", { agentId: "agent-1" });
       emitStateChanged("term-2", "idle", { agentId: "agent-2" });

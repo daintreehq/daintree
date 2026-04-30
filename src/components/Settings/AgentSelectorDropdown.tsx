@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, type ComponentType } from "re
 import { cn } from "@/lib/utils";
 import { Settings2, ChevronDown, Search } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { BrandMark } from "@/components/icons";
 
 export interface AgentOption {
   id: string;
@@ -82,7 +83,7 @@ export function AgentSelectorDropdown({
         case "Enter":
           if (activeIndex >= 0 && activeIndex < items.length) {
             e.preventDefault();
-            handleSelect(items[activeIndex].id);
+            handleSelect(items[activeIndex]!.id);
           }
           break;
       }
@@ -100,16 +101,19 @@ export function AgentSelectorDropdown({
           type="button"
           aria-expanded={open}
           aria-haspopup="listbox"
+          data-testid="agent-selector-trigger"
           className={cn(
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
             "border border-daintree-border bg-daintree-bg text-daintree-text",
             "hover:border-daintree-accent/50 transition-colors",
-            "focus:outline-none focus:ring-2 focus:ring-daintree-accent/50"
+            "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50"
           )}
         >
           {selectedAgent ? (
             <>
-              <selectedAgent.Icon size={16} brandColor={selectedAgent.color} />
+              <BrandMark brandColor={selectedAgent.color} size={16}>
+                <selectedAgent.Icon size={16} brandColor={selectedAgent.color} />
+              </BrandMark>
               <span className="flex-1 text-left truncate">{selectedAgent.name}</span>
               {(!selectedAgent.selected || selectedAgent.dangerousEnabled) && (
                 <span className="flex items-center gap-1">
@@ -168,7 +172,7 @@ export function AgentSelectorDropdown({
             aria-activedescendant={
               items[activeIndex] ? `agent-selector-item-${items[activeIndex].id}` : undefined
             }
-            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-none"
+            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden"
           />
         </div>
         <div role="listbox" id="agent-selector-list" className="overflow-y-auto max-h-60 p-1">
@@ -189,8 +193,8 @@ export function AgentSelectorDropdown({
                 onMouseEnter={() => setActiveIndex(index)}
                 className={cn(
                   "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
-                  isActive && "bg-daintree-accent/10",
-                  isSelected && "text-daintree-accent",
+                  isActive && "bg-overlay-selected",
+                  isSelected && "text-daintree-text font-medium",
                   !isActive && !isSelected && "text-daintree-text"
                 )}
               >
@@ -204,7 +208,9 @@ export function AgentSelectorDropdown({
                   </>
                 ) : (
                   <>
-                    <item.agent.Icon size={16} brandColor={item.agent.color} className="shrink-0" />
+                    <BrandMark brandColor={item.agent.color} size={16} className="shrink-0">
+                      <item.agent.Icon size={16} brandColor={item.agent.color} />
+                    </BrandMark>
                     <span className="flex-1 min-w-0 truncate">{item.agent.name}</span>
                     {(!item.agent.selected || item.agent.dangerousEnabled) && (
                       <span className="flex items-center gap-1 shrink-0">

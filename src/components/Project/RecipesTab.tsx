@@ -1,15 +1,18 @@
 import { useState, useEffect, useRef } from "react";
 import { Plus, Trash2, Edit3, Download, FileDown, Check, Globe } from "lucide-react";
-import { TerminalRecipeIcon } from "@/components/icons";
+import { Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { useRecipeStore } from "@/store/recipeStore";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalRecipe, Worktree } from "@/types";
+import { logError } from "@/utils/logger";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface RecipesTabProps {
   projectId: string;
@@ -51,7 +54,7 @@ export function RecipesTab({
     if (isOpen && !hasLoadedRecipes.current && !recipesLoading && projectId) {
       hasLoadedRecipes.current = true;
       loadRecipes(projectId).catch((err) => {
-        console.error("Failed to load recipes:", err);
+        logError("Failed to load recipes", err);
       });
     }
   }, [isOpen, recipesLoading, loadRecipes, projectId]);
@@ -113,8 +116,8 @@ export function RecipesTab({
       }
       setRecipeToDelete(null);
     } catch (err) {
-      console.error("Failed to delete recipe:", err);
-      setDeleteError(err instanceof Error ? err.message : "Failed to delete recipe");
+      logError("Failed to delete recipe", err);
+      setDeleteError(formatErrorMessage(err, "Failed to delete recipe"));
     }
   };
 
@@ -134,8 +137,8 @@ export function RecipesTab({
           exportTimeoutRef.current = null;
         }, 2000);
       } catch (err) {
-        console.error("Failed to copy to clipboard:", err);
-        setExportError(err instanceof Error ? err.message : "Failed to copy to clipboard");
+        logError("Failed to copy to clipboard", err);
+        setExportError(formatErrorMessage(err, "Failed to copy to clipboard"));
       }
     }
   };
@@ -151,7 +154,7 @@ export function RecipesTab({
       setShowImportDialog(false);
       setImportJson("");
     } catch (err) {
-      setImportError(err instanceof Error ? err.message : "Failed to import recipe");
+      setImportError(formatErrorMessage(err, "Failed to import recipe"));
     }
   };
 
@@ -170,10 +173,10 @@ export function RecipesTab({
   };
 
   return (
-    <TooltipProvider delayDuration={400} skipDelayDuration={300}>
+    <>
       <div className="mb-6">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
-          <TerminalRecipeIcon className="h-4 w-4" />
+          <Workflow className="h-4 w-4" />
           Terminal Recipes
         </h3>
         <p className="text-xs text-daintree-text/60 mb-4">
@@ -187,8 +190,13 @@ export function RecipesTab({
               Loading recipes...
             </div>
           ) : recipes.length === 0 ? (
-            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
-              No recipes configured yet
+            <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+              <EmptyState
+                variant="zero-data"
+                icon={<Workflow />}
+                title="No recipes configured yet"
+                description="Create a recipe to spawn multiple terminals with predefined commands and settings."
+              />
             </div>
           ) : (
             <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
@@ -312,11 +320,11 @@ export function RecipesTab({
           <div className="flex gap-2">
             <Button variant="outline" onClick={handleAddRecipe} className="flex-1">
               <Plus />
-              Add Recipe
+              Add recipe
             </Button>
             <Button variant="outline" onClick={() => setShowImportDialog(true)}>
               <FileDown />
-              Import Recipe
+              Import recipe
             </Button>
           </div>
         </div>
@@ -331,13 +339,14 @@ export function RecipesTab({
 
       <ConfirmDialog
         isOpen={recipeToDelete !== null}
-        title="Delete Recipe"
+        title={`Delete '${recipes.find((r) => r.id === recipeToDelete)?.name ?? "recipe"}'?`}
         description={
           deleteError
             ? `Error: ${deleteError}`
-            : "Are you sure you want to delete this recipe? This action cannot be undone."
+            : "The recipe will be permanently removed. This cannot be undone."
         }
-        confirmLabel={deleteError ? "Retry" : "Delete"}
+        confirmLabel={deleteError ? "Retry delete" : "Delete recipe"}
+        variant="destructive"
         onConfirm={() => {
           if (recipeToDelete) {
             void handleDeleteRecipe(recipeToDelete);
@@ -359,7 +368,7 @@ export function RecipesTab({
         size="md"
       >
         <AppDialog.Header>
-          <AppDialog.Title>Import Recipe</AppDialog.Title>
+          <AppDialog.Title>Import recipe</AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>
 
@@ -371,7 +380,7 @@ export function RecipesTab({
             value={importJson}
             onChange={(e) => setImportJson(e.target.value)}
             placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className="w-full h-64 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-none focus:ring-2 focus:ring-daintree-accent resize-none"
+            className="w-full h-64 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent resize-none"
             spellCheck={false}
           />
           {importError && (
@@ -397,6 +406,6 @@ export function RecipesTab({
           </Button>
         </AppDialog.Footer>
       </AppDialog>
-    </TooltipProvider>
+    </>
   );
 }

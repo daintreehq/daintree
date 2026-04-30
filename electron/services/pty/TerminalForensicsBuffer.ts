@@ -16,14 +16,22 @@ export class TerminalForensicsBuffer {
     }
   }
 
+  /**
+   * Read the current forensic buffer snapshot without disturbing it. Used by
+   * the fallback classifier to inspect exit-time output before teardown runs.
+   */
+  getRecentOutput(): string {
+    return this.recentOutputBuffer;
+  }
+
   logForensics(
     terminalId: string,
     exitCode: number,
     terminal: TerminalInfo,
-    isAgentTerminal: boolean,
+    hadAgent: boolean,
     signal?: number
   ): void {
-    if (!isAgentTerminal) return;
+    if (!hadAgent) return;
 
     const decision = decideTerminalExitForensics({
       exitCode,
@@ -36,19 +44,19 @@ export class TerminalForensicsBuffer {
       return;
     }
 
+    const agentId = terminal.detectedAgentId ?? terminal.launchAgentId ?? "unknown";
     logError(`Terminal ${terminalId} exited abnormally (code ${exitCode})`, undefined, {
       terminalId,
       exitCode,
       signal: decision.normalizedSignal,
-      agentType: terminal.type,
-      agentId: terminal.agentId,
+      agentId,
       cwd: terminal.cwd,
       lastOutput: decision.strippedOutput.slice(-1000),
     });
 
     if (process.env.DAINTREE_VERBOSE || exitCode !== 0) {
       console.error(
-        `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTERMINAL CRASH FORENSICS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTerminal ID: ${terminalId}\nAgent Type:  ${terminal.type || "unknown"}\nAgent ID:    ${terminal.agentId || "N/A"}\nExit Code:   ${exitCode}\nSignal:      ${decision.normalizedSignal ?? "none"}\nCWD:         ${terminal.cwd}\nTimestamp:   ${new Date().toISOString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nLAST OUTPUT (${decision.strippedOutput.length} chars):\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${decision.strippedOutput}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`
+        `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTERMINAL CRASH FORENSICS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTerminal ID: ${terminalId}\nAgent:       ${agentId}\nExit Code:   ${exitCode}\nSignal:      ${decision.normalizedSignal ?? "none"}\nCWD:         ${terminal.cwd}\nTimestamp:   ${new Date().toISOString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nLAST OUTPUT (${decision.strippedOutput.length} chars):\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${decision.strippedOutput}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`
       );
     }
   }

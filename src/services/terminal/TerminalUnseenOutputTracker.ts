@@ -3,6 +3,11 @@ export interface UnseenOutputSnapshot {
   unseen: number;
 }
 
+// Minimum unseen lines before the indicator pill is shown. Consumed by
+// `useUnseenOutput` and by the tracker itself to bound listener notifications
+// (we notify on the threshold crossing, not on every increment).
+export const UNSEEN_THRESHOLD = 2;
+
 type Listener = () => void;
 
 export class TerminalUnseenOutputTracker {
@@ -17,7 +22,14 @@ export class TerminalUnseenOutputTracker {
     const next = current + 1;
     this.unseenById.set(id, next);
 
-    if (current === 0) {
+    // Bound listener notifications to threshold crossings to avoid re-render
+    // churn during heavy streaming output while scrolled back. Once the pill
+    // is visible (unseen > UNSEEN_THRESHOLD) further increments don't change
+    // UI state, so suppress those notifications. The raw count continues to
+    // accumulate in `unseenById` and the snapshot is refreshed from it on
+    // the next relevant event (clearUnseen / updateScrollState).
+    const crossesThreshold = current === 0 || current === UNSEEN_THRESHOLD;
+    if (crossesThreshold) {
       this.updateSnapshot(id, isUserScrolledBack, next);
       this.notify(id);
     }

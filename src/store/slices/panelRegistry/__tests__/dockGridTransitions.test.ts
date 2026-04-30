@@ -58,7 +58,6 @@ function createMockTerminal(
 ): TerminalInstance {
   return {
     id,
-    type: "terminal",
     title: `Terminal ${id}`,
     cwd: "/test",
     cols: 80,
@@ -69,6 +68,14 @@ function createMockTerminal(
   };
 }
 
+function createGlobalMockTerminal(
+  id: string,
+  location: "grid" | "dock" | "trash" = "grid"
+): TerminalInstance {
+  const terminal = createMockTerminal(id, location);
+  return { ...terminal, worktreeId: undefined };
+}
+
 function createMockTabGroup(
   id: string,
   panelIds: string[],
@@ -77,7 +84,7 @@ function createMockTabGroup(
   return {
     id,
     panelIds,
-    activeTabId: panelIds[0],
+    activeTabId: panelIds[0]!,
     location,
     worktreeId: "wt-1",
   };
@@ -103,9 +110,9 @@ describe("dock ↔ grid transitions", () => {
       usePanelStore.getState().moveTerminalToDock("t1");
 
       const updated = usePanelStore.getState().panelsById["t1"];
-      expect(updated.location).toBe("dock");
-      expect(updated.isVisible).toBe(false);
-      expect(updated.runtimeStatus).toBe("background");
+      expect(updated!.location).toBe("dock");
+      expect(updated!.isVisible).toBe(false);
+      expect(updated!.runtimeStatus).toBe("background");
     });
   });
 
@@ -120,8 +127,8 @@ describe("dock ↔ grid transitions", () => {
 
       expect(moved).toBe(true);
       const updated = usePanelStore.getState().panelsById["t1"];
-      expect(updated.location).toBe("grid");
-      expect(updated.isVisible).toBe(true);
+      expect(updated!.location).toBe("grid");
+      expect(updated!.isVisible).toBe(true);
     });
 
     it("is idempotent — calling twice on an already-grid panel returns false", () => {
@@ -130,6 +137,120 @@ describe("dock ↔ grid transitions", () => {
 
       const moved = usePanelStore.getState().moveTerminalToGrid("t1");
       expect(moved).toBe(false);
+    });
+
+    it("restores a docked panel even when a stale persisted group still says grid", () => {
+      const t1 = createMockTerminal("t1", "dock");
+      const t2 = createMockTerminal("t2", "grid");
+      setTerminals([t1, t2]);
+
+      const staleGroup = createMockTabGroup("g1", ["t1", "t2"], "grid");
+      usePanelStore.setState({ tabGroups: new Map([["g1", staleGroup]]) });
+
+      expect(usePanelStore.getState().getPanelGroup("t1")).toBeUndefined();
+
+      const moved = usePanelStore.getState().moveTerminalToGrid("t1");
+
+      expect(moved).toBe(true);
+      expect(usePanelStore.getState().panelsById["t1"]!.location).toBe("grid");
+      expect(usePanelStore.getState().panelsById["t1"]!.isVisible).toBe(true);
+      expect(usePanelStore.getState().tabGroups.has("g1")).toBe(false);
+    });
+
+    it("removes stale dock group membership on drag-style single panel moves", () => {
+      const t1 = createMockTerminal("t1", "dock");
+      const t2 = createMockTerminal("t2", "dock");
+      setTerminals([t1, t2]);
+
+      const staleDockGroup = createMockTabGroup("g1", ["t1", "t2"], "dock");
+      usePanelStore.setState({ tabGroups: new Map([["g1", staleDockGroup]]) });
+
+      usePanelStore.getState().moveTerminalToPosition("t1", 0, "grid", "wt-1");
+
+      expect(usePanelStore.getState().panelsById["t1"]!.location).toBe("grid");
+      expect(
+        usePanelStore
+          .getState()
+          .getTabGroups("dock", "wt-1")
+          .map((g) => g.panelIds)
+      ).toEqual([["t2"]]);
+      expect(usePanelStore.getState().getPanelGroup("t1")).toBeUndefined();
+      expect(usePanelStore.getState().tabGroups.has("g1")).toBe(false);
+    });
+
+    it("clears activeDockTerminalId when moving a dock tab group to grid directly", () => {
+      const t1 = createMockTerminal("t1", "dock");
+      const t2 = createMockTerminal("t2", "dock");
+      setTerminals([t1, t2]);
+
+      const group = createMockTabGroup("g1", ["t1", "t2"], "dock");
+      usePanelStore.setState({
+        tabGroups: new Map([["g1", group]]),
+        activeDockTerminalId: "t2",
+        focusedId: "t2",
+      });
+
+      const moved = usePanelStore.getState().moveTabGroupToLocation("g1", "grid");
+
+      expect(moved).toBe(true);
+      expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+      expect(usePanelStore.getState().focusedId).toBe("t1");
+      expect(usePanelStore.getState().getTabGroups("dock", "wt-1")).toHaveLength(0);
+    });
+  });
+
+  describe("getTabGroups dock visibility", () => {
+    it("includes global dock panels in a worktree-scoped dock", () => {
+      const globalDocked = createGlobalMockTerminal("global-dock", "dock");
+      const worktreeDocked = createMockTerminal("worktree-dock", "dock");
+      setTerminals([globalDocked, worktreeDocked]);
+
+      const groups = usePanelStore.getState().getTabGroups("dock", "wt-1");
+
+      expect(groups.map((g) => g.panelIds)).toEqual([["global-dock"], ["worktree-dock"]]);
+    });
+
+    it("removes a global dock panel from dock groups after restoring it to grid", () => {
+      const globalDocked = createGlobalMockTerminal("global-dock", "dock");
+      setTerminals([globalDocked]);
+
+      expect(usePanelStore.getState().getTabGroups("dock", "wt-1")).toHaveLength(1);
+
+      const moved = usePanelStore.getState().moveTerminalToGrid("global-dock");
+
+      expect(moved).toBe(true);
+      expect(usePanelStore.getState().getTabGroups("dock", "wt-1")).toHaveLength(0);
+    });
+
+    it("filters stale grid members out when resolving panels for a dock group", () => {
+      const t1 = createMockTerminal("t1", "dock");
+      const t2 = createMockTerminal("t2", "grid");
+      const group = createMockTabGroup("g1", ["t1", "t2"], "dock");
+      setTerminals([t1, t2]);
+      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
+
+      expect(usePanelStore.getState().getTabGroups("dock", "wt-1")[0]?.panelIds).toEqual(["t1"]);
+      expect(
+        usePanelStore
+          .getState()
+          .getTabGroupPanels("g1", "dock")
+          .map((p) => p.id)
+      ).toEqual(["t1"]);
+    });
+
+    it("updates visibility and runtimeStatus on drag-style dock to grid moves", () => {
+      const t1 = createMockTerminal("t1", "dock");
+      t1.isVisible = false;
+      t1.runtimeStatus = "background";
+      setTerminals([t1]);
+
+      usePanelStore.getState().moveTerminalToPosition("t1", 0, "grid", "wt-1");
+
+      const updated = usePanelStore.getState().panelsById["t1"];
+      expect(updated!.location).toBe("grid");
+      expect(updated!.isVisible).toBe(true);
+      expect(updated!.runtimeStatus).toBe("running");
+      expect(usePanelStore.getState().getTabGroups("dock", "wt-1")).toHaveLength(0);
     });
   });
 
@@ -149,8 +270,9 @@ describe("dock ↔ grid transitions", () => {
       usePanelStore.getState().hydrateTabGroups([group]);
 
       const updated = usePanelStore.getState().panelsById["t1"];
-      expect(updated.location).toBe("dock");
-      expect(updated.isVisible).toBe(false);
+      expect(updated!.location).toBe("dock");
+      expect(updated!.isVisible).toBe(false);
+      expect(usePanelStore.getState().getPanelGroup("t1")).toBeUndefined();
     });
 
     it("applies group location when terminal is already in grid", () => {
@@ -165,11 +287,11 @@ describe("dock ↔ grid transitions", () => {
 
       // Both terminals remain in grid — no override needed
       const updated = usePanelStore.getState().panelsById["t1"];
-      expect(updated.location).toBe("grid");
-      expect(updated.isVisible).toBe(true);
+      expect(updated!.location).toBe("grid");
+      expect(updated!.isVisible).toBe(true);
     });
 
-    it("allows group to move terminal to dock (both agree on dock)", () => {
+    it("preserves terminal grid location when group says dock", () => {
       const t1 = createMockTerminal("t1", "grid");
       const t2 = createMockTerminal("t2", "grid");
       setTerminals([t1, t2]);
@@ -180,8 +302,9 @@ describe("dock ↔ grid transitions", () => {
       usePanelStore.getState().hydrateTabGroups([group]);
 
       const updated = usePanelStore.getState().panelsById["t1"];
-      expect(updated.location).toBe("dock");
-      expect(updated.isVisible).toBe(false);
+      expect(updated!.location).toBe("grid");
+      expect(updated!.isVisible).toBe(true);
+      expect(usePanelStore.getState().tabGroups.has("g1")).toBe(false);
     });
   });
 });

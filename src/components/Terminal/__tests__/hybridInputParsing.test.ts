@@ -352,8 +352,8 @@ describe("getAllAtDiffTokens", () => {
   it("finds diff tokens alongside @file tokens", () => {
     const tokens = getAllAtDiffTokens("@diff @src/file.ts @diff:head");
     expect(tokens).toHaveLength(2);
-    expect(tokens[0].diffType).toBe("unstaged");
-    expect(tokens[1].diffType).toBe("head");
+    expect(tokens[0]!.diffType).toBe("unstaged");
+    expect(tokens[1]!.diffType).toBe("head");
   });
 
   it("handles duplicate diff tokens", () => {
@@ -364,8 +364,8 @@ describe("getAllAtDiffTokens", () => {
   it("handles newline-delimited tokens", () => {
     const tokens = getAllAtDiffTokens("@diff\n@diff:staged");
     expect(tokens).toHaveLength(2);
-    expect(tokens[0].diffType).toBe("unstaged");
-    expect(tokens[1].diffType).toBe("staged");
+    expect(tokens[0]!.diffType).toBe("unstaged");
+    expect(tokens[1]!.diffType).toBe("staged");
   });
 });
 
@@ -430,7 +430,7 @@ describe("getAllAtTerminalTokens", () => {
   it("finds @terminal alongside @diff and @file tokens", () => {
     const tokens = getAllAtTerminalTokens("@terminal @diff @src/file.ts");
     expect(tokens).toHaveLength(1);
-    expect(tokens[0].start).toBe(0);
+    expect(tokens[0]!.start).toBe(0);
   });
 });
 

@@ -33,8 +33,9 @@ const autoUpdaterMock = vi.hoisted(() => ({
 }));
 
 const storeMock = vi.hoisted(() => ({
-  get: vi.fn((): string | undefined => undefined),
+  get: vi.fn((_key: string): unknown => undefined),
   set: vi.fn(),
+  delete: vi.fn(),
 }));
 
 const cleanupOnExitMock = vi.hoisted(() => vi.fn());
@@ -581,6 +582,214 @@ describe("AutoUpdaterService", () => {
 
       expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.UPDATE_GET_CHANNEL);
       expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.UPDATE_SET_CHANNEL);
+    });
+  });
+
+  describe("update-available dedup and dismiss cooldown", () => {
+    let availableHandler: (info: { version: string }) => void;
+    let downloadedHandler: (info: { version: string }) => void;
+    let dismissHandler: (event: unknown, version: unknown) => void;
+
+    const storeState: Record<string, unknown> = {};
+
+    function primeStore(values: Record<string, unknown>): void {
+      for (const key of Object.keys(storeState)) delete storeState[key];
+      Object.assign(storeState, values);
+    }
+
+    beforeEach(() => {
+      primeStore({});
+      storeMock.get.mockImplementation((key: string) => storeState[key]);
+      storeMock.set.mockImplementation((key: string, value: unknown) => {
+        storeState[key] = value;
+      });
+      storeMock.delete.mockImplementation((key: string) => {
+        delete storeState[key];
+      });
+
+      autoUpdaterService.initialize();
+
+      availableHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-available"
+      )![1];
+      downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1];
+      dismissHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_DISMISS_TOAST
+      )![1];
+
+      broadcastMock.mockClear();
+    });
+
+    it("suppresses repeat periodic broadcasts for the same version in a session", () => {
+      availableHandler({ version: "1.1.0" });
+      availableHandler({ version: "1.1.0" });
+
+      const availableCalls = broadcastMock.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.UPDATE_AVAILABLE
+      );
+      expect(availableCalls).toHaveLength(1);
+      expect(availableCalls[0][1]).toEqual({ version: "1.1.0" });
+    });
+
+    it("broadcasts a newer version after having broadcast an older one", () => {
+      availableHandler({ version: "1.1.0" });
+      broadcastMock.mockClear();
+
+      availableHandler({ version: "1.2.0" });
+
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.UPDATE_AVAILABLE, { version: "1.2.0" });
+    });
+
+    it("manual check always broadcasts, even for the same version", () => {
+      availableHandler({ version: "1.1.0" });
+      broadcastMock.mockClear();
+
+      autoUpdaterService.checkForUpdatesManually();
+      availableHandler({ version: "1.1.0" });
+
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.UPDATE_AVAILABLE, { version: "1.1.0" });
+    });
+
+    it("suppresses broadcast when a persisted dismissal of the same version is within 24h", () => {
+      primeStore({
+        dismissedUpdateVersion: "1.1.0",
+        dismissedUpdateAt: Date.now() - 60 * 60 * 1000, // 1 hour ago
+      });
+
+      availableHandler({ version: "1.1.0" });
+
+      const availableCalls = broadcastMock.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.UPDATE_AVAILABLE
+      );
+      expect(availableCalls).toHaveLength(0);
+    });
+
+    it("broadcasts when the persisted dismissal has expired beyond 24h", () => {
+      primeStore({
+        dismissedUpdateVersion: "1.1.0",
+        dismissedUpdateAt: Date.now() - 25 * 60 * 60 * 1000, // 25 hours ago
+      });
+
+      availableHandler({ version: "1.1.0" });
+
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.UPDATE_AVAILABLE, { version: "1.1.0" });
+      // Stale record was cleared on expiry.
+      expect(storeState.dismissedUpdateVersion).toBeUndefined();
+      expect(storeState.dismissedUpdateAt).toBeUndefined();
+    });
+
+    it("bypasses the cooldown for a newer semver version", () => {
+      primeStore({
+        dismissedUpdateVersion: "1.1.0",
+        dismissedUpdateAt: Date.now() - 60 * 60 * 1000, // 1 hour ago
+      });
+
+      availableHandler({ version: "1.2.0" });
+
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.UPDATE_AVAILABLE, { version: "1.2.0" });
+    });
+
+    it("still broadcasts UPDATE_DOWNLOADED even while the Available-stage cooldown is active", () => {
+      primeStore({
+        dismissedUpdateVersion: "1.1.0",
+        dismissedUpdateAt: Date.now() - 60 * 60 * 1000,
+      });
+
+      availableHandler({ version: "1.1.0" });
+      const availableCalls = broadcastMock.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.UPDATE_AVAILABLE
+      );
+      expect(availableCalls).toHaveLength(0);
+
+      downloadedHandler({ version: "1.1.0" });
+
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.UPDATE_DOWNLOADED, { version: "1.1.0" });
+    });
+
+    it("UPDATE_DISMISS_TOAST handler persists version and timestamp", () => {
+      const before = Date.now();
+      dismissHandler({}, "1.1.0");
+      const after = Date.now();
+
+      expect(storeState.dismissedUpdateVersion).toBe("1.1.0");
+      expect(typeof storeState.dismissedUpdateAt).toBe("number");
+      expect(storeState.dismissedUpdateAt).toBeGreaterThanOrEqual(before);
+      expect(storeState.dismissedUpdateAt).toBeLessThanOrEqual(after);
+    });
+
+    it("UPDATE_DISMISS_TOAST ignores empty, whitespace, or non-string versions", () => {
+      dismissHandler({}, "");
+      dismissHandler({}, "   ");
+      dismissHandler({}, 42);
+      dismissHandler({}, null);
+
+      expect(storeState.dismissedUpdateVersion).toBeUndefined();
+      expect(storeState.dismissedUpdateAt).toBeUndefined();
+    });
+
+    it("dispose resets the session dedup so the next session rebroadcasts the same version", () => {
+      availableHandler({ version: "1.1.0" });
+      broadcastMock.mockClear();
+
+      autoUpdaterService.dispose();
+      primeStore({}); // no persisted dismissal carries across
+      autoUpdaterService.initialize();
+
+      const nextAvailableHandler = (autoUpdaterMock.on as Mock).mock.calls
+        .filter((args) => args[0] === "update-available")
+        .at(-1)![1];
+      nextAvailableHandler({ version: "1.1.0" });
+
+      const availableCalls = broadcastMock.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.UPDATE_AVAILABLE
+      );
+      expect(availableCalls).toHaveLength(1);
+      expect(availableCalls[0][1]).toEqual({ version: "1.1.0" });
+    });
+
+    it("broadcasts at exactly 24h boundary (cooldown window is >=, not >)", () => {
+      primeStore({
+        dismissedUpdateVersion: "1.1.0",
+        dismissedUpdateAt: Date.now() - 24 * 60 * 60 * 1000,
+      });
+
+      availableHandler({ version: "1.1.0" });
+
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.UPDATE_AVAILABLE, { version: "1.1.0" });
+    });
+
+    it("treats corrupt dismissedUpdateAt (NaN) as missing and clears the record", () => {
+      primeStore({
+        dismissedUpdateVersion: "1.1.0",
+        dismissedUpdateAt: Number.NaN,
+      });
+
+      availableHandler({ version: "1.1.0" });
+
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.UPDATE_AVAILABLE, { version: "1.1.0" });
+      expect(storeState.dismissedUpdateVersion).toBeUndefined();
+      expect(storeState.dismissedUpdateAt).toBeUndefined();
+    });
+
+    it("treats a future-dated dismissedUpdateAt (clock skew) as expired and rebroadcasts", () => {
+      primeStore({
+        dismissedUpdateVersion: "1.1.0",
+        dismissedUpdateAt: Date.now() + 60 * 60 * 1000, // 1h in the future
+      });
+
+      availableHandler({ version: "1.1.0" });
+
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.UPDATE_AVAILABLE, { version: "1.1.0" });
+      expect(storeState.dismissedUpdateVersion).toBeUndefined();
+      expect(storeState.dismissedUpdateAt).toBeUndefined();
+    });
+
+    it("dispose removes the UPDATE_DISMISS_TOAST handler", () => {
+      autoUpdaterService.dispose();
+
+      expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.UPDATE_DISMISS_TOAST);
     });
   });
 });

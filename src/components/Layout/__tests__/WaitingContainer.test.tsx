@@ -74,9 +74,9 @@ describe("WaitingContainer icon", () => {
       const circles = svg.querySelectorAll("circle");
       return (
         circles.length === 1 &&
-        circles[0].getAttribute("cx") === "8" &&
-        circles[0].getAttribute("cy") === "8" &&
-        circles[0].getAttribute("r") === "6"
+        circles[0]!.getAttribute("cx") === "8" &&
+        circles[0]!.getAttribute("cy") === "8" &&
+        circles[0]!.getAttribute("r") === "6"
       );
     });
     expect(hasHollowCircle).toBe(true);

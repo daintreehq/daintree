@@ -2,6 +2,8 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { AgentIdSchema, LaunchLocationSchema } from "./schemas";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { AGENT_REGISTRY } from "@/config/agents";
 import type { ActionId } from "@shared/types/actions";
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -21,9 +23,10 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       prompt: z.string().optional(),
       interactive: z.boolean().optional(),
       model: z.string().optional(),
+      presetId: z.string().nullable().optional(),
     }),
     run: async (args: unknown) => {
-      const { agentId, location, cwd, worktreeId, prompt, interactive, model } = args as {
+      const { agentId, location, cwd, worktreeId, prompt, interactive, model, presetId } = args as {
         agentId: string;
         location?: "grid" | "dock";
         cwd?: string;
@@ -31,6 +34,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         prompt?: string;
         interactive?: boolean;
         model?: string;
+        presetId?: string | null;
       };
       const terminalId = await callbacks.onLaunchAgent(agentId, {
         location,
@@ -39,6 +43,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         prompt,
         interactive,
         modelId: model,
+        presetId,
       });
       return { terminalId };
     },
@@ -98,7 +103,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     run: async () => {
       const state = usePanelStore.getState();
-      const { getCurrentViewStore } = await import("@/store/createWorktreeStore");
       const worktreeData = getCurrentViewStore().getState();
       const validWorktreeIds = new Set<string>();
       for (const [id, wt] of worktreeData.worktrees) {
@@ -119,7 +123,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     run: async () => {
       const state = usePanelStore.getState();
-      const { getCurrentViewStore } = await import("@/store/createWorktreeStore");
       const worktreeData = getCurrentViewStore().getState();
       const validWorktreeIds = new Set<string>();
       for (const [id, wt] of worktreeData.worktrees) {
@@ -140,7 +143,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     run: async () => {
       const state = usePanelStore.getState();
-      const { getCurrentViewStore } = await import("@/store/createWorktreeStore");
       const worktreeData = getCurrentViewStore().getState();
       const validWorktreeIds = new Set<string>();
       for (const [id, wt] of worktreeData.worktrees) {
@@ -161,7 +163,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     run: async () => {
       const state = usePanelStore.getState();
-      const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
       const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
       state.focusNextBlockedDock(activeWorktreeId ?? undefined, state.getPanelGroup);
     },
@@ -177,7 +178,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     run: async () => {
       const state = usePanelStore.getState();
-      const { getCurrentViewStore } = await import("@/store/createWorktreeStore");
       const worktreeData = getCurrentViewStore().getState();
       const validWorktreeIds = new Set<string>();
       for (const [id, wt] of worktreeData.worktrees) {

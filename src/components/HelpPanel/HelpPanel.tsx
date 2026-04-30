@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { X, ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
@@ -15,7 +15,8 @@ import { getAgentSettingsEntry } from "@shared/types";
 import { ASSISTANT_FAST_MODELS } from "@shared/config/agentRegistry";
 import { actionService } from "@/services/ActionService";
 import { TerminalRefreshTier } from "@/types";
-import type { TerminalType } from "@/types";
+import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 const RESIZE_STEP = 10;
 
@@ -77,28 +78,33 @@ export function HelpPanel() {
     if (!isOpen || terminalId || !preferredAgentId || hasAutoLaunched.current) return;
     hasAutoLaunched.current = true;
 
-    void (async () => {
-      const folderPath = await window.electron.help.getFolderPath();
-      if (!folderPath) return;
+    safeFireAndForget(
+      (async () => {
+        const folderPath = await window.electron.help.getFolderPath();
+        if (!folderPath) return;
 
-      const model = resolveAssistantModel(preferredAgentId);
-      const result = await actionService.dispatch<{ terminalId: string | null }>(
-        "agent.launch",
-        {
-          agentId: preferredAgentId,
-          location: "dock",
-          cwd: folderPath,
-          prompt: HELP_PROMPT,
-          ...(model && { model }),
-        },
-        { source: "user" }
-      );
-      if (result.ok && result.result?.terminalId) {
-        if (document.hidden) return;
-        useHelpPanelStore.getState().setTerminal(result.result.terminalId, preferredAgentId);
-        window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
-      }
-    })();
+        const model = resolveAssistantModel(preferredAgentId);
+        const result = await actionService.dispatch<{ terminalId: string | null }>(
+          "agent.launch",
+          {
+            agentId: preferredAgentId,
+            location: "dock",
+            cwd: folderPath,
+            prompt: HELP_PROMPT,
+            ...(model && { model }),
+          },
+          { source: "user" }
+        );
+        if (result.ok && result.result?.terminalId) {
+          if (document.hidden) return;
+          useHelpPanelStore.getState().setTerminal(result.result.terminalId, preferredAgentId);
+          window.electron.help.markTerminal(result.result.terminalId).catch((err) => {
+            logError("Failed to mark help terminal", err);
+          });
+        }
+      })(),
+      { context: "Auto-launching preferred help agent" }
+    );
   }, [isOpen, terminalId, preferredAgentId]);
 
   // Reset auto-launch guard when panel closes
@@ -189,7 +195,9 @@ export function HelpPanel() {
 
       if (result.ok && result.result?.terminalId) {
         useHelpPanelStore.getState().setTerminal(result.result.terminalId, selectedAgentId);
-        window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
+        window.electron.help.markTerminal(result.result.terminalId).catch((err) => {
+          logError("Failed to mark help terminal", err);
+        });
       }
     },
     [terminalId, removePanel, clearTerminal]
@@ -236,8 +244,8 @@ export function HelpPanel() {
         tabIndex={0}
         className={cn(
           "absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10",
-          "hover:bg-daintree-accent/20 active:bg-daintree-accent/30 transition-colors",
-          isResizing && "bg-daintree-accent/30"
+          "hover:bg-overlay-soft active:bg-overlay-medium transition-colors",
+          isResizing && "bg-overlay-medium"
         )}
         onMouseDown={handleResizeStart}
         onKeyDown={handleResizeKeyDown}
@@ -275,12 +283,14 @@ export function HelpPanel() {
       <div ref={contentRef} className="flex-1 flex flex-col min-h-0 relative">
         {showTerminal ? (
           <div className="absolute inset-0">
-            <XtermAdapter
-              terminalId={terminalId}
-              terminalType={(agentId ?? "terminal") as TerminalType}
-              getRefreshTier={getRefreshTier}
-              cwd={terminal.cwd}
-            />
+            <Suspense fallback={null}>
+              <XtermAdapter
+                terminalId={terminalId}
+                launchAgentId={agentId ?? undefined}
+                getRefreshTier={getRefreshTier}
+                cwd={terminal.cwd}
+              />
+            </Suspense>
           </div>
         ) : (
           <HelpAgentPicker onSelectAgent={handleSelectAgent} />

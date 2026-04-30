@@ -87,7 +87,7 @@ function CommandList({
     const target = index + direction;
     if (target < 0 || target >= commands.length) return;
     const updated = [...commands];
-    [updated[index], updated[target]] = [updated[target], updated[index]];
+    [updated[index], updated[target]] = [updated[target]!, updated[index]!];
     onChange(updated);
   };
 
@@ -106,14 +106,14 @@ function CommandList({
               onChange={(e) => updateCommand(index, e.target.value)}
               placeholder={placeholder}
               spellCheck={false}
-              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
             />
             <div className="flex flex-col">
               <button
                 type="button"
                 onClick={() => moveCommand(index, -1)}
                 disabled={index === 0}
-                className="p-0.5 rounded hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                className="p-0.5 rounded hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                 aria-label={`Move command ${index + 1} up`}
               >
                 <ChevronUp className="h-3 w-3 text-daintree-text" />
@@ -122,7 +122,7 @@ function CommandList({
                 type="button"
                 onClick={() => moveCommand(index, 1)}
                 disabled={index === commands.length - 1}
-                className="p-0.5 rounded hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                className="p-0.5 rounded hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                 aria-label={`Move command ${index + 1} down`}
               >
                 <ChevronDown className="h-3 w-3 text-daintree-text" />
@@ -191,7 +191,7 @@ function IconPickerButton({ currentIcon, onChange }: IconPickerButtonProps) {
                 className={cn(
                   "p-2 rounded flex items-center justify-center transition-colors",
                   isSelected
-                    ? "bg-daintree-accent/20 border border-daintree-accent"
+                    ? "bg-overlay-medium border border-border-strong"
                     : "hover:bg-surface-hover border border-transparent"
                 )}
                 title={label}
@@ -294,7 +294,7 @@ export function ResourceEnvironmentsSection({
       onResourceEnvironmentsChange(envs);
       const remaining = Object.keys(envs);
       if (remaining.length > 0) {
-        const next = remaining[0];
+        const next = remaining[0]!;
         setSelectedEnvName(next);
         onActiveResourceEnvironmentChange(next);
       }
@@ -322,7 +322,7 @@ export function ResourceEnvironmentsSection({
             value={currentEnvName}
             onChange={(e) => handleSelectEnv(e.target.value)}
             aria-label="Select environment"
-            className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+            className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
           >
             {envKeys.map((name) => (
               <option key={name} value={name}>
@@ -404,7 +404,7 @@ export function ResourceEnvironmentsSection({
               autoFocus
               spellCheck={false}
               placeholder="docker-local"
-              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
             />
             <Button type="button" size="sm" onClick={handleAddEnv}>
               Add
@@ -436,35 +436,35 @@ export function ResourceEnvironmentsSection({
         </div>
         <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
           <div>
-            <code className="text-daintree-accent/80">{"{branch}"}</code>
+            <code className="text-text-secondary">{"{branch}"}</code>
             <span className="text-daintree-text/40"> — branch name</span>
           </div>
           <div>
-            <code className="text-daintree-accent/80">{"{branch-slug}"}</code>
+            <code className="text-text-secondary">{"{branch-slug}"}</code>
             <span className="text-daintree-text/40"> — sanitized branch</span>
           </div>
           <div>
-            <code className="text-daintree-accent/80">{"{repo-name}"}</code>
+            <code className="text-text-secondary">{"{repo-name}"}</code>
             <span className="text-daintree-text/40"> — repository folder</span>
           </div>
           <div>
-            <code className="text-daintree-accent/80">{"{base-folder}"}</code>
+            <code className="text-text-secondary">{"{base-folder}"}</code>
             <span className="text-daintree-text/40"> — alias for repo-name</span>
           </div>
           <div>
-            <code className="text-daintree-accent/80">{"{parent-dir}"}</code>
+            <code className="text-text-secondary">{"{parent-dir}"}</code>
             <span className="text-daintree-text/40"> — parent directory</span>
           </div>
           <div>
-            <code className="text-daintree-accent/80">{"{worktree_name}"}</code>
+            <code className="text-text-secondary">{"{worktree_name}"}</code>
             <span className="text-daintree-text/40"> — worktree name</span>
           </div>
           <div>
-            <code className="text-daintree-accent/80">{"{worktree_path}"}</code>
+            <code className="text-text-secondary">{"{worktree_path}"}</code>
             <span className="text-daintree-text/40"> — full worktree path</span>
           </div>
           <div>
-            <code className="text-daintree-accent/80">{"{project_root}"}</code>
+            <code className="text-text-secondary">{"{project_root}"}</code>
             <span className="text-daintree-text/40"> — project root path</span>
           </div>
         </div>
@@ -476,7 +476,7 @@ export function ResourceEnvironmentsSection({
           <CommandList
             commands={env.provision ?? []}
             onChange={(provision) => updateEnv({ provision })}
-            placeholder="docker compose -p {worktree_name} up -d"
+            placeholder="e.g. docker compose up -d"
             label="Provision Commands"
             helpText="Commands to run when provisioning a remote environment"
           />
@@ -485,7 +485,7 @@ export function ResourceEnvironmentsSection({
           <CommandList
             commands={env.teardown ?? []}
             onChange={(teardown) => updateEnv({ teardown })}
-            placeholder="docker compose -p {worktree_name} down -v"
+            placeholder="e.g. docker compose down"
             label="Teardown Commands"
             helpText="Commands to run when destroying the environment"
           />
@@ -494,7 +494,7 @@ export function ResourceEnvironmentsSection({
           <CommandList
             commands={env.resume ?? []}
             onChange={(resume) => updateEnv({ resume })}
-            placeholder="docker compose -p {worktree_name} start"
+            placeholder="e.g. docker unpause container"
             label="Resume Commands"
             helpText="Commands to resume a paused environment without destroying"
           />
@@ -503,7 +503,7 @@ export function ResourceEnvironmentsSection({
           <CommandList
             commands={env.pause ?? []}
             onChange={(pause) => updateEnv({ pause })}
-            placeholder="docker compose -p {worktree_name} stop"
+            placeholder="e.g. docker pause container"
             label="Pause Commands"
             helpText="Commands to pause the environment while preserving state"
           />
@@ -515,9 +515,9 @@ export function ResourceEnvironmentsSection({
               type="text"
               value={env.status ?? ""}
               onChange={(e) => updateEnv({ status: e.target.value || undefined })}
-              placeholder={"docker compose -p {worktree_name} ps --format json"}
+              placeholder="e.g. docker compose ps --format json"
               spellCheck={false}
-              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
             />
             <p className="text-xs text-text-muted mt-1">
               Must output JSON with {'{ "status": "<string>" }'}
@@ -531,9 +531,9 @@ export function ResourceEnvironmentsSection({
               type="text"
               value={env.connect ?? ""}
               onChange={(e) => updateEnv({ connect: e.target.value || undefined })}
-              placeholder="docker compose -p {worktree_name} exec app bash"
+              placeholder="e.g. docker exec -it container /bin/bash"
               spellCheck={false}
-              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
             />
             <p className="text-xs text-text-muted mt-1">
               Shell command for connecting (ssh, docker exec, kubectl exec)
@@ -576,13 +576,13 @@ export function ResourceEnvironmentsSection({
 
       <ConfirmDialog
         isOpen={pendingDeleteEnvironment !== null}
-        title="Remove environment?"
+        title={`Remove '${pendingDeleteEnvironment}'?`}
         description={
           pendingDeleteEnvironment
-            ? `Remove environment "${pendingDeleteEnvironment}"? This only removes its saved commands from project settings.`
+            ? `This removes the saved commands for "${pendingDeleteEnvironment}" from project settings.`
             : undefined
         }
-        confirmLabel="Remove"
+        confirmLabel="Remove environment"
         variant="destructive"
         onConfirm={() => {
           if (pendingDeleteEnvironment) {

@@ -9,11 +9,25 @@ import type {
   AppAgentConfig,
 } from "../shared/types/index.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
-import type { AppError } from "../shared/types/ipc/errors.js";
-import type { BuiltInTerminalType } from "../shared/config/agentIds.js";
+import type { ErrorRecord } from "../shared/types/ipc/errors.js";
+import type { BuiltInAgentId } from "../shared/config/agentIds.js";
+import type { AgentId } from "../shared/types/agent.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
 import type { AppThemeConfig } from "../shared/types/appTheme.js";
-import type { SettingsRecovery } from "../shared/types/ipc/app.js";
+import type { SettingsRecovery, ActionFrecencyEntry } from "../shared/types/ipc/app.js";
+
+interface WindowStateEntry {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+  isMaximized: boolean;
+  isFullScreen?: boolean;
+}
+
+interface WindowStatesStoreSchema {
+  windowStates: Record<string, WindowStateEntry>;
+}
 
 export interface StoreSchema {
   _schemaVersion: number;
@@ -63,10 +77,10 @@ export interface StoreSchema {
     };
     terminals: Array<{
       id: string;
-      kind?: "terminal" | "agent" | "browser" | "notes" | "dev-preview" | string;
-      type?: BuiltInTerminalType;
-      agentId?: string;
+      kind?: "terminal" | "browser" | "dev-preview" | string;
+      launchAgentId?: AgentId;
       title: string;
+      titleMode?: "default" | "custom";
       cwd?: string;
       worktreeId?: string;
       location: "grid" | "dock";
@@ -76,10 +90,6 @@ export interface StoreSchema {
       };
       isInputLocked?: boolean;
       browserUrl?: string;
-      notePath?: string;
-      noteId?: string;
-      scope?: "worktree" | "project";
-      createdAt?: number;
       devCommand?: string;
       browserConsoleOpen?: boolean;
       devPreviewConsoleOpen?: boolean;
@@ -92,7 +102,7 @@ export interface StoreSchema {
       name: string;
       worktreeId?: string;
       terminals: Array<{
-        type: BuiltInTerminalType;
+        launchAgentId?: BuiltInAgentId;
         title?: string;
         command?: string;
         env?: Record<string, string>;
@@ -103,7 +113,8 @@ export interface StoreSchema {
     }>;
     panelGridConfig?: PanelGridConfig;
     mruList?: string[];
-    actionMruList?: string[];
+    actionMruList?: ActionFrecencyEntry[] | string[];
+    fleetScopeMode?: "legacy" | "scoped";
   };
   userConfig: {
     githubToken?: string;
@@ -125,6 +136,10 @@ export interface StoreSchema {
     workingPulseEnabled: boolean;
     workingPulseSoundFile: string;
     uiFeedbackSoundEnabled: boolean;
+    quietHoursEnabled: boolean;
+    quietHoursStartMin: number;
+    quietHoursEndMin: number;
+    quietHoursWeekdays: number[];
   };
   userAgentRegistry: UserAgentRegistry;
   agentUpdateSettings: AgentUpdateSettings;
@@ -146,6 +161,12 @@ export interface StoreSchema {
     }
   >;
   worktreeIssueMap: Record<string, IssueAssociation>;
+  /**
+   * Per-worktree WSL git routing state. Key is the worktree id (UNC path on
+   * Windows). `enabled` opts into routing git through `wsl.exe git`; `dismissed`
+   * hides the suggestion banner without enabling. Only meaningful on Windows.
+   */
+  wslGitByWorktree: Record<string, { enabled: boolean; dismissed: boolean }>;
   appTheme: Partial<AppThemeConfig>;
   privacy: {
     telemetryLevel: "off" | "errors" | "full";
@@ -168,7 +189,7 @@ export interface StoreSchema {
     port: number | null;
     apiKey: string;
   };
-  pendingErrors: AppError[];
+  pendingErrors: ErrorRecord[];
   gpu: {
     hardwareAccelerationDisabled: boolean;
   };
@@ -183,9 +204,9 @@ export interface StoreSchema {
     firstRunToastSeen: boolean;
     newsletterPromptSeen: boolean;
     waitingNudgeSeen: boolean;
-    // TODO(0.9.0): Remove after deleting onboarding:migrate and the renderer
-    // localStorage import path for old Canopy onboarding keys.
-    migratedFromLocalStorage: boolean;
+    seenAgentIds: string[];
+    welcomeCardDismissed: boolean;
+    setupBannerDismissed: boolean;
     checklist: {
       dismissed: boolean;
       celebrationShown: boolean;
@@ -193,13 +214,22 @@ export interface StoreSchema {
         openedProject: boolean;
         launchedAgent: boolean;
         createdWorktree: boolean;
-        subscribedNewsletter: boolean;
+        ranSecondParallelAgent: boolean;
       };
     };
   };
   orchestrationMilestones: Record<string, boolean>;
   shortcutHintCounts: Record<string, number>;
   updateChannel: "stable" | "nightly";
+  dismissedUpdateVersion?: string;
+  dismissedUpdateAt?: number;
+  /**
+   * Per-logger level overrides keyed by stable `"<process>:Module"` names (or
+   * `"*"` / `"<process>:*"` wildcards). Values are `"debug" | "info" | "warn"
+   * | "error" | "off"`. Persisted so support sessions can reproduce boot-time
+   * issues without reconfiguring on every launch.
+   */
+  logLevelOverrides: Record<string, string>;
 }
 
 const storeOptions = {
@@ -254,6 +284,10 @@ const storeOptions = {
       workingPulseEnabled: false,
       workingPulseSoundFile: "pulse.wav",
       uiFeedbackSoundEnabled: false,
+      quietHoursEnabled: false,
+      quietHoursStartMin: 22 * 60,
+      quietHoursEndMin: 8 * 60,
+      quietHoursWeekdays: [],
     },
     userAgentRegistry: {},
     agentUpdateSettings: {
@@ -269,6 +303,7 @@ const storeOptions = {
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
     windowStates: {},
     worktreeIssueMap: {},
+    wslGitByWorktree: {},
     appTheme: {},
     privacy: {
       telemetryLevel: "off" as const,
@@ -306,7 +341,9 @@ const storeOptions = {
       firstRunToastSeen: false,
       newsletterPromptSeen: false,
       waitingNudgeSeen: false,
-      migratedFromLocalStorage: false,
+      seenAgentIds: [],
+      welcomeCardDismissed: false,
+      setupBannerDismissed: false,
       checklist: {
         dismissed: false,
         celebrationShown: false,
@@ -314,13 +351,14 @@ const storeOptions = {
           openedProject: false,
           launchedAgent: false,
           createdWorktree: false,
-          subscribedNewsletter: false,
+          ranSecondParallelAgent: false,
         },
       },
     },
     orchestrationMilestones: {},
     shortcutHintCounts: {},
     updateChannel: "stable" as const,
+    logLevelOverrides: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,
 };
@@ -394,6 +432,53 @@ function refreshBackup(configPath: string): void {
   }
 }
 
+function readRawSnapshot(filePath: string): Buffer | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return fs.readFileSync(filePath);
+  } catch {
+    return null;
+  }
+}
+
+// A "wipe" is an electron-store rewrite that loses user data (clearInvalidConfig
+// path). A "merge" is an electron-store rewrite that adds missing default keys
+// while preserving every user value. Byte-equality cannot tell them apart, so
+// we parse pre/post and check whether every key from pre survives in post with
+// an identical value. Any dropped or changed user value means the file was
+// wiped.
+function detectStoreWipe(pre: Buffer, post: Buffer | null): boolean {
+  if (post === null) return true;
+  if (pre.equals(post)) return false;
+  let preObj: unknown;
+  let postObj: unknown;
+  try {
+    preObj = JSON.parse(pre.toString("utf8"));
+  } catch {
+    // Pre-content was not parseable JSON; preflight should have caught this,
+    // but if we got here the safest move is to treat the rewrite as a wipe.
+    return true;
+  }
+  try {
+    postObj = JSON.parse(post.toString("utf8"));
+  } catch {
+    return true;
+  }
+  if (typeof preObj !== "object" || preObj === null || Array.isArray(preObj)) {
+    return false;
+  }
+  if (typeof postObj !== "object" || postObj === null || Array.isArray(postObj)) {
+    return true;
+  }
+  const preRecord = preObj as Record<string, unknown>;
+  const postRecord = postObj as Record<string, unknown>;
+  for (const key of Object.keys(preRecord)) {
+    if (!Object.prototype.hasOwnProperty.call(postRecord, key)) return true;
+    if (JSON.stringify(preRecord[key]) !== JSON.stringify(postRecord[key])) return true;
+  }
+  return false;
+}
+
 function createInMemoryFallback(): Store<StoreSchema> {
   const memoryStore = new Map();
   return {
@@ -419,7 +504,11 @@ export function _resetPendingSettingsRecovery(): void {
   pendingSettingsRecovery = null;
 }
 
+let storeInstance: Store<StoreSchema> | undefined;
+
 export function initializeStore(options: typeof storeOptions = storeOptions): Store<StoreSchema> {
+  if (storeInstance) return storeInstance;
+
   const configPath = resolveConfigPath(options.cwd);
 
   if (configPath) {
@@ -435,20 +524,100 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
   }
 
   try {
-    const instance = new Store<StoreSchema>({
+    const preSnapshot = configPath ? readRawSnapshot(configPath) : null;
+    const created = new Store<StoreSchema>({
       ...options,
       clearInvalidConfig: true,
     });
-    refreshBackup(instance.path);
-    return instance;
+    const postSnapshot = configPath ? readRawSnapshot(configPath) : null;
+    const wipedDuringConstruction =
+      preSnapshot !== null && detectStoreWipe(preSnapshot, postSnapshot);
+    if (wipedDuringConstruction) {
+      console.warn(
+        "[Store] electron-store silently replaced config.json during construction; preserving .bak"
+      );
+      // Don't clobber a more specific recovery state already set by preflight.
+      if (pendingSettingsRecovery === null) {
+        pendingSettingsRecovery = { kind: "reset-to-defaults" };
+      }
+    } else {
+      refreshBackup(created.path);
+    }
+    storeInstance = created;
+    return created;
   } catch (error) {
     console.warn("[Store] Failed to initialize electron-store, using in-memory fallback:", error);
     pendingSettingsRecovery = { kind: "reset-to-defaults" };
-    return createInMemoryFallback();
+    const fallback = createInMemoryFallback();
+    storeInstance = fallback;
+    return fallback;
   }
 }
 
-export const store = initializeStore();
+export function _resetStoreInstance(): void {
+  storeInstance = undefined;
+}
+
+export function _peekStoreInstance(): Store<StoreSchema> | undefined {
+  return storeInstance;
+}
+
+function getOrLazyInitInstance(): Store<StoreSchema> {
+  // In production, bootstrap.ts calls initializeStore() explicitly before
+  // any module reads the store, so this branch is unreachable. The lazy
+  // fallback exists for tests that import services using `store` without
+  // mocking it: they get the in-memory fallback that the previous
+  // module-load `export const store = initializeStore()` provided implicitly.
+  return storeInstance ?? initializeStore();
+}
+
+export const store = new Proxy({} as Store<StoreSchema>, {
+  get(_target, prop) {
+    const instance = getOrLazyInitInstance();
+    const value = Reflect.get(instance as object, prop, instance);
+    return typeof value === "function"
+      ? (value as (...args: unknown[]) => unknown).bind(instance)
+      : value;
+  },
+  set(_target, prop, value) {
+    const instance = getOrLazyInitInstance();
+    return Reflect.set(instance as object, prop, value, instance);
+  },
+  has(_target, prop) {
+    const instance = getOrLazyInitInstance();
+    return Reflect.has(instance as object, prop);
+  },
+});
+
+function initializeWindowStatesStore(): Store<WindowStatesStoreSchema> {
+  try {
+    return new Store<WindowStatesStoreSchema>({
+      name: "window-states",
+      cwd: storeOptions.cwd,
+      defaults: { windowStates: {} },
+      clearInvalidConfig: true,
+    });
+  } catch (error) {
+    console.warn(
+      "[Store] Failed to initialize window-states store, using in-memory fallback:",
+      error
+    );
+    const memoryStore = new Map();
+    return {
+      get: (key: string) => memoryStore.get(key),
+      set: (key: string, value: unknown) => memoryStore.set(key, value),
+      delete: (key: string) => memoryStore.delete(key),
+      has: (key: string) => memoryStore.has(key),
+      clear: () => memoryStore.clear(),
+      store: {},
+      path: "",
+    } as unknown as Store<WindowStatesStoreSchema>;
+  }
+}
+
+export const windowStatesStore = initializeWindowStatesStore();
+
+export type { WindowStateEntry };
 
 export {
   resolveConfigPath,

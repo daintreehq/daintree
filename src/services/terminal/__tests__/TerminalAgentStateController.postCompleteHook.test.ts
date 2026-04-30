@@ -28,7 +28,7 @@ function makeMockBuffer(lines: string[]) {
   return {
     active: {
       length: lines.length,
-      getLine: (i: number) => (i >= 0 && i < lines.length ? makeMockBufferLine(lines[i]) : null),
+      getLine: (i: number) => (i >= 0 && i < lines.length ? makeMockBufferLine(lines[i]!) : null),
       baseY: 0,
       type: "normal",
     },
@@ -46,7 +46,7 @@ function makeMockMarker(line: number) {
 
 function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
   return {
-    kind: "agent",
+    kind: "terminal",
     agentState: undefined,
     canonicalAgentState: undefined,
     agentStateSubscribers: new Set(),

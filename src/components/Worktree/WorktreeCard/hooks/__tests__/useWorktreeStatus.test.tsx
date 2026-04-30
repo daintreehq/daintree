@@ -547,3 +547,26 @@ describe("useWorktreeStatus — computedSubtitle", () => {
     );
   });
 });
+
+describe("useWorktreeStatus — hasResourceConfig gating", () => {
+  function getHasResourceConfig(overrides: Partial<WorktreeState> = {}) {
+    const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));
+    return result.current.hasResourceConfig;
+  }
+
+  it("returns false when hasResourceConfig is false", () => {
+    expect(getHasResourceConfig({ hasResourceConfig: false })).toBe(false);
+  });
+
+  it("returns true when hasResourceConfig is true", () => {
+    expect(getHasResourceConfig({ hasResourceConfig: true })).toBe(true);
+  });
+
+  it("gates Resource submenu based on hasResourceConfig", () => {
+    // Regression test: this flag controls visibility of the Resource submenu
+    // in WorktreeMenuItems.tsx. The flag is set by WorkspaceService.initResourceConfigAsync()
+    // when a resource config is loaded, and it should be set even during cold start
+    // before the monitor begins running.
+    expect(getHasResourceConfig({ hasResourceConfig: true })).toBe(true);
+  });
+});

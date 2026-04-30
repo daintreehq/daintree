@@ -5,22 +5,26 @@ import { Spinner } from "@/components/ui/Spinner";
 import { AgentCliStep } from "./AgentCliStep";
 import { SystemRequirementsSection } from "./SystemRequirementsSection";
 import { AGENT_REGISTRY } from "@/config/agents";
+import { BrandMark } from "@/components/icons";
 import { AgentCard } from "@/components/agents/AgentCard";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { useAgentSettingsStore } from "@/store";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { cliAvailabilityClient } from "@/clients";
+import { logError } from "@/utils/logger";
 import type { CliAvailability } from "@shared/types";
-import { isAgentInstalled, isAgentReady } from "../../../shared/utils/agentAvailability";
+import { isAgentInstalled, isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { Sparkles, ChevronLeft, ChevronRight, ArrowRight, Check, Sun, Moon } from "lucide-react";
-import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
-import { DaintreeAgentIcon } from "@/components/icons";
+import { AnimatePresence, m, useReducedMotion, type Variants } from "framer-motion";
+import { Plug } from "@/components/icons";
 import { UI_ENTER_DURATION, UI_EXIT_DURATION } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import type { AppColorScheme } from "@shared/types/appTheme";
+import { actionService } from "@/services/ActionService";
+import { keybindingService } from "@/services/KeybindingService";
 
 const AGENT_ORDER = BUILT_IN_AGENT_IDS;
 const POLL_INTERVAL = 3000;
@@ -254,7 +258,8 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
     case "SELECTION_CONTINUE": {
       const selectedIds = Object.keys(state.selections).filter((id) => state.selections[id]);
       const allSelectedInstalled =
-        selectedIds.length > 0 && selectedIds.every((id) => isAgentReady(state.availability[id]));
+        selectedIds.length > 0 &&
+        selectedIds.every((id) => isAgentLaunchable(state.availability[id]));
       return {
         ...state,
         step: allSelectedInstalled ? { type: "complete" } : { type: "cli" },
@@ -382,7 +387,7 @@ export function AgentSetupWizard({
             dispatch({ type: "SET_AVAILABILITY", payload: result });
           }
         })
-        .catch(console.error);
+        .catch((err) => logError("Failed to refresh CLI availability", err));
     };
 
     poll();
@@ -404,7 +409,7 @@ export function AgentSetupWizard({
     initRef.current = true;
     const initial: Record<string, boolean> = {};
     for (const agentId of AGENT_ORDER) {
-      initial[agentId] = isAgentReady(state.availability[agentId]);
+      initial[agentId] = isAgentLaunchable(state.availability[agentId]);
     }
     dispatch({ type: "INIT_SELECTIONS", payload: initial });
   }, [isOpen, isAvailabilityLoading, state.availability, state.selectionsInitialized]);
@@ -420,7 +425,9 @@ export function AgentSetupWizard({
       // Auto-select mirrors OS appearance — not a direct user pick, so use the
       // silent setter to avoid polluting the recently-used list.
       setSelectedSchemeIdSilent(targetId);
-      appThemeClient.setColorScheme(targetId).catch(console.error);
+      appThemeClient
+        .setColorScheme(targetId)
+        .catch((err) => logError("Failed to set color scheme", err));
     }
   }, [isFirstRun, isOpen, state.step.type, selectedSchemeId, setSelectedSchemeIdSilent]);
 
@@ -430,7 +437,7 @@ export function AgentSetupWizard({
       try {
         await appThemeClient.setColorScheme(id);
       } catch (error) {
-        console.error("Failed to persist app theme:", error);
+        logError("Failed to persist app theme", error);
       }
     },
     [setSelectedSchemeId]
@@ -443,12 +450,12 @@ export function AgentSetupWizard({
       await window.electron.telemetry.markPromptShown();
       telemetryCommittedRef.current = true;
     } catch (error) {
-      console.error("Failed to commit telemetry preference:", error);
+      logError("Failed to commit telemetry preference", error);
     }
   }, []);
 
   const installedAgents = useMemo(
-    () => AGENT_ORDER.filter((id) => isAgentReady(state.availability[id])),
+    () => AGENT_ORDER.filter((id) => isAgentLaunchable(state.availability[id])),
     [state.availability]
   );
 
@@ -469,6 +476,8 @@ export function AgentSetupWizard({
         return 1;
       case "complete":
         return 2;
+      default:
+        return 0;
     }
   })();
 
@@ -527,7 +536,7 @@ export function AgentSetupWizard({
       dismissible={!isSaving}
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<DaintreeAgentIcon className="w-5 h-5 text-daintree-accent" />}>
+        <AppDialog.Title icon={<Plug className="w-5 h-5 text-daintree-accent" />}>
           Agent Setup
         </AppDialog.Title>
         <div className="flex items-center gap-3">
@@ -541,7 +550,7 @@ export function AgentSetupWizard({
       <AppDialog.Body>
         <div className="relative overflow-hidden">
           <AnimatePresence mode="wait" custom={directionRef.current}>
-            <motion.div
+            <m.div
               key={state.step.type}
               custom={directionRef.current}
               variants={prefersReducedMotion ? reducedStepVariants : stepVariants}
@@ -581,7 +590,7 @@ export function AgentSetupWizard({
                 />
               )}
               {state.step.type === "complete" && <CompleteStep installedAgents={installedAgents} />}
-            </motion.div>
+            </m.div>
           </AnimatePresence>
         </div>
       </AppDialog.Body>
@@ -693,44 +702,42 @@ function SelectionStep({
   const schemes = [daintreeScheme, bondiScheme] as const;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <SystemRequirementsSection
         onFatalFailureChange={onFatalFailureChange}
         onCheckingChange={onCheckingChange}
       />
 
-      {isFirstRun ? (
-        <div>
+      {isFirstRun && (
+        <section className="pb-6 border-b border-daintree-border">
           <h3 className="text-base font-semibold text-daintree-text mb-2">Welcome to Daintree</h3>
           <p className="text-sm text-daintree-text/60">
             Pick a theme, choose your agents, and you&apos;re ready to go.
           </p>
-        </div>
-      ) : (
-        <div>
-          <h3 className="text-base font-semibold text-daintree-text mb-2">Choose your AI agents</h3>
-          <p className="text-sm text-daintree-text/60">
-            Select the agents you want in your workflow. Already-installed agents are pre-selected.
-            You can change this anytime from{" "}
-            <span className="text-daintree-text/80">Settings &gt; Agents</span>.
-          </p>
-        </div>
+        </section>
       )}
 
       {isFirstRun && onThemeSelect && (
-        <>
-          <div className="grid grid-cols-2 gap-4">
+        <section className="pb-6 border-b border-daintree-border">
+          <h3 className="text-base font-semibold text-daintree-text mb-2">Appearance</h3>
+          <p className="text-sm text-daintree-text/60 mb-4">
+            Choose your preferred theme. More options available in Settings.
+          </p>
+          <div className="grid grid-cols-2 gap-4" role="listbox" aria-label="Theme">
             {schemes.map((scheme) => {
               const isSelected = selectedSchemeId === scheme.id;
               const isDark = scheme.type === "dark";
               return (
                 <button
                   key={scheme.id}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
                   onClick={() => onThemeSelect(scheme.id)}
                   className={cn(
-                    "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border-2 transition-colors text-left",
+                    "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border transition-colors text-left",
                     isSelected
-                      ? "border-daintree-accent bg-daintree-accent/10"
+                      ? "border-border-strong bg-overlay-selected"
                       : "border-daintree-border bg-daintree-bg hover:border-daintree-text/30"
                   )}
                 >
@@ -747,104 +754,121 @@ function SelectionStep({
                         {isDark ? "Dark" : "Light"}
                       </span>
                     </div>
-                    {isSelected && (
-                      <div className="w-4 h-4 rounded-full bg-daintree-accent flex items-center justify-center">
-                        <Check className="w-2.5 h-2.5 text-accent-primary-foreground" />
-                      </div>
-                    )}
+                    {isSelected && <Check className="w-3.5 h-3.5 text-daintree-text shrink-0" />}
                   </div>
                 </button>
               );
             })}
           </div>
-          <p className="text-xs text-daintree-text/50 text-center">
+          <p className="text-xs text-daintree-text/50 text-center mt-3">
             More themes available in Settings → Appearance
           </p>
-        </>
+        </section>
       )}
 
-      {isFirstRun && (
-        <div className="flex items-center gap-2 py-1">
-          <div className="h-px flex-1 bg-border-divider" />
-          <span className="text-[11px] text-daintree-text/40 font-medium">Agents</span>
-          <div className="h-px flex-1 bg-border-divider" />
-        </div>
-      )}
+      <section className={cn(isFirstRun && "pb-6 border-b border-daintree-border")}>
+        <h3 className="text-base font-semibold text-daintree-text mb-2">
+          {isFirstRun ? "Agents" : "Choose your AI agents"}
+        </h3>
+        <p className="text-sm text-daintree-text/60 mb-4">
+          Select the agents you want in your workflow. Already-installed agents are pre-selected.
+          You can change this anytime from{" "}
+          <span className="text-daintree-text/80">Settings &gt; Agents</span>.
+        </p>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Spinner size="lg" className="text-daintree-text/40" />
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {featuredAgents.map((agentId) => (
+              <AgentCard
+                key={agentId}
+                mode="onboarding"
+                agentId={agentId}
+                availability={availability}
+                isChecked={selections[agentId] ?? false}
+                isSaving={isSaving}
+                onToggle={onToggle}
+              />
+            ))}
 
-      {isLoading ? (
-        <div className="flex items-center justify-center py-8">
-          <Spinner size="lg" className="text-daintree-text/40" />
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {featuredAgents.map((agentId) => (
-            <AgentCard
-              key={agentId}
-              mode="onboarding"
-              agentId={agentId}
-              availability={availability}
-              isChecked={selections[agentId] ?? false}
-              isSaving={isSaving}
-              onToggle={onToggle}
-            />
-          ))}
+            {moreAgents.length > 0 && (
+              <>
+                <div className="flex items-center gap-2 py-1">
+                  <div className="h-px flex-1 bg-border-divider" />
+                  <span className="text-[11px] text-daintree-text/40 font-medium">More agents</span>
+                  <div className="h-px flex-1 bg-border-divider" />
+                </div>
 
-          {moreAgents.length > 0 && (
-            <>
-              <div className="flex items-center gap-2 py-1">
-                <div className="h-px flex-1 bg-border-divider" />
-                <span className="text-[11px] text-daintree-text/40 font-medium">More agents</span>
-                <div className="h-px flex-1 bg-border-divider" />
-              </div>
-
-              <div className="space-y-1.5">
-                {moreAgents.map((agentId) => (
-                  <AgentCard
-                    key={agentId}
-                    mode="onboarding"
-                    agentId={agentId}
-                    availability={availability}
-                    isChecked={selections[agentId] ?? false}
-                    isSaving={isSaving}
-                    onToggle={onToggle}
-                    compact
-                  />
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
+                <div className="space-y-1.5">
+                  {moreAgents.map((agentId) => (
+                    <AgentCard
+                      key={agentId}
+                      mode="onboarding"
+                      agentId={agentId}
+                      availability={availability}
+                      isChecked={selections[agentId] ?? false}
+                      isSaving={isSaving}
+                      onToggle={onToggle}
+                      compact
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </section>
 
       {isFirstRun && onTelemetryChange != null && (
-        <div className="flex items-center justify-between gap-3 pt-4 border-t border-daintree-border">
-          <div>
-            <p className="text-sm font-medium text-daintree-text">Help improve Daintree</p>
+        <section>
+          <h3 className="text-base font-semibold text-daintree-text mb-2">Privacy</h3>
+          <p className="text-sm text-daintree-text/60 mb-4">
+            Help improve Daintree by sharing anonymous crash reports.
+          </p>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-medium text-daintree-text">Enable crash reporting</p>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={telemetryEnabled}
+                aria-label="Enable crash reporting"
+                onClick={() => onTelemetryChange(!telemetryEnabled)}
+                className={cn(
+                  "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
+                  telemetryEnabled ? "bg-daintree-accent" : "bg-daintree-border"
+                )}
+              >
+                <span
+                  className={cn(
+                    "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
+                    telemetryEnabled
+                      ? "translate-x-4 ml-0.5 bg-text-inverse"
+                      : "translate-x-0 ml-0.5 bg-daintree-text"
+                  )}
+                />
+              </button>
+            </div>
             <p className="text-xs text-daintree-text/50">
-              Send anonymous crash reports. No file contents or credentials.
+              No file contents or credentials are ever sent.
             </p>
+            <button
+              type="button"
+              className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:underline"
+              onClick={() =>
+                void actionService.dispatch(
+                  "telemetry.togglePreview",
+                  { active: true },
+                  { source: "user" }
+                )
+              }
+            >
+              Preview what would be sent
+            </button>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={telemetryEnabled}
-            aria-label="Enable crash reporting"
-            onClick={() => onTelemetryChange(!telemetryEnabled)}
-            className={cn(
-              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
-              telemetryEnabled ? "bg-daintree-accent" : "bg-daintree-border"
-            )}
-          >
-            <span
-              className={cn(
-                "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
-                telemetryEnabled
-                  ? "translate-x-4 ml-0.5 bg-text-inverse"
-                  : "translate-x-0 ml-0.5 bg-daintree-text"
-              )}
-            />
-          </button>
-        </div>
+        </section>
       )}
     </div>
   );
@@ -873,18 +897,29 @@ function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
             const agent = AGENT_REGISTRY[id];
             if (!agent) return null;
             const Icon = agent.icon;
+            const presetCount = agent.presets?.length ?? 0;
+            const shortcut = keybindingService.getDisplayCombo(`agent.${id}`);
 
             return (
               <div
                 key={id}
+                data-testid={`agent-card-${id}`}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/5"
               >
-                <Icon size={18} brandColor={agent.color} />
+                <BrandMark brandColor={agent.color} size={18}>
+                  <Icon size={18} brandColor={agent.color} />
+                </BrandMark>
                 <span className="text-sm text-daintree-text font-medium">{agent.name}</span>
-                {agent.shortcut && (
-                  <span className="text-[11px] text-daintree-text/40 ml-auto">
-                    {agent.shortcut}
+                {presetCount > 1 && (
+                  <span
+                    data-testid="preset-count-badge"
+                    className="text-[10px] text-status-info font-medium bg-status-info/10 px-1.5 py-0.5 rounded"
+                  >
+                    {presetCount} presets
                   </span>
+                )}
+                {shortcut && (
+                  <span className="text-[11px] text-daintree-text/40 ml-auto">{shortcut}</span>
                 )}
               </div>
             );

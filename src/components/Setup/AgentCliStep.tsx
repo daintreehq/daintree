@@ -10,6 +10,8 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
+import { resolveBrandChip } from "@/lib/brandIcon";
+import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { getInstallBlocksForCurrentOS, isBlockExecutable } from "@/lib/agentInstall";
 import { systemClient } from "@/clients";
@@ -19,6 +21,7 @@ import { CopyableCommand } from "./InstallBlock";
 import { AGENT_DESCRIPTIONS } from "@/config/agents";
 import type { CliAvailability } from "@shared/types";
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 const AGENT_ORDER = BUILT_IN_AGENT_IDS;
 
@@ -39,9 +42,12 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
   const mountedRef = useRef(true);
   const installingRef = useRef(new Set<string>());
   const cardStatusesRef = useRef(cardStatuses);
-  cardStatusesRef.current = cardStatuses;
+  useEffect(() => {
+    cardStatusesRef.current = cardStatuses;
+  }, [cardStatuses]);
 
   const selectedAgentIds = useMemo(() => AGENT_ORDER.filter((id) => selections[id]), [selections]);
+  const activeScheme = useActiveAppScheme();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -64,7 +70,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
         const blocks = getInstallBlocksForCurrentOS(config);
         if (!blocks || blocks.length === 0) continue;
         const methodIdx = selectedMethodIndex[agentId] ?? 0;
-        const block = blocks[methodIdx] ?? blocks[0];
+        const block = blocks[methodIdx] ?? blocks[0]!;
 
         const desiredStatus: CardStatus = !isBlockExecutable(block) ? "manual" : "idle";
 
@@ -91,7 +97,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
       if (!blocks || blocks.length === 0) return;
 
       const methodIdx = selectedMethodIndex[agentId] ?? 0;
-      const block = blocks[methodIdx] ?? blocks[0];
+      const block = blocks[methodIdx] ?? blocks[0]!;
       if (!isBlockExecutable(block)) return;
 
       installingRef.current.add(agentId);
@@ -133,7 +139,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
         setCardStatuses((prev) => ({ ...prev, [agentId]: "error" }));
         setCardErrors((prev) => ({
           ...prev,
-          [agentId]: err instanceof Error ? err.message : "Installation failed",
+          [agentId]: formatErrorMessage(err, "Installation failed"),
         }));
       } finally {
         installingRef.current.delete(agentId);
@@ -218,7 +224,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
               <div
                 className={`flex items-center gap-3 w-full px-3 py-2 rounded-[var(--radius-md)] border transition-colors ${
                   isInstalling
-                    ? "bg-daintree-accent/5 border-daintree-accent/30"
+                    ? "bg-overlay-soft border-border-strong"
                     : isInstalled
                       ? "bg-status-success/5 border-status-success/20"
                       : isError
@@ -228,7 +234,11 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
               >
                 <div
                   className="w-8 h-8 rounded-[var(--radius-sm)] flex items-center justify-center shrink-0"
-                  style={{ backgroundColor: `${config.color}15` }}
+                  style={{
+                    backgroundColor:
+                      resolveBrandChip(config.color, activeScheme)?.background ??
+                      `${config.color}15`,
+                  }}
                 >
                   <Icon size={18} brandColor={config.color} />
                 </div>
@@ -243,7 +253,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
                     <span
                       role="link"
                       tabIndex={0}
-                      className="text-daintree-text/30 hover:text-daintree-accent transition-colors p-0.5 cursor-pointer"
+                      className="text-daintree-text/30 hover:text-daintree-text transition-colors p-0.5 cursor-pointer"
                       onClick={() => systemClient.openExternal(config.install!.docsUrl!)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ")
@@ -302,7 +312,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
                       disabled={isInstalling || isBatchRunning}
                       onClick={() => handleMethodChange(agentId, idx)}
                       data-selected={idx === currentMethodIdx || undefined}
-                      className="px-1.5 py-0.5 rounded text-[10px] text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-daintree-accent/15 data-[selected]:text-daintree-accent disabled:opacity-50"
+                      className="px-1.5 py-0.5 rounded text-[10px] text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-tint/[0.12] data-[selected]:text-daintree-text disabled:opacity-50 disabled:pointer-events-none"
                     >
                       {block.label ?? `Method ${idx + 1}`}
                     </button>
@@ -362,7 +372,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
           type="button"
           disabled={isBatchRunning}
           onClick={handleInstallAll}
-          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-text-inverse text-sm font-medium hover:bg-daintree-accent/90 transition-colors disabled:opacity-50"
+          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-text-inverse text-sm font-medium hover:bg-daintree-accent/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
         >
           {isBatchRunning ? (
             <>

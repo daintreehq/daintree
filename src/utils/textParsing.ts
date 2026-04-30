@@ -22,7 +22,7 @@ export function parseNoteWithLinks(text: string): TextSegment[] {
         start: lastIndex,
       });
     }
-    segments.push({ type: "link", content: match[1], start: match.index });
+    segments.push({ type: "link", content: match[1]!, start: match.index });
     lastIndex = match.index + match[0].length;
   }
 

@@ -20,7 +20,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { ProjectPulseIcon } from "@/components/icons";
+import { Activity } from "@/components/icons";
 import { PulseHeatmap } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
@@ -431,7 +431,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     >
       <div className="pulse-card-header px-4 py-3 border-b border-daintree-border flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <ProjectPulseIcon className="w-4 h-4 text-status-success" />
+          <Activity className="w-4 h-4 text-status-success" />
           <span className="text-sm font-medium text-daintree-text/90">{title}</span>
           {isLoading && <Spinner size="xs" className="text-daintree-text/55" />}
         </div>
@@ -449,21 +449,11 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
                   type="button"
                   onClick={() => handleRangeChange(option.value)}
                   className={cn(
-                    "rounded-md px-2 py-1 transition-colors",
+                    "rounded-md border px-2 py-1 transition-colors",
                     isActive
-                      ? "text-daintree-accent border border-daintree-accent/25"
-                      : "pulse-control text-daintree-text/55 hover:text-daintree-text/80"
+                      ? "bg-overlay-selected border-border-strong text-daintree-text"
+                      : "pulse-control border-transparent text-daintree-text/55 hover:text-daintree-text/80"
                   )}
-                  style={
-                    isActive
-                      ? {
-                          background:
-                            "color-mix(in oklab, var(--color-accent-primary) 12%, transparent)",
-                        }
-                      : {
-                          background: "transparent",
-                        }
-                  }
                   aria-pressed={isActive}
                 >
                   {option.label}
@@ -475,7 +465,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <button
             onClick={handleRefresh}
             disabled={isLoading}
-            className="pulse-control rounded-md p-1.5 text-daintree-text/55 transition-colors hover:text-daintree-text/80 disabled:opacity-50"
+            className="pulse-control rounded-md p-1.5 text-daintree-text/55 transition-colors hover:text-daintree-text/80 disabled:opacity-50 disabled:pointer-events-none"
             aria-label="Refresh"
           >
             <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} />

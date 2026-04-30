@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { GITIGNORE_SNIPPET } from "../projectSettingsConstants";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 describe("GITIGNORE_SNIPPET", () => {
   it("includes project.json path as safe to commit", () => {
@@ -56,7 +57,7 @@ describe("In-repo settings — enable/disable UI logic", () => {
     try {
       throw new Error("EACCES: permission denied, mkdir '.daintree'");
     } catch (err) {
-      inRepoError = err instanceof Error ? err.message : "Failed to enable in-repo settings";
+      inRepoError = formatErrorMessage(err, "Failed to enable in-repo settings");
     } finally {
       inRepoEnabling = false;
     }

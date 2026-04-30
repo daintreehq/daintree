@@ -1,12 +1,14 @@
 import { useId, useState } from "react";
 import { Plus, Trash2, Globe, Check, X, Search, PanelRight, Link } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { BrandMark } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
+import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 
 function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
   const className = size === 16 ? "w-4 h-4" : size === 32 ? "w-8 h-8" : "w-4 h-4";
@@ -22,7 +24,11 @@ function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
     const config = getAgentConfig(name);
     if (config) {
       const Icon = config.icon;
-      return <Icon className={className} brandColor={config.color} />;
+      return (
+        <BrandMark brandColor={config.color} size={size} className={className}>
+          <Icon className={className} brandColor={config.color} />
+        </BrandMark>
+      );
     }
   }
 
@@ -60,6 +66,10 @@ export function PortalSettingsTab() {
   const [customUrlError, setCustomUrlError] = useState("");
   const customUrlErrorId = useId();
   const addLinkErrorId = useId();
+
+  // Report validation state to sidebar
+  const hasError = Boolean(urlError || customUrlError);
+  useSettingsTabValidation("portal", hasError);
 
   const systemLinks = links.filter((l) => l.type === "system");
   const userLinks = links.filter((l) => l.type === "user");
@@ -204,15 +214,15 @@ export function PortalSettingsTab() {
             type="text"
             value={editName}
             onChange={(e) => setEditName(e.target.value)}
-            className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text w-32 focus:border-daintree-accent focus:outline-none"
-            placeholder="Name"
+            className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text w-32 focus:border-daintree-accent focus:outline-hidden"
+            placeholder="e.g. My portal"
           />
           <input
             type="text"
             value={editUrl}
             onChange={(e) => setEditUrl(e.target.value)}
-            className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text flex-1 focus:border-daintree-accent focus:outline-none"
-            placeholder="URL"
+            className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text flex-1 focus:border-daintree-accent focus:outline-hidden"
+            placeholder="e.g. https://github.com/owner/repo"
           />
           <button
             onClick={handleSaveEdit}
@@ -240,16 +250,14 @@ export function PortalSettingsTab() {
           <div className="flex flex-col">
             <span className="text-sm text-daintree-text">{link.title}</span>
             {!allowDelete && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="text-[11px] font-mono text-daintree-text/50 truncate min-w-0">
-                      {link.url}
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{link.url}</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-[11px] font-mono text-daintree-text/50 truncate min-w-0">
+                    {link.url}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{link.url}</TooltipContent>
+              </Tooltip>
             )}
           </div>
         </div>
@@ -293,10 +301,7 @@ export function PortalSettingsTab() {
                 )
               }
               disabled={link.alwaysEnabled}
-              className={cn(
-                "p-1.5 rounded hover:bg-daintree-border/50 text-daintree-text/50 hover:text-status-error",
-                link.alwaysEnabled && "opacity-50 cursor-not-allowed"
-              )}
+              className="p-1.5 rounded hover:bg-daintree-border/50 text-daintree-text/50 hover:text-status-error disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
             >
               <Trash2 className="w-4 h-4" />
             </button>
@@ -325,16 +330,13 @@ export function PortalSettingsTab() {
                     ? "custom"
                     : defaultNewTabUrl
             }
-            onChange={(e) => handleDefaultAgentChange(e.target.value)}
-          >
-            <option value="none">None (show Launchpad)</option>
-            {enabledLinks.map((link) => (
-              <option key={link.id} value={link.url}>
-                {link.title}
-              </option>
-            ))}
-            <option value="custom">Custom URL...</option>
-          </SettingsSelect>
+            onValueChange={(v) => handleDefaultAgentChange(v)}
+            options={[
+              { value: "none", label: "None (show Launchpad)" },
+              ...enabledLinks.map((link) => ({ value: link.url, label: link.title })),
+              { value: "custom", label: "Custom URL..." },
+            ]}
+          />
 
           {showCustomUrlInput && (
             <div className="flex gap-2">
@@ -346,7 +348,7 @@ export function PortalSettingsTab() {
                   setCustomDefaultUrl(e.target.value);
                   setCustomUrlError("");
                 }}
-                className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:border-daintree-accent focus:outline-none transition-colors"
+                className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:border-daintree-accent focus:outline-hidden transition-colors"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleCustomUrlSave();
                   if (e.key === "Escape") handleCustomUrlCancel();
@@ -408,23 +410,23 @@ export function PortalSettingsTab() {
           <div className="flex gap-2">
             <input
               type="text"
-              placeholder="Name"
+              placeholder="e.g. My portal"
               value={newLinkName}
               onChange={(e) => {
                 setNewLinkName(e.target.value);
                 setUrlError("");
               }}
-              className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text w-32 focus:border-daintree-accent focus:outline-none transition-colors"
+              className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text w-32 focus:border-daintree-accent focus:outline-hidden transition-colors"
             />
             <input
               type="text"
-              placeholder="https://..."
+              placeholder="e.g. https://github.com/owner/repo"
               value={newLinkUrl}
               onChange={(e) => {
                 setNewLinkUrl(e.target.value);
                 setUrlError("");
               }}
-              className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text flex-1 focus:border-daintree-accent focus:outline-none transition-colors"
+              className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text flex-1 focus:border-daintree-accent focus:outline-hidden transition-colors"
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleAddLink();
               }}
@@ -434,7 +436,7 @@ export function PortalSettingsTab() {
             <button
               onClick={handleAddLink}
               disabled={!newLinkName.trim() || !newLinkUrl.trim()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-daintree-accent text-daintree-bg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-daintree-accent/90 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-daintree-accent text-daintree-bg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none hover:bg-daintree-accent/90 transition-colors"
             >
               <Plus className="w-4 h-4" />
               Add

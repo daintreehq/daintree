@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, ChevronDown, CircleCheck, Loader2, RotateCw } from "lucide-react";
-import { motion, useReducedMotion } from "framer-motion";
+import { m, useReducedMotion } from "framer-motion";
 import { UI_ENTER_DURATION } from "@/lib/animationUtils";
 import { useSystemHealthCheck } from "./useSystemHealthCheck";
 import { PrerequisiteCard } from "./SystemToolsStep";
@@ -91,7 +91,7 @@ export function SystemRequirementsSection({
         )}
       </button>
 
-      <motion.div
+      <m.div
         animate={{ height: isExpanded ? "auto" : 0 }}
         initial={false}
         transition={
@@ -143,13 +143,13 @@ export function SystemRequirementsSection({
             type="button"
             onClick={() => void runCheck()}
             disabled={isChecking}
-            className="inline-flex items-center gap-1.5 text-xs text-daintree-text/50 hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="inline-flex items-center gap-1.5 text-xs text-daintree-text/50 hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
           >
             <RotateCw className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`} />
             {isChecking ? "Checking..." : "Re-check"}
           </button>
         </div>
-      </motion.div>
+      </m.div>
     </div>
   );
 }

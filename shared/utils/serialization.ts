@@ -1,3 +1,5 @@
+import { formatErrorMessage } from "./errorMessage.js";
+
 /**
  * Utilities for ensuring data is safe for structured clone serialization (IPC transport).
  *
@@ -28,9 +30,7 @@ export function ensureSerializable<T>(data: T): unknown {
   try {
     return JSON.parse(JSON.stringify(data));
   } catch (error) {
-    throw new Error(
-      `Failed to serialize data: ${error instanceof Error ? error.message : String(error)}`
-    );
+    throw new Error(formatErrorMessage(error, "Failed to serialize data"));
   }
 }
 
@@ -49,10 +49,9 @@ export function validateSerializable(
     JSON.stringify(data);
     return { valid: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
     return {
       valid: false,
-      error: message,
+      error: formatErrorMessage(error, "Failed to serialize data"),
     };
   }
 }

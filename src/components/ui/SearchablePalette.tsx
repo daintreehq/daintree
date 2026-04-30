@@ -155,7 +155,7 @@ export function SearchablePalette<T>({
 
   const activeDescendant =
     results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length
-      ? `${itemIdPrefix}-${getItemId(results[selectedIndex])}`
+      ? `${itemIdPrefix}-${getItemId(results[selectedIndex]!)}`
       : undefined;
 
   return (

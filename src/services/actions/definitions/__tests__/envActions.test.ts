@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import type { ActionDefinition, ActionContext } from "@shared/types/actions";
+import type { ActionContext } from "@shared/types/actions";
+import type { AnyActionDefinition } from "../../actionTypes";
 
 const mockGetSettings = vi.fn();
 const mockSaveSettings = vi.fn();
@@ -14,7 +15,7 @@ vi.mock("@/clients", () => ({
 const mockGlobalEnvGet = vi.fn();
 const mockGlobalEnvSet = vi.fn();
 
-type ActionFactory = () => ActionDefinition;
+type ActionFactory = () => AnyActionDefinition;
 
 const ENV_ACTION_IDS = [
   "env.global.get",
@@ -58,10 +59,10 @@ describe("env action definitions", () => {
   });
 
   it.each([
-    ["env.global.get", "query", "safe", "env"],
-    ["env.global.set", "command", "confirm", "env"],
-    ["env.project.get", "query", "safe", "env"],
-    ["env.project.set", "command", "confirm", "env"],
+    ["env.global.get", "query", "safe", "settings"],
+    ["env.global.set", "command", "confirm", "settings"],
+    ["env.project.get", "query", "safe", "settings"],
+    ["env.project.set", "command", "confirm", "settings"],
     ["worktree.resource.config.get", "query", "safe", "worktree"],
     ["worktree.resource.config.set", "command", "confirm", "worktree"],
   ] as const)("%s has expected kind/danger/category", (id, kind, danger, category) => {
@@ -111,7 +112,7 @@ describe("env action definitions", () => {
     const def = registry.get("env.project.set")!();
     await def.run({ projectId: "p1", variables: { B: "2" } }, stubCtx);
     expect(mockSaveSettings).toHaveBeenCalledTimes(1);
-    const [savedProjectId, savedSettings] = mockSaveSettings.mock.calls[0];
+    const [savedProjectId, savedSettings] = mockSaveSettings.mock.calls[0]!;
     expect(savedProjectId).toBe("p1");
     expect(savedSettings.environmentVariables).toEqual({ A: "1", B: "2" });
     expect(savedSettings.runCommands).toEqual([]);
@@ -145,7 +146,7 @@ describe("env action definitions", () => {
       stubCtx
     );
     expect(mockSaveSettings).toHaveBeenCalledTimes(1);
-    const [savedProjectId, savedSettings] = mockSaveSettings.mock.calls[0];
+    const [savedProjectId, savedSettings] = mockSaveSettings.mock.calls[0]!;
     expect(savedProjectId).toBe("p1");
     expect(savedSettings.resourceEnvironments).toEqual({ new: { provision: ["a"] } });
     expect(savedSettings.runCommands).toEqual([]);

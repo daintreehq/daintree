@@ -47,43 +47,45 @@ describe("commands IPC adversarial", () => {
   });
 
   it("commands:execute rejects null payload", async () => {
-    const result = (await getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), null)) as {
-      success: boolean;
-      error?: { code: string };
-    };
-    expect(result.success).toBe(false);
-    expect(result.error?.code).toBe("INVALID_PAYLOAD");
+    await expect(getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), null)).rejects.toMatchObject({
+      name: "AppError",
+      code: "VALIDATION",
+      message: expect.stringMatching(/Invalid command execution payload/),
+    });
     expect(commandServiceMock.execute).not.toHaveBeenCalled();
   });
 
   it("commands:execute rejects payload without commandId", async () => {
-    const result = (await getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), {})) as {
-      error?: { code: string };
-    };
-    expect(result.error?.code).toBe("INVALID_PAYLOAD");
+    await expect(getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), {})).rejects.toMatchObject({
+      name: "AppError",
+      code: "VALIDATION",
+    });
   });
 
   it("commands:execute rejects non-string commandId", async () => {
-    const result = (await getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), {
-      commandId: 42,
-    })) as { error?: { code: string } };
-    expect(result.error?.code).toBe("INVALID_PAYLOAD");
+    await expect(
+      getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), { commandId: 42 })
+    ).rejects.toMatchObject({ name: "AppError", code: "VALIDATION" });
   });
 
   it("commands:execute rejects array context", async () => {
-    const result = (await getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), {
-      commandId: "x",
-      context: [],
-    })) as { error?: { message: string } };
-    expect(result.error?.message).toMatch(/plain object/);
+    await expect(
+      getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), { commandId: "x", context: [] })
+    ).rejects.toMatchObject({
+      name: "AppError",
+      code: "VALIDATION",
+      message: expect.stringMatching(/plain object/),
+    });
   });
 
   it("commands:execute rejects array args", async () => {
-    const result = (await getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), {
-      commandId: "x",
-      args: [],
-    })) as { error?: { message: string } };
-    expect(result.error?.message).toMatch(/plain object/);
+    await expect(
+      getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), { commandId: "x", args: [] })
+    ).rejects.toMatchObject({
+      name: "AppError",
+      code: "VALIDATION",
+      message: expect.stringMatching(/plain object/),
+    });
   });
 
   it("commands:execute treats absent context and args as empty plain objects", async () => {

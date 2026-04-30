@@ -14,6 +14,11 @@ export function ChordIndicator() {
   // Cache last chord/completions so exit animation doesn't show empty content
   const lastChordRef = useRef<string>("");
   const lastCompletionsRef = useRef<ReturnType<typeof keybindingService.getChordCompletions>>([]);
+  // Mirror into state so JSX doesn't read refs during render (React Compiler).
+  const [lastChord, setLastChord] = useState<string>("");
+  const [lastCompletions, setLastCompletions] = useState<
+    ReturnType<typeof keybindingService.getChordCompletions>
+  >([]);
 
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen: showOverlay,
@@ -23,6 +28,8 @@ export function ChordIndicator() {
     if (pendingChord) {
       lastChordRef.current = pendingChord;
       lastCompletionsRef.current = keybindingService.getChordCompletions(pendingChord);
+      setLastChord(lastChordRef.current);
+      setLastCompletions(lastCompletionsRef.current);
       // If overlay is already showing (chord deepened), keep it visible
       if (!showOverlay) {
         timerRef.current = setTimeout(() => {
@@ -43,8 +50,8 @@ export function ChordIndicator() {
 
   if (!shouldRender) return null;
 
-  const displayChord = keybindingService.formatComboForDisplay(lastChordRef.current);
-  const completions = lastCompletionsRef.current;
+  const displayChord = keybindingService.formatComboForDisplay(lastChord);
+  const completions = lastCompletions;
 
   // Group completions by category
   const grouped = new Map<string, typeof completions>();

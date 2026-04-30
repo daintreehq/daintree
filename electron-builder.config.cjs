@@ -101,12 +101,14 @@ module.exports = async function () {
     files: [
       "dist/**/*",
       "dist-electron/**/*",
+      "!demo/**",
       "!node_modules/node-pty/bin",
       "!node_modules/node-pty/prebuilds",
     ],
     extraResources: [
       { from: "help", to: "help" },
       { from: "electron/resources/sounds", to: "sounds" },
+      { from: "electron/services/persistence/migrations", to: "migrations" },
     ],
     asarUnpack: [
       "node_modules/node-pty/**/*",

@@ -412,6 +412,9 @@ export function createContentAttributes(): Extension {
     autocorrect: "off",
     autocapitalize: "off",
     autocomplete: "off",
+    // Surface marker: lets fleet-broadcast classify keystrokes that
+    // originate inside the agent prompt editor vs the xterm body.
+    "data-hybrid-input-editor": "true",
   });
 }
 

@@ -254,6 +254,121 @@ describe("AgentInstallService adversarial", () => {
       expect(result.error).toContain("No install blocks");
     });
 
+    describe("env sandboxing and secret scrubbing (issue #6247)", () => {
+      const originalEnv = process.env;
+
+      afterEach(() => {
+        process.env = originalEnv;
+      });
+
+      it("does not pass ANTHROPIC_API_KEY or GITHUB_TOKEN into the spawned child env", async () => {
+        process.env = {
+          ...originalEnv,
+          ANTHROPIC_API_KEY: "sk-ant-x",
+          GITHUB_TOKEN: "ghp_x",
+          OPENAI_API_KEY: "sk-x",
+          PATH: process.env.PATH ?? "/usr/bin",
+          HOME: process.env.HOME ?? "/home/u",
+        } as NodeJS.ProcessEnv;
+
+        getAgentConfigMock.mockReturnValue({
+          install: { byOs: { linux: [{ commands: ["npm install -g foo"] }] } },
+        });
+        const child = makeFakeChild();
+        spawnMock.mockReturnValue(child);
+
+        const pending = runAgentInstall({ agentId: "a", jobId: "j1" }, vi.fn());
+        child.emitClose(0);
+        await pending;
+
+        const opts = spawnMock.mock.calls[0][2] as { env: Record<string, string> };
+        expect(opts.env.ANTHROPIC_API_KEY).toBeUndefined();
+        expect(opts.env.GITHUB_TOKEN).toBeUndefined();
+        expect(opts.env.OPENAI_API_KEY).toBeUndefined();
+        expect(opts.env.CI).toBe("1");
+        expect(opts.env.NO_UPDATE_NOTIFIER).toBe("1");
+      });
+
+      it("preserves proxy and version-manager vars needed for installs", async () => {
+        process.env = {
+          ...originalEnv,
+          PATH: process.env.PATH ?? "/usr/bin",
+          HOME: process.env.HOME ?? "/home/u",
+          HTTPS_PROXY: "http://proxy:8080",
+          NODE_EXTRA_CA_CERTS: "/etc/ssl/corp-ca.pem",
+          NVM_DIR: "/home/u/.nvm",
+        } as NodeJS.ProcessEnv;
+
+        getAgentConfigMock.mockReturnValue({
+          install: { byOs: { linux: [{ commands: ["npm install -g foo"] }] } },
+        });
+        const child = makeFakeChild();
+        spawnMock.mockReturnValue(child);
+
+        const pending = runAgentInstall({ agentId: "a", jobId: "j1" }, vi.fn());
+        child.emitClose(0);
+        await pending;
+
+        const opts = spawnMock.mock.calls[0][2] as { env: Record<string, string> };
+        expect(opts.env.HTTPS_PROXY).toBe("http://proxy:8080");
+        expect(opts.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/corp-ca.pem");
+        expect(opts.env.NVM_DIR).toBe("/home/u/.nvm");
+      });
+
+      it("scrubs secrets from spawn-error messages emitted via the 'error' event", async () => {
+        getAgentConfigMock.mockReturnValue({
+          install: { byOs: { linux: [{ commands: ["nope"] }] } },
+        });
+        const child = makeFakeChild();
+        spawnMock.mockReturnValue(child);
+        const onProgress = vi.fn();
+
+        const pending = runAgentInstall({ agentId: "a", jobId: "j1" }, onProgress);
+        const leakingKey = "sk-ant-" + "A".repeat(95);
+        child.emitError(new Error(`spawn failed for env=${leakingKey}`));
+        await pending;
+
+        const errorEvent = onProgress.mock.calls
+          .map(([e]) => e as { stream: string; chunk: string })
+          .find((e) => e.stream === "stderr" && e.chunk.includes("spawn failed"));
+        expect(errorEvent).toBeDefined();
+        expect(errorEvent!.chunk).not.toContain(leakingKey);
+        expect(errorEvent!.chunk).toContain("[REDACTED]");
+      });
+
+      it("scrubs secrets from streamed stdout chunks at the emit boundary", async () => {
+        getAgentConfigMock.mockReturnValue({
+          install: { byOs: { linux: [{ commands: ["npm install -g foo"] }] } },
+        });
+        const child = makeFakeChild();
+        spawnMock.mockReturnValue(child);
+        const onProgress = vi.fn();
+
+        const pending = runAgentInstall({ agentId: "a", jobId: "j1" }, onProgress);
+        const leakingKey = "sk-ant-" + "A".repeat(95);
+        child.emitStdout(`npm warn deprecated\nleak ${leakingKey} trailing\n`);
+        child.emitStderr(`auth failure ghp_${"B".repeat(40)}\n`);
+        child.emitClose(0);
+        await pending;
+
+        const stdoutEvents = onProgress.mock.calls
+          .map(([e]) => e as { stream: string; chunk: string })
+          .filter((e) => e.stream === "stdout");
+        const stderrEvents = onProgress.mock.calls
+          .map(([e]) => e as { stream: string; chunk: string })
+          .filter((e) => e.stream === "stderr");
+
+        for (const ev of stdoutEvents) {
+          expect(ev.chunk).not.toContain(leakingKey);
+        }
+        expect(stdoutEvents.some((e) => e.chunk.includes("[REDACTED]"))).toBe(true);
+        for (const ev of stderrEvents) {
+          expect(ev.chunk).not.toMatch(/ghp_[A-Z]{40}/);
+        }
+        expect(stderrEvents.some((e) => e.chunk.includes("[REDACTED]"))).toBe(true);
+      });
+    });
+
     it("finalize is idempotent — close after error does not emit a second result", async () => {
       getAgentConfigMock.mockReturnValue({
         install: { byOs: { linux: [{ commands: ["cmd1"] }] } },

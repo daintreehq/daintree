@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ActionDefinition } from "@shared/types/actions";
-import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
+import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const githubClientMock = vi.hoisted(() => ({
   openIssues: vi.fn(),
@@ -32,7 +31,7 @@ function setupActions() {
   return (id: string) => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
-    return factory() as ActionDefinition<unknown, unknown>;
+    return factory() as AnyActionDefinition;
   };
 }
 

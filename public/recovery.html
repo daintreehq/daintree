@@ -67,6 +67,28 @@
         margin-bottom: 28px;
         word-break: break-all;
       }
+      .project-chip {
+        display: inline-block;
+        color: #a1a1aa;
+        font-size: 12px;
+        font-weight: 500;
+        background: #1c1f2b;
+        border-radius: 999px;
+        padding: 4px 12px;
+        margin-bottom: 16px;
+      }
+      .cta-hint {
+        color: #f59e0b;
+        font-size: 13px;
+        line-height: 1.6;
+        margin-bottom: 8px;
+      }
+      .backup-line {
+        color: #86efac;
+        font-size: 13px;
+        line-height: 1.6;
+        margin-bottom: 8px;
+      }
       .actions {
         display: flex;
         flex-direction: column;
@@ -89,6 +111,10 @@
       button:active {
         opacity: 0.8;
       }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
       .btn-primary {
         background: #3b82f6;
         color: #fff;
@@ -96,6 +122,15 @@
       .btn-secondary {
         background: #27272a;
         color: #e4e4e7;
+      }
+      .status {
+        margin-top: 12px;
+        font-size: 12px;
+        color: #a1a1aa;
+        min-height: 16px;
+      }
+      .status.error {
+        color: #f87171;
       }
     </style>
   </head>
@@ -110,16 +145,22 @@
           <line x1="12" y1="17" x2="12.01" y2="17" />
         </svg>
       </div>
-      <h1>Something went wrong</h1>
-      <p class="description">
+      <div class="project-chip" id="project-chip" style="display: none"></div>
+      <h1 id="crash-title">Something went wrong</h1>
+      <p class="description" id="crash-description">
         The renderer process crashed repeatedly. You can try reloading the window or reset the
         workspace state if the problem persists.
       </p>
+      <p class="cta-hint" id="cta-hint" style="display: none"></p>
+      <p class="backup-line" id="backup-line" style="display: none"></p>
       <div class="details" id="crash-details">Loading crash details…</div>
       <div class="actions">
         <button class="btn-primary" id="btn-reload">Reload Window</button>
+        <button class="btn-secondary" id="btn-export-diagnostics">Export Diagnostics</button>
+        <button class="btn-secondary" id="btn-open-logs">Open Logs</button>
         <button class="btn-secondary" id="btn-reset">Reset Workspace State</button>
       </div>
+      <div class="status" id="status" role="status" aria-live="polite"></div>
     </div>
     <script src="recovery-renderer.js"></script>
   </body>

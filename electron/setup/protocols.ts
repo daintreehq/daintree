@@ -1,10 +1,12 @@
 import { app, protocol, net, session } from "electron";
 import { getWindowForWebContents, getAppWebContents } from "../window/webContentsRegistry.js";
 import path from "path";
+import { realpath } from "fs/promises";
 import { pathToFileURL } from "url";
 import { resolveAppUrlToDistPath, getMimeType, buildHeaders } from "../utils/appProtocol.js";
 import {
   classifyPartition,
+  getDaintreeAppCSP,
   getLocalhostDevCSP,
   mergeCspHeaders,
   isDevPreviewPartition,
@@ -101,15 +103,24 @@ function createDaintreeFileProtocolHandler() {
       const normalizedFile = path.normalize(filePath);
       const normalizedRoot = path.normalize(rootPath);
 
-      if (
-        !normalizedFile.startsWith(normalizedRoot + path.sep) &&
-        normalizedFile !== normalizedRoot
-      ) {
-        return new Response("Forbidden — path outside root", { status: 403 });
+      // Resolve symlinks before containment to block in-root symlinks pointing outside root (CVE-2025-53109 / CVE-2025-54794 class).
+      let realRoot: string;
+      let realFile: string;
+      try {
+        realRoot = await realpath(normalizedRoot);
+        realFile = await realpath(normalizedFile);
+      } catch {
+        return new Response("Not Found", { status: 404 });
       }
 
-      const mimeType = getMimeType(normalizedFile);
-      const fileUrl = pathToFileURL(normalizedFile).toString();
+      const rel = path.relative(realRoot, realFile);
+      // Match exact ".." and "../*" — bare startsWith("..") would reject legitimate files like "..hidden/x". isAbsolute catches Windows cross-drive escapes.
+      if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
+        return new Response("Not Found", { status: 404 });
+      }
+
+      const mimeType = getMimeType(realFile);
+      const fileUrl = pathToFileURL(realFile).toString();
       const response = await net.fetch(fileUrl);
 
       if (!response.ok) {
@@ -176,12 +187,18 @@ export function setupWebviewCSP(): void {
     }
 
     const partitionType = classifyPartition(partition);
-    if (partitionType === "unknown" || partitionType === "portal") {
+    // Browser panels load arbitrary remote sites — overlaying our CSP would
+    // intersect with theirs and break most of the web. Sandbox, deny-all
+    // permissions, and navigation guards remain in place.
+    if (partitionType === "unknown" || partitionType === "portal" || partitionType === "browser") {
       return;
     }
 
     const ses = session.fromPartition(partition);
-    const cspPolicy = getLocalhostDevCSP();
+    const cspPolicy =
+      partitionType === "project"
+        ? getDaintreeAppCSP(process.env.NODE_ENV === "development")
+        : getLocalhostDevCSP();
 
     ses.webRequest.onHeadersReceived((details, callback) => {
       callback({
@@ -192,8 +209,12 @@ export function setupWebviewCSP(): void {
     configuredPartitions.add(partition);
   };
 
-  // Configure static partitions (browser only - portal excluded)
-  applyCSP("persist:browser");
+  // Configure static partitions:
+  // - persist:daintree: trusted Daintree renderer shell (strict app CSP)
+  // Browser hosts arbitrary remote sites (skipped by classifyPartition guard above
+  // to avoid intersecting with site CSPs), portal/unknown are excluded, and
+  // dev-preview partitions are wired dynamically via will-attach-webview below.
+  applyCSP("persist:daintree");
 
   // Singleton for the browser partition session — used for identity comparison in navigation handlers.
   const browserSession = session.fromPartition("persist:browser");

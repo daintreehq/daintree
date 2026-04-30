@@ -1,11 +1,11 @@
-import { Terminal, IDisposable, IMarker } from "@xterm/xterm";
+import { Terminal, IDisposable, IMarker, ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { ImageAddon } from "@xterm/addon-image";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 
-import { TerminalRefreshTier, TerminalType, PanelKind, AgentState } from "@/types";
+import { TerminalRefreshTier, PanelKind, AgentState } from "@/types";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
@@ -15,9 +15,11 @@ export type PostCompleteHook = (output: string) => void | Promise<void>;
 
 export interface ManagedTerminal {
   terminal: Terminal;
-  type: TerminalType;
   kind?: PanelKind;
-  agentId?: string;
+  /** Launch hint — agent this terminal was launched to run. Not identity. */
+  launchAgentId?: string;
+  /** Live runtime agent identity. Set by detector promotion, cleared on demotion. */
+  runtimeAgentId?: string;
   agentState?: AgentState;
   agentStateSubscribers: Set<AgentStateCallback>;
   fitAddon: FitAddon;
@@ -26,6 +28,10 @@ export interface ManagedTerminal {
   searchAddon: SearchAddon;
   fileLinksDisposable: IDisposable | null;
   webLinksAddon: WebLinksAddon | null;
+  // Currently-hovered link (tracked via xterm addon hover/leave callbacks).
+  // Read synchronously by the right-click context menu so it reflects the
+  // same detection xterm uses for plain URLs, file paths, and OSC 8 links.
+  hoveredLink: ILink | null;
   hostElement: HTMLDivElement;
   isOpened: boolean;
   listeners: Array<() => void>;
@@ -60,6 +66,9 @@ export interface ManagedTerminal {
   _suppressScrollTracking?: boolean;
   // Viewport pinning: set by wheel/keyboard events to distinguish user-initiated scroll
   _userScrollIntent?: boolean;
+  // Timestamp of the most recent wheel event on the host element — used to
+  // suppress the "new output" indicator while the user is actively scrolling.
+  lastWheelAt?: number;
 
   // Last activity marker for scroll-to-last-activity
   lastActivityMarker?: IMarker;
@@ -92,6 +101,11 @@ export interface ManagedTerminal {
   // Title-based state detection hysteresis (per-terminal)
   titleReportTimer?: number;
   pendingTitleState?: "working" | "waiting";
+
+  // Last-meaningful-title tracking for agent session history
+  observedTitleTimer?: number;
+  pendingObservedTitle?: string;
+  lastObservedTitleSent?: string;
 
   // Input lock state (read-only monitor mode)
   isInputLocked?: boolean;
@@ -130,6 +144,11 @@ export interface ManagedTerminal {
   isHibernated?: boolean;
   hibernationTimer?: ReturnType<typeof setTimeout>;
   ipcListenerCount: number;
+
+  // Visibility-driven WebGL restore debounce. Hide path releases the WebGL
+  // context immediately; show path waits ~100ms before re-acquiring so rapid
+  // tab/panel toggles don't thrash addon load/unload.
+  webGLRestoreTimer?: number;
 }
 
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;

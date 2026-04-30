@@ -7,6 +7,7 @@ import {
   buildMicroCorrectionSystemPrompt,
   type CorrectionPromptContext,
 } from "../../shared/config/voiceCorrection.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
@@ -160,7 +161,7 @@ export class VoiceCorrectionService {
         confirmedText,
       };
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = formatErrorMessage(error, "Voice correction failed");
       logWarn(`${P} Correction failed, using raw text`, { error: msg });
       return {
         action: "no_change",
@@ -272,7 +273,7 @@ export class VoiceCorrectionService {
 
       return { ...result, confirmedText };
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = formatErrorMessage(error, "Voice micro-correction failed");
       logWarn(`${P} Micro-correction failed, using raw text`, { error: msg });
       return {
         action: "no_change",
@@ -332,7 +333,7 @@ export class VoiceCorrectionService {
 
       return parsed.file_references.filter((r) => r.description.trim().length > 0);
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = formatErrorMessage(error, "Voice file link detection failed");
       logWarn(`${P} File link detection failed`, { error: msg });
       return [];
     }

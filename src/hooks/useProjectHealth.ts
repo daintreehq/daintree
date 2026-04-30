@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { ProjectHealthData } from "../types";
 import { githubClient, projectClient } from "@/clients";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 const ACTIVE_POLL_INTERVAL = 30 * 1000;
 const IDLE_POLL_INTERVAL = 5 * 60 * 1000;
@@ -86,7 +87,7 @@ export function useProjectHealth(): UseProjectHealthReturn {
       }
     } catch (err) {
       if (mountedRef.current) {
-        const errorMessage = err instanceof Error ? err.message : "Failed to fetch project health";
+        const errorMessage = formatErrorMessage(err, "Failed to fetch project health");
         setError(errorMessage);
         lastErrorRef.current = errorMessage;
       }
@@ -182,8 +183,7 @@ export function useProjectHealth(): UseProjectHealthReturn {
         scheduleNextPoll();
       }
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [fetchHealth, scheduleNextPoll]);
 
   useEffect(() => {
     const handleSidebarRefresh = () => {

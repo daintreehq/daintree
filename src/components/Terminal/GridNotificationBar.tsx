@@ -1,5 +1,6 @@
 import React from "react";
 import { AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useNotificationStore, type Notification } from "@/store/notificationStore";
 
@@ -54,8 +55,8 @@ export interface GridNotificationBarProps {
 }
 
 export function GridNotificationBar({ className }: GridNotificationBarProps) {
-  const notification = useNotificationStore((state) =>
-    state.notifications.find((item) => item.placement === "grid-bar")
+  const notification = useNotificationStore(
+    useShallow((state) => state.notifications.find((item) => item.placement === "grid-bar"))
   );
   const removeNotification = useNotificationStore((state) => state.removeNotification);
 
@@ -104,10 +105,10 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
               }}
               className={cn(
                 "h-7 rounded-[var(--radius-sm)] px-3 text-xs font-medium transition-colors",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
+                "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
                 action.variant === "secondary"
                   ? "border border-tint/15 bg-tint/5 text-daintree-text/80 hover:bg-tint/10 hover:text-daintree-text"
-                  : "border border-daintree-accent/40 bg-daintree-accent/15 text-daintree-accent hover:bg-daintree-accent/25"
+                  : "border border-status-info/30 bg-status-info/15 text-status-info hover:bg-status-info/20"
               )}
             >
               {action.label}
@@ -120,7 +121,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
         <button
           type="button"
           onClick={() => removeNotification(notification.id)}
-          className="h-7 shrink-0 rounded-[var(--radius-sm)] border border-tint/10 bg-tint/5 px-2 text-xs text-daintree-text/60 transition-colors hover:bg-tint/10 hover:text-daintree-text/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent/60"
+          className="h-7 shrink-0 rounded-[var(--radius-sm)] border border-tint/10 bg-tint/5 px-2 text-xs text-daintree-text/60 transition-colors hover:bg-tint/10 hover:text-daintree-text/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60"
         >
           Dismiss
         </button>

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActionService } from "@/services/ActionService";
+import { _resetForTests as resetEscapeStack, registerEscape } from "@/lib/escapeStack";
 import type { ActionId } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 
@@ -213,6 +214,7 @@ function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallba
     onCloseWorktreeOverview: vi.fn(),
     onOpenPanelPalette: vi.fn(),
     onOpenProjectSwitcherPalette: vi.fn(),
+    onConfirmCloseActiveProject: vi.fn(),
     onOpenActionPalette: vi.fn(),
     onOpenQuickSwitcher: vi.fn(),
     onOpenShortcuts: vi.fn(),
@@ -316,16 +318,20 @@ describe("project action hardening", () => {
 
     expectRegistryToMatchIds(actions, [
       "project.switcherPalette",
+      "project.mruCycleOlder",
+      "project.mruCycleNewer",
       "project.add",
       "project.openDialog",
       "project.switch",
       "project.update",
       "project.remove",
       "project.close",
+      "project.closeActive",
       "project.getAll",
       "project.getCurrent",
       "project.getSettings",
       "project.saveSettings",
+      "project.muteNotifications",
       "project.detectRunners",
       "project.getStats",
       "project.cloneRepo",
@@ -345,6 +351,77 @@ describe("project action hardening", () => {
     const trimmedResult = await service.dispatch("project.add", { path: "   /tmp/repo   " });
     expect(trimmedResult).toEqual({ ok: true, result: undefined });
     expect(state.addProjectByPath).toHaveBeenCalledWith("/tmp/repo");
+  });
+
+  it("routes project.close for the active project through the confirm callback", async () => {
+    useProjectStore.setState({
+      currentProject: { id: "project-1" } as never,
+      closeProject: vi.fn().mockResolvedValue({ success: true }),
+    });
+    const onConfirmCloseActiveProject = vi.fn();
+    const { service } = buildService(registerProjectActions, {
+      onConfirmCloseActiveProject,
+    });
+
+    const result = await service.dispatch(
+      "project.close",
+      { projectId: "project-1" },
+      { source: "user" }
+    );
+
+    expect(result).toEqual({ ok: true, result: undefined });
+    expect(onConfirmCloseActiveProject).toHaveBeenCalledWith("project-1");
+    expect(useProjectStore.getState().closeProject).not.toHaveBeenCalled();
+  });
+
+  it("routes project.close for a background project through the store", async () => {
+    const closeProject = vi.fn().mockResolvedValue({ success: true });
+    useProjectStore.setState({
+      currentProject: { id: "active-project" } as never,
+      closeProject,
+    });
+    const onConfirmCloseActiveProject = vi.fn();
+    const { service } = buildService(registerProjectActions, {
+      onConfirmCloseActiveProject,
+    });
+
+    const result = await service.dispatch(
+      "project.close",
+      { projectId: "background-project" },
+      { source: "user" }
+    );
+
+    expect(result).toEqual({ ok: true, result: undefined });
+    expect(closeProject).toHaveBeenCalledWith("background-project");
+    expect(onConfirmCloseActiveProject).not.toHaveBeenCalled();
+  });
+
+  it("project.closeActive triggers the confirm callback for the current project", async () => {
+    useProjectStore.setState({
+      currentProject: { id: "active-project" } as never,
+    });
+    const onConfirmCloseActiveProject = vi.fn();
+    const { service } = buildService(registerProjectActions, {
+      onConfirmCloseActiveProject,
+    });
+
+    const result = await service.dispatch("project.closeActive", undefined, { source: "menu" });
+
+    expect(result).toEqual({ ok: true, result: undefined });
+    expect(onConfirmCloseActiveProject).toHaveBeenCalledWith("active-project");
+  });
+
+  it("project.closeActive no-ops when no project is active", async () => {
+    useProjectStore.setState({ currentProject: null });
+    const onConfirmCloseActiveProject = vi.fn();
+    const { service } = buildService(registerProjectActions, {
+      onConfirmCloseActiveProject,
+    });
+
+    const result = await service.dispatch("project.closeActive", undefined, { source: "menu" });
+
+    expect(result).toEqual({ ok: true, result: undefined });
+    expect(onConfirmCloseActiveProject).not.toHaveBeenCalled();
   });
 
   it("rejects unconfirmed agent project switches before mutating store state", async () => {
@@ -548,6 +625,7 @@ describe("preferences action hardening", () => {
       "help.launchAgent",
       "help.togglePanel",
       "modal.close",
+      "preferences.reduceAnimations.set",
       "app.quit",
       "app.forceQuit",
     ]);
@@ -720,6 +798,65 @@ describe("preferences action hardening", () => {
     });
   });
 
+  it("preserves custom preset color and runtime fields through agentSettings.set validation", async () => {
+    mocks.agentSettingsClient.set.mockResolvedValueOnce({
+      agents: {
+        claude: {
+          customPresets: [
+            {
+              id: "blue",
+              name: "Blue Provider",
+              env: { ANTHROPIC_BASE_URL: "https://example.test" },
+              args: ["--model", "sonnet"],
+              dangerousEnabled: true,
+              customFlags: "--verbose",
+              inlineMode: true,
+              color: "#3366ff",
+              fallbacks: ["fallback"],
+            },
+          ],
+        },
+      },
+    });
+    const { service } = buildService(registerPreferencesActions);
+
+    const result = await service.dispatch("agentSettings.set", {
+      agentId: "claude",
+      settings: {
+        customPresets: [
+          {
+            id: "blue",
+            name: "Blue Provider",
+            env: { ANTHROPIC_BASE_URL: "https://example.test" },
+            args: ["--model", "sonnet"],
+            dangerousEnabled: true,
+            customFlags: "--verbose",
+            inlineMode: true,
+            color: "#3366ff",
+            fallbacks: ["fallback"],
+          },
+        ],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mocks.agentSettingsClient.set).toHaveBeenCalledWith("claude", {
+      customPresets: [
+        {
+          id: "blue",
+          name: "Blue Provider",
+          env: { ANTHROPIC_BASE_URL: "https://example.test" },
+          args: ["--model", "sonnet"],
+          dangerousEnabled: true,
+          customFlags: "--verbose",
+          inlineMode: true,
+          color: "#3366ff",
+          fallbacks: ["fallback"],
+        },
+      ],
+    });
+  });
+
   it("returns override snapshots and propagates stale action ID failures from the keybinding service", async () => {
     mocks.keybindingService.getOverridesSnapshot.mockReturnValue({ "terminal.new": ["Cmd+T"] });
     mocks.keybindingService.setOverride.mockRejectedValueOnce(
@@ -744,7 +881,9 @@ describe("preferences action hardening", () => {
   });
 
   it("calls Electron window actions directly and keeps quit actions confirmation-gated for agents", async () => {
-    const dispatchEvent = vi.spyOn(window, "dispatchEvent");
+    resetEscapeStack();
+    const escapeHandler = vi.fn();
+    registerEscape(escapeHandler);
     const { service } = buildService(registerPreferencesActions);
 
     await expect(service.dispatch("window.zoomIn")).resolves.toEqual({
@@ -754,8 +893,7 @@ describe("preferences action hardening", () => {
     expect(mocks.electronWindow.zoomIn).toHaveBeenCalledTimes(1);
 
     await expect(service.dispatch("modal.close")).resolves.toEqual({ ok: true, result: undefined });
-    expect(dispatchEvent).toHaveBeenCalledWith(expect.any(KeyboardEvent));
-    expect(dispatchEvent.mock.calls.at(-1)?.[0].type).toBe("keydown");
+    expect(escapeHandler).toHaveBeenCalledTimes(1);
 
     const quitResult = await service.dispatch("app.quit", undefined, { source: "agent" });
     expect(quitResult.ok).toBe(false);

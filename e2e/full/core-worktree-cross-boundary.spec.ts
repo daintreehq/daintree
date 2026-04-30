@@ -83,13 +83,18 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
         .toContain("selected");
     });
 
-    const mainPanel = await spawnTerminalAndVerify(window);
+    await spawnTerminalAndVerify(window);
     const mainPanelIds = await getGridPanelIds(window);
     const mainPanelId = mainPanelIds[mainPanelIds.length - 1];
 
     await test.step("echo marker in main terminal", async () => {
-      await runTerminalCommand(window, mainPanel, "echo MARKER_MAIN_AAA");
-      await waitForTerminalText(mainPanel, "MARKER_MAIN_AAA");
+      // Re-acquire the panel via its stable ID — `.last()` can resolve
+      // differently after the worktree switch reorders DOM nodes.
+      const stableMain = getPanelById(window, mainPanelId);
+      await stableMain.click({ position: { x: 100, y: 50 } });
+      await window.waitForTimeout(T_SETTLE);
+      await runTerminalCommand(window, stableMain, "echo MARKER_MAIN_AAA");
+      await waitForTerminalText(stableMain, "MARKER_MAIN_AAA");
     });
 
     // Switch to feature worktree and echo a different marker
@@ -101,13 +106,16 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
         .toContain("selected");
     });
 
-    const featurePanel = await spawnTerminalAndVerify(window);
+    await spawnTerminalAndVerify(window);
     const featurePanelIds = await getGridPanelIds(window);
     const featurePanelId = featurePanelIds[featurePanelIds.length - 1];
 
     await test.step("echo marker in feature terminal", async () => {
-      await runTerminalCommand(window, featurePanel, "echo MARKER_FEATURE_BBB");
-      await waitForTerminalText(featurePanel, "MARKER_FEATURE_BBB");
+      const stableFeature = getPanelById(window, featurePanelId);
+      await stableFeature.click({ position: { x: 100, y: 50 } });
+      await window.waitForTimeout(T_SETTLE);
+      await runTerminalCommand(window, stableFeature, "echo MARKER_FEATURE_BBB");
+      await waitForTerminalText(stableFeature, "MARKER_FEATURE_BBB");
     });
 
     // Switch back to main and verify isolation

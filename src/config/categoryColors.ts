@@ -20,7 +20,6 @@ export const ACTION_CATEGORY_COLORS: Record<string, string> = {
   logs: "bg-cat-amber/15 text-cat-amber",
   recipes: "bg-cat-pink/15 text-cat-pink",
   portal: "bg-cat-violet/15 text-cat-violet",
-  notes: "bg-cat-teal/15 text-cat-teal",
   browser: "bg-cat-cyan/15 text-cat-cyan",
 };
 

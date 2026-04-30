@@ -1,0 +1,12 @@
+{"time":0.0,"chunk":"Mistral Vibe","detectedState":"initializing","confidence":0.9,"agentId":"mistral","agentVersion":"2.9.0"}
+{"time":0.3,"chunk":"v2.9.0 · Type /help for more information","detectedState":"waiting","confidence":0.85,"agentId":"mistral","agentVersion":"2.9.0"}
+{"time":0.5,"chunk":"> ","detectedState":"waiting","confidence":0.85,"agentId":"mistral","agentVersion":"2.9.0"}
+{"time":1.0,"chunk":"⠋ Generating (1s Esc/Ctrl+C to interrupt)","detectedState":"working","confidence":0.95,"agentId":"mistral","agentVersion":"2.9.0"}
+{"time":2.0,"chunk":"⠙ Generating (2s Esc/Ctrl+C to interrupt)","detectedState":"working","confidence":0.95,"agentId":"mistral","agentVersion":"2.9.0"}
+{"time":5.0,"chunk":"⠹ Reading files (5s Esc/Ctrl+C to interrupt)","detectedState":"working","confidence":0.95,"agentId":"mistral","agentVersion":"2.9.0"}
+{"time":8.0,"chunk":"⠼ Vibing (8s Esc/Ctrl+C to interrupt)","detectedState":"working","confidence":0.95,"agentId":"mistral","agentVersion":"2.9.0"}
+{"time":12.0,"chunk":"⠦ Generating (12s Esc/Ctrl+C to interrupt)","detectedState":"working","confidence":0.95,"agentId":"mistral","agentVersion":"2.9.0"}
+{"time":13.0,"chunk":"⠏ Thinking","detectedState":"working","confidence":0.75,"agentId":"mistral","agentVersion":"2.9.0"}
+{"time":15.0,"chunk":"> ","detectedState":"waiting","confidence":0.85,"agentId":"mistral","agentVersion":"2.9.0"}
+{"time":16.0,"chunk":"To continue this session, run: vibe --continue","detectedState":"waiting","confidence":0.0,"agentId":"mistral","agentVersion":"2.9.0"}
+{"time":16.5,"chunk":"Or: vibe --resume abc-123-def-456","detectedState":"waiting","confidence":0.0,"agentId":"mistral","agentVersion":"2.9.0"}

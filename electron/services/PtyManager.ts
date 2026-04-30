@@ -6,7 +6,18 @@ import type { AgentEvent } from "./AgentStateMachine.js";
 import type { AgentStateChangeTrigger } from "../schemas/agent.js";
 import type { PtyPool } from "./PtyPool.js";
 import type { ProcessTreeCache } from "./ProcessTreeCache.js";
-import { logDebug, logInfo, logWarn, logError } from "../utils/logger.js";
+import type { DetectionResult } from "./ProcessDetector.js";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("pty-host:PtyManager");
+const logDebug = (msg: string, ctx?: Record<string, unknown>) =>
+  ctx ? logger.debug(msg, ctx) : logger.debug(msg);
+const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
+  ctx ? logger.info(msg, ctx) : logger.info(msg);
+const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
+  ctx ? logger.warn(msg, ctx) : logger.warn(msg);
+const logError = (msg: string, error?: unknown, ctx?: Record<string, unknown>) =>
+  ctx ? logger.error(msg, error, ctx) : logger.error(msg, error);
 
 import {
   TerminalRegistry,
@@ -196,7 +207,9 @@ export class PtyManager extends EventEmitter {
       );
       this.kill(id);
     }
-    logInfo(`Spawning terminal ${id} (kind: ${options.kind}, type: ${options.type})`);
+    logInfo(
+      `Spawning terminal ${id} (kind: ${options.kind}, launchAgentId: ${options.launchAgentId})`
+    );
 
     const spawnContext = computeSpawnContext(id, options);
     const ptyProcess = acquirePtyProcess(
@@ -205,7 +218,6 @@ export class PtyManager extends EventEmitter {
       spawnContext.env,
       spawnContext.shell,
       spawnContext.args,
-      spawnContext.isAgentTerminal,
       this.ptyPool,
       (error, context) => {
         console.error(
@@ -265,6 +277,27 @@ export class PtyManager extends EventEmitter {
       return;
     }
     terminal.write(data, traceId);
+  }
+
+  /**
+   * Write data and return per-call result for the small-keystroke fast path.
+   * Used by fleet broadcast so dead-pipe errors on one target don't
+   * disappear into `logWriteError` but produce a per-target rejection that
+   * the renderer can use to disarm the dead pane.
+   */
+  tryWrite(
+    id: string,
+    data: string,
+    traceId?: string
+  ): { ok: boolean; error?: NodeJS.ErrnoException } {
+    const terminal = this.registry.get(id);
+    if (!terminal) {
+      return {
+        ok: false,
+        error: Object.assign(new Error(`terminal ${id} not found`), { code: "EBADF" }),
+      };
+    }
+    return terminal.tryWrite(data, traceId);
   }
 
   /**
@@ -339,12 +372,12 @@ export class PtyManager extends EventEmitter {
       void (async () => {
         try {
           const sessionId = await this.gracefulKill(termId);
-          if (sessionId && info?.agentId) {
+          if (sessionId && info?.launchAgentId) {
             await persistAgentSession({
               sessionId,
-              agentId: info.agentId,
-              worktreeId: null,
-              title: info.title ?? null,
+              agentId: info.launchAgentId,
+              worktreeId: info.worktreeId ?? null,
+              title: info.lastObservedTitle ?? info.title ?? null,
               projectId: info.projectId ?? null,
               agentLaunchFlags: info.agentLaunchFlags,
               agentModelId: info.agentModelId,
@@ -484,8 +517,7 @@ export class PtyManager extends EventEmitter {
       id: terminalInfo.id,
       projectId: terminalInfo.projectId,
       kind: terminalInfo.kind,
-      type: terminalInfo.type,
-      agentId: terminalInfo.agentId,
+      launchAgentId: terminalInfo.launchAgentId,
       title: terminalInfo.title,
       cwd: terminalInfo.cwd,
       shell: terminalInfo.shell,
@@ -499,8 +531,7 @@ export class PtyManager extends EventEmitter {
       semanticBufferLines: terminalInfo.semanticBuffer.length,
       restartCount: terminalInfo.restartCount,
       hasPty,
-      isAgentTerminal: terminal.getIsAgentTerminal(),
-      detectedAgentType: terminalInfo.detectedAgentType,
+      detectedAgentId: terminalInfo.detectedAgentId,
       analysisEnabled: terminalInfo.analysisEnabled,
       resizeStrategy: terminal.getResizeStrategy(),
       ptyPid: ptyProcess?.pid,
@@ -512,6 +543,7 @@ export class PtyManager extends EventEmitter {
       agentLaunchFlags: terminalInfo.agentLaunchFlags,
       agentModelId: terminalInfo.agentModelId,
       exitCode: terminalInfo.exitCode,
+      everDetectedAgent: terminalInfo.everDetectedAgent,
     };
   }
 
@@ -523,6 +555,17 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Store the last observed (non-useless) OSC title for a terminal so that
+   * persistAgentSession can capture a meaningful label even if the agent
+   * clears its title right before shutdown.
+   */
+  updateObservedTitle(id: string, title: string): void {
+    const terminal = this.registry.get(id);
+    if (!terminal) return;
+    terminal.setObservedTitle(title);
+  }
+
+  /**
    * Enable or disable semantic analysis for a terminal.
    */
   setAnalysisEnabled(id: string, enabled: boolean): void {
@@ -530,6 +573,22 @@ export class PtyManager extends EventEmitter {
     if (terminal) {
       terminal.setAnalysisEnabled(enabled);
     }
+  }
+
+  /**
+   * Drive the runtime agent-detection pipeline directly. In production, the
+   * per-terminal ProcessDetector invokes TerminalProcess.handleAgentDetection;
+   * this hook routes the same result through that method synchronously so
+   * integration tests can exercise runtime promotion/demotion without depending
+   * on a real agent binary being resident in the process tree.
+   */
+  simulateAgentDetection(id: string, result: DetectionResult): boolean {
+    const terminal = this.registry.get(id);
+    if (!terminal) {
+      return false;
+    }
+    terminal.handleAgentDetection(result, terminal.getInfo().spawnedAt);
+    return true;
   }
 
   /**
@@ -767,7 +826,7 @@ export class PtyManager extends EventEmitter {
   dispose(): void {
     for (const [_id, terminal] of this.registry.entries()) {
       const terminalInfo = terminal.getInfo();
-      if (terminalInfo.agentId) {
+      if (terminalInfo.launchAgentId) {
         this.agentStateService.emitAgentKilled(terminalInfo, "cleanup");
       }
       terminal.dispose();

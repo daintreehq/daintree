@@ -52,6 +52,14 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
       this._isDisposed = true;
     });
 
+    manualRestart = vi.fn(() => {
+      // Emulate the real host: a manual restart emits "restarted" so
+      // `WorkspaceClient` runs reloadProjectAfterRestart.
+      this.emit("restarted");
+    });
+
+    setLogLevelOverrides = vi.fn();
+
     // Test helpers
     simulateReady(): void {
       this._isReady = true;
@@ -562,9 +570,96 @@ describe("WorkspaceClient multi-process manager", () => {
         worktree: { id: "wt-1", path: "/a/wt", name: "wt", branch: "main" },
       });
 
-      expect(wc.send).toHaveBeenCalledWith("worktree:update", {
-        worktree: expect.objectContaining({ id: "wt-1" }),
+      expect(wc.send).toHaveBeenCalledWith("events:push", {
+        name: "worktree:update",
+        payload: {
+          worktree: expect.objectContaining({ id: "wt-1" }),
+        },
       });
+    });
+
+    it("emits top-level worktree-update event so plugin subscribers can observe", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      const listener = vi.fn();
+      client.on("worktree-update", listener);
+
+      h(0).emit("host-event", {
+        type: "worktree-update",
+        worktree: { id: "wt-1", path: "/a/wt", name: "wt", branch: "main" },
+      });
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith({
+        worktree: expect.objectContaining({ id: "wt-1" }),
+        projectPath: "/project-a",
+      });
+    });
+
+    it("emits top-level worktree-removed event when a worktree is removed", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      const listener = vi.fn();
+      client.on("worktree-removed", listener);
+
+      h(0).emit("host-event", {
+        type: "worktree-removed",
+        worktreeId: "wt-1",
+      });
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith({
+        worktreeId: "wt-1",
+        projectPath: "/project-a",
+      });
+    });
+
+    it("emits top-level worktree-activated event when setActiveWorktree succeeds", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      const listener = vi.fn();
+      client.on("worktree-activated", listener);
+
+      const activatePromise = client.setActiveWorktree("wt-1", 1);
+      // The set-active request is queued on sendWithResponse — resolve it
+      // so setActiveWorktree finishes and emits.
+      await tick();
+      const setActiveReq = h(0)
+        .getAllRequests()
+        .find((r) => r.type === "set-active");
+      expect(setActiveReq).toBeDefined();
+      h(0).resolveRequest(setActiveReq!.requestId, { success: true });
+      await activatePromise;
+
+      expect(listener).toHaveBeenCalledWith({
+        worktreeId: "wt-1",
+        projectPath: "/project-a",
+      });
+    });
+
+    it("does not emit worktree-activated when setActiveWorktree is silent", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      const listener = vi.fn();
+      client.on("worktree-activated", listener);
+
+      const activatePromise = client.setActiveWorktree("wt-1", 1, { silent: true });
+      await tick();
+      const setActiveReq = h(0)
+        .getAllRequests()
+        .find((r) => r.type === "set-active");
+      h(0).resolveRequest(setActiveReq!.requestId, { success: true });
+      await activatePromise;
+
+      expect(listener).not.toHaveBeenCalled();
     });
   });
 
@@ -827,6 +922,94 @@ describe("WorkspaceClient multi-process manager", () => {
         .getAllRequests()
         .filter((r: any) => r.type === "load-project")[1];
       expect(reloadReq.rootPath).toBe(path.resolve("/project-a"));
+    });
+  });
+
+  describe("manualRestartForWindow", () => {
+    it("resolves the window's host and invokes manualRestart", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      client.manualRestartForWindow(1);
+
+      expect(h(0).manualRestart).toHaveBeenCalledTimes(1);
+    });
+
+    it("triggers reloadProjectAfterRestart via the emitted 'restarted' event", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      client.manualRestartForWindow(1);
+
+      // The mock's manualRestart() emits "restarted"; the real
+      // WorkspaceClient listener should enqueue a fresh load-project.
+      await vi.waitFor(() => {
+        const reqs = h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "load-project");
+        expect(reqs).toHaveLength(2);
+      });
+    });
+
+    it("no-ops when the window has no associated project", () => {
+      // No loadProject — window is not tracked.
+      expect(() => client.manualRestartForWindow(999)).not.toThrow();
+      expect(mockHosts).toHaveLength(0);
+    });
+  });
+
+  describe("host-disconnected broadcast", () => {
+    it("broadcasts WORKTREE_HOST_DISCONNECTED to affected views when host emits host-recovering", async () => {
+      const wc = createMockWebContents();
+
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+      client.attachDirectPort(1, wc as any);
+
+      wc.send.mockClear();
+      h(0).emit("host-recovering", 1);
+
+      expect(wc.send).toHaveBeenCalledWith("worktree:host-disconnected", { fatal: false });
+    });
+
+    it("does not broadcast host-recovering to views of other projects", async () => {
+      const wcA = createMockWebContents();
+      const wcB = createMockWebContents();
+
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+      client.attachDirectPort(1, wcA as any);
+
+      const load2 = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await load2;
+      client.attachDirectPort(2, wcB as any);
+
+      wcA.send.mockClear();
+      wcB.send.mockClear();
+
+      h(0).emit("host-recovering", 1);
+
+      expect(wcA.send).toHaveBeenCalledWith("worktree:host-disconnected", { fatal: false });
+      expect(wcB.send).not.toHaveBeenCalled();
+    });
+
+    it("broadcasts fatal: true on host-crash (max retries exhausted)", async () => {
+      const wc = createMockWebContents();
+
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+      client.attachDirectPort(1, wc as any);
+
+      wc.send.mockClear();
+      h(0).emit("host-crash", 137);
+
+      expect(wc.send).toHaveBeenCalledWith("worktree:host-disconnected", { fatal: true });
     });
   });
 

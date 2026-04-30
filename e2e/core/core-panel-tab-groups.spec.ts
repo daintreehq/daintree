@@ -173,14 +173,7 @@ test.describe.serial("Core: Panel Tab Groups", () => {
       await overflowBtn.click();
 
       // Verify expected menu items are visible (scoped to window since Radix portals to body)
-      const expectedItems = [
-        "Restart Session",
-        "Rename",
-        "Duplicate",
-        "Lock Input",
-        "View Terminal Info",
-        "Trash",
-      ];
+      const expectedItems = ["Restart Session", "Rename", "Duplicate", "Lock Input", "Trash"];
 
       for (const itemName of expectedItems) {
         await expect(window.getByRole("menuitem", { name: itemName })).toBeVisible({
@@ -188,13 +181,24 @@ test.describe.serial("Core: Panel Tab Groups", () => {
         });
       }
 
-      // Close the menu
+      // Removed in #5957 — guard against accidental re-introduction
+      await expect(window.getByRole("menuitem", { name: "View Terminal Info" })).toHaveCount(0);
+
+      // Close the menu and wait for it to fully unmount. Without this assertion
+      // the next test races against Radix's close animation: the menu's
+      // FocusScope keeps focus and its typeahead handler swallows the keys
+      // typed by `runTerminalCommand`, so the command never reaches the PTY.
       await window.keyboard.press("Escape");
+      await expect(window.locator('[role="menu"]')).toHaveCount(0, { timeout: T_SHORT });
     });
 
     test("restart confirmation flow works", async () => {
       const { window } = ctx;
       const panel = getFirstGridPanel(window);
+
+      // Settle after the previous test's menu close so xterm input handlers
+      // are wired before we start typing.
+      await window.waitForTimeout(T_SETTLE);
 
       // Run a marker before restart
       await runTerminalCommand(window, panel, "node -e \"console.log('PRE_RESTART')\"");

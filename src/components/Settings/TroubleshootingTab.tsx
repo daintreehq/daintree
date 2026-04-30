@@ -11,13 +11,20 @@ import {
   RotateCw,
   Download,
   Monitor,
+  SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { appClient, systemClient } from "@/clients";
+import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
+import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
+import type { ReplacementRule } from "@shared/utils/diagnosticsTransform";
 import { actionService } from "@/services/ActionService";
+import { logError, logWarn } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { DiagnosticsReviewDialog } from "./DiagnosticsReviewDialog";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 function SystemHealthSection() {
   const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
@@ -31,7 +38,7 @@ function SystemHealthSection() {
       const data = await systemClient.healthCheck();
       setResult(data);
     } catch (err) {
-      setCheckError(err instanceof Error ? err.message : "Health check failed");
+      setCheckError(formatErrorMessage(err, "Health check failed"));
     } finally {
       setIsChecking(false);
     }
@@ -86,20 +93,47 @@ function SystemHealthSection() {
 }
 
 function DownloadDiagnosticsSection() {
-  const [isDownloading, setIsDownloading] = useState(false);
+  const [isCollecting, setIsCollecting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewPayload, setReviewPayload] = useState<DiagnosticsReviewPayload | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  const handleDownload = useCallback(async () => {
-    setIsDownloading(true);
+  const handleOpenReview = useCallback(async () => {
+    setIsCollecting(true);
     setDownloadError(null);
     try {
-      await systemClient.downloadDiagnostics();
+      const payload = await systemClient.collectDiagnosticsForReview();
+      setReviewPayload(payload);
+      setReviewOpen(true);
     } catch (err) {
-      setDownloadError(err instanceof Error ? err.message : "Failed to download diagnostics");
+      setDownloadError(formatErrorMessage(err, "Failed to collect diagnostics"));
     } finally {
-      setIsDownloading(false);
+      setIsCollecting(false);
     }
   }, []);
+
+  const handleSave = useCallback(
+    async (enabledSections: Record<string, boolean>, replacements: ReplacementRule[]) => {
+      setIsSaving(true);
+      try {
+        const payload = reviewPayload?.payload ?? {};
+        const saved = await systemClient.saveDiagnosticsBundle({
+          payload,
+          enabledSections,
+          replacements,
+        });
+        if (saved) {
+          setReviewOpen(false);
+        }
+      } catch (err) {
+        setDownloadError(formatErrorMessage(err, "Failed to save diagnostics bundle"));
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [reviewPayload]
+  );
 
   return (
     <SettingsSection
@@ -110,14 +144,21 @@ function DownloadDiagnosticsSection() {
       <Button
         variant="outline"
         size="sm"
-        onClick={() => void handleDownload()}
-        disabled={isDownloading}
+        onClick={() => void handleOpenReview()}
+        disabled={isCollecting}
         className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text mb-3"
       >
-        <Download className={cn("w-4 h-4", isDownloading && "animate-spin")} />
-        {isDownloading ? "Collecting..." : "Download Diagnostics"}
+        <Download className={cn("w-4 h-4", isCollecting && "animate-spin")} />
+        {isCollecting ? "Collecting..." : "Download Diagnostics"}
       </Button>
       {downloadError && <p className="text-xs text-status-error mb-3">{downloadError}</p>}
+      <DiagnosticsReviewDialog
+        isOpen={reviewOpen}
+        onClose={() => setReviewOpen(false)}
+        reviewPayload={reviewPayload}
+        onSave={handleSave}
+        isSaving={isSaving}
+      />
     </SettingsSection>
   );
 }
@@ -134,7 +175,9 @@ function HardwareAccelerationSection() {
   const handleToggle = useCallback(() => {
     if (disabled === null) return;
     const newEnabled = disabled; // if currently disabled, we're enabling
-    void window.electron.gpu.setHardwareAcceleration(newEnabled);
+    safeFireAndForget(window.electron.gpu.setHardwareAcceleration(newEnabled), {
+      context: "Setting hardware acceleration preference",
+    });
   }, [disabled]);
 
   if (disabled === null) return null;
@@ -147,16 +190,20 @@ function HardwareAccelerationSection() {
     >
       <SettingsSwitchCard
         icon={Monitor}
-        title={disabled ? "Hardware Acceleration Disabled" : "Hardware Acceleration Enabled"}
-        subtitle={
-          disabled
-            ? "GPU was disabled due to repeated crashes. Re-enable to restore full performance. App will restart."
-            : "Disable if you experience blank panels or rendering issues. App will restart."
-        }
+        title="Hardware Acceleration"
+        subtitle="Uses GPU to improve rendering performance. Disable if you experience blank panels or rendering issues. App restarts on change."
         isEnabled={!disabled}
         onChange={handleToggle}
         ariaLabel="Hardware Acceleration Toggle"
       />
+
+      {disabled && (
+        <p className="text-xs text-status-warning/80 flex items-center gap-1.5 select-text">
+          <AlertTriangle className="w-3 h-3" />
+          GPU acceleration was disabled due to repeated crashes. Re-enable to restore full
+          performance.
+        </p>
+      )}
     </SettingsSection>
   );
 }
@@ -167,6 +214,39 @@ export function TroubleshootingTab() {
   const [focusEventsTab, setFocusEventsTab] = useState(false);
   const [verboseLogging, setVerboseLogging] = useState(false);
   const [verboseLoggingPending, setVerboseLoggingPending] = useState(false);
+  const [logOverrides, setLogOverrides] = useState<Record<string, string>>({});
+  const [logOverridesRefreshKey, setLogOverridesRefreshKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    void logsClient
+      .getLevelOverrides()
+      .then((overrides) => {
+        if (!cancelled) setLogOverrides(overrides);
+      })
+      .catch(() => {
+        if (!cancelled) setLogOverrides({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [logOverridesRefreshKey, verboseLogging]);
+
+  const handleOpenLogLevelPalette = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("daintree:open-log-level-palette"));
+    // Refresh on a short delay after the palette closes; simplest approach is
+    // to re-fetch whenever the user clicks the button again.
+    setLogOverridesRefreshKey((k) => k + 1);
+  }, []);
+
+  const handleClearLogOverrides = useCallback(async () => {
+    try {
+      await logsClient.clearLevelOverrides();
+      setLogOverrides({});
+    } catch (error) {
+      logError("Failed to clear log level overrides", error);
+    }
+  }, []);
 
   useEffect(() => {
     appClient.getState().then((appState) => {
@@ -185,7 +265,7 @@ export function TroubleshootingTab() {
         }
       })
       .catch((error) => {
-        console.error("Failed to get verbose logging state:", error);
+        logError("Failed to get verbose logging state", error);
       });
   }, []);
 
@@ -205,7 +285,7 @@ export function TroubleshootingTab() {
           throw new Error(result.error.message);
         }
       } catch (error) {
-        console.error("Failed to save developer mode settings:", error);
+        logError("Failed to save developer mode settings", error);
       }
     },
     []
@@ -284,13 +364,12 @@ export function TroubleshootingTab() {
         { enabled: newState },
         { source: "user" }
       );
-      const payload = result.ok ? (result.result as { success: boolean }) : null;
-      if (!result.ok || !payload?.success) {
-        console.error("Backend rejected verbose logging toggle");
+      if (!result.ok) {
+        logWarn("Backend rejected verbose logging toggle");
         setVerboseLogging(!newState);
       }
     } catch (error) {
-      console.error("Failed to set verbose logging:", error);
+      logError("Failed to set verbose logging", error);
       setVerboseLogging(!newState);
     } finally {
       setVerboseLoggingPending(false);
@@ -306,7 +385,7 @@ export function TroubleshootingTab() {
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to clear logs:", error);
+      logError("Failed to clear logs", error);
     }
   };
 
@@ -354,7 +433,7 @@ export function TroubleshootingTab() {
       >
         <SettingsSwitchCard
           icon={Bug}
-          title={developerMode ? "Developer Mode Enabled" : "Enable Developer Mode"}
+          title="Developer Mode"
           subtitle="Activates all debugging features below"
           isEnabled={developerMode}
           onChange={handleToggleDeveloperMode}
@@ -387,7 +466,7 @@ export function TroubleshootingTab() {
 
         <SettingsSwitchCard
           icon={AlertTriangle}
-          title={verboseLogging ? "Verbose Logging Enabled" : "Enable Verbose Logging"}
+          title="Verbose Logging"
           subtitle="Captures detailed debug output for troubleshooting. Resets on app restart."
           isEnabled={verboseLogging}
           onChange={handleToggleVerboseLogging}
@@ -415,6 +494,54 @@ export function TroubleshootingTab() {
             DAINTREE_DEBUG=1 npm run dev
           </code>
         </div>
+      </SettingsSection>
+
+      <SettingsSection
+        icon={SlidersHorizontal}
+        title="Per-Module Log Levels"
+        description="Override the log level for a specific module (or a process-wide wildcard). Overrides persist across restarts."
+      >
+        <div className="flex gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleOpenLogLevelPalette}
+            className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
+          >
+            <SlidersHorizontal />
+            Set Log Level…
+          </Button>
+          {Object.keys(logOverrides).length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleClearLogOverrides()}
+              className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+            >
+              <Trash2 />
+              Clear All Overrides
+            </Button>
+          )}
+        </div>
+
+        {Object.keys(logOverrides).length > 0 && (
+          <div className="space-y-1 mt-3">
+            <h5 className="text-xs font-medium text-daintree-text/80 mb-1">Active overrides</h5>
+            {Object.entries(logOverrides)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([name, level]) => (
+                <div
+                  key={name}
+                  className="flex items-center justify-between px-3 py-1.5 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30"
+                >
+                  <span className="text-xs font-mono text-daintree-text truncate">{name}</span>
+                  <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-daintree-border/60 text-daintree-text/80">
+                    {level}
+                  </span>
+                </div>
+              ))}
+          </div>
+        )}
       </SettingsSection>
 
       <div className="space-y-2">

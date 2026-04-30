@@ -42,8 +42,8 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
       }
 
       e.preventDefault();
-      tabs[nextIndex].focus();
-      const tabId = tabs[nextIndex].dataset.tab;
+      tabs[nextIndex]!.focus();
+      const tabId = tabs[nextIndex]!.dataset.tab;
       if (tabId) onChange(tabId);
     },
     [onChange]

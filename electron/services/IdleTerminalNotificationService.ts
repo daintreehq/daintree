@@ -19,12 +19,7 @@ const MIN_THRESHOLD_MINUTES = 15;
 const MAX_THRESHOLD_MINUTES = 1440; // 24h
 const MIN_COOLDOWN_MINUTES = 60;
 
-const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set([
-  "working",
-  "running",
-  "waiting",
-  "directing",
-]);
+const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set(["working", "waiting", "directing"]);
 
 interface PtyManagerLike {
   getAll: () => Array<{

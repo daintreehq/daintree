@@ -251,11 +251,11 @@ export function VoiceInputButton({
                   : "Start voice input"
         }
         className={cn(
-          "relative flex items-center justify-center rounded-full transition duration-200",
+          "relative flex items-center justify-center rounded-full transition duration-150",
           "h-6 w-6",
-          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent",
+          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent",
           showOrbit
-            ? "bg-daintree-accent/10 text-daintree-accent hover:bg-daintree-accent/15"
+            ? "bg-overlay-soft text-daintree-text hover:bg-overlay-medium"
             : cn(
                 status === "error"
                   ? "text-activity-waiting hover:text-activity-waiting/80"

@@ -26,9 +26,12 @@ let panelIdsA: string[] = [];
 async function focusAndRunCommand(page: Page, panel: Locator, command: string): Promise<void> {
   const xterm = panel.locator(SEL.terminal.xtermRows);
   await xterm.click();
-  // Wait for focus to settle before typing — prevents keystroke loss
-  await page.waitForTimeout(200);
-  await page.keyboard.type(command);
+  // Wait for xterm's helper textarea to receive focus before typing —
+  // typing too early can drop the leading characters of the command.
+  await expect(panel.locator(".xterm-helper-textarea")).toBeFocused({ timeout: 5_000 });
+  await page.waitForTimeout(150);
+  // Per-key delay; PTY can drop bursts on cold-start or after switches.
+  await page.keyboard.type(command, { delay: 15 });
   await page.keyboard.press("Enter");
 }
 

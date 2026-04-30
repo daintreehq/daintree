@@ -25,6 +25,13 @@ vi.mock("../../Terminal/XtermAdapter", () => ({
   )),
 }));
 
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 describe("ConsoleDrawer", () => {
   const mockTerminalId = "test-terminal-id";
   const getToggleButton = () => screen.getByRole("button", { name: /(?:show|hide) terminal/i });

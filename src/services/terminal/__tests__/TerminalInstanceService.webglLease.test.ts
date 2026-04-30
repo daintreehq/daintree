@@ -207,12 +207,17 @@ describe("onTierApplied handler — WebGL manager integration", () => {
   let webGLManager: import("../TerminalWebGLManager").TerminalWebGLManager;
   let managed: ManagedTerminal;
 
-  function makeManagedTerminal(kind: "agent" | "terminal" = "agent"): ManagedTerminal {
+  function makeManagedTerminal(agentId?: string | null): ManagedTerminal {
+    // After the #5777 kind collapse, agent identity lives on `agentId`, not
+    // `kind`. WebGL reservation gates on `managed.agentId`. Tests that want
+    // a plain (non-agent) terminal pass `null` (or omit — but `null` is more
+    // explicit and avoids the default-param trap when callers pass `undefined`).
     return {
       terminal: { loadAddon: vi.fn(), refresh: vi.fn(), rows: 24 },
       isOpened: true,
       lastActiveTime: Date.now(),
-      kind,
+      kind: "terminal",
+      agentId: agentId === null ? undefined : (agentId ?? "claude"),
     } as unknown as ManagedTerminal;
   }
 
@@ -226,7 +231,7 @@ describe("onTierApplied handler — WebGL manager integration", () => {
   });
 
   function simulateOnTierApplied(id: string, tier: TerminalRefreshTier, m: ManagedTerminal) {
-    if ((m as unknown as { kind?: string }).kind !== "agent") return;
+    if (!(m as unknown as { agentId?: string }).agentId) return;
 
     if (
       tier === TerminalRefreshTier.FOCUSED ||
@@ -302,13 +307,13 @@ describe("onTierApplied handler — WebGL manager integration", () => {
   });
 
   it("standard terminal at FOCUSED never acquires WebGL context", () => {
-    const stdManaged = makeManagedTerminal("terminal");
+    const stdManaged = makeManagedTerminal(null);
     simulateOnTierApplied("t-std", TerminalRefreshTier.FOCUSED, stdManaged);
     expect(webGLManager.isActive("t-std")).toBe(false);
   });
 
   it("standard terminal at BURST/VISIBLE never acquires WebGL context", () => {
-    const stdManaged = makeManagedTerminal("terminal");
+    const stdManaged = makeManagedTerminal(null);
     simulateOnTierApplied("t-std", TerminalRefreshTier.BURST, stdManaged);
     expect(webGLManager.isActive("t-std")).toBe(false);
     simulateOnTierApplied("t-std", TerminalRefreshTier.VISIBLE, stdManaged);
@@ -316,7 +321,7 @@ describe("onTierApplied handler — WebGL manager integration", () => {
   });
 
   it("rapid tier churn on standard terminal does not create pool entries", () => {
-    const stdManaged = makeManagedTerminal("terminal");
+    const stdManaged = makeManagedTerminal(null);
     const tiers = [
       TerminalRefreshTier.FOCUSED,
       TerminalRefreshTier.BURST,
@@ -333,9 +338,9 @@ describe("onTierApplied handler — WebGL manager integration", () => {
   it("mixed pool: standard terminals don't consume agent WebGL slots", () => {
     const agents = Array.from({ length: 3 }, (_, i) => ({
       id: `agent-${i}`,
-      m: makeManagedTerminal("agent"),
+      m: makeManagedTerminal("claude"),
     }));
-    const stdManaged = makeManagedTerminal("terminal");
+    const stdManaged = makeManagedTerminal(null);
 
     for (const { id, m } of agents) {
       simulateOnTierApplied(id, TerminalRefreshTier.FOCUSED, m);

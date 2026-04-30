@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "../../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import {
   ChevronRight,
@@ -43,10 +44,17 @@ import {
   Terminal as TerminalIcon,
   Box,
   Layers,
+  Trash2,
 } from "lucide-react";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
-import { IssueTooltipContent, PRTooltipContent, TooltipLoading } from "./GitHubTooltipContent";
+import {
+  IssueTooltipContent,
+  PRTooltipContent,
+  TooltipLoading,
+  TokenMissingTooltip,
+} from "./GitHubTooltipContent";
+import { actionService } from "@/services/ActionService";
 
 const ENVIRONMENT_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   Server,
@@ -91,37 +99,54 @@ const IssueBadge = memo(function IssueBadge({
   underlineOnHover,
 }: IssueBadgeProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const { data, loading, error, fetchTooltip, reset } = useIssueTooltip(worktreePath, issueNumber);
+  const { data, loading, error, missingToken, fetchTooltip, reset } = useIssueTooltip(
+    worktreePath,
+    issueNumber
+  );
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
       setIsOpen(open);
       if (open) {
-        fetchTooltip();
+        void fetchTooltip();
       } else {
-        reset();
+        void reset();
       }
     },
     [fetchTooltip, reset]
   );
+
+  const handleClick = useCallback(() => {
+    if (!isActive) return;
+    if (missingToken) {
+      void actionService.dispatch(
+        "app.settings.openTab",
+        { tab: "github", sectionId: "github-token" },
+        { source: "user" }
+      );
+      return;
+    }
+    onOpen?.();
+  }, [isActive, missingToken, onOpen]);
 
   return (
     <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
       <TooltipTrigger asChild>
         <button
           type="button"
-          onClick={() => {
-            if (isActive) onOpen?.();
-          }}
+          onClick={handleClick}
           className={cn(
             "flex items-center gap-1.5 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
-            isHeadline ? "text-[13px]" : "text-xs"
+            isHeadline ? "text-[13px]" : "text-xs",
+            missingToken && "opacity-60"
           )}
           aria-disabled={!isActive || undefined}
           aria-label={
-            issueTitle
-              ? `Open issue #${issueNumber}: ${issueTitle}`
-              : `Open issue #${issueNumber} on GitHub`
+            missingToken
+              ? "Configure GitHub token to see issue details"
+              : issueTitle
+                ? `Open issue #${issueNumber}: ${issueTitle}`
+                : `Open issue #${issueNumber} on GitHub`
           }
         >
           <CircleDot
@@ -144,7 +169,9 @@ const IssueBadge = memo(function IssueBadge({
         </button>
       </TooltipTrigger>
       <TooltipContent side="right" align="start" className="p-3">
-        {loading ? (
+        {missingToken ? (
+          <TokenMissingTooltip type="issue" />
+        ) : loading ? (
           <TooltipLoading type="issue" />
         ) : data ? (
           <IssueTooltipContent data={data} />
@@ -178,19 +205,35 @@ const PRBadge = memo(function PRBadge({
   underlineOnHover,
 }: PRBadgeProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const { data, loading, error, fetchTooltip, reset } = usePRTooltip(worktreePath, prNumber);
+  const { data, loading, error, missingToken, fetchTooltip, reset } = usePRTooltip(
+    worktreePath,
+    prNumber
+  );
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
       setIsOpen(open);
       if (open) {
-        fetchTooltip();
+        void fetchTooltip();
       } else {
-        reset();
+        void reset();
       }
     },
     [fetchTooltip, reset]
   );
+
+  const handleClick = useCallback(() => {
+    if (!isActive) return;
+    if (missingToken) {
+      void actionService.dispatch(
+        "app.settings.openTab",
+        { tab: "github", sectionId: "github-token" },
+        { source: "user" }
+      );
+      return;
+    }
+    onOpen?.();
+  }, [isActive, missingToken, onOpen]);
 
   const prStateColor =
     prState === "merged"
@@ -206,12 +249,17 @@ const PRBadge = memo(function PRBadge({
       <TooltipTrigger asChild>
         <button
           type="button"
-          onClick={() => {
-            if (isActive) onOpen?.();
-          }}
-          className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0"
+          onClick={handleClick}
+          className={cn(
+            "flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
+            missingToken && "opacity-60"
+          )}
           aria-disabled={!isActive || undefined}
-          aria-label={`Open ${prStateLabel} pull request #${prNumber} on GitHub`}
+          aria-label={
+            missingToken
+              ? "Configure GitHub token to see PR details"
+              : `Open ${prStateLabel} pull request #${prNumber} on GitHub`
+          }
         >
           {isSubordinate && (
             <CornerDownRight className="w-3 h-3 text-text-muted shrink-0" aria-hidden="true" />
@@ -223,7 +271,9 @@ const PRBadge = memo(function PRBadge({
         </button>
       </TooltipTrigger>
       <TooltipContent side="right" align="start" className="p-3">
-        {loading ? (
+        {missingToken ? (
+          <TokenMissingTooltip type="pr" />
+        ) : loading ? (
           <TooltipLoading type="pr" />
         ) : data ? (
           <PRTooltipContent data={data} />
@@ -261,6 +311,7 @@ export interface WorktreeHeaderProps {
   resourceEndpoint?: string;
   resourceLastCheckedAt?: number;
   onCheckResourceStatus?: () => void;
+  onCleanupWorktree?: () => void;
   badges: {
     onOpenIssue?: () => void;
     onOpenPR?: () => void;
@@ -271,13 +322,14 @@ export interface WorktreeHeaderProps {
     launchAgents: WorktreeLaunchAgentItem[];
     recipes: TerminalRecipe[];
     runningRecipeId: string | null;
-    isRestartValidating: boolean;
     counts: {
       grid: number;
       dock: number;
       active: number;
       completed: number;
       all: number;
+      waiting: number;
+      working: number;
     };
     onCopyContextFull: () => void;
     onCopyContextModified: () => void;
@@ -296,11 +348,10 @@ export interface WorktreeHeaderProps {
     onLaunchAgent?: (agentId: string) => void;
     onDockAll: () => void;
     onMaximizeAll: () => void;
-    onRestartAll: () => void;
     onResetRenderers: () => void;
-    onCloseCompleted: () => void;
-    onCloseAll: () => void;
-    onEndAll: () => void;
+    onSelectAllAgents: () => void;
+    onSelectWaitingAgents: () => void;
+    onSelectWorkingAgents: () => void;
     onAttachIssue?: () => void;
     onViewPlan?: () => void;
     onOpenReviewHub?: () => void;
@@ -347,6 +398,7 @@ export function WorktreeHeader({
   resourceEndpoint,
   resourceLastCheckedAt,
   onCheckResourceStatus,
+  onCleanupWorktree,
   badges,
   menu,
 }: WorktreeHeaderProps) {
@@ -411,7 +463,7 @@ export function WorktreeHeader({
               const iconClass = cn(
                 "w-3 h-3 shrink-0",
                 isLifecycleRunning
-                  ? "animate-pulse text-daintree-accent"
+                  ? "animate-pulse text-activity-working"
                   : resourceStatusColor === "green"
                     ? "text-terminal-bright-green"
                     : resourceStatusColor === "yellow"
@@ -419,7 +471,7 @@ export function WorktreeHeader({
                       : resourceStatusColor === "red"
                         ? "text-status-error"
                         : resourceStatusColor === "neutral" || resourceStatusLabel
-                          ? "text-daintree-accent/70"
+                          ? "text-status-info/70"
                           : "text-daintree-text/30"
               );
               const hasDetails =
@@ -444,7 +496,7 @@ export function WorktreeHeader({
                 <Popover>
                   <PopoverTrigger asChild>
                     <button
-                      className="shrink-0 rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent"
+                      className="shrink-0 rounded focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
                       aria-label={`${worktree.worktreeMode} environment status`}
                     >
                       <EnvironmentIcon className={iconClass} />
@@ -518,19 +570,21 @@ export function WorktreeHeader({
               underlineOnHover={underlineOnHover}
             />
           ) : isMainStandardLayout ? (
-            <span
-              className={cn(
-                "truncate text-[13px] font-medium transition-colors duration-200",
-                isActive
-                  ? "text-text-primary/90"
-                  : isMuted
-                    ? "text-text-muted"
-                    : "text-text-secondary"
-              )}
-              data-testid="primary-worktree-project-name"
-            >
-              {worktree.name}
-            </span>
+            <TruncatedTooltip content={worktree.name}>
+              <span
+                className={cn(
+                  "truncate text-[13px] font-medium transition-colors duration-150",
+                  isActive
+                    ? "text-text-primary/90"
+                    : isMuted
+                      ? "text-text-muted"
+                      : "text-text-secondary"
+                )}
+                data-testid="primary-worktree-project-name"
+              >
+                {worktree.name}
+              </span>
+            </TruncatedTooltip>
           ) : (
             <BranchLabel
               label={branchLabel}
@@ -592,6 +646,25 @@ export function WorktreeHeader({
                 : "opacity-0 pointer-events-none group-hover/card:opacity-100 group-hover/card:pointer-events-auto group-focus-within/card:opacity-100 group-focus-within/card:pointer-events-auto"
           )}
         >
+          {onCleanupWorktree && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCleanupWorktree();
+                  }}
+                  className="sidebar-action-button p-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                  aria-label="Delete worktree"
+                  data-testid="worktree-cleanup-button"
+                >
+                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Delete worktree</TooltipContent>
+            </Tooltip>
+          )}
           {canCollapse && (
             <button
               onClick={onToggleCollapse}
@@ -602,7 +675,7 @@ export function WorktreeHeader({
             >
               <ChevronRight
                 className={cn(
-                  "w-3.5 h-3.5 transition-transform duration-200",
+                  "w-3.5 h-3.5 transition-transform duration-150",
                   isCollapsed ? "rotate-0" : "rotate-90"
                 )}
                 aria-hidden="true"
@@ -640,7 +713,6 @@ export function WorktreeHeader({
                 launchAgents={menu.launchAgents}
                 recipes={recipeOptions}
                 runningRecipeId={menu.runningRecipeId}
-                isRestartValidating={menu.isRestartValidating}
                 isPinned={isPinned}
                 counts={menu.counts}
                 onLaunchAgent={menu.onLaunchAgent ? handleLaunchAgent : undefined}
@@ -664,11 +736,10 @@ export function WorktreeHeader({
                 isCollapsed={menu.isCollapsed}
                 onDockAll={menu.onDockAll}
                 onMaximizeAll={menu.onMaximizeAll}
-                onRestartAll={menu.onRestartAll}
                 onResetRenderers={menu.onResetRenderers}
-                onCloseCompleted={menu.onCloseCompleted}
-                onCloseAll={menu.onCloseAll}
-                onEndAll={menu.onEndAll}
+                onSelectAllAgents={menu.onSelectAllAgents}
+                onSelectWaitingAgents={menu.onSelectWaitingAgents}
+                onSelectWorkingAgents={menu.onSelectWorkingAgents}
                 onOpenPanelPalette={menu.onOpenPanelPalette}
                 onDeleteWorktree={menu.onDeleteWorktree}
                 onRevertAgentChanges={menu.onRevertAgentChanges}
@@ -875,7 +946,7 @@ export function WorktreeHeader({
                 aria-disabled={!isActive || undefined}
                 aria-label="View agent plan file"
               >
-                <FileText className="w-3 h-3 shrink-0 text-daintree-accent/70" aria-hidden="true" />
+                <FileText className="w-3 h-3 shrink-0 text-daintree-text/50" aria-hidden="true" />
                 <span className={cn("font-mono", underlineOnHover && "hover:underline")}>
                   {worktree.planFilePath ?? "Plan"}
                 </span>

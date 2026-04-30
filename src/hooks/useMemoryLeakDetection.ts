@@ -31,8 +31,8 @@ export function computeSlope(values: number[]): number {
   let sumI2 = 0;
   for (let i = 0; i < n; i++) {
     sumI += i;
-    sumY += values[i];
-    sumIY += i * values[i];
+    sumY += values[i]!;
+    sumIY += i * values[i]!;
     sumI2 += i * i;
   }
   const denom = n * sumI2 - sumI * sumI;
@@ -170,7 +170,7 @@ export function useMemoryLeakDetection(
                 onClick: () => {},
               },
               {
-                label: "Dismiss",
+                label: "Mute alerts",
                 variant: "secondary" as const,
                 onClick: () => {
                   const st = localStateMap.get(id);

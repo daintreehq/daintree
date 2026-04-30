@@ -4,6 +4,18 @@ export interface SerializedError {
   message: string;
   stack?: string;
   code?: string;
+  /**
+   * User-facing message carried by `AppError`. Promoted to a top-level field
+   * (rather than living in `properties`) so it survives the packaged-build
+   * strip in `electron/setup/security.ts`.
+   */
+  userMessage?: string;
+  /**
+   * Classified reason carried by `GitOperationError`. Promoted to a top-level
+   * field so it survives the packaged-build strip and lets the renderer drive
+   * recovery UI without relying on substring-matching the message.
+   */
+  gitReason?: GitOperationReason;
   errno?: number;
   syscall?: string;
   path?: string;
@@ -34,8 +46,86 @@ export function isIpcEnvelope(value: unknown): value is IpcEnvelope {
   );
 }
 
+/**
+ * Keys that an IPC handler must never include in its return value. These
+ * collide with the envelope discriminator that `security.ts` adds around
+ * every handler return — when a handler returns `{ ok: false, ... }` the
+ * outer wrapper still reports `ok: true` and the renderer's
+ * `_unwrappingInvoke` silently swallows the inner failure.
+ */
+type ForbiddenEnvelopeKey = "ok" | "success";
+
+/**
+ * Branded shape produced when a handler's declared return type contains a
+ * forbidden envelope discriminator key. The property name carries the
+ * remediation hint, so TypeScript surfaces it in the compile error:
+ *
+ *   Property '"IPC handler must throw new AppError(...) instead of returning {ok|success: ...} — see #6020"' is missing
+ */
+export interface IpcHandlerEnvelopeViolation {
+  readonly "IPC handler must throw new AppError(...) instead of returning {ok|success: ...} — see #6020": never;
+}
+
+/**
+ * Distributive conditional: rejects any object type that carries `ok` or
+ * `success` as a key (in any branch of a union). Pass-through for primitive
+ * results, `void`, `null`, and objects without those keys.
+ *
+ * Used to constrain typed-handler return positions in
+ * `electron/ipc/define.ts` (`PlainHandler` / `ContextHandler`) and
+ * `electron/ipc/utils.ts` (`typedHandle` / `typedHandleWithContext`). The
+ * constraint catches the antipattern at the registration site, directing
+ * developers to throw an error instead of returning an inner-envelope shape.
+ */
+export type ForbidIpcEnvelopeKeys<T> = T extends object
+  ? Extract<keyof T, ForbiddenEnvelopeKey> extends never
+    ? T
+    : IpcHandlerEnvelopeViolation
+  : T;
+
 /** Error type */
-export type ErrorType = "git" | "process" | "filesystem" | "network" | "config" | "unknown";
+export type ErrorType =
+  | "git"
+  | "process"
+  | "filesystem"
+  | "network"
+  | "config"
+  | "validation"
+  | "unknown";
+
+/**
+ * Discriminated reason for a failed git operation. The classifier in
+ * `shared/utils/gitOperationErrors.ts` maps simple-git stderr output to one of
+ * these reasons so UI code can branch without substring-matching raw stderr.
+ */
+export type GitOperationReason =
+  | "auth-failed"
+  | "network-unavailable"
+  | "repository-not-found"
+  | "not-a-repository"
+  | "dubious-ownership"
+  | "config-missing"
+  | "worktree-dirty"
+  | "conflict-unresolved"
+  | "push-rejected-outdated"
+  | "push-rejected-policy"
+  | "pathspec-invalid"
+  | "lfs-missing"
+  | "lfs-quota-exceeded"
+  | "hook-rejected"
+  | "system-io-error"
+  | "unknown";
+
+/**
+ * Structured contextual CTA for an error. `actionId` is dispatched via the
+ * renderer's ActionService when the user clicks the recovery button. All
+ * fields are plain primitives so the object survives structured clone.
+ */
+export interface RecoveryAction {
+  label: string;
+  actionId: string;
+  args?: Record<string, unknown>;
+}
 
 /** Action that can be retried after an error */
 export type RetryAction = "terminal" | "git" | "worktree";
@@ -47,8 +137,8 @@ export interface RetryProgressPayload {
   maxAttempts: number;
 }
 
-/** Application error for UI display */
-export interface AppError {
+/** Application error record stored for UI display (errorStore / banners). */
+export interface ErrorRecord {
   /** Unique identifier */
   id: string;
   /** Timestamp when error occurred */
@@ -84,4 +174,8 @@ export interface AppError {
   recoveryHint?: string;
   /** Retry progress state (set during active retry loop) */
   retryProgress?: { attempt: number; maxAttempts: number };
+  /** Classified reason when this error originated from a git operation */
+  gitReason?: GitOperationReason;
+  /** Structured CTA the renderer can surface alongside the error */
+  recoveryAction?: RecoveryAction;
 }

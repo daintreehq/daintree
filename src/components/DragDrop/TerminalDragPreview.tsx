@@ -1,7 +1,7 @@
 import { Loader2, Layers } from "lucide-react";
 import type { TerminalInstance } from "@/store";
 import { PlaceholderContent } from "./PlaceholderContent";
-import { getPanelKindColor } from "@shared/config/panelKindRegistry";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 interface TerminalDragPreviewProps {
   terminal: TerminalInstance;
@@ -10,8 +10,10 @@ interface TerminalDragPreviewProps {
 }
 
 export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPreviewProps) {
-  const brandColor = getPanelKindColor(terminal.kind ?? "terminal", terminal.agentId);
-  const isWorking = terminal.agentState === "working";
+  // Drag visual color mirrors the same chrome descriptor used by tabs/panels.
+  const chrome = deriveTerminalChrome(terminal);
+  const brandColor = chrome.color;
+  const isWorking = chrome.isAgent && terminal.agentState === "working";
   const isGroupDrag = (groupTabCount ?? 0) > 1;
 
   return (
@@ -22,7 +24,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
         backgroundColor: "var(--color-daintree-sidebar)",
         border: "1px solid var(--color-daintree-border)",
         borderRadius: "var(--radius-lg)",
-        boxShadow: "0 8px 24px rgba(0, 0, 0, 0.6)",
+        boxShadow: "var(--theme-shadow-floating)",
         overflow: "visible",
         display: "flex",
         flexDirection: "column",
@@ -36,7 +38,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
             position: "absolute",
             top: -8,
             right: -8,
-            backgroundColor: "var(--color-daintree-accent)",
+            backgroundColor: "var(--color-daintree-text)",
             color: "var(--color-daintree-bg)",
             borderRadius: "9999px",
             padding: "2px 6px",
@@ -45,7 +47,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
             display: "flex",
             alignItems: "center",
             gap: 3,
-            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.4)",
+            boxShadow: "var(--theme-shadow-ambient)",
             fontVariantNumeric: "tabular-nums",
             zIndex: 10,
           }}
@@ -113,7 +115,10 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
           flexDirection: "column",
         }}
       >
-        <PlaceholderContent kind={terminal.kind ?? "terminal"} agentId={terminal.agentId} />
+        <PlaceholderContent
+          kind={terminal.kind ?? "terminal"}
+          agentId={chrome.agentId ?? undefined}
+        />
       </div>
     </div>
   );

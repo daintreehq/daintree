@@ -1,21 +1,21 @@
 import { useState } from "react";
-import { PanelBottom } from "lucide-react";
-import { MoveToGridIcon } from "@/components/icons";
+import { PanelBottom, PanelTopClose } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import type { TerminalInstance } from "@/store/panelStore";
 import type { PanelLocation } from "@shared/types";
 import type { ComponentType } from "react";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 function getLocationIcon(location: PanelLocation | undefined) {
   if (location === "dock") return <PanelBottom className="w-3 h-3" />;
-  return <MoveToGridIcon className="w-3 h-3" />;
+  return <PanelTopClose className="w-3 h-3" />;
 }
 
 export interface StatusContainerConfig {
@@ -28,17 +28,16 @@ export interface StatusContainerConfig {
   statusAriaLabel: string;
   contentAriaLabel: string;
   contentId: string;
-  useTerminals: () => TerminalInstance[];
 }
 
 interface StatusContainerProps {
   config: StatusContainerConfig;
+  terminals: TerminalInstance[];
   compact?: boolean;
 }
 
-export function StatusContainer({ config, compact = false }: StatusContainerProps) {
+export function StatusContainer({ config, terminals, compact = false }: StatusContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const terminals = config.useTerminals();
   const { activateTerminal, pingTerminal } = usePanelStore(
     useShallow((state) => ({
       activateTerminal: state.activateTerminal,
@@ -66,7 +65,7 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
           size="sm"
           className={cn(
             compact ? "px-1.5 min-w-0" : "px-3",
-            isOpen && "bg-daintree-border border-daintree-accent/40 ring-1 ring-daintree-accent/30"
+            isOpen && "bg-overlay-emphasis border-border-default"
           )}
           aria-haspopup="dialog"
           aria-expanded={isOpen}
@@ -126,15 +125,13 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
                   pingTerminal(terminal.id);
                   setIsOpen(false);
                 }}
-                className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left outline-none hover:bg-tint/5 focus:bg-tint/5"
+                className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left outline-hidden hover:bg-tint/5 focus:bg-tint/5"
               >
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                   <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
                     <TerminalIcon
-                      type={terminal.type}
                       kind={terminal.kind}
-                      agentId={terminal.agentId}
-                      detectedProcessId={terminal.detectedProcessId}
+                      chrome={deriveTerminalChrome(terminal)}
                       className="h-3 w-3"
                     />
                   </div>
@@ -149,18 +146,16 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
                     aria-label={config.statusAriaLabel}
                   />
 
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors">
-                          {getLocationIcon(terminal.location)}
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        {terminal.location === "dock" ? "Docked" : "On Grid"}
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors">
+                        {getLocationIcon(terminal.location)}
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {terminal.location === "dock" ? "Docked" : "On Grid"}
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               </button>
             ))}

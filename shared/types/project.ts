@@ -2,10 +2,11 @@ import type { AgentId, AgentState } from "./agent.js";
 import type { BrowserHistory } from "./browser.js";
 import type {
   PanelKind,
-  TerminalType,
   PanelLocation,
+  PanelTitleMode,
   TabGroup,
   PanelExitBehavior,
+  ViewportPresetId,
 } from "./panel.js";
 import type { CommandOverride } from "./commands.js";
 import type { EditorConfig } from "./editor.js";
@@ -54,12 +55,16 @@ export interface PanelSnapshot {
   id: string;
   /** Terminal category */
   kind?: PanelKind;
-  /** Terminal type */
-  type?: TerminalType;
-  /** Agent ID when kind is an agent - enables extensibility */
-  agentId?: AgentId;
+  /**
+   * Launch hint — agent this terminal was launched to run. Persisted so
+   * restart re-injects the same command. Not identity. See
+   * `docs/architecture/terminal-identity.md`.
+   */
+  launchAgentId?: AgentId;
   /** Display title */
   title: string;
+  /** How the title is owned. Absent defaults to "default". */
+  titleMode?: PanelTitleMode;
   /** Working directory - only present for PTY panels */
   cwd?: string;
   /** Associated worktree ID */
@@ -86,14 +91,10 @@ export interface PanelSnapshot {
   devServerTerminalId?: string;
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
-  /** Path to note file (kind === 'notes') */
-  notePath?: string;
-  /** Note ID (kind === 'notes') */
-  noteId?: string;
-  /** Note scope (kind === 'notes') */
-  scope?: "worktree" | "project";
-  /** Note creation timestamp (kind === 'notes') */
-  createdAt?: number;
+  /** Active viewport preset for dev-preview responsive emulation */
+  viewportPreset?: ViewportPresetId;
+  /** Last captured dev-preview scroll position, paired with URL for stale-scroll prevention */
+  devPreviewScrollPosition?: { url: string; scrollY: number };
   /** Behavior when terminal exits */
   exitBehavior?: PanelExitBehavior;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
@@ -102,12 +103,28 @@ export interface PanelSnapshot {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Preset ID active at launch time, used to restore colored icon on reload */
+  agentPresetId?: string;
+  /** Preset hex color captured at launch time; fallback when preset is later deleted */
+  agentPresetColor?: string;
+  /** Original user-selected preset ID; immutable across fallback hops. */
+  originalPresetId?: string;
+  /** Whether this panel is currently running on a fallback preset. */
+  isUsingFallback?: boolean;
+  /** How many fallback hops have been consumed from the primary's chain. */
+  fallbackChainIndex?: number;
   /** Last known agent state for crash recovery display */
   agentState?: AgentState;
   /** Timestamp of last agent state change */
   lastStateChange?: number;
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
+  /**
+   * Extension ID of the plugin that registered this panel's kind, if applicable.
+   * Preserved across save/restore so the placeholder can name the missing plugin
+   * when its registration is gone.
+   */
+  pluginId?: string;
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 
@@ -180,6 +197,10 @@ export interface RecipeTerminal {
   devCommand?: string;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely (optional, defaults to "keep") */
   exitBehavior?: PanelExitBehavior;
+  /** Per-panel model override captured at launch (agent types only). Transient — stripped before disk persistence. */
+  agentModelId?: string;
+  /** Process-level launch flags captured at launch (agent types only). Transient — stripped before disk persistence. */
+  agentLaunchFlags?: string[];
 }
 
 /** A saved terminal recipe */
@@ -263,6 +284,17 @@ export type ResourceEnvironment = {
   icon?: string;
 };
 
+/** A saved fleet scope — a named selection of terminal IDs or filter preset */
+export interface FleetSavedScope {
+  id: string;
+  name: string;
+  /** Explicit terminal IDs — takes precedence over filter when present */
+  terminalIds?: string[];
+  /** Filter-based scope that is re-evaluated against current panels on recall */
+  filter?: { scope: "current" | "all"; stateFilter: string };
+  createdAt: number;
+}
+
 /** Per-project terminal configuration overrides */
 export interface ProjectTerminalSettings {
   /** Override shell executable path (machine-local, not stored in .daintree/settings.json) */
@@ -301,6 +333,8 @@ export interface ProjectSettings {
   devServerAutoDetected?: boolean;
   /** User dismissed cloud sync folder warning for this project */
   cloudSyncWarningDismissed?: boolean;
+  /** User dismissed the offer to import detected project context files (CLAUDE.md, AGENTS.md, etc.) */
+  contextFilesOfferDismissed?: boolean;
   /** Timeout in seconds before a slow-loading dev preview is automatically reloaded (default: 30, max: 120) */
   devServerLoadTimeout?: number;
   /** Whether to auto-inject --turbopack for Next.js 15+ projects (default: true) */
@@ -336,6 +370,8 @@ export interface ProjectSettings {
   githubRemote?: string;
   /** Per-project worktree path pattern override (uses global default when unset) */
   worktreePathPattern?: string;
+  /** Saved fleet scopes for quick arm/recall */
+  fleetSavedScopes?: FleetSavedScope[];
   /** Per-project terminal configuration overrides */
   terminalSettings?: ProjectTerminalSettings;
   /** Per-project notification overrides (machine-local, never written to .daintree/settings.json) */
@@ -348,4 +384,6 @@ export interface ProjectSettings {
   activeResourceEnvironment?: string;
   /** Default worktree mode for new worktrees ("local" or an environment key from resourceEnvironments) */
   defaultWorktreeMode?: string;
+  /** Hostnames the user approved for the browser panel beyond the implicit local/private allow-list */
+  browserAllowedHosts?: string[];
 }

@@ -9,11 +9,15 @@ import {
   terminalConfigClient,
   worktreeConfigClient,
 } from "@/clients";
+import { dispatchEscape } from "@/lib/escapeStack";
 import { notify } from "@/lib/notify";
+import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { ASSISTANT_FAST_MODELS, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { getAgentSettingsEntry } from "@shared/types";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
@@ -37,6 +41,7 @@ export function registerPreferencesActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ show: z.boolean() }),
+    safeBreadcrumbArgs: ["show"],
     run: async (args: unknown) => {
       const { show } = args as { show: boolean };
       usePreferencesStore.getState().setShowProjectPulse(show);
@@ -52,6 +57,7 @@ export function registerPreferencesActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ show: z.boolean() }),
+    safeBreadcrumbArgs: ["show"],
     run: async (args: unknown) => {
       const { show } = args as { show: boolean };
       usePreferencesStore.getState().setShowDeveloperTools(show);
@@ -85,6 +91,21 @@ export function registerPreferencesActions(
     run: async (args: unknown) => {
       const { show } = args as { show: boolean };
       usePreferencesStore.getState().setShowDockAgentHighlights(show);
+    },
+  }));
+
+  actions.set("preferences.reduceAnimations.set", () => ({
+    id: "preferences.reduceAnimations.set",
+    title: "Set Reduce UI Animations",
+    description: "Minimize motion across the interface, independent of OS settings",
+    category: "preferences",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ value: z.boolean() }),
+    run: async (args: unknown) => {
+      const { value } = args as { value: boolean };
+      usePreferencesStore.getState().setReduceAnimations(value);
     },
   }));
 
@@ -678,8 +699,6 @@ export function registerPreferencesActions(
       const agentSettings = useAgentSettingsStore.getState().settings;
       const agentEntry = getAgentSettingsEntry(agentSettings, agentId);
       const storedModel = agentEntry.assistantModelId as string | undefined;
-      const { getEffectiveAgentConfig, ASSISTANT_FAST_MODELS } =
-        await import("@shared/config/agentRegistry");
       const agentCfg = getEffectiveAgentConfig(agentId);
       let model: string | undefined;
       if (storedModel && agentCfg?.models?.some((m) => m.id === storedModel)) {
@@ -692,7 +711,6 @@ export function registerPreferencesActions(
       const helpPrompt =
         "I need help with Daintree, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
 
-      const { actionService } = await import("@/services/ActionService");
       const result = await actionService.dispatch<{ terminalId: string | null }>(
         "agent.launch",
         { agentId, cwd: folderPath, location: "dock", prompt: helpPrompt, ...(model && { model }) },
@@ -700,7 +718,6 @@ export function registerPreferencesActions(
       );
 
       // Store the terminal in the help panel
-      const { useHelpPanelStore } = await import("@/store/helpPanelStore");
       if (result.ok && result.result?.terminalId) {
         useHelpPanelStore.getState().setTerminal(result.result.terminalId, agentId);
         useHelpPanelStore.getState().setOpen(true);
@@ -718,7 +735,6 @@ export function registerPreferencesActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const { useHelpPanelStore } = await import("@/store/helpPanelStore");
       useHelpPanelStore.getState().toggle();
     },
   }));
@@ -731,9 +747,9 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
-      // This is typically handled by the modal component itself via Escape key
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      dispatchEscape();
     },
   }));
 

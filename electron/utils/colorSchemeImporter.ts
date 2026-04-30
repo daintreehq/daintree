@@ -1,5 +1,6 @@
 import { readFile } from "fs/promises";
 import path from "path";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 interface ImportedSchemeColors {
   background?: string;
@@ -365,7 +366,7 @@ export async function parseColorSchemeFile(filePath: string): Promise<ImportResu
   } catch (err) {
     return {
       ok: false,
-      errors: [`Failed to read file: ${err instanceof Error ? err.message : String(err)}`],
+      errors: [formatErrorMessage(err, "Failed to read color scheme file")],
     };
   }
 }

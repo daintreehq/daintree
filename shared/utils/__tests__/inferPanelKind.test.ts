@@ -3,19 +3,19 @@ import { inferKind } from "../inferPanelKind.js";
 
 describe("inferKind", () => {
   it("returns saved kind when present", () => {
-    expect(inferKind({ kind: "agent" })).toBe("agent");
+    expect(inferKind({ kind: "browser" })).toBe("browser");
+  });
+
+  it('migrates legacy "agent" kind to "terminal" (agent identity lives on agentId)', () => {
+    expect(inferKind({ kind: "agent" })).toBe("terminal");
+  });
+
+  it('migrates legacy "agent" kind even when other fields are present', () => {
+    expect(inferKind({ kind: "agent", cwd: "/project", command: "claude" })).toBe("terminal");
   });
 
   it("infers browser from browserUrl", () => {
     expect(inferKind({ browserUrl: "https://example.com" })).toBe("browser");
-  });
-
-  it("infers notes from notePath", () => {
-    expect(inferKind({ notePath: "/notes/a.md" })).toBe("notes");
-  });
-
-  it("infers notes from noteId", () => {
-    expect(inferKind({ noteId: "note-1" })).toBe("notes");
   });
 
   it("infers dev-preview from devCommand", () => {
@@ -46,15 +46,7 @@ describe("inferKind", () => {
     expect(inferKind({ browserUrl: "https://x.com", devCommand: "npm dev" })).toBe("browser");
   });
 
-  it("prefers notePath over devCommand", () => {
-    expect(inferKind({ notePath: "/a.md", devCommand: "npm dev" })).toBe("notes");
-  });
-
   it("infers browser from empty-string browserUrl (defined means browser)", () => {
     expect(inferKind({ browserUrl: "" })).toBe("browser");
-  });
-
-  it("infers notes from empty-string notePath", () => {
-    expect(inferKind({ notePath: "" })).toBe("notes");
   });
 });

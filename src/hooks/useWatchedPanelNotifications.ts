@@ -4,6 +4,22 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { fireWatchNotification } from "@/lib/watchNotification";
 
 const NOTIFICATION_STAGGER_MS = 250;
+export const MAX_STAGGER_QUEUE_LENGTH = 50;
+
+/**
+ * Drops the oldest entry if the queue is at or above the cap. Returns true
+ * when an entry was dropped, so callers can emit a one-time diagnostic log.
+ * Exported for direct unit testing; the cap cannot be reliably reached via
+ * the subscriber path because `drainStaggerQueue` is called synchronously
+ * from every push.
+ */
+export function applyStaggerQueueCap<T>(queue: T[]): boolean {
+  if (queue.length >= MAX_STAGGER_QUEUE_LENGTH) {
+    queue.shift();
+    return true;
+  }
+  return false;
+}
 
 export function useWatchedPanelNotifications(): void {
   useEffect(() => {
@@ -29,6 +45,7 @@ export function useWatchedPanelNotifications(): void {
     );
     const staggerQueue: Array<() => void> = [];
     let staggerTimer: ReturnType<typeof setTimeout> | null = null;
+    let hasWarnedOverflow = false;
 
     function drainStaggerQueue(): void {
       const fn = staggerQueue.shift();
@@ -42,6 +59,10 @@ export function useWatchedPanelNotifications(): void {
     }
 
     function enqueueNotification(fn: () => void): void {
+      if (applyStaggerQueueCap(staggerQueue) && !hasWarnedOverflow) {
+        hasWarnedOverflow = true;
+        console.warn("[WatchedPanel] stagger queue overflow: dropping oldest notification");
+      }
       staggerQueue.push(fn);
       if (!staggerTimer) {
         drainStaggerQueue();

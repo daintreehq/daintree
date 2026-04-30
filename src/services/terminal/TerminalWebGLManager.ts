@@ -16,6 +16,13 @@ export class TerminalWebGLManager {
   // <webview> partitions and have their own budgets).
   private static _maxContexts = 12;
 
+  // Circuit breaker: if N genuine context-loss events occur within W ms,
+  // disable WebGL for the rest of the session to avoid strobing reacquisition
+  // on systems with persistent GPU faults (e.g. M-series Macs on external
+  // displays at fractional scaling).
+  private static readonly LOSS_THRESHOLD = 3;
+  private static readonly LOSS_WINDOW_MS = 60_000;
+
   static get MAX_CONTEXTS(): number {
     return TerminalWebGLManager._maxContexts;
   }
@@ -28,6 +35,8 @@ export class TerminalWebGLManager {
   private lruOrder: string[] = [];
   private hardwareAvailable = true;
   private hasLoggedSoftwareSkip = false;
+  private lossTimestamps: number[] = [];
+  private hasLoggedBreakerTrip = false;
 
   setHardwareAvailable(available: boolean): void {
     this.hardwareAvailable = available;
@@ -36,7 +45,7 @@ export class TerminalWebGLManager {
   ensureContext(id: string, managed: ManagedTerminal): void {
     if (WEBGL_DISABLED) return;
     if (!this.hardwareAvailable) {
-      if (!this.hasLoggedSoftwareSkip) {
+      if (!this.hasLoggedSoftwareSkip && !this.hasLoggedBreakerTrip) {
         console.warn("[TerminalWebGLManager] Skipping WebGL: software-only GPU detected");
         this.hasLoggedSoftwareSkip = true;
       }
@@ -63,6 +72,8 @@ export class TerminalWebGLManager {
       const ownAddon = addon;
       clDisposable = addon.onContextLoss(() => {
         if (this.pool.get(id)?.addon === ownAddon) {
+          // record before release; pool entry still valid here
+          this.recordContextLoss();
           this.releaseContext(id);
         }
       });
@@ -128,6 +139,23 @@ export class TerminalWebGLManager {
       entry.addon.dispose();
     } catch {
       // ignore
+    }
+  }
+
+  private recordContextLoss(): void {
+    const now = Date.now();
+    this.lossTimestamps = this.lossTimestamps.filter(
+      (t) => now - t < TerminalWebGLManager.LOSS_WINDOW_MS
+    );
+    this.lossTimestamps.push(now);
+    if (this.lossTimestamps.length >= TerminalWebGLManager.LOSS_THRESHOLD) {
+      this.setHardwareAvailable(false);
+      if (!this.hasLoggedBreakerTrip) {
+        console.warn(
+          "[TerminalWebGLManager] WebGL circuit breaker tripped — falling back to DOM renderer"
+        );
+        this.hasLoggedBreakerTrip = true;
+      }
     }
   }
 

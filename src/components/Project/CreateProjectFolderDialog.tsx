@@ -4,6 +4,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { FolderPlus, FolderOpen } from "lucide-react";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface CreateProjectFolderDialogProps {
   isOpen: boolean;
@@ -95,7 +96,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
       onClose();
     } catch (err) {
       // Show error inline — keep dialog open so user can retry or correct input
-      setError(err instanceof Error ? err.message : "Failed to create folder");
+      setError(formatErrorMessage(err, "Failed to create folder"));
     } finally {
       setIsCreating(false);
     }
@@ -166,7 +167,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             onKeyDown={handleKeyDown}
             aria-invalid={error != null}
             aria-describedby={error ? errorId : undefined}
-            className="w-full rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-2 text-sm text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent/50 focus:border-daintree-accent aria-invalid:border-status-error"
+            className="w-full rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-2 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 focus:border-daintree-accent aria-invalid:border-status-error"
             placeholder="my-project"
             disabled={isCreating}
           />

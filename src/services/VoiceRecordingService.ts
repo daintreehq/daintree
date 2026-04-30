@@ -7,6 +7,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
 import { logDebug, logWarn, logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { PendingCorrection } from "@/store/voiceRecordingStore";
 
 const LOG_PREFIX = "[VoiceRecording]";
@@ -70,12 +71,12 @@ function findCorrectionRange(
       ? occurrences.filter((idx) => Math.abs(idx - segmentStart) <= CORRECTION_MATCH_RADIUS)
       : [];
   if (nearby.length === 1) {
-    const start = nearby[0];
+    const start = nearby[0]!;
     return { start, end: start + rawText.length };
   }
 
   if (occurrences.length === 1) {
-    const start = occurrences[0];
+    const start = occurrences[0]!;
     return { start, end: start + rawText.length };
   }
 
@@ -94,7 +95,7 @@ function resolveQueuedCorrectionStart(draft: string, rawText: string): number {
   }
 
   const occurrences = collectOccurrences(draft, rawText);
-  return occurrences.length === 1 ? occurrences[0] : -1;
+  return occurrences.length === 1 ? occurrences[0]! : -1;
 }
 
 class VoiceRecordingService {
@@ -506,7 +507,9 @@ class VoiceRecordingService {
       logError(`${LOG_PREFIX} Microphone permission denied at OS level`, { micStatus });
       useVoiceRecordingStore.getState().setError(message);
       useVoiceRecordingStore.getState().announce(message);
-      void window.electron.voiceInput.openMicSettings();
+      safeFireAndForget(window.electron.voiceInput.openMicSettings(), {
+        context: "Opening OS microphone settings",
+      });
       return;
     }
 
@@ -658,7 +661,7 @@ class VoiceRecordingService {
       const samples = new Int16Array(event.data);
       let sumSq = 0;
       for (let i = 0; i < samples.length; i++) {
-        const n = samples[i] / 32768;
+        const n = samples[i]! / 32768;
         sumSq += n * n;
       }
       const rms = Math.sqrt(sumSq / samples.length);

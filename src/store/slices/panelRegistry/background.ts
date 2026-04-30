@@ -1,4 +1,4 @@
-import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
@@ -32,7 +32,7 @@ export const createBackgroundActions = (
     let groupMetadata: import("./types").TrashedTerminalGroupMetadata | undefined;
 
     if (group) {
-      groupRestoreId = `group-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      groupRestoreId = `group-${crypto.randomUUID()}`;
       groupMetadata = {
         panelIds: [...group.panelIds],
         activeTabId: group.activeTabId ?? group.panelIds[0] ?? "",
@@ -42,9 +42,11 @@ export const createBackgroundActions = (
     }
 
     set((state) => {
-      const newById = {
+      const existing = state.panelsById[id];
+      if (!existing) return state;
+      const newById: Record<string, TerminalInstance> = {
         ...state.panelsById,
-        [id]: { ...state.panelsById[id], location: "background" as const },
+        [id]: { ...existing, location: "background" as const },
       };
       const newBackgrounded = new Map(state.backgroundedTerminals);
       newBackgrounded.set(id, {
@@ -97,7 +99,7 @@ export const createBackgroundActions = (
       return;
     }
 
-    const groupRestoreId = `group-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const groupRestoreId = `group-${crypto.randomUUID()}`;
     const panelIds = [...group.panelIds];
     const activeTabId = group.activeTabId ?? panelIds[0] ?? "";
     const state = get();
@@ -130,7 +132,7 @@ export const createBackgroundActions = (
 
       const newBackgrounded = new Map(s.backgroundedTerminals);
       for (let i = 0; i < bgPanelIds.length; i++) {
-        const bid = bgPanelIds[i];
+        const bid = bgPanelIds[i]!;
         const isAnchor = i === 0;
         newBackgrounded.set(bid, {
           id: bid,

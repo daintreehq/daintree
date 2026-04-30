@@ -1,10 +1,8 @@
 import type { TerminalActivityStatus, TerminalTaskType } from "../../shared/types/terminal.js";
 import type { AgentState, WaitingReason } from "../../shared/types/agent.js";
-import type { TerminalType } from "../../shared/types/panel.js";
 
 export interface ActivityContext {
   terminalId: string;
-  terminalType?: TerminalType;
   agentId?: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;

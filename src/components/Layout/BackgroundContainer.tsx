@@ -9,6 +9,7 @@ import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useBackgroundedTerminals } from "@/hooks/useTerminalSelectors";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 interface BackgroundContainerProps {
   compact?: boolean;
@@ -148,7 +149,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           size="sm"
           className={cn(
             compact ? "px-1.5 min-w-0" : "px-3",
-            isOpen && "bg-daintree-border border-daintree-accent/40 ring-1 ring-daintree-accent/30"
+            isOpen && "bg-overlay-emphasis border-border-default"
           )}
           aria-haspopup="dialog"
           aria-expanded={isOpen}
@@ -202,15 +203,13 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
                   key={item.terminal.id}
                   type="button"
                   onClick={() => handleRestoreSingle(item.terminal)}
-                  className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left outline-none hover:bg-tint/5 focus:bg-tint/5"
+                  className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left outline-hidden hover:bg-tint/5 focus:bg-tint/5"
                 >
                   <div className="flex items-center gap-2 min-w-0 flex-1">
                     <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
                       <TerminalIcon
-                        type={item.terminal.type}
                         kind={item.terminal.kind}
-                        agentId={item.terminal.agentId}
-                        detectedProcessId={item.terminal.detectedProcessId}
+                        chrome={deriveTerminalChrome(item.terminal)}
                         className="h-3 w-3"
                       />
                     </div>
@@ -308,10 +307,8 @@ function BackgroundGroupItem({
                   className="flex items-center gap-2 w-full px-2 py-1 text-[11px] rounded hover:bg-tint/5 text-left"
                 >
                   <TerminalIcon
-                    type={terminal.type}
                     kind={terminal.kind}
-                    agentId={terminal.agentId}
-                    detectedProcessId={terminal.detectedProcessId}
+                    chrome={deriveTerminalChrome(terminal)}
                     className="w-2.5 h-2.5 opacity-60"
                   />
                   <span

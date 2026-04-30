@@ -157,15 +157,23 @@ test.describe.serial("Core: PTY Resilience", () => {
     // Wait for the shell to be ready
     await waitForTerminalText(floodPanel, "pty-resilience", T_LONG);
 
-    // Capture the shell PID
+    // Capture the shell PID. The shell echoes the command back before
+    // expanding $$, so wait for the actual digits — not just the prefix —
+    // otherwise the poll succeeds on the echoed `echo DAINTREE_PID_$$` line
+    // before the shell has produced the expanded `DAINTREE_PID_<pid>` output.
     await runTerminalCommand(window, floodPanel, "echo DAINTREE_PID_$$");
-    await waitForTerminalText(floodPanel, "DAINTREE_PID_", T_LONG);
-
-    const text = await getTerminalText(floodPanel);
-    const pidMatch = text.match(/DAINTREE_PID_(\d+)/);
-    expect(pidMatch).toBeTruthy();
-    const capturedPid = Number(pidMatch![1]);
-    expect(capturedPid).toBeGreaterThan(0);
+    let capturedPid = 0;
+    await expect
+      .poll(
+        async () => {
+          const buf = await getTerminalText(floodPanel);
+          const m = buf.match(/DAINTREE_PID_(\d+)/);
+          if (m) capturedPid = Number(m[1]);
+          return capturedPid;
+        },
+        { timeout: T_LONG, intervals: [250] }
+      )
+      .toBeGreaterThan(0);
 
     // Start a slow flood
     await window.waitForTimeout(T_SETTLE);

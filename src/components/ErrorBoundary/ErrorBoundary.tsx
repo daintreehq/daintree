@@ -74,7 +74,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         correlationId,
       });
     } catch (storeError) {
-      console.error("Failed to add error to store:", storeError);
+      logError("Failed to add error to store", storeError);
     }
 
     this.setState({
@@ -86,7 +86,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       try {
         onError(error, errorInfo);
       } catch (handlerError) {
-        console.error("Error in onError handler:", handlerError);
+        logError("Error in onError handler", handlerError);
       }
     }
 
@@ -98,7 +98,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       incidentId,
     });
 
-    console.error("ErrorBoundary caught error:", error, errorInfo);
+    logError("ErrorBoundary caught error", error, { errorInfo });
   }
 
   componentDidUpdate(prevProps: ErrorBoundaryProps): void {

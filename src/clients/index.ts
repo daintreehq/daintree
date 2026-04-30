@@ -23,3 +23,5 @@ export { commandsClient } from "./commandsClient";
 export { editorClient } from "./editorClient";
 export { appThemeClient } from "./appThemeClient";
 export { globalRecipesClient } from "./globalRecipesClient";
+export { telemetryPreviewClient } from "./telemetryPreviewClient";
+export { connectivityClient } from "./connectivityClient";

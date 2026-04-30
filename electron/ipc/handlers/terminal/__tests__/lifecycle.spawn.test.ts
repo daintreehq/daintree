@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const ipcMainMock = vi.hoisted(() => ({
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
-  ipcMain: {
-    handle: vi.fn(),
-    removeHandler: vi.fn(),
-  },
+  ipcMain: ipcMainMock,
   app: {
     getPath: vi.fn(() => "/tmp/test"),
   },
@@ -16,6 +18,9 @@ const { mockGetCurrentProject, mockGetProjectById, mockGetProjectSettings } = vi
   mockGetProjectSettings: vi.fn(),
 }));
 
+const waitForRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const consumeRestoreQuotaMock = vi.hoisted(() => vi.fn(() => false));
+
 vi.mock("../../../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: mockGetCurrentProject,
@@ -24,13 +29,48 @@ vi.mock("../../../../services/ProjectStore.js", () => ({
   },
 }));
 
-vi.mock("../../../services/pty/terminalShell.js", () => ({
+vi.mock("../../../../services/pty/terminalShell.js", () => ({
   getDefaultShell: vi.fn(() => "/bin/zsh"),
 }));
 
-vi.mock("../../utils.js", () => ({
-  waitForRateLimitSlot: vi.fn(),
-  consumeRestoreQuota: vi.fn(() => false),
+type SafeParseable = {
+  safeParse: (v: unknown) => { success: true; data: unknown } | { success: false; error: unknown };
+};
+
+vi.mock("../../../utils.js", () => ({
+  waitForRateLimitSlot: waitForRateLimitSlotMock,
+  consumeRestoreQuota: consumeRestoreQuotaMock,
+  typedHandle: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: null,
+          projectId: null,
+        };
+        return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleValidated: (channel: string, schema: SafeParseable, handler: unknown) => {
+    ipcMainMock.handle(channel, async (_e: unknown, ...args: unknown[]) => {
+      const parsed = schema.safeParse(args[0]);
+      if (!parsed.success) {
+        throw new Error(`IPC validation failed: ${channel}`);
+      }
+      return (handler as (payload: unknown) => unknown)(parsed.data);
+    });
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 vi.mock("../../../../shared/config/agentRegistry.js", () => ({
@@ -240,7 +280,7 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
     expect(spawnArgs.cwd).toBe(os.homedir());
   });
 
-  it("does not forward worktreeId to the pty client (renderer-owned layout state)", async () => {
+  it("forwards worktreeId to the pty client for session-history persistence (#5182)", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
 
@@ -252,13 +292,195 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
         cwd: os.homedir(),
         cols: 80,
         rows: 24,
-        // Even if a caller sends worktreeId it should be stripped by the Zod schema
-        // and never reach the pty client spawn options.
         worktreeId: "wt-123",
       } as unknown as Parameters<typeof handler>[1]
     );
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.worktreeId).toBeUndefined();
+    expect(spawnArgs.worktreeId).toBe("wt-123");
+  });
+});
+
+describe("terminal spawn shell-injection hardening (#6065)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ptyClient = {
+      spawn: vi.fn(),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue({ id: "p1", path: "/tmp", name: "p" });
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+  });
+
+  it("rejects commands containing control characters before spawning", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+
+    await expect(
+      handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          command: "echo \x1B[31mred",
+        } as unknown as Parameters<typeof handler>[1]
+      )
+    ).rejects.toThrow(/IPC validation failed: terminal:spawn/);
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("rejects multi-line commands at the schema boundary", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+
+    await expect(
+      handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          command: "evil\nrm -rf ~",
+        } as unknown as Parameters<typeof handler>[1]
+      )
+    ).rejects.toThrow(/IPC validation failed: terminal:spawn/);
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("accepts intentional shell metacharacters (pipes, redirects, env, $())", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+
+    const command = "FOO=bar npm run dev | tee out.log; echo $(pwd)";
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: "/tmp",
+        command,
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.command).toBe(command);
+
+    // Lock the security-critical script template against structural regressions.
+    // The shell path must be single-quoted and the user command must appear
+    // verbatim between the trap markers — no further wrapping or rewriting.
+    expect(spawnArgs.args).toEqual([
+      "-lic",
+      `trap : INT\n${command}\ntrap - INT\nexec '/bin/zsh' -l`,
+    ]);
+  });
+
+  it("single-quotes shell paths containing single quotes when building the launch script", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: "/tmp",
+        shell: "/tmp/o'hare/zsh",
+        command: "echo hi",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.args[1]).toContain("exec '/tmp/o'\\''hare/zsh' -l");
+  });
+});
+
+describe("terminal spawn rate limiting (#5352)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    waitForRateLimitSlotMock.mockResolvedValue(undefined);
+    consumeRestoreQuotaMock.mockReturnValue(false);
+    ptyClient = {
+      spawn: vi.fn(),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue({ id: "p1", path: "/tmp", name: "p" });
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+  });
+
+  it("uses the leaky-bucket form so batch spawns drain at a smooth 1/sec cadence", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 });
+
+    // Exactly ("terminalSpawn", 1_000) — 2 args, not 3. The 3-arg overload
+    // silently picks the sliding-window implementation and reintroduces the
+    // every-10-terminals stall described in #5352.
+    expect(waitForRateLimitSlotMock).toHaveBeenCalledWith("terminalSpawn", 1_000);
+    expect(waitForRateLimitSlotMock.mock.calls[0]).toHaveLength(2);
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects without calling ptyClient.spawn when the rate-limit slot rejects", async () => {
+    waitForRateLimitSlotMock.mockRejectedValueOnce(new Error("Spawn queue full"));
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await expect(
+      handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 })
+    ).rejects.toThrow("Spawn queue full");
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+
+  it("bypasses the rate limiter entirely for restore spawns", async () => {
+    consumeRestoreQuotaMock.mockReturnValueOnce(true);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        restore: true,
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(waitForRateLimitSlotMock).not.toHaveBeenCalled();
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 });

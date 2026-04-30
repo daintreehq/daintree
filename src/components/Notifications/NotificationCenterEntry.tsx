@@ -1,8 +1,15 @@
-import { CheckCircle2, XCircle, Info, AlertTriangle, X } from "lucide-react";
+import { CheckCircle2, XCircle, Info, AlertTriangle, MoreHorizontal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
 import type { ActionId } from "@shared/types/actions";
+import type { NotificationType } from "@/store/notificationStore";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const TYPE_CONFIG = {
   success: { icon: CheckCircle2, className: "text-status-success" },
@@ -24,6 +31,7 @@ function formatRelativeTime(timestamp: number): string {
 
 interface NotificationCenterEntryProps {
   entry: NotificationHistoryEntry;
+  displayType?: NotificationType;
   threadCount?: number;
   isNew?: boolean;
   onDismiss?: () => void;
@@ -31,20 +39,16 @@ interface NotificationCenterEntryProps {
 
 export function NotificationCenterEntry({
   entry,
+  displayType,
   threadCount,
   isNew = false,
   onDismiss,
 }: NotificationCenterEntryProps) {
-  const config = TYPE_CONFIG[entry.type];
+  const config = TYPE_CONFIG[displayType ?? entry.type];
   const Icon = config.icon;
 
   return (
-    <div
-      className={cn(
-        "group flex items-start gap-2.5 px-3 py-2 hover:bg-overlay-medium transition-colors border-l-2",
-        isNew ? "border-daintree-accent bg-daintree-accent/[0.04]" : "border-transparent"
-      )}
-    >
+    <div className="group flex items-start gap-2.5 px-3 py-2 hover:bg-overlay-medium transition-colors">
       <div className={cn("mt-0.5 shrink-0", config.className)}>
         <Icon className="h-3.5 w-3.5" />
       </div>
@@ -85,7 +89,7 @@ export function NotificationCenterEntry({
                     isAvailable
                       ? action.variant === "secondary"
                         ? "border border-daintree-text/20 text-daintree-text/70 hover:bg-overlay-medium"
-                        : "border border-daintree-accent/40 bg-daintree-accent/15 text-daintree-accent hover:bg-daintree-accent/25"
+                        : "border border-status-info/30 bg-status-info/15 text-status-info hover:bg-status-info/20"
                       : "border border-daintree-text/10 text-daintree-text/30 cursor-not-allowed"
                   )}
                 >
@@ -101,10 +105,32 @@ export function NotificationCenterEntry({
           {formatRelativeTime(entry.timestamp)}
         </span>
         {isNew && (
-          <span
-            aria-hidden="true"
-            className="h-1.5 w-1.5 rounded-full bg-daintree-accent shrink-0"
-          />
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-status-info shrink-0" />
+        )}
+        {entry.context?.projectId && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Notification options"
+                onClick={(e) => e.stopPropagation()}
+                className="opacity-0 group-hover:opacity-100 focus:opacity-100 data-[state=open]:opacity-100 h-4 w-4 flex items-center justify-center rounded text-daintree-text/40 hover:text-daintree-text/70 transition-opacity"
+              >
+                <MoreHorizontal className="h-3 w-3" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" sideOffset={4}>
+              <DropdownMenuItem
+                onSelect={() => {
+                  const projectId = entry.context?.projectId;
+                  if (!projectId) return;
+                  void actionService.dispatch("project.muteNotifications", { projectId });
+                }}
+              >
+                Mute project notifications
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
         {onDismiss && (
           <button

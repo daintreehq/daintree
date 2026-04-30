@@ -26,5 +26,3 @@ export function DaintreeIcon({ className, size = 16, style }: DaintreeIconProps)
     </svg>
   );
 }
-
-export default DaintreeIcon;

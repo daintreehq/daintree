@@ -41,6 +41,34 @@ describe("corpus-replay", () => {
     });
   });
 
+  describe("mistral corpus replay", () => {
+    it("achieves >= 90% accuracy on mistral sample corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "mistral_sample.jsonl"), "mistral");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.accuracy).toBeGreaterThanOrEqual(MIN_ACCURACY);
+    });
+  });
+
+  // Amp ships with empty primary/fallback patterns until on-device PTY
+  // capture lands. The corpus only exercises non-working states so the
+  // accuracy gate stays meaningful — working samples will be added when
+  // patterns are discovered.
+  describe("amp corpus replay", () => {
+    it("achieves >= 90% accuracy on amp sample corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "amp_sample.jsonl"), "amp");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.accuracy).toBeGreaterThanOrEqual(MIN_ACCURACY);
+    });
+  });
+
+  describe("aider corpus replay", () => {
+    it("achieves >= 90% accuracy on aider sample corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "aider_sample.jsonl"), "aider");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.accuracy).toBeGreaterThanOrEqual(MIN_ACCURACY);
+    });
+  });
+
   describe("replay result structure", () => {
     it("returns detailed wrong entries for debugging", () => {
       const result = replayCorpus(path.join(CORPUS_DIR, "claude_sample.jsonl"), "claude");

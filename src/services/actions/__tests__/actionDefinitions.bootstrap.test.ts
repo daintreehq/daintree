@@ -17,6 +17,7 @@ function createCallbacks() {
     onCloseWorktreeOverview: () => {},
     onOpenPanelPalette: () => {},
     onOpenProjectSwitcherPalette: () => {},
+    onConfirmCloseActiveProject: () => {},
     onOpenShortcuts: () => {},
     onLaunchAgent: async () => null,
     onInject: () => {},

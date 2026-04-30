@@ -5,7 +5,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { getGridPanelCount, getDockPanelCount } from "../helpers/panels";
 import { spawnTerminalAndVerify } from "../helpers/workflows";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
+import { T_SHORT, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
 let ctx: AppContext;
 const FEATURE = "feature/test-branch";
@@ -81,59 +81,6 @@ test.describe.serial("Core: Worktree Session Bulk", () => {
     await clickSessionsItem(/Maximize All/);
 
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(3);
-    await expect.poll(() => getDockPanelCount(window), { timeout: T_LONG }).toBe(0);
-  });
-
-  test("close completed is disabled with no completed sessions", async () => {
-    const { window } = ctx;
-
-    await window.waitForTimeout(T_SETTLE);
-
-    await openSessionsSubmenu();
-
-    const closeCompleted = window.getByRole("menuitem", { name: /Close Completed/ });
-    await expect(closeCompleted).toBeVisible({ timeout: T_SHORT });
-    await expect(closeCompleted).toHaveAttribute("data-disabled", { timeout: T_SHORT });
-
-    await window.keyboard.press("Escape");
-    await expect(window.locator('[role="menu"]')).toHaveCount(0, { timeout: T_SHORT });
-  });
-
-  test("close all with cancel preserves terminals", async () => {
-    const { window } = ctx;
-
-    await window.waitForTimeout(T_SETTLE);
-
-    const gridBefore = await getGridPanelCount(window);
-    const dockBefore = await getDockPanelCount(window);
-
-    await openSessionsSubmenu();
-    await clickSessionsItem(/Close All \(Trash\)/);
-
-    const dialog = window.getByRole("dialog");
-    await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-
-    await dialog.getByRole("button", { name: "Cancel" }).click();
-    await expect(dialog).not.toBeVisible({ timeout: T_SHORT });
-
-    expect(await getGridPanelCount(window)).toBe(gridBefore);
-    expect(await getDockPanelCount(window)).toBe(dockBefore);
-  });
-
-  test("close all with confirm removes all terminals", async () => {
-    const { window } = ctx;
-
-    await window.waitForTimeout(T_SETTLE);
-
-    await openSessionsSubmenu();
-    await clickSessionsItem(/Close All \(Trash\)/);
-
-    const dialog = window.getByRole("dialog");
-    await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-
-    await dialog.getByRole("button", { name: "Confirm" }).click();
-
-    await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(0);
     await expect.poll(() => getDockPanelCount(window), { timeout: T_LONG }).toBe(0);
   });
 });

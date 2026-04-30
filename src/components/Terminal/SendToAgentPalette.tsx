@@ -2,7 +2,6 @@ import React, { useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { getBrandColorHex } from "@/lib/colorUtils";
 import { Lock } from "lucide-react";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import type { SendToAgentItem } from "@/hooks/useSendToAgentPalette";
@@ -53,13 +52,7 @@ const SendToAgentItemRow = React.memo(function SendToAgentItemRow({
       role="option"
     >
       <span className="shrink-0 text-daintree-text/70" aria-hidden="true">
-        <TerminalIcon
-          type={item.terminalType}
-          kind={item.terminalKind}
-          agentId={item.agentId}
-          detectedProcessId={item.detectedProcessId}
-          brandColor={getBrandColorHex(item.agentId ?? item.terminalType)}
-        />
+        <TerminalIcon kind={item.terminalKind} chrome={item.chrome} />
       </span>
 
       <div className="flex-1 min-w-0 overflow-hidden">

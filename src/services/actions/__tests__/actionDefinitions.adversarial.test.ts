@@ -212,6 +212,10 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: mocks.terminalInstanceService,
 }));
 
+vi.mock("@/services/terminal/TerminalInstanceService", () => ({
+  terminalInstanceService: mocks.terminalInstanceService,
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: mocks.actionService,
 }));
@@ -241,6 +245,7 @@ const { registerPanelActions } = await import("../definitions/panelActions");
 const { registerWorktreeActions } = await import("../definitions/worktreeActions");
 const { usePanelStore } = await import("../../../store/panelStore");
 const { usePortalStore } = await import("../../../store/portalStore");
+const { useUIStore } = await import("../../../store/uiStore");
 const { useWorktreeSelectionStore } = await import("../../../store/worktreeStore");
 const { useWorktreeFilterStore } = await import("../../../store/worktreeFilterStore");
 const worktreeViewStore = mocks.worktreeViewStore;
@@ -260,6 +265,7 @@ function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallba
     onCloseWorktreeOverview: vi.fn(),
     onOpenPanelPalette: vi.fn(),
     onOpenProjectSwitcherPalette: vi.fn(),
+    onConfirmCloseActiveProject: vi.fn(),
     onOpenActionPalette: vi.fn(),
     onOpenQuickSwitcher: vi.fn(),
     onOpenShortcuts: vi.fn(),
@@ -294,7 +300,6 @@ function createTerminal(overrides: Record<string, unknown> = {}): TerminalInstan
   return {
     id: "term-1",
     kind: "terminal",
-    type: "terminal",
     title: "Terminal",
     cwd: "/repo",
     cols: 80,
@@ -329,6 +334,8 @@ beforeEach(() => {
     links: [],
     defaultNewTabUrl: null,
   });
+
+  useUIStore.setState({ overlayClaims: new Set<string>() });
 
   useWorktreeSelectionStore.setState({
     activeWorktreeId: null,
@@ -525,7 +532,7 @@ describe("terminal action hardening", () => {
 
     expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "terminal",
+        kind: "terminal",
         title: "My Shell (copy)",
       })
     );
@@ -572,7 +579,7 @@ describe("terminal action hardening", () => {
 
     expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "terminal",
+        kind: "terminal",
         cwd: "/repo",
         location: "grid",
       })
@@ -701,6 +708,27 @@ describe("panel action hardening", () => {
 
     expect(usePortalStore.getState().tabs).toEqual([]);
     expect(usePortalStore.getState().createdTabs.size).toBe(0);
+  });
+
+  it("portal.openUrl is a no-op while an overlay claim is active", async () => {
+    const actions = buildRegistry(registerPanelActions);
+    const openUrl = actions.get("portal.openUrl")!();
+
+    useUIStore.setState({ overlayClaims: new Set(["theme-browser"]) });
+    usePortalStore.setState({
+      isOpen: false,
+      activeTabId: null,
+      tabs: [],
+      createdTabs: new Set<string>(),
+    });
+
+    await openUrl.run({ url: "https://example.com/blocked", title: "Blocked" }, {} as never);
+
+    const state = usePortalStore.getState();
+    expect(state.isOpen).toBe(false);
+    expect(state.tabs).toEqual([]);
+    expect(mocks.portal.create).not.toHaveBeenCalled();
+    expect(mocks.portal.show).not.toHaveBeenCalled();
   });
 
   it("reuses the active blank tab when opening a foreground URL", async () => {
@@ -1084,8 +1112,8 @@ describe("worktree cycling respects sidebar order", () => {
 
     // Visible list: [main, wt-working]. Both actions must pick the same entry
     // (last visible → wt-working) so cycle and directional navigation agree.
-    expect(select.mock.calls[0][0]).toBe("wt-working");
-    expect(select.mock.calls[1][0]).toBe("wt-working");
+    expect(select.mock.calls[0]![0]).toBe("wt-working");
+    expect(select.mock.calls[1]![0]).toBe("wt-working");
   });
 
   it("up/down use first/last visible when active is filtered out", async () => {

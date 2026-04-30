@@ -31,8 +31,6 @@ function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
   return {
     shell: "/bin/zsh",
     args: ["-l"],
-    isAgentTerminal: false,
-    agentId: undefined,
     env: {},
     ...overrides,
   };
@@ -46,15 +44,9 @@ function createTerminal(options?: Partial<TerminalProcessOptions>): TerminalProc
     cols: 80,
     rows: 24,
     kind: "terminal" as const,
-    type: "terminal" as const,
     ...options,
   };
-  const isAgent =
-    merged.kind === "agent" || !!merged.agentId || (!!merged.type && merged.type !== "terminal");
-  const ctx = defaultSpawnContext({
-    isAgentTerminal: isAgent,
-    agentId: isAgent ? ((merged as any).agentId ?? merged.type) : undefined,
-  });
+  const ctx = defaultSpawnContext();
   return new TerminalProcess(
     "t1",
     merged,
@@ -119,13 +111,36 @@ describe("TerminalProcess.submit", () => {
 
   it("does not use bracketed paste for Gemini; uses soft newlines and then sends CR", async () => {
     vi.useFakeTimers();
-    const terminal = createTerminal({ kind: "agent", type: "gemini" });
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "gemini" });
+    // Input protocol is driven by detectedAgentId (live process), not the launch hint.
+    // Simulate the process detector firing for Gemini.
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string } }
+    ).terminalInfo.detectedAgentId = "gemini";
 
     terminal.submit("line1\nline2");
 
     expect(ptyWriteMock).toHaveBeenCalledTimes(1);
     expect(ptyWriteMock.mock.calls[0]?.[0]).toBe("line1\x1b\rline2");
     await vi.advanceTimersByTimeAsync(250);
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    vi.useRealTimers();
+  });
+
+  it("sends Enter immediately for Copilot with submitEnterDelayMs: 0", async () => {
+    vi.useFakeTimers();
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "copilot" });
+    // Input protocol is driven by detectedAgentId (live process), not the launch hint.
+    // Simulate the process detector firing for Copilot.
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string } }
+    ).terminalInfo.detectedAgentId = "copilot";
+
+    terminal.submit("test");
+
+    expect(ptyWriteMock).toHaveBeenCalledTimes(1);
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("test");
+    await vi.advanceTimersByTimeAsync(50);
     expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
     vi.useRealTimers();
   });

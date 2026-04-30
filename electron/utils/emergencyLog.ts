@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { app } from "electron";
+import { scrubSecrets } from "./secretScrubber.js";
 
 const MAX_LOG_SIZE = 1024 * 1024; // 1MB
 
@@ -48,13 +49,15 @@ export function emergencyLogMainFatal(kind: string, error: unknown): void {
       : { message: String(error) };
 
   appendMainCrashLog(
-    [
-      "============================================================",
-      `[${timestamp}] [${kind}] pid=${pid} uptimeMs=${uptimeMs}`,
-      `electron=${process.versions.electron ?? "unknown"} node=${process.version} platform=${process.platform} arch=${process.arch}`,
-      `memory.rss=${memory.rss} heapUsed=${memory.heapUsed} heapTotal=${memory.heapTotal} external=${memory.external}`,
-      `error=${JSON.stringify(details)}`,
-      "",
-    ].join("\n")
+    scrubSecrets(
+      [
+        "============================================================",
+        `[${timestamp}] [${kind}] pid=${pid} uptimeMs=${uptimeMs}`,
+        `electron=${process.versions.electron ?? "unknown"} node=${process.version} platform=${process.platform} arch=${process.arch}`,
+        `memory.rss=${memory.rss} heapUsed=${memory.heapUsed} heapTotal=${memory.heapTotal} external=${memory.external}`,
+        `error=${JSON.stringify(details)}`,
+        "",
+      ].join("\n")
+    )
   );
 }

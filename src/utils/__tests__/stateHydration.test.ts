@@ -244,7 +244,7 @@ describe("hydrateAppState", () => {
       })
     );
 
-    const addPanelArg = addPanel.mock.calls[0][0] as Record<string, unknown>;
+    const addPanelArg = addPanel.mock.calls[0]![0] as Record<string, unknown>;
     expect(addPanelArg.devServerStatus).toBeUndefined();
     expect(addPanelArg.devServerUrl).toBeUndefined();
     expect(addPanelArg.devServerError).toBeUndefined();
@@ -329,8 +329,8 @@ describe("hydrateAppState", () => {
       })
     );
 
-    const firstAddArg = addPanel.mock.calls[0][0] as Record<string, unknown>;
-    const secondAddArg = addPanel.mock.calls[1][0] as Record<string, unknown>;
+    const firstAddArg = addPanel.mock.calls[0]![0] as Record<string, unknown>;
+    const secondAddArg = addPanel.mock.calls[1]![0] as Record<string, unknown>;
 
     expect(firstAddArg.devServerStatus).toBeUndefined();
     expect(firstAddArg.devServerUrl).toBeUndefined();
@@ -343,7 +343,7 @@ describe("hydrateAppState", () => {
     expect(secondAddArg.devServerTerminalId).toBeUndefined();
   });
 
-  it("rehydrates non-terminal panels like browser and notes", async () => {
+  it("rehydrates non-terminal panels like browser", async () => {
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -356,15 +356,12 @@ describe("hydrateAppState", () => {
             browserUrl: "http://localhost:5173",
           },
           {
-            id: "notes-1",
-            kind: "notes",
-            title: "Notes",
+            id: "browser-2",
+            kind: "browser",
+            title: "Docs",
             cwd: "/project",
             location: "dock",
-            notePath: "notes/today.md",
-            noteId: "note-1",
-            scope: "project",
-            createdAt: 123,
+            browserUrl: "http://localhost:4000",
           },
         ],
         sidebarWidth: 350,
@@ -398,12 +395,9 @@ describe("hydrateAppState", () => {
     expect(addPanel).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        kind: "notes",
-        requestedId: "notes-1",
-        notePath: "notes/today.md",
-        noteId: "note-1",
-        scope: "project",
-        createdAt: 123,
+        kind: "browser",
+        requestedId: "browser-2",
+        browserUrl: "http://localhost:4000",
       })
     );
   });
@@ -459,9 +453,8 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
-            type: "claude",
-            agentId: "claude",
+            kind: "terminal",
+            launchAgentId: "claude",
             title: "Claude",
             cwd: "/project",
             location: "grid",
@@ -508,7 +501,7 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             agentId: "claude",
             title: "Claude",
@@ -543,7 +536,7 @@ describe("hydrateAppState", () => {
     expect(addPanel).toHaveBeenCalledTimes(1);
     expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "agent",
+        kind: "terminal",
         requestedId: "agent-1",
       })
     );
@@ -558,7 +551,7 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             agentId: "claude",
             title: "Claude Agent",
@@ -582,9 +575,8 @@ describe("hydrateAppState", () => {
       exists: true,
       id: "agent-1",
       projectId: "project-1",
-      kind: "agent",
-      type: "claude",
-      agentId: "claude",
+      kind: "terminal",
+      launchAgentId: "claude",
       title: "Claude Agent",
       cwd: "/project",
       worktreeId: undefined,
@@ -614,8 +606,8 @@ describe("hydrateAppState", () => {
     expect(addPanel).toHaveBeenCalledTimes(1);
     expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "agent",
-        agentId: "claude",
+        kind: "terminal",
+        launchAgentId: "claude",
         existingId: "agent-1", // reconnect path uses existingId
         agentState: "waiting",
         lastStateChange: 123456789,
@@ -1198,9 +1190,8 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
-            type: "claude",
-            agentId: "claude",
+            kind: "terminal",
+            launchAgentId: "claude",
             title: "Claude",
             cwd: "/project",
             location: "grid",
@@ -1241,9 +1232,8 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
-            type: "claude",
-            agentId: "claude",
+            kind: "terminal",
+            launchAgentId: "claude",
             title: "Claude",
             cwd: "/project",
             location: "grid",
@@ -1285,7 +1275,7 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             agentId: "claude",
             title: "Claude",
@@ -1319,7 +1309,7 @@ describe("hydrateAppState", () => {
     expect(addPanel).toHaveBeenCalledTimes(1);
     expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "agent",
+        kind: "terminal",
         requestedId: "agent-1",
       })
     );
@@ -1331,7 +1321,7 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             agentId: "claude",
             title: "Claude",
@@ -1354,7 +1344,7 @@ describe("hydrateAppState", () => {
         id: "agent-1",
         hasPty: true,
         cwd: "/project",
-        kind: "agent",
+        kind: "terminal",
         type: "claude",
         agentId: "claude",
         title: "Claude",
@@ -1376,7 +1366,7 @@ describe("hydrateAppState", () => {
     });
 
     expect(addPanel).toHaveBeenCalledTimes(1);
-    const callArgs = addPanel.mock.calls[0][0];
+    const callArgs = addPanel.mock.calls[0]![0];
 
     // On reconnect, agentSessionId should be preserved
     expect(callArgs.existingId).toBe("agent-1");
@@ -1524,7 +1514,7 @@ describe("hydrateAppState", () => {
     });
 
     expect(addPanel).toHaveBeenCalledTimes(1);
-    const callArgs = addPanel.mock.calls[0][0] as Record<string, unknown>;
+    const callArgs = addPanel.mock.calls[0]![0] as Record<string, unknown>;
     expect(callArgs.restore).toBe(true);
   });
 
@@ -1570,7 +1560,7 @@ describe("hydrateAppState", () => {
     });
 
     expect(addPanel).toHaveBeenCalledTimes(1);
-    const callArgs = addPanel.mock.calls[0][0] as Record<string, unknown>;
+    const callArgs = addPanel.mock.calls[0]![0] as Record<string, unknown>;
     // Reconnects should not have restore flag
     expect(callArgs.restore).toBeUndefined();
   });
@@ -1656,12 +1646,12 @@ describe("hydrateAppState", () => {
             browserUrl: "http://localhost:3000",
           },
           {
-            id: "notes-1",
-            kind: "notes",
-            title: "Notes",
+            id: "browser-2",
+            kind: "browser",
+            title: "Docs",
             cwd: "/project",
             location: "grid",
-            noteId: "note-abc",
+            browserUrl: "http://localhost:4000",
           },
         ],
         sidebarWidth: 350,
@@ -1684,7 +1674,7 @@ describe("hydrateAppState", () => {
     const addPanel = vi
       .fn()
       .mockImplementation((opts: { kind?: string; requestedId?: string; existingId?: string }) => {
-        callOrder.push(opts.kind ?? "unknown");
+        callOrder.push(`${opts.kind ?? "unknown"}:${opts.requestedId ?? opts.existingId}`);
         return Promise.resolve(opts.requestedId ?? opts.existingId ?? "id");
       });
     const setActiveWorktree = vi.fn();
@@ -1700,13 +1690,13 @@ describe("hydrateAppState", () => {
 
     expect(addPanel).toHaveBeenCalledTimes(3);
 
-    // Non-PTY panels (browser, notes) should be restored before PTY panel (terminal)
-    const terminalIndex = callOrder.indexOf("terminal");
-    const browserIndex = callOrder.indexOf("browser");
-    const notesIndex = callOrder.indexOf("notes");
+    // Non-PTY panels (browser) should be restored before PTY panel (terminal)
+    const terminalIdx = callOrder.findIndex((c) => c.startsWith("terminal:"));
+    const browser1Idx = callOrder.indexOf("browser:browser-1");
+    const browser2Idx = callOrder.indexOf("browser:browser-2");
 
-    expect(browserIndex).toBeLessThan(terminalIndex);
-    expect(notesIndex).toBeLessThan(terminalIndex);
+    expect(browser1Idx).toBeLessThan(terminalIdx);
+    expect(browser2Idx).toBeLessThan(terminalIdx);
   });
 
   it("preserves order for all-non-PTY panel workspace", async () => {
@@ -1722,12 +1712,12 @@ describe("hydrateAppState", () => {
             browserUrl: "http://localhost:3000",
           },
           {
-            id: "notes-1",
-            kind: "notes",
-            title: "Notes 1",
+            id: "browser-2",
+            kind: "browser",
+            title: "Browser 2",
             cwd: "/project",
             location: "grid",
-            noteId: "note-1",
+            browserUrl: "http://localhost:4000",
           },
           {
             id: "dev-preview-1",
@@ -1763,13 +1753,13 @@ describe("hydrateAppState", () => {
     expect(addPanel).toHaveBeenCalledTimes(3);
 
     // All three non-PTY panels should be restored with correct kinds in order
-    expect(addPanel.mock.calls[0][0]).toEqual(
+    expect(addPanel.mock.calls[0]![0]).toEqual(
       expect.objectContaining({ kind: "browser", requestedId: "browser-1" })
     );
-    expect(addPanel.mock.calls[1][0]).toEqual(
-      expect.objectContaining({ kind: "notes", requestedId: "notes-1" })
+    expect(addPanel.mock.calls[1]![0]).toEqual(
+      expect.objectContaining({ kind: "browser", requestedId: "browser-2" })
     );
-    expect(addPanel.mock.calls[2][0]).toEqual(
+    expect(addPanel.mock.calls[2]![0]).toEqual(
       expect.objectContaining({ kind: "dev-preview", requestedId: "dev-preview-1" })
     );
   });
@@ -1799,13 +1789,13 @@ describe("hydrateAppState", () => {
             browserUrl: "http://localhost:3000",
           },
           {
-            id: "notes-active",
-            kind: "notes",
-            title: "Active Notes",
+            id: "browser-active",
+            kind: "browser",
+            title: "Active Browser",
             cwd: "/project",
             worktreeId: "wt-active",
             location: "grid",
-            noteId: "note-1",
+            browserUrl: "http://localhost:4000",
           },
           {
             id: "term-bg",
@@ -1864,12 +1854,12 @@ describe("hydrateAppState", () => {
     expect(addPanel).toHaveBeenCalledTimes(4);
 
     // Both non-PTY panels (from different worktrees) should come before either PTY panel
-    const browserIdx = callOrder.findIndex((c) => c.startsWith("browser:"));
-    const notesIdx = callOrder.findIndex((c) => c.startsWith("notes:"));
+    const browserBgIdx = callOrder.indexOf("browser:browser-bg");
+    const browserActiveIdx = callOrder.indexOf("browser:browser-active");
     const firstPtyIdx = callOrder.findIndex((c) => c.startsWith("terminal:"));
 
-    expect(browserIdx).toBeLessThan(firstPtyIdx);
-    expect(notesIdx).toBeLessThan(firstPtyIdx);
+    expect(browserBgIdx).toBeLessThan(firstPtyIdx);
+    expect(browserActiveIdx).toBeLessThan(firstPtyIdx);
   });
 
   it("treats dev-preview with backend terminal as PTY-grouped", async () => {
@@ -2032,13 +2022,13 @@ describe("hydrateAppState", () => {
       expect(notifyMock).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "warning",
-          title: "Settings Restored from Backup",
+          title: "Settings restored from backup",
           priority: "high",
           duration: 8000,
         })
       );
-      expect(notifyMock.mock.calls[0][0].message).toContain("restored from a backup");
-      expect(notifyMock.mock.calls[0][0].message).toContain("/path/to/config.json.corrupted.123");
+      expect(notifyMock.mock.calls[0]![0].message).toContain("restored from a backup");
+      expect(notifyMock.mock.calls[0]![0].message).toContain("/path/to/config.json.corrupted.123");
     });
 
     it("shows persistent warning toast when settings reset to defaults", async () => {
@@ -2064,13 +2054,13 @@ describe("hydrateAppState", () => {
       expect(notifyMock).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "warning",
-          title: "Settings Reset to Defaults",
+          title: "Settings reset to defaults",
           priority: "high",
           duration: 0,
         })
       );
-      expect(notifyMock.mock.calls[0][0].message).toContain("reset to defaults");
-      expect(notifyMock.mock.calls[0][0].message).toContain("/path/to/config.json.corrupted.456");
+      expect(notifyMock.mock.calls[0]![0].message).toContain("reset to defaults");
+      expect(notifyMock.mock.calls[0]![0].message).toContain("/path/to/config.json.corrupted.456");
     });
 
     it("does not show notification on normal startup", async () => {
@@ -2108,7 +2098,105 @@ describe("hydrateAppState", () => {
       });
 
       expect(notifyMock).toHaveBeenCalledTimes(1);
-      expect(notifyMock.mock.calls[0][0].message).not.toContain("preserved at");
+      expect(notifyMock.mock.calls[0]![0].message).not.toContain("preserved at");
+    });
+  });
+
+  describe("project state recovery notifications", () => {
+    it("shows persistent warning toast when project state was quarantined", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        projectStateRecovery: {
+          quarantinedPath: "/path/to/state.json.corrupted",
+        },
+      });
+
+      await hydrateAppState({
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "warning",
+          title: "Project state corrupted",
+          priority: "high",
+          duration: 0,
+        })
+      );
+      expect(notifyMock.mock.calls[0]![0].message).toContain("/path/to/state.json.corrupted");
+      expect(notifyMock.mock.calls[0]![0].message).toContain("has been reset");
+    });
+
+    it("does not show notification when projectStateRecovery is null", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        projectStateRecovery: null,
+      });
+
+      await hydrateAppState({
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("does not show notification when projectStateRecovery is omitted", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      await hydrateAppState({
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("shows both settings and project state notifications when both recoveries occur", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        settingsRecovery: {
+          kind: "reset-to-defaults",
+          quarantinedPath: "/path/to/config.json.corrupted",
+        },
+        projectStateRecovery: {
+          quarantinedPath: "/path/to/state.json.corrupted",
+        },
+      });
+
+      await hydrateAppState({
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(2);
+      const titles = notifyMock.mock.calls.map((call) => call[0].title);
+      expect(titles).toContain("Settings reset to defaults");
+      expect(titles).toContain("Project state corrupted");
     });
   });
 
@@ -2255,7 +2343,7 @@ describe("hydrateAppState", () => {
           id: "dead-agent-1",
           hasPty: false,
           cwd: "/project",
-          kind: "agent",
+          kind: "terminal",
           type: "claude",
           agentId: "claude",
           title: "Claude",
@@ -2323,7 +2411,7 @@ describe("hydrateAppState", () => {
           id: "live-agent-1",
           hasPty: true,
           cwd: "/project",
-          kind: "agent",
+          kind: "terminal",
           type: "claude",
           agentId: "claude",
           title: "Claude",
@@ -2385,9 +2473,8 @@ describe("hydrateAppState", () => {
           terminals: [
             {
               id: "agent-1",
-              kind: "agent",
-              type: "claude",
-              agentId: "claude",
+              kind: "terminal",
+              launchAgentId: "claude",
               title: "Claude",
               cwd: "/project",
               location: "grid",
@@ -2405,9 +2492,8 @@ describe("hydrateAppState", () => {
           id: "agent-1",
           hasPty: false,
           cwd: "/project",
-          kind: "agent",
-          type: "claude",
-          agentId: "claude",
+          kind: "terminal",
+          launchAgentId: "claude",
           title: "Claude",
         },
       ]);
@@ -2474,7 +2560,7 @@ describe("hydrateAppState", () => {
           terminals: [
             {
               id: "agent-1",
-              kind: "agent",
+              kind: "terminal",
               type: "claude",
               agentId: "claude",
               title: "Claude",
@@ -2515,7 +2601,7 @@ describe("hydrateAppState", () => {
 
       // Agent should still respawn on timeout (could be a temporary network issue)
       expect(addPanel).toHaveBeenCalledTimes(1);
-      expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ kind: "agent" }));
+      expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ kind: "terminal" }));
     });
 
     it("still respawns non-agent terminal when not found in backend", async () => {
@@ -2562,8 +2648,7 @@ describe("hydrateAppState", () => {
           terminals: [
             {
               id: "agent-old",
-              type: "claude",
-              agentId: "claude",
+              launchAgentId: "claude",
               title: "Claude",
               cwd: "/project",
               location: "grid",
@@ -2593,6 +2678,382 @@ describe("hydrateAppState", () => {
 
       // Older agent snapshots (type: "claude" but no kind) should be skipped during project switch
       expect(addPanel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("live agent identity replayable across view rebuild", () => {
+    // View eviction / window rebuild drops the renderer V8 context and store, so
+    // the main process is the sole source of truth for live agent identity.
+    // These cases lock down the contract that the four identity dimensions —
+    // launch intent (agentId), live detected identity (detectedAgentId /
+    // detectedProcessId), capability mode (capabilityAgentId), and current state
+    // (agentState, everDetectedAgent) — survive the hydration pipeline verbatim
+    // and reach addPanel without invention or loss.
+
+    function makeBackendAgentEntry(overrides: Record<string, unknown> = {}) {
+      return {
+        id: "agent-1",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        launchAgentId: "claude",
+        title: "Claude",
+        agentState: "working",
+        lastStateChange: 123456789,
+        everDetectedAgent: true,
+        detectedAgentId: "claude",
+        detectedProcessId: "claude-12345",
+        ...overrides,
+      };
+    }
+
+    function makeSavedAgentPanel(overrides: Record<string, unknown> = {}) {
+      return {
+        id: "agent-1",
+        kind: "terminal",
+        launchAgentId: "claude",
+        title: "Claude",
+        cwd: "/project",
+        location: "grid",
+        command: "claude",
+        ...overrides,
+      };
+    }
+
+    it("carries full identity payload (agentId + detected + capability + state) through getForProject into addPanel", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [makeSavedAgentPanel()],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([makeBackendAgentEntry()]);
+
+      const addPanel = vi.fn(async (opts: Record<string, unknown>) => {
+        return (
+          (opts.existingId as string | undefined) ??
+          (opts.requestedId as string | undefined) ??
+          "id"
+        );
+      });
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).toHaveBeenCalledTimes(1);
+      expect(addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          existingId: "agent-1",
+          launchAgentId: "claude",
+          agentState: "working",
+          everDetectedAgent: true,
+          detectedAgentId: "claude",
+          detectedProcessId: "claude-12345",
+        })
+      );
+      // Reconnect path, not respawn
+      expect(addPanel).not.toHaveBeenCalledWith(
+        expect.objectContaining({ requestedId: "agent-1" })
+      );
+    });
+
+    it("preserves observed-shell live identity (detectedAgentId with no launch intent) without inventing agentId or capabilityAgentId", async () => {
+      // User launched a plain shell (no launch intent); detection later kicked
+      // in via OSC title or process scan. everDetectedAgent flipped sticky-true,
+      // detectedAgentId resolved to "claude", but capabilityAgentId stays
+      // undefined because it was sealed at spawn from the absent agentId.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            makeSavedAgentPanel({
+              id: "shell-1",
+              kind: "terminal",
+              launchAgentId: undefined,
+              title: "zsh",
+              command: undefined,
+            }),
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        makeBackendAgentEntry({
+          id: "shell-1",
+          launchAgentId: undefined,
+          title: "zsh",
+          everDetectedAgent: true,
+          detectedAgentId: "claude",
+          detectedProcessId: "claude-98765",
+        }),
+      ]);
+
+      const addPanel = vi.fn(async (opts: Record<string, unknown>) => {
+        return (
+          (opts.existingId as string | undefined) ??
+          (opts.requestedId as string | undefined) ??
+          "id"
+        );
+      });
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).toHaveBeenCalledTimes(1);
+      const callArgs = addPanel.mock.calls[0]![0];
+      // Detected identity flows through as-is
+      expect(callArgs.everDetectedAgent).toBe(true);
+      expect(callArgs.detectedAgentId).toBe("claude");
+      expect(callArgs.detectedProcessId).toBe("claude-98765");
+      // Launch intent must not be invented from detection
+      expect(callArgs.launchAgentId).toBeUndefined();
+      expect(callArgs.existingId).toBe("shell-1");
+    });
+
+    it("drops dead agent backends (hasPty:false) even when identity fields are populated", async () => {
+      // Guards the test above from becoming vacuously green: if hasPty were
+      // silently missing, the dead-agent filter in stateHydration/index.ts
+      // would suppress the addPanel call and hide a real regression.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [makeSavedAgentPanel()],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        makeBackendAgentEntry({ hasPty: false }),
+      ]);
+
+      const addPanel = vi.fn(async (opts: Record<string, unknown>) => {
+        return (
+          (opts.existingId as string | undefined) ??
+          (opts.requestedId as string | undefined) ??
+          "id"
+        );
+      });
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).not.toHaveBeenCalled();
+    });
+
+    it("carries full identity payload through the TERMINAL_RECONNECT fallback path", async () => {
+      // Simulates the window-rebuild / eviction-recovery race where
+      // getForProject returns empty (project ID mismatch or stale snapshot)
+      // but the backend terminal is still live. The fallback resolves via
+      // terminalClient.reconnect and must carry identity fields verbatim.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [makeSavedAgentPanel()],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([]);
+      terminalClientMock.reconnect.mockResolvedValue({
+        exists: true,
+        id: "agent-1",
+        projectId: "project-1",
+        kind: "terminal",
+        launchAgentId: "claude",
+        title: "Claude",
+        cwd: "/project",
+        worktreeId: undefined,
+        agentState: "waiting",
+        lastStateChange: 123456789,
+        spawnedAt: 123456000,
+        activityTier: "background",
+        hasPty: true,
+        everDetectedAgent: true,
+        detectedAgentId: "claude",
+        detectedProcessId: "claude-12345",
+      });
+
+      const addPanel = vi.fn(async (opts: Record<string, unknown>) => {
+        return (
+          (opts.existingId as string | undefined) ??
+          (opts.requestedId as string | undefined) ??
+          "id"
+        );
+      });
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(terminalClientMock.reconnect).toHaveBeenCalledWith("agent-1");
+      expect(addPanel).toHaveBeenCalledTimes(1);
+      expect(addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          existingId: "agent-1",
+          launchAgentId: "claude",
+          agentState: "waiting",
+          everDetectedAgent: true,
+          detectedAgentId: "claude",
+          detectedProcessId: "claude-12345",
+        })
+      );
+      // Must go through reconnect, not respawn
+      expect(addPanel).not.toHaveBeenCalledWith(
+        expect.objectContaining({ requestedId: "agent-1" })
+      );
+    });
+
+    it("carries full identity payload through the orphaned-backend path (backend terminal not in saved state)", async () => {
+      // Third propagation route: a live backend terminal that hydrate() does
+      // not know about (saved state stripped, new window discovers it from
+      // getForProject). Routes through buildArgsForOrphanedTerminal instead
+      // of the primary or reconnect builders. Must carry the four identity
+      // dimensions just like the other two paths.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          // At least one saved panel so the orphan filter does not treat the
+          // orphan as a cross-project "default-" bootstrap leftover.
+          terminals: [
+            {
+              id: "other-1",
+              kind: "terminal",
+              type: "terminal",
+              title: "Other Terminal",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "other-1",
+          hasPty: true,
+          cwd: "/project",
+          kind: "terminal",
+          type: "terminal",
+          title: "Other Terminal",
+        },
+        makeBackendAgentEntry({ id: "orphan-agent-1" }),
+      ]);
+
+      const addPanel = vi.fn(async (opts: Record<string, unknown>) => {
+        return (
+          (opts.existingId as string | undefined) ??
+          (opts.requestedId as string | undefined) ??
+          "id"
+        );
+      });
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // One addPanel for the matched saved terminal, one for the orphan
+      expect(addPanel).toHaveBeenCalledTimes(2);
+      expect(addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          existingId: "orphan-agent-1",
+          launchAgentId: "claude",
+          agentState: "working",
+          everDetectedAgent: true,
+          detectedAgentId: "claude",
+          detectedProcessId: "claude-12345",
+        })
+      );
+    });
+
+    it("does not invent detected identity on reconnect fallback when the backend reports none", async () => {
+      // Cold-launched agent whose detection has not yet fired (or fired and
+      // then reset). The renderer must not fabricate a detectedAgentId or
+      // flip everDetectedAgent based on the launch intent alone.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [makeSavedAgentPanel()],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([]);
+      terminalClientMock.reconnect.mockResolvedValue({
+        exists: true,
+        id: "agent-1",
+        projectId: "project-1",
+        kind: "terminal",
+        launchAgentId: "claude",
+        title: "Claude",
+        cwd: "/project",
+        worktreeId: undefined,
+        agentState: "idle",
+        lastStateChange: 123456789,
+        spawnedAt: 123456000,
+        activityTier: "background",
+        hasPty: true,
+        // No live detection yet — everDetectedAgent / detectedAgentId /
+        // detectedProcessId omitted.
+      });
+
+      const addPanel = vi.fn(async (opts: Record<string, unknown>) => {
+        return (
+          (opts.existingId as string | undefined) ??
+          (opts.requestedId as string | undefined) ??
+          "id"
+        );
+      });
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).toHaveBeenCalledTimes(1);
+      const callArgs = addPanel.mock.calls[0]![0];
+      expect(callArgs.existingId).toBe("agent-1");
+      expect(callArgs.launchAgentId).toBe("claude");
+      expect(callArgs.agentState).toBe("idle");
+      // No invention: absent detection stays absent
+      expect(callArgs.everDetectedAgent).toBeUndefined();
+      expect(callArgs.detectedAgentId).toBeUndefined();
+      expect(callArgs.detectedProcessId).toBeUndefined();
     });
   });
 
@@ -2656,6 +3117,137 @@ describe("hydrateAppState", () => {
       );
 
       expect(appClientMock.hydrate).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("hydration batching (#5196)", () => {
+    it("pairs beginHydrationBatch and flushHydrationBatch for each non-empty restore phase", async () => {
+      // Three panel kinds exercise three phases simultaneously: browser (non-PTY),
+      // a saved terminal without a backend process (background PTY respawn), and
+      // an orphan backend terminal not in the saved list.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "browser-1",
+              kind: "browser",
+              title: "Browser",
+              cwd: "/project",
+              location: "grid",
+            },
+            {
+              id: "terminal-1",
+              kind: "terminal",
+              type: "terminal",
+              title: "Terminal",
+              cwd: "/project",
+              location: "grid",
+              worktreeId: "wt-other",
+            },
+          ],
+          activeWorktreeId: "wt-active",
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        { id: "orphan-1", kind: "terminal", type: "terminal", cwd: "/project", hasPty: true },
+      ]);
+      terminalClientMock.reconnect.mockResolvedValue({ exists: false });
+
+      const beginHydrationBatch = vi.fn(() => Symbol("batch"));
+      const flushHydrationBatch = vi.fn();
+
+      await hydrateAppState({
+        addPanel: vi.fn().mockResolvedValue("panel-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+        beginHydrationBatch,
+        flushHydrationBatch,
+      });
+
+      // Every begin must be matched by a flush with the same token.
+      expect(flushHydrationBatch).toHaveBeenCalledTimes(beginHydrationBatch.mock.calls.length);
+      const tokens = beginHydrationBatch.mock.results.map((r) => r.value);
+      tokens.forEach((token, i) => {
+        expect(flushHydrationBatch.mock.calls[i]?.[0]).toBe(token);
+      });
+
+      // Non-PTY + background-PTY + orphan phases each fire at least one begin/flush.
+      expect(beginHydrationBatch.mock.calls.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it("falls through to legacy per-panel commits when batch hooks are omitted", async () => {
+      // Regression guard: existing callers (and tests) that don't pass begin/flush
+      // must still hydrate correctly. This is the same shape as the first test in
+      // this suite, but without any batch hooks in the options object.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "browser-1",
+              kind: "browser",
+              title: "Browser",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      const addPanel = vi.fn().mockResolvedValue("browser-1");
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).toHaveBeenCalledTimes(1);
+    });
+
+    it("flushes the batch even if a panel addition throws mid-phase", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "browser-1",
+              kind: "browser",
+              title: "Browser",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      const beginHydrationBatch = vi.fn(() => Symbol("batch"));
+      const flushHydrationBatch = vi.fn();
+
+      // If `addPanel` rejects, hydration swallows the error (logWarn). The batch
+      // still needs to flush so the store isn't left stuck with a dangling batch.
+      const addPanel = vi.fn().mockRejectedValue(new Error("boom"));
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+        beginHydrationBatch,
+        flushHydrationBatch,
+      });
+
+      expect(beginHydrationBatch).toHaveBeenCalled();
+      expect(flushHydrationBatch).toHaveBeenCalledTimes(beginHydrationBatch.mock.calls.length);
     });
   });
 });

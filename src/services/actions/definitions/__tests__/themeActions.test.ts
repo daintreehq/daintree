@@ -19,6 +19,11 @@ vi.mock("@/store/notificationStore", () => ({
   useNotificationStore: { getState: () => ({ addNotification: mockAddNotification }) },
 }));
 
+const mockNotify = vi.fn().mockReturnValue("test-id");
+vi.mock("@/lib/notify", () => ({
+  notify: (...args: unknown[]) => mockNotify(...args),
+}));
+
 vi.mock("@/clients", () => ({ appClient: {} }));
 vi.mock("@/store/userAgentRegistryStore", () => ({
   useUserAgentRegistryStore: { getState: () => ({ refresh: vi.fn() }) },
@@ -34,8 +39,8 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 import { registerAppActions } from "../appActions";
-import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
-import type { ActionContext, ActionDefinition } from "@shared/types/actions";
+import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
 
 const stubCtx: ActionContext = {};
 
@@ -55,10 +60,10 @@ const lightA = makeScheme("light-a", "light", "Light A");
 const darkB = makeScheme("dark-b", "dark", "Dark B");
 
 function getActions(): {
-  toggle: ActionDefinition;
-  pick: ActionDefinition;
+  toggle: AnyActionDefinition;
+  pick: AnyActionDefinition;
 } {
-  const registry = new Map<string, () => ActionDefinition>();
+  const registry = new Map<string, () => AnyActionDefinition>();
   const callbacks = {
     onOpenSettings: vi.fn(),
     onOpenSettingsTab: vi.fn(),
@@ -94,7 +99,7 @@ describe("app.theme.toggle", () => {
 
     expect(mockSetSelectedSchemeId).toHaveBeenCalledWith("light-a");
     expect(mockSetColorScheme).toHaveBeenCalledWith("light-a");
-    expect(mockAddNotification).toHaveBeenCalledWith(
+    expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "info", message: "Theme: Light A" })
     );
   });
@@ -113,7 +118,7 @@ describe("app.theme.toggle", () => {
 
     expect(mockSetSelectedSchemeId).toHaveBeenCalledWith("dark-a");
     expect(mockSetColorScheme).toHaveBeenCalledWith("dark-a");
-    expect(mockAddNotification).toHaveBeenCalledWith(
+    expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "info", message: "Theme: Dark A" })
     );
   });
@@ -155,7 +160,7 @@ describe("app.theme.toggle", () => {
     expect(mockSetSelectedSchemeId).toHaveBeenCalledTimes(1);
     expect(mockSetColorScheme).toHaveBeenCalledTimes(1);
     // Target must be a dark scheme — assert the fallback kicked in.
-    const targetId = mockSetSelectedSchemeId.mock.calls[0][0] as string;
+    const targetId = mockSetSelectedSchemeId.mock.calls[0]![0] as string;
     expect(targetId).not.toBe("light-a");
   });
 
@@ -173,11 +178,11 @@ describe("app.theme.toggle", () => {
     await toggle.run(undefined, stubCtx);
 
     expect(mockSetSelectedSchemeId).toHaveBeenCalledTimes(1);
-    const selectedId = mockSetSelectedSchemeId.mock.calls[0][0] as string;
+    const selectedId = mockSetSelectedSchemeId.mock.calls[0]![0] as string;
     // Must NOT be light-a (the wrong-type fallback). Must be some built-in dark scheme.
     expect(selectedId).not.toBe("light-a");
     expect(mockSetColorScheme).toHaveBeenCalledWith(selectedId);
-    expect(mockAddNotification).toHaveBeenCalledWith(expect.objectContaining({ type: "info" }));
+    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ type: "info" }));
   });
 
   it("shows error toast when persistence fails, skips success toast", async () => {
@@ -194,8 +199,12 @@ describe("app.theme.toggle", () => {
     await toggle.run(undefined, stubCtx);
 
     expect(mockSetSelectedSchemeId).toHaveBeenCalledWith("light-a");
-    expect(mockAddNotification).toHaveBeenCalledTimes(1);
-    expect(mockAddNotification).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
+    expect(mockNotify).toHaveBeenCalledTimes(1);
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", message: "Failed to save theme: Light A" })
+    );
+    expect(mockNotify).not.toHaveBeenCalledWith(expect.objectContaining({ priority: "low" }));
+    expect(mockAddNotification).not.toHaveBeenCalled();
   });
 });
 
@@ -213,7 +222,7 @@ describe("app.theme.pick", () => {
     const { pick } = getActions();
     await pick.run(undefined, stubCtx);
     expect(window.dispatchEvent).toHaveBeenCalledTimes(1);
-    const event = (window.dispatchEvent as ReturnType<typeof vi.fn>).mock.calls[0][0] as Event;
+    const event = (window.dispatchEvent as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Event;
     expect(event.type).toBe("daintree:open-theme-palette");
   });
 

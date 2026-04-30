@@ -9,7 +9,9 @@ import {
   PORTAL_DEFAULT_WIDTH,
   DEFAULT_SYSTEM_LINKS,
 } from "@shared/types";
+import { useUIStore } from "./uiStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 interface PortalState {
   isOpen: boolean;
@@ -97,7 +99,15 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
   return {
     ...initialState,
 
-    toggle: () => set((s) => ({ isOpen: !s.isOpen })),
+    toggle: () =>
+      set((s) => {
+        // Suppress the closed→open transition while another surface owns the
+        // viewport (e.g. a settings dialog). Without this the store flips to
+        // isOpen=true but PortalVisibilityController keeps the webview hidden,
+        // leaving the Portal visually closed yet "open" per the store.
+        if (!s.isOpen && useUIStore.getState().overlayClaims.size > 0) return s;
+        return { isOpen: !s.isOpen };
+      }),
 
     setOpen: (open) => set({ isOpen: open }),
 
@@ -109,7 +119,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
     setActiveTab: (id) => set({ activeTabId: id }),
 
     createTab: (url, title) => {
-      const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const newTabId = `tab-${crypto.randomUUID()}`;
       const newTab: PortalTab = { id: newTabId, url, title };
       set((s) => ({
         tabs: [...s.tabs, newTab],
@@ -127,7 +137,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
         return existingBlank.id;
       }
 
-      const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const newTabId = `tab-${crypto.randomUUID()}`;
       const newTab: PortalTab = { id: newTabId, url: null, title: "New Tab" };
       set((s) => ({
         tabs: [...s.tabs, newTab],
@@ -146,7 +156,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       let newActiveId = state.activeTabId;
       if (wasActive) {
         newActiveId =
-          newTabs.length === 0 ? null : newTabs[Math.min(closingIndex, newTabs.length - 1)].id;
+          newTabs.length === 0 ? null : newTabs[Math.min(closingIndex, newTabs.length - 1)]!.id;
       }
       const nextCreatedTabs = new Set(state.createdTabs);
       nextCreatedTabs.delete(id);
@@ -181,7 +191,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       if (state.tabs.length <= 1) return;
       const currentIndex = state.tabs.findIndex((t) => t.id === state.activeTabId);
       const nextIndex = currentIndex < state.tabs.length - 1 ? currentIndex + 1 : 0;
-      set({ activeTabId: state.tabs[nextIndex].id });
+      set({ activeTabId: state.tabs[nextIndex]!.id });
     },
 
     cyclePrevTab: () => {
@@ -189,7 +199,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       if (state.tabs.length <= 1) return;
       const currentIndex = state.tabs.findIndex((t) => t.id === state.activeTabId);
       const prevIndex = currentIndex > 0 ? currentIndex - 1 : state.tabs.length - 1;
-      set({ activeTabId: state.tabs[prevIndex].id });
+      set({ activeTabId: state.tabs[prevIndex]!.id });
     },
 
     closeAllTabs: () => {
@@ -205,7 +215,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       const tab = state.tabs.find((t) => t.id === id);
       if (!tab?.url) return null;
 
-      const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const newTabId = `tab-${crypto.randomUUID()}`;
       const newTab: PortalTab = {
         id: newTabId,
         url: tab.url,
@@ -308,7 +318,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
             ...s.links,
             {
               ...link,
-              id: `user-${Date.now()}`,
+              id: `user-${crypto.randomUUID()}`,
               type: "user",
               enabled: true,
               order: maxOrder + 1,
@@ -350,6 +360,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
         }
         const links = [...s.links];
         const [moved] = links.splice(fromIndex, 1);
+        if (!moved) return s;
         links.splice(toIndex, 0, moved);
         return { links: links.map((l, i) => ({ ...l, order: i })) };
       }),
@@ -367,6 +378,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
         }
         const newTabs = [...s.tabs];
         const [moved] = newTabs.splice(fromIndex, 1);
+        if (!moved) return s;
         newTabs.splice(toIndex, 0, moved);
         return { tabs: newTabs };
       }),
@@ -397,6 +409,8 @@ const portalStoreCreator: StateCreator<
 > = persist(createPortalStore, {
   name: "portal-storage",
   storage: createSafeJSONStorage(),
+  version: 0,
+  migrate: (persistedState) => persistedState as PortalState & PortalActions,
   partialize: (state) => ({
     links: state.links,
     width: state.width,
@@ -468,3 +482,9 @@ const portalStoreCreator: StateCreator<
 });
 
 export const usePortalStore = create<PortalState & PortalActions>()(portalStoreCreator);
+
+registerPersistedStore({
+  storeId: "portalStore",
+  store: usePortalStore,
+  persistedStateType: "Partial<PortalState> (links, width, tabs, defaultNewTabUrl)",
+});

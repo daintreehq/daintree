@@ -89,9 +89,9 @@ test.describe.serial("Full: Global Environment Variable Inheritance", () => {
     await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
-    // Switch to Project scope
-    const scopeSelect = window.locator('[aria-label="Settings scope"]');
-    await scopeSelect.selectOption("project");
+    // Switch to Project scope (Radix Select)
+    await window.locator('[aria-label="Settings scope"]').click();
+    await window.locator('[role="option"]', { hasText: "Project" }).click();
     await window.waitForTimeout(T_SETTLE);
 
     // Click Variables tab

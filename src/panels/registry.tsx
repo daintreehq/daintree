@@ -1,19 +1,21 @@
 import { Suspense, lazy, type ComponentType } from "react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
+import type { PtyPanelData, BrowserPanelData, DevPreviewPanelData } from "@shared/types/panel";
+import type {
+  TerminalPanelOptions,
+  BrowserPanelOptions,
+  DevPreviewPanelOptions,
+} from "@shared/types/addPanelOptions";
+import type { PanelSnapshot } from "@shared/types/project";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
-import { NotesPaneSkeleton } from "@/components/Notes/NotesPaneSkeleton";
 
 import { serializePtyPanel } from "./terminal/serializer";
 import { createTerminalDefaults } from "./terminal/defaults";
-import { serializeAgent } from "./agent/serializer";
-import { createAgentDefaults } from "./agent/defaults";
 import { serializeBrowser } from "./browser/serializer";
 import { createBrowserDefaults } from "./browser/defaults";
-import { serializeNotes } from "./notes/serializer";
-import { createNotesDefaults } from "./notes/defaults";
 import { serializeDevPreview } from "./dev-preview/serializer";
 import { createDevPreviewDefaults } from "./dev-preview/defaults";
 
@@ -43,30 +45,20 @@ export interface PanelKindDefinition extends PanelKindConfig {
 const LazyBrowserPane = lazy(() =>
   import("@/components/Browser/BrowserPane").then((m) => ({ default: m.BrowserPane }))
 );
-const LazyNotesPane = lazy(() =>
-  import("@/components/Notes/NotesPane").then((m) => ({ default: m.NotesPane }))
-);
 const LazyDevPreviewPane = lazy(() =>
   import("@/components/DevPreview/DevPreviewPane").then((m) => ({ default: m.DevPreviewPane }))
 );
 
+// Wrapper providing Suspense fallback for the lazy dynamic import and
+// correct componentName attribution on chunk-load failures. The per-panel
+// boundary in GridPanel catches render errors; this wrapper catches import
+// failures with proper attribution — the two boundaries serve different roles.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function BrowserPaneWrapper(props: any) {
   return (
     <ErrorBoundary variant="component" componentName="BrowserPane">
       <Suspense fallback={<BrowserPaneSkeleton />}>
         <LazyBrowserPane {...props} />
-      </Suspense>
-    </ErrorBoundary>
-  );
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function NotesPaneWrapper(props: any) {
-  return (
-    <ErrorBoundary variant="component" componentName="NotesPane">
-      <Suspense fallback={<NotesPaneSkeleton />}>
-        <LazyNotesPane {...props} />
       </Suspense>
     </ErrorBoundary>
   );
@@ -83,29 +75,48 @@ function DevPreviewPaneWrapper(props: any) {
   );
 }
 
-const BUILT_IN_SERIALIZE_DEFAULTS: Record<
-  string,
-  {
-    serialize: NonNullable<PanelKindConfig["serialize"]>;
-    createDefaults: NonNullable<PanelKindConfig["createDefaults"]>;
-  }
-> = {
-  terminal: { serialize: serializePtyPanel, createDefaults: createTerminalDefaults },
-  agent: { serialize: serializeAgent, createDefaults: createAgentDefaults },
-  browser: { serialize: serializeBrowser, createDefaults: createBrowserDefaults },
-  notes: { serialize: serializeNotes, createDefaults: createNotesDefaults },
-  "dev-preview": { serialize: serializeDevPreview, createDefaults: createDevPreviewDefaults },
+/**
+ * Maps each built-in panel kind to its panel data variant. `createdAt` is
+ * intentionally widened on the PTY and dev-preview entries so serializers can
+ * read the legacy field without modifying the shared variant interfaces.
+ */
+interface BuiltInPanelMap {
+  terminal: PtyPanelData & { createdAt?: number };
+  browser: BrowserPanelData;
+  "dev-preview": DevPreviewPanelData & { createdAt?: number };
+}
+
+interface BuiltInPanelOptionsMap {
+  terminal: TerminalPanelOptions;
+  browser: BrowserPanelOptions;
+  "dev-preview": DevPreviewPanelOptions;
+}
+
+type BuiltInSerializeDefaults = {
+  [K in keyof BuiltInPanelMap]: {
+    serialize: (panel: BuiltInPanelMap[K]) => Partial<PanelSnapshot>;
+    createDefaults: (options: BuiltInPanelOptionsMap[K]) => Partial<BuiltInPanelMap[K]>;
+  };
 };
+
+const BUILT_IN_SERIALIZE_DEFAULTS = {
+  terminal: { serialize: serializePtyPanel, createDefaults: createTerminalDefaults },
+  browser: { serialize: serializeBrowser, createDefaults: createBrowserDefaults },
+  "dev-preview": { serialize: serializeDevPreview, createDefaults: createDevPreviewDefaults },
+} satisfies BuiltInSerializeDefaults;
 
 export function initBuiltInPanelKinds(): void {
   for (const [kindId, hooks] of Object.entries(BUILT_IN_SERIALIZE_DEFAULTS)) {
     const existing = requirePanelKindConfig(kindId);
-    if (
-      existing.serialize !== hooks.serialize ||
-      existing.createDefaults !== hooks.createDefaults
-    ) {
-      existing.serialize = hooks.serialize;
-      existing.createDefaults = hooks.createDefaults;
+    // Narrow per-kind hooks are widened to the shared PanelKindConfig contract
+    // here — this is the single seam between the typed registry map above and
+    // the extension-friendly wide interface. Function parameter contravariance
+    // makes this cast necessary; it is intentionally isolated to this function.
+    const serialize = hooks.serialize as PanelKindConfig["serialize"];
+    const createDefaults = hooks.createDefaults as PanelKindConfig["createDefaults"];
+    if (existing.serialize !== serialize || existing.createDefaults !== createDefaults) {
+      existing.serialize = serialize;
+      existing.createDefaults = createDefaults;
     }
   }
 }
@@ -120,9 +131,7 @@ function requirePanelKindConfig(kind: string): PanelKindConfig {
 
 const PANEL_KIND_DEFINITION_REGISTRY: Record<string, PanelKindDefinition> = {
   terminal: { ...requirePanelKindConfig("terminal"), component: TerminalPane },
-  agent: { ...requirePanelKindConfig("agent"), component: TerminalPane },
   browser: { ...requirePanelKindConfig("browser"), component: BrowserPaneWrapper },
-  notes: { ...requirePanelKindConfig("notes"), component: NotesPaneWrapper },
   "dev-preview": { ...requirePanelKindConfig("dev-preview"), component: DevPreviewPaneWrapper },
 };
 

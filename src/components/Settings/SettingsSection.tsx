@@ -24,7 +24,12 @@ export function SettingsSection({
   const headingId = useId();
 
   return (
-    <div className="flex flex-col gap-3" id={id} role="group" aria-labelledby={headingId}>
+    <div
+      className="grid grid-cols-[minmax(0,1fr)] gap-3"
+      id={id}
+      role="group"
+      aria-labelledby={headingId}
+    >
       <div>
         <h4
           id={headingId}
@@ -33,7 +38,7 @@ export function SettingsSection({
           <Icon className={cn("w-4 h-4", iconColor)} aria-hidden="true" />
           {title}
           {badge && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-daintree-accent/10 border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-status-info/10 border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
               {badge}
             </span>
           )}

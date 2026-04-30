@@ -144,7 +144,7 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
 
     const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
     expect(buffer?.pendingCorrections).toHaveLength(1);
-    expect(buffer?.pendingCorrections[0].id).toBe("id-b");
+    expect(buffer?.pendingCorrections[0]!.id).toBe("id-b");
     expect(buffer?.transcriptPhase).toBe("paragraph_pending_ai");
   });
 
@@ -158,9 +158,9 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
 
     const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
     // Entry at position 0 is not shifted (only entries AFTER the applied position are)
-    expect(buffer?.pendingCorrections[0].segmentStart).toBe(0);
+    expect(buffer?.pendingCorrections[0]!.segmentStart).toBe(0);
     // Entry at position 20 shifts to 22
-    expect(buffer?.pendingCorrections[1].segmentStart).toBe(22);
+    expect(buffer?.pendingCorrections[1]!.segmentStart).toBe(22);
   });
 
   it("rebasePendingCorrections with negative delta contracts later offsets", () => {
@@ -172,8 +172,8 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
     useVoiceRecordingStore.getState().rebasePendingCorrections(PANEL_ID, 0, -9);
 
     const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
-    expect(buffer?.pendingCorrections[0].segmentStart).toBe(0);
-    expect(buffer?.pendingCorrections[1].segmentStart).toBe(11);
+    expect(buffer?.pendingCorrections[0]!.segmentStart).toBe(0);
+    expect(buffer?.pendingCorrections[1]!.segmentStart).toBe(11);
   });
 
   it("updateAICorrectionSpan replaces the tracked text after correction is applied", () => {
@@ -195,8 +195,8 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
     useVoiceRecordingStore.getState().rebaseAICorrectionSpans(PANEL_ID, 0, 2);
 
     const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
-    expect(buffer?.aiCorrectionSpans[0].segmentStart).toBe(0);
-    expect(buffer?.aiCorrectionSpans[1].segmentStart).toBe(22);
+    expect(buffer?.aiCorrectionSpans[0]!.segmentStart).toBe(0);
+    expect(buffer?.aiCorrectionSpans[1]!.segmentStart).toBe(22);
   });
 
   it("clearAICorrectionSpans removes persistent AI underline history", () => {

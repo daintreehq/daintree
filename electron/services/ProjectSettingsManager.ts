@@ -47,6 +47,10 @@ export class ProjectSettingsManager {
       workingPulseEnabled: overrides.workingPulseEnabled ?? global.workingPulseEnabled,
       workingPulseSoundFile: overrides.workingPulseSoundFile ?? global.workingPulseSoundFile,
       uiFeedbackSoundEnabled: global.uiFeedbackSoundEnabled,
+      quietHoursEnabled: global.quietHoursEnabled,
+      quietHoursStartMin: global.quietHoursStartMin,
+      quietHoursEndMin: global.quietHoursEndMin,
+      quietHoursWeekdays: global.quietHoursWeekdays,
     };
   }
 
@@ -164,6 +168,10 @@ export class ProjectSettingsManager {
           typeof parsed.cloudSyncWarningDismissed === "boolean"
             ? parsed.cloudSyncWarningDismissed
             : undefined,
+        contextFilesOfferDismissed:
+          typeof parsed.contextFilesOfferDismissed === "boolean"
+            ? parsed.contextFilesOfferDismissed
+            : undefined,
         devServerLoadTimeout:
           typeof parsed.devServerLoadTimeout === "number" &&
           Number.isFinite(parsed.devServerLoadTimeout) &&
@@ -223,7 +231,7 @@ export class ProjectSettingsManager {
       console.error(`[ProjectSettingsManager] Failed to load settings for ${projectId}:`, error);
       this.notificationOverridesCache.delete(projectId);
       try {
-        const quarantinePath = `${filePath}.corrupted`;
+        const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
         await resilientRename(filePath, quarantinePath);
         console.warn(`[ProjectSettingsManager] Corrupted settings file moved to ${quarantinePath}`);
       } catch {
@@ -298,6 +306,10 @@ export class ProjectSettingsManager {
       cloudSyncWarningDismissed:
         typeof settings.cloudSyncWarningDismissed === "boolean"
           ? settings.cloudSyncWarningDismissed
+          : undefined,
+      contextFilesOfferDismissed:
+        typeof settings.contextFilesOfferDismissed === "boolean"
+          ? settings.contextFilesOfferDismissed
           : undefined,
       devServerLoadTimeout:
         typeof settings.devServerLoadTimeout === "number" &&

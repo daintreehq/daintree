@@ -1,6 +1,7 @@
 import type { DaintreeCommand, CommandResult } from "../../../shared/types/commands.js";
 import { getGitHubToken, getRepoContext, clearGitHubCaches } from "../GitHubService.js";
 import { GITHUB_API_TIMEOUT_MS } from "../github/index.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 interface CreateIssueArgs {
   title?: string;
@@ -120,7 +121,7 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
     try {
       repoContext = await getRepoContext(cwd);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to determine repository context");
       return {
         success: false,
         error: {
@@ -258,7 +259,7 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
         },
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to create GitHub issue");
 
       if (
         message.includes("ENOTFOUND") ||

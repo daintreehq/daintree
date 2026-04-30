@@ -1,10 +1,18 @@
 import { create, type StateCreator } from "zustand";
+import type { GitOperationReason } from "@shared/types/ipc/errors";
 
-export type ErrorType = "git" | "process" | "filesystem" | "network" | "config" | "unknown";
+export type ErrorType =
+  | "git"
+  | "process"
+  | "filesystem"
+  | "network"
+  | "config"
+  | "validation"
+  | "unknown";
 
 export type RetryAction = "terminal" | "git" | "worktree";
 
-export interface AppError {
+export interface ErrorRecord {
   id: string;
   timestamp: number;
   type: ErrorType;
@@ -25,22 +33,24 @@ export interface AppError {
   correlationId?: string;
   recoveryHint?: string;
   retryProgress?: { attempt: number; maxAttempts: number };
+  /** Classified reason when this error originated from a git operation */
+  gitReason?: GitOperationReason;
 }
 
 interface ErrorStore {
-  errors: AppError[];
+  errors: ErrorRecord[];
   isPanelOpen: boolean;
   lastErrorTime: number;
 
-  addError: (error: Omit<AppError, "id" | "timestamp" | "dismissed">) => string;
+  addError: (error: Omit<ErrorRecord, "id" | "timestamp" | "dismissed">) => string;
   dismissError: (id: string) => void;
   clearAll: () => void;
   removeError: (id: string) => void;
   togglePanel: () => void;
   setPanelOpen: (open: boolean) => void;
-  getWorktreeErrors: (worktreeId: string) => AppError[];
-  getTerminalErrors: (terminalId: string) => AppError[];
-  getActiveErrors: () => AppError[];
+  getWorktreeErrors: (worktreeId: string) => ErrorRecord[];
+  getTerminalErrors: (terminalId: string) => ErrorRecord[];
+  getActiveErrors: () => ErrorRecord[];
   updateRetryProgress: (id: string, attempt: number, maxAttempts: number) => void;
   clearRetryProgress: (id: string) => void;
   reset: () => void;
@@ -50,7 +60,7 @@ const MAX_ERRORS = 50;
 const ERROR_RATE_LIMIT_MS = 500;
 
 function generateErrorId(): string {
-  return `error-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  return `error-${crypto.randomUUID()}`;
 }
 
 const createErrorStore: StateCreator<ErrorStore> = (set, get) => ({
@@ -82,7 +92,7 @@ const createErrorStore: StateCreator<ErrorStore> = (set, get) => ({
       return recentDuplicate.id;
     }
 
-    const newError: AppError = {
+    const newError: ErrorRecord = {
       ...error,
       id: generateErrorId(),
       timestamp: now,

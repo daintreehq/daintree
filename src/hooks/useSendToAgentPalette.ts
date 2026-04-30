@@ -8,16 +8,14 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
 import { usePaletteStore } from "@/store/paletteStore";
-import { getAgentConfig } from "@/config/agents";
+import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 
 export interface SendToAgentItem {
   id: string;
   title: string;
   subtitle?: string;
-  terminalType?: TerminalInstance["type"];
   terminalKind?: TerminalInstance["kind"];
-  agentId?: TerminalInstance["agentId"];
-  detectedProcessId?: TerminalInstance["detectedProcessId"];
+  chrome: TerminalChromeDescriptor;
   isInputLocked?: boolean;
 }
 
@@ -97,17 +95,15 @@ export function useSendToAgentPalette() {
       if (t.kind && !panelKindHasPty(t.kind)) continue;
       if (t.hasPty === false) continue;
 
-      const agentConfig = t.agentId ? getAgentConfig(t.agentId) : null;
-      const subtitle = agentConfig ? agentConfig.name : t.type !== "terminal" ? t.type : "Terminal";
+      const chrome = deriveTerminalChrome(t);
+      const subtitle = chrome.label;
 
       result.push({
         id: t.id,
         title: t.title,
         subtitle,
-        terminalType: t.type,
         terminalKind: t.kind,
-        agentId: t.agentId,
-        detectedProcessId: t.detectedProcessId,
+        chrome,
         isInputLocked: t.isInputLocked,
       });
     }
@@ -146,7 +142,7 @@ export function useSendToAgentPalette() {
   const confirmSelection = useCallback(() => {
     const { results, selectedIndex } = palette;
     if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-      selectItem(results[selectedIndex]);
+      selectItem(results[selectedIndex]!);
     }
   }, [palette, selectItem]);
 

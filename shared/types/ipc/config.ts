@@ -18,8 +18,15 @@ export interface TerminalConfig {
   hybridInputAutoFocus?: boolean;
   /** Selected terminal color scheme ID */
   colorSchemeId?: string;
-  /** Custom imported color schemes (serialized) */
-  customSchemes?: string;
+  /** Custom imported color schemes */
+  customSchemes?: {
+    id: string;
+    name: string;
+    type: "dark" | "light";
+    builtin: boolean;
+    colors: Record<string, string>;
+    location?: string;
+  }[];
   /** IDs of the most recently selected terminal color schemes (LRU, newest first, capped at 5) */
   recentSchemeIds?: string[];
   /** Screen reader mode: 'auto' (follow OS), 'on', or 'off' (default: 'auto') */

@@ -226,4 +226,24 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       );
     },
   }));
+
+  actions.set("browser.hardReload", () => ({
+    id: "browser.hardReload",
+    title: "Hard Reload Browser",
+    description: "Reload the browser panel bypassing HTTP cache",
+    category: "browser",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string().optional() }),
+    run: async (args: unknown) => {
+      const { terminalId } = args as { terminalId?: string };
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
+      if (targetId) {
+        window.dispatchEvent(
+          new CustomEvent("daintree:hard-reload-browser", { detail: { id: targetId } })
+        );
+      }
+    },
+  }));
 }

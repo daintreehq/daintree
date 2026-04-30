@@ -5,6 +5,8 @@ import type {
   AgentInstallResult,
   AgentInstallProgressEvent,
 } from "../../shared/types/ipc/system.js";
+import { buildInstallEnv } from "../utils/spawnEnv.js";
+import { scrubSecrets } from "../utils/secretScrubber.js";
 
 function isManualOnlyCommand(command: string): boolean {
   return /\|\s*(bash|sh|zsh)\b/.test(command) || /\|\s*iex\b/.test(command);
@@ -53,7 +55,7 @@ function runSingleCommand(
     let finalized = false;
 
     const env = {
-      ...process.env,
+      ...buildInstallEnv(),
       CI: "1",
       NO_UPDATE_NOTIFIER: "1",
     };
@@ -65,11 +67,11 @@ function runSingleCommand(
     });
 
     child.stdout?.on("data", (chunk: Buffer) => {
-      onProgress({ jobId, chunk: chunk.toString(), stream: "stdout" });
+      onProgress({ jobId, chunk: scrubSecrets(chunk.toString()), stream: "stdout" });
     });
 
     child.stderr?.on("data", (chunk: Buffer) => {
-      onProgress({ jobId, chunk: chunk.toString(), stream: "stderr" });
+      onProgress({ jobId, chunk: scrubSecrets(chunk.toString()), stream: "stderr" });
     });
 
     const finalize = (exitCode: number | null) => {
@@ -80,7 +82,7 @@ function runSingleCommand(
 
     child.on("close", (code) => finalize(code));
     child.on("error", (err) => {
-      onProgress({ jobId, chunk: err.message + "\n", stream: "stderr" });
+      onProgress({ jobId, chunk: scrubSecrets(err.message) + "\n", stream: "stderr" });
       finalize(1);
     });
   });

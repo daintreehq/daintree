@@ -1,8 +1,9 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
-import { usePanelStore } from "@/store/panelStore";
+import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -28,7 +29,9 @@ export function registerTerminalQueryActions(
         location?: "grid" | "dock" | "trash" | "background";
       };
       const state = usePanelStore.getState();
-      let terminals = state.panelIds.map((id) => state.panelsById[id]).filter(Boolean);
+      let terminals = state.panelIds
+        .map((id) => state.panelsById[id])
+        .filter((t): t is TerminalInstance => t !== undefined);
 
       // Filter by worktree if specified
       if (worktreeId) {
@@ -47,11 +50,11 @@ export function registerTerminalQueryActions(
       return terminals.map((t) => ({
         id: t.id,
         kind: t.kind,
-        type: t.type,
+        type: undefined,
         worktreeId: t.worktreeId ?? null,
         title: t.title ?? null,
         location: t.location ?? "grid",
-        agentId: t.agentId ?? null,
+        agentId: t.launchAgentId ?? null,
         agentState: t.agentState ?? null,
         isInputLocked: t.isInputLocked ?? false,
       }));
@@ -61,8 +64,7 @@ export function registerTerminalQueryActions(
   actions.set("terminal.getOutput", () => ({
     id: "terminal.getOutput",
     title: "Get Terminal Output",
-    description:
-      "Get terminal serialized state (last N lines from buffer, ANSI codes stripped by default). Note: includes terminal control sequences and alternate buffer content.",
+    description: "Get terminal output with optional line limit and ANSI stripping.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -157,7 +159,6 @@ export function registerTerminalQueryActions(
       }
 
       // Check if terminal kind supports PTY (must have a shell to send commands to)
-      const { panelKindHasPty } = await import("@shared/config/panelKindRegistry");
       const kind = terminal.kind ?? "terminal";
       if (!panelKindHasPty(kind)) {
         throw new Error(`Terminal kind "${kind}" does not support command execution`);

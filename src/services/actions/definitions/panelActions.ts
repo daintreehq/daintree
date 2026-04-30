@@ -1,11 +1,14 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
+import { PORTAL_DEFAULT_WIDTH } from "@shared/types";
 import { systemClient } from "@/clients";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { usePortalStore } from "@/store/portalStore";
-import { usePanelStore } from "@/store/panelStore";
+import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
+import { useUIStore } from "@/store/uiStore";
+import { logError } from "@/utils/logger";
 
 export function registerPanelActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   // Query action: list all panels with metadata
@@ -29,7 +32,9 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         location?: "grid" | "dock" | "trash" | "background";
       };
       const state = usePanelStore.getState();
-      let panels = state.panelIds.map((id) => state.panelsById[id]).filter(Boolean);
+      let panels = state.panelIds
+        .map((id) => state.panelsById[id])
+        .filter((p): p is TerminalInstance => p !== undefined);
 
       if (worktreeId) {
         panels = panels.filter((p) => p.worktreeId === worktreeId);
@@ -47,11 +52,11 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         panels: panels.map((p) => ({
           id: p.id,
           kind: p.kind,
-          type: p.type,
+          type: undefined,
           worktreeId: p.worktreeId ?? null,
           title: p.title ?? null,
           location: p.location ?? "grid",
-          agentId: p.agentId ?? null,
+          agentId: p.launchAgentId ?? null,
           agentState: p.agentState ?? null,
         })),
         dock: {
@@ -99,6 +104,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onOpenPanelPalette();
     },
@@ -144,7 +150,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
       }
       await window.electron.portal.show({ tabId, bounds });
     } catch (error) {
-      console.error("Failed to activate portal tab:", error);
+      logError("Failed to activate portal tab", error);
     }
   };
 
@@ -521,7 +527,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
       const icon = agentInfo?.icon;
 
       if (background) {
-        const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const newTabId = `tab-${crypto.randomUUID()}`;
         usePortalStore.setState((s) => ({
           tabs: [...s.tabs, { id: newTabId, url, title: finalTitle, icon }],
         }));
@@ -530,13 +536,19 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
           await window.electron.portal.create({ tabId: newTabId, url });
           state.markTabCreated(newTabId);
         } catch (error) {
-          console.error("Failed to create background portal tab:", error);
+          logError("Failed to create background portal tab", error);
           usePortalStore.setState((s) => ({
             tabs: s.tabs.filter((t) => t.id !== newTabId),
           }));
         }
         return;
       }
+
+      // Suppress foreground portal reveal while another surface owns the
+      // viewport (e.g. theme browser). Mirrors portalStore.toggle()'s guard —
+      // without it, setOpen(true) would flip isOpen unconditionally and the
+      // portal would pop into view the moment the overlay closed.
+      if (useUIStore.getState().overlayClaims.size > 0) return;
 
       // Ensure portal is visible before activating a tab
       if (!state.isOpen) {
@@ -686,7 +698,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         state.markTabCreated(newTabId);
         await window.electron.portal.show({ tabId: newTabId, bounds });
       } catch (error) {
-        console.error("Failed to duplicate portal tab:", error);
+        logError("Failed to duplicate portal tab", error);
         state.closeTab(newTabId);
       }
     },
@@ -810,7 +822,6 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const { PORTAL_DEFAULT_WIDTH } = await import("@shared/types");
       usePortalStore.getState().setWidth(PORTAL_DEFAULT_WIDTH);
     },
   }));

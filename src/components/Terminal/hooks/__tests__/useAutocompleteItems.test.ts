@@ -32,7 +32,7 @@ describe("useAutocompleteItems", () => {
       })
     );
     expect(result.current.autocompleteItems).toHaveLength(2);
-    expect(result.current.autocompleteItems[0].key).toBe("src/index.ts");
+    expect(result.current.autocompleteItems[0]!.key).toBe("src/index.ts");
     expect(result.current.isLoading).toBe(true);
   });
 
@@ -59,7 +59,7 @@ describe("useAutocompleteItems", () => {
       })
     );
     expect(result.current.autocompleteItems).toHaveLength(1);
-    expect(result.current.autocompleteItems[0].key).toBe("terminal");
+    expect(result.current.autocompleteItems[0]!.key).toBe("terminal");
   });
 
   it("returns selection item when activeMode is selection", () => {
@@ -71,7 +71,7 @@ describe("useAutocompleteItems", () => {
       })
     );
     expect(result.current.autocompleteItems).toHaveLength(1);
-    expect(result.current.autocompleteItems[0].key).toBe("selection");
+    expect(result.current.autocompleteItems[0]!.key).toBe("selection");
   });
 
   it("returns command items when activeMode is command", () => {

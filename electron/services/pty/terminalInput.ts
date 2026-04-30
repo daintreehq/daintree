@@ -38,7 +38,10 @@ export function splitTrailingNewlines(text: string): { body: string; enterCount:
 }
 
 function getEffectiveAgentId(terminal: TerminalInfo): string | undefined {
-  return terminal.detectedAgentType ?? terminal.agentId ?? terminal.type;
+  // Input protocol follows the live process. A demoted shell returns plain
+  // behavior (no agent-specific submit delay, bracketed-paste, soft-newline)
+  // regardless of what this terminal was originally launched as.
+  return terminal.detectedAgentId;
 }
 
 export function supportsBracketedPaste(terminal: TerminalInfo): boolean {
@@ -51,6 +54,17 @@ export function supportsBracketedPaste(terminal: TerminalInfo): boolean {
 export function getSoftNewlineSequence(terminal: TerminalInfo): string {
   const agentId = getEffectiveAgentId(terminal);
   return getSoftNewlineSequenceShared(agentId);
+}
+
+export function getSubmitEnterDelay(terminal: TerminalInfo): number {
+  const agentId = getEffectiveAgentId(terminal);
+  if (!agentId) return SUBMIT_ENTER_DELAY_MS;
+  const config = getEffectiveAgentConfig(agentId);
+  const delayMs = config?.capabilities?.submitEnterDelayMs;
+  if (delayMs === undefined || delayMs === null || isNaN(delayMs) || delayMs < 0) {
+    return SUBMIT_ENTER_DELAY_MS;
+  }
+  return Math.min(delayMs, 5000);
 }
 
 export function isBracketedPaste(data: string): boolean {

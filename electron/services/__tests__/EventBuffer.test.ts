@@ -29,7 +29,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -42,7 +41,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -53,7 +51,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-2",
         terminalId: "term-2",
-        type: "gemini",
         timestamp: Date.now(),
       });
 
@@ -64,7 +61,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -81,7 +77,6 @@ describe("EventBuffer", () => {
         events.emit("agent:spawned", {
           agentId: `agent-${i}`,
           terminalId: `term-${i}`,
-          type: "claude",
           timestamp: Date.now(),
         });
       }
@@ -94,7 +89,6 @@ describe("EventBuffer", () => {
         events.emit("agent:spawned", {
           agentId: `agent-${i}`,
           terminalId: `term-${i}`,
-          type: "claude",
           timestamp: Date.now(),
         });
       }
@@ -111,13 +105,11 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "first",
         terminalId: "t1",
-        type: "claude",
         timestamp: Date.now(),
       });
       events.emit("agent:spawned", {
         agentId: "second",
         terminalId: "t2",
-        type: "gemini",
         timestamp: Date.now(),
       });
 
@@ -135,7 +127,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         worktreeId: "wt-1",
         timestamp: Date.now() - 5000,
       });
@@ -162,7 +153,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-2",
         terminalId: "term-2",
-        type: "gemini",
         worktreeId: "wt-2",
         timestamp: Date.now() - 2000,
       });
@@ -316,7 +306,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -325,7 +314,6 @@ describe("EventBuffer", () => {
 
       expect(spawnedEvent).toBeDefined();
       expect(spawnedEvent?.payload.agentId).toBe("agent-1");
-      expect(spawnedEvent?.payload.type).toBe("claude");
     });
 
     it("does not redact agent:state-changed events", () => {
@@ -355,13 +343,11 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
       events.emit("agent:spawned", {
         agentId: "agent-2",
         terminalId: "term-2",
-        type: "gemini",
         timestamp: Date.now(),
       });
 
@@ -374,7 +360,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
       const after = Date.now();
@@ -388,7 +373,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -400,7 +384,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -423,7 +406,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-[1]",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -506,7 +488,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
         traceId: "trace-alpha",
       });
@@ -522,7 +503,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-2",
         terminalId: "term-2",
-        type: "gemini",
         timestamp: Date.now(),
         traceId: "trace-beta",
       });
@@ -544,7 +524,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
         traceId: "trace-1",
       });
@@ -560,7 +539,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-2",
         terminalId: "term-2",
-        type: "gemini",
         timestamp: Date.now(),
         traceId: "trace-1",
       });
@@ -583,7 +561,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -623,7 +600,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
       events.emit("agent:state-changed", {
@@ -654,13 +630,11 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
       events.emit("agent:spawned", {
         agentId: "agent-2",
         terminalId: "term-2",
-        type: "gemini",
         timestamp: Date.now(),
       });
       events.emit("task:created", {
@@ -682,7 +656,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
       events.emit("task:created", {
@@ -705,7 +678,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
       events.emit("agent:state-changed", {
@@ -734,7 +706,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -754,13 +725,11 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "first",
         terminalId: "t1",
-        type: "claude",
         timestamp: Date.now(),
       });
       events.emit("agent:spawned", {
         agentId: "second",
         terminalId: "t2",
-        type: "gemini",
         timestamp: Date.now(),
       });
 
@@ -778,7 +747,6 @@ describe("EventBuffer", () => {
         events.emit("agent:spawned", {
           agentId: `agent-${i}`,
           terminalId: `term-${i}`,
-          type: "claude",
           timestamp: Date.now(),
         });
       }
@@ -801,7 +769,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -821,7 +788,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -832,7 +798,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-2",
         terminalId: "term-2",
-        type: "gemini",
         timestamp: Date.now(),
       });
 
@@ -848,7 +813,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -869,7 +833,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 
@@ -893,7 +856,6 @@ describe("EventBuffer", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
-        type: "claude",
         timestamp: Date.now(),
       });
 

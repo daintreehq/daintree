@@ -52,6 +52,16 @@ export interface GitHubIssue {
 
 export type GitHubPRCIStatus = "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
 
+/** Required-check summary derived from statusCheckRollup.contexts */
+export interface GitHubPRCISummary {
+  /** Total number of required contexts seen */
+  requiredTotal: number;
+  /** Number of required contexts with a failing conclusion/state */
+  requiredFailing: number;
+  /** Number of required contexts still in progress / pending */
+  requiredPending: number;
+}
+
 /** GitHub pull request representation */
 export interface GitHubPR {
   /** PR number */
@@ -76,8 +86,12 @@ export interface GitHubPR {
   isFork?: boolean;
   /** Number of comments */
   commentCount?: number;
-  /** CI status rollup from the latest commit */
+  /** CI status rollup from the latest commit (reflects required checks only when ciSummary is present) */
   ciStatus?: GitHubPRCIStatus;
+  /** Summary of required checks. Absent when enrichment hasn't run, when the context page
+   *  was truncated, or when the repository has no required checks configured (in which case
+   *  ciStatus reflects the raw rollup). */
+  ciSummary?: GitHubPRCISummary;
 }
 
 /** Issue tooltip data (subset of full issue for hover display) */

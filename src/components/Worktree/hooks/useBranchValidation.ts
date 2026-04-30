@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { worktreeClient } from "@/clients";
+import { logError } from "@/utils/logger";
 import { parseBranchInput } from "../branchPrefixUtils";
 
 export interface UseBranchValidationResult {
@@ -116,7 +117,7 @@ export function useBranchValidation({
               onBranchAutoResolved(availableBranch);
             }
           } else {
-            console.error("Failed to get available branch:", branchResult.reason);
+            logError("Failed to get available branch", branchResult.reason);
             setBranchWasAutoResolved(false);
           }
 
@@ -128,7 +129,7 @@ export function useBranchValidation({
             setPathWasAutoResolved(pathResolved);
             setWorktreePath(suggestedPath);
           } else {
-            console.error("Failed to get default path:", pathResult.reason);
+            logError("Failed to get default path", pathResult.reason);
             setPathWasAutoResolved(false);
             const sanitizedBranch = fullName.replace(/[^a-zA-Z0-9-_]/g, "-");
             const separator = rootPath.includes("\\") ? "\\" : "/";
@@ -166,7 +167,7 @@ export function useBranchValidation({
         })
         .catch((err) => {
           if (abortController.signal.aborted) return;
-          console.error("Failed to get default path:", err);
+          logError("Failed to get default path", err);
           setIsGeneratingPath(false);
           setPathWasAutoResolved(false);
           const sanitizedBranch = trimmedInput.replace(/[^a-zA-Z0-9-_]/g, "-");

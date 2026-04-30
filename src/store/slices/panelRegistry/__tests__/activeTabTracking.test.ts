@@ -78,7 +78,6 @@ describe("unified active tab tracking", () => {
         panelsById: {
           "term-1": {
             id: "term-1",
-            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -87,7 +86,6 @@ describe("unified active tab tracking", () => {
           },
           "term-2": {
             id: "term-2",
-            type: "terminal",
             title: "Shell 2",
             cwd: "/test",
             cols: 80,
@@ -96,7 +94,6 @@ describe("unified active tab tracking", () => {
           },
           "term-3": {
             id: "term-3",
-            type: "terminal",
             title: "Shell 3",
             cwd: "/test",
             cols: 80,
@@ -123,7 +120,6 @@ describe("unified active tab tracking", () => {
         panelsById: {
           "term-1": {
             id: "term-1",
-            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -156,7 +152,6 @@ describe("unified active tab tracking", () => {
         panelsById: {
           "term-1": {
             id: "term-1",
-            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -165,7 +160,6 @@ describe("unified active tab tracking", () => {
           },
           "term-2": {
             id: "term-2",
-            type: "terminal",
             title: "Shell 2",
             cwd: "/test",
             cols: 80,
@@ -174,7 +168,6 @@ describe("unified active tab tracking", () => {
           },
           "term-3": {
             id: "term-3",
-            type: "terminal",
             title: "Shell 3",
             cwd: "/test",
             cols: 80,
@@ -208,7 +201,6 @@ describe("unified active tab tracking", () => {
         panelsById: {
           "term-1": {
             id: "term-1",
-            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -217,7 +209,6 @@ describe("unified active tab tracking", () => {
           },
           "term-2": {
             id: "term-2",
-            type: "terminal",
             title: "Shell 2",
             cwd: "/test",
             cols: 80,
@@ -261,7 +252,6 @@ describe("unified active tab tracking", () => {
         panelsById: {
           "term-1": {
             id: "term-1",
-            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -270,7 +260,6 @@ describe("unified active tab tracking", () => {
           },
           "term-2": {
             id: "term-2",
-            type: "terminal",
             title: "Shell 2",
             cwd: "/test",
             cols: 80,
@@ -291,7 +280,6 @@ describe("unified active tab tracking", () => {
         panelsById: {
           "term-1": {
             id: "term-1",
-            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -330,7 +318,6 @@ describe("unified active tab tracking", () => {
         panelsById: {
           "term-1": {
             id: "term-1",
-            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -339,7 +326,6 @@ describe("unified active tab tracking", () => {
           },
           "term-2": {
             id: "term-2",
-            type: "terminal",
             title: "Shell 2",
             cwd: "/test",
             cols: 80,
@@ -361,7 +347,6 @@ describe("unified active tab tracking", () => {
         panelsById: {
           "term-bg": {
             id: "term-bg",
-            type: "terminal",
             title: "Background",
             cwd: "/test",
             cols: 80,
@@ -384,7 +369,6 @@ describe("unified active tab tracking", () => {
         panelsById: {
           "term-1": {
             id: "term-1",
-            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -393,7 +377,6 @@ describe("unified active tab tracking", () => {
           },
           "term-2": {
             id: "term-2",
-            type: "terminal",
             title: "Shell 2",
             cwd: "/test",
             cols: 80,
@@ -402,7 +385,6 @@ describe("unified active tab tracking", () => {
           },
           "term-3": {
             id: "term-3",
-            type: "terminal",
             title: "Shell 3",
             cwd: "/test",
             cols: 80,
@@ -411,7 +393,6 @@ describe("unified active tab tracking", () => {
           },
           "term-4": {
             id: "term-4",
-            type: "terminal",
             title: "Shell 4",
             cwd: "/test",
             cols: 80,
@@ -457,7 +438,6 @@ describe("unified active tab tracking", () => {
         panelsById: {
           "term-1": {
             id: "term-1",
-            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -494,7 +474,6 @@ describe("unified active tab tracking", () => {
         panelsById: {
           "term-1": {
             id: "term-1",
-            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -503,7 +482,6 @@ describe("unified active tab tracking", () => {
           },
           "term-2": {
             id: "term-2",
-            type: "terminal",
             title: "Shell 2",
             cwd: "/test",
             cols: 80,
@@ -538,7 +516,6 @@ describe("unified active tab tracking", () => {
         panelsById: {
           "term-1": {
             id: "term-1",
-            type: "terminal",
             title: "Shell 1",
             cwd: "/test",
             cols: 80,
@@ -547,7 +524,6 @@ describe("unified active tab tracking", () => {
           },
           "term-2": {
             id: "term-2",
-            type: "terminal",
             title: "Shell 2",
             cwd: "/test",
             cols: 80,

@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, useWorktreeSelectionStore, useDockStore } from "@/store";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
-import { isAgentTerminal } from "@/utils/terminalType";
+import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import type { DockRenderState } from "@shared/types";
 
 /**
@@ -36,6 +36,7 @@ export function useDockRenderState(): DockRenderState & {
           (t) =>
             t &&
             t.location === "dock" &&
+            !state.trashedTerminals.has(t.id) &&
             // Show terminals that match active worktree OR have no worktree (global terminals)
             (t.worktreeId == null || t.worktreeId === activeWorktreeId)
         )
@@ -53,7 +54,7 @@ export function useDockRenderState(): DockRenderState & {
       if (!hybridInputEnabled) return false;
       const focusedTerminal = state.focusedId ? state.panelsById[state.focusedId] : undefined;
       if (!focusedTerminal) return false;
-      return isAgentTerminal(focusedTerminal.kind ?? focusedTerminal.type, focusedTerminal.agentId);
+      return isRuntimeAgentTerminal(focusedTerminal);
     })
   );
 

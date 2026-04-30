@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import type React from "react";
+import { useShallow } from "zustand/react/shallow";
 import { usePortalStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { PortalToolbar } from "./PortalToolbar";
@@ -9,6 +10,7 @@ import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -23,9 +25,19 @@ import {
 import { getElementBoundsAsDip } from "@/lib/portalBounds";
 
 export function PortalDock() {
-  const { width, activeTabId, tabs, links, setWidth, setOpen, defaultNewTabUrl } = usePortalStore();
+  const { width, activeTabId, tabs, links, setWidth, setOpen, defaultNewTabUrl } = usePortalStore(
+    useShallow((s) => ({
+      width: s.width,
+      activeTabId: s.activeTabId,
+      tabs: s.tabs,
+      links: s.links,
+      setWidth: s.setWidth,
+      setOpen: s.setOpen,
+      defaultNewTabUrl: s.defaultNewTabUrl,
+    }))
+  );
   const contentRef = useRef<HTMLDivElement>(null);
-  const dockRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLElement>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
@@ -97,10 +109,10 @@ export function PortalDock() {
           { source: "user" }
         );
         if (!result.ok) {
-          console.error("Failed to activate portal tab:", result.error);
+          logError("Failed to activate portal tab", undefined, { error: result.error });
         }
       } catch (error) {
-        console.error("Failed to activate portal tab:", error);
+        logError("Failed to activate portal tab", error);
       } finally {
         setIsSwitching(false);
       }
@@ -172,7 +184,7 @@ export function PortalDock() {
   const handleGoBack = useCallback(async () => {
     const result = await actionService.dispatch("portal.goBack", undefined, { source: "user" });
     if (!result.ok) {
-      console.error("Failed to go back:", result.error);
+      logError("Failed to go back", undefined, { error: result.error });
     }
   }, [activeTabId]);
 
@@ -181,14 +193,14 @@ export function PortalDock() {
       source: "user",
     });
     if (!result.ok) {
-      console.error("Failed to go forward:", result.error);
+      logError("Failed to go forward", undefined, { error: result.error });
     }
   }, [activeTabId]);
 
   const handleReload = useCallback(async () => {
     const result = await actionService.dispatch("portal.reload", undefined, { source: "user" });
     if (!result.ok) {
-      console.error("Failed to reload:", result.error);
+      logError("Failed to reload", undefined, { error: result.error });
     }
   }, [activeTabId]);
 
@@ -197,14 +209,14 @@ export function PortalDock() {
       source: "user",
     });
     if (!result.ok) {
-      console.error("Failed to open URL externally:", result.error);
+      logError("Failed to open URL externally", undefined, { error: result.error });
     }
   }, []);
 
   const handleCopyUrl = useCallback(async () => {
     const result = await actionService.dispatch("portal.copyUrl", undefined, { source: "user" });
     if (!result.ok) {
-      console.error("Failed to copy URL:", result.error);
+      logError("Failed to copy URL", undefined, { error: result.error });
     }
   }, []);
 
@@ -217,7 +229,7 @@ export function PortalDock() {
         { source: "context-menu" }
       );
       if (!result.ok) {
-        console.error("Failed to duplicate tab:", result.error);
+        logError("Failed to duplicate tab", undefined, { error: result.error });
       }
     },
     [isSwitching]
@@ -232,7 +244,7 @@ export function PortalDock() {
         { source: "context-menu" }
       );
       if (!result.ok) {
-        console.error("Failed to close other tabs:", result.error);
+        logError("Failed to close other tabs", undefined, { error: result.error });
       }
     },
     [isSwitching]
@@ -247,7 +259,7 @@ export function PortalDock() {
         { source: "context-menu" }
       );
       if (!result.ok) {
-        console.error("Failed to close tabs to the right:", result.error);
+        logError("Failed to close tabs to the right", undefined, { error: result.error });
       }
     },
     [isSwitching]
@@ -260,7 +272,7 @@ export function PortalDock() {
       { source: "context-menu" }
     );
     if (!result.ok) {
-      console.error("Failed to copy tab URL:", result.error);
+      logError("Failed to copy tab URL", undefined, { error: result.error });
     }
   }, []);
 
@@ -271,7 +283,7 @@ export function PortalDock() {
       { source: "context-menu" }
     );
     if (!result.ok) {
-      console.error("Failed to open tab externally:", result.error);
+      logError("Failed to open tab externally", undefined, { error: result.error });
     }
   }, []);
 
@@ -282,7 +294,7 @@ export function PortalDock() {
       { source: "context-menu" }
     );
     if (!result.ok) {
-      console.error("Failed to reload tab:", result.error);
+      logError("Failed to reload tab", undefined, { error: result.error });
     }
   }, []);
 
@@ -367,13 +379,12 @@ export function PortalDock() {
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div
+        <aside
           ref={dockRef}
-          role="region"
           aria-label="Portal"
           data-macro-focus={isMacroFocused ? "true" : undefined}
           className={cn(
-            "flex flex-col h-full bg-daintree-bg relative portal-dock outline-none",
+            "flex flex-col h-full bg-daintree-bg relative portal-dock outline-hidden",
             "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset"
           )}
           style={{ width }}
@@ -391,8 +402,8 @@ export function PortalDock() {
             tabIndex={0}
             className={cn(
               "group absolute -left-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-50",
-              "hover:bg-overlay-soft transition-colors focus:outline-none focus:bg-tint/[0.04] focus:ring-1 focus:ring-daintree-accent/50",
-              isResizing && "bg-daintree-accent/20"
+              "hover:bg-overlay-soft transition-colors focus:outline-hidden focus:bg-tint/[0.04] focus:ring-1 focus:ring-daintree-accent/50",
+              isResizing && "bg-overlay-medium"
             )}
             onMouseDown={handleResizeStart}
             onKeyDown={handleKeyDown}
@@ -402,7 +413,7 @@ export function PortalDock() {
                 "w-px h-8 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
                 "bg-daintree-text/20",
                 "group-hover:bg-daintree-text/35 group-focus:bg-daintree-accent",
-                isResizing && "bg-daintree-accent"
+                isResizing && "bg-daintree-text/50"
               )}
             />
           </div>
@@ -435,7 +446,7 @@ export function PortalDock() {
               <div className="flex-1 bg-daintree-sidebar" id="portal-placeholder" />
             )}
           </div>
-        </div>
+        </aside>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem

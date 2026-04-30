@@ -29,9 +29,6 @@ function mockRegistryImports(options?: { throwBrowserDefaults?: boolean }): void
   vi.doMock("@/components/Browser/BrowserPaneSkeleton", () => ({
     BrowserPaneSkeleton: (() => null) as MinimalComponent,
   }));
-  vi.doMock("@/components/Notes/NotesPaneSkeleton", () => ({
-    NotesPaneSkeleton: (() => null) as MinimalComponent,
-  }));
   vi.doMock("../terminal/serializer", () => ({ serializePtyPanel: vi.fn(() => ({ id: "term" })) }));
   vi.doMock("../terminal/defaults", () => ({ createTerminalDefaults: vi.fn(() => ({})) }));
   vi.doMock("../agent/serializer", () => ({ serializeAgent: vi.fn(() => ({ id: "agent" })) }));
@@ -46,8 +43,6 @@ function mockRegistryImports(options?: { throwBrowserDefaults?: boolean }): void
         })
       : vi.fn(() => ({ browserUrl: "http://localhost:3000" })),
   }));
-  vi.doMock("../notes/serializer", () => ({ serializeNotes: vi.fn(() => ({ id: "notes" })) }));
-  vi.doMock("../notes/defaults", () => ({ createNotesDefaults: vi.fn(() => ({ noteId: "n1" })) }));
   vi.doMock("../dev-preview/serializer", () => ({
     serializeDevPreview: vi.fn(() => ({ id: "dev-preview" })),
   }));

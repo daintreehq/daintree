@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Signal, FolderOpen, Trash2, Clock, HardDrive, AlertTriangle } from "lucide-react";
+import { Signal, FolderOpen, Trash2, Clock, HardDrive, AlertTriangle, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,8 @@ import { SettingsSection } from "./SettingsSection";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
+import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 
 type TelemetryLevel = "off" | "errors" | "full";
 type LogRetention = 7 | 30 | 90 | 0;
@@ -108,12 +110,32 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         setDataFolderPath(settings.dataFolderPath);
       })
       .catch((err) => {
+        const fetchAndSet = async () => {
+          const settings = await window.electron.privacy.getSettings();
+          setTelemetryLevel(settings.telemetryLevel);
+          setLogRetentionDays(settings.logRetentionDays);
+          setDataFolderPath(settings.dataFolderPath);
+        };
+        const retry = async () => {
+          try {
+            await fetchAndSet();
+          } catch (retryErr) {
+            notify({
+              type: "error",
+              title: "Failed to load settings",
+              message: "Privacy settings could not be loaded.",
+              actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+            });
+            logError("Failed to load privacy settings", retryErr);
+          }
+        };
         notify({
           type: "error",
           title: "Failed to load settings",
           message: "Privacy settings could not be loaded.",
+          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
         });
-        console.error("Failed to load privacy settings:", err);
+        logError("Failed to load privacy settings", err);
       });
   }, []);
 
@@ -132,12 +154,28 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         await window.electron.privacy.setTelemetryLevel(level);
       } catch (err) {
         setTelemetryLevel(prev);
+        const retry = async () => {
+          try {
+            await window.electron.privacy.setTelemetryLevel(level);
+            setTelemetryLevel(level);
+          } catch (retryErr) {
+            setTelemetryLevel(prev);
+            notify({
+              type: "error",
+              title: "Failed to save setting",
+              message: "Telemetry level could not be saved.",
+              actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+            });
+            logError("Failed to set telemetry level", retryErr);
+          }
+        };
         notify({
           type: "error",
           title: "Failed to save setting",
-          message: "Telemetry level could not be saved. Please try again.",
+          message: "Telemetry level could not be saved.",
+          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
         });
-        console.error("Failed to set telemetry level:", err);
+        logError("Failed to set telemetry level", err);
       }
     },
     [telemetryLevel]
@@ -151,12 +189,28 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         await window.electron.privacy.setLogRetention(days);
       } catch (err) {
         setLogRetentionDays(prev);
+        const retry = async () => {
+          try {
+            await window.electron.privacy.setLogRetention(days);
+            setLogRetentionDays(days);
+          } catch (retryErr) {
+            setLogRetentionDays(prev);
+            notify({
+              type: "error",
+              title: "Failed to save setting",
+              message: "Log retention could not be saved.",
+              actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+            });
+            logError("Failed to set log retention", retryErr);
+          }
+        };
         notify({
           type: "error",
           title: "Failed to save setting",
-          message: "Log retention could not be saved. Please try again.",
+          message: "Log retention could not be saved.",
+          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
         });
-        console.error("Failed to set log retention:", err);
+        logError("Failed to set log retention", err);
       }
     },
     [logRetentionDays]
@@ -174,7 +228,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
       setCacheCleared(true);
       setTimeout(() => setCacheCleared(false), 3000);
     } catch (err) {
-      console.error("Failed to clear cache:", err);
+      logError("Failed to clear cache", err);
     } finally {
       setCacheClearing(false);
     }
@@ -182,6 +236,10 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
 
   const handleResetAllData = useCallback(() => {
     window.electron.privacy.resetAllData();
+  }, []);
+
+  const handleOpenTelemetryPreview = useCallback(() => {
+    void actionService.dispatch("telemetry.togglePreview", { active: true }, { source: "user" });
   }, []);
 
   return (
@@ -198,7 +256,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           title="Telemetry & Diagnostics"
           description="Control what data Daintree collects. No personal data, file contents, or credentials are ever collected."
         >
-          <div className="space-y-2">
+          <div className="contents">
             {TELEMETRY_OPTIONS.map((option) => (
               <button
                 key={option.level}
@@ -208,7 +266,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   "w-full text-left p-4 rounded-[var(--radius-lg)] border transition-colors",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
                   telemetryLevel === option.level
-                    ? "border-daintree-accent/40 bg-daintree-accent/5"
+                    ? "border-border-strong bg-overlay-selected"
                     : "border-daintree-border hover:bg-tint/5"
                 )}
               >
@@ -217,12 +275,12 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     className={cn(
                       "w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0",
                       telemetryLevel === option.level
-                        ? "border-daintree-accent"
+                        ? "border-border-strong"
                         : "border-daintree-text/30"
                     )}
                   >
                     {telemetryLevel === option.level && (
-                      <div className="w-2 h-2 rounded-full bg-daintree-accent" />
+                      <div className="w-2 h-2 rounded-full bg-daintree-text" />
                     )}
                   </div>
                   <div>
@@ -238,6 +296,20 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           <p className="text-xs text-daintree-text/40 mt-2 select-text">
             Changes to telemetry level take effect on next app restart.
           </p>
+
+          <div className="mt-4 flex items-start gap-3 rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3">
+            <Eye className="w-4 h-4 mt-0.5 text-daintree-accent/80 shrink-0" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-daintree-text">Preview outbound telemetry</p>
+              <p className="text-xs text-daintree-text/60 mt-0.5 select-text">
+                Inspect every sanitised payload Daintree would send — live, for this session only,
+                with no transmission to any server.
+              </p>
+            </div>
+            <Button variant="subtle" size="xs" onClick={handleOpenTelemetryPreview}>
+              Open preview
+            </Button>
+          </div>
 
           <div
             aria-labelledby="telemetry-disclosure-heading"
@@ -327,7 +399,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     "px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
                     logRetentionDays === option.value
-                      ? "bg-daintree-accent/10 text-daintree-accent border border-daintree-accent/30"
+                      ? "bg-overlay-selected text-daintree-text font-medium border border-border-strong"
                       : "text-daintree-text/60 border border-daintree-border hover:bg-tint/5 hover:text-daintree-text"
                   )}
                 >
@@ -374,11 +446,9 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                 Reset All Data…
               </Button>
             ) : (
-              <div className="space-y-3">
+              <div className="contents">
                 <div className="p-3 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5">
-                  <p className="text-sm text-daintree-text font-medium mb-1">
-                    Are you sure you want to reset?
-                  </p>
+                  <p className="text-sm text-daintree-text font-medium mb-1">Reset all app data?</p>
                   <p className="text-xs text-daintree-text/60">
                     This will permanently delete all settings, API keys, session data, and logs. The
                     app will restart with factory defaults. This cannot be undone.
@@ -400,7 +470,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     className="text-text-inverse bg-status-error border-status-error hover:bg-status-error/80"
                   >
                     <AlertTriangle className="w-4 h-4" />
-                    Reset Everything & Restart
+                    Reset everything &amp; restart
                   </Button>
                 </div>
               </div>

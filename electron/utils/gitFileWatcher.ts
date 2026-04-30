@@ -8,6 +8,7 @@ import {
   normalize as pathNormalize,
 } from "path";
 import { getGitDir } from "./gitUtils.js";
+import { OPERATION_SENTINEL_NAMES } from "./gitRepoOperationState.js";
 import { logWarn } from "./logger.js";
 
 export interface GitFileWatcherOptions {
@@ -17,12 +18,21 @@ export interface GitFileWatcherOptions {
   onChange: () => void;
   /** Watch the working tree recursively for file edits (macOS FSEvents). */
   watchWorktree?: boolean;
-  /** Debounce for working tree events. Defaults to debounceMs if not set. */
-  worktreeDebounceMs?: number;
+  /** Minimum debounce delay for worktree events — first event in a burst fires at this delay. */
+  worktreeMinDebounceMs?: number;
+  /** Maximum debounce delay for worktree events — sustained bursts ramp up to this. */
+  worktreeMaxDebounceMs?: number;
   /** Max wait ceiling for worktree debounce — forces a flush during sustained bursts. */
   worktreeMaxWaitMs?: number;
   /** Called when the recursive worktree watcher fails at runtime (error or startup). */
   onWatcherFailed?: () => void;
+  /** Called when the recursive worktree watcher fails specifically because of
+   *  the Linux inotify watch limit (ENOSPC). Fires in addition to `onWatcherFailed`. */
+  onInotifyLimitReached?: () => void;
+  /** Called when the recursive worktree watcher fails specifically because of
+   *  the macOS FSEvents file descriptor ceiling (EMFILE). Fires in addition to
+   *  `onWatcherFailed`. */
+  onEmfileLimitReached?: () => void;
 }
 
 export class GitFileWatcher {
@@ -31,23 +41,32 @@ export class GitFileWatcher {
   private debounceTimer: NodeJS.Timeout | null = null;
   private worktreeDebounceTimer: NodeJS.Timeout | null = null;
   private worktreeMaxWaitTimer: NodeJS.Timeout | null = null;
+  private worktreeBurstCount = 0;
   private disposed = false;
   private readonly worktreePath: string;
   private readonly debounceMs: number;
-  private readonly worktreeDebounceMs: number;
+  private readonly worktreeMinDebounceMs: number;
+  private readonly worktreeMaxDebounceMs: number;
   private readonly worktreeMaxWaitMs: number | undefined;
+  /** Per-event ramp applied inside the min..max range. Private tuning constant. */
+  private readonly worktreeDebounceRampMs = 10;
   private readonly onChange: () => void;
   private readonly onWatcherFailed: (() => void) | undefined;
+  private readonly onInotifyLimitReached: (() => void) | undefined;
+  private readonly onEmfileLimitReached: (() => void) | undefined;
   private readonly watchWorktree: boolean;
   private currentBranch?: string;
 
   constructor(options: GitFileWatcherOptions) {
     this.worktreePath = options.worktreePath;
     this.debounceMs = options.debounceMs;
-    this.worktreeDebounceMs = options.worktreeDebounceMs ?? options.debounceMs;
+    this.worktreeMinDebounceMs = options.worktreeMinDebounceMs ?? options.debounceMs;
+    this.worktreeMaxDebounceMs = options.worktreeMaxDebounceMs ?? this.worktreeMinDebounceMs;
     this.worktreeMaxWaitMs = options.worktreeMaxWaitMs;
     this.onChange = options.onChange;
     this.onWatcherFailed = options.onWatcherFailed;
+    this.onInotifyLimitReached = options.onInotifyLimitReached;
+    this.onEmfileLimitReached = options.onEmfileLimitReached;
     this.currentBranch = options.branch;
     this.watchWorktree = options.watchWorktree ?? false;
   }
@@ -83,8 +102,21 @@ export class GitFileWatcher {
         this.watchFile(branchRefPath);
       }
 
+      // Track rebase/merge/cherry-pick/revert sentinel files so the watcher
+      // wakes immediately when an operation starts or finishes. The sentinels
+      // live in gitDir alongside HEAD, so this reuses the existing dir watcher.
+      for (const sentinelName of OPERATION_SENTINEL_NAMES) {
+        this.watchFile(pathJoin(gitDir, sentinelName));
+      }
+
       if (this.watchWorktree) {
-        this.startWorktreeWatcher(gitDir);
+        const worktreeWatcherStarted = this.startWorktreeWatcher(gitDir);
+        // Surface startup failure of the recursive watcher (e.g. Linux
+        // ENOSPC) so WorktreeMonitor routes into its retry branch instead
+        // of treating the watcher as healthy and disabling the retry loop.
+        if (!worktreeWatcherStarted) {
+          return false;
+        }
       }
 
       return true;
@@ -116,6 +148,7 @@ export class GitFileWatcher {
       clearTimeout(this.worktreeMaxWaitTimer);
       this.worktreeMaxWaitTimer = null;
     }
+    this.worktreeBurstCount = 0;
 
     for (const watcher of this.watchers) {
       try {
@@ -139,7 +172,7 @@ export class GitFileWatcher {
     }
   }
 
-  private startWorktreeWatcher(_gitDir: string): void {
+  private startWorktreeWatcher(_gitDir: string): boolean {
     try {
       // Always filter ".git" — for linked worktrees the gitDir resolves to the
       // main repo's .git/worktrees/<name>, but the worktree root still has a
@@ -195,6 +228,25 @@ export class GitFileWatcher {
           } catch {
             // Ignore close errors on already-broken watcher
           }
+          this.onInotifyLimitReached?.();
+          this.onWatcherFailed?.();
+        } else if (process.platform === "darwin" && errno.code === "EMFILE") {
+          logWarn(
+            "FSEvents file descriptor ceiling reached — recursive file watching may be incomplete. " +
+              "Temporary fix: sudo sysctl -w kern.maxfilesperproc=64000. " +
+              "Permanent fix: add kern.maxfilesperproc=64000 to /etc/sysctl.conf",
+            { path: this.worktreePath }
+          );
+          const idx = this.watchers.indexOf(watcher);
+          if (idx !== -1) {
+            this.watchers.splice(idx, 1);
+          }
+          try {
+            watcher.close();
+          } catch {
+            // Ignore close errors on already-broken watcher
+          }
+          this.onEmfileLimitReached?.();
           this.onWatcherFailed?.();
         } else {
           logWarn("Worktree recursive watcher error", {
@@ -205,6 +257,7 @@ export class GitFileWatcher {
       });
 
       this.watchers.push(watcher);
+      return true;
     } catch (error) {
       const errno = error as NodeJS.ErrnoException;
       if (process.platform === "linux" && errno.code === "ENOSPC") {
@@ -214,12 +267,24 @@ export class GitFileWatcher {
             "Permanent fix: echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-inotify.conf && sudo sysctl --system",
           { path: this.worktreePath }
         );
+        this.onInotifyLimitReached?.();
+        this.onWatcherFailed?.();
+      } else if (process.platform === "darwin" && errno.code === "EMFILE") {
+        logWarn(
+          "FSEvents file descriptor ceiling reached — recursive file watching may be incomplete. " +
+            "Temporary fix: sudo sysctl -w kern.maxfilesperproc=64000. " +
+            "Permanent fix: add kern.maxfilesperproc=64000 to /etc/sysctl.conf",
+          { path: this.worktreePath }
+        );
+        this.onEmfileLimitReached?.();
+        this.onWatcherFailed?.();
       } else {
         logWarn("Failed to start recursive worktree watcher", {
           path: this.worktreePath,
           error: errno.message,
         });
       }
+      return false;
     }
   }
 
@@ -303,39 +368,48 @@ export class GitFileWatcher {
     }, this.debounceMs);
   }
 
-  /** Handle working tree file changes. Separate debounce (can be longer). */
+  /**
+   * Handle working tree file changes with an adaptive debounce. The first event
+   * in a burst fires at `worktreeMinDebounceMs`; each subsequent event adds
+   * `worktreeDebounceRampMs` to the pending delay up to `worktreeMaxDebounceMs`.
+   * A `worktreeMaxWaitMs` ceiling forces a flush during sustained bursts.
+   */
   private handleWorktreeChange(): void {
     if (this.disposed) {
       return;
     }
 
+    this.worktreeBurstCount++;
+    const delay = Math.min(
+      this.worktreeMaxDebounceMs,
+      this.worktreeMinDebounceMs + (this.worktreeBurstCount - 1) * this.worktreeDebounceRampMs
+    );
+
     if (this.worktreeDebounceTimer) {
       clearTimeout(this.worktreeDebounceTimer);
     }
+    this.worktreeDebounceTimer = setTimeout(() => this.flushWorktreeChange(), delay);
 
-    // Start max-wait ceiling on first event in a burst
     if (this.worktreeMaxWaitMs != null && !this.worktreeMaxWaitTimer) {
-      this.worktreeMaxWaitTimer = setTimeout(() => {
-        this.worktreeMaxWaitTimer = null;
-        if (this.worktreeDebounceTimer) {
-          clearTimeout(this.worktreeDebounceTimer);
-          this.worktreeDebounceTimer = null;
-        }
-        if (!this.disposed) {
-          this.onChange();
-        }
-      }, this.worktreeMaxWaitMs);
+      this.worktreeMaxWaitTimer = setTimeout(
+        () => this.flushWorktreeChange(),
+        this.worktreeMaxWaitMs
+      );
     }
+  }
 
-    this.worktreeDebounceTimer = setTimeout(() => {
+  private flushWorktreeChange(): void {
+    if (this.worktreeDebounceTimer) {
+      clearTimeout(this.worktreeDebounceTimer);
       this.worktreeDebounceTimer = null;
-      if (this.worktreeMaxWaitTimer) {
-        clearTimeout(this.worktreeMaxWaitTimer);
-        this.worktreeMaxWaitTimer = null;
-      }
-      if (!this.disposed) {
-        this.onChange();
-      }
-    }, this.worktreeDebounceMs);
+    }
+    if (this.worktreeMaxWaitTimer) {
+      clearTimeout(this.worktreeMaxWaitTimer);
+      this.worktreeMaxWaitTimer = null;
+    }
+    this.worktreeBurstCount = 0;
+    if (!this.disposed) {
+      this.onChange();
+    }
   }
 }

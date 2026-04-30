@@ -6,6 +6,8 @@ import type { AgentState, CopyTreeProgress } from "@/types";
 import { copyTreeClient } from "@/clients";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { logDebug, logError } from "@/utils/logger";
+import { isAgentTerminal } from "@/utils/terminalType";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export type InjectionStatus = "idle" | "waiting" | "injecting";
 
@@ -212,9 +214,10 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
       globalInjectionState.injectionId++;
       const currentInjectionId = globalInjectionState.injectionId;
 
-      // Gate injection for agent terminals that are not ready
-      // Non-agent terminals (agentState undefined) inject immediately
-      if (terminal.agentId && !isAgentReady(terminal.agentState)) {
+      // Gate injection for live agent terminals that are not ready. Runtime
+      // detection matters here: a plain shell that started Claude is an agent
+      // target, while a demoted launch-agent panel is just a shell again.
+      if (isAgentTerminal(terminal) && !isAgentReady(terminal.agentState)) {
         logDebug("[useContextInjection] Agent not ready, waiting for idle", {
           agentState: terminal.agentState,
         });
@@ -258,7 +261,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           });
         } catch (e) {
           // Injection was cancelled while waiting
-          const message = e instanceof Error ? e.message : "Injection cancelled";
+          const message = formatErrorMessage(e, "Injection cancelled");
           if (message !== "Injection cancelled") {
             setError(message);
           }
@@ -275,7 +278,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         }
 
         // Verify agent is still ready (could have changed during race)
-        if (updatedTerminal.agentId && !isAgentReady(updatedTerminal.agentState)) {
+        if (isAgentTerminal(updatedTerminal) && !isAgentReady(updatedTerminal.agentState)) {
           logDebug("[useContextInjection] Agent state changed while waiting, aborting injection", {
             agentState: updatedTerminal.agentState,
           });
@@ -353,7 +356,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           currentErrorIdRef.current = null;
         }
       } catch (e) {
-        const message = e instanceof Error ? e.message : "Failed to inject context";
+        const message = formatErrorMessage(e, "Failed to inject context");
         const details = e instanceof Error ? e.stack : undefined;
 
         setError(message);

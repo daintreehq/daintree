@@ -1,7 +1,10 @@
-import { useMemo, useCallback, useRef, useEffect, useState } from "react";
+import { useMemo, useCallback, useEffect, useRef, useState } from "react";
 import { usePanelStore, useLayoutConfigStore, useWorktreeSelectionStore } from "@/store";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useShallow } from "zustand/react/shallow";
 import { computeGridColumns } from "@/lib/terminalLayout";
+import { buildFleetPanels } from "@/components/Terminal/contentGridFleetPanels";
 
 export type NavigationDirection = "up" | "down" | "left" | "right";
 
@@ -16,6 +19,7 @@ interface UseGridNavigationOptions {
 }
 
 export function useGridNavigation(options: UseGridNavigationOptions = {}) {
+  "use no memo";
   const { containerSelector = "#panel-grid" } = options;
 
   const { panelIds, panelsById, focusedId, tabGroups, getTabGroups } = usePanelStore(
@@ -29,7 +33,14 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
   );
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
+  const isFleetScopeActive = useWorktreeSelectionStore((state) => state.isFleetScopeActive);
+  const fleetScopeMode = useFleetScopeFlagStore((state) => state.mode);
+  const { armedIds, armOrder } = useFleetArmingStore(
+    useShallow((state) => ({ armedIds: state.armedIds, armOrder: state.armOrder }))
+  );
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
+
+  const isFleetScopeEnabled = fleetScopeMode === "scoped" && isFleetScopeActive;
 
   const gridTerminals = useMemo(
     () =>
@@ -57,10 +68,21 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     [panelIds, panelsById, activeWorktreeId]
   );
 
-  const directionCache = useRef(new Map<string, string | null>());
-
   // Track container width for responsive layout (mirrors ContentGrid)
   const [gridWidth, setGridWidth] = useState<number | null>(null);
+
+  // Fleet scope projection: must mirror ContentGrid's fleetPanels exactly so
+  // the focus model lines up with what's rendered. Drift here was the cause
+  // of #5989 (Cmd+Alt+Arrow no-op when fleet scope spanned worktrees).
+  const fleetPanels = useMemo(() => {
+    if (!isFleetScopeEnabled) return [];
+    return buildFleetPanels(armOrder, armedIds, panelsById);
+  }, [isFleetScopeEnabled, armOrder, armedIds, panelsById]);
+
+  // Mirrors ContentGrid.isFleetScopeRender — when fleet scope is on but every
+  // armed panel has been moved to dock/trash, ContentGrid falls through to
+  // the normal active-worktree grid; the nav model has to match.
+  const isFleetScopeRender = isFleetScopeEnabled && fleetPanels.length > 0;
 
   useEffect(() => {
     const findAndObserve = () => {
@@ -88,24 +110,68 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     }
 
     return () => observer.disconnect();
-  }, [containerSelector]);
+    // isFleetScopeRender is a dep because ContentGrid swaps the rendered tree
+    // (different React key) when fleet scope toggles, which detaches the old
+    // #panel-grid node. Re-running the effect re-binds the observer to the
+    // new node so gridCols continues to track resizes.
+  }, [containerSelector, isFleetScopeRender]);
 
   // Derive visual grid groups (one cell per tab group), matching ContentGrid.
-  // tabGroups + terminals are intentional deps: getTabGroups reads both internally.
-  const gridGroups = useMemo(
-    () => getTabGroups("grid", activeWorktreeId ?? undefined),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- tabGroups/panelIds/panelsById are intentional trigger deps; getTabGroups reads them internally
-    [getTabGroups, activeWorktreeId, tabGroups, panelIds, panelsById]
-  );
+  // getTabGroups reads tabGroups/panelIds/panelsById from the store via get();
+  // reference them so exhaustive-deps treats them as real deps without a
+  // suppression (which would force the React Compiler to bail out).
+  const gridGroups = useMemo(() => {
+    void tabGroups;
+    void panelIds;
+    void panelsById;
+    return getTabGroups("grid", activeWorktreeId ?? undefined);
+  }, [getTabGroups, activeWorktreeId, tabGroups, panelIds, panelsById]);
 
-  // Compute gridCols using visual group count, matching ContentGrid's gridItemCount
+  // Hysteresis input mirroring ContentGrid: keyboard-nav column count must
+  // track the visual grid through the same sticky boundaries, otherwise arrow
+  // navigation maps to wrong cells when count drops into the buffer zone.
+  // Two refs (normal vs fleet) mirror ContentGrid's split so a normal-grid
+  // history doesn't bleed into a fleet-scope render.
+  const hysteresisNavGridColsRef = useRef<number | undefined>(undefined);
+  const hysteresisNavFleetColsRef = useRef<number | undefined>(undefined);
+
+  // Compute gridCols using visual group count, matching ContentGrid's gridItemCount.
+  // In fleet scope render, count is fleet panels (matches ContentGrid.fleetGridCols).
   const gridCols = useMemo(() => {
     const { strategy, value } = layoutConfig;
-    return computeGridColumns(gridGroups.length, gridWidth, strategy, value);
-  }, [gridGroups.length, layoutConfig, gridWidth]);
+    const count = isFleetScopeRender ? Math.max(fleetPanels.length, 1) : gridGroups.length;
+    return computeGridColumns(
+      count,
+      gridWidth,
+      strategy,
+      value,
+      isFleetScopeRender ? hysteresisNavFleetColsRef.current : hysteresisNavGridColsRef.current
+    );
+  }, [isFleetScopeRender, fleetPanels.length, gridGroups.length, layoutConfig, gridWidth]);
 
-  // Compute grid layout from visual groups (no DOM measurement)
+  useEffect(() => {
+    // Only retain hysteresis state for the automatic strategy. Fixed strategies
+    // produce user-chosen counts that must not bias a later auto computation.
+    const value = layoutConfig.strategy === "automatic" ? gridCols : undefined;
+    if (isFleetScopeRender) {
+      hysteresisNavFleetColsRef.current = value;
+    } else {
+      hysteresisNavGridColsRef.current = value;
+    }
+  }, [gridCols, isFleetScopeRender, layoutConfig.strategy]);
+
+  // Compute grid layout from visual groups (no DOM measurement). Fleet branch
+  // treats each armed panel as its own single-cell position, mirroring how
+  // ContentGrid renders the flat fleet grid when scope is active.
   const gridLayout = useMemo(() => {
+    if (isFleetScopeRender) {
+      return fleetPanels.map((t, index) => ({
+        terminalId: t.id,
+        row: Math.floor(index / gridCols),
+        col: index % gridCols,
+      }));
+    }
+
     if (gridGroups.length === 0) return [];
 
     return gridGroups
@@ -122,7 +188,7 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
           : null;
       })
       .filter((pos): pos is GridPosition => pos !== null);
-  }, [gridGroups, gridCols]);
+  }, [isFleetScopeRender, fleetPanels, gridGroups, gridCols]);
 
   const rowMajor = useMemo(() => {
     return [...gridLayout].sort((a, b) => {
@@ -160,15 +226,25 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     return buckets;
   }, [gridLayout]);
 
-  useEffect(() => {
-    directionCache.current.clear();
-  }, [gridLayout, rowMajor, columnBuckets]);
+  // Tied structurally to gridLayout: the cache is reset synchronously when
+  // the layout changes, so a fleet-scope toggle can never serve a stale
+  // cached result on the next keypress. Held in a ref because the React
+  // Compiler treats useMemo results as immutable and rejects in-place .set().
+  const directionCacheRef = useRef<{
+    source: unknown;
+    map: Map<string, string | null>;
+  }>({ source: null, map: new Map() });
 
   const findNearest = useCallback(
     (currentId: string, direction: NavigationDirection): string | null => {
+      if (directionCacheRef.current.source !== gridLayout) {
+        directionCacheRef.current = { source: gridLayout, map: new Map() };
+      }
+      const directionCache = directionCacheRef.current.map;
+
       const cacheKey = `${currentId}:${direction}`;
-      if (directionCache.current.has(cacheKey)) {
-        return directionCache.current.get(cacheKey) ?? null;
+      if (directionCache.has(cacheKey)) {
+        return directionCache.get(cacheKey) ?? null;
       }
 
       if (rowMajor.length === 0) return null;
@@ -186,10 +262,10 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
           if (direction === "right") {
             const nextIndex = (currentIndex + 1) % rowMajor.length;
-            result = rowMajor[nextIndex].terminalId;
+            result = rowMajor[nextIndex]!.terminalId;
           } else {
             const prevIndex = (currentIndex - 1 + rowMajor.length) % rowMajor.length;
-            result = rowMajor[prevIndex].terminalId;
+            result = rowMajor[prevIndex]!.terminalId;
           }
           break;
         }
@@ -204,25 +280,32 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
           if (direction === "down") {
             const nextIndex = (currentColIndex + 1) % colBucket.length;
-            result = colBucket[nextIndex].terminalId;
+            result = colBucket[nextIndex]!.terminalId;
           } else {
             const prevIndex = (currentColIndex - 1 + colBucket.length) % colBucket.length;
-            result = colBucket[prevIndex].terminalId;
+            result = colBucket[prevIndex]!.terminalId;
           }
           break;
         }
       }
 
-      directionCache.current.set(cacheKey, result);
+      directionCache.set(cacheKey, result);
       return result;
     },
-    [rowMajor, indexById, columnBuckets, positionById]
+    [rowMajor, indexById, columnBuckets, positionById, gridLayout]
   );
 
   // Build a group-aware ordered list matching ContentGrid's visual order.
   // Uses getTabGroups for ordering (explicit groups first by terminal order, then virtual groups)
-  // so Cmd+N indices are consistent with what the user sees on screen.
+  // so Cmd+N indices are consistent with what the user sees on screen. In
+  // fleet scope render, the visible order is armOrder, so Cmd+N maps to that.
   const groupRowMajor = useMemo(() => {
+    void tabGroups;
+    void panelIds;
+    void panelsById;
+    if (isFleetScopeRender) {
+      return fleetPanels.map((t) => t.id);
+    }
     const orderedGroups = getTabGroups("grid", activeWorktreeId ?? undefined);
     return orderedGroups.flatMap((group) => {
       const resolvedId = group.panelIds.includes(group.activeTabId)
@@ -230,8 +313,15 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
         : group.panelIds[0];
       return resolvedId ? [resolvedId] : [];
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional trigger deps for getTabGroups
-  }, [getTabGroups, activeWorktreeId, tabGroups, panelIds, panelsById]);
+  }, [
+    isFleetScopeRender,
+    fleetPanels,
+    getTabGroups,
+    activeWorktreeId,
+    tabGroups,
+    panelIds,
+    panelsById,
+  ]);
 
   const findByIndex = useCallback(
     (index: number): string | null => {
@@ -244,13 +334,13 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     (currentId: string, direction: "left" | "right"): string | null => {
       if (dockTerminals.length === 0) return null;
 
-      const currentIndex = dockTerminals.findIndex((t) => t.id === currentId);
+      const currentIndex = dockTerminals.findIndex((t) => t!.id === currentId);
       if (currentIndex === -1) return null;
 
       if (direction === "left") {
-        return currentIndex > 0 ? dockTerminals[currentIndex - 1].id : null;
+        return currentIndex > 0 ? dockTerminals[currentIndex - 1]!.id : null;
       } else {
-        return currentIndex < dockTerminals.length - 1 ? dockTerminals[currentIndex + 1].id : null;
+        return currentIndex < dockTerminals.length - 1 ? dockTerminals[currentIndex + 1]!.id : null;
       }
     },
     [dockTerminals]

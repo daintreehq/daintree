@@ -1,0 +1,6 @@
+{"time":0.0,"chunk":"amp v0.1.0","detectedState":"initializing","confidence":0.9,"agentId":"amp","agentVersion":"0.1.0"}
+{"time":0.5,"chunk":"Welcome to Amp","detectedState":"initializing","confidence":0.5,"agentId":"amp","agentVersion":"0.1.0"}
+{"time":1.0,"chunk":"> ","detectedState":"waiting","confidence":0.85,"agentId":"amp","agentVersion":"0.1.0"}
+{"time":2.0,"chunk":"Sign in at https://ampcode.com to continue","detectedState":"initializing","confidence":0.5,"agentId":"amp","agentVersion":"0.1.0"}
+{"time":3.0,"chunk":"> ","detectedState":"waiting","confidence":0.85,"agentId":"amp","agentVersion":"0.1.0"}
+{"time":4.0,"chunk":"Thread saved. Resume with: amp threads continue T-abc123","detectedState":"waiting","confidence":0.0,"agentId":"amp","agentVersion":"0.1.0"}

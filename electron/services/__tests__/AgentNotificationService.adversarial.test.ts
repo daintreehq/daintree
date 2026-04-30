@@ -69,7 +69,7 @@ const DEFAULT_APP_STATE = {
   terminals: [
     {
       id: "term-1",
-      kind: "agent",
+      kind: "terminal",
       agentId: "agent-1",
       title: "Claude Agent",
       location: "dock" as const,
@@ -185,7 +185,7 @@ describe("AgentNotificationService adversarial", () => {
 
     events.emit("agent:state-changed", makePayload("completed", "working"));
     vi.advanceTimersByTime(1000);
-    events.emit("agent:state-changed", makePayload("completed", "running"));
+    events.emit("agent:state-changed", makePayload("completed", "directing"));
     vi.advanceTimersByTime(2001);
 
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);

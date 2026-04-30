@@ -12,6 +12,9 @@ export type {
   WorktreeChanges,
   StagingFileEntry,
   StagingStatus,
+  RepoState,
+  ConflictXYCode,
+  ConflictedFileEntry,
 } from "./git.js";
 
 // Worktree types
@@ -38,7 +41,7 @@ export type {
   PanelInstance,
   TabGroupLocation,
   TabGroup,
-  TerminalType,
+  PanelTitleMode,
   TerminalRestartError,
   TerminalReconnectError,
   TerminalRuntimeStatus,
@@ -49,6 +52,7 @@ export type {
   DockMode,
   DockRenderState,
   PanelExitBehavior,
+  ViewportPresetId,
 } from "./panel.js";
 
 // Panel type guards and enums (value exports)
@@ -58,9 +62,7 @@ export { isBuiltInPanelKind, isPtyPanelKind, TerminalRefreshTier } from "./panel
 export type {
   AddPanelOptionsBase,
   TerminalPanelOptions,
-  AgentPanelOptions,
   BrowserPanelOptions,
-  NotesPanelOptions,
   DevPreviewPanelOptions,
   ExtensionPanelOptions,
   AddPanelOptions,
@@ -98,6 +100,7 @@ export type {
   TerminalErrorPayload,
   BackendTerminalInfo,
   TerminalReconnectResult,
+  SemanticSearchMatch,
   // CopyTree IPC types
   CopyTreeOptions,
   CopyTreeGeneratePayload,
@@ -123,6 +126,10 @@ export type {
   AppMetricsSummary,
   AgentAvailabilityState,
   CliAvailability,
+  AgentCliDetail,
+  AgentCliDetails,
+  AgentCliProbeSource,
+  AgentCliBlockReason,
   AgentVersionInfo,
   AgentUpdateSettings,
   StartAgentUpdatePayload,
@@ -146,10 +153,21 @@ export type {
   ProjectStatusMap,
   // GitHub IPC types
   RepositoryStats,
+  RepoStatsAndPagePayload,
+  GitHubFirstPageCachePayload,
   ProjectHealthData,
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
+  GitHubRateLimitPayload,
+  GitHubRateLimitKind,
+  GitHubTokenHealthPayload,
+  GitHubTokenHealthStatus,
+  // Per-service connectivity types
+  ConnectivityServiceKey,
+  ServiceConnectivityStatus,
+  ServiceConnectivityPayload,
+  ServiceConnectivitySnapshot,
   // Hibernation types
   HibernationConfig,
   HibernationProjectHibernatedPayload,
@@ -177,7 +195,7 @@ export type {
   // Error types
   ErrorType,
   RetryAction,
-  AppError,
+  ErrorRecord,
   RetryProgressPayload,
   // Agent session types
   Artifact,
@@ -186,6 +204,7 @@ export type {
   // Agent detection
   AgentDetectedPayload,
   AgentExitedPayload,
+  AgentFallbackTriggeredPayload,
   // Artifact types
   ArtifactDetectedPayload,
   SaveArtifactOptions,
@@ -220,6 +239,8 @@ export type {
   // IPC Contract Maps
   IpcInvokeMap,
   IpcEventMap,
+  IpcEventBusMap,
+  EventBusEnvelope,
   IpcInvokeArgs,
   IpcInvokeResult,
   IpcEventPayload,
@@ -266,15 +287,20 @@ export {
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
   getAgentSettingsEntry,
+  resolveEffectivePresetId,
   generateAgentFlags,
   generateAgentCommand,
   buildAgentLaunchFlags,
   buildResumeCommand,
+  buildLaunchCommandFromFlags,
 } from "./agentSettings.js";
 
 // User agent registry types - user-defined agent configuration
 export type { UserAgentConfig, UserAgentRegistry } from "./userAgentRegistry.js";
 export { UserAgentConfigSchema, UserAgentRegistrySchema } from "./userAgentRegistry.js";
+
+// Per-service connectivity helpers
+export { CONNECTIVITY_SERVICE_KEYS } from "./ipc/connectivity.js";
 
 // Event types - event context for correlation
 export type { EventContext } from "./events.js";
@@ -308,6 +334,8 @@ export type {
   AgentKilledPayload,
   TerminalFlowStatus,
   TerminalStatusPayload,
+  BroadcastWriteTargetResult,
+  BroadcastWriteResultPayload,
   SpawnResult,
   SpawnError,
   SpawnErrorCode,
@@ -350,6 +378,17 @@ export type {
   CreateWorktreeOptions as WorkspaceCreateWorktreeOptions,
   BranchInfo as WorkspaceBranchInfo,
 } from "./workspace-host.js";
+
+// Worktree Port RPC protocol - typed request/response for the dedicated MessagePort
+export type {
+  WorktreePortProtocol,
+  WorktreePortAction,
+  WorktreePortPayload,
+  WorktreePortResult,
+  WorktreePortRequest,
+  WorktreePortRequestArgs,
+  WorktreePortResourceAction,
+} from "./worktree-port.js";
 
 // Project Pulse types - activity heatmap and commit history
 export type {
@@ -457,3 +496,12 @@ export type {
   AppThemeConfig,
   ColorVisionMode,
 } from "./appTheme.js";
+
+// Telemetry preview types — session-scoped payload mirror
+export type {
+  SanitizedTelemetryEvent,
+  SanitizedTelemetryEventKind,
+  SanitizedSentryEvent,
+  SanitizedAnalyticsEvent,
+  TelemetryPreviewState,
+} from "./ipc/telemetryPreview.js";

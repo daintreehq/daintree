@@ -2,11 +2,12 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { AlertTriangle, Trash2 } from "lucide-react";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { usePanelStore } from "@/store";
 import { actionService } from "@/services/ActionService";
 import type { WorktreeState } from "@/types";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface WorktreeDeleteDialogProps {
   isOpen: boolean;
@@ -106,7 +107,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       }
       onClose();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = formatErrorMessage(err, "Failed to delete worktree");
       setError(msg);
     } finally {
       setIsDeleting(false);
@@ -116,7 +117,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const getDeleteButtonText = () => {
     if (isDeleting) return "Deleting...";
     if (deleteBranch && canDeleteBranch && isArmed) return "Click again to confirm";
-    return "Delete Worktree";
+    return "Delete worktree";
   };
 
   return (
@@ -133,16 +134,22 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           <div className="p-2 bg-status-error/10 rounded-full">
             <Trash2 className="w-6 h-6" />
           </div>
-          <AppDialog.Title>Delete Worktree?</AppDialog.Title>
+          <AppDialog.Title>Delete '{worktree.branch ?? worktree.name}'?</AppDialog.Title>
         </div>
 
         <div className="space-y-4">
           <p className="text-sm text-daintree-text/80">
-            Are you sure you want to delete{" "}
-            <span className="font-mono font-medium text-daintree-text">
-              {worktree.isMainWorktree ? worktree.name : worktree.branch || worktree.name}
-            </span>
-            ?
+            This will permanently delete the worktree directory
+            {deleteBranch && worktree.branch && (
+              <>
+                {" "}
+                and branch{" "}
+                <span className="font-mono font-medium text-daintree-text">{worktree.branch}</span>
+              </>
+            )}
+            .{closeTerminals && hasTerminals && " All associated terminals will be closed."}
+            {hasChanges &&
+              " Uncommitted changes will be lost unless the worktree is first restored from git."}
           </p>
 
           <div className="text-xs text-daintree-text/60 bg-daintree-bg/50 p-3 rounded border border-daintree-border font-mono break-all">
@@ -220,7 +227,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               />
               <span className="text-sm text-daintree-text">
                 <span className="flex items-center gap-1.5">
-                  <WorktreeIcon className="w-3.5 h-3.5" />
+                  <FolderGit2 className="w-3.5 h-3.5" />
                   Delete branch{" "}
                   <code className="text-xs bg-daintree-bg/50 px-1.5 py-0.5 rounded border border-daintree-border">
                     {worktree.branch}

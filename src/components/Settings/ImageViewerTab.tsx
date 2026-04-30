@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { Image } from "lucide-react";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { useProjectStore } from "@/store";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 type ImageViewerMode = "os" | "custom";
 
@@ -49,7 +51,7 @@ export function ImageViewerTab() {
       })
       .catch((err) => {
         if (cancelled || !isMountedRef.current) return;
-        console.error("[ImageViewerTab] Failed to load settings:", err);
+        logError("[ImageViewerTab] Failed to load settings", err);
       })
       .finally(() => {
         clearTimeout(timer);
@@ -93,7 +95,7 @@ export function ImageViewerTab() {
       setSaved(true);
     } catch (err) {
       if (!isMountedRef.current) return;
-      setSaveError(err instanceof Error ? err.message : "Failed to save");
+      setSaveError(formatErrorMessage(err, "Failed to save image viewer preference"));
     } finally {
       if (isMountedRef.current) setIsSaving(false);
     }
@@ -157,7 +159,7 @@ export function ImageViewerTab() {
                     value={customCommand}
                     onChange={(e) => handleCommandChange(e.target.value)}
                     placeholder="e.g. open -a Photoshop, gimp"
-                    className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent transition-colors font-mono"
+                    className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent transition-colors font-mono"
                   />
                   <p className="text-xs text-daintree-text/40">
                     The file path will be appended as the last argument.
@@ -169,7 +171,7 @@ export function ImageViewerTab() {
                 <button
                   onClick={handleSave}
                   disabled={isSaving || isLoading}
-                  className="px-4 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-daintree-bg text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 transition-colors"
+                  className="px-4 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-daintree-bg text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
                 >
                   {isSaving ? "Saving…" : "Save"}
                 </button>

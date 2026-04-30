@@ -43,6 +43,12 @@ async function removeProjectViaSwitcher(
  * currently-active project. Active projects no longer have a "Remove
  * project" menu item — instead they expose "Stop all agents" which fires
  * the Stop project confirm dialog.
+ *
+ * "Stop all agents" is gated by `processCount > 0` in the renderer. The
+ * processCount is pushed via `project:stats-updated` IPC, which is debounced
+ * (200ms) and otherwise polls every 5s. Right-clicking immediately after
+ * spawning terminals can race the broadcast — retry by re-opening the
+ * context menu until the menuitem renders.
  */
 async function stopActiveProjectViaSwitcher(
   window: import("@playwright/test").Page,
@@ -54,9 +60,24 @@ async function stopActiveProjectViaSwitcher(
 
   const option = palette.getByRole("option", { name: new RegExp(projectName) });
   await expect(option).toBeVisible({ timeout: T_SHORT });
-  await option.click({ button: "right" });
+
   const stopItem = window.getByRole("menuitem", { name: "Stop all agents" });
-  await expect(stopItem).toBeVisible({ timeout: T_SHORT });
+
+  await expect
+    .poll(
+      async () => {
+        await option.click({ button: "right" });
+        const visible = await stopItem.isVisible({ timeout: T_SHORT }).catch(() => false);
+        if (visible) return true;
+        // Menu opened but lacks "Stop all agents" (processCount not yet
+        // propagated). Dismiss and retry — palette stays open.
+        await window.keyboard.press("Escape");
+        return false;
+      },
+      { timeout: T_LONG, intervals: [250, 500, 1000] }
+    )
+    .toBe(true);
+
   await stopItem.click();
 }
 
@@ -238,9 +259,9 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
 
     await removeProjectViaSwitcher(window, PROJECT_B);
 
-    const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).last();
+    const dialog = window.getByRole("dialog", { name: "Remove project from list?" }).last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-    await expect(dialog.getByRole("button", { name: "Remove Project" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Remove project" })).toBeVisible();
 
     // Cancel first
     await dialog.getByRole("button", { name: "Cancel" }).click();
@@ -252,10 +273,10 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
 
     await removeProjectViaSwitcher(window, PROJECT_B);
 
-    const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).last();
+    const dialog = window.getByRole("dialog", { name: "Remove project from list?" }).last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
-    await dialog.getByRole("button", { name: "Remove Project" }).click();
+    await dialog.getByRole("button", { name: "Remove project" }).click();
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 
     await window.waitForTimeout(T_SETTLE * 2);
@@ -341,9 +362,9 @@ test.describe.serial("Deletion Cleanup: Background removal persists across resta
 
     // Remove B from the list
     await removeProjectViaSwitcher(ctx.window, PROJECT_B);
-    const dialog = ctx.window.getByRole("dialog", { name: "Remove Project from List?" }).last();
+    const dialog = ctx.window.getByRole("dialog", { name: "Remove project from list?" }).last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-    await dialog.getByRole("button", { name: "Remove Project" }).click();
+    await dialog.getByRole("button", { name: "Remove project" }).click();
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 
     // Verify B is gone

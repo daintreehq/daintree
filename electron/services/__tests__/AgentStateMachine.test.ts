@@ -41,6 +41,10 @@ describe("AgentStateMachine", () => {
       expect(isValidTransition("completed", "working")).toBe(true);
     });
 
+    it("should allow waiting → idle (watchdog timeout)", () => {
+      expect(isValidTransition("waiting", "idle")).toBe(true);
+    });
+
     it("should allow completed → exited (exit from completed)", () => {
       expect(isValidTransition("completed", "exited")).toBe(true);
     });
@@ -49,10 +53,18 @@ describe("AgentStateMachine", () => {
       expect(isValidTransition("completed", "idle")).toBe(false);
     });
 
-    it("should not allow exited → any state (terminal state)", () => {
-      expect(isValidTransition("exited", "idle")).toBe(false);
+    it("should allow exited → idle (Issue #5767 — agent respawn in same PTY)", () => {
+      expect(isValidTransition("exited", "idle")).toBe(true);
+    });
+
+    it("should not allow exited → working/completed/waiting directly", () => {
       expect(isValidTransition("exited", "working")).toBe(false);
       expect(isValidTransition("exited", "completed")).toBe(false);
+      expect(isValidTransition("exited", "waiting")).toBe(false);
+    });
+
+    it("should allow idle → exited (Issue #5767 — graceful agent exit detected from idle)", () => {
+      expect(isValidTransition("idle", "exited")).toBe(true);
     });
 
     it("should not allow invalid transitions", () => {
@@ -220,14 +232,29 @@ describe("AgentStateMachine", () => {
         expect(nextAgentState("completed", event)).toBe("exited");
       });
 
-      it("should not transition from idle on exit", () => {
+      it("should transition idle → exited on exit (Issue #5767 — graceful agent exit after silence timeout)", () => {
         const event: AgentEvent = { type: "exit", code: 0 };
-        expect(nextAgentState("idle", event)).toBe("idle");
+        expect(nextAgentState("idle", event)).toBe("exited");
       });
 
       it("should not transition from exited on exit (terminal state)", () => {
         const event: AgentEvent = { type: "exit", code: 0 };
         expect(nextAgentState("exited", event)).toBe("exited");
+      });
+    });
+
+    describe("respawn event (Issue #5767 — fresh agent session in same PTY)", () => {
+      it("should transition exited → idle on respawn", () => {
+        const event: AgentEvent = { type: "respawn" };
+        expect(nextAgentState("exited", event)).toBe("idle");
+      });
+
+      it("should be a no-op from non-exited states", () => {
+        const event: AgentEvent = { type: "respawn" };
+        expect(nextAgentState("idle", event)).toBe("idle");
+        expect(nextAgentState("working", event)).toBe("working");
+        expect(nextAgentState("waiting", event)).toBe("waiting");
+        expect(nextAgentState("completed", event)).toBe("completed");
       });
     });
 
@@ -239,6 +266,44 @@ describe("AgentStateMachine", () => {
         for (const state of states) {
           expect(nextAgentState(state, event)).toBe("idle");
         }
+      });
+    });
+
+    describe("watchdog-timeout event", () => {
+      it("should transition waiting → idle on watchdog-timeout", () => {
+        const event: AgentEvent = { type: "watchdog-timeout" };
+        expect(nextAgentState("waiting", event)).toBe("idle");
+      });
+
+      it("should not transition from completed on watchdog-timeout", () => {
+        const event: AgentEvent = { type: "watchdog-timeout" };
+        expect(nextAgentState("completed", event)).toBe("completed");
+      });
+
+      it("should not transition from working on watchdog-timeout", () => {
+        const event: AgentEvent = { type: "watchdog-timeout" };
+        expect(nextAgentState("working", event)).toBe("working");
+      });
+
+      it("should not transition from idle on watchdog-timeout", () => {
+        const event: AgentEvent = { type: "watchdog-timeout" };
+        expect(nextAgentState("idle", event)).toBe("idle");
+      });
+
+      it("should not transition from exited on watchdog-timeout", () => {
+        const event: AgentEvent = { type: "watchdog-timeout" };
+        expect(nextAgentState("exited", event)).toBe("exited");
+      });
+
+      it("should allow late exit: waiting→idle (watchdog) then idle→exited (exit)", () => {
+        const watchdogEvent: AgentEvent = { type: "watchdog-timeout" };
+        const exitEvent: AgentEvent = { type: "exit", code: 0 };
+
+        const afterWatchdog = nextAgentState("waiting", watchdogEvent);
+        expect(afterWatchdog).toBe("idle");
+
+        const afterExit = nextAgentState(afterWatchdog, exitEvent);
+        expect(afterExit).toBe("exited");
       });
     });
 

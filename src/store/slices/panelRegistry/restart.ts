@@ -1,19 +1,34 @@
 import type { PanelLocation } from "@/types";
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { terminalClient, agentSettingsClient, projectClient, systemClient } from "@/clients";
-import { generateAgentCommand, buildResumeCommand } from "@shared/types";
+import {
+  generateAgentCommand,
+  buildAgentLaunchFlags,
+  buildResumeCommand,
+  buildLaunchCommandFromFlags,
+} from "@shared/types";
+import type { AgentSettingsEntry } from "@shared/types/agentSettings";
 import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
-import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
+import { getAgentConfig } from "@/config/agents";
+import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
-import { deriveRuntimeStatus, getDefaultTitle } from "./helpers";
+import { deriveRuntimeStatus } from "./helpers";
 import { logDebug, logWarn, logError } from "@/utils/logger";
+import {
+  buildAgentLaunchFlagsForRuntimeSettings,
+  mergePresetArgsIntoLaunchFlags,
+  resolveAgentRuntimeSettings,
+  type AgentRuntimeSettingsResolution,
+} from "@/utils/agentRuntimeSettings";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 // Lazy accessor to break circular dependency: restart -> projectStore -> panelPersistence -> core.
 let _cachedProjectStore: typeof import("@/store/projectStore").useProjectStore | null = null;
@@ -29,6 +44,54 @@ type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
 
 const INJECTION_TIMEOUT_MS = 30_000;
+
+interface LoadedAgentRuntimeSettings {
+  entry: AgentSettingsEntry;
+  settings: AgentRuntimeSettingsResolution;
+  tmpDir: string;
+}
+
+function mergeSpawnEnv(
+  globalEnv: Record<string, string>,
+  projectEnv: Record<string, string>,
+  runtimeEnv: Record<string, string> | undefined
+): Record<string, string> | undefined {
+  const hasAny =
+    Object.keys(globalEnv).length > 0 ||
+    Object.keys(projectEnv).length > 0 ||
+    Boolean(runtimeEnv && Object.keys(runtimeEnv).length > 0);
+  return hasAny ? { ...globalEnv, ...projectEnv, ...(runtimeEnv ?? {}) } : undefined;
+}
+
+async function fetchGlobalEnv(): Promise<Record<string, string>> {
+  if (typeof window === "undefined" || !window.electron?.globalEnv?.get) {
+    return {};
+  }
+  return window.electron.globalEnv.get().catch((error: unknown) => {
+    logWarn("[TerminalStore] Failed to fetch global environment variables", { error });
+    return {} as Record<string, string>;
+  });
+}
+
+async function buildRestartEnv(
+  projectId: string | undefined,
+  runtimeEnv: Record<string, string> | undefined,
+  context: string
+): Promise<Record<string, string> | undefined> {
+  const [globalEnv, projectEnv] = await Promise.all([
+    fetchGlobalEnv(),
+    projectId
+      ? projectClient
+          .getSettings(projectId)
+          .then((settings) => settings?.environmentVariables ?? ({} as Record<string, string>))
+          .catch((error: unknown) => {
+            logWarn(`[TerminalStore] Failed to fetch project env for ${context}`, { error });
+            return {} as Record<string, string>;
+          })
+      : Promise.resolve({} as Record<string, string>),
+  ]);
+  return mergeSpawnEnv(globalEnv, projectEnv, runtimeEnv);
+}
 
 function scheduleHistoryInjection(id: string, history: string, worktreePath: string): void {
   const prompt = [
@@ -88,7 +151,7 @@ export const createRestartActions = (
   | "setRuntimeStatus"
   | "setInputLocked"
   | "toggleInputLocked"
-  | "convertTerminalType"
+  | "activateFallbackPreset"
 > => ({
   restartTerminal: async (id) => {
     const terminal = get().panelsById[id];
@@ -137,7 +200,7 @@ export const createRestartActions = (
         recoverable: false,
         context: {
           failedCwd: terminal.cwd,
-          validationError: error instanceof Error ? error.message : String(error),
+          validationError: formatErrorMessage(error, "Failed to validate terminal configuration"),
         },
       };
 
@@ -188,51 +251,148 @@ export const createRestartActions = (
     // For agent terminals, regenerate command from current settings
     // For other terminals, use the saved command
     let commandToRun = currentTerminal.command;
-    // Get effective agentId - handles both new agentId and legacy type-based detection
-    const effectiveAgentId =
-      currentTerminal.agentId ??
-      (currentTerminal.type && isRegisteredAgent(currentTerminal.type)
-        ? currentTerminal.type
-        : undefined);
-    const isAgent = !!effectiveAgentId;
+    const effectiveAgentId = currentTerminal.launchAgentId;
+    // Gate on launch intent (`effectiveAgentId`, derived from the sealed
+    // `launchAgentId`) plus two demotion
+    // signals:
+    //   - `exitCode !== undefined` — the PTY has truly exited (onExit path).
+    //   - `agentState === "exited"` — the FSM saw the detected agent quit
+    //     to shell; this state is preserved across demoted restarts so
+    //     subsequent restarts stay demoted (issue #5764).
+    // `panelStoreListeners.onAgentExited` must NOT clear `agentId` — if it
+    // did, a cold-launched agent that `/quit`s into its shell would lose its
+    // launch identity and relaunch decisions would misclassify. #5807
+    const isAgent =
+      !!effectiveAgentId &&
+      currentTerminal.agentState !== "exited" &&
+      currentTerminal.exitCode === undefined;
+    const isDemotedAgent = !!effectiveAgentId && !isAgent;
+    let loadedRuntimeSettings: LoadedAgentRuntimeSettings | undefined;
+    let runtimeSettingsLoaded = false;
+    let nextAgentLaunchFlags = currentTerminal.agentLaunchFlags;
+    let nextAgentPresetId = currentTerminal.agentPresetId;
+    let nextAgentPresetColor = currentTerminal.agentPresetColor;
+    let nextOriginalPresetId = currentTerminal.originalPresetId;
+
+    const loadAgentRuntimeSettings = async (): Promise<LoadedAgentRuntimeSettings | undefined> => {
+      if (!effectiveAgentId || runtimeSettingsLoaded) return loadedRuntimeSettings;
+      runtimeSettingsLoaded = true;
+      try {
+        const [agentSettings, tmpDir] = await Promise.all([
+          agentSettingsClient.get(),
+          systemClient.getTmpDir().catch(() => ""),
+        ]);
+        const entry = (agentSettings?.agents?.[effectiveAgentId] ?? {}) as AgentSettingsEntry;
+        const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
+        const projectPresets = useProjectPresetsStore.getState().presetsByAgent[effectiveAgentId];
+        const settings = resolveAgentRuntimeSettings({
+          agentId: effectiveAgentId,
+          presetId: currentTerminal.agentPresetId,
+          entry,
+          ccrPresets,
+          projectPresets,
+        });
+        loadedRuntimeSettings = { entry, settings, tmpDir };
+        if (settings.presetWasStale) {
+          nextAgentPresetId = undefined;
+          nextAgentPresetColor = undefined;
+          nextOriginalPresetId = undefined;
+        } else if (settings.preset) {
+          nextAgentPresetColor = settings.preset.color ?? currentTerminal.agentPresetColor;
+        }
+        return loadedRuntimeSettings;
+      } catch (error) {
+        logWarn("[TerminalStore] Failed to load agent runtime settings for restart", { error });
+        return undefined;
+      }
+    };
+
+    const runtimeForEnv = effectiveAgentId ? await loadAgentRuntimeSettings() : undefined;
+    if (runtimeForEnv?.settings.presetWasStale && effectiveAgentId) {
+      nextAgentLaunchFlags = buildAgentLaunchFlagsForRuntimeSettings(
+        runtimeForEnv.settings.effectiveEntry,
+        effectiveAgentId,
+        undefined,
+        { modelId: currentTerminal.agentModelId }
+      );
+    }
 
     if (isAgent && effectiveAgentId) {
+      const presetForLaunchFlags = runtimeForEnv?.settings.preset;
+      if (presetForLaunchFlags) {
+        nextAgentLaunchFlags = mergePresetArgsIntoLaunchFlags(
+          currentTerminal.agentLaunchFlags,
+          presetForLaunchFlags
+        );
+      }
       const sessionId = currentTerminal.agentSessionId;
       if (sessionId) {
-        const resumeCmd = buildResumeCommand(
-          effectiveAgentId,
-          sessionId,
-          currentTerminal.agentLaunchFlags
-        );
+        const resumeCmd = buildResumeCommand(effectiveAgentId, sessionId, nextAgentLaunchFlags);
         if (resumeCmd) {
           commandToRun = resumeCmd;
         }
       }
 
       if (commandToRun === currentTerminal.command) {
-        try {
-          const [agentSettings, tmpDir] = await Promise.all([
-            agentSettingsClient.get(),
-            systemClient.getTmpDir().catch(() => ""),
-          ]);
-          if (agentSettings) {
-            const agentConfig = getAgentConfig(effectiveAgentId);
-            const baseCommand = agentConfig?.command || effectiveAgentId;
+        const persistedFlags = nextAgentLaunchFlags;
+        let hasPersistedFlags = Boolean(persistedFlags && persistedFlags.length > 0);
+        const agentConfig = getAgentConfig(effectiveAgentId);
+        const baseCommand = agentConfig?.command || effectiveAgentId;
+        const runtimeSettings = runtimeForEnv ?? (await loadAgentRuntimeSettings());
+        if (!hasPersistedFlags && runtimeSettings) {
+          nextAgentLaunchFlags = buildAgentLaunchFlagsForRuntimeSettings(
+            runtimeSettings.settings.effectiveEntry,
+            effectiveAgentId,
+            runtimeSettings.settings.preset,
+            { modelId: currentTerminal.agentModelId }
+          );
+          hasPersistedFlags = nextAgentLaunchFlags.length > 0;
+        }
+
+        if (hasPersistedFlags && effectiveAgentId !== "gemini") {
+          // Sync fast path: non-Gemini agents have no runtime-dynamic flag
+          // injection, so the persisted flags are the complete command.
+          commandToRun = buildLaunchCommandFromFlags(
+            baseCommand,
+            effectiveAgentId,
+            nextAgentLaunchFlags as string[]
+          );
+        } else {
+          // Async path: either Gemini (needs clipboard directory re-injection)
+          // or no persisted flags (needs settings-derived fallback).
+          try {
+            const runtimeSettings = runtimeForEnv ?? (await loadAgentRuntimeSettings());
+            const tmpDir = runtimeSettings?.tmpDir ?? "";
             const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
-            commandToRun = generateAgentCommand(
-              baseCommand,
-              agentSettings.agents?.[effectiveAgentId] ?? {},
-              effectiveAgentId,
-              { clipboardDirectory, modelId: currentTerminal.agentModelId }
+            if (hasPersistedFlags) {
+              const entry = runtimeSettings?.entry;
+              const shareClipboardDirectory = entry?.shareClipboardDirectory as boolean | undefined;
+              commandToRun = buildLaunchCommandFromFlags(
+                baseCommand,
+                effectiveAgentId,
+                nextAgentLaunchFlags as string[],
+                { clipboardDirectory, shareClipboardDirectory }
+              );
+            } else if (runtimeSettings) {
+              commandToRun = generateAgentCommand(
+                baseCommand,
+                runtimeSettings.settings.effectiveEntry,
+                effectiveAgentId,
+                {
+                  clipboardDirectory,
+                  modelId: currentTerminal.agentModelId,
+                  presetArgs: runtimeSettings.settings.preset?.args?.join(" "),
+                }
+              );
+            }
+          } catch (error) {
+            logWarn(
+              "[TerminalStore] Failed to load agent settings for restart, using saved command",
+              {
+                error,
+              }
             );
           }
-        } catch (error) {
-          logWarn(
-            "[TerminalStore] Failed to load agent settings for restart, using saved command",
-            {
-              error,
-            }
-          );
         }
       }
     }
@@ -272,11 +432,23 @@ export const createRestartActions = (
           ...t,
           location: targetLocation,
           restartKey: (t.restartKey ?? 0) + 1,
-          agentState: isAgent ? ("working" as const) : undefined,
+          // Demoted panels keep `agentState: "exited"` so the guard above
+          // stays true across repeated restarts (issue #5764).
+          agentState: isAgent
+            ? ("working" as const)
+            : isDemotedAgent
+              ? ("exited" as const)
+              : undefined,
           lastStateChange: isAgent ? Date.now() : undefined,
           stateChangeTrigger: undefined,
           stateChangeConfidence: undefined,
-          command: durableCommand,
+          // Clear the stored agent command on demotion so a subsequent
+          // restart falls through to the default shell.
+          command: isDemotedAgent ? undefined : durableCommand,
+          agentLaunchFlags: isAgent ? nextAgentLaunchFlags : t.agentLaunchFlags,
+          agentPresetId: nextAgentPresetId,
+          agentPresetColor: nextAgentPresetColor,
+          originalPresetId: nextOriginalPresetId,
           agentSessionId: undefined,
           isRestarting: true,
           restartError: undefined,
@@ -294,21 +466,11 @@ export const createRestartActions = (
       const projectStore = await resolveProjectStore();
       const capturedProjectId = projectStore.getState().currentProject?.id;
 
-      // Fetch project environment variables for restart
-      let restartEnv: Record<string, string> | undefined;
-      try {
-        if (capturedProjectId) {
-          const projectSettings = await projectClient.getSettings(capturedProjectId);
-          if (
-            projectSettings?.environmentVariables &&
-            Object.keys(projectSettings.environmentVariables).length > 0
-          ) {
-            restartEnv = projectSettings.environmentVariables;
-          }
-        }
-      } catch (error) {
-        logWarn("[TerminalStore] Failed to fetch project env for restart", { error });
-      }
+      const restartEnv = await buildRestartEnv(
+        capturedProjectId,
+        runtimeForEnv?.settings.env,
+        "restart"
+      );
 
       await terminalClient.spawn({
         id,
@@ -316,15 +478,19 @@ export const createRestartActions = (
         cwd: currentTerminal.cwd,
         cols: spawnCols,
         rows: spawnRows,
-        kind: currentTerminal.kind ?? (isAgent ? "agent" : "terminal"),
-        type: currentTerminal.type,
-        agentId: currentTerminal.agentId,
+        // Demoted panels spawn as plain terminals — launchAgentId cleared so the
+        // IPC handler does not treat them as agent spawns (issue #5764).
+        kind: "terminal",
+        launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
         title: currentTerminal.title,
-        command: spawnCommand,
+        command: isAgent ? spawnCommand : undefined,
         restore: false,
         env: restartEnv,
-        agentLaunchFlags: currentTerminal.agentLaunchFlags,
-        agentModelId: currentTerminal.agentModelId,
+        agentLaunchFlags: isAgent ? nextAgentLaunchFlags : undefined,
+        agentModelId: isAgent ? currentTerminal.agentModelId : undefined,
+        agentPresetId: nextAgentPresetId,
+        agentPresetColor: nextAgentPresetColor,
+        originalAgentPresetId: nextOriginalPresetId ?? nextAgentPresetId,
       });
 
       if (targetLocation === "dock") {
@@ -336,7 +502,7 @@ export const createRestartActions = (
       unmarkTerminalRestarting(id);
       set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to restart terminal");
       const errorCode = (error as { code?: string })?.code;
 
       let phase = "unknown";
@@ -485,9 +651,7 @@ export const createRestartActions = (
     if (terminal.isRestarting) return;
 
     // Determine if this is an agent terminal before any async work
-    const effectiveAgentId =
-      terminal.agentId ??
-      (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
+    const effectiveAgentId = terminal.launchAgentId;
     const isAgent = !!effectiveAgentId;
 
     // Capture the terminal buffer BEFORE any teardown (xterm instance is still alive)
@@ -530,7 +694,7 @@ export const createRestartActions = (
                   ...t,
                   isRestarting: false,
                   restartError: {
-                    message: err instanceof Error ? err.message : String(err),
+                    message: formatErrorMessage(err, "Failed to move terminal to new worktree"),
                     timestamp: Date.now(),
                     recoverable: false,
                     context: {
@@ -623,62 +787,84 @@ export const createRestartActions = (
     });
   },
 
-  convertTerminalType: async (id, newType, newAgentId) => {
+  activateFallbackPreset: async (id, nextPresetId, originalPresetId) => {
     const terminal = get().panelsById[id];
     if (!terminal) {
-      logWarn("[TerminalStore] Cannot convert: terminal not found", { id });
-      return;
+      return { success: false, error: "terminal not found" };
     }
-
     if (terminal.isRestarting) {
-      logWarn("[TerminalStore] Terminal is already restarting, ignoring convert", { id });
-      return;
+      return { success: false, error: "already restarting" };
     }
 
-    // Mark as restarting SYNCHRONOUSLY first to prevent exit event race condition.
-    markTerminalRestarting(id);
+    const effectiveAgentId = terminal.launchAgentId;
+    if (!effectiveAgentId) {
+      return { success: false, error: "panel is not an agent" };
+    }
 
-    // Set store flag immediately to prevent overlapping operations
+    markTerminalRestarting(id);
     set((state) =>
       updateTerminal(state, id, (t) => ({
         ...t,
         restartError: undefined,
+        spawnError: undefined,
         isRestarting: true,
       }))
     );
 
-    const effectiveAgentId = newAgentId ?? (isRegisteredAgent(newType) ? newType : undefined);
-    const newKind: "terminal" | "agent" = effectiveAgentId ? "agent" : "terminal";
-    const newTitle = getDefaultTitle(newKind, newType, effectiveAgentId);
-
-    let commandToRun: string | undefined;
-    if (effectiveAgentId) {
-      try {
-        const [agentSettings, tmpDir] = await Promise.all([
-          agentSettingsClient.get(),
-          systemClient.getTmpDir().catch(() => ""),
-        ]);
-        if (agentSettings) {
-          const agentConfig = getAgentConfig(effectiveAgentId);
-          const baseCommand = agentConfig?.command || effectiveAgentId;
-          const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
-          commandToRun = generateAgentCommand(
-            baseCommand,
-            agentSettings.agents?.[effectiveAgentId] ?? {},
-            effectiveAgentId,
-            { clipboardDirectory }
-          );
-        }
-      } catch (error) {
-        logWarn("[TerminalStore] Failed to load agent settings for convert, using default", {
-          error,
-        });
-        const agentConfig = getAgentConfig(effectiveAgentId);
-        commandToRun = agentConfig?.command || effectiveAgentId;
-      }
-    }
+    // Snapshot pre-mutation preset fields for rollback on spawn failure.
+    // Without this, a failed respawn leaves the panel permanently stamped as
+    // "using fallback N" while no process is running, corrupting any retry
+    // that reads fallbackChainIndex.
+    const priorSnapshot = {
+      command: terminal.command,
+      agentPresetId: terminal.agentPresetId,
+      agentPresetColor: terminal.agentPresetColor,
+      originalPresetId: terminal.originalPresetId,
+      isUsingFallback: terminal.isUsingFallback,
+      fallbackChainIndex: terminal.fallbackChainIndex,
+      agentLaunchFlags: terminal.agentLaunchFlags,
+    };
 
     try {
+      const [agentSettings, tmpDir] = await Promise.all([
+        agentSettingsClient.get(),
+        systemClient.getTmpDir().catch(() => ""),
+      ]);
+      const entry = agentSettings?.agents?.[effectiveAgentId] ?? {};
+      const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
+      const projectPresets = useProjectPresetsStore.getState().presetsByAgent[effectiveAgentId];
+      const runtimeSettings = resolveAgentRuntimeSettings({
+        agentId: effectiveAgentId,
+        presetId: nextPresetId,
+        entry,
+        ccrPresets,
+        projectPresets,
+      });
+      const nextPreset = runtimeSettings.preset;
+      if (!nextPreset) {
+        throw new Error(`fallback preset "${nextPresetId}" not found`);
+      }
+
+      const effectiveEntry = runtimeSettings.effectiveEntry;
+
+      let clipboardDirectory: string | undefined;
+      if (effectiveAgentId === "gemini" && effectiveEntry.shareClipboardDirectory !== false) {
+        clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
+      }
+
+      const agentConfig = getAgentConfig(effectiveAgentId);
+      const baseCommand = agentConfig?.command || effectiveAgentId;
+      const commandToRun = generateAgentCommand(baseCommand, effectiveEntry, effectiveAgentId, {
+        clipboardDirectory,
+        modelId: terminal.agentModelId,
+        presetArgs: nextPreset.args?.join(" "),
+      });
+      const nextLaunchFlags = buildAgentLaunchFlags(effectiveEntry, effectiveAgentId, {
+        modelId: terminal.agentModelId,
+        presetArgs: nextPreset.args,
+      });
+
+      // Capture live terminal dimensions before teardown
       const managedInstance = terminalInstanceService.get(id);
       let spawnCols = terminal.cols || 80;
       let spawnRows = terminal.rows || 24;
@@ -688,55 +874,52 @@ export const createRestartActions = (
       }
 
       terminalInstanceService.destroy(id);
-      terminalInstanceService.suppressNextExit(id);
-      await terminalClient.kill(id);
+      terminalInstanceService.suppressNextExit(id, 10000);
+      try {
+        await terminalClient.kill(id);
+      } catch (error) {
+        logWarn("[TerminalStore] kill failed during fallback activation; continuing", {
+          id,
+          error,
+        });
+      }
 
-      const isAgentConvert = !!effectiveAgentId;
+      const nextChainIndex = (terminal.fallbackChainIndex ?? 0) + 1;
 
       set((state) => {
         const t = state.panelsById[id];
         if (!t) return state;
         const updated = {
           ...t,
-          kind: newKind,
-          type: newType,
-          agentId: effectiveAgentId,
-          title: newTitle,
           restartKey: (t.restartKey ?? 0) + 1,
-          agentState: isAgentConvert ? ("working" as const) : undefined,
-          lastStateChange: isAgentConvert ? Date.now() : undefined,
+          agentState: "working" as AgentState,
+          lastStateChange: Date.now(),
           stateChangeTrigger: undefined,
           stateChangeConfidence: undefined,
           command: commandToRun,
+          agentPresetId: nextPreset.id,
+          agentPresetColor: nextPreset.color,
+          originalPresetId: originalPresetId,
+          isUsingFallback: true,
+          fallbackChainIndex: nextChainIndex,
+          agentLaunchFlags: nextLaunchFlags,
+          agentSessionId: undefined,
           isRestarting: true,
           restartError: undefined,
+          exitCode: undefined,
+          startedAt: Date.now(),
         };
         const newById = { ...state.panelsById, [id]: updated };
         saveNormalized(newById, state.panelIds);
         return { panelsById: newById };
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });
 
-      // Capture project ID before async work to avoid race conditions (issue #3690).
-      const projectStoreForConvert = await resolveProjectStore();
-      const capturedProjectId = projectStoreForConvert.getState().currentProject?.id;
+      const projectStore = await resolveProjectStore();
+      const capturedProjectId = projectStore.getState().currentProject?.id;
 
-      // Fetch project environment variables for conversion
-      let convertEnv: Record<string, string> | undefined;
-      try {
-        if (capturedProjectId) {
-          const projectSettings = await projectClient.getSettings(capturedProjectId);
-          if (
-            projectSettings?.environmentVariables &&
-            Object.keys(projectSettings.environmentVariables).length > 0
-          ) {
-            convertEnv = projectSettings.environmentVariables;
-          }
-        }
-      } catch (error) {
-        logWarn("[TerminalStore] Failed to fetch project env for conversion", { error });
-      }
+      const restartEnv = await buildRestartEnv(capturedProjectId, runtimeSettings.env, "fallback");
 
       await terminalClient.spawn({
         id,
@@ -744,16 +927,18 @@ export const createRestartActions = (
         cwd: terminal.cwd,
         cols: spawnCols,
         rows: spawnRows,
-        kind: newKind,
-        type: newType,
-        agentId: effectiveAgentId,
-        title: newTitle,
+        kind: "terminal",
+        launchAgentId: terminal.launchAgentId,
+        title: terminal.title,
         command: commandToRun,
         restore: false,
-        env: convertEnv,
+        env: restartEnv,
+        agentLaunchFlags: nextLaunchFlags,
+        agentModelId: terminal.agentModelId,
+        agentPresetId: nextPreset.id,
+        agentPresetColor: nextPreset.color,
+        originalAgentPresetId: originalPresetId,
       });
-
-      await new Promise((resolve) => setTimeout(resolve, 50));
 
       if (terminal.location === "dock") {
         optimizeForDock(id);
@@ -763,31 +948,36 @@ export const createRestartActions = (
 
       unmarkTerminalRestarting(id);
       set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
+      return { success: true };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorCode = (error as { code?: string })?.code;
-
-      const restartError = {
-        message: errorMessage,
-        code: errorCode,
-        timestamp: Date.now(),
-        recoverable: false,
-        context: {
-          failedCwd: terminal.cwd,
-          command: commandToRun,
-        },
-      };
-
+      const errorMessage = formatErrorMessage(error, "Failed to restart terminal");
       unmarkTerminalRestarting(id);
       set((state) =>
         updateTerminal(state, id, (t) => ({
           ...t,
           isRestarting: false,
-          restartError,
+          // Restore pre-mutation fields so fallbackChainIndex and presetId
+          // accurately reflect "we are NOT running the next preset". Without
+          // rollback, any subsequent fallback trigger would jump past this
+          // preset even though the PTY never started.
+          ...priorSnapshot,
+          restartError: {
+            message: errorMessage,
+            timestamp: Date.now(),
+            recoverable: false,
+            context: {
+              failedCwd: terminal.cwd,
+              phase: "fallback-activation",
+              nextPresetId,
+            },
+          },
         }))
       );
-
-      logError("[TerminalStore] Failed to convert terminal", error, { id });
+      logError("[TerminalStore] Failed to activate fallback preset", error, {
+        id,
+        nextPresetId,
+      });
+      return { success: false, error: errorMessage };
     }
   },
 });

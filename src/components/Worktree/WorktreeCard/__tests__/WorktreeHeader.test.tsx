@@ -1,23 +1,27 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
 import type { WorktreeState } from "@shared/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { actionService } from "@/services/ActionService";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
 
+let mockMissingToken = false;
+
 vi.mock("@/hooks/useGitHubTooltip", () => ({
   useIssueTooltip: () => ({
     data: null,
     loading: false,
     error: null,
+    missingToken: mockMissingToken,
     fetchTooltip: vi.fn(),
     reset: vi.fn(),
   }),
@@ -25,9 +29,16 @@ vi.mock("@/hooks/useGitHubTooltip", () => ({
     data: null,
     loading: false,
     error: null,
+    missingToken: mockMissingToken,
     fetchTooltip: vi.fn(),
     reset: vi.fn(),
   }),
+}));
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: {
+    dispatch: vi.fn(),
+  },
 }));
 
 const noop = () => {};
@@ -48,8 +59,7 @@ const baseMenu: WorktreeHeaderProps["menu"] = {
   launchAgents: [],
   recipes: [],
   runningRecipeId: null,
-  isRestartValidating: false,
-  counts: { grid: 0, dock: 0, active: 0, completed: 0, all: 0 },
+  counts: { grid: 0, dock: 0, active: 0, completed: 0, all: 0, waiting: 0, working: 0 },
   onCopyContextFull: noop,
   onCopyContextModified: noop,
   onCopyPath: noop,
@@ -58,11 +68,10 @@ const baseMenu: WorktreeHeaderProps["menu"] = {
   onRunRecipe: noop,
   onDockAll: noop,
   onMaximizeAll: noop,
-  onRestartAll: noop,
   onResetRenderers: noop,
-  onCloseCompleted: noop,
-  onCloseAll: noop,
-  onEndAll: noop,
+  onSelectAllAgents: noop,
+  onSelectWaitingAgents: noop,
+  onSelectWorkingAgents: noop,
 };
 
 function renderHeader(overrides: Partial<WorktreeHeaderProps> = {}) {
@@ -766,8 +775,8 @@ describe("WorktreeHeader collapsed session indicators", () => {
     const badges = indicators.querySelectorAll("[aria-hidden='true']");
     expect(badges.length).toBe(2);
     // First badge should be working (text-state-working), second waiting (text-state-waiting)
-    expect(badges[0].className).toContain("text-state-working");
-    expect(badges[1].className).toContain("text-state-waiting");
+    expect(badges[0]!.className).toContain("text-state-working");
+    expect(badges[1]!.className).toContain("text-state-waiting");
   });
 
   it("applies animate-spin-slow only to working icon", () => {
@@ -779,9 +788,9 @@ describe("WorktreeHeader collapsed session indicators", () => {
     const indicators = screen.getByTestId("collapsed-session-indicators");
     const svgs = indicators.querySelectorAll("svg");
     // First svg is working icon — should have animate-spin-slow
-    expect(svgs[0].getAttribute("class")).toContain("animate-spin-slow");
+    expect(svgs[0]!.getAttribute("class")).toContain("animate-spin-slow");
     // Second svg is completed icon — should NOT have animate-spin-slow
-    expect(svgs[1].getAttribute("class")).not.toContain("animate-spin-slow");
+    expect(svgs[1]!.getAttribute("class")).not.toContain("animate-spin-slow");
   });
 
   it("does not render when sessionStates is not provided", () => {
@@ -809,6 +818,100 @@ describe("WorktreeHeader collapsed session indicators", () => {
   });
 });
 
+describe("WorktreeHeader cleanup button", () => {
+  it("renders the cleanup button when onCleanupWorktree is provided", () => {
+    renderHeader({ onCleanupWorktree: vi.fn() });
+    const button = screen.getByRole("button", { name: "Delete worktree" });
+    expect(button).toBeDefined();
+    expect(button.getAttribute("data-testid")).toBe("worktree-cleanup-button");
+  });
+
+  it("does not render the cleanup button when onCleanupWorktree is omitted", () => {
+    renderHeader();
+    expect(screen.queryByRole("button", { name: "Delete worktree" })).toBeNull();
+    expect(screen.queryByTestId("worktree-cleanup-button")).toBeNull();
+  });
+
+  it("places the cleanup button inside the hover-gated actions wrapper", () => {
+    renderHeader({ onCleanupWorktree: vi.fn() });
+    const button = screen.getByTestId("worktree-cleanup-button");
+    const wrapper = screen.getByTestId("worktree-actions-wrapper");
+    expect(wrapper.contains(button)).toBe(true);
+  });
+
+  it("hides the cleanup button alongside other actions on inactive, non-collapsed cards", () => {
+    renderHeader({ onCleanupWorktree: vi.fn(), isActive: false, isCollapsed: false });
+    const button = screen.getByTestId("worktree-cleanup-button");
+    const wrapper = screen.getByTestId("worktree-actions-wrapper");
+    // The hover-gated wrapper hides on inactive cards and reveals on group hover/focus.
+    expect(wrapper.className).toContain("opacity-0");
+    expect(wrapper.className).toContain("pointer-events-none");
+    expect(wrapper.className).toContain("group-hover/card:opacity-100");
+    expect(wrapper.className).toContain("group-focus-within/card:opacity-100");
+    // The cleanup button inherits visibility through the wrapper, not its own classes.
+    expect(wrapper.contains(button)).toBe(true);
+  });
+
+  it("shows the cleanup button on active cards", () => {
+    renderHeader({ onCleanupWorktree: vi.fn(), isActive: true, isCollapsed: false });
+    const wrapper = screen.getByTestId("worktree-actions-wrapper");
+    expect(wrapper.className).toContain("opacity-100");
+    expect(wrapper.className).not.toContain("opacity-0");
+  });
+
+  it("shows the cleanup button on collapsed cards", () => {
+    renderHeader({ onCleanupWorktree: vi.fn(), isActive: false, isCollapsed: true });
+    const wrapper = screen.getByTestId("worktree-actions-wrapper");
+    expect(wrapper.className).toContain("opacity-100");
+    expect(wrapper.className).not.toContain("opacity-0");
+  });
+
+  it("renders the cleanup button as the first action in the wrapper", () => {
+    renderHeader({
+      onCleanupWorktree: vi.fn(),
+      canCollapse: true,
+      onToggleCollapse: noop,
+    });
+    const wrapper = screen.getByTestId("worktree-actions-wrapper");
+    const cleanupButton = screen.getByTestId("worktree-cleanup-button");
+    expect(wrapper.firstElementChild).toBe(cleanupButton);
+  });
+
+  it("uses muted destructive coloring at idle and full red on hover", () => {
+    renderHeader({ onCleanupWorktree: vi.fn() });
+    const button = screen.getByTestId("worktree-cleanup-button");
+    expect(button.className).toContain("text-status-error/70");
+    expect(button.className).toContain("hover:text-status-error");
+    expect(button.className).not.toContain("text-github-merged");
+  });
+
+  it("calls onCleanupWorktree and stops propagation when clicked", () => {
+    const onCleanupWorktree = vi.fn();
+    const onParentClick = vi.fn();
+    render(
+      <TooltipProvider>
+        <div onClick={onParentClick} data-testid="parent-wrapper">
+          <WorktreeHeader
+            worktree={baseWorktree}
+            isActive={false}
+            isMainWorktree={false}
+            isPinned={false}
+            branchLabel="feature/test"
+            badges={{}}
+            menu={baseMenu}
+            onCleanupWorktree={onCleanupWorktree}
+          />
+        </div>
+      </TooltipProvider>
+    );
+
+    const button = screen.getByRole("button", { name: "Delete worktree" });
+    fireEvent.click(button);
+    expect(onCleanupWorktree).toHaveBeenCalledOnce();
+    expect(onParentClick).not.toHaveBeenCalled();
+  });
+});
+
 describe("WorktreeHeader icon button hit targets", () => {
   it("collapse button has p-1.5 for WCAG 24px minimum", () => {
     renderHeader({
@@ -823,5 +926,116 @@ describe("WorktreeHeader icon button hit targets", () => {
     renderHeader();
     const menuButton = screen.getByTestId("worktree-actions-menu");
     expect(menuButton.className).toContain("p-1.5");
+  });
+});
+
+describe("WorktreeHeader token-missing badge behavior", () => {
+  beforeEach(() => {
+    mockMissingToken = false;
+    vi.mocked(actionService.dispatch).mockClear();
+  });
+
+  it("issue badge shows token-missing aria-label when no token configured", () => {
+    mockMissingToken = true;
+    renderHeader({
+      worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
+      badges: { onOpenIssue: noop },
+      isActive: true,
+    });
+
+    const issueButton = screen.getByRole("button", {
+      name: /Configure GitHub token to see issue details/,
+    });
+    expect(issueButton).toBeDefined();
+    expect(issueButton.className).toContain("opacity-60");
+  });
+
+  it("issue badge dispatches settings action on click when no token configured", () => {
+    mockMissingToken = true;
+    const onOpenIssue = vi.fn();
+    renderHeader({
+      worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
+      badges: { onOpenIssue },
+      isActive: true,
+    });
+
+    const issueButton = screen.getByRole("button", {
+      name: /Configure GitHub token to see issue details/,
+    });
+    fireEvent.click(issueButton);
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "github", sectionId: "github-token" },
+      { source: "user" }
+    );
+    expect(onOpenIssue).not.toHaveBeenCalled();
+  });
+
+  it("PR badge shows token-missing aria-label when no token configured", () => {
+    mockMissingToken = true;
+    renderHeader({
+      worktree: { ...baseWorktree, prNumber: 101, prState: "open" },
+      badges: { onOpenPR: noop },
+      isActive: true,
+    });
+
+    const prButton = screen.getByRole("button", {
+      name: /Configure GitHub token to see PR details/,
+    });
+    expect(prButton).toBeDefined();
+    expect(prButton.className).toContain("opacity-60");
+  });
+
+  it("PR badge dispatches settings action on click when no token configured", () => {
+    mockMissingToken = true;
+    const onOpenPR = vi.fn();
+    renderHeader({
+      worktree: { ...baseWorktree, prNumber: 101, prState: "open" },
+      badges: { onOpenPR },
+      isActive: true,
+    });
+
+    const prButton = screen.getByRole("button", {
+      name: /Configure GitHub token to see PR details/,
+    });
+    fireEvent.click(prButton);
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "github", sectionId: "github-token" },
+      { source: "user" }
+    );
+    expect(onOpenPR).not.toHaveBeenCalled();
+  });
+
+  it("issue badge calls onOpenIssue normally when token is present", () => {
+    mockMissingToken = false;
+    const onOpenIssue = vi.fn();
+    renderHeader({
+      worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
+      badges: { onOpenIssue },
+      isActive: true,
+    });
+
+    const issueButton = screen.getByRole("button", {
+      name: /Open issue #42/,
+    });
+    fireEvent.click(issueButton);
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+    expect(onOpenIssue).toHaveBeenCalledOnce();
+  });
+
+  it("token-missing badge click does nothing on inactive card", () => {
+    mockMissingToken = true;
+    renderHeader({
+      worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
+      badges: { onOpenIssue: noop },
+      isActive: false,
+    });
+
+    const issueButton = screen.getByRole("button", {
+      name: /Configure GitHub token/,
+    });
+    fireEvent.click(issueButton);
+    expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 });

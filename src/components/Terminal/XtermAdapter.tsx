@@ -1,33 +1,33 @@
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } from "react";
+import React, {
+  use,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useEffect,
+  useState,
+} from "react";
 import "@xterm/xterm/css/xterm.css";
 import { cn } from "@/lib/utils";
-import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
-import type { TerminalType } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import {
-  useScrollbackStore,
-  usePerformanceModeStore,
-  useTerminalFontStore,
-  useProjectSettingsStore,
-  useScreenReaderStore,
-} from "@/store";
-import {
-  useTerminalColorSchemeStore,
-  selectWrapperBackground,
-  selectEffectiveTheme,
-} from "@/store/terminalColorSchemeStore";
-import { useAppThemeStore } from "@/store/appThemeStore";
+import { writeTerminalInputOrFleet } from "@/services/terminal/fleetInputRouter";
+import { useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
+import { terminalFontReady } from "@/config/terminalFont";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
 
 export interface XtermAdapterProps {
   terminalId: string;
-  terminalType?: TerminalType;
+  launchAgentId?: string;
+  /** Runtime-detected agent identity. Drives agent-specific input protocol
+   *  (soft-newline sequences, bracketed paste) when a live agent is running. */
+  detectedAgentId?: string;
   isInputLocked?: boolean;
   onReady?: () => void;
   onExit?: (exitCode: number) => void;
@@ -43,7 +43,8 @@ const MIN_CONTAINER_SIZE = 50;
 
 function XtermAdapterComponent({
   terminalId,
-  terminalType = "terminal",
+  launchAgentId,
+  detectedAgentId,
   isInputLocked,
   onReady,
   onExit,
@@ -54,6 +55,13 @@ function XtermAdapterComponent({
   restoreOnAttach = false,
   hasBottomBar = false,
 }: XtermAdapterProps) {
+  // Gate xterm's grid measurement (which happens at `terminal.open()` inside
+  // `terminalInstanceService.attach`) on the JetBrains Mono font being ready.
+  // xterm does not re-measure after open, so measuring with the fallback stack
+  // would leave a permanently mis-sized grid. The promise is a module-level
+  // singleton so `use()` sees a stable reference across re-renders.
+  use(terminalFontReady);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const prevDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
   const exitUnsubRef = useRef<(() => void) | null>(null);
@@ -75,29 +83,26 @@ function XtermAdapterComponent({
     return getRefreshTierRef.current ? getRefreshTierRef.current() : TerminalRefreshTier.FOCUSED;
   }, []);
 
-  const scrollbackLines = useScrollbackStore((state) => state.scrollbackLines);
-  const projectScrollback = useProjectSettingsStore(
-    (state) => state.settings?.terminalSettings?.scrollbackLines
-  );
-  const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
-  const fontSize = useTerminalFontStore((state) => state.fontSize);
-  const fontFamily = useTerminalFontStore((state) => state.fontFamily);
-  // Subscribe to app theme so wrapper background + effective theme re-compute on theme change
-  useAppThemeStore((s) => s.selectedSchemeId);
-  const wrapperBackground = useTerminalColorSchemeStore(selectWrapperBackground);
-  const effectiveTheme = useTerminalColorSchemeStore(selectEffectiveTheme);
-
-  const screenReaderEnabled = useScreenReaderStore((s) => s.resolvedScreenReaderEnabled());
+  const {
+    fontSize,
+    fontFamily,
+    performanceMode,
+    scrollbackLines,
+    projectScrollback,
+    effectiveTheme,
+    wrapperBackground,
+    screenReaderMode: screenReaderEnabled,
+  } = useTerminalAppearance();
 
   // Calculate effective scrollback: performance mode overrides, then project override, then app default
   const effectiveScrollback = useMemo(() => {
     if (performanceMode) {
       return PERFORMANCE_MODE_SCROLLBACK;
     }
-    const isAgent = terminalType !== "terminal";
+    const isAgent = launchAgentId !== undefined;
     const baseScrollback = !isAgent && projectScrollback ? projectScrollback : scrollbackLines;
-    return getScrollbackForType(terminalType, baseScrollback);
-  }, [performanceMode, scrollbackLines, projectScrollback, terminalType]);
+    return getScrollbackForType(isAgent, baseScrollback);
+  }, [performanceMode, scrollbackLines, projectScrollback, launchAgentId]);
 
   // Alt buffer state for TUI applications (OpenCode, vim, htop, etc.)
   // When in alt buffer, we remove padding and let the TUI fill the entire space
@@ -169,7 +174,11 @@ function XtermAdapterComponent({
     [terminalId]
   );
 
-  // Fallback fit for initial mount and visibility changes
+  // Fallback fit for initial mount and visibility changes. Uses a ref to
+  // break the RAF self-reference — the React Compiler rejects accessing
+  // `performFit` before its declaration, so the retry reads the latest
+  // performFit via performFitRef.current instead.
+  const performFitRef = useRef<(() => void) | null>(null);
   const performFit = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -181,7 +190,7 @@ function XtermAdapterComponent({
       }
       // Retry on next frame for drag/mount transitions where container isn't sized yet
       requestAnimationFrame(() => {
-        if (containerRef.current) performFit();
+        if (containerRef.current) performFitRef.current?.();
       });
       return;
     }
@@ -200,14 +209,19 @@ function XtermAdapterComponent({
       initialFitDoneRef.current = true;
     }
   }, [terminalId]);
+  useEffect(() => {
+    performFitRef.current = performFit;
+  }, [performFit]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
+    let disposed = false;
+
     const managed = terminalInstanceService.getOrCreate(
       terminalId,
-      terminalType,
+      launchAgentId,
       terminalOptions,
       stableRefreshTierProvider,
       onInput,
@@ -300,14 +314,15 @@ function XtermAdapterComponent({
                 )
                 .then((dispatchResult) => {
                   if (!dispatchResult.ok) {
-                    console.error(
-                      `[XtermKeybinding] Action "${result.match!.actionId}" failed:`,
-                      dispatchResult.error
+                    logError(
+                      `[XtermKeybinding] Action "${result.match!.actionId}" failed`,
+                      undefined,
+                      { error: dispatchResult.error }
                     );
                   }
                 })
                 .catch((error) => {
-                  console.error(`[XtermKeybinding] Unexpected error:`, error);
+                  logError("[XtermKeybinding] Unexpected error", error);
                 });
             }
             // Chord prefix consumed to prevent terminal leakage
@@ -342,8 +357,11 @@ function XtermAdapterComponent({
             // "Soft" newline for agent CLIs.
             // Codex CLI commonly expects LF (\n / Ctrl+J) for a newline without submit.
             // Other agent CLIs use the legacy ESC+CR sequence.
-            const softNewline = getSoftNewlineSequence(terminalType);
-            terminalClient.write(terminalId, softNewline);
+            // Soft-newline sequence follows the live process. If a Codex
+            // session is currently running, use its sequence even if this
+            // terminal was launched as Claude or as a plain shell.
+            const softNewline = getSoftNewlineSequence(detectedAgentId ?? launchAgentId);
+            writeTerminalInputOrFleet(terminalId, softNewline);
             terminalInstanceService.notifyUserInput(terminalId);
             onInput?.(softNewline);
           }
@@ -361,7 +379,7 @@ function XtermAdapterComponent({
           event.stopPropagation();
           if (event.type === "keydown" && !managed.isInputLocked) {
             const submit = "\r";
-            terminalClient.write(terminalId, submit);
+            writeTerminalInputOrFleet(terminalId, submit);
             terminalInstanceService.notifyUserInput(terminalId);
             onInput?.(submit);
           }
@@ -385,16 +403,23 @@ function XtermAdapterComponent({
       !(wasDetachedForSwitch && hasSavedTargetDims) &&
       !hasVisibleBufferContent()
     ) {
-      void terminalInstanceService.fetchAndRestore(terminalId).then((restored) => {
-        if (restored) {
-          requestAnimationFrame(() => performFit());
-        }
-      });
+      void terminalInstanceService
+        .fetchAndRestore(terminalId)
+        .then((restored) => {
+          if (disposed) return;
+          if (restored) {
+            requestAnimationFrame(() => performFit());
+          }
+        })
+        .catch((err) => {
+          if (!disposed) logError("Failed to restore terminal buffer", err);
+        });
     }
 
     onReady?.();
 
     return () => {
+      disposed = true;
       // Pass the captured generation so stale dock→grid unmount cleanup
       // doesn't background a terminal that has already been re-attached elsewhere.
       terminalInstanceService.setVisible(terminalId, false, attachGen);
@@ -414,7 +439,8 @@ function XtermAdapterComponent({
     };
   }, [
     terminalId,
-    terminalType,
+    launchAgentId,
+    detectedAgentId,
     isInputLocked,
     terminalOptions,
     onExit,

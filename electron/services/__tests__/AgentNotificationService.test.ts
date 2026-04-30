@@ -66,7 +66,7 @@ const DEFAULT_APP_STATE = {
   terminals: [
     {
       id: "term-1",
-      kind: "agent",
+      kind: "terminal",
       agentId: "agent-1",
       title: "Claude Agent",
       location: "dock",
@@ -391,7 +391,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "Claude Agent",
               location: "grid",
@@ -414,7 +414,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "My Custom Agent",
               location: "dock",
@@ -497,7 +497,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "Claude Agent",
               location: "grid",
@@ -555,7 +555,7 @@ describe("AgentNotificationService", () => {
         activeWorktreeId: "wt-1",
         terminals: Array.from({ length: count }, (_, i) => ({
           id: `term-${i + 1}`,
-          kind: "agent",
+          kind: "terminal",
           agentId: `agent-${i + 1}`,
           title: `Agent ${i + 1}`,
           location: "dock" as const,
@@ -706,7 +706,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "Claude Agent",
               location: "grid",
@@ -735,7 +735,39 @@ describe("AgentNotificationService", () => {
       // At 10s — first pulse fires
       vi.advanceTimersByTime(1);
       expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
-      expect(soundServiceMock.playPulse).toHaveBeenCalledWith("pulse.wav");
+      expect(soundServiceMock.playPulse).toHaveBeenCalledWith("pulse.wav", expect.any(Number));
+    });
+
+    it("passes a random detune within ±15 cents on each pulse", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+
+      // Each tick consumes Math.random() twice: first for detune, then for
+      // jitter. Providing a fixed [detune, jitter] pair per tick pins both
+      // the formula (detune = rand*30 - 15) and the call order contract.
+      const randomSpy = vi.spyOn(Math, "random");
+      try {
+        randomSpy
+          .mockReturnValueOnce(0) // tick 1 detune → -15
+          .mockReturnValueOnce(0.5) // tick 1 jitter
+          .mockReturnValueOnce(0.5) // tick 2 detune → 0
+          .mockReturnValueOnce(0.5) // tick 2 jitter
+          .mockReturnValueOnce(0.999) // tick 3 detune → 14.97
+          .mockReturnValueOnce(0.5); // tick 3 jitter
+
+        events.emit("agent:state-changed", makePayload("working", "idle"));
+        vi.advanceTimersByTime(10_000);
+        expect(soundServiceMock.playPulse).toHaveBeenLastCalledWith("pulse.wav", -15);
+
+        vi.advanceTimersByTime(10_000);
+        expect(soundServiceMock.playPulse).toHaveBeenLastCalledWith("pulse.wav", 0);
+
+        vi.advanceTimersByTime(10_000);
+        const lastCall = soundServiceMock.playPulse.mock.calls.at(-1);
+        expect(lastCall?.[0]).toBe("pulse.wav");
+        expect(lastCall?.[1]).toBeCloseTo(14.97, 2);
+      } finally {
+        randomSpy.mockRestore();
+      }
     });
 
     it("starts pulse for docked terminal with escalation enabled", () => {
@@ -871,7 +903,6 @@ describe("AgentNotificationService", () => {
       events.emit("agent:spawned", {
         terminalId: "term-1",
         agentId: "claude",
-        type: "claude",
         worktreeId: "wt-1",
         timestamp: Date.now(),
       });
@@ -887,7 +918,6 @@ describe("AgentNotificationService", () => {
       events.emit("agent:spawned", {
         terminalId: "term-1",
         agentId: "claude",
-        type: "claude",
         worktreeId: "wt-1",
         timestamp: Date.now(),
       });
@@ -902,7 +932,6 @@ describe("AgentNotificationService", () => {
       events.emit("agent:spawned", {
         terminalId: "term-1",
         agentId: "claude",
-        type: "claude",
         worktreeId: "wt-1",
         timestamp: Date.now(),
       });
@@ -937,7 +966,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "Claude",
               location: "dock",
@@ -967,7 +996,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "Claude",
               location: "dock",
@@ -997,7 +1026,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "Claude",
               location: "dock",
@@ -1039,6 +1068,323 @@ describe("AgentNotificationService", () => {
         "Agent completed",
         expect.any(String),
         expect.objectContaining({ worktreeId: undefined }),
+        "notification:watch-navigate",
+        true
+      );
+    });
+  });
+
+  // #5773 — Runtime-detected agents (plain terminals where an agent CLI was
+  // detected at runtime, no persisted launch-time agentId) never fire
+  // agent:spawned. Spawn grace must be seeded from agent:detected so startup
+  // "waiting" states don't immediately produce notification sounds.
+  describe("agent:detected spawn grace (#5773)", () => {
+    it("seeds spawn grace from agent:detected so waiting sound is suppressed within grace window", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true });
+      // Advance past boot grace so only spawn grace matters
+      vi.advanceTimersByTime(10_000);
+
+      events.emit("agent:detected", {
+        terminalId: "term-1",
+        agentType: "claude",
+        processName: "claude",
+        timestamp: Date.now(),
+      });
+
+      // Within the 5s spawn grace window, a waiting event should not trigger sound
+      events.emit("agent:state-changed", {
+        state: "waiting" as const,
+        previousState: "working" as const,
+        terminalId: "term-1",
+        agentId: "claude",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+      vi.advanceTimersByTime(200);
+
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+    });
+
+    it("does not seed grace when agent:detected lacks agentType (non-agent process)", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true });
+      vi.advanceTimersByTime(10_000);
+
+      // Non-agent process detection (npm/docker/etc.) — no agentType
+      events.emit("agent:detected", {
+        terminalId: "term-1",
+        processIconId: "npm",
+        processName: "npm",
+        timestamp: Date.now(),
+      });
+
+      events.emit("agent:state-changed", {
+        state: "waiting" as const,
+        previousState: "working" as const,
+        terminalId: "term-1",
+        agentId: "agent-1",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+      vi.advanceTimersByTime(200);
+
+      // No grace was seeded; waiting sound fires normally
+      expect(soundServiceMock.playFile).toHaveBeenCalled();
+    });
+
+    it("spawn grace expires after SPAWN_GRACE_PERIOD_MS — waiting sound resumes", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true });
+      vi.advanceTimersByTime(10_000);
+
+      events.emit("agent:detected", {
+        terminalId: "term-1",
+        agentType: "claude",
+        processName: "claude",
+        timestamp: Date.now(),
+      });
+
+      // Advance past the 5s spawn grace
+      vi.advanceTimersByTime(6_000);
+
+      events.emit("agent:state-changed", {
+        state: "waiting" as const,
+        previousState: "working" as const,
+        terminalId: "term-1",
+        agentId: "claude",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+      vi.advanceTimersByTime(200);
+
+      expect(soundServiceMock.playFile).toHaveBeenCalled();
+    });
+
+    it("completion key is per-terminal — two runtime-detected terminals with same agent type both notify", () => {
+      // Two plain terminals both detect "claude" as their agent. Before the
+      // fix, both completion debounces shared the key "claude" and the
+      // second would cancel the first. Now the key is terminalId-first.
+      const appState = {
+        activeWorktreeId: "wt-1",
+        terminals: [
+          {
+            id: "term-1",
+            kind: "terminal",
+            agentId: "claude",
+            title: "Terminal 1",
+            location: "dock",
+            worktreeId: "wt-1",
+          },
+          {
+            id: "term-2",
+            kind: "terminal",
+            agentId: "claude",
+            title: "Terminal 2",
+            location: "dock",
+            worktreeId: "wt-1",
+          },
+        ],
+      };
+      mockStore({ completedEnabled: true }, appState);
+      agentNotificationService.syncWatchedPanels(["term-1", "term-2"]);
+
+      events.emit("agent:state-changed", {
+        state: "completed" as const,
+        previousState: "working" as const,
+        terminalId: "term-1",
+        agentId: "claude",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+      events.emit("agent:state-changed", {
+        state: "completed" as const,
+        previousState: "working" as const,
+        terminalId: "term-2",
+        agentId: "claude",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+
+      // Advance past the 2s completion debounce + 0ms flush timer
+      vi.advanceTimersByTime(2001);
+
+      // Both completions should be captured (grouped into one "Agents completed"
+      // burst rather than silently dropping one).
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agents completed",
+        "2 agents finished their tasks",
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("grace key is per-terminal — one terminal's interaction doesn't clear a sibling's grace", () => {
+      const appState = {
+        activeWorktreeId: "wt-1",
+        terminals: [
+          {
+            id: "term-1",
+            kind: "terminal",
+            agentId: "claude",
+            title: "Terminal 1",
+            location: "dock",
+            worktreeId: "wt-1",
+          },
+          {
+            id: "term-2",
+            kind: "terminal",
+            agentId: "claude",
+            title: "Terminal 2",
+            location: "dock",
+            worktreeId: "wt-1",
+          },
+        ],
+      };
+      mockStore({ waitingEnabled: true, soundEnabled: true }, appState);
+      agentNotificationService.syncWatchedPanels(["term-1", "term-2"]);
+      vi.advanceTimersByTime(10_000);
+
+      // Both terminals detect "claude" — each seeds its own grace entry
+      events.emit("agent:detected", {
+        terminalId: "term-1",
+        agentType: "claude",
+        processName: "claude",
+        timestamp: Date.now(),
+      });
+      events.emit("agent:detected", {
+        terminalId: "term-2",
+        agentType: "claude",
+        processName: "claude",
+        timestamp: Date.now(),
+      });
+
+      // Term-1 transitions waiting→working (user interacted), clearing ITS grace
+      events.emit("agent:state-changed", {
+        state: "waiting" as const,
+        previousState: "idle" as const,
+        terminalId: "term-1",
+        agentId: "claude",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+      events.emit("agent:state-changed", {
+        state: "working" as const,
+        previousState: "waiting" as const,
+        terminalId: "term-1",
+        agentId: "claude",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+
+      // Term-2 hits waiting — its grace is still active, so no sound should fire
+      soundServiceMock.playFile.mockClear();
+      events.emit("agent:state-changed", {
+        state: "waiting" as const,
+        previousState: "working" as const,
+        terminalId: "term-2",
+        agentId: "claude",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+      vi.advanceTimersByTime(200);
+
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+    });
+
+    it("handles state-changed payload whose agentId is the detected type (no persisted agentId)", () => {
+      mockStore({ completedEnabled: true });
+
+      // Runtime-detected agent: agentId on the event carries detectedAgentType
+      events.emit("agent:state-changed", {
+        state: "completed" as const,
+        previousState: "working" as const,
+        terminalId: "term-1",
+        agentId: "claude",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent completed",
+        expect.stringContaining("claude"),
+        expect.objectContaining({ panelId: "term-1" }),
+        "notification:watch-navigate",
+        true
+      );
+    });
+  });
+
+  describe("quiet hours suppression", () => {
+    it("scheduled quiet hours suppresses completion watch notifications", () => {
+      const realDate = global.Date;
+      // Monday 23:00 falls inside 22:00 → 06:00 quiet window
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      mockStore({
+        completedEnabled: true,
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 6 * 60,
+        quietHoursWeekdays: [],
+      } as unknown as Partial<typeof DEFAULT_NOTIFICATION_SETTINGS>);
+
+      events.emit("agent:state-changed", makePayload("completed"));
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+      global.Date = realDate;
+    });
+
+    it("session mute suppresses completion watch notifications", () => {
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      mockStore({ completedEnabled: true });
+      agentNotificationService.setSessionMuteUntil(Date.now() + 60 * 60 * 1000);
+
+      events.emit("agent:state-changed", makePayload("completed"));
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    });
+
+    it("session mute expires — notifications resume after the timestamp", () => {
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      mockStore({ completedEnabled: true });
+      agentNotificationService.setSessionMuteUntil(Date.now() + 1000);
+
+      vi.advanceTimersByTime(2000);
+      agentNotificationService.setSessionMuteUntil(0); // simulate renderer clearing
+
+      events.emit("agent:state-changed", makePayload("completed"));
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalled();
+    });
+
+    it("scheduled quiet hours does not suppress waiting alerts", () => {
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      mockStore({
+        waitingEnabled: true,
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 6 * 60,
+        quietHoursWeekdays: [],
+      } as unknown as Partial<typeof DEFAULT_NOTIFICATION_SETTINGS>);
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(500);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.any(String),
+        expect.any(Object),
         "notification:watch-navigate",
         true
       );

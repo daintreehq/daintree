@@ -2,7 +2,6 @@ export const CHANNELS = {
   WORKTREE_GET_ALL: "worktree:get-all",
   WORKTREE_REFRESH: "worktree:refresh",
   WORKTREE_SET_ACTIVE: "worktree:set-active",
-  WORKTREE_UPDATE: "worktree:update",
   WORKTREE_REMOVE: "worktree:remove",
   WORKTREE_ACTIVATED: "worktree:activated",
   WORKTREE_CREATE: "worktree:create",
@@ -21,15 +20,15 @@ export const CHANNELS = {
   WORKTREE_DETACH_ISSUE: "worktree:detach-issue",
   WORKTREE_GET_ISSUE_ASSOCIATION: "worktree:get-issue-association",
   WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS: "worktree:get-all-issue-associations",
+  WORKTREE_HOST_DISCONNECTED: "worktree:host-disconnected",
+  WORKTREE_RESTART_SERVICE: "worktree:restart-service",
 
   TERMINAL_SPAWN: "terminal:spawn",
-  TERMINAL_SPAWN_RESULT: "terminal:spawn-result",
   TERMINAL_DATA: "terminal:data",
   TERMINAL_INPUT: "terminal:input",
   TERMINAL_SUBMIT: "terminal:submit",
   TERMINAL_RESIZE: "terminal:resize",
   TERMINAL_KILL: "terminal:kill",
-  TERMINAL_EXIT: "terminal:exit",
   TERMINAL_ERROR: "terminal:error",
   TERMINAL_TRASH: "terminal:trash",
   TERMINAL_RESTORE: "terminal:restore",
@@ -41,6 +40,7 @@ export const CHANNELS = {
   TERMINAL_GET_AVAILABLE: "terminal:get-available",
   TERMINAL_GET_BY_STATE: "terminal:get-by-state",
   TERMINAL_GET_ALL: "terminal:get-all",
+  TERMINAL_SEARCH_SEMANTIC_BUFFERS: "terminal:search-semantic-buffers",
   TERMINAL_RECONNECT: "terminal:reconnect",
   TERMINAL_REPLAY_HISTORY: "terminal:replay-history",
   TERMINAL_GET_SERIALIZED_STATE: "terminal:get-serialized-state",
@@ -52,10 +52,12 @@ export const CHANNELS = {
   TERMINAL_FORCE_RESUME: "terminal:force-resume",
   TERMINAL_GRACEFUL_KILL: "terminal:graceful-kill",
   TERMINAL_STATUS: "terminal:status",
-  TERMINAL_BACKEND_CRASHED: "terminal:backend-crashed",
-  TERMINAL_BACKEND_READY: "terminal:backend-ready",
   TERMINAL_SEND_KEY: "terminal:send-key",
+  TERMINAL_BATCH_DOUBLE_ESCAPE: "terminal:batch-double-escape",
+  TERMINAL_BROADCAST_WRITE: "terminal:broadcast-write",
+  TERMINAL_BROADCAST_WRITE_RESULT: "terminal:broadcast-write-result",
   TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
+  TERMINAL_UPDATE_OBSERVED_TITLE: "terminal:update-observed-title",
   TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
   TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
   TERMINAL_RESTART_SERVICE: "terminal:restart-service",
@@ -66,11 +68,6 @@ export const CHANNELS = {
 
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",
-
-  AGENT_STATE_CHANGED: "agent:state-changed",
-  AGENT_ALL_CLEAR: "agent:all-clear",
-  AGENT_DETECTED: "agent:detected",
-  AGENT_EXITED: "agent:exited",
 
   TERMINAL_ACTIVITY: "terminal:activity",
 
@@ -100,7 +97,7 @@ export const CHANNELS = {
   SYSTEM_GET_TMP_DIR: "system:get-tmp-dir",
   SYSTEM_GET_CLI_AVAILABILITY: "system:get-cli-availability",
   SYSTEM_REFRESH_CLI_AVAILABILITY: "system:refresh-cli-availability",
-  SYSTEM_WAKE: "system:wake",
+  SYSTEM_GET_AGENT_CLI_DETAILS: "system:get-agent-cli-details",
   SYSTEM_GET_AGENT_VERSIONS: "system:get-agent-versions",
   SYSTEM_REFRESH_AGENT_VERSIONS: "system:refresh-agent-versions",
   SYSTEM_GET_AGENT_UPDATE_SETTINGS: "system:get-agent-update-settings",
@@ -113,11 +110,14 @@ export const CHANNELS = {
   SYSTEM_HEALTH_CHECK_SPECS: "system:health-check-specs",
   SYSTEM_CHECK_TOOL: "system:check-tool",
   SYSTEM_DOWNLOAD_DIAGNOSTICS: "system:download-diagnostics",
+  SYSTEM_COLLECT_DIAGNOSTICS_FOR_REVIEW: "system:collect-diagnostics-for-review",
+  SYSTEM_SAVE_DIAGNOSTICS_BUNDLE: "system:save-diagnostics-bundle",
   SYSTEM_GET_APP_METRICS: "system:get-app-metrics",
   SYSTEM_GET_HARDWARE_INFO: "system:get-hardware-info",
   DIAGNOSTICS_GET_PROCESS_METRICS: "diagnostics:get-process-metrics",
   DIAGNOSTICS_GET_HEAP_STATS: "diagnostics:get-heap-stats",
   DIAGNOSTICS_GET_INFO: "diagnostics:get-info",
+  SYSTEM_REPORT_BLINK_MEMORY: "system:report-blink-memory",
 
   PR_DETECTED: "pr:detected",
   PR_CLEARED: "pr:cleared",
@@ -145,6 +145,11 @@ export const CHANNELS = {
   GITHUB_GET_ISSUE_BY_NUMBER: "github:get-issue-by-number",
   GITHUB_GET_PR_BY_NUMBER: "github:get-pr-by-number",
   GITHUB_LIST_REMOTES: "github:list-remotes",
+  GITHUB_RATE_LIMIT_CHANGED: "github:rate-limit-changed",
+  GITHUB_TOKEN_HEALTH_CHANGED: "github:token-health-changed",
+  GITHUB_GET_TOKEN_HEALTH: "github:get-token-health",
+  GITHUB_REPO_STATS_AND_PAGE_UPDATED: "github:repo-stats-and-page-updated",
+  GITHUB_GET_FIRST_PAGE_CACHE: "github:get-first-page-cache",
 
   APP_GET_STATE: "app:get-state",
   APP_SET_STATE: "app:set-state",
@@ -152,6 +157,8 @@ export const CHANNELS = {
   APP_HYDRATE: "app:hydrate",
   APP_QUIT: "app:quit",
   APP_FORCE_QUIT: "app:force-quit",
+  APP_RESET_AND_RELAUNCH: "app:reset-and-relaunch",
+  APP_FIRST_INTERACTIVE: "app:first-interactive",
   MENU_ACTION: "menu:action",
   MENU_SHOW_CONTEXT: "menu:show-context",
 
@@ -164,6 +171,10 @@ export const CHANNELS = {
   LOGS_SET_VERBOSE: "logs:set-verbose",
   LOGS_GET_VERBOSE: "logs:get-verbose",
   LOGS_WRITE: "logs:write",
+  LOGS_GET_LEVEL_OVERRIDES: "logs:get-level-overrides",
+  LOGS_SET_LEVEL_OVERRIDES: "logs:set-level-overrides",
+  LOGS_CLEAR_LEVEL_OVERRIDES: "logs:clear-level-overrides",
+  LOGS_GET_REGISTRY: "logs:get-registry",
 
   ERROR_NOTIFY: "error:notify",
   ERROR_RETRY: "error:retry",
@@ -175,12 +186,12 @@ export const CHANNELS = {
   EVENT_INSPECTOR_GET_EVENTS: "event-inspector:get-events",
   EVENT_INSPECTOR_GET_FILTERED: "event-inspector:get-filtered",
   EVENT_INSPECTOR_CLEAR: "event-inspector:clear",
-  EVENT_INSPECTOR_EVENT: "event-inspector:event",
   EVENT_INSPECTOR_EVENT_BATCH: "event-inspector:event-batch",
   EVENT_INSPECTOR_SUBSCRIBE: "event-inspector:subscribe",
   EVENT_INSPECTOR_UNSUBSCRIBE: "event-inspector:unsubscribe",
 
   EVENTS_EMIT: "events:emit",
+  EVENTS_PUSH: "events:push",
 
   PROJECT_GET_ALL: "project:get-all",
   PROJECT_GET_CURRENT: "project:get-current",
@@ -218,6 +229,7 @@ export const CHANNELS = {
   PROJECT_SYNC_INREPO_RECIPES: "project:sync-inrepo-recipes",
   PROJECT_UPDATE_INREPO_RECIPE: "project:update-inrepo-recipe",
   PROJECT_DELETE_INREPO_RECIPE: "project:delete-inrepo-recipe",
+  PROJECT_GET_INREPO_PRESETS: "project:get-inrepo-presets",
 
   GLOBAL_GET_RECIPES: "global:get-recipes",
   GLOBAL_ADD_RECIPE: "global:add-recipe",
@@ -240,6 +252,7 @@ export const CHANNELS = {
   PROJECT_WRITE_CLAUDE_MD: "project:write-claude-md",
   PROJECT_ENABLE_IN_REPO_SETTINGS: "project:enable-in-repo-settings",
   PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
+  PROJECT_DETECT_CONTEXT_FILES: "project:detect-context-files",
   PROJECT_CHECK_MISSING: "project:check-missing",
   PROJECT_LOCATE: "project:locate",
   AGENT_SETTINGS_GET: "agent-settings:get",
@@ -290,6 +303,9 @@ export const CHANNELS = {
   GIT_SNAPSHOT_LIST: "git:snapshot-list",
   GIT_SNAPSHOT_REVERT: "git:snapshot-revert",
   GIT_SNAPSHOT_DELETE: "git:snapshot-delete",
+  GIT_ABORT_REPOSITORY_OPERATION: "git:abort-repository-operation",
+  GIT_CONTINUE_REPOSITORY_OPERATION: "git:continue-repository-operation",
+  GIT_MARK_SAFE_DIRECTORY: "git:mark-safe-directory",
 
   PORTAL_CREATE: "portal:create",
   PORTAL_SHOW: "portal:show",
@@ -329,6 +345,7 @@ export const CHANNELS = {
   WEBVIEW_STOP_CONSOLE_CAPTURE: "webview:stop-console-capture",
   WEBVIEW_CLEAR_CONSOLE_CAPTURE: "webview:clear-console-capture",
   WEBVIEW_GET_CONSOLE_PROPERTIES: "webview:get-console-properties",
+  WEBVIEW_RELOAD_IGNORING_CACHE: "webview:reload-ignoring-cache",
   WEBVIEW_CONSOLE_MESSAGE: "webview:console-message",
   WEBVIEW_CONSOLE_CONTEXT_CLEARED: "webview:console-context-cleared",
 
@@ -347,8 +364,9 @@ export const CHANNELS = {
 
   WORKTREE_CONFIG_GET: "worktree-config:get",
   WORKTREE_CONFIG_SET_PATTERN: "worktree-config:set-pattern",
+  WORKTREE_CONFIG_SET_WSL_GIT: "worktree-config:set-wsl-git",
+  WORKTREE_CONFIG_DISMISS_WSL_BANNER: "worktree-config:dismiss-wsl-banner",
 
-  WINDOW_FULLSCREEN_CHANGE: "window:fullscreen-change",
   WINDOW_TOGGLE_FULLSCREEN: "window:toggle-fullscreen",
   WINDOW_RELOAD: "window:reload",
   WINDOW_FORCE_RELOAD: "window:force-reload",
@@ -358,12 +376,8 @@ export const CHANNELS = {
   WINDOW_ZOOM_RESET: "window:zoom-reset",
   WINDOW_CLOSE: "window:close",
   WINDOW_NEW: "window:new",
-  WINDOW_RECLAIM_MEMORY: "window:reclaim-memory",
-  WINDOW_DESTROY_HIDDEN_WEBVIEWS: "window:destroy-hidden-webviews",
-  WINDOW_DISK_SPACE_STATUS: "window:disk-space-status",
 
   SOUND_TRIGGER: "sound:trigger",
-  SOUND_CANCEL: "sound:cancel",
   SOUND_GET_DIR: "sound:get-dir",
 
   NOTIFICATION_UPDATE: "notification:update",
@@ -377,6 +391,7 @@ export const CHANNELS = {
   NOTIFICATION_WAITING_ACKNOWLEDGE: "notification:waiting-acknowledge",
   NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE: "notification:working-pulse-acknowledge",
   NOTIFICATION_SHOW_TOAST: "notification:show-toast",
+  NOTIFICATION_SESSION_MUTE_SET: "notification:session-mute-set",
 
   SOUND_PLAY_UI_EVENT: "sound:play-ui-event",
 
@@ -388,25 +403,19 @@ export const CHANNELS = {
   UPDATE_CHECK_FOR_UPDATES: "update:check-for-updates",
   UPDATE_GET_CHANNEL: "update:get-channel",
   UPDATE_SET_CHANNEL: "update:set-channel",
+  UPDATE_DISMISS_TOAST: "update:dismiss-toast",
 
   SLASH_COMMANDS_LIST: "slash-commands:list",
 
   GEMINI_GET_STATUS: "gemini:get-status",
   GEMINI_ENABLE_ALTERNATE_BUFFER: "gemini:enable-alternate-buffer",
 
-  NOTES_CREATE: "notes:create",
-  NOTES_READ: "notes:read",
-  NOTES_WRITE: "notes:write",
-  NOTES_LIST: "notes:list",
-  NOTES_DELETE: "notes:delete",
-  NOTES_SEARCH: "notes:search",
-  NOTES_UPDATED: "notes:updated",
-
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",
   DEV_PREVIEW_STOP: "dev-preview:stop",
   DEV_PREVIEW_STOP_BY_PANEL: "dev-preview:stop-by-panel",
   DEV_PREVIEW_GET_STATE: "dev-preview:get-state",
+  DEV_PREVIEW_GET_BY_WORKTREE: "dev-preview:get-by-worktree",
   DEV_PREVIEW_STATE_CHANGED: "dev-preview:state-changed",
 
   COMMANDS_LIST: "commands:list",
@@ -419,9 +428,7 @@ export const CHANNELS = {
   APP_AGENT_HAS_API_KEY: "app-agent:has-api-key",
   APP_AGENT_TEST_API_KEY: "app-agent:test-api-key",
   APP_AGENT_TEST_MODEL: "app-agent:test-model",
-  APP_AGENT_DISPATCH_ACTION_REQUEST: "app-agent:dispatch-action-request",
   APP_AGENT_DISPATCH_ACTION_RESPONSE: "app-agent:dispatch-action-response",
-  APP_AGENT_CONFIRMATION_REQUEST: "app-agent:confirmation-request",
   APP_AGENT_CONFIRMATION_RESPONSE: "app-agent:confirmation-response",
 
   // Agent Capabilities channels
@@ -442,6 +449,9 @@ export const CHANNELS = {
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
   CLIPBOARD_WRITE_IMAGE: "clipboard:write-image",
+  CLIPBOARD_WRITE_TEXT: "clipboard:write-text",
+  CLIPBOARD_WRITE_SELECTION: "clipboard:write-selection",
+  CLIPBOARD_READ_SELECTION: "clipboard:read-selection",
 
   APP_THEME_GET: "app-theme:get",
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
@@ -460,6 +470,12 @@ export const CHANNELS = {
   TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
   TELEMETRY_TRACK: "telemetry:track",
+  TELEMETRY_PREVIEW_GET_STATE: "telemetry:preview-get-state",
+  TELEMETRY_PREVIEW_TOGGLE: "telemetry:preview-toggle",
+  TELEMETRY_PREVIEW_SUBSCRIBE: "telemetry:preview-subscribe",
+  TELEMETRY_PREVIEW_UNSUBSCRIBE: "telemetry:preview-unsubscribe",
+  TELEMETRY_PREVIEW_EVENT_BATCH: "telemetry:preview-event-batch",
+  TELEMETRY_PREVIEW_STATE_CHANGED: "telemetry:preview-state-changed",
 
   // Privacy & Data channels
   PRIVACY_GET_SETTINGS: "privacy:get-settings",
@@ -505,18 +521,19 @@ export const CHANNELS = {
 
   // Onboarding channels
   ONBOARDING_GET: "onboarding:get",
-  // TODO(0.9.0): Remove after deleting the temporary Canopy localStorage
-  // onboarding migration path.
-  ONBOARDING_MIGRATE: "onboarding:migrate",
   ONBOARDING_SET_STEP: "onboarding:set-step",
   ONBOARDING_COMPLETE: "onboarding:complete",
   ONBOARDING_MARK_TOAST_SEEN: "onboarding:mark-toast-seen",
   ONBOARDING_MARK_NEWSLETTER_SEEN: "onboarding:mark-newsletter-seen",
   ONBOARDING_MARK_WAITING_NUDGE_SEEN: "onboarding:mark-waiting-nudge-seen",
+  ONBOARDING_MARK_AGENTS_SEEN: "onboarding:mark-agents-seen",
+  ONBOARDING_DISMISS_WELCOME_CARD: "onboarding:dismiss-welcome-card",
+  ONBOARDING_DISMISS_SETUP_BANNER: "onboarding:dismiss-setup-banner",
   ONBOARDING_CHECKLIST_GET: "onboarding:checklist-get",
   ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
   ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN: "onboarding:checklist-mark-celebration-shown",
+  ONBOARDING_CHECKLIST_PUSH: "onboarding:checklist-push",
 
   // Milestone channels
   MILESTONES_GET: "milestones:get",
@@ -539,13 +556,14 @@ export const CHANNELS = {
   // Renderer Recovery channels (in-session crash recovery)
   RECOVERY_RELOAD_APP: "recovery:reload-app",
   RECOVERY_RESET_AND_RELOAD: "recovery:reset-and-reload",
+  RECOVERY_EXPORT_DIAGNOSTICS: "recovery:export-diagnostics",
+  RECOVERY_OPEN_LOGS: "recovery:open-logs",
 
   // Demo mode channels (dev-only)
   DEMO_MOVE_TO: "demo:move-to",
   DEMO_MOVE_TO_SELECTOR: "demo:move-to-selector",
   DEMO_CLICK: "demo:click",
   DEMO_TYPE: "demo:type",
-  DEMO_SET_ZOOM: "demo:set-zoom",
   DEMO_SCREENSHOT: "demo:screenshot",
   DEMO_WAIT_FOR_SELECTOR: "demo:wait-for-selector",
   DEMO_PAUSE: "demo:pause",
@@ -554,7 +572,6 @@ export const CHANNELS = {
   DEMO_EXEC_MOVE_TO_SELECTOR: "demo:exec-move-to-selector",
   DEMO_EXEC_CLICK: "demo:exec-click",
   DEMO_EXEC_TYPE: "demo:exec-type",
-  DEMO_EXEC_SET_ZOOM: "demo:exec-set-zoom",
   DEMO_EXEC_PAUSE: "demo:exec-pause",
   DEMO_EXEC_RESUME: "demo:exec-resume",
   DEMO_EXEC_WAIT_FOR_SELECTOR: "demo:exec-wait-for-selector",
@@ -580,23 +597,35 @@ export const CHANNELS = {
   DEMO_EXEC_DISMISS_ANNOTATION: "demo:exec-dismiss-annotation",
   DEMO_WAIT_FOR_IDLE: "demo:wait-for-idle",
   DEMO_EXEC_WAIT_FOR_IDLE: "demo:exec-wait-for-idle",
-  DEMO_ENCODE: "demo:encode",
-  DEMO_ENCODE_PROGRESS: "demo:encode:progress",
+  DEMO_EXEC_START_CAPTURE: "demo:exec-start-capture",
+  DEMO_EXEC_STOP_CAPTURE: "demo:exec-stop-capture",
+  DEMO_CAPTURE_CHUNK: "demo:capture-chunk",
+  DEMO_CAPTURE_STOP: "demo:capture-stop",
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
   PLUGIN_INVOKE: "plugin:invoke",
   PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
   PLUGIN_MENU_ITEMS: "plugin:menu-items",
-
-  RESOURCE_PROFILE_CHANGED: "resource:profile-changed",
+  PLUGIN_VALIDATE_ACTION_IDS: "plugin:validate-action-ids",
+  PLUGIN_ACTIONS_GET: "plugin:actions-get",
+  PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
+  PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
 
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",
   APP_CONFIG_RELOADED: "app:config-reloaded",
 
+  // Agent preset channels
+  AGENT_PRESETS_UPDATED: "agent-presets:updated",
+  AGENT_CAPABILITIES_GET_CCR_PRESETS: "agent-capabilities:get-ccr-presets",
+
   // Performance capture channels
   PERF_FLUSH_RENDERER_MARKS: "perf:flush-renderer-marks",
+
+  // Per-service connectivity channels
+  CONNECTIVITY_GET_STATE: "connectivity:get-state",
+  CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

@@ -73,7 +73,7 @@ describe("PlanFileViewer", () => {
   });
 
   it("renders file content in CodeViewer after successful read", async () => {
-    mockRead.mockResolvedValue({ ok: true, content: "# My Plan\n- step 1" });
+    mockRead.mockResolvedValue({ content: "# My Plan\n- step 1" });
 
     render(
       <PlanFileViewer isOpen={true} filePath="TODO.md" rootPath="/project" onClose={() => {}} />
@@ -88,7 +88,9 @@ describe("PlanFileViewer", () => {
   });
 
   it("shows generic error state when read fails with non-NOT_FOUND code", async () => {
-    mockRead.mockResolvedValue({ ok: false, code: "FILE_TOO_LARGE" });
+    mockRead.mockRejectedValue(
+      Object.assign(new Error("File too large"), { name: "AppError", code: "FILE_TOO_LARGE" })
+    );
 
     render(
       <PlanFileViewer isOpen={true} filePath="TODO.md" rootPath="/project" onClose={() => {}} />
@@ -100,7 +102,9 @@ describe("PlanFileViewer", () => {
   });
 
   it("shows empty state (not error) when NOT_FOUND is returned — plan file was deleted", async () => {
-    mockRead.mockResolvedValue({ ok: false, code: "NOT_FOUND" });
+    mockRead.mockRejectedValue(
+      Object.assign(new Error("File not found"), { name: "AppError", code: "NOT_FOUND" })
+    );
 
     render(
       <PlanFileViewer isOpen={true} filePath="TODO.md" rootPath="/project" onClose={() => {}} />
@@ -113,7 +117,7 @@ describe("PlanFileViewer", () => {
   });
 
   it("shows the filename in the dialog title", async () => {
-    mockRead.mockResolvedValue({ ok: true, content: "content" });
+    mockRead.mockResolvedValue({ content: "content" });
 
     render(
       <PlanFileViewer isOpen={true} filePath="PLAN.md" rootPath="/project" onClose={() => {}} />

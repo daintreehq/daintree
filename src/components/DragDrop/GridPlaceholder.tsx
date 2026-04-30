@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { useDndPlaceholder, GRID_PLACEHOLDER_ID } from "./DndProvider";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PlaceholderContent } from "./PlaceholderContent";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 interface GridPlaceholderProps {
   className?: string;
@@ -17,13 +18,17 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
     return <div className={cn("h-full rounded-[var(--radius-lg)] bg-daintree-bg/50", className)} />;
   }
 
-  const { title, type, kind, agentId, detectedProcessId } = activeTerminal;
+  const { title, kind } = activeTerminal;
+  // Drag visuals mirror chrome: live detection only. A demoted shell dragged
+  // across the grid shows plain-terminal styling even though it was launched
+  // as an agent — matches what the tab looks like right now.
+  const chrome = deriveTerminalChrome(activeTerminal);
 
   return (
     <div
       className={cn(
         "h-full w-full rounded flex flex-col overflow-hidden",
-        "border border-daintree-accent/40 bg-daintree-accent/5",
+        "border border-border-strong bg-overlay-subtle",
         "animate-in fade-in duration-200",
         className
       )}
@@ -33,24 +38,18 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
       <div
         className={cn(
           "flex items-center gap-2 px-3 h-7 shrink-0 font-mono text-xs",
-          "bg-daintree-accent/10 border-b border-daintree-accent/10"
+          "bg-overlay-medium border-b border-border-strong/30"
         )}
       >
-        <span className="shrink-0 flex items-center justify-center text-daintree-accent/80">
-          <TerminalIcon
-            type={type}
-            kind={kind}
-            agentId={agentId}
-            detectedProcessId={detectedProcessId}
-            className="w-3.5 h-3.5"
-          />
+        <span className="shrink-0 flex items-center justify-center text-daintree-text/50">
+          <TerminalIcon kind={kind} chrome={chrome} className="w-3.5 h-3.5" />
         </span>
-        <span className="font-medium text-daintree-accent/80 truncate opacity-80">{title}</span>
+        <span className="font-medium text-daintree-text/60 truncate">{title}</span>
       </div>
 
       {/* Panel-specific placeholder body */}
       <div className="flex-1 w-full p-3">
-        <PlaceholderContent kind={kind ?? "terminal"} agentId={agentId} />
+        <PlaceholderContent kind={kind ?? "terminal"} agentId={chrome.agentId ?? undefined} />
       </div>
     </div>
   );

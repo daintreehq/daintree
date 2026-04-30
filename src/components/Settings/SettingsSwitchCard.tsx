@@ -1,29 +1,16 @@
 import type { ComponentType } from "react";
 import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SettingsSwitch } from "./SettingsSwitch";
 
 const COLOR_SCHEMES = {
-  accent: {
-    enabled: "border-daintree-border text-daintree-text",
-    icon: "text-daintree-accent",
-    toggle: "bg-daintree-accent",
-    focus: "focus-visible:outline-daintree-accent",
-  },
-  amber: {
-    enabled: "border-daintree-border text-daintree-text",
-    icon: "text-status-warning",
-    toggle: "bg-status-warning",
-    focus: "focus-visible:outline-status-warning",
-  },
-  danger: {
-    enabled: "border-daintree-border text-daintree-text",
-    icon: "text-status-error",
-    toggle: "bg-status-error",
-    focus: "focus-visible:outline-status-error",
-  },
-} as const;
+  accent: { icon: "text-daintree-accent" },
+  amber: { icon: "text-status-warning" },
+  danger: { icon: "text-status-error" },
+};
 
 interface SettingsSwitchCardProps {
+  id?: string;
   icon?: ComponentType<{ className?: string }>;
   title: string;
   subtitle: string;
@@ -31,15 +18,17 @@ interface SettingsSwitchCardProps {
   onChange: () => void;
   ariaLabel: string;
   disabled?: boolean;
-  colorScheme?: keyof typeof COLOR_SCHEMES;
+  colorScheme?: "accent" | "amber" | "danger";
   variant?: "card" | "compact";
   isModified?: boolean;
   onReset?: () => void;
   resetAriaLabel?: string;
   lifecycleBadge?: string;
+  scope?: "default" | "global" | "project";
 }
 
 export function SettingsSwitchCard({
+  id,
   icon: Icon,
   title,
   subtitle,
@@ -53,34 +42,52 @@ export function SettingsSwitchCard({
   onReset,
   resetAriaLabel,
   lifecycleBadge,
+  scope,
 }: SettingsSwitchCardProps) {
-  const scheme = COLOR_SCHEMES[colorScheme];
+  const scheme = COLOR_SCHEMES[colorScheme] ?? COLOR_SCHEMES.accent;
   const isCard = variant === "card";
   const showReset = isModified && onReset && !disabled;
 
-  const button = (
-    <button
-      type="button"
-      onClick={onChange}
-      disabled={disabled}
-      role="switch"
-      aria-checked={isEnabled}
-      aria-label={ariaLabel}
+  const handleCardClick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('[role="switch"]') || target.closest('button[type="button"]')) {
+      return;
+    }
+    onChange();
+  };
+
+  const scopeBadge = scope ? (
+    <span
+      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+        scope === "project"
+          ? "bg-status-info/10 text-status-info"
+          : scope === "global"
+            ? "bg-status-info/10 text-status-info"
+            : "bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20"
+      }`}
+    >
+      {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
+    </span>
+  ) : null;
+
+  const card = (
+    <div
       className={cn(
-        "relative w-full flex items-center justify-between transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
+        "relative w-full flex items-center justify-between transition",
         isCard ? "p-4 rounded-[var(--radius-lg)] border hover:bg-tint/5" : "py-2",
-        isEnabled ? scheme.enabled : "border-daintree-border text-daintree-text/70",
-        scheme.focus,
-        disabled && "opacity-50 cursor-not-allowed"
+        "border-daintree-border text-daintree-text/70",
+        isEnabled && "border-daintree-border text-daintree-text",
+        disabled && "opacity-50"
       )}
+      onClick={disabled ? undefined : handleCardClick}
     >
       {isModified && isCard && (
         <div
-          className="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-daintree-accent"
+          className="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-state-modified"
           aria-hidden="true"
         />
       )}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-1">
         {Icon && (
           <Icon
             className={cn("w-5 h-5", isEnabled ? scheme.icon : "text-daintree-text/50")}
@@ -90,8 +97,9 @@ export function SettingsSwitchCard({
         <div className="text-left">
           <div className="text-sm font-medium flex items-center gap-1.5 flex-wrap">
             {title}
+            {scopeBadge}
             {lifecycleBadge && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-daintree-accent/10 border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
                 {lifecycleBadge}
               </span>
             )}
@@ -99,43 +107,44 @@ export function SettingsSwitchCard({
           <div className="text-xs opacity-70">{subtitle}</div>
         </div>
       </div>
-      <div
-        className={cn(
-          "w-11 h-6 shrink-0 rounded-full relative transition-colors",
-          isEnabled ? scheme.toggle : "bg-daintree-border"
-        )}
-        aria-hidden="true"
-      >
-        <div
-          className={cn(
-            "absolute top-1 w-4 h-4 rounded-full transition-transform",
-            isEnabled ? "translate-x-6 bg-text-inverse" : "translate-x-1 bg-daintree-text"
-          )}
-        />
-      </div>
-    </button>
+      <SettingsSwitch
+        checked={isEnabled}
+        onCheckedChange={onChange}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        colorScheme={colorScheme}
+      />
+    </div>
   );
 
-  if (!showReset) return button;
+  if (!showReset) {
+    return (
+      <div id={id} className="grid grid-cols-subgrid col-span-full gap-2">
+        {card}
+      </div>
+    );
+  }
 
   return (
-    <div className="group relative">
-      {button}
-      <button
-        type="button"
-        aria-label={resetAriaLabel ?? `Reset ${title} to default`}
-        className={cn(
-          "absolute top-1/2 -translate-y-1/2 z-10 p-1 rounded-sm",
-          "text-daintree-text/40 hover:text-daintree-accent",
-          "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
-          "transition-colors",
-          isCard ? "right-[4.5rem]" : "right-[3.25rem]"
-        )}
-        onClick={onReset}
-      >
-        <RotateCcw className="w-3 h-3" />
-      </button>
+    <div id={id} className="grid grid-cols-subgrid col-span-full gap-2">
+      <div className="group relative">
+        {card}
+        <button
+          type="button"
+          aria-label={resetAriaLabel ?? `Reset ${title} to default`}
+          className={cn(
+            "absolute top-1/2 -translate-y-1/2 z-10 p-1 rounded-sm",
+            "text-daintree-text/40 hover:text-daintree-text",
+            "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+            "transition-colors",
+            isCard ? "right-[4.5rem]" : "right-[3.25rem]"
+          )}
+          onClick={onReset}
+        >
+          <RotateCcw className="w-3 h-3" />
+        </button>
+      </div>
     </div>
   );
 }

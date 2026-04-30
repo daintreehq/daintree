@@ -1,12 +1,20 @@
 import type { ComponentType, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { AGENT_DESCRIPTIONS, getAgentConfig, type AgentIconProps } from "@/config/agents";
-import { isAgentInstalled } from "@shared/utils/agentAvailability";
-import type { AgentAvailabilityState } from "@shared/types";
+import { BrandMark } from "@/components/icons";
+import { resolveBrandChip } from "@/lib/brandIcon";
+import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
+import {
+  isAgentInstalled,
+  isAgentBlocked,
+  isAgentUnauthenticated,
+} from "@shared/utils/agentAvailability";
+import type { AgentAvailabilityState, AgentCliDetail } from "@shared/types";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, ExternalLink } from "lucide-react";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
 import { InstallBlock } from "@/components/Setup/InstallBlock";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 interface AgentIdentity {
   name: string;
@@ -71,6 +79,8 @@ function OnboardingCard({
 }: AgentCardOnboardingProps & { identity: AgentIdentity }) {
   const { name, color, Icon, description } = identity;
   const installed = isAgentInstalled(availability[agentId]);
+  const agentConfig = getAgentConfig(agentId);
+  const presetCount = agentConfig?.presets?.length ?? 0;
 
   return (
     <label
@@ -93,11 +103,18 @@ function OnboardingCard({
         description={description}
         compact={compact}
       />
-      {installed ? (
-        <span className="text-[11px] text-status-success font-medium shrink-0">Installed</span>
-      ) : (
-        <span className="text-[11px] text-daintree-text/30 shrink-0">Not installed</span>
-      )}
+      <div className="flex items-center gap-2 shrink-0">
+        {presetCount > 1 && (
+          <span className="text-[10px] text-status-info font-medium bg-status-info/10 px-1.5 py-0.5 rounded">
+            {presetCount} presets
+          </span>
+        )}
+        {installed ? (
+          <span className="text-[11px] text-status-success font-medium">Installed</span>
+        ) : (
+          <span className="text-[11px] text-daintree-text/30">Not installed</span>
+        )}
+      </div>
     </label>
   );
 }
@@ -113,7 +130,9 @@ function ManagementCard({
     <div className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4">
       <div className="flex items-center justify-between pb-3 border-b border-daintree-border">
         <div className="flex items-center gap-3">
-          <Icon size={24} brandColor={color} />
+          <BrandMark brandColor={color} size={24}>
+            <Icon size={24} brandColor={color} />
+          </BrandMark>
           <div>
             <h4 className="text-sm font-medium text-daintree-text">{name} Settings</h4>
             <p className="text-xs text-daintree-text/50 select-text">
@@ -141,6 +160,8 @@ export function AgentIdentityBlock({
   description: string;
   compact?: boolean;
 }) {
+  const activeScheme = useActiveAppScheme();
+  const tileBackground = resolveBrandChip(color, activeScheme)?.background ?? `${color}15`;
   return (
     <>
       <div
@@ -148,7 +169,7 @@ export function AgentIdentityBlock({
           "rounded-[var(--radius-sm)] flex items-center justify-center shrink-0",
           compact ? "w-7 h-7" : "w-8 h-8"
         )}
-        style={{ backgroundColor: `${color}15` }}
+        style={{ backgroundColor: tileBackground }}
       >
         <Icon size={compact ? 16 : 18} brandColor={color} />
       </div>
@@ -166,6 +187,7 @@ export function AgentInstallSection({
   agentId,
   agentName,
   availability,
+  detail,
   isCliLoading,
   isRefreshingCli,
   cliError,
@@ -174,6 +196,8 @@ export function AgentInstallSection({
   agentId: string;
   agentName: string;
   availability: AgentAvailabilityState | undefined;
+  /** Optional diagnostic detail from `cliAvailabilityClient.getDetails()`. */
+  detail?: AgentCliDetail;
   isCliLoading: boolean;
   isRefreshingCli: boolean;
   cliError: string | null;
@@ -183,7 +207,20 @@ export function AgentInstallSection({
   const installBlocks = agentConfig ? getInstallBlocksForCurrentOS(agentConfig) : null;
   const hasInstallConfig = agentConfig?.install;
 
-  if (availability === "ready") return null;
+  // `authConfirmed === false` means the binary is on PATH and launchable,
+  // but the passive auth probe didn't find a credential. We still show the
+  // section (as "Authentication") so users see the sign-in cue and install
+  // docs. `undefined` means no auth probe applies — hide the section when
+  // availability is `ready`.
+  const authMissing = isAgentUnauthenticated(availability);
+
+  // "ready" + confirmed-or-no-probe hides the whole install section.
+  // "unauthenticated" keeps it visible for the auth nudge.
+  // "blocked" keeps it visible so the user gets actionable info (allowlist
+  // guidance, resolved path) — the binary exists, reinstall instructions
+  // would be misleading, but we do want to show why it isn't runnable and
+  // where it was found. "installed" covers the WSL cap.
+  if (availability === "ready" && !authMissing) return null;
 
   if (isCliLoading) {
     return (
@@ -193,29 +230,51 @@ export function AgentInstallSection({
     );
   }
 
+  const blocked = isAgentBlocked(availability);
+  // WSL-capped `installed` is a distinct case from `ready + authConfirmed:
+  // false` — the binary exists in WSL but direct launch from the PTY host
+  // isn't wired yet, so sign-in copy would mislead. Keep them separate.
+  const showWslNotice = availability === "installed";
+  const showAuthNudge = authMissing;
+
+  const headerLabel = blocked
+    ? "Blocked"
+    : showWslNotice
+      ? "Not launchable"
+      : showAuthNudge
+        ? "Authentication"
+        : "Installation";
+
+  const headerDescription = blocked
+    ? `${agentName} CLI was found but couldn't run — check your security software or file permissions`
+    : showWslNotice
+      ? `${agentName} CLI was detected in WSL, but Daintree can't launch WSL binaries directly yet — install a native Windows binary if available`
+      : showAuthNudge
+        ? `${agentName} CLI found but not signed in — launching will prompt for login`
+        : `${agentName} CLI not found`;
+
   return (
-    <div id="agents-installation" className="space-y-3 pt-4 border-t border-daintree-border">
-      <div className="flex items-center justify-between">
-        <div>
-          <h5 className="text-sm font-medium text-daintree-text">
-            {availability === "installed" ? "Authentication" : "Installation"}
-          </h5>
-          <p className="text-xs text-daintree-text/50 select-text">
-            {availability === "installed"
-              ? `${agentName} CLI found but not authenticated`
-              : `${agentName} CLI not found`}
-          </p>
+    <div
+      id="agents-installation"
+      className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4"
+    >
+      <div className="pb-3 border-b border-daintree-border">
+        <div className="flex items-center justify-between">
+          <div>
+            <h5 className="text-sm font-medium text-daintree-text">{headerLabel}</h5>
+            <p className="text-xs text-daintree-text/50 select-text">{headerDescription}</p>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={onRefresh}
+            disabled={isRefreshingCli}
+            className="text-daintree-text/50 hover:text-daintree-text"
+          >
+            <RefreshCw size={14} className={cn("mr-1.5", isRefreshingCli && "animate-spin")} />
+            Re-check
+          </Button>
         </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={onRefresh}
-          disabled={isRefreshingCli}
-          className="text-daintree-text/50 hover:text-daintree-text"
-        >
-          <RefreshCw size={14} className={cn("mr-1.5", isRefreshingCli && "animate-spin")} />
-          Re-check
-        </Button>
       </div>
 
       {cliError && (
@@ -223,6 +282,30 @@ export function AgentInstallSection({
           <p className="text-xs text-status-error">
             Re-check failed. Try again or restart the app.
           </p>
+        </div>
+      )}
+
+      {detail && (detail.resolvedPath || detail.message) && (
+        <div
+          className={cn(
+            "px-3 py-2 rounded-[var(--radius-md)] border",
+            blocked
+              ? "bg-status-warning/10 border-status-warning/20"
+              : "bg-daintree-bg/50 border-daintree-border/50"
+          )}
+        >
+          {detail.resolvedPath && (
+            <div className="text-xs font-mono break-all text-daintree-text/70 select-text">
+              {detail.via === "wsl"
+                ? `Available via WSL (${detail.wslDistro ?? "distro"})`
+                : detail.via === "npm-global"
+                  ? `npm global: ${detail.resolvedPath}`
+                  : `Resolved path: ${detail.resolvedPath}`}
+            </div>
+          )}
+          {detail.message && (
+            <div className="text-xs text-status-warning mt-1 select-text">{detail.message}</div>
+          )}
         </div>
       )}
 
@@ -263,9 +346,12 @@ export function AgentInstallSection({
             variant="ghost"
             onClick={() => {
               const url = agentConfig?.install?.docsUrl;
-              if (url) void window.electron.system.openExternal(url);
+              if (url) {
+                safeFireAndForget(window.electron.system.openExternal(url), {
+                  context: "Opening agent install docs",
+                });
+              }
             }}
-            className="text-daintree-accent hover:text-daintree-accent/80"
           >
             <ExternalLink size={14} />
             Open Install Docs
@@ -285,7 +371,11 @@ export function AgentInstallSection({
           variant="ghost"
           onClick={() => {
             const url = agentConfig?.install?.docsUrl;
-            if (url) void window.electron.system.openExternal(url);
+            if (url) {
+              safeFireAndForget(window.electron.system.openExternal(url), {
+                context: "Opening agent install docs",
+              });
+            }
           }}
           className="w-full text-daintree-text/50 hover:text-daintree-text"
         >

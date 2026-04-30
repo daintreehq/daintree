@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agentIds";
 
-export const AgentIdSchema = z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser"]);
+export const AgentIdSchema = z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]);
 
 export const LaunchLocationSchema = z.enum(["grid", "dock"]);
 
@@ -75,6 +75,19 @@ export const CopyTreeOptionsSchema = z.object({
   charLimit: z.number().int().positive().optional(),
 });
 
+export const AgentPresetSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  args: z.array(z.string()).optional(),
+  dangerousEnabled: z.boolean().optional(),
+  customFlags: z.string().optional(),
+  inlineMode: z.boolean().optional(),
+  color: z.string().optional(),
+  fallbacks: z.array(z.string()).optional(),
+});
+
 export const AgentSettingsEntrySchema = z
   .object({
     selected: z.boolean().optional(),
@@ -82,5 +95,7 @@ export const AgentSettingsEntrySchema = z
     customFlags: z.string().optional(),
     dangerousArgs: z.string().optional(),
     dangerousEnabled: z.boolean().optional(),
+    presetId: z.string().optional(),
+    customPresets: z.array(AgentPresetSchema).optional(),
   })
   .catchall(z.unknown());

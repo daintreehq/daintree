@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, type CSSProperties } from "react";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 type ButtonVariant = "primary" | "accent" | "dismiss" | "danger" | "dangerFilled";
 
@@ -26,6 +27,7 @@ export interface InlineStatusBannerProps {
   actions: BannerAction[];
   role?: "alert" | "status";
   ariaLive?: "polite" | "assertive";
+  onClose?: () => void;
 }
 
 const SEVERITY_VAR: Record<"error" | "warning", string> = {
@@ -38,7 +40,7 @@ function getButtonClasses(variant: ButtonVariant): string {
     case "primary":
       return "bg-daintree-border text-daintree-text hover:bg-daintree-border/80";
     case "accent":
-      return "bg-daintree-accent/10 text-daintree-accent hover:bg-daintree-accent/20";
+      return "bg-status-info/10 text-status-info hover:bg-status-info/20";
     case "dismiss":
       return "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50";
     case "danger":
@@ -76,6 +78,7 @@ function InlineStatusBannerComponent({
   actions,
   role = "alert",
   ariaLive = "polite",
+  onClose,
 }: InlineStatusBannerProps) {
   const prefersReducedMotion =
     typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -156,6 +159,19 @@ function InlineStatusBannerComponent({
       </div>
 
       <div className={cn("flex items-center shrink-0", hasDescription ? "gap-2 ml-6" : "gap-1")}>
+        {onClose && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            aria-label="Dismiss"
+            className="p-1 rounded text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        )}
         {actions.map((action) => {
           const variant = action.variant ?? "primary";
           const variantClasses = getButtonClasses(variant);
@@ -188,12 +204,10 @@ function InlineStatusBannerComponent({
           );
 
           return action.title ? (
-            <TooltipProvider key={action.id}>
-              <Tooltip>
-                <TooltipTrigger asChild>{buttonEl}</TooltipTrigger>
-                <TooltipContent side="bottom">{action.title}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip key={action.id}>
+              <TooltipTrigger asChild>{buttonEl}</TooltipTrigger>
+              <TooltipContent side="bottom">{action.title}</TooltipContent>
+            </Tooltip>
           ) : (
             <React.Fragment key={action.id}>{buttonEl}</React.Fragment>
           );

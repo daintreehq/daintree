@@ -6,12 +6,19 @@ import { EventTimeline } from "../EventInspector/EventTimeline";
 import { EventDetail } from "../EventInspector/EventDetail";
 import { EventFilters } from "../EventInspector/EventFilters";
 import { eventInspectorClient } from "@/clients";
+import { logError } from "@/utils/logger";
 
 export interface EventsContentProps {
   className?: string;
 }
 
 export function EventsContent({ className }: EventsContentProps) {
+  // React Compiler can't see that getFilteredEvents() reads via Zustand's
+  // get(), so it can over-cache the useMemo below — which then keeps
+  // useDeferredValue stuck at the initial empty array even after `events`
+  // grows. Opt out of compiler memoization for this component.
+  "use no memo";
+
   const {
     events,
     filters,
@@ -47,7 +54,7 @@ export function EventsContent({ className }: EventsContentProps) {
         setEvents(existingEvents);
       })
       .catch((error) => {
-        console.error("Failed to load events:", error);
+        logError("Failed to load events", error);
       });
 
     const unsubscribe = eventInspectorClient.onEventBatch((events) => {
@@ -60,8 +67,11 @@ export function EventsContent({ className }: EventsContentProps) {
     };
   }, [addEvents, setEvents]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const filteredEvents = useMemo(() => getFilteredEvents(), [events, filters, getFilteredEvents]);
+  const filteredEvents = useMemo(() => {
+    void events;
+    void filters;
+    return getFilteredEvents();
+  }, [events, filters, getFilteredEvents]);
   const deferredFilteredEvents = useDeferredValue(filteredEvents);
   const selectedEvent = selectedEventId
     ? events.find((e) => e.id === selectedEventId) || null

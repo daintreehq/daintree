@@ -87,6 +87,7 @@ export type BuiltInKeyAction =
   | "terminal.inject"
   | "terminal.focusNext"
   | "terminal.focusPrevious"
+  | "terminal.focusAlternate"
   | "terminal.focusUp"
   | "terminal.focusDown"
   | "terminal.focusLeft"
@@ -116,6 +117,17 @@ export type BuiltInKeyAction =
   | "terminal.scrollToLastActivity"
   | "terminal.sendToAgent"
   | "terminal.bulkCommand"
+  | "terminal.armDefault"
+  | "terminal.disarmAll"
+
+  // Fleet quick-actions (scoped to "fleet ribbon visible" at dispatch time)
+  | "fleet.accept"
+  | "fleet.reject"
+  | "fleet.interrupt"
+  | "fleet.restart"
+  | "fleet.kill"
+  | "fleet.trash"
+  | "fleet.armFocused"
 
   // Agent spawning
   | "agent.palette"
@@ -149,15 +161,15 @@ export type BuiltInKeyAction =
   | "portal.nextTab"
   | "portal.prevTab"
 
-  // Notes actions
-  | "notes.openPalette"
-
   // Action palette
   | "action.palette"
   | "action.palette.open"
+  | "action.repeatLast"
 
   // Project actions
   | "project.switcherPalette"
+  | "project.mruCycleOlder"
+  | "project.mruCycleNewer"
 
   // Help/Settings
   | "help.shortcuts"
@@ -257,6 +269,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.inject",
   "terminal.focusNext",
   "terminal.focusPrevious",
+  "terminal.focusAlternate",
   "terminal.focusUp",
   "terminal.focusDown",
   "terminal.focusLeft",
@@ -285,6 +298,15 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.scrollToLastActivity",
   "terminal.sendToAgent",
   "terminal.bulkCommand",
+  "terminal.armDefault",
+  "terminal.disarmAll",
+  "fleet.accept",
+  "fleet.reject",
+  "fleet.interrupt",
+  "fleet.restart",
+  "fleet.kill",
+  "fleet.trash",
+  "fleet.armFocused",
   "agent.palette",
   ...BUILT_IN_AGENT_KEY_ACTIONS,
   "agent.terminal",
@@ -307,10 +329,12 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "portal.closeTab",
   "portal.nextTab",
   "portal.prevTab",
-  "notes.openPalette",
   "action.palette",
   "action.palette.open",
+  "action.repeatLast",
   "project.switcherPalette",
+  "project.mruCycleOlder",
+  "project.mruCycleNewer",
   "help.shortcuts",
   "help.shortcutsAlt",
   "help.launchAgent",

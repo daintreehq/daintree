@@ -1,10 +1,14 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Key, Eye, EyeOff, Trash2, Plus, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { useSettingsTabValidation } from "./SettingsValidationRegistry";
+import { logError } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 
 interface EnvVar {
   id: string;
@@ -17,7 +21,7 @@ function envVarsFromRecord(record: Record<string, string> | undefined): EnvVar[]
   return Object.entries(record)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => ({
-      id: `env-${Date.now()}-${Math.random()}`,
+      id: `env-${crypto.randomUUID()}`,
       key,
       value,
     }));
@@ -46,6 +50,16 @@ export function EnvironmentSettingsTab() {
   const [isDirty, setIsDirty] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState<Record<string, string>>({});
 
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  // Report validation state to sidebar — a failed load also marks the tab
+  // as in-error so the sidebar reflects the user-visible error block.
+  const hasError = Object.keys(rowErrors).length > 0;
+  useSettingsTabValidation("environment", hasError || loadFailed);
+
+  // Suppress duplicate toasts when the tab remounts (close/reopen Settings)
+  // while the IPC failure persists — notify() has no dedup-by-key.
+  const notifiedFailureRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
     window.electron.globalEnv
@@ -56,8 +70,25 @@ export function EnvironmentSettingsTab() {
         setSavedSnapshot(vars);
         setIsLoading(false);
       })
-      .catch(() => {
-        if (!cancelled) setIsLoading(false);
+      .catch((err) => {
+        if (cancelled) return;
+        // Showing an empty form here would let the user "save" and silently
+        // overwrite their stored variables with nothing. Block save and tell
+        // them what happened.
+        setLoadFailed(true);
+        setIsLoading(false);
+        logError("Failed to load global env vars", err);
+        if (!notifiedFailureRef.current) {
+          notifiedFailureRef.current = true;
+          notify({
+            type: "error",
+            title: "Couldn't load environment variables",
+            message:
+              "The settings form couldn't load your saved variables. Saving now would overwrite them with an empty list.",
+            priority: "high",
+            duration: 0,
+          });
+        }
       });
     return () => {
       cancelled = true;
@@ -68,6 +99,7 @@ export function EnvironmentSettingsTab() {
     setEnvRows((prev) => {
       const updated = [...prev];
       const row = updated[index];
+      if (!row) return prev;
       const oldKey = row.key;
       const rowId = row.id;
       updated[index] = { ...row, [field]: value };
@@ -97,10 +129,7 @@ export function EnvironmentSettingsTab() {
   }, []);
 
   const addRow = useCallback(() => {
-    setEnvRows((prev) => [
-      ...prev,
-      { id: `env-${Date.now()}-${Math.random()}`, key: "", value: "" },
-    ]);
+    setEnvRows((prev) => [...prev, { id: `env-${crypto.randomUUID()}`, key: "", value: "" }]);
     setIsDirty(true);
   }, []);
 
@@ -109,6 +138,11 @@ export function EnvironmentSettingsTab() {
     setVisibleEnvVars((prev) => {
       const next = new Set(prev);
       next.delete(id);
+      return next;
+    });
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
       return next;
     });
     setIsDirty(true);
@@ -129,17 +163,18 @@ export function EnvironmentSettingsTab() {
     let valid = true;
 
     for (let i = 0; i < envRows.length; i++) {
-      const trimmedKey = envRows[i].key.trim();
+      const row = envRows[i]!;
+      const trimmedKey = row.key.trim();
       if (!trimmedKey) continue;
 
       if (!ENV_KEY_REGEX.test(trimmedKey)) {
-        errors[envRows[i].id] = "Invalid name: use letters, digits, and underscores only";
+        errors[row.id] = "Invalid name: use letters, digits, and underscores only";
         valid = false;
       }
 
       const prevIndex = seenKeys.get(trimmedKey);
       if (prevIndex !== undefined) {
-        errors[envRows[i].id] = `Duplicate variable name`;
+        errors[row.id] = `Duplicate variable name`;
         valid = false;
       }
       seenKeys.set(trimmedKey, i);
@@ -161,7 +196,7 @@ export function EnvironmentSettingsTab() {
       setSavedSnapshot(record);
       setIsDirty(false);
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Failed to save");
+      setSaveError(formatErrorMessage(err, "Failed to save environment variables"));
     } finally {
       setIsSaving(false);
     }
@@ -183,6 +218,22 @@ export function EnvironmentSettingsTab() {
     );
   }
 
+  if (loadFailed) {
+    return (
+      <SettingsSection
+        icon={Key}
+        title="Environment Variables"
+        description="Global environment variables injected into all new terminals. Project-level variables override globals with the same name."
+        id="environment-variables"
+      >
+        <div className="text-sm text-status-error/90 py-8 px-4 border border-status-error/40 rounded-[var(--radius-md)] bg-status-error/5">
+          Couldn't load saved environment variables. Close and reopen settings to try again. Editing
+          isn't available right now to avoid overwriting your stored values.
+        </div>
+      </SettingsSection>
+    );
+  }
+
   return (
     <SettingsSection
       icon={Key}
@@ -190,7 +241,7 @@ export function EnvironmentSettingsTab() {
       description="Global environment variables injected into all new terminals. Project-level variables override globals with the same name."
       id="environment-variables"
     >
-      <div className="space-y-3">
+      <div className="contents">
         <div className="space-y-2">
           {envRows.length === 0 ? (
             <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
@@ -217,7 +268,7 @@ export function EnvironmentSettingsTab() {
                       onChange={(e) => updateRow(index, "key", e.target.value)}
                       spellCheck={false}
                       autoCapitalize="none"
-                      className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+                      className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
                       placeholder="VARIABLE_NAME"
                       aria-label="Environment variable name"
                     />
@@ -231,10 +282,10 @@ export function EnvironmentSettingsTab() {
                         autoCapitalize="none"
                         autoComplete={isSensitive ? "new-password" : "off"}
                         className={cn(
-                          "w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30",
+                          "w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30",
                           isSensitive && "pr-8"
                         )}
-                        placeholder="value"
+                        placeholder="e.g. /usr/local/bin"
                         aria-label="Environment variable value"
                       />
                       {isSensitive && (

@@ -38,11 +38,12 @@ test.describe("Core: Process Cleanup", () => {
       const ctx = await launchApp({ userDataDir });
       ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Process Cleanup");
 
-      // Open terminal and wait for shell readiness
+      // Open terminal and wait for shell readiness via an explicit echo
       await openTerminal(ctx.window);
       const panel = getFirstGridPanel(ctx.window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
-      await waitForTerminalText(panel, "process-cleanup", T_LONG);
+      await runTerminalCommand(ctx.window, panel, "echo SHELL_READY_MARKER");
+      await waitForTerminalText(panel, "SHELL_READY_MARKER", T_LONG);
 
       // Spawn a long-lived child process and wait for it to appear
       await runTerminalCommand(ctx.window, panel, "sleep 9999");
@@ -114,7 +115,8 @@ test.describe("Core: Process Cleanup", () => {
       await openTerminal(ctx.window);
       const panel = getFirstGridPanel(ctx.window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
-      await waitForTerminalText(panel, "process-cleanup-unclean", T_LONG);
+      await runTerminalCommand(ctx.window, panel, "echo SHELL_READY_MARKER");
+      await waitForTerminalText(panel, "SHELL_READY_MARKER", T_LONG);
 
       // Spawn a HUP-resistant process so it survives SIGKILL of parent.
       // `trap '' HUP` makes the shell ignore SIGHUP.

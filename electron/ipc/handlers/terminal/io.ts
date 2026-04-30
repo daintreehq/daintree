@@ -8,6 +8,10 @@ import type { HandlerDependencies } from "../../types.js";
 import type { TerminalResizePayload } from "../../../types/index.js";
 import { TerminalResizePayloadSchema } from "../../../schemas/ipc.js";
 import type { PtyHostActivityTier } from "../../../../shared/types/pty-host.js";
+import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
+import { typedHandle } from "../../utils.js";
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { AppError } from "../../../utils/errorTypes.js";
 
 export function registerTerminalIOHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -44,23 +48,58 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   ipcMain.on(CHANNELS.TERMINAL_SEND_KEY, handleTerminalSendKey);
   handlers.push(() => ipcMain.removeListener(CHANNELS.TERMINAL_SEND_KEY, handleTerminalSendKey));
 
-  const handleTerminalSubmit = async (
-    _event: Electron.IpcMainInvokeEvent,
-    id: string,
-    text: string
+  const handleTerminalBatchDoubleEscape = (_event: Electron.IpcMainEvent, ids: unknown) => {
+    try {
+      if (!Array.isArray(ids)) {
+        console.error("Invalid terminal batchDoubleEscape parameters: expected string[]");
+        return;
+      }
+      const validIds = ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+      if (validIds.length === 0) return;
+      ptyClient.batchDoubleEscape(validIds);
+    } catch (error) {
+      console.error("Error sending batch double escape to terminals:", error);
+    }
+  };
+  ipcMain.on(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, handleTerminalBatchDoubleEscape);
+  handlers.push(() =>
+    ipcMain.removeListener(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, handleTerminalBatchDoubleEscape)
+  );
+
+  const handleTerminalBroadcastWrite = (
+    _event: Electron.IpcMainEvent,
+    ids: unknown,
+    data: unknown
   ) => {
+    try {
+      if (!Array.isArray(ids) || typeof data !== "string") {
+        console.error("Invalid terminal broadcastWrite parameters");
+        return;
+      }
+      const validIds = ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+      if (validIds.length === 0 || data.length === 0) return;
+      ptyClient.broadcastWrite(validIds, data);
+    } catch (error) {
+      console.error("Error broadcasting write to terminals:", error);
+    }
+  };
+  ipcMain.on(CHANNELS.TERMINAL_BROADCAST_WRITE, handleTerminalBroadcastWrite);
+  handlers.push(() =>
+    ipcMain.removeListener(CHANNELS.TERMINAL_BROADCAST_WRITE, handleTerminalBroadcastWrite)
+  );
+
+  const handleTerminalSubmit = async (id: string, text: string) => {
     try {
       if (typeof id !== "string" || typeof text !== "string") {
         throw new Error("Invalid terminal submit parameters");
       }
       ptyClient.submit(id, text);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to submit to terminal");
       throw new Error(`Failed to submit to terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_SUBMIT));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit));
 
   const handleTerminalResize = (_event: Electron.IpcMainEvent, payload: TerminalResizePayload) => {
     try {
@@ -145,24 +184,50 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeListener(CHANNELS.TERMINAL_AGENT_TITLE_STATE, handleTerminalAgentTitleState)
   );
 
-  const handleTerminalForceResume = async (
-    _event: Electron.IpcMainInvokeEvent,
-    id: string
-  ): Promise<{ success: boolean; error?: string }> => {
+  const handleTerminalUpdateObservedTitle = (
+    _event: Electron.IpcMainEvent,
+    payload: { id: string; title: string }
+  ) => {
     try {
-      if (typeof id !== "string" || !id) {
-        throw new Error("Invalid terminal ID: must be a non-empty string");
-      }
-      ptyClient.forceResume(id);
-      return { success: true };
+      if (!payload || typeof payload !== "object") return;
+      const { id, title } = payload;
+      if (typeof id !== "string" || !id) return;
+      const normalized = normalizeObservedTitle(title);
+      if (!normalized) return;
+      ptyClient.updateObservedTitle(id, normalized);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[IPC] Failed to force resume terminal ${id}:`, errorMessage);
-      return { success: false, error: errorMessage };
+      console.error("[IPC] Error handling observed title update:", error);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_FORCE_RESUME));
+  ipcMain.on(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, handleTerminalUpdateObservedTitle);
+  handlers.push(() =>
+    ipcMain.removeListener(
+      CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE,
+      handleTerminalUpdateObservedTitle
+    )
+  );
+
+  const handleTerminalForceResume = async (id: string): Promise<void> => {
+    if (typeof id !== "string" || !id) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Invalid terminal ID: must be a non-empty string",
+      });
+    }
+    try {
+      ptyClient.forceResume(id);
+    } catch (error) {
+      const errorMessage = formatErrorMessage(error, "Failed to force resume terminal");
+      console.error(`[IPC] Failed to force resume terminal ${id}:`, errorMessage);
+      throw new AppError({
+        code: "INTERNAL",
+        message: errorMessage,
+        context: { terminalId: id },
+        cause: error instanceof Error ? error : undefined,
+      });
+    }
+  };
+  handlers.push(typedHandle(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

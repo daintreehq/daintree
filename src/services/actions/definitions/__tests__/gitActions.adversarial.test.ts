@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ActionDefinition } from "@shared/types/actions";
-import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
+import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { registerGitActions } from "../gitActions";
 
 type GitStub = {
@@ -53,7 +52,7 @@ function setupActions(): {
     run: async (id, args, ctx) => {
       const factory = actions.get(id);
       if (!factory) throw new Error(`missing ${id}`);
-      const def = factory() as ActionDefinition<unknown, unknown>;
+      const def = factory() as AnyActionDefinition;
       Object.defineProperty(globalThis, "window", {
         value: { electron: { git } },
         configurable: true,

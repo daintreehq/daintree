@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { ProjectResourceBadge, QuickRun } from "@/components/Project";
 import { useProjectStore } from "@/store/projectStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { usePreferencesStore } from "@/store";
 import { DEFAULT_SIDEBAR_WIDTH } from "./AppLayout";
 import { actionService } from "@/services/ActionService";
 import {
@@ -37,6 +38,8 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
   const sidebarRef = useRef<HTMLElement>(null);
   const currentProject = useProjectStore((state) => state.currentProject);
   const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "sidebar");
+  const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
+  const animateWidth = !isResizing && !reduceAnimations;
 
   useEffect(() => {
     useMacroFocusStore.getState().setRegionRef("sidebar", sidebarRef.current);
@@ -104,10 +107,14 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
           aria-label="Sidebar"
           data-macro-focus={isMacroFocused ? "true" : undefined}
           className={cn(
-            "relative shrink-0 flex flex-col outline-none",
+            "sidebar-root",
+            "relative shrink-0 flex flex-col outline-hidden overflow-hidden",
             "surface-chrome",
             "border-r border-divider",
             "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
+            animateWidth &&
+              "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+            width === 0 && "pointer-events-none",
             className
           )}
           style={{ width }}
@@ -125,11 +132,12 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
             aria-valuenow={width}
             aria-valuemin={200}
             aria-valuemax={600}
-            tabIndex={0}
+            tabIndex={width === 0 ? -1 : 0}
+            aria-hidden={width === 0 ? "true" : undefined}
             className={cn(
               "group absolute top-0 -right-1.5 w-3 h-full cursor-col-resize flex items-center justify-center z-50",
-              "hover:bg-overlay-soft transition-colors focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
-              isResizing && "bg-daintree-accent/20"
+              "hover:bg-overlay-soft transition-colors focus-visible:outline-hidden focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
+              isResizing && "bg-overlay-medium"
             )}
             onMouseDown={startResizing}
             onKeyDown={handleKeyDown}
@@ -141,7 +149,7 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
                 "w-px h-8 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
                 "bg-daintree-text/20",
                 "group-hover:bg-daintree-text/35 group-focus-visible:bg-daintree-accent",
-                isResizing && "bg-daintree-accent"
+                isResizing && "bg-daintree-text/50"
               )}
             />
           </div>

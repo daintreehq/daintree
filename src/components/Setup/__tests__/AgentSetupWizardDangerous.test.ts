@@ -7,7 +7,7 @@ import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
  * The toggle should only appear for agents that have a DEFAULT_DANGEROUS_ARGS entry.
  */
 describe("Skip permissions toggle gating", () => {
-  it("DEFAULT_DANGEROUS_ARGS has entries for claude, gemini, codex, cursor", () => {
+  it("DEFAULT_DANGEROUS_ARGS has entries for claude, gemini, codex, cursor, interpreter, amp", () => {
     expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("claude", "--dangerously-skip-permissions");
     expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("gemini", "--yolo");
     expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty(
@@ -15,11 +15,19 @@ describe("Skip permissions toggle gating", () => {
       "--dangerously-bypass-approvals-and-sandbox"
     );
     expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("cursor", "--force");
+    expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("interpreter", "--auto_run");
+    expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("amp", "--dangerously-allow-all");
   });
 
-  it("opencode and kiro have no DEFAULT_DANGEROUS_ARGS entry", () => {
+  it("opencode, kiro, goose, crush, qwen, mistral, kimi, and aider have no DEFAULT_DANGEROUS_ARGS entry", () => {
     expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("opencode");
     expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("kiro");
+    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("goose");
+    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("crush");
+    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("qwen");
+    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("mistral");
+    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("kimi");
+    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("aider");
   });
 
   it("gating expression matches expected agents", () => {
@@ -32,8 +40,18 @@ describe("Skip permissions toggle gating", () => {
       (id) => (DEFAULT_DANGEROUS_ARGS[id] ?? "") === ""
     );
 
-    expect(agentsWithToggle).toEqual(["claude", "gemini", "codex", "cursor"]);
-    expect(agentsWithoutToggle).toEqual(["opencode", "kiro", "copilot"]);
+    expect(agentsWithToggle).toEqual(["claude", "gemini", "codex", "cursor", "amp", "interpreter"]);
+    expect(agentsWithoutToggle).toEqual([
+      "opencode",
+      "aider",
+      "copilot",
+      "goose",
+      "crush",
+      "qwen",
+      "kimi",
+      "mistral",
+      "kiro",
+    ]);
   });
 
   it("all dangerous args are non-empty strings starting with --", () => {

@@ -5,7 +5,9 @@ const COOLDOWN_MS = 500;
 
 export function useDoubleShift(callback: () => void, enabled: boolean = true): void {
   const callbackRef = useRef(callback);
-  callbackRef.current = callback;
+  useEffect(() => {
+    callbackRef.current = callback;
+  }, [callback]);
 
   useEffect(() => {
     if (!enabled) return;

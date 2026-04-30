@@ -84,7 +84,7 @@ describe("ScrollShadow", () => {
 
     const gradients = container.querySelectorAll("[aria-hidden='true']");
     expect(gradients).toHaveLength(1);
-    expect(gradients[0].className).toContain("bottom-0");
+    expect(gradients[0]!.className).toContain("bottom-0");
   });
 
   it("shows top shadow when scrolled down", () => {
@@ -107,7 +107,7 @@ describe("ScrollShadow", () => {
 
     const gradients = container.querySelectorAll("[aria-hidden='true']");
     expect(gradients).toHaveLength(1);
-    expect(gradients[0].className).toContain("top-0");
+    expect(gradients[0]!.className).toContain("top-0");
   });
 
   it("shows both shadows when scrolled to middle", () => {
@@ -130,8 +130,8 @@ describe("ScrollShadow", () => {
 
     const gradients = container.querySelectorAll("[aria-hidden='true']");
     expect(gradients).toHaveLength(2);
-    expect(gradients[0].className).toContain("top-0");
-    expect(gradients[1].className).toContain("bottom-0");
+    expect(gradients[0]!.className).toContain("top-0");
+    expect(gradients[1]!.className).toContain("bottom-0");
   });
 
   it("forwards ref to inner scrollable div", () => {

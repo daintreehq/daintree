@@ -74,6 +74,8 @@ Component-specific styling does not belong in this layer.
 
 ## Component Overrides
 
+**See [Canonical Interaction State Recipes](./interaction-state-recipes.md)** for hover/focus implementation patterns when working with component overrides.
+
 Component CSS owns the public override surface. Themes can target specific UI regions through `extensions` without expanding the global semantic contract.
 
 | Component          | File                                 | Variable prefix                                    |

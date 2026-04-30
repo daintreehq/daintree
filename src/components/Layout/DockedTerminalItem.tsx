@@ -3,7 +3,6 @@ import { useShallow } from "zustand/react/shallow";
 import { useDndMonitor } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, getBaseTitle } from "@/lib/utils";
-import { getBrandColorHex } from "@/lib/colorUtils";
 import {
   useTerminalInputStore,
   usePanelStore,
@@ -11,9 +10,14 @@ import {
   useFocusStore,
   type TerminalInstance,
 } from "@/store";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
@@ -21,10 +25,10 @@ import {
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
-import { useDockBlockedState } from "./useDockBlockedState";
+import { getDockDisplayAgentState, useDockBlockedState } from "./useDockBlockedState";
 import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { usePreferencesStore } from "@/store";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTerminalItemProps {
   terminal: TerminalInstance;
@@ -180,14 +184,89 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     [terminal.id, openDockTerminal, closeDockTerminal]
   );
 
-  const isWorking = terminal.agentState === "working";
-  const isRunning = terminal.agentState === "running";
-  const isWaiting = terminal.agentState === "waiting";
-  const isActive = isWorking || isRunning || isWaiting;
+  const presetCustomPresets = useAgentSettingsStore((s) =>
+    terminal.launchAgentId ? s.settings?.agents?.[terminal.launchAgentId]?.customPresets : undefined
+  );
+  const presetCcrPresets = useCcrPresetsStore((s) =>
+    terminal.launchAgentId ? s.ccrPresetsByAgent[terminal.launchAgentId] : undefined
+  );
+  const presetProjectPresets = useProjectPresetsStore((s) =>
+    terminal.launchAgentId ? s.presetsByAgent[terminal.launchAgentId] : undefined
+  );
+  const baseChrome = useMemo(
+    () =>
+      deriveTerminalChrome({
+        kind: terminal.kind,
+        launchAgentId: terminal.launchAgentId,
+        runtimeIdentity: terminal.runtimeIdentity,
+        detectedAgentId: terminal.detectedAgentId,
+        detectedProcessId: terminal.detectedProcessId,
+        agentState: terminal.agentState,
+        runtimeStatus: terminal.runtimeStatus,
+        exitCode: terminal.exitCode,
+      }),
+    [
+      terminal.kind,
+      terminal.launchAgentId,
+      terminal.runtimeIdentity,
+      terminal.detectedAgentId,
+      terminal.detectedProcessId,
+      terminal.agentState,
+      terminal.runtimeStatus,
+      terminal.exitCode,
+    ]
+  );
+  const brandColor = useMemo(() => {
+    const fallbackColor = baseChrome.color;
+    if (!terminal.agentPresetId || !terminal.launchAgentId) return fallbackColor;
+    const preset = getMergedPresets(
+      terminal.launchAgentId,
+      presetCustomPresets,
+      presetCcrPresets,
+      presetProjectPresets
+    ).find((f) => f.id === terminal.agentPresetId);
+    return preset?.color ?? terminal.agentPresetColor ?? fallbackColor;
+  }, [
+    terminal.launchAgentId,
+    terminal.agentPresetId,
+    terminal.agentPresetColor,
+    baseChrome.color,
+    presetCustomPresets,
+    presetCcrPresets,
+    presetProjectPresets,
+  ]);
+  const chrome = useMemo(
+    () =>
+      deriveTerminalChrome({
+        kind: terminal.kind,
+        launchAgentId: terminal.launchAgentId,
+        runtimeIdentity: terminal.runtimeIdentity,
+        detectedAgentId: terminal.detectedAgentId,
+        detectedProcessId: terminal.detectedProcessId,
+        agentState: terminal.agentState,
+        runtimeStatus: terminal.runtimeStatus,
+        exitCode: terminal.exitCode,
+        presetColor: brandColor,
+      }),
+    [
+      terminal.kind,
+      terminal.launchAgentId,
+      terminal.runtimeIdentity,
+      terminal.detectedAgentId,
+      terminal.detectedProcessId,
+      terminal.agentState,
+      terminal.runtimeStatus,
+      terminal.exitCode,
+      brandColor,
+    ]
+  );
+
+  const agentState = chrome.isAgent ? getDockDisplayAgentState(terminal) : undefined;
+  const isWorking = agentState === "working";
+  const isWaiting = agentState === "waiting";
+  const isActive = isWorking || isWaiting;
   const commandText = terminal.activityHeadline || terminal.lastCommand;
-  const brandColor = getBrandColorHex(terminal.agentId ?? terminal.type);
-  const agentState = terminal.agentState;
-  const blockedState = useDockBlockedState(terminal.agentState);
+  const blockedState = useDockBlockedState(agentState);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
   // Use shortened title without command summary for dock items
   const displayTitle = getBaseTitle(terminal.title);
@@ -239,14 +318,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             aria-label={`${terminal.title} - Click to preview, double-click to move to grid, drag to reorder`}
           >
             <div className="flex items-center justify-center shrink-0">
-              <TerminalIcon
-                type={terminal.type}
-                kind={terminal.kind}
-                agentId={terminal.agentId}
-                detectedProcessId={terminal.detectedProcessId}
-                className="w-3.5 h-3.5"
-                brandColor={brandColor}
-              />
+              <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
             </div>
             <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
               {displayTitle}
@@ -255,43 +327,39 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             {isActive && commandText && (
               <>
                 <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
-                        {commandText}
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">{commandText}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
+                      {commandText}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{commandText}</TooltipContent>
+                </Tooltip>
               </>
             )}
 
             {/* State icon (compact spacing from title) */}
             {showStateIcon && StateIcon && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div
+                    className={cn(
+                      "flex items-center shrink-0",
+                      getEffectiveStateColor(agentState, terminal.waitingReason)
+                    )}
+                  >
+                    <StateIcon
                       className={cn(
-                        "flex items-center shrink-0",
-                        getEffectiveStateColor(agentState, terminal.waitingReason)
+                        "w-3.5 h-3.5",
+                        agentState === "working" && "animate-spin-slow",
+                        "motion-reduce:animate-none"
                       )}
-                    >
-                      <StateIcon
-                        className={cn(
-                          "w-3.5 h-3.5",
-                          agentState === "working" && "animate-spin-slow",
-                          "motion-reduce:animate-none"
-                        )}
-                        aria-hidden="true"
-                      />
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+                      aria-hidden="true"
+                    />
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
+              </Tooltip>
             )}
           </button>
         </PopoverTrigger>
@@ -308,7 +376,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const focusTarget = getTerminalFocusTarget({
-            isAgentTerminal: terminal.type !== "terminal",
+            hasHybridInputSurface: chrome.isAgent,
             isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
             hybridInputEnabled,
             hybridInputAutoFocus,

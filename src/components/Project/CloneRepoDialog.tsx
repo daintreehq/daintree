@@ -3,8 +3,9 @@ import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Check, AlertCircle, FolderOpen } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { projectClient } from "@/clients";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { CloneRepoProgressEvent } from "@shared/types/ipc/gitClone";
 
 interface CloneRepoDialogProps {
@@ -126,21 +127,21 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     hasFinalizedRef.current = false;
 
     try {
-      const result = await projectClient.cloneRepo({
+      const { clonedPath: resultPath } = await projectClient.cloneRepo({
         url: normalizeCloneUrl(url),
         parentPath,
         folderName: folderName.trim(),
         shallowClone,
       });
 
-      if (result.success && result.clonedPath) {
-        setClonedPath(result.clonedPath);
-        setIsComplete(true);
-      } else if (!result.cancelled) {
-        setError(result.error || "Clone failed");
-      }
+      setClonedPath(resultPath);
+      setIsComplete(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      // CANCELLED is the user aborting via the cancel button — not a failure.
+      const code = (err as { code?: string })?.code;
+      if (code !== "CANCELLED") {
+        setError(formatErrorMessage(err, "Failed to clone repository"));
+      }
     } finally {
       setIsCloning(false);
     }
@@ -161,7 +162,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   return (
     <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isCloning}>
       <AppDialog.Header>
-        <AppDialog.Title icon={<WorktreeIcon className="h-5 w-5 text-daintree-accent" />}>
+        <AppDialog.Title icon={<FolderGit2 className="h-5 w-5 text-daintree-accent" />}>
           Clone Repository
         </AppDialog.Title>
         {!isCloning && <AppDialog.CloseButton />}
@@ -177,7 +178,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             onChange={(e) => setUrl(e.target.value)}
             placeholder="owner/repo or https://github.com/user/repo.git"
             disabled={isCloning || isComplete}
-            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-none focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
+            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
           />
         </div>
 
@@ -190,7 +191,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               value={parentPath}
               readOnly
               placeholder="Select a directory..."
-              className="flex-1 rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 disabled:opacity-50"
+              className="flex-1 rounded-md border border-daintree-border bg-muted/50 px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 disabled:opacity-50 select-all"
             />
             <Button
               variant="outline"
@@ -215,7 +216,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               setFolderNameEdited(true);
             }}
             disabled={isCloning || isComplete}
-            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-none focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
+            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
           />
         </div>
 

@@ -3746,4 +3746,355 @@ describe("ActivityMonitor", () => {
       expect(onStateChange).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("reconfigure", () => {
+    const CLAUDE_WORKING = "✽ Deliberating… (esc to interrupt · 15s)";
+    const GEMINI_WORKING = "⠼ Unpacking Project Details (esc to cancel, 14s)";
+
+    it("swaps detector so old-agent patterns no longer match after reconfigure", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("reconf-1", 1, onStateChange, { agentId: "claude" });
+
+      // Baseline: claude detector matches its own pattern
+      monitor.onData(CLAUDE_WORKING);
+      expect(monitor.getLastPatternResult()?.isWorking).toBe(true);
+
+      monitor.reconfigure("gemini");
+
+      // Feed claude-only pattern — gemini detector should not match it
+      monitor.onData("✽ Deliberating…");
+      expect(monitor.getLastPatternResult()?.isWorking).toBeFalsy();
+
+      // Feed gemini-only pattern — new detector should match
+      monitor.onData(GEMINI_WORKING);
+      expect(monitor.getLastPatternResult()?.isWorking).toBe(true);
+
+      monitor.dispose();
+    });
+
+    it("clears pattern buffer and TTL fields on reconfigure", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("reconf-2", 1, onStateChange, { agentId: "claude" });
+
+      monitor.onData(CLAUDE_WORKING);
+      expect(monitor.getLastPatternResult()?.isWorking).toBe(true);
+
+      type MonitorInternals = {
+        patternBuf: { getText(): string };
+        lastPatternResult: unknown;
+        lastPatternResultAt: number;
+        lastWorkingIndicatorTimestamp: number;
+      };
+      const internals = monitor as unknown as MonitorInternals;
+      expect(internals.patternBuf.getText().length).toBeGreaterThan(0);
+
+      monitor.reconfigure("gemini");
+
+      expect(internals.patternBuf.getText()).toBe("");
+      expect(internals.lastPatternResult).toBeUndefined();
+      expect(internals.lastPatternResultAt).toBe(0);
+      expect(internals.lastWorkingIndicatorTimestamp).toBe(0);
+
+      monitor.dispose();
+    });
+
+    it("preserves timing state (lastActivityTimestamp, workingHoldUntil) across reconfigure", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("reconf-3", 1, onStateChange, { agentId: "claude" });
+
+      monitor.onData(CLAUDE_WORKING);
+
+      type MonitorInternals = {
+        lastActivityTimestamp: number;
+        workingHoldUntil: number;
+      };
+      const before = monitor as unknown as MonitorInternals;
+      const ts = before.lastActivityTimestamp;
+      const hold = before.workingHoldUntil;
+      expect(ts).toBeGreaterThan(0);
+
+      vi.setSystemTime(10050);
+      monitor.reconfigure("gemini");
+
+      expect(before.lastActivityTimestamp).toBe(ts);
+      expect(before.workingHoldUntil).toBe(hold);
+
+      monitor.dispose();
+    });
+
+    it("does not emit stale working state after reconfigure (debounce TTL guard)", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("reconf-4", 1, onStateChange, {
+        agentId: "claude",
+        idleDebounceMs: 1000,
+      });
+
+      // Enter working via claude pattern
+      monitor.onData(CLAUDE_WORKING);
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // Swap to gemini — stale pattern result must not hold working through TTL
+      monitor.reconfigure("gemini");
+
+      // Advance past idle debounce. With stale TTL fields cleared, monitor should
+      // go idle (no new working signals from old detector's stale state).
+      vi.advanceTimersByTime(5000);
+
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenCalledWith("reconf-4", 1, "idle");
+
+      monitor.dispose();
+    });
+
+    it("treats reconfigure with no args as disabling the detector", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("reconf-5", 1, onStateChange, { agentId: "claude" });
+
+      monitor.reconfigure();
+
+      // With no detector, claude pattern should not register a working result
+      monitor.onData(CLAUDE_WORKING);
+      expect(monitor.getLastPatternResult()).toBeUndefined();
+
+      monitor.dispose();
+    });
+
+    it("builds a detector when reconfigure is called on a monitor that had none", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("reconf-6", 1, onStateChange);
+
+      // No detector initially
+      monitor.onData(CLAUDE_WORKING);
+      expect(monitor.getLastPatternResult()).toBeUndefined();
+
+      monitor.reconfigure("claude");
+      monitor.onData(CLAUDE_WORKING);
+      expect(monitor.getLastPatternResult()?.isWorking).toBe(true);
+
+      monitor.dispose();
+    });
+
+    it("is a no-op after dispose", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("reconf-7", 1, onStateChange, { agentId: "claude" });
+
+      monitor.dispose();
+
+      expect(() => monitor.reconfigure("gemini")).not.toThrow();
+
+      // Disposed monitor should not react to further data
+      onStateChange.mockClear();
+      monitor.onData(GEMINI_WORKING);
+      expect(onStateChange).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Waiting watchdog", () => {
+    it("should fire onWaitingTimeout after MAX_WAITING_SILENCE_MS when idle with dead children", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-1", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      // Advance past the 5s watchdog interval + 1s silence threshold
+      vi.advanceTimersByTime(5100);
+
+      expect(onWaitingTimeout).toHaveBeenCalledWith("test-wd-1", 100);
+
+      monitor.dispose();
+    });
+
+    it("should not fire before MAX_WAITING_SILENCE_MS elapses", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-2", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 60000,
+      });
+
+      // Advance past watchdog interval but not past silence threshold
+      vi.advanceTimersByTime(10000);
+
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("should not fire when hasActiveChildren returns true", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-3", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      vi.advanceTimersByTime(5100);
+
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("should not fire when hasActiveChildren returns null (no validator)", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      // No processStateValidator at all
+      const monitor = new ActivityMonitor("test-wd-4", 100, onStateChange, {
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      vi.advanceTimersByTime(5100);
+
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("should not fire when state is busy", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-5", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+        idleDebounceMs: 30000, // Keep busy long enough to test watchdog gate
+      });
+
+      // Enter busy state
+      monitor.onInput("\r");
+      expect(onStateChange).toHaveBeenCalledWith("test-wd-5", 100, "busy", { trigger: "input" });
+
+      // Advance past watchdog interval but not past idle debounce — still busy
+      vi.advanceTimersByTime(5100);
+      expect(monitor.getState()).toBe("busy");
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("should fire only once per idle episode", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-6", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      // Advance well past multiple watchdog intervals
+      vi.advanceTimersByTime(15000);
+
+      expect(onWaitingTimeout).toHaveBeenCalledTimes(1);
+
+      monitor.dispose();
+    });
+
+    it("should reset after becomeBusy and fire again next idle cycle", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-7", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      // Fire first watchdog
+      vi.advanceTimersByTime(5100);
+      expect(onWaitingTimeout).toHaveBeenCalledTimes(1);
+
+      // Transition to busy
+      monitor.onInput("\r");
+      onWaitingTimeout.mockClear();
+
+      // Still busy, watchdog shouldn't fire
+      vi.advanceTimersByTime(5100);
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("should not fire after dispose", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-8", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      monitor.dispose();
+
+      vi.advanceTimersByTime(1100);
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+    });
+
+    it("should fire for polling monitors after becoming idle", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const getVisibleLines = vi.fn(() => ["$ "]);
+      // Stub detectPrompt to avoid importing the full module
+      const monitor = new ActivityMonitor("test-wd-9", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 100,
+        getVisibleLines,
+        pollingIntervalMs: 20,
+        idleDebounceMs: 50,
+      });
+
+      monitor.startPolling();
+
+      // Polling starts in busy boot phase — watchdog won't fire yet
+      vi.advanceTimersByTime(200);
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+  });
 });

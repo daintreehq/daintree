@@ -9,5 +9,3 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
-
-declare const IS_LEGACY_BUILD: boolean;

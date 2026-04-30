@@ -209,8 +209,8 @@ describe("round-trip serialization", () => {
 
   it("round-trips an Error with context and custom properties", () => {
     const original = Object.assign(new Error("conflict"), {
-      name: "NoteConflictError",
-      context: { noteId: "n-1" },
+      name: "ConflictError",
+      context: { resourceId: "r-1" },
       currentLastModified: 12345,
     });
     const restored = deserializeError(serializeError(original)) as Error & {
@@ -218,9 +218,70 @@ describe("round-trip serialization", () => {
       currentLastModified: number;
     };
 
-    expect(restored.name).toBe("NoteConflictError");
-    expect(restored.context).toEqual({ noteId: "n-1" });
+    expect(restored.name).toBe("ConflictError");
+    expect(restored.context).toEqual({ resourceId: "r-1" });
     expect(restored.currentLastModified).toBe(12345);
+  });
+
+  it("round-trips a GitOperationError discriminator via serialize -> structuredClone -> deserialize", () => {
+    // Shared-layer test synthesizes the GitOperationError shape without importing
+    // the electron/ module — shared/ must not depend on electron/.
+    //
+    // The handler's `reason` field is promoted to the top-level `gitReason`
+    // slot on `SerializedError` so it survives the packaged-build strip in
+    // `electron/setup/security.ts` (which clears `context`/`cause`/`properties`
+    // but preserves named top-level fields).
+    const original = Object.assign(new Error("fatal: not a git repository"), {
+      name: "GitOperationError",
+      context: { cwd: "/repo", op: "status", reason: "not-a-repository" },
+      reason: "not-a-repository",
+      op: "status",
+      rawMessage: "fatal: not a git repository",
+    });
+
+    const serialized = serializeError(original);
+    expect(serialized.gitReason).toBe("not-a-repository");
+
+    const cloned = structuredClone(serialized);
+    const restored = deserializeError(cloned) as Error & {
+      gitReason: string;
+      op: string;
+      rawMessage: string;
+      context: Record<string, unknown>;
+    };
+
+    expect(restored.name).toBe("GitOperationError");
+    expect(restored.gitReason).toBe("not-a-repository");
+    expect(restored.op).toBe("status");
+    expect(restored.rawMessage).toBe("fatal: not a git repository");
+    expect(restored.context).toEqual({
+      cwd: "/repo",
+      op: "status",
+      reason: "not-a-repository",
+    });
+  });
+
+  it("round-trips an AppError code + userMessage via serialize -> structuredClone -> deserialize", () => {
+    const original = Object.assign(new Error("Binary file"), {
+      name: "AppError",
+      code: "BINARY_FILE",
+      userMessage: "This file can't be displayed.",
+      context: { filePath: "/repo/asset.bin" },
+    });
+
+    const serialized = serializeError(original);
+    expect(serialized.code).toBe("BINARY_FILE");
+    expect(serialized.userMessage).toBe("This file can't be displayed.");
+
+    const cloned = structuredClone(serialized);
+    const restored = deserializeError(cloned) as Error & {
+      code: string;
+      userMessage: string;
+    };
+
+    expect(restored.name).toBe("AppError");
+    expect(restored.code).toBe("BINARY_FILE");
+    expect(restored.userMessage).toBe("This file can't be displayed.");
   });
 });
 

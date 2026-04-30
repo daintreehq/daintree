@@ -31,6 +31,7 @@ vi.mock("node:v8", () => ({
 
 import { ResourceGovernor, type ResourceGovernorDeps } from "../ResourceGovernor.js";
 import { PtyPauseCoordinator } from "../PtyPauseCoordinator.js";
+import { metricsEnabled } from "../metrics.js";
 
 function createMockCoordinator() {
   const raw = { pause: vi.fn(), resume: vi.fn() };
@@ -230,6 +231,103 @@ describe("ResourceGovernor", () => {
       expect(coordinator.hasToken("backpressure")).toBe(true);
       expect(coordinator.isPaused).toBe(true);
       expect(raw.resume).not.toHaveBeenCalled();
+
+      governor.dispose();
+    });
+  });
+
+  describe("pending bytes gauge", () => {
+    it("emits pending-bytes-gauge when metrics enabled and pending bytes > 0", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+
+      const deps = createMockDeps({
+        getPendingBytesSnapshot: vi.fn().mockReturnValue({
+          totalPendingBytes: 1024,
+          perTerminal: [{ terminalId: "t1", pendingBytes: 1024 }],
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      vi.advanceTimersByTime(2000);
+
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "terminal-reliability-metric",
+          payload: expect.objectContaining({
+            terminalId: "resource-governor",
+            metricType: "pending-bytes-gauge",
+            totalPendingBytes: 1024,
+            perTerminal: [{ terminalId: "t1", pendingBytes: 1024 }],
+          }),
+        })
+      );
+
+      governor.dispose();
+    });
+
+    it("does not emit gauge when metrics are disabled", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(false);
+
+      const deps = createMockDeps({
+        getPendingBytesSnapshot: vi.fn().mockReturnValue({
+          totalPendingBytes: 1024,
+          perTerminal: [{ terminalId: "t1", pendingBytes: 1024 }],
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      vi.advanceTimersByTime(2000);
+
+      const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
+      const gaugeCalls = calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "pending-bytes-gauge"
+      );
+      expect(gaugeCalls).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("does not emit gauge when total pending bytes is zero", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+
+      const deps = createMockDeps({
+        getPendingBytesSnapshot: vi.fn().mockReturnValue({
+          totalPendingBytes: 0,
+          perTerminal: [],
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      vi.advanceTimersByTime(2000);
+
+      const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
+      const gaugeCalls = calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "pending-bytes-gauge"
+      );
+      expect(gaugeCalls).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("gracefully handles missing getPendingBytesSnapshot dep", () => {
+      const deps = createMockDeps();
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // Should not throw
+      expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
 
       governor.dispose();
     });

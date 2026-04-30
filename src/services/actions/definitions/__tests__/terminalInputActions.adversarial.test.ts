@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ActionDefinition } from "@shared/types/actions";
-import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
+import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const contextMenuMock = vi.hoisted(() => ({ openPanelContextMenu: vi.fn() }));
@@ -13,6 +12,22 @@ const bracketedMock = vi.hoisted(() => ({
   formatWithBracketedPaste: vi.fn((t: string) => `<BP>${t}</BP>`),
 }));
 const sendToAgentMock = vi.hoisted(() => ({ openSendToAgentPalette: vi.fn() }));
+const terminalInputStoreMock = vi.hoisted(() => ({
+  triggerStashInput: vi.fn(),
+  triggerPopStash: vi.fn(),
+}));
+const fleetArmingMock = vi.hoisted(() => ({
+  useFleetArmingStore: {
+    getState: vi.fn(() => ({
+      armId: vi.fn(),
+      disarmId: vi.fn(),
+      clear: vi.fn(),
+      armByState: vi.fn(),
+      armAll: vi.fn(),
+    })),
+  },
+  isFleetArmEligible: vi.fn(() => false),
+}));
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: panelStoreMock.getState },
@@ -24,6 +39,8 @@ vi.mock("@/services/terminal/TerminalInstanceService", () => ({
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
 vi.mock("@shared/utils/terminalInputProtocol", () => bracketedMock);
 vi.mock("@/hooks/useSendToAgentPalette", () => sendToAgentMock);
+vi.mock("@/store/terminalInputStore", () => terminalInputStoreMock);
+vi.mock("@/store/fleetArmingStore", () => fleetArmingMock);
 vi.mock("@shared/config/panelKindRegistry", () => ({
   panelKindHasPty: (kind: string) => kind === "terminal" || kind === "agent",
 }));
@@ -52,7 +69,7 @@ function setupActions(): {
     run: async (id: string, args?: unknown) => {
       const factory = actions.get(id);
       if (!factory) throw new Error(`missing ${id}`);
-      const def = factory() as ActionDefinition<unknown, unknown>;
+      const def = factory() as AnyActionDefinition;
       return def.run(args, {});
     },
     callbacks,
@@ -206,7 +223,7 @@ describe("terminalInputActions adversarial", () => {
     expect(terminalInstanceMock.notifyUserInput).not.toHaveBeenCalled();
   });
 
-  it("sendToAgent ignores non-PTY panels like browser/notes", async () => {
+  it("sendToAgent ignores non-PTY panels like browser", async () => {
     setPanelState({
       focusedId: "b1",
       panelsById: { b1: { kind: "browser" } },
@@ -262,5 +279,21 @@ describe("terminalInputActions adversarial", () => {
 
     await expect(run("terminal.copyLink", { url: "https://a.example" })).rejects.toThrow("denied");
     expect(writeSpy).toHaveBeenCalledWith("https://a.example");
+  });
+
+  describe("terminal.bulkCommand (fleet broadcast entry)", () => {
+    it("arms the current worktree and performs no other store side effects", async () => {
+      const armAll = vi.fn();
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({
+        armedIds: { size: 3 } as Set<string>,
+        armAll,
+      } as never);
+
+      const { run } = setupActions();
+      await run("terminal.bulkCommand");
+
+      expect(armAll).toHaveBeenCalledWith("current");
+      expect(armAll).toHaveBeenCalledTimes(1);
+    });
   });
 });

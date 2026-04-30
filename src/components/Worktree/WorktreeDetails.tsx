@@ -1,6 +1,6 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import type { WorktreeState } from "../../types";
-import type { AppError, RetryAction } from "../../store/errorStore";
+import type { ErrorRecord, RetryAction } from "../../store/errorStore";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { FileChangeList } from "./FileChangeList";
 import { ActivityLight } from "./ActivityLight";
@@ -8,6 +8,7 @@ import { LiveTimeAgo } from "./LiveTimeAgo";
 import { cn } from "../../lib/utils";
 import { GitCommit, Copy, Check, ExternalLink } from "lucide-react";
 import { parseNoteWithLinks, formatPath, type TextSegment } from "../../utils/textParsing";
+import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -16,7 +17,7 @@ export interface WorktreeDetailsProps {
   homeDir?: string;
   effectiveNote?: string;
   effectiveSummary?: string | null;
-  worktreeErrors: AppError[];
+  worktreeErrors: ErrorRecord[];
   hasChanges: boolean;
   isFocused: boolean;
   showLastCommit?: boolean;
@@ -96,7 +97,7 @@ export function WorktreeDetails({
         }
       }, 2000);
     } catch (err) {
-      console.error("Failed to copy path:", err);
+      logError("Failed to copy path", err);
     }
   };
 

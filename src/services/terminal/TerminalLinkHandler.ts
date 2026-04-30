@@ -3,6 +3,7 @@ import { actionService } from "@/services/ActionService";
 import { isLocalhostUrl, normalizeBrowserUrl } from "@/components/Browser/browserUtils";
 import { usePanelStore } from "@/store/panelStore";
 import { isMac } from "@/lib/platform";
+import { logError } from "@/utils/logger";
 
 export class TerminalLinkHandler {
   openLink(url: string, terminalId: string, event?: MouseEvent): void {
@@ -51,7 +52,7 @@ export class TerminalLinkHandler {
         return systemClient.openExternal(normalizedUrl);
       })
       .catch((error) => {
-        console.error("[TerminalLinkHandler] Failed to open URL:", error);
+        logError("[TerminalLinkHandler] Failed to open URL", error);
       });
   }
 }

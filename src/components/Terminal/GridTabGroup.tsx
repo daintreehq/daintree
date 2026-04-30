@@ -1,11 +1,17 @@
-import React, { useCallback, useMemo, useEffect, useRef } from "react";
+import React, { useCallback, useMemo, useEffect, useEffectEvent, useRef } from "react";
 import { usePanelStore, type TerminalInstance } from "@/store";
+import { logError } from "@/utils/logger";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import { getMergedPresets } from "@/config/agents";
 import { GridPanel } from "./GridPanel";
 import type { TabGroup } from "@/types";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { focusPanelInput } from "./terminalFocusRegistry";
 import { getGroupAmbientAgentState } from "@/components/Layout/useDockBlockedState";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 export interface GridTabGroupProps {
   group: TabGroup;
@@ -60,16 +66,18 @@ export function gridTabGroupPropsAreEqual(
   if (prevPanels !== nextPanels) {
     if (prevPanels.length !== nextPanels.length) return false;
     for (let i = 0; i < prevPanels.length; i++) {
-      const a = prevPanels[i];
-      const b = nextPanels[i];
+      const a = prevPanels[i]!;
+      const b = nextPanels[i]!;
       if (a !== b) {
         if (
           a.id !== b.id ||
           a.title !== b.title ||
           a.worktreeId !== b.worktreeId ||
           a.kind !== b.kind ||
-          a.type !== b.type ||
-          a.agentId !== b.agentId ||
+          a.launchAgentId !== b.launchAgentId ||
+          a.detectedAgentId !== b.detectedAgentId ||
+          a.everDetectedAgent !== b.everDetectedAgent ||
+          a.runtimeIdentity !== b.runtimeIdentity ||
           a.cwd !== b.cwd ||
           a.agentState !== b.agentState ||
           a.activityHeadline !== b.activityHeadline ||
@@ -82,11 +90,8 @@ export function gridTabGroupPropsAreEqual(
           a.reconnectError !== b.reconnectError ||
           a.spawnError !== b.spawnError ||
           a.detectedProcessId !== b.detectedProcessId ||
+          a.agentLaunchFlags !== b.agentLaunchFlags ||
           a.browserUrl !== b.browserUrl ||
-          a.notePath !== b.notePath ||
-          a.noteId !== b.noteId ||
-          a.scope !== b.scope ||
-          a.createdAt !== b.createdAt ||
           a.isRestarting !== b.isRestarting ||
           a.runtimeStatus !== b.runtimeStatus ||
           a.isInputLocked !== b.isInputLocked
@@ -148,19 +153,66 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     return panels.find((p) => p.id === activeTabId) ?? panels[0];
   }, [panels, activeTabId]);
 
+  const agentSettings = useAgentSettingsStore((s) => s.settings);
+  const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
+  const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
+
   // Build tabs array for PanelHeader
   const tabs: TabInfo[] = useMemo(() => {
-    return panels.map((p) => ({
-      id: p.id,
-      title: p.title,
-      type: p.type,
-      agentId: p.agentId,
-      detectedProcessId: p.detectedProcessId,
-      kind: p.kind ?? "terminal",
-      agentState: p.agentState,
-      isActive: p.id === activeTabId,
-    }));
-  }, [panels, activeTabId]);
+    const dangerousFlags = new Set([
+      "--dangerously-skip-permissions",
+      "--yolo",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--force",
+    ]);
+
+    return panels.map((p) => {
+      let presetColor = p.agentPresetColor;
+      let fallbackTooltip: string | undefined;
+      if (p.launchAgentId && p.agentPresetId) {
+        const presets = getMergedPresets(
+          p.launchAgentId,
+          agentSettings?.agents?.[p.launchAgentId]?.customPresets,
+          ccrPresetsByAgent[p.launchAgentId],
+          projectPresetsByAgent[p.launchAgentId]
+        );
+        const live = presets.find((f) => f.id === p.agentPresetId);
+        if (live) presetColor = live.color ?? presetColor;
+        if (p.isUsingFallback && p.originalPresetId) {
+          const original = presets.find((f) => f.id === p.originalPresetId);
+          const originalName = original?.name ?? p.originalPresetId;
+          const activeName = live?.name ?? p.agentPresetId;
+          fallbackTooltip = `Using fallback "${activeName}" — "${originalName}" unavailable`;
+        }
+      }
+
+      const hasDangerousFlags =
+        p.agentLaunchFlags?.some((flag) => dangerousFlags.has(flag)) ?? false;
+
+      return {
+        id: p.id,
+        title: p.title,
+        chrome: deriveTerminalChrome({
+          kind: p.kind,
+          launchAgentId: p.launchAgentId,
+          runtimeIdentity: p.runtimeIdentity,
+          detectedAgentId: p.detectedAgentId,
+          detectedProcessId: p.detectedProcessId,
+          agentState: p.agentState,
+          runtimeStatus: p.runtimeStatus,
+          exitCode: p.exitCode,
+          presetColor,
+        }),
+        kind: p.kind ?? "terminal",
+        agentState: p.agentState,
+        isActive: p.id === activeTabId,
+        presetColor,
+        isUsingFallback: p.isUsingFallback,
+        fallbackTooltip,
+        hasDangerousFlags,
+      };
+    });
+  }, [panels, activeTabId, agentSettings, ccrPresetsByAgent, projectPresetsByAgent]);
 
   // Check if this group is currently focused
   const isGroupFocused = useMemo(() => panels.some((p) => p.id === focusedId), [panels, focusedId]);
@@ -178,17 +230,23 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     panelIdsRef.current = new Set(panels.map((p) => p.id));
   }, [panels]);
 
-  useEffect(() => {
-    if (prevActiveTabIdRef.current === activeTabId) return;
+  // isGroupFocused is read non-reactively — we only want to re-run when
+  // activeTabId changes, not when focus flickers.
+  const maybeScheduleFocus = useEffectEvent(() => {
+    if (prevActiveTabIdRef.current === activeTabId) return null;
     prevActiveTabIdRef.current = activeTabId;
-    if (!activeTabId || !isGroupFocused) return;
-    const rafId = requestAnimationFrame(() => {
+    if (!activeTabId || !isGroupFocused) return null;
+    return requestAnimationFrame(() => {
       const currentFocusedId = usePanelStore.getState().focusedId;
       if (!currentFocusedId || !panelIdsRef.current.has(currentFocusedId)) return;
       focusPanelInput(activeTabId);
     });
+  });
+  useEffect(() => {
+    void activeTabId;
+    const rafId = maybeScheduleFocus();
+    if (rafId == null) return;
     return () => cancelAnimationFrame(rafId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTabId]);
 
   // Handle tab click - switch to that tab, only focus if group already focused
@@ -256,7 +314,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
       setActiveTab(group.id, newPanelId);
       setFocused(newPanelId);
     } catch (error) {
-      console.error("Failed to add tab:", error);
+      logError("Failed to add tab", error);
     }
   }, [activePanel, group.id, addPanel, addPanelToGroup, setActiveTab, setFocused]);
 

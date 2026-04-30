@@ -7,6 +7,7 @@ import { BrowserPane } from "../BrowserPane";
 type MockWebviewElement = HTMLElement & {
   reload: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
   setZoomFactor: ReturnType<typeof vi.fn>;
   getURL: ReturnType<typeof vi.fn>;
   isLoading: ReturnType<typeof vi.fn>;
@@ -28,6 +29,7 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   };
 
   webview.reload = vi.fn();
+  webview.stop = vi.fn();
   webview.loadURL = vi.fn((url: string) => {
     currentUrl = url;
     element.setAttribute("src", url);
@@ -260,7 +262,7 @@ describe("BrowserPane webview lifecycle regression", () => {
     expect(webview.setZoomFactor).toHaveBeenCalledWith(1.35);
   });
 
-  it("reloads webview after 30s when loading is stuck", () => {
+  it("stops webview and shows timeout error after 30s when loading is stuck", () => {
     const { container } = render(<BrowserPane {...baseProps} />);
     const webview = getWebviewElement(container);
 
@@ -273,7 +275,9 @@ describe("BrowserPane webview lifecycle regression", () => {
       vi.advanceTimersByTime(30000);
     });
 
-    expect(webview.reload).toHaveBeenCalledTimes(1);
+    expect(webview.stop).toHaveBeenCalledTimes(1);
+    expect(webview.reload).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Page Load Timed Out");
   });
 
   it("clears stuck-load timeout on did-stop-loading", () => {
@@ -292,6 +296,7 @@ describe("BrowserPane webview lifecycle regression", () => {
     });
 
     expect(webview.reload).not.toHaveBeenCalled();
+    expect(webview.stop).not.toHaveBeenCalled();
   });
 
   it("clears stuck-load timeout on did-fail-load", () => {
@@ -304,6 +309,8 @@ describe("BrowserPane webview lifecycle regression", () => {
       emitWebviewEvent(webview, "did-fail-load", {
         errorCode: -105,
         errorDescription: "Name not resolved",
+        isMainFrame: true,
+        validatedURL: "http://badsite.test/",
       });
     });
 
@@ -312,6 +319,7 @@ describe("BrowserPane webview lifecycle regression", () => {
     });
 
     expect(webview.reload).not.toHaveBeenCalled();
+    expect(webview.stop).not.toHaveBeenCalled();
   });
 
   it("cleans pending timeout on unmount", () => {
@@ -330,6 +338,7 @@ describe("BrowserPane webview lifecycle regression", () => {
     });
 
     expect(webview.reload).not.toHaveBeenCalled();
+    expect(webview.stop).not.toHaveBeenCalled();
   });
 
   it("renders drag protection overlay and hides webview when isDragging is true", () => {
@@ -639,6 +648,215 @@ describe("BrowserPane webview lifecycle regression", () => {
       // Should show generic error since the user actively navigated
       expect(container.textContent).not.toContain("The saved URL is no longer reachable");
       expect(container.textContent).toContain("ERR_CONNECTION_REFUSED");
+    });
+  });
+
+  describe("slow-load and timeout escalation", () => {
+    it("shows slow-load message and Cancel after 5s of loading", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+
+      // Before 5s, only spinner (no slow-load text)
+      expect(container.textContent).not.toContain("Taking longer than usual");
+
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      expect(container.textContent).toContain("Taking longer than usual");
+      expect(container.textContent).toContain("Cancel");
+    });
+
+    it("Cancel stops the webview and shows cancelled error", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      const cancelButton = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Cancel")
+      );
+      expect(cancelButton).toBeDefined();
+
+      act(() => {
+        cancelButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(webview.stop).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("Load cancelled");
+      expect(container.textContent).toContain("Retry");
+    });
+
+    it("timeout calls webview.stop() instead of reload", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(30000);
+      });
+
+      expect(webview.stop).toHaveBeenCalledTimes(1);
+      expect(webview.reload).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("Page Load Timed Out");
+    });
+
+    it("timeout error overlay shows Retry and Open External buttons", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(30000);
+      });
+
+      expect(container.textContent).toContain("Retry");
+      expect(container.textContent).toContain("Open in External Browser");
+    });
+
+    it("Retry from timeout clears error and loads current URL", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(30000);
+      });
+
+      webview.stop.mockClear();
+
+      const retryButton = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Retry")
+      );
+      expect(retryButton).toBeDefined();
+
+      act(() => {
+        retryButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:5173/");
+    });
+
+    it("clears slow timer on did-stop-loading", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+
+      act(() => {
+        webview.setMockLoading(false);
+        emitWebviewEvent(webview, "did-stop-loading");
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      expect(container.textContent).not.toContain("Taking longer than usual");
+    });
+
+    it("clears slow timer on did-fail-load", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -105,
+          errorDescription: "Name not resolved",
+          isMainFrame: true,
+          validatedURL: "http://badsite.test/",
+        });
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      expect(container.textContent).not.toContain("Taking longer than usual");
+    });
+
+    it("shows DNS failure message with hostname for -105", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -105,
+          errorDescription: "ERR_NAME_NOT_RESOLVED",
+          isMainFrame: true,
+          validatedURL: "http://nonexistent.example.com/page",
+        });
+      });
+
+      expect(container.textContent).toContain("Couldn't resolve");
+      expect(container.textContent).toContain("nonexistent.example.com");
+    });
+
+    it("shows no-internet message for -106", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -106,
+          errorDescription: "ERR_INTERNET_DISCONNECTED",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/",
+        });
+      });
+
+      expect(container.textContent).toContain("No internet connection");
+    });
+
+    it("cleans slow timer on unmount", () => {
+      const { container, unmount } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+
+      unmount();
+
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      // No error — timer was cleaned up
+      expect(container.textContent).not.toContain("Taking longer than usual");
     });
   });
 });

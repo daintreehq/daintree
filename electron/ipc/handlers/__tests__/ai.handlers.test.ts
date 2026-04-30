@@ -46,6 +46,27 @@ vi.mock("../../../services/UserAgentRegistryService.js", () => ({
 
 vi.mock("../../utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  typedHandle: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: null,
+          projectId: null,
+        };
+        return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 vi.mock("../../../menu.js", () => ({
@@ -168,16 +189,11 @@ describe("ai handler payload validation", () => {
       } as never
     );
 
-    expect(storeMock.set).toHaveBeenCalledWith(
-      "agentSettings",
-      expect.objectContaining({
-        agents: {
-          claude: {
-            customFlags: "--foo",
-          },
-        },
-      })
-    );
+    expect(storeMock.set).toHaveBeenCalledWith("agentSettings.agents", {
+      claude: {
+        customFlags: "--foo",
+      },
+    });
     expect(result).toEqual(
       expect.objectContaining({
         agents: expect.objectContaining({
@@ -204,13 +220,10 @@ describe("ai handler payload validation", () => {
     const result = await handler({} as never, "claude");
 
     expect(storeMock.set).toHaveBeenCalledWith(
-      "agentSettings",
+      "agentSettings.agents",
       expect.objectContaining({
-        misc: true,
-        agents: expect.objectContaining({
-          claude: expect.objectContaining({
-            dangerousEnabled: false,
-          }),
+        claude: expect.objectContaining({
+          dangerousEnabled: false,
         }),
       })
     );
@@ -248,13 +261,11 @@ describe("ai handler payload validation", () => {
     );
 
     expect(storeMock.set).toHaveBeenCalledWith(
-      "agentSettings",
+      "agentSettings.agents",
       expect.objectContaining({
-        agents: {
-          claude: expect.objectContaining({
-            pinned: false,
-          }),
-        },
+        claude: expect.objectContaining({
+          pinned: false,
+        }),
       })
     );
     expect(result).toEqual(
@@ -276,12 +287,10 @@ describe("ai handler payload validation", () => {
     await handler({} as never, " claude ");
 
     expect(storeMock.set).toHaveBeenCalledWith(
-      "agentSettings",
+      "agentSettings.agents",
       expect.objectContaining({
-        agents: expect.objectContaining({
-          claude: expect.objectContaining({
-            dangerousEnabled: false,
-          }),
+        claude: expect.objectContaining({
+          dangerousEnabled: false,
         }),
       })
     );

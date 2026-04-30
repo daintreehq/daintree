@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useDeferredValue } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { Spinner } from "@/components/ui/Spinner";
@@ -47,7 +47,6 @@ export function CommandPicker({
   filter,
 }: CommandPickerProps) {
   const [query, setQuery] = useState("");
-  const deferredQuery = useDeferredValue(query);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const filteredCommands = useMemo(() => {
@@ -57,15 +56,15 @@ export function CommandPicker({
       result = result.filter((cmd) => filter.includes(cmd.category));
     }
 
-    if (deferredQuery.trim()) {
+    if (query.trim()) {
       result = result.filter((cmd) => {
         const searchText = `${cmd.id} ${cmd.label} ${cmd.description} ${cmd.keywords?.join(" ") ?? ""}`;
-        return fuzzyMatch(searchText, deferredQuery.trim());
+        return fuzzyMatch(searchText, query.trim());
       });
     }
 
     return result;
-  }, [commands, filter, deferredQuery]);
+  }, [commands, filter, query]);
 
   const groupedCommands = useMemo(() => {
     const groups = new Map<CommandCategory, CommandManifestEntry[]>();
@@ -97,7 +96,7 @@ export function CommandPicker({
     const starts = new Map<string, CommandCategory>();
     for (const group of groupedCommands) {
       if (group.commands.length > 0) {
-        starts.set(group.commands[0].id, group.category);
+        starts.set(group.commands[0]!.id, group.category);
       }
     }
     return starts;
@@ -118,7 +117,7 @@ export function CommandPicker({
     setSelectedIndex((prev) => {
       if (flatCommands.length === 0) return 0;
       let next = (prev - 1 + flatCommands.length) % flatCommands.length;
-      while (!flatCommands[next].enabled && next !== prev) {
+      while (!flatCommands[next]!.enabled && next !== prev) {
         next = (next - 1 + flatCommands.length) % flatCommands.length;
       }
       return next;
@@ -129,7 +128,7 @@ export function CommandPicker({
     setSelectedIndex((prev) => {
       if (flatCommands.length === 0) return 0;
       let next = (prev + 1) % flatCommands.length;
-      while (!flatCommands[next].enabled && next !== prev) {
+      while (!flatCommands[next]!.enabled && next !== prev) {
         next = (next + 1) % flatCommands.length;
       }
       return next;
@@ -220,7 +219,7 @@ export function CommandPicker({
               <div className="flex items-center justify-between">
                 <span className="font-mono text-sm text-daintree-text/90">/{cmd.id}</span>
                 {cmd.hasBuilder && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-daintree-accent/20 text-daintree-accent">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-overlay-medium text-daintree-text/70">
                     Builder
                   </span>
                 )}

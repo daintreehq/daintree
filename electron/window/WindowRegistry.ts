@@ -3,6 +3,7 @@ import type { EventBuffer } from "../services/EventBuffer.js";
 import type { PortalManager } from "../services/PortalManager.js";
 import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
+import { DisposableStore } from "../utils/lifecycle.js";
 
 export interface WindowServices {
   portalManager?: PortalManager;
@@ -20,7 +21,7 @@ export interface WindowContext {
   projectPath: string | null;
   abortController: AbortController;
   services: WindowServices;
-  cleanup: Array<() => void>;
+  cleanup: DisposableStore;
   /** @internal Set to true after unregister runs to prevent double-cleanup from deferred event listeners. */
   _unregistered?: boolean;
 }
@@ -50,7 +51,7 @@ export class WindowRegistry {
       projectPath: opts?.projectPath ?? null,
       abortController: new AbortController(),
       services: {},
-      cleanup: [],
+      cleanup: new DisposableStore(),
     };
 
     this.windows.set(windowId, ctx);
@@ -103,13 +104,7 @@ export class WindowRegistry {
     ctx._unregistered = true;
     ctx.abortController.abort();
 
-    for (const fn of ctx.cleanup) {
-      try {
-        fn();
-      } catch {
-        // Ignore cleanup errors during disposal
-      }
-    }
+    ctx.cleanup.dispose();
 
     this.webContentsIndex.delete(ctx.webContentsId);
     const appViewWcIds = this.appViewWebContentsIds.get(windowId);

@@ -4,7 +4,22 @@ import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notify } from "@/lib/notify";
+import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
+import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
+import type { TerminalInstance } from "@shared/types/panel";
+
+function countActiveAgentPanels(panelsById: Record<string, TerminalInstance>): number {
+  let count = 0;
+  for (const panel of Object.values(panelsById)) {
+    if (!panel?.detectedAgentId && !panel?.launchAgentId) continue;
+    const state = panel.agentState;
+    if (state && ACTIVE_AGENT_STATES.has(state)) count += 1;
+    if (count >= 2) return count;
+  }
+  return count;
+}
 
 export interface GettingStartedChecklistState {
   visible: boolean;
@@ -29,14 +44,23 @@ function reconcileCurrentState(
   }
   if (
     !cl.items.launchedAgent &&
-    usePanelStore
-      .getState()
-      .panelIds.some((id) => usePanelStore.getState().panelsById[id]?.kind === "agent")
+    usePanelStore.getState().panelIds.some((id) => {
+      const p = usePanelStore.getState().panelsById[id];
+      return (
+        Boolean(p?.launchAgentId) || Boolean(p?.detectedAgentId) || p?.everDetectedAgent === true
+      );
+    })
   ) {
     markItem("launchedAgent");
   }
   if (!cl.items.createdWorktree && getCurrentViewStore().getState().worktrees.size > 1) {
     markItem("createdWorktree");
+  }
+  if (
+    !cl.items.ranSecondParallelAgent &&
+    countActiveAgentPanels(usePanelStore.getState().panelsById) >= 2
+  ) {
+    markItem("ranSecondParallelAgent");
   }
 }
 
@@ -47,11 +71,15 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
   const [forceShow, setForceShow] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
   const checklistRef = useRef(checklist);
-  checklistRef.current = checklist;
+  useEffect(() => {
+    checklistRef.current = checklist;
+  }, [checklist]);
 
   const markItem = useCallback((item: ChecklistItemId) => {
     if (!isElectronAvailable()) return;
-    void window.electron.onboarding.markChecklistItem(item);
+    safeFireAndForget(window.electron.onboarding.markChecklistItem(item), {
+      context: "Marking onboarding checklist item",
+    });
     let shouldCelebrate = false;
     let shouldDismiss = false;
     setChecklist((prev) => {
@@ -70,7 +98,9 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       return updated;
     });
     if (shouldDismiss) {
-      void window.electron.onboarding.dismissChecklist();
+      safeFireAndForget(window.electron.onboarding.dismissChecklist(), {
+        context: "Dismissing onboarding checklist",
+      });
     }
     if (shouldCelebrate) {
       notify({
@@ -80,13 +110,17 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
         duration: 5000,
       });
       setShowCelebration(true);
-      void window.electron.onboarding.markChecklistCelebrationShown();
+      safeFireAndForget(window.electron.onboarding.markChecklistCelebrationShown(), {
+        context: "Marking onboarding celebration shown",
+      });
     }
   }, []);
 
   const dismiss = useCallback(() => {
     if (!isElectronAvailable()) return;
-    void window.electron.onboarding.dismissChecklist();
+    safeFireAndForget(window.electron.onboarding.dismissChecklist(), {
+      context: "Dismissing onboarding checklist (user action)",
+    });
     setChecklist((prev) => (prev ? { ...prev, dismissed: true } : prev));
     setForceShow(false);
   }, []);
@@ -105,8 +139,32 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
         setOnboardingCompleted(onboarding.completed);
         setChecklist(checklistState);
       })
-      .catch(console.error);
+      .catch((err) => logError("Failed to load checklist state", err));
   }, [isStateLoaded]);
+
+  // Subscribe to main-process checklist pushes. Every active WebContentsView
+  // receives the push via `broadcastToRenderer`, so cached views stay in sync.
+  // We merge by taking the union of truthy items rather than overwriting — this
+  // prevents a pre-push `getChecklist()` hydration promise from clobbering a
+  // newer push.
+  useEffect(() => {
+    if (!isElectronAvailable() || !window.electron?.onboarding?.onChecklistPush) return;
+    return window.electron.onboarding.onChecklistPush((next) => {
+      setChecklist((prev) => {
+        if (!prev) return next;
+        const mergedItems = { ...prev.items } as typeof prev.items;
+        for (const key of Object.keys(next.items) as Array<keyof typeof next.items>) {
+          if (next.items[key] || prev.items[key]) mergedItems[key] = true;
+        }
+        return {
+          ...next,
+          items: mergedItems,
+          dismissed: prev.dismissed || next.dismissed,
+          celebrationShown: prev.celebrationShown || next.celebrationShown,
+        };
+      });
+    });
+  }, []);
 
   // Set up Zustand subscriptions for auto-completion + reconcile current state
   useEffect(() => {
@@ -125,9 +183,22 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       }),
       usePanelStore.subscribe((state) => {
         const cl = getChecklist();
-        if (!cl || cl.dismissed || cl.items.launchedAgent) return;
-        if (state.panelIds.some((id) => state.panelsById[id]?.kind === "agent")) {
+        if (!cl || cl.dismissed) return;
+        if (
+          !cl.items.launchedAgent &&
+          state.panelIds.some((id) => {
+            const p = state.panelsById[id];
+            return (
+              Boolean(p?.launchAgentId) ||
+              Boolean(p?.detectedAgentId) ||
+              p?.everDetectedAgent === true
+            );
+          })
+        ) {
           markItem("launchedAgent");
+        }
+        if (!cl.items.ranSecondParallelAgent && countActiveAgentPanels(state.panelsById) >= 2) {
+          markItem("ranSecondParallelAgent");
         }
       }),
       viewStore.subscribe((state) => {
@@ -157,7 +228,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
           .then((state) => {
             setChecklist({ ...state, dismissed: false });
           })
-          .catch(console.error);
+          .catch((err) => logError("Failed to show getting started checklist", err));
       }
     };
     window.addEventListener("daintree:show-getting-started", handleShow);
@@ -175,7 +246,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
         // Reconcile after hydration in case stores already have data
         setTimeout(() => reconcileCurrentState(markItem, () => checklistRef.current), 0);
       })
-      .catch(console.error);
+      .catch((err) => logError("Failed to notify onboarding complete", err));
   }, [markItem]);
 
   // Auto-clear celebration after animation completes

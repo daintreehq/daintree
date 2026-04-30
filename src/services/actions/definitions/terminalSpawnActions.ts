@@ -1,9 +1,9 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import { TerminalTypeSchema } from "./schemas";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 export function registerTerminalSpawnActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -20,7 +20,6 @@ export function registerTerminalSpawnActions(
       const addPanel = usePanelStore.getState().addPanel;
       const terminalId = await addPanel({
         kind: "terminal",
-        type: "terminal",
         cwd: callbacks.getDefaultCwd(),
         location: "grid",
         worktreeId: callbacks.getActiveWorktreeId(),
@@ -55,22 +54,36 @@ export function registerTerminalSpawnActions(
         const location =
           terminal.location === "grid" || terminal.location === "dock" ? terminal.location : "grid";
         const options = await buildPanelDuplicateOptions(terminal, location);
-        if (terminal.title) {
-          options.title = `${terminal.title} (copy)`;
+        if (options.title) {
+          const defaultTitle = getDefaultTitle(terminal.kind, terminal);
+          if (options.title !== defaultTitle) {
+            options.title = `${options.title} (copy)`;
+          }
         }
         await state.addPanel(options);
       } else if (nonTrashed.length === 0) {
         const lastClosed = state.lastClosedConfig;
         if (lastClosed) {
+          const baseOptions = lastClosed.launchAgentId
+            ? await buildPanelDuplicateOptions(
+                {
+                  id: "last-closed",
+                  title: lastClosed.title ?? "Terminal",
+                  cwd: lastClosed.cwd ?? callbacks.getDefaultCwd(),
+                  location: "grid",
+                  ...lastClosed,
+                },
+                "grid"
+              )
+            : lastClosed;
           await state.addPanel({
-            ...lastClosed,
+            ...baseOptions,
             location: "grid",
             worktreeId: lastClosed.worktreeId ?? callbacks.getActiveWorktreeId(),
           });
         } else {
           await state.addPanel({
             kind: "terminal",
-            type: "terminal",
             cwd: callbacks.getDefaultCwd(),
             location: "grid",
             worktreeId: callbacks.getActiveWorktreeId(),
@@ -137,31 +150,6 @@ export function registerTerminalSpawnActions(
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
       state.moveToNewWorktreeAndTransfer(targetId);
-    },
-  }));
-
-  actions.set("terminal.convertType", () => ({
-    id: "terminal.convertType",
-    title: "Convert Terminal Type",
-    description: "Convert terminal to a different type",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    argsSchema: z.object({
-      terminalId: z.string().optional(),
-      type: TerminalTypeSchema,
-    }),
-    run: async (args: unknown) => {
-      const { terminalId, type } = args as { terminalId?: string; type: string };
-      const state = usePanelStore.getState();
-      const targetId = terminalId ?? state.focusedId;
-      if (targetId) {
-        state.convertTerminalType(
-          targetId,
-          type as "terminal" | "claude" | "gemini" | "codex" | "opencode"
-        );
-      }
     },
   }));
 }

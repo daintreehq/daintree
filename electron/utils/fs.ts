@@ -1,5 +1,6 @@
-import { access, unlink as fsUnlink } from "fs/promises";
-import { unlinkSync, writeFileSync } from "fs";
+import { dirname } from "path";
+import { access, open, unlink as fsUnlink } from "fs/promises";
+import { closeSync, fsyncSync, openSync, unlinkSync, writeFileSync } from "fs";
 import stubbornFs from "stubborn-fs";
 
 // Wall-clock retry budgets for transient file-locking errors (EPERM/EBUSY/EACCES).
@@ -46,22 +47,59 @@ function generateTempPath(filePath: string): string {
   return `${filePath}.${suffix}.tmp`;
 }
 
+async function syncParentDirectory(filePath: string): Promise<void> {
+  if (process.platform === "win32") return;
+  const dirPath = dirname(filePath);
+  let dirHandle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    dirHandle = await open(dirPath, "r");
+    await dirHandle.sync();
+  } finally {
+    try {
+      await dirHandle?.close();
+    } catch {
+      // Suppress close errors; sync failure (if any) is the primary error
+    }
+  }
+}
+
+function syncParentDirectorySync(filePath: string): void {
+  if (process.platform === "win32") return;
+  const dirPath = dirname(filePath);
+  let fd: number | undefined;
+  try {
+    fd = openSync(dirPath, "r");
+    fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Suppress close errors
+      }
+    }
+  }
+}
+
 /**
  * Atomic writeFile: writes to a temp file with flush, then renames to the
  * target path. If any step fails the temp file is cleaned up best-effort.
+ * Accepts strings (encoded with `encoding`) or binary buffers.
  */
 export async function resilientAtomicWriteFile(
   filePath: string,
-  data: string,
+  data: string | Buffer | Uint8Array,
   encoding: BufferEncoding = "utf-8"
 ): Promise<void> {
   const tempPath = generateTempPath(filePath);
+  const writeOptions =
+    typeof data === "string"
+      ? ({ encoding, flush: true } as Parameters<typeof writeFileSync>[2])
+      : ({ flush: true } as Parameters<typeof writeFileSync>[2]);
   try {
-    await stubbornFs.retry.writeFile({ timeout: RETRY_TIMEOUT_MS })(tempPath, data, {
-      encoding,
-      flush: true,
-    } as Parameters<typeof writeFileSync>[2]);
+    await stubbornFs.retry.writeFile({ timeout: RETRY_TIMEOUT_MS })(tempPath, data, writeOptions);
     await resilientRename(tempPath, filePath);
+    await syncParentDirectory(filePath);
   } catch (error) {
     fsUnlink(tempPath).catch(() => {});
     throw error;
@@ -82,6 +120,7 @@ export function resilientAtomicWriteFileSync(
   try {
     writeFileSync(tempPath, data, { encoding, flush: true } as Parameters<typeof writeFileSync>[2]);
     resilientRenameSync(tempPath, filePath);
+    syncParentDirectorySync(filePath);
   } catch (error) {
     try {
       unlinkSync(tempPath);

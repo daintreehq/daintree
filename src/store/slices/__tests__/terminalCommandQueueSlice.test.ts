@@ -72,12 +72,6 @@ describe("TerminalCommandQueueSlice", () => {
       expect(terminalClient.write).toHaveBeenCalledWith("test-terminal", "test data");
     });
 
-    it("should write user input immediately when agent is running", () => {
-      mockTerminal.agentState = "running";
-      state.queueCommand("test-terminal", "test data", "test description", "user");
-      expect(terminalClient.write).toHaveBeenCalledWith("test-terminal", "test data");
-    });
-
     it("should write user input immediately when agent is waiting", () => {
       mockTerminal.agentState = "waiting";
       state.queueCommand("test-terminal", "test data", "test description", "user");
@@ -122,8 +116,8 @@ describe("TerminalCommandQueueSlice", () => {
       expect(terminalClient.write).not.toHaveBeenCalled();
     });
 
-    it("should queue automation input when agent is running", () => {
-      mockTerminal.agentState = "running";
+    it("should queue automation input when agent is directing", () => {
+      mockTerminal.agentState = "directing";
       state.queueCommand("test-terminal", "test data", "test description", "automation");
       expect(terminalClient.write).not.toHaveBeenCalled();
     });

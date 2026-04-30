@@ -1,11 +1,21 @@
 import { create } from "zustand";
-import type { CliAvailability, AgentAvailabilityState } from "@shared/types";
+import { subscribeWithSelector } from "zustand/middleware";
+import type { CliAvailability, AgentAvailabilityState, AgentCliDetails } from "@shared/types";
 import { cliAvailabilityClient } from "@/clients";
 import { getAgentIds } from "@/config/agents";
 import { isElectronAvailable } from "@/hooks/useElectron";
+import { safeJSONParse } from "./persistence/safeStorage";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface CliAvailabilityState {
   availability: CliAvailability;
+  /**
+   * Per-agent detection metadata (resolved path, probe source, authConfirmed).
+   * Populated alongside `availability` by each refresh. Kept separate from
+   * `availability` so the IPC surface stays stable and consumers that only
+   * need the coarse state don't subscribe to detail churn.
+   */
+  details: AgentCliDetails;
   isLoading: boolean;
   isRefreshing: boolean;
   error: string | null;
@@ -37,7 +47,10 @@ function defaultAvailability(): CliAvailability {
   return Object.fromEntries(getAgentIds().map((id) => [id, "missing"])) as CliAvailability;
 }
 
-const CACHE_STORAGE_KEY = "daintree:cliAvailability:v1";
+// v2 evicts stale false-positive `ready` states cached under the pre-#5641
+// npx-cache probe (see CliAvailabilityService.probeNpmGlobal). Bump on any
+// future probe semantics change that could invert a prior verdict.
+const CACHE_STORAGE_KEY = "daintree:cliAvailability:v3";
 // Stale cache is still shown but triggers a synchronous refresh on init.
 const CACHE_STALE_AFTER_MS = 24 * 60 * 60 * 1000; // 24h
 // Short-window throttle for mid-session refreshes (tray-open, visibility,
@@ -49,6 +62,8 @@ const VALID_STATES: ReadonlySet<AgentAvailabilityState> = new Set<AgentAvailabil
   "ready",
   "installed",
   "missing",
+  "blocked",
+  "unauthenticated",
 ]);
 
 interface PersistedCache {
@@ -62,8 +77,11 @@ function loadCache(): PersistedCache | null {
   }
   try {
     const raw = window.localStorage.getItem(CACHE_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = safeJSONParse<unknown>(
+      raw,
+      { store: "cliAvailabilityStore", key: CACHE_STORAGE_KEY },
+      null
+    );
     if (
       !parsed ||
       typeof parsed !== "object" ||
@@ -111,127 +129,157 @@ let epoch = 0;
 let initPromise: Promise<void> | null = null;
 let refreshPromise: Promise<void> | null = null;
 
-export const useCliAvailabilityStore = create<CliAvailabilityStore>()((set, get) => ({
-  availability: defaultAvailability(),
-  isLoading: true,
-  isRefreshing: false,
-  error: null,
-  isInitialized: false,
-  lastCheckedAt: null,
-  hasRealData: false,
+// Fetch availability and details in one pass so the UI never renders a
+// "Needs Setup" nudge for an agent whose availability already arrived as
+// ready. `getDetails` reads the cache populated by the same `refresh` call,
+// so no extra probe is triggered.
+//
+// `details` is `null` when the IPC call failed — callers keep the previous
+// value rather than wiping the store (a transient getDetails failure
+// shouldn't silently suppress the sign-in nudge).
+async function fetchAvailabilityAndDetails(): Promise<{
+  availability: CliAvailability;
+  details: AgentCliDetails | null;
+}> {
+  const availability = await cliAvailabilityClient.refresh();
+  try {
+    return { availability, details: await cliAvailabilityClient.getDetails() };
+  } catch {
+    return { availability, details: null };
+  }
+}
 
-  initialize: () => {
-    if (get().isInitialized) return Promise.resolve();
-    if (initPromise) return initPromise;
+export const useCliAvailabilityStore = create<CliAvailabilityStore>()(
+  subscribeWithSelector((set, get) => ({
+    availability: defaultAvailability(),
+    details: {},
+    isLoading: true,
+    isRefreshing: false,
+    error: null,
+    isInitialized: false,
+    lastCheckedAt: null,
+    hasRealData: false,
 
-    // Hydrate from localStorage before kicking off the IPC call. This kills
-    // the first-paint toolbar flicker: cached pins render immediately and
-    // only reconcile when the fresh result lands.
-    //
-    // Deliberately omit `lastCheckedAt` so the 30s refresh throttle only
-    // kicks in after a successful *live* probe this session. Persisting
-    // the cached timestamp would mute the first mid-session refresh after
-    // a relaunch (and, with clock skew, could suppress refreshes
-    // indefinitely).
-    const cached = loadCache();
-    if (cached) {
-      set({
-        availability: cached.availability,
-        hasRealData: true,
-      });
-    }
+    initialize: () => {
+      if (get().isInitialized) return Promise.resolve();
+      if (initPromise) return initPromise;
 
-    if (!isElectronAvailable()) {
-      set({ isLoading: false, isInitialized: true });
-      return Promise.resolve();
-    }
-
-    const myEpoch = epoch;
-    initPromise = (async () => {
-      try {
-        set({ isLoading: true, error: null });
-        const availability = await cliAvailabilityClient.refresh();
-        if (epoch === myEpoch) {
-          const now = Date.now();
-          saveCache(availability, now);
-          set({
-            availability,
-            isLoading: false,
-            isInitialized: true,
-            lastCheckedAt: now,
-            hasRealData: true,
-          });
-        }
-      } catch (e) {
-        if (epoch === myEpoch) {
-          set({
-            error: e instanceof Error ? e.message : "Failed to check CLI availability",
-            isLoading: false,
-            isInitialized: true,
-          });
-        }
-      } finally {
-        if (epoch === myEpoch) {
-          initPromise = null;
-        }
+      // Hydrate from localStorage before kicking off the IPC call. This kills
+      // the first-paint toolbar flicker: cached pins render immediately and
+      // only reconcile when the fresh result lands.
+      //
+      // Deliberately omit `lastCheckedAt` so the 30s refresh throttle only
+      // kicks in after a successful *live* probe this session. Persisting
+      // the cached timestamp would mute the first mid-session refresh after
+      // a relaunch (and, with clock skew, could suppress refreshes
+      // indefinitely).
+      const cached = loadCache();
+      if (cached) {
+        set({
+          availability: cached.availability,
+          hasRealData: true,
+        });
       }
-    })();
 
-    return initPromise;
-  },
-
-  refresh: (force = false) => {
-    // If init is still in-flight, join it rather than firing a duplicate IPC call.
-    if (initPromise) return initPromise;
-
-    // Skip if the last successful probe landed within the throttle window.
-    // Failed refreshes do not set lastCheckedAt, so they stay retryable.
-    // Explicit user gestures pass `force: true` to bypass the window.
-    if (!force) {
-      const { lastCheckedAt } = get();
-      if (lastCheckedAt !== null && Date.now() - lastCheckedAt < REFRESH_THROTTLE_MS) {
+      if (!isElectronAvailable()) {
+        set({ isLoading: false, isInitialized: true });
         return Promise.resolve();
       }
-    }
 
-    if (refreshPromise) return refreshPromise;
-
-    if (!isElectronAvailable()) return Promise.resolve();
-
-    const myEpoch = epoch;
-    refreshPromise = (async () => {
-      try {
-        set({ isRefreshing: true, error: null });
-        const availability = await cliAvailabilityClient.refresh();
-        if (epoch === myEpoch) {
-          const now = Date.now();
-          saveCache(availability, now);
-          set({
-            availability,
-            isRefreshing: false,
-            error: null,
-            lastCheckedAt: now,
-            hasRealData: true,
-          });
+      const myEpoch = epoch;
+      initPromise = (async () => {
+        try {
+          set({ isLoading: true, error: null });
+          const { availability, details } = await fetchAvailabilityAndDetails();
+          if (epoch === myEpoch) {
+            const now = Date.now();
+            saveCache(availability, now);
+            set({
+              availability,
+              // Only overwrite details when the IPC succeeded — `null` means
+              // preserve previous (none on init, but same code path runs in
+              // refresh where stale values matter for the nudge UX).
+              ...(details === null ? {} : { details }),
+              isLoading: false,
+              isInitialized: true,
+              lastCheckedAt: now,
+              hasRealData: true,
+            });
+          }
+        } catch (e) {
+          if (epoch === myEpoch) {
+            set({
+              error: formatErrorMessage(e, "Failed to check CLI availability"),
+              isLoading: false,
+              isInitialized: true,
+            });
+          }
+        } finally {
+          if (epoch === myEpoch) {
+            initPromise = null;
+          }
         }
-      } catch (e) {
-        if (epoch === myEpoch) {
-          set({
-            error: e instanceof Error ? e.message : "Failed to refresh CLI availability",
-            isRefreshing: false,
-          });
-        }
-        throw e;
-      } finally {
-        if (epoch === myEpoch) {
-          refreshPromise = null;
+      })();
+
+      return initPromise;
+    },
+
+    refresh: (force = false) => {
+      // If init is still in-flight, join it rather than firing a duplicate IPC call.
+      if (initPromise) return initPromise;
+
+      // Skip if the last successful probe landed within the throttle window.
+      // Failed refreshes do not set lastCheckedAt, so they stay retryable.
+      // Explicit user gestures pass `force: true` to bypass the window.
+      if (!force) {
+        const { lastCheckedAt } = get();
+        if (lastCheckedAt !== null && Date.now() - lastCheckedAt < REFRESH_THROTTLE_MS) {
+          return Promise.resolve();
         }
       }
-    })();
 
-    return refreshPromise;
-  },
-}));
+      if (refreshPromise) return refreshPromise;
+
+      if (!isElectronAvailable()) return Promise.resolve();
+
+      const myEpoch = epoch;
+      refreshPromise = (async () => {
+        try {
+          set({ isRefreshing: true, error: null });
+          const { availability, details } = await fetchAvailabilityAndDetails();
+          if (epoch === myEpoch) {
+            const now = Date.now();
+            saveCache(availability, now);
+            set({
+              availability,
+              // Preserve previous details when getDetails IPC failed so a
+              // transient error doesn't wipe the authConfirmed nudge.
+              ...(details === null ? {} : { details }),
+              isRefreshing: false,
+              error: null,
+              lastCheckedAt: now,
+              hasRealData: true,
+            });
+          }
+        } catch (e) {
+          if (epoch === myEpoch) {
+            set({
+              error: formatErrorMessage(e, "Failed to refresh CLI availability"),
+              isRefreshing: false,
+            });
+          }
+          throw e;
+        } finally {
+          if (epoch === myEpoch) {
+            refreshPromise = null;
+          }
+        }
+      })();
+
+      return refreshPromise;
+    },
+  }))
+);
 
 export function cleanupCliAvailabilityStore() {
   epoch++;
@@ -239,6 +287,7 @@ export function cleanupCliAvailabilityStore() {
   refreshPromise = null;
   useCliAvailabilityStore.setState({
     availability: defaultAvailability(),
+    details: {},
     isLoading: true,
     isRefreshing: false,
     error: null,

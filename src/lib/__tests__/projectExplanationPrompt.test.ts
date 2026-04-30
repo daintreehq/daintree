@@ -78,7 +78,7 @@ describe("getDefaultAgentId", () => {
     expect(getDefaultAgentId(undefined, undefined, availability)).toBeNull();
   });
 
-  it("should prioritize agents in order: claude, gemini, codex, opencode", () => {
+  it("should prioritize agents in registry order: claude, opencode, gemini, codex", () => {
     const availability1: CliAvailability = {
       claude: "ready",
       gemini: "ready",
@@ -93,23 +93,23 @@ describe("getDefaultAgentId", () => {
       codex: "ready",
       opencode: "ready",
     };
-    expect(getDefaultAgentId(undefined, undefined, availability2)).toBe("gemini");
+    expect(getDefaultAgentId(undefined, undefined, availability2)).toBe("opencode");
 
     const availability3: CliAvailability = {
       claude: "missing",
-      gemini: "missing",
+      gemini: "ready",
       codex: "ready",
-      opencode: "ready",
+      opencode: "missing",
     };
-    expect(getDefaultAgentId(undefined, undefined, availability3)).toBe("codex");
+    expect(getDefaultAgentId(undefined, undefined, availability3)).toBe("gemini");
 
     const availability4: CliAvailability = {
       claude: "missing",
       gemini: "missing",
-      codex: "missing",
-      opencode: "ready",
+      codex: "ready",
+      opencode: "missing",
     };
-    expect(getDefaultAgentId(undefined, undefined, availability4)).toBe("opencode");
+    expect(getDefaultAgentId(undefined, undefined, availability4)).toBe("codex");
   });
 
   it("should ignore default agent if it's not a valid agent", () => {

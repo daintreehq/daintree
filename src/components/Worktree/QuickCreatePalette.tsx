@@ -6,6 +6,8 @@ import { getAutoAssign } from "@shared/types/project";
 import type { TerminalRecipe } from "@/types";
 import { Settings2 } from "lucide-react";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { actionService } from "@/services/ActionService";
+import { Button } from "@/components/ui/button";
 
 const TYPE_BADGES: Record<string, string> = {
   terminal: "Terminal",
@@ -34,10 +36,11 @@ function RecipeListItem({
         id={`quick-create-option-${item.id}`}
         onClick={onClick}
         className={cn(
-          "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border flex items-center gap-2",
+          "relative w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border flex items-center gap-2",
           "border-daintree-border/40 hover:border-daintree-border/60",
           "bg-daintree-bg hover:bg-surface transition-colors",
-          isSelected && "border-daintree-accent/60 bg-daintree-accent/10"
+          isSelected &&
+            "border-overlay bg-overlay-soft text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
         )}
         aria-selected={isSelected}
         role="option"
@@ -60,10 +63,11 @@ function RecipeListItem({
       id={`quick-create-option-${recipe.id}`}
       onClick={onClick}
       className={cn(
-        "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border flex flex-col gap-0.5",
+        "relative w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border flex flex-col gap-0.5",
         "border-daintree-border/40 hover:border-daintree-border/60",
         "bg-daintree-bg hover:bg-surface transition-colors",
-        isSelected && "border-daintree-accent/60 bg-daintree-accent/10"
+        isSelected &&
+          "border-overlay bg-overlay-soft text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
       )}
       aria-selected={isSelected}
       role="option"
@@ -74,7 +78,7 @@ function RecipeListItem({
           {uniqueTypes.map((type) => (
             <span
               key={type}
-              className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-daintree-accent/10 text-daintree-text/60 text-[11px]"
+              className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-overlay-medium text-daintree-text/70 text-[11px]"
             >
               {type}
             </span>
@@ -97,6 +101,12 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
   const handleClose = useCallback(() => {
     closeQuickCreate();
     palette.close();
+  }, [closeQuickCreate, palette]);
+
+  const handleOpenRecipeEditor = useCallback(() => {
+    closeQuickCreate();
+    palette.close();
+    void actionService.dispatch("recipe.manager.open", undefined, { source: "user" });
   }, [closeQuickCreate, palette]);
 
   const showAssignToggle =
@@ -130,7 +140,24 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       searchAriaLabel="Search recipes"
       listId="quick-create-palette-list"
       itemIdPrefix="quick-create-option"
-      emptyMessage="No recipes yet — create one in the recipe editor"
+      emptyMessage="No recipes yet"
+      emptyContent={
+        <div className="flex flex-col items-center gap-3 mt-4">
+          <p className="text-xs text-daintree-text/40">
+            Create a recipe in the recipe editor to get started.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleOpenRecipeEditor}
+            className="gap-1.5"
+          >
+            <Settings2 className="w-3.5 h-3.5" />
+            <span>Open recipe editor</span>
+          </Button>
+        </div>
+      }
       noMatchMessage={`No recipes match "${palette.query}"`}
       totalResults={palette.totalResults}
       afterList={

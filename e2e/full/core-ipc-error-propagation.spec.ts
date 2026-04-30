@@ -60,10 +60,16 @@ async function emitSpawnResult(
     ({ webContents }, { id, code, msg }) => {
       for (const wc of webContents.getAllWebContents()) {
         if (wc.isDestroyed()) continue;
-        wc.send("terminal:spawn-result", id, {
-          success: false,
-          id,
-          error: { code, message: msg },
+        wc.send("events:push", {
+          name: "terminal:spawn-result",
+          payload: [
+            id,
+            {
+              success: false,
+              id,
+              error: { code, message: msg },
+            },
+          ],
         });
       }
     },

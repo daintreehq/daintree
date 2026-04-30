@@ -35,14 +35,14 @@ export class TerminalParserHandler {
     blockAltScreen: boolean;
     blockMouseReporting: boolean;
   } {
-    if (this.managed.kind !== "agent") {
+    if (!this.managed.runtimeAgentId) {
       return {
         blockAltScreen: false,
         blockMouseReporting: false,
       };
     }
 
-    const effectiveAgentId = this.managed.agentId ?? this.managed.type;
+    const effectiveAgentId = this.managed.runtimeAgentId;
     const config = getAgentConfig(effectiveAgentId);
 
     return {
@@ -67,8 +67,6 @@ export class TerminalParserHandler {
     const osc52Handler = terminal.parser.registerOscHandler(52, () => true);
     this.disposables.push(osc52Handler);
 
-    const capabilities = this.getAgentCapabilities();
-
     // Track alternate screen buffer exit via DEC private mode sequences.
     // Note: Buffer state (isAltBuffer) is primarily tracked via xterm.js's
     // onBufferChange event in TerminalInstanceService. This handler only
@@ -90,19 +88,19 @@ export class TerminalParserHandler {
     );
     this.disposables.push(altScreenResetHandler);
 
-    // Block alternate screen buffer activation if configured
-    // Only block the set (h) sequence, not reset (l), to allow exit from alternate buffer
-    if (capabilities.blockAltScreen) {
-      const altScreenSetHandler = terminal.parser.registerCsiHandler(
-        { prefix: "?", final: "h" },
-        (params) => {
-          if (!this.shouldBlock()) return false;
-          const p = this.normalizeCsiParams(params);
-          return p.some((v) => ALT_SCREEN_MODES.has(v));
-        }
-      );
-      this.disposables.push(altScreenSetHandler);
-    }
+    // Block alternate screen buffer activation if the current runtime agent
+    // config asks for it. Register unconditionally so a plain terminal can
+    // become an agent terminal without recreating parser handlers.
+    const altScreenSetHandler = terminal.parser.registerCsiHandler(
+      { prefix: "?", final: "h" },
+      (params) => {
+        if (!this.shouldBlock()) return false;
+        if (!this.getAgentCapabilities().blockAltScreen) return false;
+        const p = this.normalizeCsiParams(params);
+        return p.some((v) => ALT_SCREEN_MODES.has(v));
+      }
+    );
+    this.disposables.push(altScreenSetHandler);
 
     // Block DECRQM (Request Mode) queries: CSI ? Pm $ p
     // xterm.js 6.0 has a bug in its minified requestMode handler that throws
@@ -124,25 +122,24 @@ export class TerminalParserHandler {
 
     // Block mouse reporting mode toggles (enables programs to capture mouse events).
     // We block this for agent terminals to avoid surprising interactions inside the app.
-    if (capabilities.blockMouseReporting) {
-      const mouseModeParams = new Set([1000, 1002, 1003, 1005, 1006, 1015]);
-
-      const decsetMouseHandler = terminal.parser.registerCsiHandler(
-        { prefix: "?", final: "h" },
-        (params) => {
-          if (!this.shouldBlock()) return false;
-          const p = this.normalizeCsiParams(params);
-          if (!p.some((v) => mouseModeParams.has(v))) return false;
-          return true;
-        }
-      );
-      this.disposables.push(decsetMouseHandler);
-    }
+    const mouseModeParams = new Set([1000, 1002, 1003, 1005, 1006, 1015]);
+    const decsetMouseHandler = terminal.parser.registerCsiHandler(
+      { prefix: "?", final: "h" },
+      (params) => {
+        if (!this.shouldBlock()) return false;
+        if (!this.getAgentCapabilities().blockMouseReporting) return false;
+        const p = this.normalizeCsiParams(params);
+        if (!p.some((v) => mouseModeParams.has(v))) return false;
+        return true;
+      }
+    );
+    this.disposables.push(decsetMouseHandler);
   }
 
   private shouldBlock(): boolean {
-    // Block for all agent terminals by default
-    return this.managed.kind === "agent";
+    // Runtime identity, not launch intent, decides whether agent parser
+    // protections are active.
+    return Boolean(this.managed.runtimeAgentId);
   }
 
   dispose(): void {

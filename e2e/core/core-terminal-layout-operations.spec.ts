@@ -16,11 +16,17 @@ import { spawnTerminalAndVerify } from "../helpers/workflows";
 let ctx: AppContext;
 let fixtureDir: string;
 
-async function dispatchAction(page: Page, actionId: string, args?: unknown): Promise<unknown> {
+async function dispatchAction(
+  page: Page,
+  actionId: string,
+  args?: unknown,
+  options?: { source?: string; confirmed?: boolean }
+): Promise<unknown> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return page.evaluate(([id, a]) => (window as any).__daintreeDispatchAction(id, a), [
+  return page.evaluate(([id, a, o]) => (window as any).__daintreeDispatchAction(id, a, o), [
     actionId,
     args,
+    options,
   ] as const);
 }
 
@@ -198,6 +204,65 @@ test.describe.serial("Core: Terminal Layout Operations", () => {
 
   test.describe.serial("Dock Panel Activation", () => {
     let dockIds: string[];
+
+    test("dock preview opens and restores while grid remains active", async () => {
+      const { window } = ctx;
+
+      const gridIds = await getGridPanelIds(window);
+      expect(gridIds.length).toBeGreaterThanOrEqual(3);
+      const dockedId = gridIds[0]!;
+
+      await dispatchAction(window, "terminal.moveToDock", { terminalId: dockedId });
+
+      await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(2);
+      await expect.poll(() => getDockPanelCount(window), { timeout: T_MEDIUM }).toBe(1);
+      await expect(window.locator(`[data-dock-portal-target="${dockedId}"]`)).toBeVisible({
+        timeout: T_MEDIUM,
+      });
+
+      await dispatchAction(window, "terminal.moveToGrid", { terminalId: dockedId });
+
+      await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(3);
+      await expect.poll(() => getDockPanelCount(window), { timeout: T_MEDIUM }).toBe(0);
+      await expect
+        .poll(() => getDockPanelIds(window), { timeout: T_MEDIUM })
+        .not.toContain(dockedId);
+    });
+
+    test("creating a new dock terminal while another panel is docked keeps both rendered", async () => {
+      const { window } = ctx;
+
+      const gridIds = await getGridPanelIds(window);
+      expect(gridIds.length).toBeGreaterThanOrEqual(3);
+      const dockedId = gridIds[0]!;
+
+      await dispatchAction(window, "terminal.moveToDock", { terminalId: dockedId });
+      await expect.poll(() => getDockPanelCount(window), { timeout: T_MEDIUM }).toBe(1);
+
+      const launchResult = (await dispatchAction(window, "agent.launch", {
+        agentId: "terminal",
+        location: "dock",
+        cwd: fixtureDir,
+      })) as { ok?: boolean; result?: { terminalId?: string | null } };
+      expect(launchResult.ok).toBe(true);
+      const newDockId = launchResult.result?.terminalId ?? "";
+      expect(newDockId).not.toBe("");
+
+      await expect
+        .poll(() => getDockPanelIds(window), { timeout: T_MEDIUM })
+        .toEqual(expect.arrayContaining([dockedId, newDockId]));
+
+      await dispatchAction(
+        window,
+        "terminal.kill",
+        { terminalId: newDockId },
+        { source: "user", confirmed: true }
+      );
+      await dispatchAction(window, "terminal.moveToGrid", { terminalId: dockedId });
+
+      await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(3);
+      await expect.poll(() => getDockPanelCount(window), { timeout: T_MEDIUM }).toBe(0);
+    });
 
     test("move all panels to dock", async () => {
       const { window } = ctx;

@@ -1,5 +1,5 @@
 export {
-  TerminalTypeSchema,
+  BuiltInAgentIdSchema,
   AgentStateSchema,
   AgentSpawnedSchema,
   AgentStateChangedSchema,
@@ -80,6 +80,8 @@ export {
 export {
   PluginManifestSchema,
   PanelContributionSchema,
+  PluginPermissionSchema,
   type PluginManifest,
   type PanelContribution,
+  type PluginPermission,
 } from "./plugin.js";

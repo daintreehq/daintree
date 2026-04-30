@@ -76,18 +76,18 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
     };
 
     availableTypes.forEach((type) => {
-      if (type.startsWith("sys:")) groups.system.push(type);
-      else if (type.startsWith("agent:")) groups.agent.push(type);
-      else if (type.startsWith("task:")) groups.task.push(type);
-      else if (type.startsWith("server:")) groups.devserver.push(type);
-      else if (type.startsWith("watcher:")) groups.watcher.push(type);
-      else if (type.startsWith("file:")) groups.file.push(type);
-      else if (type.startsWith("ui:")) groups.ui.push(type);
-      else groups.other.push(type);
+      if (type.startsWith("sys:")) groups.system!.push(type);
+      else if (type.startsWith("agent:")) groups.agent!.push(type);
+      else if (type.startsWith("task:")) groups.task!.push(type);
+      else if (type.startsWith("server:")) groups.devserver!.push(type);
+      else if (type.startsWith("watcher:")) groups.watcher!.push(type);
+      else if (type.startsWith("file:")) groups.file!.push(type);
+      else if (type.startsWith("ui:")) groups.ui!.push(type);
+      else groups.other!.push(type);
     });
 
     Object.keys(groups).forEach((key) => {
-      if (groups[key].length === 0) delete groups[key];
+      if (groups[key]!.length === 0) delete groups[key];
     });
 
     return groups;
@@ -161,7 +161,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
             className={cn(
               "w-full pl-9 pr-9 py-2 text-sm rounded-[var(--radius-md)]",
               "bg-muted/50 border border-transparent",
-              "focus:bg-background focus:border-primary focus:outline-none",
+              "focus:bg-background focus:border-primary focus:outline-hidden",
               "placeholder:text-muted-foreground"
             )}
           />
@@ -191,7 +191,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
               className={cn(
                 "w-full pl-3 pr-9 py-2 text-sm rounded-[var(--radius-md)] font-mono",
                 "bg-muted/50 border border-transparent",
-                "focus:bg-background focus:border-primary focus:outline-none",
+                "focus:bg-background focus:border-primary focus:outline-hidden",
                 "placeholder:text-muted-foreground placeholder:font-sans"
               )}
             />

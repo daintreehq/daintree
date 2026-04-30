@@ -32,10 +32,10 @@ export function getDiffContext(text: string, caret: number): AtDiffContext | nul
   const beforeCaret = text.slice(0, caret);
   const atStart = beforeCaret.lastIndexOf("@");
   if (atStart === -1) return null;
-  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1])) return null;
+  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1]!)) return null;
 
   let tokenEnd = atStart + 1;
-  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd])) {
+  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) {
     tokenEnd++;
   }
 
@@ -67,7 +67,7 @@ export function getAllAtDiffTokens(text: string): AtDiffToken[] {
       continue;
     }
 
-    if (i > 0 && !/\s/.test(text[i - 1])) {
+    if (i > 0 && !/\s/.test(text[i - 1]!)) {
       i++;
       continue;
     }
@@ -76,7 +76,7 @@ export function getAllAtDiffTokens(text: string): AtDiffToken[] {
     i++;
 
     const tokenStart = i;
-    while (i < text.length && !/\s/.test(text[i])) {
+    while (i < text.length && !/\s/.test(text[i]!)) {
       i++;
     }
 
@@ -104,10 +104,10 @@ export function getTerminalContext(text: string, caret: number): AtTerminalConte
   const beforeCaret = text.slice(0, caret);
   const atStart = beforeCaret.lastIndexOf("@");
   if (atStart === -1) return null;
-  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1])) return null;
+  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1]!)) return null;
 
   let tokenEnd = atStart + 1;
-  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd])) {
+  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) {
     tokenEnd++;
   }
 
@@ -135,7 +135,7 @@ export function getAllAtTerminalTokens(text: string): AtTerminalToken[] {
       continue;
     }
 
-    if (i > 0 && !/\s/.test(text[i - 1])) {
+    if (i > 0 && !/\s/.test(text[i - 1]!)) {
       i++;
       continue;
     }
@@ -144,7 +144,7 @@ export function getAllAtTerminalTokens(text: string): AtTerminalToken[] {
     i++;
 
     const tokenStart = i;
-    while (i < text.length && !/\s/.test(text[i])) {
+    while (i < text.length && !/\s/.test(text[i]!)) {
       i++;
     }
 
@@ -171,10 +171,10 @@ export function getSelectionContext(text: string, caret: number): AtSelectionCon
   const beforeCaret = text.slice(0, caret);
   const atStart = beforeCaret.lastIndexOf("@");
   if (atStart === -1) return null;
-  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1])) return null;
+  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1]!)) return null;
 
   let tokenEnd = atStart + 1;
-  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd])) {
+  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) {
     tokenEnd++;
   }
 
@@ -202,7 +202,7 @@ export function getAllAtSelectionTokens(text: string): AtSelectionToken[] {
       continue;
     }
 
-    if (i > 0 && !/\s/.test(text[i - 1])) {
+    if (i > 0 && !/\s/.test(text[i - 1]!)) {
       i++;
       continue;
     }
@@ -211,7 +211,7 @@ export function getAllAtSelectionTokens(text: string): AtSelectionToken[] {
     i++;
 
     const tokenStart = i;
-    while (i < text.length && !/\s/.test(text[i])) {
+    while (i < text.length && !/\s/.test(text[i]!)) {
       i++;
     }
 
@@ -238,10 +238,10 @@ export function getAtFileContext(text: string, caret: number): AtFileContext | n
   const beforeCaret = text.slice(0, caret);
   const atStart = beforeCaret.lastIndexOf("@");
   if (atStart === -1) return null;
-  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1])) return null;
+  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1]!)) return null;
 
   let tokenEnd = atStart + 1;
-  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd])) {
+  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) {
     tokenEnd++;
   }
 
@@ -272,10 +272,10 @@ export function getSlashCommandContext(text: string, caret: number): SlashComman
   const beforeCaret = text.slice(0, caret);
   const slashStart = beforeCaret.lastIndexOf("/");
   if (slashStart === -1) return null;
-  if (slashStart > 0 && !/\s/.test(beforeCaret[slashStart - 1])) return null;
+  if (slashStart > 0 && !/\s/.test(beforeCaret[slashStart - 1]!)) return null;
 
   let tokenEnd = slashStart + 1;
-  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd])) {
+  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) {
     tokenEnd++;
   }
 
@@ -315,7 +315,7 @@ export function getAllSlashCommandTokens(text: string): SlashCommandToken[] {
       continue;
     }
 
-    if (i > 0 && !/\s/.test(text[i - 1])) {
+    if (i > 0 && !/\s/.test(text[i - 1]!)) {
       i++;
       continue;
     }
@@ -329,7 +329,7 @@ export function getAllSlashCommandTokens(text: string): SlashCommandToken[] {
     }
 
     // Scan forward for token end (first whitespace or end of string)
-    while (i < text.length && !/\s/.test(text[i])) {
+    while (i < text.length && !/\s/.test(text[i]!)) {
       i++;
     }
 
@@ -364,7 +364,7 @@ export function getAllAtFileTokens(text: string): AtFileToken[] {
     }
 
     // Check that @ is at start or preceded by whitespace or common delimiters
-    if (i > 0 && !/[\s([{]/.test(text[i - 1])) {
+    if (i > 0 && !/[\s([{]/.test(text[i - 1]!)) {
       i++;
       continue;
     }
@@ -404,7 +404,7 @@ export function getAllAtFileTokens(text: string): AtFileToken[] {
       const pathStart = i;
       while (
         i < text.length &&
-        !/[\s,;:)}\]]/.test(text[i]) &&
+        !/[\s,;:)}\]]/.test(text[i]!) &&
         text[i] !== "\n" &&
         text[i] !== "\r"
       ) {

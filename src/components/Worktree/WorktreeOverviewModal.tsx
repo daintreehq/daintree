@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo } from "react";
 import { X, FilterX } from "lucide-react";
-import { WorktreeOverviewIcon, DaintreeAgentIcon } from "@/components/icons";
+import { Layers, Plug } from "@/components/icons";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
@@ -20,7 +20,8 @@ import {
   type GroupedSection,
 } from "@/lib/worktreeFilters";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isAgentTerminal } from "@/utils/terminalType";
 
 interface OverviewWorktreeCardProps {
   worktreeId: string;
@@ -133,7 +134,7 @@ function EmptyWorktreeState() {
 
   return (
     <div className="flex flex-col items-center justify-center h-full gap-3 text-daintree-text/50">
-      <WorktreeOverviewIcon className="w-8 h-8 text-daintree-text/30" />
+      <Layers className="w-8 h-8 text-daintree-text/30" />
       <p className="text-sm font-medium text-daintree-text/70">No worktrees yet</p>
       <p className="text-xs text-daintree-text/40">
         {createWorktreeShortcut ? (
@@ -218,7 +219,6 @@ export function WorktreeOverviewModal({
     for (const worktree of worktrees) {
       let terminalCount = 0;
       let hasWorkingAgent = false;
-      let hasRunningAgent = false;
       let hasWaitingAgent = false;
       let hasCompletedAgent = false;
       let hasExitedAgent = false;
@@ -226,8 +226,8 @@ export function WorktreeOverviewModal({
         const t = panelsById[id];
         if (!t || t.worktreeId !== worktree.id || t.location === "trash") continue;
         terminalCount++;
+        if (!isAgentTerminal(t)) continue;
         if (t.agentState === "working") hasWorkingAgent = true;
-        if (t.agentState === "running") hasRunningAgent = true;
         if (t.agentState === "waiting") hasWaitingAgent = true;
         if (t.agentState === "completed") hasCompletedAgent = true;
         if (t.agentState === "exited") hasExitedAgent = true;
@@ -235,7 +235,6 @@ export function WorktreeOverviewModal({
       map.set(worktree.id, {
         terminalCount,
         hasWorkingAgent,
-        hasRunningAgent,
         hasWaitingAgent,
         hasCompletedAgent,
         hasExitedAgent,
@@ -263,7 +262,7 @@ export function WorktreeOverviewModal({
         continue;
       }
 
-      if (derived.hasWorkingAgent || derived.hasRunningAgent) workingCount++;
+      if (derived.hasWorkingAgent) workingCount++;
       if (derived.hasWaitingAgent) waitingCount++;
     }
 
@@ -296,7 +295,6 @@ export function WorktreeOverviewModal({
       const derived = derivedMetaMap.get(worktree.id) ?? {
         terminalCount: 0,
         hasWorkingAgent: false,
-        hasRunningAgent: false,
         hasWaitingAgent: false,
         hasCompletedAgent: false,
         hasExitedAgent: false,
@@ -401,273 +399,271 @@ export function WorktreeOverviewModal({
       aria-modal="true"
       aria-labelledby="worktree-overview-title"
     >
-      <TooltipProvider delayDuration={400} skipDelayDuration={300}>
-        <div
-          className={cn(
-            "relative flex flex-col",
-            "w-[calc(100vw-80px)] h-[calc(100vh-80px)]",
-            "max-w-[1800px] max-h-[1200px]",
-            "bg-daintree-bg rounded-xl",
-            "border border-divider",
-            "shadow-[var(--theme-shadow-dialog)]",
-            "motion-safe:animate-in motion-safe:zoom-in-95 motion-safe:duration-200"
-          )}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-divider shrink-0">
-            <div className="flex items-center gap-3">
-              <WorktreeOverviewIcon className="w-5 h-5 text-daintree-text/60" />
-              <h2
-                id="worktree-overview-title"
-                className="text-daintree-text font-semibold text-base tracking-wide"
-              >
-                Worktrees Overview
-              </h2>
-              <span className="text-daintree-text/50 text-sm tabular-nums">
-                ({filteredWorktrees.length}
-                {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
-              </span>
-              {/* Aggregate activity statistics */}
-              {(aggregateStats.workingCount > 0 || aggregateStats.waitingCount > 0) && (
-                <div
-                  className="flex items-center gap-2 ml-2 pl-3 border-l border-divider"
-                  role="status"
-                  aria-label="Agent activity statistics"
-                >
-                  {aggregateStats.workingCount > 0 && (
-                    <span className="flex items-center gap-1 text-xs tabular-nums text-[var(--color-state-working)]">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-state-working)] motion-safe:animate-pulse" />
-                      {aggregateStats.workingCount} working
-                    </span>
-                  )}
-                  {aggregateStats.waitingCount > 0 && (
-                    <span className="flex items-center gap-1 text-xs tabular-nums text-status-warning">
-                      <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
-                      {aggregateStats.waitingCount} waiting
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {/* Hide main worktree toggle - show if there are non-main worktrees OR if filter is active (to allow recovery) */}
-              {(hasNonMainWorktrees || hideMainWorktree) && !hasOnlyMainWorktree && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={!hideMainWorktree}
-                      aria-label={hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
-                      onClick={() => setHideMainWorktree(!hideMainWorktree)}
-                      className={cn(
-                        "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
-                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent",
-                        hideMainWorktree
-                          ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
-                          : "bg-tint/[0.10] text-daintree-text/70 hover:text-daintree-text/90"
-                      )}
-                    >
-                      <DaintreeAgentIcon
-                        className={cn(
-                          "w-3 h-3 transition-colors",
-                          hideMainWorktree ? "text-daintree-text/30" : "text-daintree-text/50"
-                        )}
-                      />
-                      <span
-                        className={cn(
-                          "transition",
-                          hideMainWorktree && "line-through decoration-daintree-text/30"
-                        )}
-                      >
-                        main
-                      </span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
-                  </TooltipContent>
-                </Tooltip>
-              )}
-              {/* Filter Popover */}
-              <WorktreeFilterPopover />
-              {/* Clear Filters Button - only shown when filters are active */}
-              {hasActiveFilters() && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={clearAllFilters}
-                      className={cn(
-                        "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs",
-                        "text-daintree-text/60 hover:text-daintree-text",
-                        "hover:bg-tint/[0.06]",
-                        "transition-colors",
-                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
-                      )}
-                      aria-label="Clear all filters"
-                    >
-                      <FilterX className="w-3.5 h-3.5" />
-                      <span>Clear</span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Clear all filters</TooltipContent>
-                </Tooltip>
-              )}
-              {/* Close Button */}
-              <button
-                ref={closeButtonRef}
-                onClick={onClose}
-                className={cn(
-                  "p-2 rounded-lg transition-colors",
-                  "text-daintree-text/60 hover:text-daintree-text",
-                  "hover:bg-tint/[0.06]",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
-                )}
-                aria-label="Close overview"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-
-          {/* Content */}
-          <div className="flex-1 overflow-y-auto p-6">
-            {worktrees.length === 0 ? (
-              <EmptyWorktreeState />
-            ) : filteredWorktrees.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full gap-4 text-daintree-text/50">
-                <FilterX className="w-12 h-12 text-daintree-text/30" />
-                <div className="text-center">
-                  <p className="text-sm font-medium text-daintree-text/70">
-                    No worktrees match filters
-                  </p>
-                  <p className="text-xs mt-1">
-                    {worktrees.length} worktree{worktrees.length !== 1 ? "s" : ""} hidden by active
-                    filters
-                  </p>
-                </div>
-                <Button variant="subtle" size="sm" onClick={clearAllFilters} className="mt-2">
-                  Clear all filters
-                </Button>
-              </div>
-            ) : groupedSections ? (
-              <div className="space-y-6">
-                {groupedSections.map((section: GroupedSection<WorktreeState>) => (
-                  <div key={section.type}>
-                    <div className="flex items-center gap-2 mb-3">
-                      <h3 className="text-xs font-medium text-daintree-text/60 uppercase tracking-wider">
-                        {section.displayName}
-                      </h3>
-                      <span className="text-xs text-daintree-text/40">
-                        ({section.worktrees.length})
-                      </span>
-                    </div>
-                    <div
-                      className={cn(
-                        "grid gap-3",
-                        "grid-cols-[repeat(auto-fit,minmax(min(320px,100%),480px))]",
-                        "justify-center",
-                        "auto-rows-min"
-                      )}
-                    >
-                      {section.worktrees.map((worktree: WorktreeState) => (
-                        <div
-                          key={worktree.id}
-                          style={{
-                            contentVisibility: "auto",
-                            containIntrinsicSize: "auto 240px",
-                          }}
-                          className={cn(
-                            "rounded-lg overflow-hidden",
-                            "border border-divider",
-                            "bg-daintree-sidebar/50",
-                            "transition duration-200",
-                            "hover:border-daintree-accent/50 hover:shadow-lg hover:shadow-daintree-accent/5",
-                            worktree.id === activeWorktreeId &&
-                              "border-[var(--color-state-active)]/70 shadow-md"
-                          )}
-                        >
-                          <OverviewWorktreeCard
-                            worktreeId={worktree.id}
-                            activeWorktreeId={activeWorktreeId}
-                            focusedWorktreeId={focusedWorktreeId}
-                            totalWorktreeCount={worktrees.length}
-                            onSelectWorktree={onSelectWorktree}
-                            onCopyTree={onCopyTree}
-                            onOpenEditor={onOpenEditor}
-                            onSaveLayout={onSaveLayout}
-                            onLaunchAgent={onLaunchAgent}
-                            agentAvailability={agentAvailability}
-                            agentSettings={agentSettings}
-                            homeDir={homeDir}
-                            onClose={onClose}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
+      <div
+        className={cn(
+          "relative flex flex-col",
+          "w-[calc(100vw-80px)] h-[calc(100vh-80px)]",
+          "max-w-[1800px] max-h-[1200px]",
+          "bg-daintree-bg rounded-xl",
+          "border border-divider",
+          "shadow-[var(--theme-shadow-dialog)]",
+          "motion-safe:animate-in motion-safe:zoom-in-95 motion-safe:duration-200"
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-divider shrink-0">
+          <div className="flex items-center gap-3">
+            <Layers className="w-5 h-5 text-daintree-text/60" />
+            <h2
+              id="worktree-overview-title"
+              className="text-daintree-text font-semibold text-base tracking-wide"
+            >
+              Worktrees Overview
+            </h2>
+            <span className="text-daintree-text/50 text-sm tabular-nums">
+              ({filteredWorktrees.length}
+              {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
+            </span>
+            {/* Aggregate activity statistics */}
+            {(aggregateStats.workingCount > 0 || aggregateStats.waitingCount > 0) && (
               <div
-                className={cn(
-                  "grid gap-3",
-                  "grid-cols-[repeat(auto-fit,minmax(min(320px,100%),480px))]",
-                  "justify-center",
-                  "items-start"
-                )}
+                className="flex items-center gap-2 ml-2 pl-3 border-l border-divider"
+                role="status"
+                aria-label="Agent activity statistics"
               >
-                {filteredWorktrees.map((worktree) => (
-                  <div
-                    key={worktree.id}
-                    style={{
-                      contentVisibility: "auto",
-                      containIntrinsicSize: "auto 240px",
-                    }}
-                    className={cn(
-                      "rounded-lg overflow-hidden",
-                      "border border-divider",
-                      "bg-daintree-sidebar/50",
-                      "transition duration-200",
-                      "hover:border-daintree-accent/50 hover:shadow-lg hover:shadow-daintree-accent/5",
-                      worktree.id === activeWorktreeId &&
-                        "border-[var(--color-state-active)]/70 shadow-md"
-                    )}
-                  >
-                    <OverviewWorktreeCard
-                      variant="grid"
-                      worktreeId={worktree.id}
-                      activeWorktreeId={activeWorktreeId}
-                      focusedWorktreeId={focusedWorktreeId}
-                      totalWorktreeCount={worktrees.length}
-                      onSelectWorktree={onSelectWorktree}
-                      onCopyTree={onCopyTree}
-                      onOpenEditor={onOpenEditor}
-                      onSaveLayout={onSaveLayout}
-                      onLaunchAgent={onLaunchAgent}
-                      agentAvailability={agentAvailability}
-                      agentSettings={agentSettings}
-                      homeDir={homeDir}
-                      onClose={onClose}
-                    />
-                  </div>
-                ))}
+                {aggregateStats.workingCount > 0 && (
+                  <span className="flex items-center gap-1 text-xs tabular-nums text-[var(--color-state-working)]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-state-working)] motion-safe:animate-pulse" />
+                    {aggregateStats.workingCount} working
+                  </span>
+                )}
+                {aggregateStats.waitingCount > 0 && (
+                  <span className="flex items-center gap-1 text-xs tabular-nums text-status-warning">
+                    <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
+                    {aggregateStats.waitingCount} waiting
+                  </span>
+                )}
               </div>
             )}
           </div>
-
-          {/* Footer hint */}
-          <div className="px-6 py-3 border-t border-divider shrink-0">
-            <div className="flex items-center justify-center gap-4 text-xs text-daintree-text/40">
-              <span>
-                <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">Esc</kbd> to close
-              </span>
-              <span>Click a worktree to switch</span>
-            </div>
+          <div className="flex items-center gap-2">
+            {/* Hide main worktree toggle - show if there are non-main worktrees OR if filter is active (to allow recovery) */}
+            {(hasNonMainWorktrees || hideMainWorktree) && !hasOnlyMainWorktree && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!hideMainWorktree}
+                    aria-label={hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
+                    onClick={() => setHideMainWorktree(!hideMainWorktree)}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
+                      "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                      hideMainWorktree
+                        ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
+                        : "bg-tint/[0.10] text-daintree-text/70 hover:text-daintree-text/90"
+                    )}
+                  >
+                    <Plug
+                      className={cn(
+                        "w-3 h-3 transition-colors",
+                        hideMainWorktree ? "text-daintree-text/30" : "text-daintree-text/50"
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "transition",
+                        hideMainWorktree && "line-through decoration-daintree-text/30"
+                      )}
+                    >
+                      main
+                    </span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {/* Filter Popover */}
+            <WorktreeFilterPopover />
+            {/* Clear Filters Button - only shown when filters are active */}
+            {hasActiveFilters() && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={clearAllFilters}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs",
+                      "text-daintree-text/60 hover:text-daintree-text",
+                      "hover:bg-tint/[0.06]",
+                      "transition-colors",
+                      "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                    )}
+                    aria-label="Clear all filters"
+                  >
+                    <FilterX className="w-3.5 h-3.5" />
+                    <span>Clear</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Clear all filters</TooltipContent>
+              </Tooltip>
+            )}
+            {/* Close Button */}
+            <button
+              ref={closeButtonRef}
+              onClick={onClose}
+              className={cn(
+                "p-2 rounded-lg transition-colors",
+                "text-daintree-text/60 hover:text-daintree-text",
+                "hover:bg-tint/[0.06]",
+                "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+              )}
+              aria-label="Close overview"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
         </div>
-      </TooltipProvider>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {worktrees.length === 0 ? (
+            <EmptyWorktreeState />
+          ) : filteredWorktrees.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full gap-4 text-daintree-text/50">
+              <FilterX className="w-12 h-12 text-daintree-text/30" />
+              <div className="text-center">
+                <p className="text-sm font-medium text-daintree-text/70">
+                  No worktrees match filters
+                </p>
+                <p className="text-xs mt-1">
+                  {worktrees.length} worktree{worktrees.length !== 1 ? "s" : ""} hidden by active
+                  filters
+                </p>
+              </div>
+              <Button variant="subtle" size="sm" onClick={clearAllFilters} className="mt-2">
+                Clear all filters
+              </Button>
+            </div>
+          ) : groupedSections ? (
+            <div className="space-y-6">
+              {groupedSections.map((section: GroupedSection<WorktreeState>) => (
+                <div key={section.type}>
+                  <div className="flex items-center gap-2 mb-3">
+                    <h3 className="text-xs font-medium text-daintree-text/60 uppercase tracking-wider">
+                      {section.displayName}
+                    </h3>
+                    <span className="text-xs text-daintree-text/40">
+                      ({section.worktrees.length})
+                    </span>
+                  </div>
+                  <div
+                    className={cn(
+                      "grid gap-3",
+                      "grid-cols-[repeat(auto-fit,minmax(min(320px,100%),480px))]",
+                      "justify-center",
+                      "auto-rows-min"
+                    )}
+                  >
+                    {section.worktrees.map((worktree: WorktreeState) => (
+                      <div
+                        key={worktree.id}
+                        style={{
+                          contentVisibility: "auto",
+                          containIntrinsicSize: "auto 240px",
+                        }}
+                        className={cn(
+                          "rounded-lg overflow-hidden",
+                          "border border-divider",
+                          "bg-daintree-sidebar/50",
+                          "transition duration-150",
+                          "hover:border-daintree-accent/50 hover:shadow-lg hover:shadow-daintree-accent/5",
+                          worktree.id === activeWorktreeId &&
+                            "border-[var(--color-state-active)]/70 shadow-md"
+                        )}
+                      >
+                        <OverviewWorktreeCard
+                          worktreeId={worktree.id}
+                          activeWorktreeId={activeWorktreeId}
+                          focusedWorktreeId={focusedWorktreeId}
+                          totalWorktreeCount={worktrees.length}
+                          onSelectWorktree={onSelectWorktree}
+                          onCopyTree={onCopyTree}
+                          onOpenEditor={onOpenEditor}
+                          onSaveLayout={onSaveLayout}
+                          onLaunchAgent={onLaunchAgent}
+                          agentAvailability={agentAvailability}
+                          agentSettings={agentSettings}
+                          homeDir={homeDir}
+                          onClose={onClose}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div
+              className={cn(
+                "grid gap-3",
+                "grid-cols-[repeat(auto-fit,minmax(min(320px,100%),480px))]",
+                "justify-center",
+                "items-start"
+              )}
+            >
+              {filteredWorktrees.map((worktree) => (
+                <div
+                  key={worktree.id}
+                  style={{
+                    contentVisibility: "auto",
+                    containIntrinsicSize: "auto 240px",
+                  }}
+                  className={cn(
+                    "rounded-lg overflow-hidden",
+                    "border border-divider",
+                    "bg-daintree-sidebar/50",
+                    "transition duration-150",
+                    "hover:border-daintree-accent/50 hover:shadow-lg hover:shadow-daintree-accent/5",
+                    worktree.id === activeWorktreeId &&
+                      "border-[var(--color-state-active)]/70 shadow-md"
+                  )}
+                >
+                  <OverviewWorktreeCard
+                    variant="grid"
+                    worktreeId={worktree.id}
+                    activeWorktreeId={activeWorktreeId}
+                    focusedWorktreeId={focusedWorktreeId}
+                    totalWorktreeCount={worktrees.length}
+                    onSelectWorktree={onSelectWorktree}
+                    onCopyTree={onCopyTree}
+                    onOpenEditor={onOpenEditor}
+                    onSaveLayout={onSaveLayout}
+                    onLaunchAgent={onLaunchAgent}
+                    agentAvailability={agentAvailability}
+                    agentSettings={agentSettings}
+                    homeDir={homeDir}
+                    onClose={onClose}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Footer hint */}
+        <div className="px-6 py-3 border-t border-divider shrink-0">
+          <div className="flex items-center justify-center gap-4 text-xs text-daintree-text/40">
+            <span>
+              <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">Esc</kbd> to close
+            </span>
+            <span>Click a worktree to switch</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

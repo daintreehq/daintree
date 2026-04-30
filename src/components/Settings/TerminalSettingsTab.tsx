@@ -9,7 +9,7 @@ import {
   MessageSquare,
   MousePointerClick,
   SplitSquareHorizontal,
-  Monitor,
+  MonitorPlay,
   RotateCcw,
   Ear,
   Activity,
@@ -26,6 +26,9 @@ import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
+import { logError, logWarn } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   useLayoutConfigStore,
   usePerformanceModeStore,
@@ -35,7 +38,7 @@ import {
   useTwoPaneSplitStore,
 } from "@/store";
 import type { ScreenReaderMode } from "@/store";
-import type { PanelLayoutStrategy, TerminalType } from "@/types";
+import type { PanelLayoutStrategy } from "@/types";
 import {
   getScrollbackForType,
   estimateMemoryUsage,
@@ -90,12 +93,9 @@ const CACHED_VIEWS_OPTIONS = [
   { value: 5, label: "5 projects", description: "Max cache" },
 ] as const;
 
-const TYPICAL_TERMINAL_COUNTS: Partial<Record<TerminalType, number>> = {
-  claude: 2,
-  gemini: 2,
-  codex: 2,
-  opencode: 2,
-  terminal: 8,
+const TYPICAL_TERMINAL_COUNTS: { agent: number; plain: number } = {
+  agent: 8,
+  plain: 8,
 };
 
 const TERMINAL_SUBTABS: SettingsSubtabItem[] = [
@@ -162,7 +162,12 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
     window.electron.system
       .getHardwareInfo()
       .then(setHardwareInfo)
-      .catch(() => {});
+      .catch((err) => {
+        // Background probe — the UI gracefully renders without hardware info.
+        logWarn("Failed to load hardware info", {
+          error: formatErrorMessage(err, "Hardware info probe failed"),
+        });
+      });
   }, [initializeFromHardware]);
 
   const [showMemoryDetails, setShowMemoryDetails] = useState(false);
@@ -174,15 +179,15 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
   const scrollbackLimits = useMemo(() => {
     const effectiveBase = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
-    const types: Array<{ type: TerminalType; label: string }> = [
-      { type: "claude", label: "Agent (Claude/Gemini/Codex/OpenCode)" },
-      { type: "terminal", label: "Terminal" },
+    const types: Array<{ isAgent: boolean; label: string }> = [
+      { isAgent: true, label: "Agent (Claude/Gemini/Codex/OpenCode)" },
+      { isAgent: false, label: "Terminal" },
     ];
-    return types.map(({ type, label }) => ({
+    return types.map(({ isAgent, label }) => ({
       label,
       limit: performanceMode
         ? PERFORMANCE_MODE_SCROLLBACK
-        : getScrollbackForType(type, effectiveBase),
+        : getScrollbackForType(isAgent, effectiveBase),
     }));
   }, [performanceMode, scrollbackLines]);
 
@@ -197,7 +202,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist scrollback setting:", error);
+      logError("Failed to persist scrollback setting", error);
     }
   };
 
@@ -224,7 +229,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist performance mode setting:", error);
+      logError("Failed to persist performance mode setting", error);
     }
   };
 
@@ -240,7 +245,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist hybrid input setting:", error);
+      logError("Failed to persist hybrid input setting", error);
     }
   };
 
@@ -256,7 +261,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist hybrid input focus setting:", error);
+      logError("Failed to persist hybrid input focus setting", error);
     }
   };
 
@@ -271,7 +276,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist screen reader mode:", error);
+      logError("Failed to persist screen reader mode", error);
     }
   };
 
@@ -286,7 +291,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist cached project views setting:", error);
+      logError("Failed to persist cached project views setting", error);
     }
   };
 
@@ -311,12 +316,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         >
           <SettingsSwitchCard
             icon={Zap}
-            title={performanceMode ? "Performance Mode Enabled" : "Enable Performance Mode"}
-            subtitle={
-              performanceMode
-                ? `${PERFORMANCE_MODE_SCROLLBACK} line scrollback, animations disabled`
-                : "Standard scrollback, animations enabled"
-            }
+            title="Performance Mode"
+            subtitle="Reduce scrollback and disable animations for low-end hardware or high-density workflows"
             isEnabled={performanceMode}
             onChange={handlePerformanceModeToggle}
             ariaLabel="Performance Mode Toggle"
@@ -351,23 +352,23 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         >
           <SettingsSwitchCard
             icon={Activity}
-            title={
-              resourceMonitoringEnabled
-                ? "Resource Monitoring Enabled"
-                : "Enable Resource Monitoring"
-            }
+            title="Resource Monitoring"
             subtitle="Display per-terminal CPU% and memory in panel headers"
             isEnabled={resourceMonitoringEnabled}
             onChange={() => {
               const newValue = !resourceMonitoringEnabled;
               setResourceMonitoringEnabled(newValue);
-              window.electron.terminalConfig.setResourceMonitoring(newValue);
+              safeFireAndForget(window.electron.terminalConfig.setResourceMonitoring(newValue), {
+                context: "Setting terminal resource monitoring",
+              });
             }}
             ariaLabel="Resource Monitoring Toggle"
             isModified={resourceMonitoringEnabled}
             onReset={() => {
               setResourceMonitoringEnabled(false);
-              window.electron.terminalConfig.setResourceMonitoring(false);
+              safeFireAndForget(window.electron.terminalConfig.setResourceMonitoring(false), {
+                context: "Resetting terminal resource monitoring",
+              });
             }}
           />
         </SettingsSection>
@@ -382,23 +383,23 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         >
           <SettingsSwitchCard
             icon={MemoryStick}
-            title={
-              memoryLeakDetectionEnabled
-                ? "Memory Leak Detection Enabled"
-                : "Enable Memory Leak Detection"
-            }
+            title="Memory Leak Detection"
             subtitle="Show warnings when a terminal's memory grows continuously"
             isEnabled={memoryLeakDetectionEnabled}
             onChange={() => {
               const newValue = !memoryLeakDetectionEnabled;
               setMemoryLeakDetectionEnabled(newValue);
-              window.electron.terminalConfig.setMemoryLeakDetection(newValue);
+              safeFireAndForget(window.electron.terminalConfig.setMemoryLeakDetection(newValue), {
+                context: "Setting terminal memory leak detection",
+              });
             }}
             ariaLabel="Memory Leak Detection Toggle"
             isModified={memoryLeakDetectionEnabled}
             onReset={() => {
               setMemoryLeakDetectionEnabled(false);
-              window.electron.terminalConfig.setMemoryLeakDetection(false);
+              safeFireAndForget(window.electron.terminalConfig.setMemoryLeakDetection(false), {
+                context: "Resetting terminal memory leak detection",
+              });
             }}
             disabled={!resourceMonitoringEnabled}
           />
@@ -422,7 +423,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 if (!isNaN(val)) {
                   setAutoRestartThresholdMb(val);
                   if (val >= 1024 && val <= 32768) {
-                    window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(val);
+                    safeFireAndForget(
+                      window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(val),
+                      { context: "Setting memory leak auto-restart threshold" }
+                    );
                   }
                 }
               }}
@@ -448,14 +452,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         >
           <SettingsSwitchCard
             icon={AlertTriangle}
-            title={
-              panelLimits.warningsDisabled ? "Panel Warnings Disabled" : "Panel Warnings Enabled"
-            }
-            subtitle={
-              panelLimits.warningsDisabled
-                ? "No soft warning banner or confirmation dialog (hard limit still enforced)"
-                : "Show warning banner and confirmation dialog when panel count is high"
-            }
+            title="Panel Warnings"
+            subtitle="Show warning banner and confirmation dialog when panel count is high"
             isEnabled={!panelLimits.warningsDisabled}
             onChange={() => setWarningsDisabled(!panelLimits.warningsDisabled)}
             ariaLabel="Panel Warnings Toggle"
@@ -536,7 +534,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           description="Number of project views to keep loaded in memory. Lower values save memory; switching to an evicted project takes ~500ms to reload."
         >
           <div
-            className="grid grid-cols-5 gap-2"
+            className="grid grid-cols-5 gap-3"
             role="radiogroup"
             aria-label="Cached project views"
           >
@@ -550,7 +548,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 className={cn(
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   cachedProjectViews === value
-                    ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                    ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
                     : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                 )}
               >
@@ -571,12 +569,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         >
           <SettingsSwitchCard
             icon={MessageSquare}
-            title={hybridInputEnabled ? "Hybrid Input Enabled" : "Enable Hybrid Input"}
-            subtitle={
-              hybridInputEnabled
-                ? "Show the multi-line input bar on agent terminals"
-                : "Hide the input bar and use the terminal directly"
-            }
+            title="Hybrid Input Bar"
+            subtitle="Show the multi-line input bar on agent terminals"
             isEnabled={hybridInputEnabled}
             onChange={handleHybridInputEnabledToggle}
             ariaLabel="Hybrid Input Bar Toggle"
@@ -593,12 +587,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           <div className="ml-4 border-l-2 border-daintree-border pl-4">
             <SettingsSwitchCard
               icon={MousePointerClick}
-              title={hybridInputAutoFocus ? "Auto-Focus Input" : "Auto-Focus Terminal"}
-              subtitle={
-                hybridInputAutoFocus
-                  ? "Selecting a pane focuses the input bar"
-                  : "Selecting a pane focuses the terminal (xterm)"
-              }
+              title="Auto-Focus Input"
+              subtitle="Selecting a pane focuses the input bar instead of the terminal"
               isEnabled={hybridInputAutoFocus}
               onChange={handleHybridInputAutoFocusToggle}
               ariaLabel="Hybrid Input Auto Focus Toggle"
@@ -626,14 +616,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           >
             <SettingsSwitchCard
               icon={SplitSquareHorizontal}
-              title={
-                twoPaneSplitConfig.enabled ? "Two-Pane Split Enabled" : "Enable Two-Pane Split"
-              }
-              subtitle={
-                twoPaneSplitConfig.enabled
-                  ? "Drag divider to resize, double-click to reset"
-                  : "Use equal-width grid for two panels"
-              }
+              title="Two-Pane Split"
+              subtitle="Display two panels with a resizable divider instead of equal columns"
               isEnabled={twoPaneSplitConfig.enabled}
               onChange={() => setTwoPaneSplitEnabled(!twoPaneSplitConfig.enabled)}
               ariaLabel="Two-Pane Split Toggle"
@@ -643,15 +627,9 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
             <div className="ml-4 space-y-3 border-l-2 border-daintree-border pl-4">
               <SettingsSwitchCard
-                icon={Monitor}
-                title={
-                  twoPaneSplitConfig.preferPreview ? "Preview-Focused Layout" : "Balanced Layout"
-                }
-                subtitle={
-                  twoPaneSplitConfig.preferPreview
-                    ? "Give more space to browser/dev-preview panels (65/35)"
-                    : "Start with equal space for both panels (50/50)"
-                }
+                icon={MonitorPlay}
+                title="Preview-Focused Layout"
+                subtitle="Give more space to browser and dev-preview panels"
                 isEnabled={twoPaneSplitConfig.preferPreview}
                 onChange={() => setPreferPreview(!twoPaneSplitConfig.preferPreview)}
                 ariaLabel="Prefer Preview Toggle"
@@ -724,7 +702,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   className={cn(
                     "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-colors",
                     layoutConfig.strategy === id
-                      ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                      ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
                       : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                   )}
                 >
@@ -772,7 +750,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           description="Base scrollback applies to agent terminals. Shells and dev servers use reduced limits automatically."
           badge="New Terminals"
         >
-          <div className="grid grid-cols-4 gap-2" role="radiogroup" aria-label="Scrollback presets">
+          <div className="grid grid-cols-4 gap-3" role="radiogroup" aria-label="Scrollback presets">
             {SCROLLBACK_OPTIONS.map(({ value, label, description }) => (
               <button
                 key={value}
@@ -785,7 +763,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   performanceMode && "opacity-50 cursor-not-allowed",
                   scrollbackLines === value
-                    ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                    ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
                     : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                 )}
               >
@@ -832,18 +810,13 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <div className="flex justify-between">
                 <span>Agent terminals (8)</span>
                 <span className="font-mono text-daintree-text/70">
-                  {formatBytes(
-                    (memoryEstimate.perType.claude ?? 0) +
-                      (memoryEstimate.perType.gemini ?? 0) +
-                      (memoryEstimate.perType.codex ?? 0) +
-                      (memoryEstimate.perType.opencode ?? 0)
-                  )}
+                  {formatBytes(memoryEstimate.agent)}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span>Terminals (8)</span>
                 <span className="font-mono text-daintree-text/70">
-                  {formatBytes(memoryEstimate.perType.terminal ?? 0)}
+                  {formatBytes(memoryEstimate.plain)}
                 </span>
               </div>
               <div className="flex justify-between pt-1.5 border-t border-daintree-border mt-1.5">
@@ -864,7 +837,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           id="terminal-screen-reader"
           description="Enable screen reader support so assistive technology can read terminal output. When set to Auto, screen reader mode activates only when the OS reports an active screen reader."
         >
-          <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Screen reader mode">
+          <div className="grid grid-cols-3 gap-3" role="radiogroup" aria-label="Screen reader mode">
             {(
               [
                 { value: "auto", label: "Auto", description: "Follow OS" },
@@ -881,7 +854,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 className={cn(
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   screenReaderMode === value
-                    ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                    ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
                     : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                 )}
               >

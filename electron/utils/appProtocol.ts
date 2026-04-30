@@ -1,4 +1,5 @@
 import path from "node:path";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export interface AppProtocolHeaders extends Record<string, string> {
   "Content-Type": string;
@@ -99,7 +100,7 @@ export function resolveAppUrlToDistPath(
   } catch (error) {
     return {
       filePath: "",
-      error: error instanceof Error ? error.message : "Unknown error",
+      error: formatErrorMessage(error, "Failed to resolve app protocol path"),
     };
   }
 }

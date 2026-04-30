@@ -2,6 +2,7 @@ import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
 import type { ListenLiveClient, LiveTranscriptionEvent } from "@deepgram/sdk";
 import type { VoiceInputSettings, VoiceInputStatus } from "../../shared/types/ipc/api.js";
 import { CONFIDENCE_TAG_THRESHOLD } from "../../shared/config/voiceCorrection.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { logDebug, logInfo, logWarn, logError } from "../utils/logger.js";
 
 const P = "[VoiceTranscription]";
@@ -247,11 +248,8 @@ export class VoiceTranscriptionService {
       connection.on(LiveTranscriptionEvents.Error, (err: Error) => {
         this.clearConnectTimeout();
         if (this.sessionId !== mySessionId) return;
-        const errObj = err as { message?: string; error?: string };
-        const message =
-          err instanceof Error
-            ? err.message
-            : (errObj?.message ?? errObj?.error ?? "Deepgram error");
+        const errObj = err as { error?: string };
+        const message = formatErrorMessage(err, errObj?.error ?? "Deepgram error");
         logError(`${P} Connection error`, { message });
         this.cleanupConnection();
         this.emit({ type: "error", message });

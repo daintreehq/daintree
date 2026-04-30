@@ -29,15 +29,21 @@ class NotificationService {
   private trackedWindows = new Map<number, TrackedWindow>();
   private activeNotifications = new Set<Notification>();
 
-  private detachAllWindowListeners(): void {
-    for (const [, tracked] of this.trackedWindows) {
-      if (!tracked.browserWindow.isDestroyed()) {
-        tracked.browserWindow.off("focus", tracked.focusHandler);
-        tracked.browserWindow.off("blur", tracked.blurHandler);
-      }
+  detachWindowListeners(windowId: number): void {
+    const tracked = this.trackedWindows.get(windowId);
+    if (!tracked) return;
+    if (!tracked.browserWindow.isDestroyed()) {
+      tracked.browserWindow.off("focus", tracked.focusHandler);
+      tracked.browserWindow.off("blur", tracked.blurHandler);
     }
-    this.trackedWindows.clear();
-    this.focusedWindows.clear();
+    this.trackedWindows.delete(windowId);
+    this.focusedWindows.delete(windowId);
+  }
+
+  private detachAllWindowListeners(): void {
+    for (const id of [...this.trackedWindows.keys()]) {
+      this.detachWindowListeners(id);
+    }
   }
 
   private attachWindowListeners(ctx: WindowContext): void {

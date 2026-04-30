@@ -58,7 +58,7 @@ test.describe.serial("Core: Project Management Advanced", () => {
       await removeItem.click();
 
       // Confirm dialog appears with project name
-      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).last();
+      const dialog = window.getByRole("dialog", { name: "Remove project from list?" }).last();
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
       await expect(dialog.locator(`text="${SECONDARY_NAME}"`)).toBeVisible();
 
@@ -90,11 +90,11 @@ test.describe.serial("Core: Project Management Advanced", () => {
       await expect(removeItem2).toBeVisible({ timeout: T_SHORT });
       await removeItem2.click();
 
-      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).last();
+      const dialog = window.getByRole("dialog", { name: "Remove project from list?" }).last();
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
       // Confirm removal
-      await dialog.getByRole("button", { name: "Remove Project" }).click();
+      await dialog.getByRole("button", { name: "Remove project" }).click();
       await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 
       // Verify project is gone from the palette

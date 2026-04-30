@@ -25,6 +25,7 @@ const registerMocks = vi.hoisted(() => ({
   registerAgentCliHandlers: vi.fn(),
   registerProjectCrudHandlers: vi.fn(),
   registerProjectRecipesHandlers: vi.fn(),
+  registerProjectPresetsHandlers: vi.fn(),
   registerGlobalRecipesHandlers: vi.fn(),
   registerTerminalLayoutHandlers: vi.fn(),
   registerProjectInRepoSettingsHandlers: vi.fn(),
@@ -40,7 +41,6 @@ const registerMocks = vi.hoisted(() => ({
   registerNotificationHandlers: vi.fn(),
   registerGeminiHandlers: vi.fn(),
   registerEventsHandlers: vi.fn(),
-  registerNotesHandlers: vi.fn(),
   registerDevPreviewHandlers: vi.fn(),
   registerCommandHandlers: vi.fn(),
   registerAppAgentHandlers: vi.fn(),
@@ -49,6 +49,7 @@ const registerMocks = vi.hoisted(() => ({
   registerHelpHandlers: vi.fn(),
   registerClipboardHandlers: vi.fn(),
   registerGitWriteHandlers: vi.fn(),
+  registerGitReadHandlers: vi.fn(),
   registerTelemetryHandlers: vi.fn(),
   registerPrivacyHandlers: vi.fn(),
   registerOnboardingHandlers: vi.fn(),
@@ -66,10 +67,10 @@ const registerMocks = vi.hoisted(() => ({
   registerPerfHandlers: vi.fn(),
 }));
 
-vi.mock("../handlers/worktree.js", () => ({
+vi.mock("../handlers/worktree/index.js", () => ({
   registerWorktreeHandlers: registerMocks.registerWorktreeHandlers,
 }));
-vi.mock("../handlers/terminal.js", () => ({
+vi.mock("../handlers/terminal/index.js", () => ({
   registerTerminalHandlers: registerMocks.registerTerminalHandlers,
 }));
 vi.mock("../handlers/files.js", () => ({
@@ -93,11 +94,14 @@ vi.mock("../handlers/editorConfig.js", () => ({
 vi.mock("../handlers/agentCli.js", () => ({
   registerAgentCliHandlers: registerMocks.registerAgentCliHandlers,
 }));
-vi.mock("../handlers/projectCrud.js", () => ({
+vi.mock("../handlers/projectCrud/index.js", () => ({
   registerProjectCrudHandlers: registerMocks.registerProjectCrudHandlers,
 }));
 vi.mock("../handlers/projectRecipes.js", () => ({
   registerProjectRecipesHandlers: registerMocks.registerProjectRecipesHandlers,
+}));
+vi.mock("../handlers/projectPresets.js", () => ({
+  registerProjectPresetsHandlers: registerMocks.registerProjectPresetsHandlers,
 }));
 vi.mock("../handlers/globalRecipes.js", () => ({
   registerGlobalRecipesHandlers: registerMocks.registerGlobalRecipesHandlers,
@@ -144,9 +148,6 @@ vi.mock("../handlers/gemini.js", () => ({
 vi.mock("../handlers/events.js", () => ({
   registerEventsHandlers: registerMocks.registerEventsHandlers,
 }));
-vi.mock("../handlers/notes.js", () => ({
-  registerNotesHandlers: registerMocks.registerNotesHandlers,
-}));
 vi.mock("../handlers/devPreview.js", () => ({
   registerDevPreviewHandlers: registerMocks.registerDevPreviewHandlers,
 }));
@@ -170,6 +171,9 @@ vi.mock("../handlers/clipboard.js", () => ({
 }));
 vi.mock("../handlers/git-write.js", () => ({
   registerGitWriteHandlers: registerMocks.registerGitWriteHandlers,
+}));
+vi.mock("../handlers/git-read.js", () => ({
+  registerGitReadHandlers: registerMocks.registerGitReadHandlers,
 }));
 vi.mock("../handlers/telemetry.js", () => ({
   registerTelemetryHandlers: registerMocks.registerTelemetryHandlers,

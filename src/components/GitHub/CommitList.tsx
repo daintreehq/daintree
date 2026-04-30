@@ -7,6 +7,7 @@ import { CommitListItem } from "./CommitListItem";
 import type { GitCommit, GitCommitListResponse } from "@shared/types/github";
 import { actionService } from "@/services/ActionService";
 import { CommitListSkeleton } from "./GitHubDropdownSkeletons";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface CommitListProps {
   projectPath: string;
@@ -94,7 +95,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
         setHasMore(result.hasMore);
       } catch (err) {
         if (abortSignal?.aborted) return;
-        const message = err instanceof Error ? err.message : "Failed to fetch commits";
+        const message = formatErrorMessage(err, "Failed to fetch commits");
         if (append) {
           setLoadMoreError(message);
         } else {
@@ -223,7 +224,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
             aria-controls={listId}
             aria-activedescendant={activeCommitId}
             aria-label="Search commits"
-            className="flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-none"
+            className="flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-hidden"
           />
         </div>
       </div>

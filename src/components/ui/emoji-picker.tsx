@@ -14,7 +14,7 @@ export function EmojiPicker({ className, onEmojiSelect }: EmojiPickerProps) {
       emojibaseUrl="/emojibase"
     >
       <EmojiPickerPrimitive.Search
-        className="z-10 mx-2 mt-2 appearance-none rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border px-3 py-2 text-sm text-daintree-text placeholder:text-text-muted focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+        className="z-10 mx-2 mt-2 appearance-none rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border px-3 py-2 text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
         placeholder="Search emojis..."
       />
       <EmojiPickerPrimitive.Viewport className="relative flex-1 outline-hidden">

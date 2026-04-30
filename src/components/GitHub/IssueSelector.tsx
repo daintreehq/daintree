@@ -6,7 +6,9 @@ import { githubClient } from "@/clients/githubClient";
 import type { GitHubIssue } from "@shared/types/github";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { GitHubResourceRowsSkeleton } from "./GitHubDropdownSkeletons";
+import { logError } from "@/utils/logger";
 
 interface IssueSelectorProps {
   projectPath: string;
@@ -45,7 +47,7 @@ export function IssueSelector({
       })
       .catch((err) => {
         if (!abortController.signal.aborted) {
-          console.error("Failed to fetch issues:", err);
+          logError("Failed to fetch issues", err);
           setIssues([]);
         }
       })
@@ -91,27 +93,25 @@ export function IssueSelector({
           )}
           <div className="flex items-center gap-1 shrink-0">
             {selectedIssue && !disabled && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={handleClear}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          handleClear(e as unknown as React.MouseEvent);
-                        }
-                      }}
-                      className="p-0.5 hover:bg-daintree-border rounded cursor-pointer"
-                    >
-                      <X className="h-3.5 w-3.5 text-muted-foreground hover:text-daintree-text" />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Clear selection</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={handleClear}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleClear(e as unknown as React.MouseEvent);
+                      }
+                    }}
+                    className="p-0.5 hover:bg-daintree-border rounded cursor-pointer"
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground hover:text-daintree-text" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Clear selection</TooltipContent>
+              </Tooltip>
             )}
             <ChevronsUpDown className="h-4 w-4 opacity-50" />
           </div>
@@ -125,7 +125,7 @@ export function IssueSelector({
         <div className="flex items-center border-b border-daintree-border px-3">
           <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
           <input
-            className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
             placeholder="Search issues..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -137,7 +137,7 @@ export function IssueSelector({
         </div>
         <div id="issue-list" role="listbox" className="max-h-[300px] overflow-y-auto p-1">
           {loading ? (
-            <div className="py-6 text-center text-sm text-muted-foreground">Loading issues...</div>
+            <GitHubResourceRowsSkeleton count={3} immediate />
           ) : issues.length === 0 ? (
             <div className="py-6 text-center text-sm text-muted-foreground">
               {debouncedQuery ? "No issues found" : "No open issues"}

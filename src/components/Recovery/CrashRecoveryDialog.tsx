@@ -7,12 +7,12 @@ import {
   FileText,
   SquareTerminal,
   Globe,
-  Monitor,
-  StickyNote,
+  MonitorPlay,
 } from "lucide-react";
-import { DaintreeAgentIcon } from "@/components/icons";
+import { Plug } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
+import { logError } from "@/utils/logger";
 import type {
   PendingCrash,
   PanelSummary,
@@ -32,13 +32,11 @@ interface CrashRecoveryDialogProps {
 function getPanelIcon(kind: string) {
   switch (kind) {
     case "agent":
-      return <DaintreeAgentIcon className="h-3.5 w-3.5" />;
+      return <Plug className="h-3.5 w-3.5" />;
     case "browser":
       return <Globe className="h-3.5 w-3.5" />;
-    case "notes":
-      return <StickyNote className="h-3.5 w-3.5" />;
     case "dev-preview":
-      return <Monitor className="h-3.5 w-3.5" />;
+      return <MonitorPlay className="h-3.5 w-3.5" />;
     default:
       return <SquareTerminal className="h-3.5 w-3.5" />;
   }
@@ -110,7 +108,9 @@ export function CrashRecoveryDialog({
   }, [allSelected, panels]);
 
   const handleOpenLogFile = useCallback(() => {
-    window.electron.system.openPath(crash.logPath).catch(console.error);
+    window.electron.system
+      .openPath(crash.logPath)
+      .catch((err) => logError("Failed to open crash log path", err));
   }, [crash.logPath]);
 
   const handleReport = useCallback(() => {
@@ -123,7 +123,9 @@ export function CrashRecoveryDialog({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
-    window.electron.system.openExternal(ISSUES_URL).catch(console.error);
+    window.electron.system
+      .openExternal(ISSUES_URL)
+      .catch((err) => logError("Failed to open issues URL", err));
   }, [privacyWarningShown, crash]);
 
   const handleAutoRestore = useCallback(
@@ -149,7 +151,7 @@ export function CrashRecoveryDialog({
     >
       <AppDialog.Header>
         <AppDialog.Title icon={<AlertTriangle className="h-5 w-5 text-status-warning" />}>
-          Daintree Crashed
+          Daintree closed unexpectedly
         </AppDialog.Title>
       </AppDialog.Header>
 
@@ -166,7 +168,7 @@ export function CrashRecoveryDialog({
                 <button
                   type="button"
                   onClick={toggleAll}
-                  className="cursor-pointer text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors"
+                  className="cursor-pointer text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
                   data-testid="toggle-all-button"
                 >
                   {allSelected ? "Deselect all" : "Select all"}
@@ -233,12 +235,12 @@ export function CrashRecoveryDialog({
               className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-daintree-border hover:border-daintree-accent hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
               data-testid="restore-button"
             >
-              <div className="mt-0.5 h-5 w-5 rounded-full bg-daintree-accent/20 flex items-center justify-center shrink-0">
-                <div className="h-2 w-2 rounded-full bg-daintree-accent" />
+              <div className="mt-0.5 h-5 w-5 rounded-full bg-overlay-medium flex items-center justify-center shrink-0">
+                <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
               </div>
               <div>
                 <div className="text-sm font-medium text-daintree-text">
-                  Restore Previous Session
+                  Restore previous session
                 </div>
                 {backupDate ? (
                   <div className="text-xs text-daintree-text/60 mt-0.5">
@@ -263,7 +265,7 @@ export function CrashRecoveryDialog({
                 <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
               </div>
               <div>
-                <div className="text-sm font-medium text-daintree-text">Start Fresh</div>
+                <div className="text-sm font-medium text-daintree-text">Start fresh</div>
                 <div className="text-xs text-daintree-text/60 mt-0.5">
                   Reset to a clean layout — open panels will be cleared
                 </div>
@@ -279,7 +281,7 @@ export function CrashRecoveryDialog({
             className="cursor-pointer w-full flex items-center justify-between px-3 py-2 text-sm text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
             data-testid="details-toggle"
           >
-            <span className="font-medium">Error Details</span>
+            <span className="font-medium">Error details</span>
             {detailsOpen ? (
               <ChevronDown className="h-4 w-4" />
             ) : (
@@ -369,8 +371,9 @@ export function CrashRecoveryDialog({
                   className="text-xs text-status-warning/90 bg-status-warning/10 rounded px-2 py-1.5"
                   data-testid="privacy-warning"
                 >
-                  Crash info may include file paths. Click again to copy to clipboard and open
-                  GitHub Issues. You'll need to paste the info into the form.
+                  Crash info may include panel titles, panel kinds, file paths, and stack traces.
+                  Click again to copy to clipboard and open GitHub Issues. You'll need to paste the
+                  info into the form.
                 </p>
               )}
             </div>
@@ -386,7 +389,7 @@ export function CrashRecoveryDialog({
             data-testid="auto-restore-checkbox"
           />
           <span className="text-xs text-daintree-text/60">
-            Don't show this again — always restore automatically
+            Always restore sessions automatically
           </span>
         </label>
       </AppDialog.Body>

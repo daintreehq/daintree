@@ -7,7 +7,7 @@ import {
   type ConsoleMessage,
   EMPTY_MESSAGES,
 } from "@/store/consoleCaptureStore";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ObjectInspector } from "./ObjectInspector";
 import { StackTrace } from "./StackTrace";
 
@@ -216,7 +216,7 @@ export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePan
     setIsAtBottom(el.scrollTop + el.clientHeight >= el.scrollHeight - threshold);
   }, []);
 
-  const lastVisibleId = filtered.length > 0 ? filtered[filtered.length - 1].id : null;
+  const lastVisibleId = filtered.length > 0 ? filtered[filtered.length - 1]!.id : null;
   useEffect(() => {
     if (lastVisibleId === prevLastIdRef.current) return;
     prevLastIdRef.current = lastVisibleId;
@@ -249,7 +249,7 @@ export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePan
   }, []);
 
   const buttonClass =
-    "px-2 py-0.5 rounded text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent/50";
+    "px-2 py-0.5 rounded text-[10px] font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50";
 
   return (
     <div className="flex flex-col border-t border-overlay bg-daintree-bg" style={{ height }}>
@@ -290,45 +290,41 @@ export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePan
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter…"
-          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-[11px] rounded bg-daintree-bg border border-overlay focus:outline-none focus:border-border-strong text-daintree-text placeholder:text-daintree-text/30"
+          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-[11px] rounded bg-daintree-bg border border-overlay focus:outline-hidden focus:border-border-strong text-daintree-text placeholder:text-daintree-text/30"
         />
 
         <div className="flex-1" />
 
         {/* Scroll to bottom */}
         {!isAtBottom && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={handleScrollToBottom}
-                  className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
-                >
-                  <ChevronDown className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Scroll to bottom</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        )}
-
-        {/* Clear */}
-        <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
-                onClick={() => clearMessages(paneId)}
+                onClick={handleScrollToBottom}
                 className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
-                aria-label="Clear console"
               >
-                <Trash2 className="w-3.5 h-3.5" />
+                <ChevronDown className="w-3.5 h-3.5" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Clear console</TooltipContent>
+            <TooltipContent side="bottom">Scroll to bottom</TooltipContent>
           </Tooltip>
-        </TooltipProvider>
+        )}
+
+        {/* Clear */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={() => clearMessages(paneId)}
+              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
+              aria-label="Clear console"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Clear console</TooltipContent>
+        </Tooltip>
       </div>
 
       {/* Message list */}

@@ -8,8 +8,10 @@
  */
 
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
-import type { TerminalType, PanelKind, TerminalFlowStatus } from "./panel.js";
+import type { PanelKind, TerminalFlowStatus, PanelTitleMode } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
+import type { BuiltInAgentId } from "../config/agentIds.js";
+import type { SemanticSearchMatch } from "./ipc/terminal.js";
 
 export type { TerminalFlowStatus };
 
@@ -21,9 +23,20 @@ export interface PtyHostSpawnOptions {
   env?: Record<string, string>;
   cols: number;
   rows: number;
+  /**
+   * Optional command submitted immediately after spawn. Used as detector seed
+   * so toolbar-launched agents and command-launched processes enter the same
+   * runtime identity path as typed shell commands.
+   */
+  command?: string;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  /**
+   * Launch hint — the agent this terminal is being launched to run. NOT an
+   * identity. Used only to key agent-specific settings (model, flags, session
+   * resume) and to pick the right auto-inject command. See
+   * `docs/architecture/terminal-identity.md`.
+   */
+  launchAgentId?: AgentId;
   title?: string;
   projectId?: string;
   /** Whether to restore previous session content (default: true). Set to false on restart. */
@@ -34,6 +47,14 @@ export interface PtyHostSpawnOptions {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Worktree the terminal was spawned in; used when persisting agent session history */
+  worktreeId?: string;
+  /** Preset ID the agent was launched with (needed for fallback chain lookup on exit). */
+  agentPresetId?: string;
+  /** Preset brand color captured by the renderer for reconnect/orphan chrome recovery. */
+  agentPresetColor?: string;
+  /** Original user-selected preset ID; unchanged across fallback hops for revert UX. */
+  originalAgentPresetId?: string;
 }
 
 /**
@@ -44,7 +65,9 @@ export type PtyHostRequest =
   | { type: "spawn"; id: string; options: PtyHostSpawnOptions }
   | { type: "resize"; id: string; cols: number; rows: number }
   | { type: "write"; id: string; data: string; traceId?: string }
+  | { type: "broadcast-write"; ids: string[]; data: string }
   | { type: "submit"; id: string; text: string }
+  | { type: "batch-double-escape"; ids: string[] }
   | { type: "kill"; id: string; reason?: string }
   | { type: "trash"; id: string }
   | { type: "restore"; id: string }
@@ -70,6 +93,7 @@ export type PtyHostRequest =
   | { type: "get-snapshot"; id: string; requestId: string }
   | { type: "get-all-snapshots"; requestId: string }
   | { type: "mark-checked"; id: string }
+  | { type: "update-observed-title"; id: string; title: string }
   | {
       type: "transition-state";
       id: string;
@@ -83,6 +107,7 @@ export type PtyHostRequest =
   | { type: "pause-all" }
   | { type: "resume-all" }
   | { type: "dispose" }
+  | { type: "set-log-level-overrides"; overrides: Record<string, string> }
   | { type: "get-terminals-for-project"; projectId: string; requestId: string }
   | { type: "get-terminal"; id: string; requestId: string }
   | { type: "replay-history"; id: string; maxLines: number; requestId: string }
@@ -101,6 +126,12 @@ export type PtyHostRequest =
   | { type: "get-available-terminals"; requestId: string }
   | { type: "get-terminals-by-state"; state: AgentState; requestId: string }
   | { type: "get-all-terminals"; requestId: string }
+  | {
+      type: "search-semantic-buffers";
+      query: string;
+      isRegex: boolean;
+      requestId: string;
+    }
   | { type: "set-ipc-data-mirror"; id: string; enabled: boolean }
   | { type: "graceful-kill"; id: string; requestId: string }
   | { type: "graceful-kill-by-project"; projectId: string; requestId: string }
@@ -120,8 +151,8 @@ export interface PtyHostTerminalSnapshot {
   lastOutputTime: number;
   lastCheckTime: number;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  /** Launch hint — agent this terminal was launched to run. Not identity. */
+  launchAgentId?: AgentId;
   agentState?: AgentState;
   lastStateChange?: number;
   spawnedAt: number;
@@ -147,7 +178,11 @@ export type PtyHostEvent =
   | {
       type: "project-stats";
       requestId: string;
-      stats: { terminalCount: number; processIds: number[]; terminalTypes: Record<string, number> };
+      stats: {
+        terminalCount: number;
+        processIds: number[];
+        detectedAgents: Record<string, number>;
+      };
     }
   | {
       type: "agent-state";
@@ -168,16 +203,23 @@ export type PtyHostEvent =
   | {
       type: "agent-detected";
       terminalId: string;
+      /** Detected agent identity (lowercase built-in agent id) if a known agent is running. */
       agentType?: string;
+      /** Non-agent process icon id (npm, yarn, etc.) if a recognised plain process is running. */
       processIconId?: string;
       processName: string;
+      /** Default title derived from detection — written into panel.title when titleMode === "default". */
+      defaultTitle?: string;
       timestamp: number;
     }
   | {
       type: "agent-exited";
       terminalId: string;
       agentType?: string;
+      /** Default title derived from the demoted/launched identity — written into panel.title when titleMode === "default". */
+      defaultTitle?: string;
       timestamp: number;
+      exitKind?: "subcommand" | "terminal";
     }
   | { type: "agent-spawned"; payload: AgentSpawnedPayload }
   | { type: "agent-output"; payload: AgentOutputPayload }
@@ -200,11 +242,18 @@ export type PtyHostEvent =
   | { type: "terminals-by-state"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "all-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | {
+      type: "semantic-search-result";
+      requestId: string;
+      matches: SemanticSearchMatch[];
+      error?: "invalid-regex";
+    }
+  | {
       type: "terminal-status";
       id: string;
       status: TerminalFlowStatus;
       bufferUtilization?: number;
       pauseDuration?: number;
+      reason?: string;
       timestamp: number;
     }
   | {
@@ -242,6 +291,10 @@ export type PtyHostEvent =
       type: "resource-metrics";
       metrics: TerminalResourceBatchPayload;
       timestamp: number;
+    }
+  | {
+      type: "broadcast-write-result";
+      results: BroadcastWriteTargetResult[];
     };
 
 /** Terminal info sent from Host → Main for getTerminal queries */
@@ -249,9 +302,10 @@ export interface PtyHostTerminalInfo {
   id: string;
   projectId?: string;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  /** Launch hint — agent this terminal was launched to run. Not identity. */
+  launchAgentId?: AgentId;
   title?: string;
+  titleMode?: PanelTitleMode;
   cwd: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
@@ -269,13 +323,26 @@ export interface PtyHostTerminalInfo {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Worktree the terminal was spawned in; used when persisting agent session history */
+  worktreeId?: string;
+  /** Preset ID the agent was launched with. */
+  agentPresetId?: string;
+  /** Preset brand color captured at launch time. */
+  agentPresetColor?: string;
+  /** Original user-selected preset ID; unchanged across fallback hops. */
+  originalAgentPresetId?: string;
+  /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
+  everDetectedAgent?: boolean;
+  /** Runtime-detected agent identity (cleared when the agent exits). */
+  detectedAgentId?: BuiltInAgentId;
+  /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
+  detectedProcessId?: string;
 }
 
 /** Payload for agent:spawned event */
 export interface AgentSpawnedPayload {
   agentId: string;
   terminalId: string;
-  type: TerminalType;
   timestamp: number;
 }
 
@@ -329,6 +396,7 @@ export type SpawnErrorCode =
   | "ENOTDIR" // Working directory does not exist (or path component is not a directory)
   | "EIO" // I/O error (e.g., PTY allocation failure)
   | "DISCONNECTED" // Terminal process no longer exists in backend (e.g., after project switch)
+  | "PENDING_SPAWNS_CAPPED" // PtyClient.pendingSpawns admission cap hit (restart-storm guard)
   | "UNKNOWN"; // Unknown error
 
 /** Result of a spawn operation */
@@ -361,7 +429,25 @@ export interface TerminalStatusPayload {
   status: TerminalFlowStatus;
   bufferUtilization?: number;
   pauseDuration?: number;
+  reason?: string;
   timestamp: number;
+}
+
+/**
+ * Per-target outcome from a fleet `broadcast-write`. `ok: true` means the
+ * pty-host successfully called `pty.write()` for that target. `ok: false`
+ * means the synchronous write threw — typically a dead pipe (EPIPE/EIO/EBADF/
+ * ECONNRESET) — and the renderer should treat the target as gone.
+ */
+export interface BroadcastWriteTargetResult {
+  id: string;
+  ok: boolean;
+  error?: { code?: string; message: string };
+}
+
+/** Payload delivered to the renderer after every fleet broadcast write. */
+export interface BroadcastWriteResultPayload {
+  results: BroadcastWriteTargetResult[];
 }
 
 /** Payload for host crash events */
@@ -383,13 +469,24 @@ export interface HostThrottlePayload {
 /** Payload for terminal reliability metrics (backpressure/suspend/wake) */
 export interface TerminalReliabilityMetricPayload {
   terminalId: string;
-  metricType: "pause-start" | "pause-end" | "suspend" | "wake-latency";
+  metricType:
+    | "pause-start"
+    | "pause-end"
+    | "suspend"
+    | "wake-latency"
+    | "pending-byte-cap-hit"
+    | "pending-bytes-gauge";
   timestamp: number;
   durationMs?: number;
   bufferUtilization?: number;
   shardIndex?: number;
   serializedStateBytes?: number;
   wakeLatencyMs?: number;
+  capType?: "per-terminal" | "total";
+  attemptedBytes?: number;
+  currentPendingBytes?: number;
+  totalPendingBytes?: number;
+  perTerminal?: Array<{ terminalId: string; pendingBytes: number }>;
 }
 
 /**
@@ -405,7 +502,12 @@ export type RendererToPtyHostMessage =
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
  * These bypass the Main process for low-latency terminal output.
  */
-export type PtyHostToRendererMessage = { type: "data"; id: string; data: string; bytes: number };
+export type PtyHostToRendererMessage = {
+  type: "data";
+  id: string;
+  data: Uint8Array;
+  bytes: number;
+};
 
 /** Per-process resource breakdown entry */
 export interface TerminalResourceProcess {

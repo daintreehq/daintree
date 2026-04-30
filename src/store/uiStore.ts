@@ -1,9 +1,9 @@
 import { create } from "zustand";
 
 interface UIState {
-  overlayCount: number;
-  pushOverlay: () => void;
-  popOverlay: () => void;
+  overlayClaims: Set<string>;
+  addOverlayClaim: (id: string) => void;
+  removeOverlayClaim: (id: string) => void;
   hasOpenOverlays: () => boolean;
   notificationCenterOpen: boolean;
   openNotificationCenter: () => void;
@@ -12,16 +12,28 @@ interface UIState {
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
-  overlayCount: 0,
+  overlayClaims: new Set<string>(),
 
-  pushOverlay: () => set((state) => ({ overlayCount: state.overlayCount + 1 })),
+  // Idempotent — return the same state reference when the claim is already
+  // present so Zustand skips re-renders. Never mutate the existing Set; a new
+  // instance is required so reference-equality subscribers update.
+  addOverlayClaim: (id) =>
+    set((state) => {
+      if (state.overlayClaims.has(id)) return state;
+      const next = new Set(state.overlayClaims);
+      next.add(id);
+      return { overlayClaims: next };
+    }),
 
-  popOverlay: () =>
-    set((state) => ({
-      overlayCount: Math.max(0, state.overlayCount - 1),
-    })),
+  removeOverlayClaim: (id) =>
+    set((state) => {
+      if (!state.overlayClaims.has(id)) return state;
+      const next = new Set(state.overlayClaims);
+      next.delete(id);
+      return { overlayClaims: next };
+    }),
 
-  hasOpenOverlays: () => get().overlayCount > 0,
+  hasOpenOverlays: () => get().overlayClaims.size > 0,
 
   notificationCenterOpen: false,
   openNotificationCenter: () => set({ notificationCenterOpen: true }),

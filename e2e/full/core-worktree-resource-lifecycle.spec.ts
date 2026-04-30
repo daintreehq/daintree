@@ -262,10 +262,13 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
     const xtermScreen = newPanel.locator(SEL.terminal.xtermRows);
     await expect(xtermScreen).toBeVisible({ timeout: T_MEDIUM });
 
-    // The connect command is: echo CONNECTED_TO_{{worktree_name}}; bash --norc --noprofile
-    // After substitution, it should output CONNECTED_TO_<actual branch name>
-    // Use waitForTerminalText which reads from the xterm buffer API (works with all renderers)
-    await waitForTerminalText(newPanel, "CONNECTED_TO_");
+    // The panel title carries the substituted worktree name — this verifies
+    // the substitution path independent of terminal buffer scrollback (which
+    // can be wiped when interactive bash starts on macOS).
+    await expect(newPanel.locator("text=Connect:")).toBeVisible({ timeout: T_MEDIUM });
+    await expect(newPanel.locator("text=Connect: e2e/resource-lifecycle")).toBeVisible({
+      timeout: T_MEDIUM,
+    });
   });
 
   test("pause resource action updates status", async () => {

@@ -26,11 +26,88 @@ export interface SystemWakePayload {
   timestamp: number;
 }
 
-/** Three-state availability for an individual agent CLI */
-export type AgentAvailabilityState = "missing" | "installed" | "ready";
+/**
+ * Availability for an individual agent CLI.
+ *
+ * - `missing`: binary not found via any probe (PATH, native installer path, npm global bin).
+ * - `installed`: binary found but cannot be launched directly (e.g. WSL-detected on
+ *   Windows, where direct spawn isn't wired up yet).
+ * - `ready`: binary found, launchable, and credentials confirmed. Auth discovery
+ *   succeeded — the agent can start without a login prompt.
+ * - `blocked`: binary exists but execution was denied (security software like Santa,
+ *   CrowdStrike, SentinelOne, or Windows Defender, or missing execute permission).
+ *   Distinct from `missing` because the fix is a permissions/allowlist change, not
+ *   a reinstall.
+ * - `unauthenticated`: binary found and launchable, but the passive auth probe found
+ *   no credentials. The CLI will prompt for login on first launch. Distinct from
+ *   `ready` so the UI can show a "Login required" nudge without gating launch.
+ */
+export type AgentAvailabilityState =
+  | "missing"
+  | "installed"
+  | "ready"
+  | "blocked"
+  | "unauthenticated";
 
 /** CLI availability status for AI agents */
 export type CliAvailability = Record<AgentId, AgentAvailabilityState>;
+
+/**
+ * Which probe layer located the CLI binary. Populated alongside
+ * {@link AgentCliDetail.resolvedPath} for the Settings diagnostics surface.
+ */
+export type AgentCliProbeSource = "which" | "native" | "npm-global" | "wsl";
+
+/**
+ * Reason a binary exists but cannot be executed. Only set when
+ * {@link AgentCliDetail.state} is `"blocked"`.
+ */
+export type AgentCliBlockReason = "security" | "permissions";
+
+/**
+ * Detailed CLI detection info surfaced for diagnostics. Kept as a parallel
+ * type so the existing {@link CliAvailability} IPC surface stays unchanged.
+ *
+ * `resolvedPath` contract:
+ * - For `which`/`native`/`npm-global` probes: absolute filesystem path to the binary.
+ * - For `wsl`: synthetic `wsl:<distro>` (execution target, not a Windows path).
+ * - `null` when the binary was not found or execution was blocked before
+ *   a path could be resolved.
+ */
+export interface AgentCliDetail {
+  state: AgentAvailabilityState;
+  resolvedPath: string | null;
+  via: AgentCliProbeSource | null;
+  /** Human-readable diagnostic message for UI (e.g. blocked-by-security reason). */
+  message?: string;
+  /** Reason when `state === "blocked"`. */
+  blockReason?: AgentCliBlockReason;
+  /** WSL distribution used when `via === "wsl"`. */
+  wslDistro?: string;
+  /**
+   * All paths emitted by the shell probe (`which -a` / `where.exe`), in PATH
+   * order. Populated only when the probe succeeded via `which`. The first
+   * entry equals {@link AgentCliDetail.resolvedPath}; additional entries are
+   * the duplicate installs that drove the duplicate-detection notification.
+   */
+  allResolvedPaths?: string[];
+  /**
+   * Passive auth discovery result. Populated alongside the binary probe to
+   * drive onboarding nudges ("Needs Setup" tray section, Settings auth
+   * panel) without gating launch.
+   *
+   * - `true`: a credential file or env var was detected for this agent.
+   * - `false`: the agent declares an `authCheck` in the registry, the check
+   *   ran, and nothing was found (or it failed / timed out). Show the nudge.
+   * - `undefined`: no `authCheck` is configured, or the agent is in a state
+   *   where discovery doesn't apply (WSL-capped, blocked, missing). Do not
+   *   show a nudge.
+   */
+  authConfirmed?: boolean;
+}
+
+/** Map of agent ID → detailed detection result. */
+export type AgentCliDetails = Partial<Record<AgentId, AgentCliDetail>>;
 
 /** Version information for an agent */
 export interface AgentVersionInfo {
@@ -158,6 +235,26 @@ export interface HeapStats {
 export interface DiagnosticsInfo {
   uptimeSeconds: number;
   eventLoopP99Ms: number;
+}
+
+/** Payload returned by the review collection IPC. */
+export interface DiagnosticsReviewPayload {
+  /** Raw diagnostic data (keyed by section). */
+  payload: Record<string, unknown>;
+  /** Ordered section keys for the review dialog. */
+  sectionKeys: string[];
+  /** Safe-stringified JSON preview (already redacted). */
+  previewJson: string;
+}
+
+/** User selections sent to the save-bundle IPC. */
+export interface DiagnosticsBundleSavePayload {
+  /** The reviewed and filtered payload (what the user saw in preview). */
+  payload: Record<string, unknown>;
+  /** Sections the user chose to include. */
+  enabledSections: Record<string, boolean>;
+  /** Find-and-replace redaction rules. */
+  replacements: Array<{ find: string; replace: string }>;
 }
 
 /** Payload for starting an agent install via setup wizard */

@@ -18,6 +18,7 @@ import type {
   AtTerminalContext,
   AtSelectionContext,
 } from "../hybridInputParsing";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface LatestRefShape {
   terminalId: string;
@@ -120,7 +121,7 @@ export function useTokenResolution({
                 replacement = `No ${labels[token.diffType]} changes.`;
               }
             } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
+              const msg = formatErrorMessage(err, "Failed to fetch diff");
               replacement = `[Error fetching diff: ${msg}]`;
             }
             replacements.push({ start: token.start, end: token.end, replacement });
@@ -155,8 +156,19 @@ export function useTokenResolution({
       setTerminalContext(null);
       setSelectionContext(null);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs are stable
-    [applyEditorValue, agentId, cwd, terminalId]
+    [
+      applyEditorValue,
+      agentId,
+      cwd,
+      terminalId,
+      latestRef,
+      setAtContext,
+      setDiffContext,
+      setIsExpanded,
+      setSelectionContext,
+      setSlashContext,
+      setTerminalContext,
+    ]
   );
 
   return { sendText };

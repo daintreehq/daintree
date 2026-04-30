@@ -1,12 +1,12 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import type { HandlerDependencies } from "../types.js";
+import { typedHandle } from "../utils.js";
 
 export function registerEditorConfigHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleEditorGetConfig = async (_event: Electron.IpcMainInvokeEvent, projectId: unknown) => {
+  const handleEditorGetConfig = async (projectId: unknown) => {
     const { discover } = await import("../../services/EditorService.js");
     const discoveredEditors = discover();
 
@@ -22,10 +22,9 @@ export function registerEditorConfigHandlers(_deps: HandlerDependencies): () => 
 
     return { preferredEditor, discoveredEditors };
   };
-  ipcMain.handle(CHANNELS.EDITOR_GET_CONFIG, handleEditorGetConfig);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.EDITOR_GET_CONFIG));
+  handlers.push(typedHandle(CHANNELS.EDITOR_GET_CONFIG, handleEditorGetConfig));
 
-  const handleEditorSetConfig = async (_event: Electron.IpcMainInvokeEvent, payload: unknown) => {
+  const handleEditorSetConfig = async (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -88,15 +87,13 @@ export function registerEditorConfigHandlers(_deps: HandlerDependencies): () => 
     const settings = await projectStore.getProjectSettings(pid);
     await projectStore.saveProjectSettings(pid, { ...settings, preferredEditor: editorConfig });
   };
-  ipcMain.handle(CHANNELS.EDITOR_SET_CONFIG, handleEditorSetConfig);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.EDITOR_SET_CONFIG));
+  handlers.push(typedHandle(CHANNELS.EDITOR_SET_CONFIG, handleEditorSetConfig));
 
   const handleEditorDiscover = async () => {
     const { discover } = await import("../../services/EditorService.js");
     return discover();
   };
-  ipcMain.handle(CHANNELS.EDITOR_DISCOVER, handleEditorDiscover);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.EDITOR_DISCOVER));
+  handlers.push(typedHandle(CHANNELS.EDITOR_DISCOVER, handleEditorDiscover));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

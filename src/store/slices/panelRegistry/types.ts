@@ -2,7 +2,6 @@ import type { StoreApi } from "zustand";
 import type {
   TerminalInstance as TerminalInstanceType,
   AgentState,
-  TerminalType,
   AgentStateChangeTrigger,
   TerminalFlowStatus,
   TerminalRuntimeStatus,
@@ -43,6 +42,13 @@ export interface BackgroundedTerminal {
   groupMetadata?: TrashedTerminalGroupMetadata;
 }
 
+/**
+ * Opaque token returned by `beginHydrationBatch`. Callers must pass the same token
+ * to `flushHydrationBatch` so a stale batch from a cancelled hydration cannot be
+ * flushed by a later, unrelated caller.
+ */
+export type HydrationBatchToken = symbol;
+
 export interface PanelRegistrySlice {
   panelsById: Record<string, TerminalInstance>;
   panelIds: string[];
@@ -52,8 +58,20 @@ export interface PanelRegistrySlice {
   tabGroups: Map<string, TabGroup>;
 
   addPanel: (options: AddPanelOptions) => Promise<string | null>;
+  /**
+   * Hydration-only: collect subsequent `addPanel` mutations into one batched commit
+   * instead of applying each individually. Every `addPanel` between begin and flush
+   * still returns its final id and runs per-panel side effects, but store mutations
+   * are deferred until `flushHydrationBatch` fires exactly one `set()` +
+   * `saveNormalized()` for all collected panels. Collapses an N-panel restore phase
+   * from N re-renders into 1.
+   */
+  beginHydrationBatch: () => HydrationBatchToken;
+  /** Apply all panels collected since `beginHydrationBatch` in a single `set()` call. */
+  flushHydrationBatch: (token: HydrationBatchToken) => void;
   removePanel: (id: string) => void;
   updateTitle: (id: string, newTitle: string) => void;
+  updateLastObservedTitle: (id: string, title: string) => void;
   updateAgentState: (
     id: string,
     agentState: AgentState,
@@ -122,12 +140,30 @@ export interface PanelRegistrySlice {
   setRuntimeStatus: (id: string, status: TerminalRuntimeStatus) => void;
   setInputLocked: (id: string, locked: boolean) => void;
   toggleInputLocked: (id: string) => void;
-  convertTerminalType: (id: string, newType: TerminalType, newAgentId?: string) => Promise<void>;
+  /**
+   * Kill the current PTY and respawn it in the same panel slot using a
+   * different preset. Fires as part of the fallback chain when a preset's
+   * provider is unavailable. No session resume (fresh spawn), since the
+   * upstream session we were talking to is the very thing that failed.
+   */
+  activateFallbackPreset: (
+    id: string,
+    nextPresetId: string,
+    originalPresetId: string
+  ) => Promise<{ success: boolean; error?: string }>;
   setBrowserUrl: (id: string, url: string) => void;
   setBrowserHistory: (id: string, history: BrowserHistory) => void;
   setBrowserZoom: (id: string, zoom: number) => void;
   setBrowserConsoleOpen: (id: string, isOpen: boolean) => void;
   setDevPreviewConsoleOpen: (id: string, isOpen: boolean) => void;
+  setViewportPreset: (
+    id: string,
+    preset: import("@shared/types/panel.js").ViewportPresetId | undefined
+  ) => void;
+  setDevPreviewScrollPosition: (
+    id: string,
+    position: { url: string; scrollY: number } | undefined
+  ) => void;
   setDevServerState: (
     id: string,
     status: "stopped" | "starting" | "installing" | "running" | "error",

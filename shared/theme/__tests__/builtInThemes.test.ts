@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { BUILT_IN_THEME_SOURCES } from "../builtInThemes/index.js";
+import { getThemeContrastWarnings } from "../contrast.js";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
 import { APP_THEME_TOKEN_KEYS } from "../types.js";
 
 describe("built-in themes", () => {
   it("every source compiles to a valid AppColorScheme", () => {
+    expect(BUILT_IN_THEME_SOURCES.length).toBeGreaterThan(0);
     expect(BUILT_IN_APP_SCHEMES).toHaveLength(BUILT_IN_THEME_SOURCES.length);
     for (const scheme of BUILT_IN_APP_SCHEMES) {
       expect(scheme.id).toBeTruthy();
@@ -19,6 +21,14 @@ describe("built-in themes", () => {
     const ids = BUILT_IN_APP_SCHEMES.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
+
+  it.each(BUILT_IN_APP_SCHEMES.map((s) => [s.id, s] as const))(
+    "scheme %s passes WCAG contrast checks",
+    (_id, scheme) => {
+      const warnings = getThemeContrastWarnings(scheme);
+      expect(warnings, warnings.map((w) => w.message).join("; ")).toHaveLength(0);
+    }
+  );
 
   it("every compiled scheme has all required token keys", () => {
     for (const scheme of BUILT_IN_APP_SCHEMES) {
@@ -77,6 +87,56 @@ describe("built-in themes", () => {
         source.palette.strategy?.materialSaturation,
         `${source.id} missing materialSaturation`
       ).toBeGreaterThan(0);
+    }
+  });
+
+  it("surface-disabled token derives as opaque color (not rgba)", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const surfaceDisabled = scheme.tokens["surface-disabled"];
+      expect(surfaceDisabled, `${scheme.id} surface-disabled should exist`).toBeTruthy();
+      expect(surfaceDisabled, `${scheme.id} surface-disabled should be opaque`).not.toMatch(
+        /^rgba\(/
+      );
+      expect(
+        surfaceDisabled,
+        `${scheme.id} surface-disabled should not contain undefined`
+      ).not.toContain("undefined");
+    }
+  });
+
+  it("status-danger-surface token derives as transparent wash", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      expect(
+        scheme.tokens["status-danger-surface"],
+        `${scheme.id} status-danger-surface should be transparent wash`
+      ).toMatch(
+        /rgba\(.*,\s*0\.\d+\)|color-mix\(in oklab,\s*var\(--theme-status-danger\)\s*\d+%,\s*transparent\)/
+      );
+    }
+  });
+
+  it("knob-base token is polarity-aware (dark vs light)", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const knobBase = scheme.tokens["knob-base"];
+      expect(knobBase, `${scheme.id} knob-base should be oklch`).toMatch(/oklch\(/);
+      if (scheme.type === "dark") {
+        expect(knobBase, `${scheme.id} dark theme knob should be light`).toMatch(
+          /oklch\([0-9]\.[8-9]/
+        );
+      } else {
+        expect(knobBase, `${scheme.id} light theme knob should be dark`).toMatch(
+          /oklch\([0-1]\.[0-2]/
+        );
+      }
+    }
+  });
+
+  it("state-modified token derives from status-info base", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const modified = scheme.tokens["state-modified"];
+      expect(modified, `${scheme.id} state-modified should derive from status-info`).toContain(
+        "color-mix"
+      );
     }
   });
 });

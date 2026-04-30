@@ -12,7 +12,11 @@ import path from "path";
 import crypto from "crypto";
 import { events } from "./events.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
+import { gitHubRateLimitService } from "./github/index.js";
 import { store } from "../store.js";
+import { isValidLogOverrideLevel } from "../utils/logger.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 import { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
 import type {
@@ -36,6 +40,21 @@ export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
 const CLEANUP_GRACE_MS = 180_000; // 3 minutes
 const MAX_WARM_ENTRIES = 3;
 
+function readPersistedLogOverrides(): Record<string, string> {
+  try {
+    const raw = store.get("logLevelOverrides") ?? {};
+    const clean: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof key === "string" && key && isValidLogOverrideLevel(value)) {
+        clean[key] = value as string;
+      }
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
 const DEFAULT_CONFIG: Required<WorkspaceClientConfig> = {
   maxRestartAttempts: 3,
   healthCheckIntervalMs: 60000,
@@ -46,6 +65,14 @@ interface ProcessEntry {
   host: WorkspaceHostProcess;
   refCount: number;
   initPromise: Promise<void>;
+  /**
+   * Tracks the most recent readiness promise for this entry. Starts as
+   * `initPromise` and is replaced by the `reloadProjectAfterRestart` promise
+   * whenever the host restarts, so `waitForReady()` blocks until the restarted
+   * host has finished loading the project. `initPromise` is retained unchanged
+   * for the poisoned-entry detection in `loadProject`.
+   */
+  currentReadyPromise: Promise<void>;
   cleanupTimeout: NodeJS.Timeout | null;
   windowIds: Set<number>;
   projectPath: string;
@@ -63,11 +90,31 @@ export class WorkspaceClient extends EventEmitter {
   // Reverse map: worktree path → project path (populated from worktree-update events)
   private worktreePathToProject = new Map<string, string>();
 
+  // Timestamp of the most recent main-initiated GitHub token change. Used to
+  // discard utility-process rate-limit events that predate the mutation —
+  // without this, a "blocked: true" event emitted by utility *before* the
+  // token change can arrive at main *after* main cleared state, reblocking
+  // main with obsolete pre-token-change observations until the utility
+  // eventually sends its own clear.
+  private githubTokenChangeAt = 0;
+  private static readonly RATE_LIMIT_TOKEN_CHANGE_GUARD_MS = 5_000;
+
   // CopyTree progress callbacks by operationId (manager-level)
   private copyTreeProgressCallbacks = new Map<string, CopyTreeProgressCallback>();
   private activeCopyTreeOperations = new Map<string, string>();
 
   private readonly _statesInflight = new Map<string, Promise<WorktreeSnapshot[]>>();
+
+  /**
+   * Cached log-level overrides, fanned out to every workspace host and
+   * primed on new hosts spawned after the cache was set. Each host's own
+   * `setLogLevelOverrides` handles push-on-ready replay internally.
+   *
+   * Seeded from the persisted store so hosts created before the IPC handler
+   * registers (e.g. via `prewarmProject` during early boot) still inherit
+   * the user's saved overrides.
+   */
+  private logLevelOverridesCache: Record<string, string> = readPersistedLogOverrides();
 
   constructor(config: WorkspaceClientConfig = {}) {
     super();
@@ -75,7 +122,7 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   async waitForReady(): Promise<void> {
-    const promises = [...this.entries.values()].map((e) => e.initPromise);
+    const promises = [...this.entries.values()].map((e) => e.currentReadyPromise);
     if (promises.length === 0) return;
     await Promise.all(promises);
   }
@@ -128,14 +175,32 @@ export class WorkspaceClient extends EventEmitter {
       this.routeHostEvent(entry, event);
     });
 
+    host.on("host-recovering", () => {
+      // Fired on every unexpected exit (before restart scheduling).  Broadcast
+      // to affected views so WorktreePortClient can reject pending requests
+      // immediately instead of waiting for the per-request timeout.
+      this.sendToEntryWindows(entry, CHANNELS.WORKTREE_HOST_DISCONNECTED, {
+        fatal: false,
+      });
+    });
+
     host.on("host-crash", (code: number) => {
+      this.sendToEntryWindows(entry, CHANNELS.WORKTREE_HOST_DISCONNECTED, {
+        fatal: true,
+      });
       this.emit("host-crash", code);
     });
 
     host.on("restarted", () => {
-      this.reloadProjectAfterRestart(entry).catch((err) => {
+      const restartPromise = this.reloadProjectAfterRestart(entry);
+      restartPromise.catch((err) => {
         console.error(`[WorkspaceClient] Failed to reload project after host restart:`, err);
       });
+      // Gate `waitForReady()` on the restart reload so callers don't race
+      // ahead of `load-project` on a restarted host. Let rejection propagate
+      // so a false-positive "ready" can't unblock callers on a broken host —
+      // the next `restarted` event will overwrite this with a fresh promise.
+      entry.currentReadyPromise = restartPromise;
     });
   }
 
@@ -156,9 +221,11 @@ export class WorkspaceClient extends EventEmitter {
             entry.projectPath
           );
         }
-        this.sendToEntryWindows(entry, CHANNELS.WORKTREE_UPDATE, {
-          worktree,
+        this.sendToEntryWindows(entry, CHANNELS.EVENTS_PUSH, {
+          name: "worktree:update",
+          payload: { worktree },
         });
+        this.emit("worktree-update", { worktree, projectPath: entry.projectPath });
         events.emit("sys:worktree:update", {
           id: worktree.id,
           path: worktree.path,
@@ -189,6 +256,10 @@ export class WorkspaceClient extends EventEmitter {
       case "worktree-removed":
         this.sendToEntryWindows(entry, CHANNELS.WORKTREE_REMOVE, {
           worktreeId: event.worktreeId,
+        });
+        this.emit("worktree-removed", {
+          worktreeId: event.worktreeId,
+          projectPath: entry.projectPath,
         });
         break;
 
@@ -237,9 +308,66 @@ export class WorkspaceClient extends EventEmitter {
         break;
       }
 
+      case "github-rate-limit-changed": {
+        // Apply the utility-process observation to main's own singleton so
+        // that subsequent main-process GitHub calls preflight-block. The
+        // main-process transport registered in `registerGithubHandlers`
+        // then rebroadcasts the state to all renderer windows.
+        //
+        // Guard against stale "blocked" observations that predate a local
+        // token mutation — they can arrive after main has already cleared
+        // state and would incorrectly re-block main until the utility
+        // eventually catches up with its own clear. Unblock events are
+        // always applied (they never make state worse).
+        if (
+          event.state.blocked &&
+          this.githubTokenChangeAt > 0 &&
+          Date.now() - this.githubTokenChangeAt < WorkspaceClient.RATE_LIMIT_TOKEN_CHANGE_GUARD_MS
+        ) {
+          break;
+        }
+        gitHubRateLimitService.applyRemoteState(event.state);
+        break;
+      }
+
       case "copytree:progress": {
         const callback = this.copyTreeProgressCallbacks.get(event.operationId);
         callback?.(event.progress);
+        break;
+      }
+
+      case "inotify-limit-reached": {
+        // System-wide Linux condition — notify every active window, not just
+        // this entry's project views. Each host fires this once per lifetime,
+        // so broadcasting is cheap.
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: "warning",
+          title: "File watching degraded",
+          message:
+            "Linux inotify watch limit reached. Some files may not auto-refresh until you raise it.",
+          action: {
+            label: "Copy fix command",
+            ipcChannel: CHANNELS.CLIPBOARD_WRITE_TEXT,
+            data: "sudo sysctl fs.inotify.max_user_watches=524288",
+          },
+        });
+        break;
+      }
+
+      case "emfile-limit-reached": {
+        // System-wide macOS condition — same broadcasting rationale as the
+        // inotify case above. Fires once per host-process lifetime.
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: "warning",
+          title: "File watching degraded",
+          message:
+            "macOS file descriptor ceiling reached. Some files may not auto-refresh until you raise it.",
+          action: {
+            label: "Copy fix command",
+            ipcChannel: CHANNELS.CLIPBOARD_WRITE_TEXT,
+            data: "sudo sysctl -w kern.maxfilesperproc=64000",
+          },
+        });
         break;
       }
     }
@@ -255,6 +383,7 @@ export class WorkspaceClient extends EventEmitter {
       requestId,
       rootPath: entry.projectPath,
       globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
+      wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
     });
 
     // Re-establish direct renderer ports after host restart
@@ -349,12 +478,16 @@ export class WorkspaceClient extends EventEmitter {
 
     const existingEntry = this.entries.get(normalizedPath);
     if (existingEntry) {
-      // Check if this entry has a failed initPromise (poisoned by prior crash)
-      const isInitFailed = await existingEntry.initPromise.then(
+      // Check if this entry has a failed readiness promise (poisoned by a
+      // prior init crash or a failed post-restart reload). Using
+      // `currentReadyPromise` catches both the original load and the most
+      // recent restart — reusing a host whose restart-reload failed produces
+      // stale state that looks like the wake-staleness bug.
+      const isReadyFailed = await existingEntry.currentReadyPromise.then(
         () => false,
         () => true
       );
-      if (isInitFailed) {
+      if (isReadyFailed) {
         existingEntry.host.dispose();
         this.entries.delete(normalizedPath);
       } else {
@@ -382,6 +515,7 @@ export class WorkspaceClient extends EventEmitter {
 
     // Create new per-project host
     const host = new WorkspaceHostProcess(normalizedPath, this.config);
+    host.setLogLevelOverrides(this.logLevelOverridesCache);
 
     const initPromise = (async () => {
       await host.waitForReady();
@@ -391,6 +525,7 @@ export class WorkspaceClient extends EventEmitter {
         requestId,
         rootPath: normalizedPath,
         globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
+        wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
       });
     })();
 
@@ -398,6 +533,7 @@ export class WorkspaceClient extends EventEmitter {
       host,
       refCount: 1,
       initPromise,
+      currentReadyPromise: initPromise,
       cleanupTimeout: null,
       windowIds: new Set([windowId]),
       projectPath: normalizedPath,
@@ -444,6 +580,7 @@ export class WorkspaceClient extends EventEmitter {
     if (this.entries.has(normalizedPath)) return;
 
     const host = new WorkspaceHostProcess(normalizedPath, this.config);
+    host.setLogLevelOverrides(this.logLevelOverridesCache);
 
     const initPromise = (async () => {
       await host.waitForReady();
@@ -453,6 +590,7 @@ export class WorkspaceClient extends EventEmitter {
         requestId,
         rootPath: normalizedPath,
         globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
+        wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
       });
     })();
 
@@ -460,6 +598,7 @@ export class WorkspaceClient extends EventEmitter {
       host,
       refCount: 0,
       initPromise,
+      currentReadyPromise: initPromise,
       cleanupTimeout: null,
       windowIds: new Set(),
       projectPath: normalizedPath,
@@ -650,11 +789,19 @@ export class WorkspaceClient extends EventEmitter {
         const entry = this.resolveEntryForWindow(windowId);
         if (entry) {
           this.sendToEntryWindows(entry, CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+          this.emit("worktree-activated", {
+            worktreeId,
+            projectPath: entry.projectPath,
+          });
         }
       } else {
         // Broadcast to all entries' views (no windowId → fan out)
         for (const entry of this.entries.values()) {
           this.sendToEntryWindows(entry, CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+          this.emit("worktree-activated", {
+            worktreeId,
+            projectPath: entry.projectPath,
+          });
         }
       }
     }
@@ -674,6 +821,20 @@ export class WorkspaceClient extends EventEmitter {
         // Host may be crashed
       }
     }
+  }
+
+  async refreshOnWake(): Promise<void> {
+    // Fan out to all hosts in parallel — wake recovery responsiveness across
+    // multiple open projects shouldn't be gated on the slowest host.
+    await Promise.allSettled(
+      Array.from(this.entries.values()).map(async (entry) => {
+        const requestId = entry.host.generateRequestId();
+        await entry.host.sendWithResponse({
+          type: "refresh-on-wake",
+          requestId,
+        });
+      })
+    );
   }
 
   async refreshPullRequests(): Promise<void> {
@@ -726,6 +887,7 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   updateGitHubToken(token: string | null): void {
+    this.githubTokenChangeAt = Date.now();
     for (const entry of this.entries.values()) {
       entry.host.send({ type: "update-github-token", token });
     }
@@ -734,6 +896,24 @@ export class WorkspaceClient extends EventEmitter {
   setPollingEnabled(enabled: boolean): void {
     for (const entry of this.entries.values()) {
       entry.host.send({ type: "set-polling-enabled", enabled });
+    }
+  }
+
+  /**
+   * Forward a per-worktree WSL git opt-in / dismissed change to every host.
+   * Each host filters by worktree id internally — broadcasting is cheaper
+   * than tracking which host owns which worktree from this layer.
+   */
+  setWslOptIn(worktreeId: string, enabled: boolean, dismissed: boolean): void {
+    for (const entry of this.entries.values()) {
+      entry.host.send({ type: "set-wsl-opt-in", worktreeId, enabled, dismissed });
+    }
+  }
+
+  setLogLevelOverrides(overrides: Record<string, string>): void {
+    this.logLevelOverridesCache = { ...overrides };
+    for (const entry of this.entries.values()) {
+      entry.host.setLogLevelOverrides(this.logLevelOverridesCache);
     }
   }
 
@@ -762,6 +942,27 @@ export class WorkspaceClient extends EventEmitter {
 
   unregisterWindow(windowId: number): void {
     this.releaseWindow(windowId);
+  }
+
+  /**
+   * User-initiated restart of the workspace host for a window's project after
+   * the auto-restart budget was exhausted. Resolves the host via the existing
+   * entry (kept alive after a fatal crash) and re-spawns its child process.
+   * The existing `"restarted"` listener in `wireHostEvents` drives
+   * `reloadProjectAfterRestart` so ports re-broker and worktree state refreshes.
+   */
+  manualRestartForWindow(windowId: number): void {
+    if (this.isDisposed) return;
+
+    const entry = this.resolveEntryForWindow(windowId);
+    if (!entry) {
+      console.warn(
+        `[WorkspaceClient] No entry for window ${windowId}; cannot manual-restart workspace host`
+      );
+      return;
+    }
+
+    entry.host.manualRestart();
   }
 
   async listBranches(rootPath: string): Promise<BranchInfo[]> {
@@ -939,7 +1140,7 @@ export class WorkspaceClient extends EventEmitter {
         includedFiles: 0,
         includedSize: 0,
         excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: formatErrorMessage(error, "Failed to generate context"),
       };
     }
   }

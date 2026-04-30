@@ -3,6 +3,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import { homedir } from "node:os";
 import path from "node:path";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 export interface GeminiConfig {
   ui?: {
@@ -43,7 +44,7 @@ export class GeminiConfigService {
       const content = await readFile(this.configPath, "utf8");
       return JSON.parse(content) as GeminiConfig;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to read Gemini config");
       throw new Error(`Failed to read Gemini config: ${message}`);
     }
   }
@@ -63,7 +64,7 @@ export class GeminiConfigService {
         alternateBufferEnabled: config.ui?.useAlternateBuffer === true,
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to read Gemini config");
       return { exists: true, alternateBufferEnabled: false, error: message };
     }
   }
@@ -113,7 +114,7 @@ export class GeminiConfigService {
       const content = JSON.stringify(config, null, 2);
       await resilientAtomicWriteFile(this.configPath, content, "utf8");
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to write Gemini config");
       throw new Error(`Failed to write Gemini config: ${message}`);
     }
   }

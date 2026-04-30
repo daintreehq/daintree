@@ -34,11 +34,25 @@ export interface PRCheckCandidate {
   worktreeId: string;
   issueNumber?: number;
   branchName?: string;
+  /**
+   * When set, enables ETag-based change detection on `/pulls/{knownPRNumber}`
+   * before issuing the batch GraphQL query. Used by the revalidation path to
+   * skip GraphQL entirely when all known PRs return 304 Not Modified (which
+   * does not consume primary rate-limit points).
+   */
+  knownPRNumber?: number;
 }
 
 export interface BatchPRCheckResult {
   results: Map<string, PRCheckResult>;
   error?: string;
+  /**
+   * When set, the error originated from a GitHub rate limit and includes
+   * the resume timestamp. Callers use this to park retry scheduling at
+   * the known resume time without counting the failure toward a
+   * circuit-breaker threshold.
+   */
+  rateLimit?: { kind: "primary" | "secondary"; resumeAt: number };
 }
 
 export type CIStatus = "success" | "failure" | "error" | "pending" | "expected" | "none";

@@ -7,6 +7,8 @@ import { generateAgentCommand } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { stableInRepoId, isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 export interface RecipeSpawnResult {
   index: number;
@@ -27,6 +29,22 @@ function isAgentRecipeType(type: RecipeTerminalType): boolean {
   return type !== "terminal" && type !== "dev-preview";
 }
 
+// Recipes read from disk may still contain agentModelId/agentLaunchFlags if
+// they were written by an older build before those fields were stripped on
+// persist. Treat them as session-only state and drop them at load time.
+function stripSessionOverridesFromRecipe(recipe: TerminalRecipe): TerminalRecipe {
+  let changed = false;
+  const terminals = recipe.terminals.map((terminal) => {
+    if (terminal.agentModelId === undefined && terminal.agentLaunchFlags === undefined) {
+      return terminal;
+    }
+    changed = true;
+    const { agentModelId: _m, agentLaunchFlags: _f, ...rest } = terminal;
+    return rest;
+  });
+  return changed ? { ...recipe, terminals } : recipe;
+}
+
 function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
   const isAgent = isAgentRecipeType(terminal.type);
   const command = terminal.command?.trim() || undefined;
@@ -43,15 +61,21 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
     initialPrompt: isAgent ? initialPrompt : undefined,
     devCommand: terminal.type === "dev-preview" ? devCommand : undefined,
     args,
+    // Session-scoped overrides must never leak into disk-saved recipes.
+    agentModelId: undefined,
+    agentLaunchFlags: undefined,
   };
 }
 
 function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
-  // Map kind to RecipeTerminalType
+  // Map kind to RecipeTerminalType.
+  // Launch-intent only: recipes encode what the terminal was launched as, not
+  // what runtime detection observed. Persisting `detectedAgentId` would corrupt
+  // a recipe by baking ephemeral session state into a reusable template.
   const type: RecipeTerminalType =
-    terminal.kind === "dev-preview"
-      ? "dev-preview"
-      : (terminal.agentId ?? terminal.type ?? "terminal");
+    terminal.kind === "dev-preview" ? "dev-preview" : (terminal.launchAgentId ?? "terminal");
+
+  const isAgent = isAgentRecipeType(type);
 
   return {
     type,
@@ -60,6 +84,8 @@ function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
     devCommand: terminal.kind === "dev-preview" ? terminal.devCommand : undefined,
     env: {},
     exitBehavior: terminal.exitBehavior,
+    agentModelId: isAgent ? terminal.agentModelId : undefined,
+    agentLaunchFlags: isAgent ? terminal.agentLaunchFlags : undefined,
   };
 }
 
@@ -151,7 +177,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         : {}),
     });
     try {
-      const [globalRecipes, projectRecipes, inRepoRecipes] = await Promise.all([
+      const [globalRecipesRaw, projectRecipesRaw, inRepoRecipesRaw] = await Promise.all([
         globalRecipesClient.getRecipes(),
         projectClient.getRecipes(projectId),
         projectClient.getInRepoRecipes(projectId).catch(() => [] as TerminalRecipe[]),
@@ -159,6 +185,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       if (requestId !== loadRecipesRequestId || get().currentProjectId !== projectId) {
         return;
       }
+      const globalRecipes = globalRecipesRaw.map(stripSessionOverridesFromRecipe);
+      const projectRecipes = projectRecipesRaw.map(stripSessionOverridesFromRecipe);
+      const inRepoRecipes = inRepoRecipesRaw.map(stripSessionOverridesFromRecipe);
       set({
         globalRecipes,
         projectRecipes,
@@ -170,7 +199,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       if (requestId !== loadRecipesRequestId || get().currentProjectId !== projectId) {
         return;
       }
-      console.error("Failed to load recipes:", error);
+      logError("Failed to load recipes", error);
       set({
         recipes: [],
         globalRecipes: [],
@@ -198,9 +227,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const isGlobal = projectId === undefined;
     const newRecipe: TerminalRecipe = {
-      id: isGlobal
-        ? `recipe-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-        : stableInRepoId(name),
+      id: isGlobal ? `recipe-${crypto.randomUUID()}` : stableInRepoId(name),
       name,
       projectId: isGlobal ? undefined : projectId,
       worktreeId: isGlobal ? undefined : worktreeId,
@@ -229,7 +256,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         await projectClient.updateInRepoRecipe(projectId, newRecipe);
       }
     } catch (error) {
-      console.error("Failed to persist recipe:", error);
+      logError("Failed to persist recipe", error);
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
@@ -256,7 +283,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
     }
 
-    const recipe = recipes[index];
+    const recipe = recipes[index]!;
     const isInRepo = isInRepoRecipeId(id);
     const isGlobal = !isInRepo && recipe.projectId === undefined;
     const sanitizedTerminals = updates.terminals?.map(sanitizeRecipeTerminal);
@@ -268,10 +295,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const nameChanged = isInRepo && updates.name && stableInRepoId(updates.name) !== id;
     const newId = nameChanged ? stableInRepoId(updates.name!) : id;
 
-    const updatedRecipe = {
+    const updatedRecipe: TerminalRecipe = {
       ...recipe,
       ...sanitizedUpdates,
       id: newId,
+      name: sanitizedUpdates.name ?? recipe.name,
       terminals: sanitizedTerminals ?? recipe.terminals,
     };
 
@@ -286,7 +314,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       return next;
     };
     const nextGlobal = isGlobal ? applyUpdate(prevGlobal) : prevGlobal;
-    const nextProject = !isGlobal && !isInRepo ? applyUpdate(prevProject) : prevProject;
+    // For in-repo recipes, the file store carries a reconciled mirror that we
+    // must keep in sync — otherwise a name change leaves the old id behind in
+    // projectRecipes, and `mergeRecipes` surfaces it as a duplicate row.
+    const nextProject =
+      isInRepo || (!isGlobal && !isInRepo) ? applyUpdate(prevProject) : prevProject;
     const nextInRepo = isInRepo ? applyUpdate(prevInRepo) : prevInRepo;
     set({
       globalRecipes: nextGlobal,
@@ -313,7 +345,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         await projectClient.updateRecipe(recipe.projectId!, id, sanitizedUpdates);
       }
     } catch (error) {
-      console.error("Failed to persist recipe update:", error);
+      logError("Failed to persist recipe update", error);
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
@@ -361,7 +393,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         await projectClient.deleteRecipe(recipe.projectId!, id);
       }
     } catch (error) {
-      console.error("Failed to persist recipe deletion:", error);
+      logError("Failed to persist recipe deletion", error);
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
@@ -404,7 +436,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     try {
       await projectClient.updateInRepoRecipe(currentProjectId, promoted);
     } catch (error) {
-      console.error("Failed to save recipe to repo:", error);
+      logError("Failed to save recipe to repo", error);
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
@@ -423,7 +455,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         }
       } catch (error) {
         // In-repo write succeeded; roll back only the delete portion
-        console.error("Failed to delete original recipe:", error);
+        logError("Failed to delete original recipe", error);
         set({
           globalRecipes: prevGlobal,
           projectRecipes: prevProject,
@@ -462,7 +494,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     get()
       .updateRecipe(recipeId, { lastUsedAt: now, usageHistory })
       .catch((error) => {
-        console.warn("Failed to update lastUsedAt for recipe:", error);
+        logError("Failed to update lastUsedAt for recipe", error);
       });
 
     const terminalStore = usePanelStore.getState();
@@ -485,7 +517,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         agentSettings = settings;
         clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
       } catch (error) {
-        console.warn("Failed to fetch agent settings for recipe:", error);
+        logError("Failed to fetch agent settings for recipe", error);
       }
     }
 
@@ -518,12 +550,12 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         }
 
         const isAgent = isAgentRecipeType(terminal.type);
-        let command = terminal.command?.trim() || "";
+        let terminalId: string | null;
 
-        // For agent terminals, build command with settings/flags and optional initial prompt
         if (isAgent) {
-          const agentConfig = getAgentConfig(terminal.type);
-          const baseCommand = agentConfig?.command || terminal.type;
+          const agentId = terminal.type as string;
+          const agentConfig = getAgentConfig(agentId);
+          const baseCommand = agentConfig?.command ?? "";
           const rawPrompt = terminal.initialPrompt?.trim();
           const resolvedContext: RecipeContext = {
             ...context,
@@ -532,32 +564,41 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           const initialPrompt = rawPrompt
             ? replaceRecipeVariables(rawPrompt, resolvedContext)
             : undefined;
-          const entry = agentSettings?.agents?.[terminal.type] ?? {};
-          command = generateAgentCommand(baseCommand, entry, terminal.type, {
+          const entry = agentSettings?.agents?.[agentId] ?? {};
+          const command = generateAgentCommand(baseCommand, entry, agentId, {
             initialPrompt,
             clipboardDirectory,
             recipeArgs: terminal.args?.trim() || undefined,
           });
+          terminalId = await terminalStore.addPanel({
+            kind: "terminal",
+            launchAgentId: agentId,
+            command,
+            title: terminal.title,
+            cwd: worktreePath,
+            worktreeId: worktreeId,
+            env: terminal.env,
+            exitBehavior: terminal.exitBehavior,
+          });
+        } else {
+          terminalId = await terminalStore.addPanel({
+            kind: "terminal",
+            title: terminal.title,
+            cwd: worktreePath,
+            command: terminal.command?.trim() || "",
+            worktreeId: worktreeId,
+            env: terminal.env,
+            exitBehavior: terminal.exitBehavior,
+          });
         }
-
-        const terminalId = await terminalStore.addPanel({
-          kind: isAgent ? "agent" : "terminal",
-          agentId: isAgent ? terminal.type : undefined,
-          title: terminal.title,
-          cwd: worktreePath,
-          command,
-          worktreeId: worktreeId,
-          env: terminal.env,
-          exitBehavior: terminal.exitBehavior,
-        });
         if (terminalId) {
           results.spawned.push({ index, terminalId });
         } else {
           results.failed.push({ index, error: "Panel limit reached" });
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`Failed to spawn terminal for recipe ${recipeId}:`, error);
+        const message = formatErrorMessage(error, "Failed to spawn terminal");
+        logError(`Failed to spawn terminal for recipe ${recipeId}`, error);
         results.failed.push({ index, error: message });
       }
     }
@@ -693,9 +734,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const isGlobal = projectId === undefined;
     const recipeName = String(recipe.name);
     const importedRecipe: TerminalRecipe = {
-      id: isGlobal
-        ? `recipe-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-        : stableInRepoId(recipeName),
+      id: isGlobal ? `recipe-${crypto.randomUUID()}` : stableInRepoId(recipeName),
       name: recipeName,
       projectId: isGlobal ? undefined : projectId,
       worktreeId: isGlobal
@@ -728,7 +767,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         await projectClient.updateInRepoRecipe(projectId, importedRecipe);
       }
     } catch (_error) {
-      console.error("Failed to persist imported recipe:", _error);
+      logError("Failed to persist imported recipe", _error);
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
@@ -744,7 +783,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const activeTerminals = terminalStore.panelIds
       .map((id) => terminalStore.panelsById[id])
-      .filter((t) => t && t.location !== "trash" && t.worktreeId === worktreeId);
+      .filter(
+        (t): t is NonNullable<typeof t> =>
+          Boolean(t) && t!.location !== "trash" && t!.worktreeId === worktreeId
+      );
 
     const terminalsToCapture = activeTerminals.slice(0, MAX_TERMINALS_PER_RECIPE);
 

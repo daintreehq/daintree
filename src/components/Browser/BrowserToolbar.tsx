@@ -12,12 +12,17 @@ import {
   Camera,
   SquareTerminal,
   Code,
+  Smartphone,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { normalizeBrowserUrl, getDisplayUrl } from "./browserUtils";
 import { actionService } from "@/services/ActionService";
 import { useUrlHistoryStore, getFrecencySuggestions } from "@/store/urlHistoryStore";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { ViewportPresetId } from "@shared/types/panel";
+import { VIEWPORT_PRESET_LIST, getViewportPreset } from "@/panels/dev-preview/viewportPresets";
+import { logError } from "@/utils/logger";
 
 const ZOOM_PRESETS = [
   { value: 0.25, label: "25%" },
@@ -42,15 +47,18 @@ interface BrowserToolbarProps {
   zoomFactor?: number;
   isConsoleOpen?: boolean;
   isWebviewReady?: boolean;
+  viewportPreset?: ViewportPresetId;
   onNavigate: (url: string) => void;
   onBack: () => void;
   onForward: () => void;
   onReload: () => void;
+  onHardReload?: () => void;
   onOpenExternal: () => void;
   onZoomChange?: (zoomFactor: number) => void;
   onCaptureScreenshot?: () => void;
   onToggleConsole?: () => void;
   onToggleDevTools?: () => void;
+  onViewportPresetChange?: (preset: ViewportPresetId | undefined) => void;
 }
 
 export function BrowserToolbar({
@@ -64,15 +72,18 @@ export function BrowserToolbar({
   zoomFactor = 1.0,
   isConsoleOpen = false,
   isWebviewReady = false,
+  viewportPreset,
   onNavigate,
   onBack,
   onForward,
   onReload,
+  onHardReload,
   onOpenExternal,
   onZoomChange,
   onCaptureScreenshot,
   onToggleConsole,
   onToggleDevTools,
+  onViewportPresetChange,
 }: BrowserToolbarProps) {
   const [inputValue, setInputValue] = useState(getDisplayUrl(url));
   const [isEditing, setIsEditing] = useState(false);
@@ -160,7 +171,7 @@ export function BrowserToolbar({
         }
         if (e.key === "Enter" && highlightedIndex >= 0) {
           e.preventDefault();
-          const selected = suggestions[highlightedIndex];
+          const selected = suggestions[highlightedIndex]!;
           setIsEditing(false);
           setIsDropdownOpen(false);
           setHighlightedIndex(-1);
@@ -173,6 +184,21 @@ export function BrowserToolbar({
           setHighlightedIndex(-1);
           return;
         }
+        if (e.shiftKey && (e.key === "Delete" || e.key === "Backspace") && highlightedIndex >= 0) {
+          e.preventDefault();
+          const entry = suggestions[highlightedIndex]!;
+          if (projectId) {
+            useUrlHistoryStore.getState().removeUrl(projectId, entry.url);
+          }
+          const remaining = suggestions.length - 1;
+          if (remaining === 0) {
+            setIsDropdownOpen(false);
+            setHighlightedIndex(-1);
+          } else if (highlightedIndex >= remaining) {
+            setHighlightedIndex(remaining - 1);
+          }
+          return;
+        }
       }
       if (e.key === "Escape") {
         setIsEditing(false);
@@ -180,7 +206,7 @@ export function BrowserToolbar({
         inputRef.current?.blur();
       }
     },
-    [isDropdownOpen, suggestions, highlightedIndex, onNavigate]
+    [isDropdownOpen, suggestions, highlightedIndex, onNavigate, projectId]
   );
 
   const handleCopy = useCallback(async () => {
@@ -196,30 +222,30 @@ export function BrowserToolbar({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error("Failed to copy URL:", err);
+      logError("Failed to copy URL", err);
     }
   }, [terminalId, url]);
 
   const handleZoomStep = useCallback(
     (direction: "in" | "out") => {
       if (!onZoomChange) return;
-      const minZoom = ZOOM_VALUES[0];
-      const maxZoom = ZOOM_VALUES[ZOOM_VALUES.length - 1];
+      const minZoom = ZOOM_VALUES[0]!;
+      const maxZoom = ZOOM_VALUES[ZOOM_VALUES.length - 1]!;
       const clampedZoom = Math.max(minZoom, Math.min(maxZoom, zoomFactor));
       const exactIndex = ZOOM_VALUES.findIndex((value) => Math.abs(value - clampedZoom) < 0.01);
-      let nextZoom = clampedZoom;
+      let nextZoom: number;
 
       if (exactIndex !== -1) {
         const nextIndex =
           direction === "in"
             ? Math.min(exactIndex + 1, ZOOM_VALUES.length - 1)
             : Math.max(exactIndex - 1, 0);
-        nextZoom = ZOOM_VALUES[nextIndex];
+        nextZoom = ZOOM_VALUES[nextIndex]!;
       } else if (direction === "in") {
         nextZoom = ZOOM_VALUES.find((value) => value > clampedZoom) ?? maxZoom;
       } else {
         const lowerValues = ZOOM_VALUES.filter((value) => value < clampedZoom);
-        nextZoom = lowerValues.length > 0 ? lowerValues[lowerValues.length - 1] : minZoom;
+        nextZoom = lowerValues.length > 0 ? lowerValues[lowerValues.length - 1]! : minZoom;
       }
 
       if (Math.abs(nextZoom - zoomFactor) >= 0.001) {
@@ -239,8 +265,8 @@ export function BrowserToolbar({
   const currentZoomLabel =
     ZOOM_PRESETS.find((p) => Math.abs(p.value - zoomFactor) < 0.01)?.label ??
     `${Math.round(zoomFactor * 100)}%`;
-  const minZoom = ZOOM_VALUES[0];
-  const maxZoom = ZOOM_VALUES[ZOOM_VALUES.length - 1];
+  const minZoom = ZOOM_VALUES[0]!;
+  const maxZoom = ZOOM_VALUES[ZOOM_VALUES.length - 1]!;
   const canZoomOut = zoomFactor > minZoom + 0.001;
   const canZoomIn = zoomFactor < maxZoom - 0.001;
 
@@ -250,122 +276,175 @@ export function BrowserToolbar({
   return (
     <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
       {/* Navigation buttons */}
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
-              <button
-                type="button"
-                onClick={onBack}
-                disabled={!canGoBack}
-                className={buttonClass}
-                aria-label="Go back"
-                data-testid="browser-back"
-              >
-                <ArrowLeft className="w-4 h-4" />
-              </button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Go back</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
-              <button
-                type="button"
-                onClick={onForward}
-                disabled={!canGoForward}
-                className={buttonClass}
-                aria-label="Go forward"
-                data-testid="browser-forward"
-              >
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Go forward</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
             <button
               type="button"
-              onClick={onReload}
-              className={cn(buttonClass, isLoading && "animate-spin")}
-              aria-label="Reload"
-              data-testid="browser-reload"
+              onClick={onBack}
+              disabled={!canGoBack}
+              className={cn(buttonClass, "disabled:pointer-events-none")}
+              aria-label="Go back"
+              data-testid="browser-back"
             >
-              <RotateCw className="w-4 h-4" />
+              <ArrowLeft className="w-4 h-4" />
             </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Reload</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Go back</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
+            <button
+              type="button"
+              onClick={onForward}
+              disabled={!canGoForward}
+              className={cn(buttonClass, "disabled:pointer-events-none")}
+              aria-label="Go forward"
+              data-testid="browser-forward"
+            >
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Go forward</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={(e) => {
+              if (e.shiftKey && onHardReload) {
+                onHardReload();
+              } else {
+                onReload();
+              }
+            }}
+            className={cn(buttonClass, isLoading && "animate-spin")}
+            aria-label="Reload"
+            data-testid="browser-reload"
+          >
+            <RotateCw className="w-4 h-4" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          {onHardReload ? "Reload (Shift+click for hard reload)" : "Reload"}
+        </TooltipContent>
+      </Tooltip>
 
       {/* Zoom controls */}
       {onZoomChange && (
         <div className="flex items-center gap-0.5">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <button
-                    type="button"
-                    onClick={() => handleZoomStep("out")}
-                    disabled={!canZoomOut}
-                    className={buttonClass}
-                    aria-label="Zoom out"
-                  >
-                    <ZoomOut className="w-3.5 h-3.5" />
-                  </button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Zoom out</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <button
-                    type="button"
-                    onClick={handleZoomReset}
-                    disabled={!isNonDefaultZoom}
-                    className={cn(
-                      "px-1.5 py-1 rounded text-xs font-medium transition-colors",
-                      "hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed",
-                      isNonDefaultZoom ? "text-status-info" : "text-daintree-text/60"
-                    )}
-                    aria-label="Reset zoom"
-                  >
-                    {currentZoomLabel}
-                  </button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Reset zoom to 100%</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <button
-                    type="button"
-                    onClick={() => handleZoomStep("in")}
-                    disabled={!canZoomIn}
-                    className={buttonClass}
-                    aria-label="Zoom in"
-                  >
-                    <ZoomIn className="w-3.5 h-3.5" />
-                  </button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Zoom in</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <button
+                  type="button"
+                  onClick={() => handleZoomStep("out")}
+                  disabled={!canZoomOut}
+                  className={cn(buttonClass, "disabled:pointer-events-none")}
+                  aria-label="Zoom out"
+                >
+                  <ZoomOut className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Zoom out</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <button
+                  type="button"
+                  onClick={handleZoomReset}
+                  disabled={!isNonDefaultZoom}
+                  className={cn(
+                    "px-1.5 py-1 rounded text-xs font-medium transition-colors",
+                    "hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none",
+                    isNonDefaultZoom ? "text-status-info" : "text-daintree-text/60"
+                  )}
+                  aria-label="Reset zoom"
+                >
+                  {currentZoomLabel}
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Reset zoom to 100%</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <button
+                  type="button"
+                  onClick={() => handleZoomStep("in")}
+                  disabled={!canZoomIn}
+                  className={cn(buttonClass, "disabled:pointer-events-none")}
+                  aria-label="Zoom in"
+                >
+                  <ZoomIn className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Zoom in</TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+
+      {/* Viewport preset selector (dev-preview only) */}
+      {onViewportPresetChange && (
+        <div className="flex items-center">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => {
+                  if (viewportPreset) {
+                    onViewportPresetChange(undefined);
+                  } else {
+                    onViewportPresetChange("iphone");
+                  }
+                }}
+                className={cn(
+                  buttonClass,
+                  viewportPreset && "bg-overlay-emphasis text-daintree-text"
+                )}
+                aria-label="Viewport preset"
+                aria-pressed={!!viewportPreset}
+              >
+                <Smartphone className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {viewportPreset
+                ? `Viewport: ${getViewportPreset(viewportPreset).label}`
+                : "Responsive viewport"}
+            </TooltipContent>
+          </Tooltip>
+          {viewportPreset && (
+            <div className="flex items-center ml-0.5">
+              {VIEWPORT_PRESET_LIST.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() =>
+                    onViewportPresetChange(viewportPreset === preset.id ? undefined : preset.id)
+                  }
+                  className={cn(
+                    "px-1.5 py-1 rounded text-[10px] font-medium transition-colors",
+                    "hover:bg-overlay-medium",
+                    viewportPreset === preset.id
+                      ? "bg-overlay-emphasis text-daintree-text"
+                      : "text-daintree-text/50"
+                  )}
+                  aria-label={preset.label}
+                  aria-pressed={viewportPreset === preset.id}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -375,16 +454,14 @@ export function BrowserToolbar({
           <div className="relative flex items-center">
             <Globe className="absolute left-2 w-3.5 h-3.5 text-daintree-text/40 pointer-events-none" />
             {urlMightBeStale && !isEditing && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="absolute left-6 w-1.5 h-1.5 rounded-full bg-status-warning/60" />
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    URL may differ from page shown (in-page navigation)
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="absolute left-6 w-1.5 h-1.5 rounded-full bg-status-warning/60" />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  URL may differ from page shown (in-page navigation)
+                </TooltipContent>
+              </Tooltip>
             )}
             <input
               ref={inputRef}
@@ -402,7 +479,7 @@ export function BrowserToolbar({
               className={cn(
                 "w-full pl-7 pr-2 py-1 text-xs rounded",
                 "bg-daintree-bg border border-overlay",
-                "focus:outline-none focus:border-border-strong",
+                "focus:outline-hidden focus:border-border-strong",
                 "text-daintree-text placeholder:text-daintree-text/40",
                 error && "border-status-error/50"
               )}
@@ -422,121 +499,155 @@ export function BrowserToolbar({
             className="absolute left-0 right-0 top-full mt-1 z-50 bg-daintree-bg border border-overlay rounded shadow-[var(--theme-shadow-floating)] overflow-hidden"
           >
             {suggestions.map((entry, index) => (
-              <button
+              <div
                 key={entry.url}
-                type="button"
-                tabIndex={-1}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setIsEditing(false);
-                  setIsDropdownOpen(false);
-                  setHighlightedIndex(-1);
-                  onNavigate(entry.url);
-                }}
                 onMouseEnter={() => setHighlightedIndex(index)}
                 className={cn(
-                  "w-full text-left px-2.5 py-1.5 flex flex-col gap-0.5 cursor-pointer",
+                  "group/row w-full text-left px-2.5 py-1.5 flex items-center gap-2 cursor-pointer",
                   index === highlightedIndex ? "bg-overlay-medium" : "hover:bg-overlay-soft"
                 )}
               >
-                {entry.title && (
-                  <span className="text-xs text-daintree-text truncate">{entry.title}</span>
+                {entry.favicon ? (
+                  <span className="relative w-4 h-4 shrink-0">
+                    <img
+                      src={entry.favicon}
+                      alt=""
+                      className="w-4 h-4 rounded-sm object-contain"
+                      onError={(e) => {
+                        const img = e.target as HTMLImageElement;
+                        img.style.display = "none";
+                        const fallback = img.nextElementSibling;
+                        if (fallback) (fallback as HTMLElement).style.display = "";
+                      }}
+                    />
+                    <Globe
+                      className="w-4 h-4 text-daintree-text/30 absolute inset-0"
+                      style={{ display: "none" }}
+                    />
+                  </span>
+                ) : (
+                  <Globe className="w-4 h-4 shrink-0 text-daintree-text/30" />
                 )}
-                <span className="text-xs text-daintree-text/50 truncate">{entry.url}</span>
-              </button>
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setIsEditing(false);
+                    setIsDropdownOpen(false);
+                    setHighlightedIndex(-1);
+                    onNavigate(entry.url);
+                  }}
+                  className="flex-1 min-w-0 flex flex-col gap-0.5 text-left"
+                >
+                  {entry.title && (
+                    <span className="text-xs text-daintree-text truncate">{entry.title}</span>
+                  )}
+                  <span className="text-xs text-daintree-text/50 truncate">{entry.url}</span>
+                </button>
+                {projectId && (
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      useUrlHistoryStore.getState().removeUrl(projectId, entry.url);
+                      const remaining = suggestions.length - 1;
+                      if (remaining === 0) {
+                        setIsDropdownOpen(false);
+                        setHighlightedIndex(-1);
+                      } else if (index === highlightedIndex && highlightedIndex >= remaining) {
+                        setHighlightedIndex(remaining - 1);
+                      }
+                    }}
+                    className="shrink-0 p-0.5 rounded opacity-0 group-hover/row:opacity-100 hover:bg-overlay-strong transition-opacity text-daintree-text/40 hover:text-daintree-text/70"
+                    aria-label={`Remove ${entry.url} from history`}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         )}
       </div>
 
       {/* Action buttons */}
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button type="button" onClick={handleCopy} className={buttonClass}>
-              {copied ? (
-                <Check className="w-4 h-4 text-status-success" />
-              ) : (
-                <Copy className="w-4 h-4" />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Copy URL</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" onClick={handleCopy} className={buttonClass}>
+            {copied ? (
+              <Check className="w-4 h-4 text-status-success" />
+            ) : (
+              <Copy className="w-4 h-4" />
+            )}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Copy URL</TooltipContent>
+      </Tooltip>
 
       {onCaptureScreenshot && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onCaptureScreenshot}
-                disabled={!isWebviewReady}
-                className={buttonClass}
-                aria-label="Capture screenshot"
-              >
-                <Camera className="w-4 h-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Copy screenshot to clipboard</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onCaptureScreenshot}
+              disabled={!isWebviewReady}
+              className={cn(buttonClass, "disabled:hover:bg-transparent")}
+              aria-label="Capture screenshot"
+            >
+              <Camera className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Copy screenshot to clipboard</TooltipContent>
+        </Tooltip>
       )}
 
       {onToggleConsole && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onToggleConsole}
-                className={cn(
-                  buttonClass,
-                  isConsoleOpen && "bg-overlay-emphasis text-daintree-text"
-                )}
-                aria-label="Toggle console"
-                aria-pressed={isConsoleOpen}
-              >
-                <SquareTerminal className="w-4 h-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {isConsoleOpen ? "Hide console" : "Show console"}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onToggleConsole}
+              className={cn(buttonClass, isConsoleOpen && "bg-overlay-emphasis text-daintree-text")}
+              aria-label="Toggle console"
+              aria-pressed={isConsoleOpen}
+            >
+              <SquareTerminal className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {isConsoleOpen ? "Hide console" : "Show console"}
+          </TooltipContent>
+        </Tooltip>
       )}
 
       {onToggleDevTools && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onToggleDevTools}
-                disabled={!isWebviewReady}
-                className={buttonClass}
-                aria-label="Toggle DevTools"
-              >
-                <Code className="w-4 h-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Open DevTools</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      )}
-
-      <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <button type="button" onClick={onOpenExternal} className={buttonClass}>
-              <ExternalLink className="w-4 h-4" />
+            <button
+              type="button"
+              onClick={onToggleDevTools}
+              disabled={!isWebviewReady}
+              className={cn(buttonClass, "disabled:hover:bg-transparent")}
+              aria-label="Toggle DevTools"
+            >
+              <Code className="w-4 h-4" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Open in browser</TooltipContent>
+          <TooltipContent side="bottom">Open DevTools</TooltipContent>
         </Tooltip>
-      </TooltipProvider>
+      )}
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" onClick={onOpenExternal} className={buttonClass}>
+            <ExternalLink className="w-4 h-4" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Open in browser</TooltipContent>
+      </Tooltip>
     </div>
   );
 }

@@ -11,6 +11,14 @@ import type { TerminalInfo } from "./types.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import type { WaitingReason } from "../../../shared/types/agent.js";
 
+// Backend-side identity used when routing agent-state events (who is this
+// event about?). Detection wins; during the boot window the launch hint is
+// used so a cold-launched agent's first state transitions carry a stable
+// agentType.
+function getLiveAgentId(terminal: TerminalInfo): string | undefined {
+  return terminal.detectedAgentId ?? terminal.launchAgentId;
+}
+
 /**
  * Service responsible for agent state machine logic and event emission.
  * Handles state transitions, trigger inference, and emits validated agent events.
@@ -47,6 +55,10 @@ export class AgentStateService {
         return "activity";
       case "completion":
         return "activity";
+      case "respawn":
+        return "activity";
+      case "watchdog-timeout":
+        return "timeout";
       default:
         return "output";
     }
@@ -108,7 +120,9 @@ export class AgentStateService {
     sessionCost?: number,
     sessionTokens?: number
   ): boolean {
-    if (!terminal.agentId) {
+    // Detection wins; fall back to the launch hint during the boot window.
+    const effectiveAgentId = terminal.detectedAgentId ?? terminal.launchAgentId;
+    if (!effectiveAgentId) {
       return false;
     }
 
@@ -130,7 +144,7 @@ export class AgentStateService {
         );
 
         const stateChangePayload = {
-          agentId: terminal.agentId,
+          agentId: effectiveAgentId,
           state: newState,
           previousState,
           timestamp: getStateChangeTimestamp(),
@@ -170,7 +184,7 @@ export class AgentStateService {
 
     // Build and validate state change payload
     const stateChangePayload = {
-      agentId: terminal.agentId,
+      agentId: effectiveAgentId,
       state: newState,
       previousState,
       timestamp: terminal.lastStateChange,
@@ -230,7 +244,8 @@ export class AgentStateService {
   }
 
   emitAgentCompleted(terminal: TerminalInfo, exitCode: number): void {
-    if (!terminal.agentId) {
+    const liveAgentId = getLiveAgentId(terminal);
+    if (!liveAgentId) {
       return;
     }
 
@@ -238,7 +253,7 @@ export class AgentStateService {
     const duration = Math.max(0, completedAt - terminal.spawnedAt);
 
     const completedPayload = {
-      agentId: terminal.agentId,
+      agentId: liveAgentId,
       exitCode,
       duration,
       timestamp: completedAt,
@@ -258,12 +273,13 @@ export class AgentStateService {
   }
 
   emitAgentKilled(terminal: TerminalInfo, reason?: string): void {
-    if (!terminal.agentId) {
+    const liveAgentId = getLiveAgentId(terminal);
+    if (!liveAgentId) {
       return;
     }
 
     const killedPayload = {
-      agentId: terminal.agentId,
+      agentId: liveAgentId,
       reason,
       timestamp: Date.now(),
       traceId: terminal.traceId,
@@ -295,7 +311,7 @@ export class AgentStateService {
       sessionTokens?: number;
     }
   ): void {
-    if (!terminal.agentId) {
+    if (!terminal.detectedAgentId && !terminal.launchAgentId) {
       return;
     }
 
@@ -333,8 +349,7 @@ export class AgentStateService {
   emitTerminalActivity(terminal: TerminalInfo): void {
     const { headline, status, type } = this.headlineGenerator.generate({
       terminalId: terminal.id,
-      terminalType: terminal.type,
-      agentId: terminal.agentId,
+      agentId: terminal.detectedAgentId ?? terminal.launchAgentId,
       agentState: terminal.agentState,
       waitingReason: terminal.waitingReason,
     });

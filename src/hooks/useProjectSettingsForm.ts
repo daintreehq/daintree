@@ -3,6 +3,7 @@ import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useRecipeStore } from "@/store/recipeStore";
+import { logError } from "@/utils/logger";
 import { debounce } from "@/utils/debounce";
 import {
   createProjectSettingsSnapshot,
@@ -15,6 +16,7 @@ import type { ProjectTerminalSettings, ResourceEnvironment } from "@shared/types
 import type { CommandOverride } from "@shared/types/commands";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface UseProjectSettingsFormParams {
   projectId: string | null;
@@ -76,6 +78,19 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     null
   );
   const prevProjectIdRef = useRef(projectId);
+  const projectPersistRef = useRef<() => Promise<void>>(undefined);
+  // Stable debounce instance initialized on mount. Uninitialized ref + mount
+  // effect keeps the render pure so the React Compiler can optimize this hook.
+  const debouncedProjectSaveRef = useRef<ReturnType<typeof debounce<[]>> | null>(null);
+  useEffect(() => {
+    debouncedProjectSaveRef.current = debounce(() => {
+      return projectPersistRef.current?.();
+    }, 500);
+    return () => {
+      debouncedProjectSaveRef.current?.cancel();
+      debouncedProjectSaveRef.current = null;
+    };
+  }, []);
 
   const { recipes, isLoading: recipesLoading } = useRecipeStore();
   const { worktreeMap, worktrees } = useWorktrees();
@@ -145,7 +160,9 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     defaultWorktreeMode,
     turbopackEnabled,
   ]);
-  currentProjectSnapshotRef.current = currentProjectSnapshot;
+  useEffect(() => {
+    currentProjectSnapshotRef.current = currentProjectSnapshot;
+  }, [currentProjectSnapshot]);
 
   useEffect(() => {
     if (isOpen && projectId !== prevProjectIdRef.current) {
@@ -156,7 +173,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
 
   useEffect(() => {
     if (!isOpen) {
-      debouncedProjectSaveRef.current.cancel();
+      debouncedProjectSaveRef.current?.cancel();
       setProjectIsInitialized(false);
       setEnvironmentVariables([]);
       setProjectIconSvg(undefined);
@@ -190,7 +207,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     const initialRunCommands = projectSettings.runCommands || [];
     const envVars = projectSettings.environmentVariables || {};
     const initialEnvVars = Object.entries(envVars).map(([key, value]) => ({
-      id: `env-${Date.now()}-${Math.random()}`,
+      id: `env-${crypto.randomUUID()}`,
       key,
       value,
     }));
@@ -285,8 +302,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setProjectIsInitialized(true);
   }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading, projectId]);
 
-  const projectPersistRef = useRef<() => Promise<void>>(undefined);
-  projectPersistRef.current = async () => {
+  const projectPersist = async () => {
     if (!projectSettings || !currentProject || !projectId) {
       return;
     }
@@ -389,16 +405,16 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         lastSavedSnapshotRef.current = currentProjectSnapshot;
       }
     } catch (err) {
-      console.error("Failed to auto-save project settings:", err);
-      setProjectAutoSaveError(err instanceof Error ? err.message : "Failed to save settings");
+      logError("Failed to auto-save project settings", err);
+      setProjectAutoSaveError(formatErrorMessage(err, "Failed to save settings"));
     }
   };
 
-  const debouncedProjectSaveRef = useRef(
-    debounce(() => {
-      return projectPersistRef.current?.();
-    }, 500)
-  );
+  // projectPersist is recreated each render; sync it to the ref so the
+  // debounced wrapper always calls the latest closure.
+  useEffect(() => {
+    projectPersistRef.current = projectPersist;
+  });
 
   useEffect(() => {
     if (!projectIsInitialized || !currentProjectSnapshot || !lastSavedSnapshotRef.current) {
@@ -406,19 +422,12 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     }
     const equal = areSnapshotsEqual(lastSavedSnapshotRef.current, currentProjectSnapshot);
     if (equal) return;
-    debouncedProjectSaveRef.current();
+    debouncedProjectSaveRef.current?.();
   }, [currentProjectSnapshot, projectIsInitialized]);
-
-  useEffect(() => {
-    const save = debouncedProjectSaveRef.current;
-    return () => {
-      save.cancel();
-    };
-  }, []);
 
   const flush = async () => {
     // First try flushing any pending debounced save
-    await debouncedProjectSaveRef.current.flush();
+    await debouncedProjectSaveRef.current?.flush();
     // If no debounced save was pending (state changed but useEffect hasn't
     // scheduled it yet), force a direct save to avoid data loss on close
     if (projectIsInitialized && projectPersistRef.current) {

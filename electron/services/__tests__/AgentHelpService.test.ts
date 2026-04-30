@@ -183,6 +183,54 @@ describe("AgentHelpService", () => {
     });
   });
 
+  describe("env sandboxing and secret scrubbing (issue #6247)", () => {
+    const originalEnv = process.env;
+
+    afterEach(() => {
+      process.env = originalEnv;
+    });
+
+    it("does not pass ANTHROPIC_API_KEY or GITHUB_TOKEN to the child process", async () => {
+      process.env = {
+        ...originalEnv,
+        ANTHROPIC_API_KEY: "sk-ant-secretvalue",
+        GITHUB_TOKEN: "ghp_secrettoken",
+        OPENAI_API_KEY: "sk-secret",
+      } as NodeJS.ProcessEnv;
+
+      mockedExecFile.mockImplementation((_cmd, _args, _opts, callback: any) => {
+        callback(null, { stdout: "Help", stderr: "" });
+        return {} as any;
+      });
+
+      await service.getHelp("claude");
+
+      const opts = mockedExecFile.mock.calls[0][2] as { env?: Record<string, string> };
+      expect(opts.env).toBeDefined();
+      expect(opts.env!.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(opts.env!.GITHUB_TOKEN).toBeUndefined();
+      expect(opts.env!.OPENAI_API_KEY).toBeUndefined();
+    });
+
+    it("scrubs secrets from stdout and stderr before returning to caller (cache boundary)", async () => {
+      const leakingKey = "sk-ant-" + "A".repeat(95);
+      mockedExecFile.mockImplementation((_cmd, _args, _opts, callback: any) => {
+        callback(null, {
+          stdout: `usage: claude\nDEBUG: key=${leakingKey}`,
+          stderr: `warn: token ghp_${"B".repeat(40)} expired`,
+        });
+        return {} as any;
+      });
+
+      const result = await service.getHelp("claude");
+
+      expect(result.stdout).not.toContain(leakingKey);
+      expect(result.stdout).toContain("[REDACTED]");
+      expect(result.stderr).not.toMatch(/ghp_[A-Z]{40}/);
+      expect(result.stderr).toContain("[REDACTED]");
+    });
+  });
+
   describe("command validation", () => {
     it("rejects empty command", async () => {
       vi.doUnmock("../../../shared/config/agentRegistry.js");

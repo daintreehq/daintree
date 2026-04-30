@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import type { AgentState } from "@/types";
@@ -6,7 +6,8 @@ import type { TerminalInstance } from "@/store/panelStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { cn } from "@/lib/utils";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
-import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { getAgentConfig } from "@/config/agents";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import {
   STATE_LABELS,
   STATE_PRIORITY,
@@ -14,12 +15,20 @@ import {
   getEffectiveStateColor,
 } from "../terminalStateConfig";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
-import { ChevronRight, GripVertical, PanelBottom, SquareTerminal } from "lucide-react";
-import { MoveToGridIcon } from "@/components/icons";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
+import {
+  ChevronRight,
+  GripVertical,
+  PanelBottom,
+  PanelTopClose,
+  SquareTerminal,
+} from "lucide-react";
 import {
   SortableWorktreeTerminal,
   getAccordionDragId,
 } from "@/components/DragDrop/SortableWorktreeTerminal";
+import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 
 interface StateIconProps {
   state: AgentState;
@@ -56,6 +65,136 @@ function StateIcon({ state, count }: StateIconProps) {
   );
 }
 
+interface MarqueeBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+interface TerminalRowProps {
+  term: TerminalInstance;
+  listeners: React.HTMLAttributes<HTMLElement> | undefined;
+  onClick: (term: TerminalInstance) => void;
+}
+
+function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
+  const { ref, isTruncated } = useTruncationDetection();
+  const isArmed = useFleetArmingStore((s) => s.armedIds.has(term.id));
+  const armBadge = useFleetArmingStore((s) => s.armOrderById[term.id]);
+  const chrome = deriveTerminalChrome(term);
+  const agentState = chrome.isAgent ? term.agentState : undefined;
+  // Only the primary ("last armed") row gets the accent ring — it's the
+  // singular focus anchor that will receive keyboard focus when fleet scope
+  // exits. Secondary armed peers keep the dashed shape but use a neutral
+  // border color so multiple accents never render at once. The arm-position
+  // badge stays accent-colored as the secondary signal.
+  const isPrimary = useFleetArmingStore((s) => s.lastArmedId === term.id);
+
+  return (
+    <div
+      data-terminal-id={term.id}
+      data-terminal-runtime-kind={chrome.runtimeKind}
+      data-terminal-agent-id={chrome.agentId || undefined}
+      data-terminal-agent-state={agentState || undefined}
+      className={cn(
+        "rounded-[var(--radius-md)]",
+        isArmed && "outline outline-2 outline-offset-[-2px]",
+        isArmed && isPrimary && "outline-solid outline-daintree-accent",
+        isArmed && !isPrimary && "outline-dashed outline-border-strong"
+      )}
+    >
+      <div className="worktree-section-button group/termrow flex items-center justify-between gap-2.5 px-3 py-2 transition-colors">
+        <TruncatedTooltip content={term.title} isTruncated={isTruncated}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick(term);
+            }}
+            aria-selected={isArmed}
+            className="flex items-center gap-2 min-w-0 flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px] rounded"
+          >
+            <div className="shrink-0 opacity-60 group-hover/termrow:opacity-100 transition-opacity">
+              <TerminalIcon kind={term.kind} chrome={chrome} className="w-3 h-3" />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <span
+                ref={ref}
+                className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-daintree-text"
+              >
+                {term.title}
+              </span>
+              {!chrome.isAgent && term.activityStatus === "working" && term.lastCommand && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="truncate text-[11px] font-mono text-text-muted">
+                      {term.lastCommand}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+          </button>
+        </TruncatedTooltip>
+
+        <div className="flex items-center gap-2.5 shrink-0">
+          {isArmed && armBadge !== undefined && (
+            <span
+              className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-daintree-accent px-1 text-[9px] font-mono font-semibold text-[var(--color-daintree-bg)] tabular-nums"
+              aria-label={`Armed position ${armBadge}`}
+            >
+              {armBadge}
+            </span>
+          )}
+
+          {agentState &&
+            agentState !== "idle" &&
+            (() => {
+              const Icon = getEffectiveStateIcon(agentState, term.waitingReason);
+              return (
+                <Icon
+                  className={cn(
+                    "w-3 h-3",
+                    getEffectiveStateColor(agentState, term.waitingReason),
+                    agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
+                  )}
+                  aria-label={STATE_LABELS[agentState]}
+                />
+              );
+            })()}
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="text-text-muted transition-colors group-hover/termrow:text-text-secondary">
+                {term.location === "dock" ? (
+                  <PanelBottom className="w-3 h-3" />
+                ) : (
+                  <PanelTopClose className="w-3 h-3" />
+                )}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {term.location === "dock" ? "Docked" : "On Grid"}
+            </TooltipContent>
+          </Tooltip>
+
+          <button
+            type="button"
+            data-drag-handle
+            className="cursor-grab rounded text-text-muted transition-colors hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1 active:cursor-grabbing"
+            aria-label="Drag to move terminal"
+            {...(listeners as React.HTMLAttributes<HTMLElement>)}
+          >
+            <GripVertical className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export interface WorktreeTerminalSectionProps {
   worktreeId: string;
   isExpanded: boolean;
@@ -78,7 +217,7 @@ export function WorktreeTerminalSection({
   const terminalsId = `worktree-${worktreeId}-terminals`;
   const terminalsPanelId = `worktree-${worktreeId}-terminals-panel`;
 
-  const topTerminalState = useMemo((): { state: AgentState; count: number } | null => {
+  const topTerminalState = ((): { state: AgentState; count: number } | null => {
     for (const state of STATE_PRIORITY) {
       const count = counts.byState[state];
       if (count > 0) {
@@ -86,13 +225,13 @@ export function WorktreeTerminalSection({
       }
     }
     return null;
-  }, [counts.byState]);
+  })();
 
   const SummaryIcon = useMemo(() => {
     if (terminals.length === 0) return null;
     let commonId: string | null = null;
     for (const t of terminals) {
-      const effectiveId = t.agentId ?? (t.type && isRegisteredAgent(t.type) ? t.type : undefined);
+      const effectiveId = deriveTerminalChrome(t).agentId;
       if (!effectiveId) return null;
       if (commonId === null) commonId = effectiveId;
       else if (effectiveId !== commonId) return null;
@@ -102,6 +241,148 @@ export function WorktreeTerminalSection({
   }, [terminals]);
 
   const orderedWorktreeTerminals = terminals;
+  const eligibleTerminals = useMemo(
+    () => orderedWorktreeTerminals.filter(isFleetArmEligible),
+    [orderedWorktreeTerminals]
+  );
+
+  const handleTerminalClick = useCallback(
+    (term: TerminalInstance) => {
+      if (!isFleetArmEligible(term)) {
+        onTerminalSelect(term);
+        return;
+      }
+      // Shift, Cmd, Ctrl, and unmodified clicks all toggle membership —
+      // the sidebar mirrors the grid's "Shift = single add" gesture so
+      // the model is consistent across surfaces.
+      useFleetArmingStore.getState().toggleId(term.id);
+    },
+    [onTerminalSelect]
+  );
+
+  // Marquee starts potential on pointerdown (no capture yet). We only upgrade
+  // to an active marquee — and take pointer capture — after the pointer has
+  // moved past a small threshold. This way a plain click on a tile still
+  // fires its onClick handler, while drag-to-select activates cleanly.
+  const MARQUEE_THRESHOLD_PX = 4;
+  const marqueeStartRef = useRef<{
+    x: number;
+    y: number;
+    pointerId: number;
+    active: boolean;
+  } | null>(null);
+  const tileRectsRef = useRef<Map<string, DOMRect>>(new Map());
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [marqueeBox, setMarqueeBox] = useState<MarqueeBox | null>(null);
+
+  const snapshotRects = useCallback(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const nodes = container.querySelectorAll<HTMLElement>("[data-terminal-id]");
+    const rects = new Map<string, DOMRect>();
+    nodes.forEach((el) => {
+      const id = el.dataset.terminalId;
+      if (id) rects.set(id, el.getBoundingClientRect());
+    });
+    tileRectsRef.current = rects;
+  }, []);
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      const target = e.target as Element;
+      // dnd-kit owns the drag handle — don't shadow its pointer events.
+      if (target.closest("[data-drag-handle]")) return;
+      marqueeStartRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        pointerId: e.pointerId,
+        active: false,
+      };
+      snapshotRects();
+    },
+    [snapshotRects]
+  );
+
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const start = marqueeStartRef.current;
+    if (!start) return;
+    const dx = Math.abs(e.clientX - start.x);
+    const dy = Math.abs(e.clientY - start.y);
+    if (!start.active) {
+      if (dx < MARQUEE_THRESHOLD_PX && dy < MARQUEE_THRESHOLD_PX) return;
+      start.active = true;
+      try {
+        e.currentTarget.setPointerCapture(start.pointerId);
+      } catch {
+        // capture may fail if pointer already released
+      }
+    }
+    const container = scrollRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const x = Math.min(start.x, e.clientX) - rect.left + container.scrollLeft;
+    const y = Math.min(start.y, e.clientY) - rect.top + container.scrollTop;
+    setMarqueeBox({ x, y, w: dx, h: dy });
+  }, []);
+
+  const commitMarquee = useCallback(
+    (endX: number, endY: number) => {
+      const start = marqueeStartRef.current;
+      if (!start) return;
+      const left = Math.min(start.x, endX);
+      const right = Math.max(start.x, endX);
+      const top = Math.min(start.y, endY);
+      const bottom = Math.max(start.y, endY);
+      const hits: string[] = [];
+      for (const [id, r] of tileRectsRef.current) {
+        if (r.right < left || r.left > right || r.bottom < top || r.top > bottom) continue;
+        hits.push(id);
+      }
+      if (hits.length > 0) {
+        const eligible = new Set(eligibleTerminals.map((t) => t.id));
+        const orderedHits = orderedWorktreeTerminals
+          .map((t) => t.id)
+          .filter((id) => hits.includes(id) && eligible.has(id));
+        if (orderedHits.length > 0) {
+          useFleetArmingStore.getState().armIds(orderedHits);
+        }
+      }
+    },
+    [orderedWorktreeTerminals, eligibleTerminals]
+  );
+
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const start = marqueeStartRef.current;
+      if (!start) return;
+      if (start.active) {
+        try {
+          e.currentTarget.releasePointerCapture(start.pointerId);
+        } catch {
+          // capture may already be released
+        }
+        commitMarquee(e.clientX, e.clientY);
+      }
+      marqueeStartRef.current = null;
+      setMarqueeBox(null);
+    },
+    [commitMarquee]
+  );
+
+  const handlePointerCancel = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const start = marqueeStartRef.current;
+    if (!start) return;
+    if (start.active) {
+      try {
+        e.currentTarget.releasePointerCapture(start.pointerId);
+      } catch {
+        // ignore
+      }
+    }
+    marqueeStartRef.current = null;
+    setMarqueeBox(null);
+  }, []);
 
   if (!showMetaFooter) {
     return null;
@@ -138,9 +419,15 @@ export function WorktreeTerminalSection({
           >
             <div
               id={terminalsPanelId}
+              ref={scrollRef}
               role="list"
               aria-labelledby={`${terminalsId}-button`}
-              className="max-h-[300px] overflow-y-auto bg-surface-inset"
+              aria-multiselectable="true"
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerCancel}
+              className="relative max-h-[300px] overflow-y-auto bg-surface-inset"
             >
               {orderedWorktreeTerminals.map((term, index) => (
                 <SortableWorktreeTerminal
@@ -150,89 +437,26 @@ export function WorktreeTerminalSection({
                   sourceIndex={index}
                 >
                   {({ listeners }) => (
-                    <div className="worktree-section-button group/termrow flex items-center justify-between gap-2.5 px-3 py-2 transition-colors">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onTerminalSelect(term);
-                        }}
-                        className="flex items-center gap-2 min-w-0 flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px] rounded"
-                      >
-                        <div className="shrink-0 opacity-60 group-hover/termrow:opacity-100 transition-opacity">
-                          <TerminalIcon
-                            type={term.type}
-                            kind={term.kind}
-                            agentId={term.agentId}
-                            detectedProcessId={term.detectedProcessId}
-                            className="w-3 h-3"
-                          />
-                        </div>
-                        <div className="flex flex-col min-w-0">
-                          <span className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-daintree-text">
-                            {term.title}
-                          </span>
-                          {term.type === "terminal" &&
-                            term.agentState === "running" &&
-                            term.lastCommand && (
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span className="truncate text-[11px] font-mono text-text-muted">
-                                    {term.lastCommand}
-                                  </span>
-                                </TooltipTrigger>
-                                <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
-                              </Tooltip>
-                            )}
-                        </div>
-                      </button>
-
-                      <div className="flex items-center gap-2.5 shrink-0">
-                        {term.agentState &&
-                          term.agentState !== "idle" &&
-                          (() => {
-                            const Icon = getEffectiveStateIcon(term.agentState, term.waitingReason);
-                            return (
-                              <Icon
-                                className={cn(
-                                  "w-3 h-3",
-                                  getEffectiveStateColor(term.agentState, term.waitingReason),
-                                  term.agentState === "working" &&
-                                    "animate-spin-slow motion-reduce:animate-none"
-                                )}
-                                aria-label={STATE_LABELS[term.agentState]}
-                              />
-                            );
-                          })()}
-
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <div className="text-text-muted transition-colors group-hover/termrow:text-text-secondary">
-                              {term.location === "dock" ? (
-                                <PanelBottom className="w-3 h-3" />
-                              ) : (
-                                <MoveToGridIcon className="w-3 h-3" />
-                              )}
-                            </div>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">
-                            {term.location === "dock" ? "Docked" : "On Grid"}
-                          </TooltipContent>
-                        </Tooltip>
-
-                        <button
-                          type="button"
-                          className="cursor-grab rounded text-text-muted transition-colors hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1 active:cursor-grabbing"
-                          aria-label="Drag to move terminal"
-                          {...listeners}
-                        >
-                          <GripVertical className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
+                    <TerminalRow
+                      term={term}
+                      listeners={listeners as React.HTMLAttributes<HTMLElement> | undefined}
+                      onClick={handleTerminalClick}
+                    />
                   )}
                 </SortableWorktreeTerminal>
               ))}
+              {marqueeBox && (
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute z-10 rounded border border-border-strong bg-overlay-medium"
+                  style={{
+                    left: marqueeBox.x,
+                    top: marqueeBox.y,
+                    width: marqueeBox.w,
+                    height: marqueeBox.h,
+                  }}
+                />
+              )}
             </div>
           </SortableContext>
         </>

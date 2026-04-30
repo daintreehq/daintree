@@ -6,13 +6,13 @@ export type PaletteId =
   | "worktree"
   | "panel"
   | "action"
-  | "notes"
   | "project-switcher"
   | "quick-create"
   | "prompt-history"
   | "send-to-agent"
   | "bulk-command"
-  | "theme";
+  | "theme"
+  | "log-level";
 
 interface PaletteState {
   activePaletteId: PaletteId | null;

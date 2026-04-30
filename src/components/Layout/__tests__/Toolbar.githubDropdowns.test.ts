@@ -95,21 +95,19 @@ describe("Toolbar Suspense skeleton fallbacks — issue #3593", () => {
   });
 
   it("uses GitHubResourceListSkeleton with immediate in issues Suspense fallback", () => {
-    const issuesSuspense = source.slice(
-      source.indexOf('type="issue"') - 300,
-      source.indexOf('type="issue"')
+    // The PR #6288 eager-chunk-loading path introduced an additional
+    // `type="issue"` reference before the Suspense fallback. Anchor on the
+    // skeleton tag itself so this test stays robust to future toolbar shape
+    // changes.
+    expect(source).toMatch(
+      /<GitHubResourceListSkeleton\s+count=\{stats\?\.issueCount\}\s+immediate\s+type="issue"/
     );
-    expect(issuesSuspense).toContain("GitHubResourceListSkeleton");
-    expect(issuesSuspense).toContain("immediate");
   });
 
   it("uses GitHubResourceListSkeleton with immediate in PRs Suspense fallback", () => {
-    const prsSuspense = source.slice(
-      source.indexOf('type="pr"') - 300,
-      source.indexOf('type="pr"')
+    expect(source).toMatch(
+      /<GitHubResourceListSkeleton\s+count=\{stats\?\.prCount\}\s+immediate\s+type="pr"/
     );
-    expect(prsSuspense).toContain("GitHubResourceListSkeleton");
-    expect(prsSuspense).toContain("immediate");
   });
 
   it("uses CommitListSkeleton with immediate in commits Suspense fallback", () => {
@@ -147,16 +145,19 @@ describe("Toolbar GitHub token error UX — issue #5024", () => {
   });
 
   it("dims Issues and PR buttons with opacity-40 on token error", () => {
+    // Slice extends past `</Button>` to survive growth in the button body —
+    // the PR #6288 hover-prefetch handlers pushed the className block past
+    // the original 1500-char window.
     const issuesButton = source.slice(
       source.indexOf("ref={issuesButtonRef}"),
-      source.indexOf("ref={issuesButtonRef}") + 1500
+      source.indexOf("ref={issuesButtonRef}") + 2500
     );
     expect(issuesButton).toContain("isTokenError");
     expect(issuesButton).toContain("opacity-40");
 
     const prsButton = source.slice(
       source.indexOf("ref={prsButtonRef}"),
-      source.indexOf("ref={prsButtonRef}") + 1500
+      source.indexOf("ref={prsButtonRef}") + 2500
     );
     expect(prsButton).toContain("isTokenError");
     expect(prsButton).toContain("opacity-40");
@@ -172,6 +173,40 @@ describe("Toolbar GitHub token error UX — issue #5024", () => {
 
   it("suppresses error indicator status for token errors", () => {
     expect(source).toContain("statsError && !isTokenError");
+  });
+});
+
+describe("Toolbar keepMounted dropdowns — PR #6288", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(GITHUB_STATS_PATH, "utf-8");
+  });
+
+  it("issues FixedDropdown opts into keepMounted (state preserved across open/close)", () => {
+    const issuesDropdownStart = source.indexOf('type="issue"');
+    const preceding = source.slice(Math.max(0, issuesDropdownStart - 800), issuesDropdownStart);
+    const lastFixedDropdown = preceding.lastIndexOf("<FixedDropdown");
+    const dropdownTag = preceding.slice(lastFixedDropdown);
+    expect(dropdownTag).toContain("keepMounted");
+  });
+
+  it("PRs FixedDropdown opts into keepMounted (state preserved across open/close)", () => {
+    const prDropdownStart = source.indexOf('type="pr"');
+    const preceding = source.slice(Math.max(0, prDropdownStart - 800), prDropdownStart);
+    const lastFixedDropdown = preceding.lastIndexOf("<FixedDropdown");
+    const dropdownTag = preceding.slice(lastFixedDropdown);
+    expect(dropdownTag).toContain("keepMounted");
+  });
+
+  it("commits FixedDropdown does NOT opt into keepMounted (cheaper to remount)", () => {
+    const commitsButtonRefIdx = source.indexOf("ref={commitsButtonRef}");
+    const lookahead = source.slice(commitsButtonRefIdx);
+    const fixedDropdownIdx = lookahead.indexOf("<FixedDropdown");
+    expect(fixedDropdownIdx).toBeGreaterThanOrEqual(0);
+    const tagEnd = lookahead.indexOf(">", fixedDropdownIdx);
+    const tag = lookahead.slice(fixedDropdownIdx, tagEnd + 1);
+    expect(tag).not.toContain("keepMounted");
   });
 });
 

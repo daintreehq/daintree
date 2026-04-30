@@ -16,7 +16,7 @@ function hasImageClipboardItem(event: ClipboardEvent): boolean {
   const items = event.clipboardData?.items;
   if (!items) return false;
   for (let i = 0; i < items.length; i++) {
-    if (items[i].type.startsWith("image/")) return true;
+    if (items[i]!.type.startsWith("image/")) return true;
   }
   return false;
 }
@@ -57,15 +57,13 @@ export function useTerminalFileTransfer(
       event.stopPropagation();
 
       try {
-        const result = await window.electron.clipboard.saveImage();
-        if (!result.ok) return;
-
-        const escaped = escapeShellArgOptional(result.filePath);
+        const { filePath } = await window.electron.clipboard.saveImage();
+        const escaped = escapeShellArgOptional(filePath);
         terminalClient.write(terminalId, escaped);
         terminalInstanceService.notifyUserInput(terminalId);
         onInput?.(escaped);
       } catch {
-        // IPC may fail if window is closing
+        // Empty clipboard, IPC failure during window close, etc. — nothing to do.
       }
     };
 

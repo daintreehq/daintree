@@ -1,3 +1,4 @@
+import { shallow } from "zustand/shallow";
 import { usePanelStore } from "./panelStore";
 import {
   useWorktreeSelectionStore,
@@ -12,6 +13,7 @@ import { useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
 import { debounce } from "@/utils/debounce";
+import { DisposableStore, toDisposable } from "@/utils/disposable";
 
 const debouncedPersistMruList = debounce(persistMruList, 150);
 
@@ -20,105 +22,142 @@ let cleanupFn: (() => void) | null = null;
 export function initStoreOrchestrator(): () => void {
   if (cleanupFn) return cleanupFn;
 
-  const unsubscribers: Array<() => void> = [];
+  const disposables = new DisposableStore();
 
-  // 1. Focus-to-worktree reaction: when focusedId changes, track focus,
-  //    switch worktree if needed, and record terminal MRU.
-  const unsubFocus = usePanelStore.subscribe((state, prevState) => {
-    if (state.focusedId === prevState.focusedId) return;
+  // 1a. Worktree focus tracking: remember which terminal was last focused
+  //     inside each worktree, so switching back restores that selection.
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => state.focusedId,
+        (focusedId) => {
+          if (!focusedId) return;
+          const terminal = usePanelStore.getState().panelsById[focusedId];
+          if (!terminal?.worktreeId) return;
+          useWorktreeSelectionStore.getState().trackTerminalFocus(terminal.worktreeId, focusedId);
+        }
+      )
+    )
+  );
 
-    const focusedId = state.focusedId;
-    if (!focusedId) return;
+  // 1b. Active worktree switch: focusing a terminal that lives in a
+  //     different worktree promotes that worktree to active.
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => state.focusedId,
+        (focusedId) => {
+          if (!focusedId) return;
+          const terminal = usePanelStore.getState().panelsById[focusedId];
+          if (!terminal?.worktreeId) return;
+          const worktreeState = useWorktreeSelectionStore.getState();
+          if (terminal.worktreeId !== worktreeState.activeWorktreeId) {
+            worktreeState.selectWorktree(terminal.worktreeId);
+          }
+        }
+      )
+    )
+  );
 
-    const terminal = state.panelsById[focusedId];
-    if (terminal?.worktreeId) {
-      const worktreeState = useWorktreeSelectionStore.getState();
-      worktreeState.trackTerminalFocus(terminal.worktreeId, focusedId);
-
-      if (terminal.worktreeId !== worktreeState.activeWorktreeId) {
-        worktreeState.selectWorktree(terminal.worktreeId);
-      }
-    }
-
-    if (!isMruRecordingSuppressed()) {
-      state.recordMru(`terminal:${focusedId}`);
-      debouncedPersistMruList(usePanelStore.getState().mruList);
-    }
-  });
-  unsubscribers.push(unsubFocus);
+  // 1c. Terminal MRU recording: append the newly focused terminal to the
+  //     global MRU list and persist it (debounced) unless suppressed.
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => state.focusedId,
+        (focusedId) => {
+          if (!focusedId) return;
+          if (isMruRecordingSuppressed()) return;
+          usePanelStore.getState().recordMru(`terminal:${focusedId}`);
+          debouncedPersistMruList(usePanelStore.getState().mruList);
+        }
+      )
+    )
+  );
 
   // 2. Background-restore reaction: when a backgrounded panel becomes
   //    focused, automatically restore it to the grid.
-  const unsubBackgroundRestore = usePanelStore.subscribe((state, prevState) => {
-    if (state.focusedId === prevState.focusedId) return;
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => state.focusedId,
+        (focusedId) => {
+          if (!focusedId) return;
+          const panel = usePanelStore.getState().panelsById[focusedId];
+          if (panel?.location !== "background") return;
 
-    const focusedId = state.focusedId;
-    if (!focusedId) return;
+          usePanelStore.getState().restoreBackgroundTerminal(focusedId);
 
-    const panel = state.panelsById[focusedId];
-    if (panel?.location !== "background") return;
-
-    state.restoreBackgroundTerminal(focusedId);
-
-    // If the panel was restored to dock, fix activeDockTerminalId since
-    // activateTerminal() saw "background" and cleared it.
-    const restored = usePanelStore.getState().panelsById[focusedId];
-    if (restored?.location === "dock") {
-      usePanelStore.setState({ activeDockTerminalId: focusedId });
-    }
-  });
-  unsubscribers.push(unsubBackgroundRestore);
+          // If the panel was restored to dock, fix activeDockTerminalId since
+          // activateTerminal() saw "background" and cleared it.
+          const restored = usePanelStore.getState().panelsById[focusedId];
+          if (restored?.location === "dock") {
+            usePanelStore.setState({ activeDockTerminalId: focusedId });
+          }
+        }
+      )
+    )
+  );
 
   // 3. Terminal-removal cleanup: when terminals are removed, clean up
   //    input store, console capture store, and worktree focus tracking.
-  let prevTerminalIds = usePanelStore.getState().panelIds;
-  let prevTerminalsById = usePanelStore.getState().panelsById;
+  //    Selector pulls both `panelIds` (for diff) and `panelsById` (to read
+  //    the removed panel's worktreeId). Shallow equality fires on either
+  //    ref change; inner guard bails when only `panelsById` changed so
+  //    metadata updates do not trigger phantom cleanup runs.
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => ({ panelIds: state.panelIds, panelsById: state.panelsById }),
+        (selected, prevSelected) => {
+          if (selected.panelIds === prevSelected.panelIds) return;
 
-  const unsubRemoval = usePanelStore.subscribe((state) => {
-    const currentIds = state.panelIds;
-    if (currentIds === prevTerminalIds) {
-      prevTerminalsById = state.panelsById;
-      return;
-    }
+          const currentIdSet = new Set(selected.panelIds);
+          const removedIds = prevSelected.panelIds.filter((id) => !currentIdSet.has(id));
+          if (removedIds.length === 0) return;
 
-    const currentIdSet = new Set(currentIds);
-    const removedIds = prevTerminalIds.filter((id) => !currentIdSet.has(id));
-    const prevById = prevTerminalsById;
-    prevTerminalIds = currentIds;
-    prevTerminalsById = state.panelsById;
+          const prevById = prevSelected.panelsById;
 
-    for (const removedId of removedIds) {
-      useTerminalInputStore.getState().clearTerminalState(removedId);
-      useConsoleCaptureStore.getState().removePane(removedId);
-      useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
-      unregisterInputController(removedId);
-      semanticAnalysisService.unregisterTerminal(removedId);
+          for (const removedId of removedIds) {
+            useTerminalInputStore.getState().clearTerminalState(removedId);
+            useConsoleCaptureStore.getState().removePane(removedId);
+            useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
+            unregisterInputController(removedId);
+            semanticAnalysisService.unregisterTerminal(removedId);
 
-      const removed = prevById[removedId];
-      if (removed?.worktreeId) {
-        const worktreeState = useWorktreeSelectionStore.getState();
-        const lastFocused = worktreeState.lastFocusedTerminalByWorktree.get(removed.worktreeId);
-        if (lastFocused === removedId) {
-          worktreeState.clearWorktreeFocusTracking(removed.worktreeId);
+            const removed = prevById[removedId];
+            if (removed?.worktreeId) {
+              const worktreeState = useWorktreeSelectionStore.getState();
+              const lastFocused = worktreeState.lastFocusedTerminalByWorktree.get(
+                removed.worktreeId
+              );
+              if (lastFocused === removedId) {
+                worktreeState.clearWorktreeFocusTracking(removed.worktreeId);
+              }
+            }
+          }
+        },
+        { equalityFn: shallow }
+      )
+    )
+  );
+
+  // 4. Layout undo history invalidation: when terminal set changes
+  //    (add/remove), clear the undo stack since snapshots reference a
+  //    different terminal universe.
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => state.panelIds,
+        (panelIds, prevPanelIds) => {
+          const prevIdSet = new Set(prevPanelIds);
+          if (panelIds.length !== prevIdSet.size || panelIds.some((id) => !prevIdSet.has(id))) {
+            useLayoutUndoStore.getState().clearHistory();
+          }
         }
-      }
-    }
-  });
-  unsubscribers.push(unsubRemoval);
-
-  // 4. Layout undo history invalidation: when terminal set changes (add/remove),
-  //    clear the undo stack since snapshots reference a different terminal universe.
-  let prevIdSet = new Set(usePanelStore.getState().panelIds);
-
-  const unsubLayoutUndo = usePanelStore.subscribe((state) => {
-    const currentIds = state.panelIds;
-    const currentIdSet = new Set(currentIds);
-    if (currentIdSet.size !== prevIdSet.size || currentIds.some((id) => !prevIdSet.has(id))) {
-      useLayoutUndoStore.getState().clearHistory();
-    }
-    prevIdSet = currentIdSet;
-  });
-  unsubscribers.push(unsubLayoutUndo);
+      )
+    )
+  );
 
   // 5. Availability → agent-settings re-normalization: installed/missing state
   //    is the input to `normalizeAgentSelection`, so re-run normalization any
@@ -129,18 +168,25 @@ export function initStoreOrchestrator(): () => void {
   //    Daintree needs their tray/toolbar state to reconcile without an app
   //    restart. `cliAvailabilityStore` only swaps the `availability` object
   //    on real IPC completion, so ref equality is a reliable trigger.
-  const unsubAvailability = useCliAvailabilityStore.subscribe((state, prevState) => {
-    const realDataLanded = state.hasRealData && !prevState.hasRealData;
-    const availabilityChanged = state.availability !== prevState.availability;
-    if (!realDataLanded && !availabilityChanged) return;
-    const { isInitialized, isLoading } = useAgentSettingsStore.getState();
-    if (!isInitialized || isLoading) return;
-    void useAgentSettingsStore.getState().refresh();
-  });
-  unsubscribers.push(unsubAvailability);
+  disposables.add(
+    toDisposable(
+      useCliAvailabilityStore.subscribe(
+        (state) => ({ hasRealData: state.hasRealData, availability: state.availability }),
+        (selected, prevSelected) => {
+          const realDataLanded = selected.hasRealData && !prevSelected.hasRealData;
+          const availabilityChanged = selected.availability !== prevSelected.availability;
+          if (!realDataLanded && !availabilityChanged) return;
+          const { isInitialized, isLoading } = useAgentSettingsStore.getState();
+          if (!isInitialized || isLoading) return;
+          void useAgentSettingsStore.getState().refresh();
+        },
+        { equalityFn: shallow }
+      )
+    )
+  );
 
   cleanupFn = () => {
-    for (const unsub of unsubscribers) unsub();
+    disposables.dispose();
     cleanupFn = null;
   };
 
@@ -148,6 +194,10 @@ export function initStoreOrchestrator(): () => void {
 }
 
 export function destroyStoreOrchestrator(): void {
+  // Kept out of the DisposableStore on purpose: only `destroyStoreOrchestrator`
+  // cancels the pending debounce. HMR teardown (`import.meta.hot.dispose` in
+  // `main.tsx`) calls the cleanup fn directly and intentionally does NOT cancel,
+  // matching pre-refactor behavior.
   debouncedPersistMruList.cancel();
   cleanupFn?.();
 }

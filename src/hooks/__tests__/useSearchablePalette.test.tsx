@@ -51,21 +51,6 @@ describe("useSearchablePalette", () => {
     expect(result.current.selectedIndex).toBe(-1);
   });
 
-  it("exposes isStale as false when query matches deferred value", () => {
-    const items: PaletteItem[] = [{ id: "a", name: "Alpha" }];
-
-    const { result } = renderHook(() => useSearchablePalette<PaletteItem>({ items }));
-
-    expect(result.current.isStale).toBe(false);
-
-    act(() => {
-      result.current.setQuery("test");
-    });
-
-    // In test environment, useDeferredValue resolves synchronously within act()
-    expect(result.current.isStale).toBe(false);
-  });
-
   describe("totalResults", () => {
     it("exposes total count before slicing when results exceed maxResults", () => {
       const items: PaletteItem[] = Array.from({ length: 25 }, (_, i) => ({

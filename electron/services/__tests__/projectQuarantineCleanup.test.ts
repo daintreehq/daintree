@@ -11,10 +11,10 @@ const VALID_PROJECT_ID = "a".repeat(64);
 const VALID_PROJECT_ID_2 = "b".repeat(64);
 
 const QUARANTINE_FILES = [
-  "state.json.corrupted",
-  "settings.json.corrupted",
-  "recipes.json.corrupted",
-  "workflows.json.corrupted",
+  "state.json.corrupted.1234567890",
+  "settings.json.corrupted.1234567890",
+  "recipes.json.corrupted.1234567890",
+  "workflows.json.corrupted.1234567890",
 ];
 
 let tmpDir: string;
@@ -54,7 +54,7 @@ describe("cleanupQuarantinedProjectFiles", () => {
     const projectDir = await createProjectDir(VALID_PROJECT_ID);
     const filePath = await createCorruptedFile(
       projectDir,
-      "state.json.corrupted",
+      "state.json.corrupted.1234567890",
       THIRTY_ONE_DAYS_MS,
       NOW
     );
@@ -69,7 +69,7 @@ describe("cleanupQuarantinedProjectFiles", () => {
     const projectDir = await createProjectDir(VALID_PROJECT_ID);
     const filePath = await createCorruptedFile(
       projectDir,
-      "state.json.corrupted",
+      "state.json.corrupted.1234567890",
       TWENTY_NINE_DAYS_MS,
       NOW
     );
@@ -110,7 +110,7 @@ describe("cleanupQuarantinedProjectFiles", () => {
   it("skips directories with invalid project IDs", async () => {
     const invalidDir = path.join(tmpDir, "not-a-valid-hex-id");
     await fs.mkdir(invalidDir);
-    const filePath = path.join(invalidDir, "state.json.corrupted");
+    const filePath = path.join(invalidDir, "state.json.corrupted.1234567890");
     await fs.writeFile(filePath, "data");
     const oldTime = new Date(NOW - THIRTY_ONE_DAYS_MS);
     await fs.utimes(filePath, oldTime, oldTime);
@@ -152,19 +152,19 @@ describe("cleanupQuarantinedProjectFiles", () => {
 
     const oldFile1 = await createCorruptedFile(
       dir1,
-      "state.json.corrupted",
+      "state.json.corrupted.1234567890",
       THIRTY_ONE_DAYS_MS,
       NOW
     );
     const oldFile2 = await createCorruptedFile(
       dir2,
-      "settings.json.corrupted",
+      "settings.json.corrupted.1234567890",
       THIRTY_ONE_DAYS_MS,
       NOW
     );
     const freshFile = await createCorruptedFile(
       dir2,
-      "recipes.json.corrupted",
+      "recipes.json.corrupted.1234567890",
       TWENTY_NINE_DAYS_MS,
       NOW
     );
@@ -179,7 +179,12 @@ describe("cleanupQuarantinedProjectFiles", () => {
 
   it("is idempotent — calling twice is safe", async () => {
     const projectDir = await createProjectDir(VALID_PROJECT_ID);
-    await createCorruptedFile(projectDir, "state.json.corrupted", THIRTY_ONE_DAYS_MS, NOW);
+    await createCorruptedFile(
+      projectDir,
+      "state.json.corrupted.1234567890",
+      THIRTY_ONE_DAYS_MS,
+      NOW
+    );
 
     const deleted1 = await cleanupQuarantinedProjectFiles(tmpDir, NOW);
     expect(deleted1).toBe(1);
@@ -193,7 +198,7 @@ describe("cleanupQuarantinedProjectFiles", () => {
     const exactlyThirtyDays = 30 * 24 * 60 * 60 * 1000;
     const filePath = await createCorruptedFile(
       projectDir,
-      "state.json.corrupted",
+      "state.json.corrupted.1234567890",
       exactlyThirtyDays,
       NOW
     );
@@ -208,7 +213,7 @@ describe("cleanupQuarantinedProjectFiles", () => {
     // File is only 1 day old relative to wall clock
     const filePath = await createCorruptedFile(
       projectDir,
-      "state.json.corrupted",
+      "state.json.corrupted.1234567890",
       1 * 24 * 60 * 60 * 1000,
       Date.now()
     );

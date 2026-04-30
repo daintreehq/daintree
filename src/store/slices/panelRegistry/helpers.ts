@@ -1,7 +1,12 @@
-import type { TerminalFlowStatus, TerminalRuntimeStatus, TerminalType } from "@/types";
+import type { TerminalFlowStatus, TerminalRuntimeStatus } from "@/types";
 import type { PanelKind } from "@/types";
+import type { TabGroup } from "@/types";
 import { getDefaultPanelTitle } from "@shared/config/panelKindRegistry";
+import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { ABSOLUTE_MAX_GRID_TERMINALS } from "@/lib/terminalLayout";
+import { deriveTerminalChrome, type TerminalChromeInput } from "@/utils/terminalChrome";
+import { logError } from "@/utils/logger";
 
 // Re-export for backward compatibility
 export const MAX_GRID_TERMINALS = ABSOLUTE_MAX_GRID_TERMINALS;
@@ -38,10 +43,62 @@ export const deriveRuntimeStatus = (
   return "running";
 };
 
-export function getDefaultTitle(kind?: PanelKind, type?: TerminalType, agentId?: string): string {
-  // Use panel kind registry for proper title resolution
-  const effectiveKind = kind ?? (agentId ? "agent" : "terminal");
-  return getDefaultPanelTitle(effectiveKind, agentId ?? (type !== "terminal" ? type : undefined));
+export function removePanelIdsFromTabGroups(
+  tabGroups: Map<string, TabGroup>,
+  panelIdsToRemove: ReadonlySet<string>
+): { tabGroups: Map<string, TabGroup>; changed: boolean } {
+  let changed = false;
+  const nextTabGroups = new Map(tabGroups);
+
+  for (const [groupId, group] of tabGroups) {
+    if (!group.panelIds.some((panelId) => panelIdsToRemove.has(panelId))) continue;
+
+    changed = true;
+    const panelIds = group.panelIds.filter((panelId) => !panelIdsToRemove.has(panelId));
+    if (panelIds.length <= 1) {
+      nextTabGroups.delete(groupId);
+      continue;
+    }
+
+    nextTabGroups.set(groupId, {
+      ...group,
+      panelIds,
+      activeTabId: panelIds.includes(group.activeTabId) ? group.activeTabId : (panelIds[0] ?? ""),
+    });
+  }
+
+  return { tabGroups: changed ? nextTabGroups : tabGroups, changed };
+}
+
+interface DefaultTitleIdentity extends TerminalChromeInput {
+  launchAgentId?: string;
+  everDetectedAgent?: boolean;
+}
+
+/**
+ * Compute the default title for a panel given its current chrome identity.
+ * Returns the agent's display name while an agent is live/expected, and falls
+ * back to the generic panel-kind title (usually "Terminal") otherwise.
+ *
+ * Callers must check `titleMode` themselves — this helper does not know
+ * whether the user has renamed.
+ */
+export function getDefaultTitle(
+  kind: PanelKind | undefined,
+  identity?: DefaultTitleIdentity
+): string {
+  const chromeAgentId = deriveTerminalChrome({ kind, ...identity }).agentId;
+  if (chromeAgentId && isBuiltInAgentId(chromeAgentId)) {
+    return AGENT_REGISTRY[chromeAgentId]?.name ?? chromeAgentId;
+  }
+  if (
+    identity?.launchAgentId &&
+    identity.everDetectedAgent !== true &&
+    isBuiltInAgentId(identity.launchAgentId)
+  ) {
+    return AGENT_REGISTRY[identity.launchAgentId]?.name ?? identity.launchAgentId;
+  }
+  return getDefaultPanelTitle(kind ?? "terminal");
 }
 
 export function stopDevPreviewByPanelId(panelId: string): void {
@@ -50,9 +107,6 @@ export function stopDevPreviewByPanelId(panelId: string): void {
   if (!stopByPanel) return;
 
   void stopByPanel({ panelId }).catch((error) => {
-    console.error(
-      `[TerminalStore] Failed to stop dev preview session for panel ${panelId}:`,
-      error
-    );
+    logError(`[TerminalStore] Failed to stop dev preview session for panel ${panelId}`, error);
   });
 }

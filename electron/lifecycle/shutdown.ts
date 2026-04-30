@@ -13,7 +13,6 @@ import { disposeAgentRouter } from "../services/AgentRouter.js";
 import { disposeTaskOrchestrator } from "../services/TaskOrchestrator.js";
 import { disposePtyClient } from "../services/PtyClient.js";
 import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
-import { mcpServerService } from "../services/McpServerService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
@@ -135,7 +134,12 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
       .then(() =>
         Promise.all([
           workspaceClient ? workspaceClient.dispose() : Promise.resolve(),
-          mcpServerService.stop(),
+          // McpServerService is dynamically imported only after first-interactive.
+          // If the deferred task never ran (early shutdown), the module never loaded
+          // and there is nothing to stop — skip silently.
+          import("../services/McpServerService.js")
+            .then(({ mcpServerService }) => mcpServerService.stop())
+            .catch(() => {}),
           new Promise<void>((resolve) => {
             disposeTaskOrchestrator();
             disposeAgentRouter();

@@ -9,7 +9,11 @@ import "@fontsource/jetbrains-mono/600.css";
 import "@fontsource/jetbrains-mono/700.css";
 import "./index.css";
 import { applyDefaultAppTheme } from "./theme/applyAppTheme";
-import { ensureTerminalFontLoaded } from "./config/terminalFont";
+// Importing this module has the side effect of starting the font load (via
+// the eagerly-initialised `terminalFontReady` singleton). `XtermAdapter`
+// suspends locally on that same promise so the grid measurement waits while
+// the rest of the app shell mounts immediately.
+import "./config/terminalFont";
 import { initStoreOrchestrator } from "./store/rendererStoreOrchestrator";
 import { useAgentSettingsStore } from "./store/agentSettingsStore";
 import { registerRendererGlobalErrorHandlers } from "./utils/rendererGlobalErrorHandlers";
@@ -47,8 +51,6 @@ async function bootstrap() {
   // subscription never gets a chance to reconcile (see issue #5158).
   void useAgentSettingsStore.getState().initialize();
 
-  await ensureTerminalFontLoaded();
-
   const { default: App } = await import("./App");
 
   const rootEl = document.getElementById("root")!;
@@ -66,6 +68,9 @@ async function bootstrap() {
 }
 
 bootstrap().catch((error: unknown) => {
+  // Logger may not be initialized at this stage of bootstrap; console is the
+  // last-resort sink before the bootstrap-error UI takes over.
+  // eslint-disable-next-line no-console
   console.error("Bootstrap failed:", error);
 
   void (async () => {

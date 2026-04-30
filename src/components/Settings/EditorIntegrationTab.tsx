@@ -5,6 +5,8 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { editorClient } from "@/clients/editorClient";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "@shared/types/editor";
 import { useProjectStore } from "@/store";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 const EDITOR_LABELS: Record<KnownEditorId, string> = {
   vscode: "VS Code",
@@ -75,7 +77,7 @@ export function EditorIntegrationTab() {
       })
       .catch((err) => {
         if (cancelled || !isMountedRef.current) return;
-        console.error("[EditorIntegrationTab] Failed to load config:", err);
+        logError("[EditorIntegrationTab] Failed to load config", err);
       });
     return () => {
       cancelled = true;
@@ -89,7 +91,7 @@ export function EditorIntegrationTab() {
       if (!isMountedRef.current) return;
       setDiscoveredEditors(editors);
     } catch (err) {
-      console.error("[EditorIntegrationTab] Rescan failed:", err);
+      logError("[EditorIntegrationTab] Rescan failed", err);
     } finally {
       if (isMountedRef.current) setIsRescanning(false);
     }
@@ -110,7 +112,7 @@ export function EditorIntegrationTab() {
       setPreferredEditor(editor);
     } catch (err) {
       if (!isMountedRef.current) return;
-      setSaveError(err instanceof Error ? err.message : "Failed to save");
+      setSaveError(formatErrorMessage(err, "Failed to save editor preference"));
     } finally {
       if (isMountedRef.current) setIsSaving(false);
     }
@@ -151,14 +153,14 @@ export function EditorIntegrationTab() {
         title="External Editor"
         description="Choose the editor that opens when you click 'Open in editor' in the diff viewer or worktree cards."
       >
-        <div className="space-y-4">
+        <div className="contents">
           <div className="space-y-1">
             <label className="text-xs text-daintree-text/60">Editor</label>
             <div className="flex items-center gap-2">
               <select
                 value={selectedId}
                 onChange={(e) => setSelectedId(e.target.value as KnownEditorId)}
-                className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent transition-colors"
+                className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent transition-colors"
               >
                 {ORDERED_KNOWN_IDS.map((id) => {
                   const disc = availabilityMap.get(id);
@@ -175,7 +177,7 @@ export function EditorIntegrationTab() {
                 onClick={handleRescan}
                 disabled={isRescanning}
                 title="Re-scan for installed editors"
-                className="p-2 rounded-[var(--radius-md)] border border-daintree-border hover:bg-tint/5 text-daintree-text/60 hover:text-daintree-text transition-colors disabled:opacity-40"
+                className="p-2 rounded-[var(--radius-md)] border border-daintree-border hover:bg-tint/5 text-daintree-text/60 hover:text-daintree-text transition-colors disabled:opacity-40 disabled:pointer-events-none"
               >
                 <RefreshCw className={cn("w-4 h-4", isRescanning && "animate-spin")} />
               </button>
@@ -218,7 +220,7 @@ export function EditorIntegrationTab() {
                   value={customCommand}
                   onChange={(e) => setCustomCommand(e.target.value)}
                   placeholder="e.g. code, nvim, subl"
-                  className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent transition-colors font-mono"
+                  className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent transition-colors font-mono"
                 />
               </div>
               <div className="space-y-1">
@@ -228,7 +230,7 @@ export function EditorIntegrationTab() {
                   value={customTemplate}
                   onChange={(e) => setCustomTemplate(e.target.value)}
                   placeholder="{file}:{line}:{col}"
-                  className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent transition-colors font-mono"
+                  className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent transition-colors font-mono"
                 />
                 <p className="text-xs text-daintree-text/40 select-text">
                   Use <code className="font-mono">{"{file}"}</code>,{" "}
@@ -243,7 +245,7 @@ export function EditorIntegrationTab() {
             <button
               onClick={handleSave}
               disabled={isSaving || !activeProjectId}
-              className="px-4 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-daintree-bg text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 transition-colors"
+              className="px-4 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-daintree-bg text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
             >
               {isSaving ? "Saving…" : "Save"}
             </button>
@@ -251,7 +253,7 @@ export function EditorIntegrationTab() {
             <button
               onClick={handleTest}
               disabled={isTesting}
-              className="px-4 py-2 rounded-[var(--radius-md)] border border-daintree-border text-sm text-daintree-text/70 hover:text-daintree-text hover:bg-tint/5 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+              className="px-4 py-2 rounded-[var(--radius-md)] border border-daintree-border text-sm text-daintree-text/70 hover:text-daintree-text hover:bg-tint/5 disabled:opacity-50 disabled:pointer-events-none transition-colors flex items-center gap-1.5"
             >
               <ExternalLink className="w-3.5 h-3.5" />
               {isTesting ? "Testing…" : "Test"}

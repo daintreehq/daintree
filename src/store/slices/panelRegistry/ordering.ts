@@ -2,8 +2,9 @@ import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
-import { saveNormalized } from "./persistence";
+import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
+import { deriveRuntimeStatus, removePanelIdsFromTabGroups } from "./helpers";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -42,12 +43,12 @@ export const createOrderingActions = (
 
       const reorderedScoped = [...scopedIds];
       reorderedScoped.splice(fromIndex, 1);
-      reorderedScoped.splice(toIndex, 0, scopedIds[fromIndex]);
+      reorderedScoped.splice(toIndex, 0, scopedIds[fromIndex]!);
 
       // Build a mapping from old scoped position to new ID
       const scopedMapping = new Map<string, string>();
       for (let i = 0; i < scopedIds.length; i++) {
-        scopedMapping.set(scopedIds[i], reorderedScoped[i]);
+        scopedMapping.set(scopedIds[i]!, reorderedScoped[i]!);
       }
 
       // Rebuild panelIds with the reordered scoped IDs in place
@@ -87,7 +88,7 @@ export const createOrderingActions = (
       // Find scoped indices within the target location
       const scopedIndices: number[] = [];
       for (let i = 0; i < filteredIds.length; i++) {
-        const t = state.panelsById[filteredIds[i]];
+        const t = state.panelsById[filteredIds[i]!];
         if (t && matchesLocation(t) && matchesWorktree(t)) {
           scopedIndices.push(i);
         }
@@ -100,21 +101,34 @@ export const createOrderingActions = (
         scopedCount === 0
           ? filteredIds.length
           : clampedIndex <= 0
-            ? scopedIndices[0]
+            ? scopedIndices[0]!
             : clampedIndex >= scopedCount
-              ? scopedIndices[scopedCount - 1] + 1
-              : scopedIndices[clampedIndex];
+              ? scopedIndices[scopedCount - 1]! + 1
+              : scopedIndices[clampedIndex]!;
 
-      // Update terminal location
-      const updatedTerminal: TerminalInstance = { ...terminal, location };
+      const isVisible = location === "grid";
+      const updatedTerminal: TerminalInstance = {
+        ...terminal,
+        location,
+        isVisible,
+        runtimeStatus: deriveRuntimeStatus(isVisible, terminal.flowStatus, terminal.runtimeStatus),
+      };
 
       // Insert at the right position
       const newIds = [...filteredIds];
       newIds.splice(insertAt, 0, id);
       const newById = { ...state.panelsById, [id]: updatedTerminal };
+      const groupPrune = removePanelIdsFromTabGroups(state.tabGroups, new Set([id]));
 
       saveNormalized(newById, newIds);
-      return { panelsById: newById, panelIds: newIds };
+      if (groupPrune.changed) {
+        saveTabGroups(groupPrune.tabGroups);
+      }
+      return {
+        panelsById: newById,
+        panelIds: newIds,
+        ...(groupPrune.changed && { tabGroups: groupPrune.tabGroups }),
+      };
     });
 
     const terminal = get().panelsById[id];

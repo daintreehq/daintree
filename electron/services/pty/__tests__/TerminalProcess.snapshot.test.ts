@@ -40,8 +40,6 @@ function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
   return {
     shell: "/bin/zsh",
     args: ["-l"],
-    isAgentTerminal: false,
-    agentId: undefined,
     env: {},
     ...overrides,
   };
@@ -54,17 +52,11 @@ function createTerminal(options?: Partial<TerminalProcessOptions>): TerminalProc
     cwd: process.cwd(),
     cols: 80,
     rows: 24,
-    kind: "agent" as const,
-    type: "claude" as const,
-    agentId: "claude",
+    kind: "terminal" as const,
+    launchAgentId: "claude" as const,
     ...options,
   };
-  const isAgent =
-    merged.kind === "agent" || !!merged.agentId || (!!merged.type && merged.type !== "terminal");
-  const ctx = defaultSpawnContext({
-    isAgentTerminal: isAgent,
-    agentId: isAgent ? (merged.agentId ?? merged.type) : undefined,
-  });
+  const ctx = defaultSpawnContext();
   return new TerminalProcess(
     "t1",
     merged,

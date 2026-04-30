@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { EditorView } from "@codemirror/view";
 import type { Compartment } from "@codemirror/state";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -56,7 +56,9 @@ export function useVoiceWaitSubmit({
   sendFromEditor,
 }: UseVoiceWaitSubmitParams) {
   const sendFromEditorRef = useRef(sendFromEditor);
-  sendFromEditorRef.current = sendFromEditor;
+  useEffect(() => {
+    sendFromEditorRef.current = sendFromEditor;
+  }, [sendFromEditor]);
 
   const startVoiceWaitSubmit = useCallback(() => {
     const store = useTerminalInputStore.getState();

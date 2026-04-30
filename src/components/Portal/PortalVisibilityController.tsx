@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { usePortalStore } from "@/store";
 import { useUIStore } from "@/store/uiStore";
 import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
+import { logError } from "@/utils/logger";
 
 /**
  * Zero-UI controller component that manages portal visibility.
@@ -16,8 +17,8 @@ export function PortalVisibilityController(): null {
   const tabs = usePortalStore((state) => state.tabs);
   const createdTabs = usePortalStore((state) => state.createdTabs);
   const markTabCreated = usePortalStore((state) => state.markTabCreated);
-  const overlayCount = useUIStore((state) => state.overlayCount);
-  const hasOverlays = overlayCount > 0;
+  const overlayClaimsSize = useUIStore((state) => state.overlayClaims.size);
+  const hasOverlays = overlayClaimsSize > 0;
   const isRestoringRef = useRef(false);
   const pendingRestoreRef = useRef<{ tabId: string; tabUrl: string } | null>(null);
 
@@ -71,14 +72,14 @@ export function PortalVisibilityController(): null {
           isRestoringRef.current = false;
           return;
         }
-        if (uiState.overlayCount > 0) {
+        if (uiState.overlayClaims.size > 0) {
           isRestoringRef.current = false;
           return;
         }
 
         await window.electron.portal.show({ tabId, bounds });
       } catch (error) {
-        console.error("Failed to restore tab:", error);
+        logError("Failed to restore tab", error);
       } finally {
         isRestoringRef.current = false;
         const pending = pendingRestoreRef.current as { tabId: string; tabUrl: string } | null;
@@ -111,7 +112,7 @@ export function PortalVisibilityController(): null {
     if (activeTabId != null) return;
     if (tabs.length === 0) return;
 
-    usePortalStore.getState().setActiveTab(tabs[0].id);
+    usePortalStore.getState().setActiveTab(tabs[0]!.id);
   }, [portalOpen, tabs, activeTabId]);
 
   // Handle active tab changes (e.g., initial auto-select or programmatic switch)

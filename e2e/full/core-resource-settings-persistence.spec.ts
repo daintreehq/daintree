@@ -58,8 +58,8 @@ function writeResourceConfig(repoDir: string) {
 async function navigateToResourcesTab(
   window: Awaited<ReturnType<typeof launchApp>>["window"]
 ): Promise<void> {
-  const scopeSelect = window.locator('[aria-label="Settings scope"]');
-  await scopeSelect.selectOption("project");
+  await window.locator('[aria-label="Settings scope"]').click();
+  await window.locator('[role="option"]', { hasText: "Project" }).click();
   // Wait for project settings to load via IPC (async fetch)
   await window.waitForTimeout(1000);
 

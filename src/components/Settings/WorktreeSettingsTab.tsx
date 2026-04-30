@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
 import { AlertCircle, Check, RotateCcw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   validatePathPattern,
   previewPathPattern,
@@ -11,6 +11,8 @@ import {
 } from "@shared/utils/pathPattern";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
+import { useSettingsTabValidation } from "./SettingsValidationRegistry";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 const PATTERN_PRESETS = [
   {
@@ -76,7 +78,7 @@ export function WorktreeSettingsTab() {
       .catch((err) => {
         settled = true;
         clearTimeout(timer);
-        setError(err instanceof Error ? err.message : "Failed to load settings");
+        setError(formatErrorMessage(err, "Failed to load worktree settings"));
       })
       .finally(() => {
         setIsLoading(false);
@@ -89,6 +91,9 @@ export function WorktreeSettingsTab() {
     if (!pattern.trim()) return { valid: false, error: "Pattern cannot be empty" };
     return validatePathPattern(pattern);
   }, [pattern]);
+
+  // Report validation state to sidebar (only after loading completes)
+  useSettingsTabValidation("worktree", !isLoading && !validation.valid);
 
   const preview = useMemo(() => {
     if (!validation.valid) return null;
@@ -122,7 +127,7 @@ export function WorktreeSettingsTab() {
       const timeout = setTimeout(() => setSavedMessage(false), 2000);
       setSavedMessageTimeout(timeout);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save pattern");
+      setError(formatErrorMessage(err, "Failed to save pattern"));
     } finally {
       setIsSaving(false);
     }
@@ -150,11 +155,11 @@ export function WorktreeSettingsTab() {
   return (
     <div className="space-y-6">
       <SettingsSection
-        icon={WorktreeIcon}
+        icon={FolderGit2}
         title="Worktree Path Pattern"
         description="Configure the default path pattern for new worktrees. Use variables to build dynamic paths based on your repository and branch names."
       >
-        <div className="space-y-4">
+        <div className="contents">
           <div className="space-y-2">
             <label htmlFor="path-pattern" className="block text-sm font-medium text-daintree-text">
               Pattern
@@ -170,25 +175,23 @@ export function WorktreeSettingsTab() {
                 }}
                 className={cn(
                   "flex-1 px-3 py-1.5 bg-daintree-bg border rounded-[var(--radius-md)] text-daintree-text font-mono text-sm",
-                  "focus:outline-none focus:ring-2 focus:ring-daintree-accent",
+                  "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent",
                   !validation.valid ? "border-status-error/50" : "border-daintree-border"
                 )}
                 placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"
               />
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={handleReset}
-                      className="px-3 py-1.5 border border-daintree-border rounded-[var(--radius-md)] text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors"
-                      aria-label="Reset to default"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Reset to default</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={handleReset}
+                    className="px-3 py-1.5 border border-daintree-border rounded-[var(--radius-md)] text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors"
+                    aria-label="Reset to default"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Reset to default</TooltipContent>
+              </Tooltip>
             </div>
 
             {!validation.valid && validation.error && (
@@ -212,19 +215,19 @@ export function WorktreeSettingsTab() {
             </span>
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
-                <code className="text-daintree-accent">{"{base-folder}"}</code>
+                <code className="text-text-secondary">{"{base-folder}"}</code>
                 <span className="text-daintree-text/50">Repository folder name</span>
               </div>
               <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
-                <code className="text-daintree-accent">{"{branch-slug}"}</code>
+                <code className="text-text-secondary">{"{branch-slug}"}</code>
                 <span className="text-daintree-text/50">Sanitized branch name</span>
               </div>
               <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
-                <code className="text-daintree-accent">{"{repo-name}"}</code>
+                <code className="text-text-secondary">{"{repo-name}"}</code>
                 <span className="text-daintree-text/50">Repository name</span>
               </div>
               <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
-                <code className="text-daintree-accent">{"{parent-dir}"}</code>
+                <code className="text-text-secondary">{"{parent-dir}"}</code>
                 <span className="text-daintree-text/50">Parent directory path</span>
               </div>
             </div>
@@ -234,24 +237,22 @@ export function WorktreeSettingsTab() {
             <span className="block text-xs font-medium text-daintree-text/70">Presets:</span>
             <div className="flex flex-wrap gap-2">
               {PATTERN_PRESETS.map((preset) => (
-                <TooltipProvider key={preset.label}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => handlePresetClick(preset.pattern)}
-                        className={cn(
-                          "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
-                          pattern === preset.pattern
-                            ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
-                            : "border-daintree-border text-daintree-text/70 hover:bg-daintree-border/50"
-                        )}
-                      >
-                        {preset.label}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">{preset.description}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip key={preset.label}>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => handlePresetClick(preset.pattern)}
+                      className={cn(
+                        "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
+                        pattern === preset.pattern
+                          ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
+                          : "border-daintree-border text-daintree-text/70 hover:bg-daintree-border/50"
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{preset.description}</TooltipContent>
+                </Tooltip>
               ))}
             </div>
           </div>
@@ -270,7 +271,7 @@ export function WorktreeSettingsTab() {
                 </div>
                 <div className="flex items-center gap-2 pt-1 border-t border-daintree-border mt-1">
                   <span className="text-daintree-text/50">Result:</span>
-                  <code className="text-daintree-accent break-all">{preview}</code>
+                  <code className="text-daintree-text break-all">{preview}</code>
                 </div>
               </div>
             </div>

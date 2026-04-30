@@ -10,6 +10,7 @@ import { artifactClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 const artifactStore = new Map<string, Artifact[]>();
 const listeners = new Set<(terminalId: string, artifacts: Artifact[]) => void>();
@@ -169,7 +170,9 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
   );
 
   const applyPatch = useCallback(
-    async (artifact: Artifact) => {
+    async (
+      artifact: Artifact
+    ): Promise<{ success: true; modifiedFiles: string[] } | { success: false; error: string }> => {
       if (!isElectronAvailable() || artifact.type !== "patch") {
         logErrorWithContext(new Error("Invalid artifact type or Electron not available"), {
           operation: "apply_patch",
@@ -201,9 +204,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
         if (!actionResult.ok) {
           throw new Error(actionResult.error.message);
         }
-        const result = actionResult.result;
-
-        return result;
+        return { success: true, modifiedFiles: actionResult.result.modifiedFiles };
       } catch (error) {
         logErrorWithContext(error, {
           operation: "apply_patch",
@@ -212,7 +213,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
         });
         return {
           success: false,
-          error: error instanceof Error ? error.message : String(error),
+          error: formatErrorMessage(error, "Failed to apply patch"),
         };
       } finally {
         setActionInProgress(null);
@@ -273,7 +274,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
         return {
           succeeded: 0,
           failed: sorted.length,
-          failures: [{ artifact: sorted[0], error: String(error) }],
+          failures: [{ artifact: sorted[0]!, error: String(error) }],
         };
       } finally {
         setBulkProgress(null);
@@ -292,7 +293,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
 
     try {
       for (let i = 0; i < sorted.length; i++) {
-        const artifact = sorted[i];
+        const artifact = sorted[i]!;
         setBulkProgress({ action: "save", current: i + 1, total: sorted.length });
 
         try {
@@ -312,7 +313,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
           }
           const saveResult = actionResult.result;
 
-          if (saveResult?.success) {
+          if (saveResult?.filePath) {
             result.succeeded++;
           } else if (saveResult === null) {
             // Treat null as user cancellation - skip remaining saves
@@ -331,7 +332,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
           result.failed++;
           result.failures.push({
             artifact,
-            error: error instanceof Error ? error.message : String(error),
+            error: formatErrorMessage(error, "Failed to save artifact"),
           });
         }
       }
@@ -362,7 +363,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
 
     try {
       for (let i = 0; i < sorted.length; i++) {
-        const artifact = sorted[i];
+        const artifact = sorted[i]!;
         setBulkProgress({ action: "apply", current: i + 1, total: sorted.length });
 
         try {
@@ -376,23 +377,8 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
           }
           const applyResult = actionResult.result;
 
-          if (applyResult.success) {
-            result.succeeded++;
-            if (applyResult.modifiedFiles) {
-              applyResult.modifiedFiles.forEach((f) => modifiedFilesSet.add(f));
-            }
-          } else {
-            logErrorWithContext(new Error(applyResult.error || "Patch application failed"), {
-              operation: "bulk_apply_patch",
-              component: "useArtifacts",
-              details: { artifactId: artifact.id, worktreeId, cwd, terminalId },
-            });
-            result.failed++;
-            result.failures.push({
-              artifact,
-              error: applyResult.error || "Patch application failed",
-            });
-          }
+          result.succeeded++;
+          applyResult.modifiedFiles.forEach((f) => modifiedFilesSet.add(f));
         } catch (error) {
           logErrorWithContext(error, {
             operation: "bulk_apply_patch",
@@ -402,7 +388,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
           result.failed++;
           result.failures.push({
             artifact,
-            error: error instanceof Error ? error.message : String(error),
+            error: formatErrorMessage(error, "Failed to apply patch"),
           });
         }
       }
@@ -429,5 +415,3 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
     applyAllPatches,
   };
 }
-
-export default useArtifacts;

@@ -2,6 +2,7 @@ import type { SimpleGit } from "simple-git";
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { existsSync } from "fs";
 import { logDebug, logError } from "../utils/logger.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type {
   ProjectPulse,
   HeatCell,
@@ -107,7 +108,7 @@ export class ProjectPulseService {
         return pulse;
       } catch (error) {
         logError("ProjectPulse computation failed", {
-          error: error instanceof Error ? error.message : String(error),
+          error: formatErrorMessage(error, "Failed to compute project pulse"),
           stack: error instanceof Error ? error.stack : undefined,
           worktreeId: options.worktreeId,
           worktreePath: options.worktreePath,
@@ -156,7 +157,7 @@ export class ProjectPulseService {
     try {
       headSha = (await git.raw(["rev-parse", "--verify", "HEAD"])).trim() || undefined;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to read git HEAD");
       const noCommitsPatterns = [
         "fatal: ambiguous argument 'HEAD'",
         "unknown revision",
@@ -572,6 +573,14 @@ export class ProjectPulseService {
 
   private async getFirstCommitDate(git: SimpleGit): Promise<Date | null> {
     try {
+      // Shallow clones graft the boundary commit as a parent-less root, which would
+      // make rev-list --max-parents=0 return the boundary SHA (often only days old)
+      // instead of the historical root. Bail so the caller skips isBeforeProject culling.
+      const shallowOut = await git.raw(["rev-parse", "--is-shallow-repository"]);
+      if (shallowOut.trim() === "true") {
+        return null;
+      }
+
       // Get the root commit(s) - commits with no parents
       const rootSha = await git.raw(["rev-list", "--max-parents=0", "HEAD"]);
       const firstRootSha = rootSha.trim().split("\n")[0];

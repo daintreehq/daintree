@@ -1,5 +1,7 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 @plugin "@tailwindcss/typography";
+@source not "../.lessons/**/*";
 @import "./styles/components/toolbar.css";
 @import "./styles/components/settings.css";
 @import "./styles/components/pulse.css";
@@ -22,6 +24,7 @@
   --color-surface-inset: var(--theme-surface-inset);
   --color-surface-hover: var(--theme-surface-hover);
   --color-surface-active: var(--theme-surface-active);
+  --color-surface-disabled: var(--theme-surface-disabled);
   --color-text-primary: var(--theme-text-primary);
   --color-text-secondary: var(--theme-text-secondary);
   --color-text-muted: var(--theme-text-muted);
@@ -48,6 +51,9 @@
   --color-status-warning: var(--theme-status-warning);
   --color-status-danger: var(--theme-status-danger);
   --color-status-info: var(--theme-status-info);
+  --color-status-danger-surface: var(--theme-status-danger-surface);
+  --color-knob-base: var(--theme-knob-base);
+  --color-state-modified: var(--theme-state-modified);
   --color-activity-active: var(--theme-activity-active);
   --color-activity-idle: var(--theme-activity-idle);
   --color-activity-working: var(--theme-activity-working);
@@ -398,6 +404,39 @@
   --font-mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
+}
+
+/* Motion token scale — single source of truth for durations and easings.
+ * Emitted to :root (plain @theme, not inline) so @keyframes rules can use var().
+ * Also generates Tailwind utilities (duration-*, ease-*) via the Tailwind v4
+ * theme namespace convention. Philosophy: every token is sub-300ms; interaction
+ * motion clarifies what happened, it never makes the user wait.
+ */
+@theme {
+  --duration-75: 75ms;
+  --duration-100: 100ms;
+  --duration-150: 150ms;
+  --duration-200: 200ms;
+  --duration-250: 250ms;
+  --duration-300: 300ms;
+  --default-transition-timing-function: ease-out;
+  --ease-snappy: cubic-bezier(0.2, 0, 0, 1);
+  --ease-spring-critical: linear(
+    0,
+    0.007,
+    0.029 2.2%,
+    0.118 4.7%,
+    0.625 14.4%,
+    0.826 19%,
+    0.902 24%,
+    0.962 29.8%,
+    0.984 33.3%,
+    1.004 37.8%,
+    1.01 42.4%,
+    1.011 52.2%,
+    1.001
+  );
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 pre code.hljs {
@@ -943,20 +982,28 @@ body,
   will-change: opacity, transform;
 }
 
-/* Agent status indicator pulse animation */
+/* Agent status indicator flash — single-shot scale+opacity on state transition.
+ * Previously infinite (1.5s loop), now a 150ms one-shot driven by the consumer
+ * toggling the class on state change (see AgentStatusIndicator).
+ */
 @keyframes agent-pulse {
-  0%,
+  0% {
+    opacity: 0.7;
+    transform: scale(0.92);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
   100% {
     opacity: 1;
-  }
-  50% {
-    opacity: 0.7;
+    transform: scale(1);
   }
 }
 
 .animate-agent-pulse {
-  animation: agent-pulse 1.5s ease-in-out infinite;
-  will-change: opacity;
+  animation: agent-pulse var(--duration-150) var(--ease-out-expo) 1 both;
+  will-change: opacity, transform;
 }
 
 /* Organic breathing animation for waiting/loading states
@@ -1158,7 +1205,143 @@ body,
   will-change: opacity;
 }
 
-/* Respect user's motion preferences */
+/* Label crossfade — used by AnimatedLabel for text/number swaps. Outgoing
+ * label fades out & lifts up + slight blur; incoming rises in from below.
+ * Container holds both spans in a CSS grid cell so width is the natural max
+ * of both labels and no layout shift occurs during the swap.
+ */
+@keyframes label-swap-out {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+    filter: blur(2px);
+  }
+}
+
+@keyframes label-swap-in {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+    filter: blur(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.animate-label-swap-out {
+  animation: label-swap-out var(--duration-150) var(--ease-out-expo) both;
+  will-change: opacity, transform, filter;
+}
+
+.animate-label-swap-in {
+  animation: label-swap-in var(--duration-150) var(--ease-out-expo) both;
+  will-change: opacity, transform, filter;
+}
+
+/* Card border accent flash — opacity-only sibling overlay so we never animate
+ * border-color (paint-bound). Compositor-friendly. Used to briefly highlight
+ * the card edge when an agent transitions between meaningful states.
+ */
+@keyframes border-flash {
+  0% {
+    opacity: 0;
+  }
+  35% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-border-flash {
+  animation: border-flash var(--duration-200) var(--ease-out-expo) 1 both;
+  will-change: opacity;
+}
+
+/* Fleet broadcast bar refocus pulse — when the OS window regains focus and
+ * fleet is armed, breathe the bar's amber stripe so the user can re-orient
+ * to the active mode without searching for it. ~800ms total, opacity-only.
+ */
+@keyframes fleet-bar-refocus-pulse {
+  0% {
+    opacity: 1;
+  }
+  35% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-fleet-bar-refocus-pulse::before {
+  animation: fleet-bar-refocus-pulse 800ms cubic-bezier(0.4, 0, 0.2, 1) 1 both;
+  will-change: opacity;
+}
+
+/* Fleet broadcast commit flash — fired on every keystroke/paste that the
+ * fleet handler fans out. 100ms opacity dip on the bar's amber stripe so
+ * the input "thumps" visibly without flashing color.
+ */
+@keyframes fleet-bar-commit-flash {
+  0% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.35;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-fleet-bar-commit-flash::before {
+  animation: fleet-bar-commit-flash 140ms cubic-bezier(0.4, 0, 0.2, 1) 1 both;
+  will-change: opacity;
+}
+
+/* Fleet exit ring pulse — fired once on the panel that becomes the new
+ * primary when the user exits fleet mode. Painted on a dedicated overlay
+ * element so it doesn't fight the panel container's `::after` worktree
+ * stripe or the existing border-color transitions.
+ */
+@keyframes fleet-exit-pulse {
+  0% {
+    opacity: 0;
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.fleet-exit-pulse-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 35%, transparent);
+  animation: fleet-exit-pulse 220ms cubic-bezier(0.4, 0, 0.2, 1) 1 both;
+  will-change: opacity;
+  z-index: 2;
+}
+
+/* Respect user's motion preferences — OS prefers-reduced-motion and the
+ * Daintree-level "Reduce UI animations" toggle (body[data-reduce-animations])
+ * both remove spatial motion while leaving opacity changes intact.
+ * WCAG 2.2 SC 2.3.3: remove motion, don't just speed it up.
+ */
 @media (prefers-reduced-motion: reduce) {
   .animate-activity-pulse,
   .animate-agent-pulse,
@@ -1171,19 +1354,51 @@ body,
   .animate-activity-blip,
   .animate-trash-pulse,
   .animate-all-clear-flash,
-  .animate-diagnostics-flash {
+  .animate-diagnostics-flash,
+  .animate-border-flash {
     animation: none;
     opacity: 1;
     transform: none;
     will-change: auto;
   }
 
-  /* Disable focus ring transitions for reduced motion */
+  /* Fleet polish animations — opacity-only already, but drop the keyframe
+   * entirely to keep WCAG 2.3.3 strict compliance. The bar stripe pseudos
+   * stay at their static opacity (1); only the dedicated exit overlay is
+   * hidden since it has no static-state purpose.
+   */
+  .animate-fleet-bar-refocus-pulse::before,
+  .animate-fleet-bar-commit-flash::before {
+    animation: none;
+    will-change: auto;
+  }
+
+  .fleet-exit-pulse-overlay {
+    animation: none;
+    opacity: 0;
+    will-change: auto;
+  }
+
+  /* Label swap under reduced motion — animation removed entirely. The swap
+   * still happens (the new value renders), it just snaps into place rather
+   * than crossfading. WCAG 2.3.3: remove motion, don't just speed it up.
+   */
+  .animate-label-swap-out,
+  .animate-label-swap-in {
+    animation: none;
+    transform: none !important;
+    filter: none !important;
+    will-change: auto;
+  }
+
+  .animate-label-swap-out {
+    opacity: 0;
+  }
+
   *:focus-visible {
     transition: none !important;
   }
 
-  /* Disable window-unfocused transitions for reduced motion */
   .animate-activity-pulse,
   .animate-agent-pulse,
   .animate-breathe,
@@ -1192,15 +1407,115 @@ body,
     transition: none;
   }
 
-  /* Disable button scale transforms for reduced motion */
-  button,
-  [role="button"],
-  [type="button"],
-  [type="submit"],
-  [type="reset"] {
+  button:not([data-state="open"]):not([data-state="closed"]),
+  [role="button"]:not([data-state="open"]):not([data-state="closed"]),
+  [type="button"]:not([data-state="open"]):not([data-state="closed"]),
+  [type="submit"]:not([data-state="open"]):not([data-state="closed"]),
+  [type="reset"]:not([data-state="open"]):not([data-state="closed"]) {
     transform: none !important;
     transition: none !important;
   }
+
+  /* Radix overlay enter/exit (popover, dropdown, context-menu, select,
+   * tooltip) via tw-animate-css. Zero out spatial transforms; fade
+   * (opacity) is intentionally preserved. WCAG 2.3.3.
+   */
+  [data-state][data-side] {
+    --tw-enter-scale: 1;
+    --tw-exit-scale: 1;
+    --tw-enter-translate-x: 0;
+    --tw-enter-translate-y: 0;
+    --tw-exit-translate-x: 0;
+    --tw-exit-translate-y: 0;
+  }
+}
+
+body[data-reduce-animations="true"]
+  :is(
+    .animate-activity-pulse,
+    .animate-agent-pulse,
+    .animate-breathe,
+    .animate-spin-slow,
+    .animate-pulse-delayed,
+    .animate-pulse-immediate,
+    .status-working,
+    .animate-badge-bump,
+    .animate-activity-blip,
+    .animate-trash-pulse,
+    .animate-all-clear-flash,
+    .animate-diagnostics-flash,
+    .animate-border-flash
+  ) {
+  animation: none;
+  opacity: 1;
+  transform: none;
+  will-change: auto;
+}
+
+body[data-reduce-animations="true"] .animate-fleet-bar-refocus-pulse::before,
+body[data-reduce-animations="true"] .animate-fleet-bar-commit-flash::before {
+  animation: none;
+  will-change: auto;
+}
+
+body[data-reduce-animations="true"] .fleet-exit-pulse-overlay {
+  animation: none;
+  opacity: 0;
+  will-change: auto;
+}
+
+body[data-reduce-animations="true"] :is(.animate-label-swap-out, .animate-label-swap-in) {
+  animation: none;
+  transform: none !important;
+  filter: none !important;
+  will-change: auto;
+}
+
+body[data-reduce-animations="true"] .animate-label-swap-out {
+  opacity: 0;
+}
+
+body[data-reduce-animations="true"] *:focus-visible {
+  transition: none !important;
+}
+
+body[data-reduce-animations="true"]
+  :is(
+    .animate-activity-pulse,
+    .animate-agent-pulse,
+    .animate-breathe,
+    .status-working,
+    .panel-state-working
+  ) {
+  transition: none;
+}
+
+body[data-reduce-animations="true"]
+  :is(
+    button:not([data-state="open"]):not([data-state="closed"]),
+    [role="button"]:not([data-state="open"]):not([data-state="closed"]),
+    [type="button"]:not([data-state="open"]):not([data-state="closed"]),
+    [type="submit"]:not([data-state="open"]):not([data-state="closed"]),
+    [type="reset"]:not([data-state="open"]):not([data-state="closed"])
+  ) {
+  transform: none !important;
+  transition: none !important;
+}
+
+body[data-reduce-animations="true"] [data-animated-chevron] {
+  transition: none !important;
+}
+
+/* Radix overlay enter/exit under the app-level reduce-animations toggle.
+ * Mirrors the prefers-reduced-motion block above. WCAG 2.3.3.
+ */
+body[data-reduce-animations="true"] [data-state][data-side] {
+  --tw-enter-scale: 1;
+  --tw-exit-scale: 1;
+  --tw-enter-translate-x: 0;
+  --tw-enter-translate-y: 0;
+  --tw-exit-translate-x: 0;
+  --tw-exit-translate-y: 0;
 }
 
 /* Terminal trash/restore animations */
@@ -1241,6 +1556,10 @@ body,
   }
 }
 
+body[data-reduce-animations="true"] :is(.terminal-restoring, .terminal-trashing) {
+  animation: none;
+}
+
 /* Terminal Selection State */
 .terminal-selected {
   border-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));
@@ -1263,25 +1582,15 @@ body,
     0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 10%, transparent);
 }
 
+/* Working state hint — static colored border. Was a 4s infinite breathe,
+ * which in peripheral vision across a multi-panel grid was a fatigue trigger
+ * (WCAG COGA). Status being a value doesn't justify continuous motion.
+ */
 .panel-state-working {
-  animation: panel-working-breathe 4s ease-in-out infinite;
-}
-
-@keyframes panel-working-breathe {
-  0%,
-  100% {
-    border-color: color-mix(in oklab, var(--color-activity-working) 25%, transparent);
-  }
-  50% {
-    border-color: color-mix(in oklab, var(--color-activity-working) 55%, transparent);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .panel-state-working {
-    animation: none;
-    border-color: color-mix(in oklab, var(--color-activity-working) 35%, transparent);
-  }
+  border-color: color-mix(in oklab, var(--color-activity-working) 35%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-activity-working) 12%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-activity-working) 8%, transparent);
 }
 
 /* Per-worktree color identity — left-edge stripe on grid panels */
@@ -1449,7 +1758,7 @@ body,
   will-change: text-shadow;
 }
 
-/* Respect reduced motion */
+/* Respect reduced motion — OS + Daintree toggle */
 @media (prefers-reduced-motion: reduce) {
   .animate-terminal-ping::before,
   .animate-terminal-ping::after,
@@ -1471,10 +1780,32 @@ body,
     text-shadow: none;
   }
 
-  /* Disable terminal glow transitions for reduced motion */
   .terminal-pane {
     transition: none !important;
   }
+}
+
+body[data-reduce-animations="true"] .animate-terminal-ping::before,
+body[data-reduce-animations="true"] .animate-terminal-ping::after,
+body[data-reduce-animations="true"] .animate-terminal-header-ping {
+  animation: none;
+  opacity: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body[data-reduce-animations="true"] .animate-terminal-ping-select {
+  animation: none !important;
+  transition: none !important;
+}
+
+body[data-reduce-animations="true"] :is(.animate-eco-title, .animate-eco-title-select) {
+  animation: none;
+  text-shadow: none;
+}
+
+body[data-reduce-animations="true"] .terminal-pane {
+  transition: none !important;
 }
 
 /* GitHub Status Indicator Animations
@@ -1899,6 +2230,20 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
 
   .terminal-pane {
     border-color: ButtonText;
+  }
+
+  /* Radix highlighted items rely on background-color which is stripped here.
+     Fall back to a system outline so the active menu/select row stays visible. */
+  [data-highlighted] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* Macro-focus regions use a Tailwind ring (box-shadow) which is removed here.
+     Fall back to a system outline so the focused region stays visible. */
+  [data-macro-focus="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
   }
 
   button,

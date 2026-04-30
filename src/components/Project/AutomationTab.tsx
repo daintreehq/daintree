@@ -7,7 +7,7 @@ import {
   AlertTriangle,
   Play,
   GitBranch,
-  FolderTree,
+  Folders,
   PanelBottom,
   LayoutGrid,
   RefreshCw,
@@ -116,7 +116,7 @@ export function AutomationTab({
                           updated[index] = { ...cmd, name: e.target.value };
                           onRunCommandsChange(updated);
                         }}
-                        className="flex-1 bg-transparent border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+                        className="flex-1 bg-transparent border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
                         placeholder="Command name"
                         aria-label="Run command name"
                       />
@@ -130,7 +130,7 @@ export function AutomationTab({
                         updated[index] = { ...cmd, command: e.target.value };
                         onRunCommandsChange(updated);
                       }}
-                      className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-xs text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+                      className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-xs text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
                       placeholder="npm run build"
                       aria-label="Run command"
                     />
@@ -142,7 +142,7 @@ export function AutomationTab({
                         type="button"
                         onClick={() => {
                           const updated = [...runCommands];
-                          const current = updated[index].preferredLocation;
+                          const current = updated[index]!.preferredLocation;
                           updated[index] = {
                             ...cmd,
                             preferredLocation: current === "dock" ? "grid" : "dock",
@@ -152,7 +152,7 @@ export function AutomationTab({
                         className={cn(
                           "flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors",
                           cmd.preferredLocation === "dock"
-                            ? "bg-daintree-accent/15 text-daintree-accent"
+                            ? "bg-tint/[0.12] text-daintree-text"
                             : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/30"
                         )}
                       >
@@ -176,7 +176,7 @@ export function AutomationTab({
                         className={cn(
                           "flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors",
                           cmd.preferredAutoRestart
-                            ? "bg-daintree-accent/15 text-daintree-accent"
+                            ? "bg-tint/[0.12] text-daintree-text"
                             : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/30"
                         )}
                       >
@@ -192,14 +192,14 @@ export function AutomationTab({
                         if (index > 0) {
                           const updated = [...runCommands];
                           [updated[index - 1], updated[index]] = [
-                            updated[index],
-                            updated[index - 1],
+                            updated[index]!,
+                            updated[index - 1]!,
                           ];
                           onRunCommandsChange(updated);
                         }
                       }}
                       disabled={index === 0}
-                      className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                       aria-label="Move run command up"
                     >
                       <ChevronUp className="h-4 w-4" />
@@ -210,14 +210,14 @@ export function AutomationTab({
                         if (index < runCommands.length - 1) {
                           const updated = [...runCommands];
                           [updated[index], updated[index + 1]] = [
-                            updated[index + 1],
-                            updated[index],
+                            updated[index + 1]!,
+                            updated[index]!,
                           ];
                           onRunCommandsChange(updated);
                         }
                       }}
                       disabled={index === runCommands.length - 1}
-                      className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                       aria-label="Move run command down"
                     >
                       <ChevronDown className="h-4 w-4" />
@@ -243,7 +243,7 @@ export function AutomationTab({
               onRunCommandsChange([
                 ...runCommands,
                 {
-                  id: `cmd-${Date.now()}`,
+                  id: `cmd-${crypto.randomUUID()}`,
                   name: "",
                   command: "",
                 },
@@ -282,7 +282,7 @@ export function AutomationTab({
                   No global recipes available.{" "}
                   <button
                     onClick={onNavigateToRecipes}
-                    className="text-daintree-accent hover:underline"
+                    className="text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline"
                   >
                     Create a recipe
                   </button>
@@ -292,7 +292,7 @@ export function AutomationTab({
                   <select
                     value={defaultWorktreeRecipeId || ""}
                     onChange={(e) => onDefaultWorktreeRecipeIdChange(e.target.value || undefined)}
-                    className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent"
+                    className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
                   >
                     <option value="">No default recipe</option>
                     {globalRecipes.map((recipe) => (
@@ -393,7 +393,7 @@ export function AutomationTab({
               value={branchPrefixCustom}
               onChange={(e) => onBranchPrefixCustomChange(e.target.value)}
               placeholder="e.g. feature/ or myteam/"
-              className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-none focus:ring-2 focus:ring-daintree-accent"
+              className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
             />
           </div>
         )}
@@ -401,7 +401,7 @@ export function AutomationTab({
         {branchPrefixMode !== "none" && (
           <div className="mt-3 p-3 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-daintree-border">
             <span className="block text-xs font-medium text-daintree-text/70 mb-1">Preview:</span>
-            <code className="text-xs text-daintree-accent">
+            <code className="text-xs text-daintree-text">
               {branchPrefixMode === "username"
                 ? "alice/fix-bug"
                 : branchPrefixCustom.trim()
@@ -419,7 +419,7 @@ export function AutomationTab({
 
       <div className="pt-2">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
-          <FolderTree className="h-4 w-4" />
+          <Folders className="h-4 w-4" />
           Worktree Path Pattern
         </h3>
         <p className="text-xs text-daintree-text/60 mb-4">
@@ -432,7 +432,7 @@ export function AutomationTab({
           value={worktreePathPattern}
           onChange={(e) => onWorktreePathPatternChange(e.target.value)}
           placeholder="e.g. {parent-dir}/{base-folder}-worktrees/{branch-slug}"
-          className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-none focus:ring-2 focus:ring-daintree-accent"
+          className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
         />
 
         {worktreePathPattern.trim() &&
@@ -448,7 +448,7 @@ export function AutomationTab({
                 <span className="block text-xs font-medium text-daintree-text/70 mb-1">
                   Preview:
                 </span>
-                <code className="text-xs text-daintree-accent break-all">{preview}</code>
+                <code className="text-xs text-daintree-text break-all">{preview}</code>
               </div>
             );
           })()}
@@ -464,7 +464,7 @@ export function AutomationTab({
               key={v}
               className="text-xs p-2 rounded-[var(--radius-md)] bg-daintree-bg/30 border border-daintree-border"
             >
-              <code className="text-daintree-accent">{v}</code>
+              <code className="text-text-secondary">{v}</code>
               <span className="text-daintree-text/50 ml-1">{desc}</span>
             </div>
           ))}
@@ -495,7 +495,7 @@ export function AutomationTab({
               type="text"
               value={terminalShell}
               onChange={(e) => onTerminalShellChange(e.target.value)}
-              className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
+              className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
               placeholder="/bin/zsh"
               spellCheck={false}
               autoComplete="off"
@@ -515,7 +515,7 @@ export function AutomationTab({
               type="text"
               value={terminalShellArgs}
               onChange={(e) => onTerminalShellArgsChange(e.target.value)}
-              className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
+              className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
               placeholder="-l"
               spellCheck={false}
               autoComplete="off"
@@ -534,7 +534,7 @@ export function AutomationTab({
               type="text"
               value={terminalDefaultCwd}
               onChange={(e) => onTerminalDefaultCwdChange(e.target.value)}
-              className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
+              className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
               placeholder="/path/to/working/directory"
               spellCheck={false}
               autoComplete="off"
@@ -558,7 +558,7 @@ export function AutomationTab({
               max={SCROLLBACK_MAX}
               value={terminalScrollback}
               onChange={(e) => onTerminalScrollbackChange(e.target.value)}
-              className="w-28 bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
+              className="w-28 bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
               placeholder="1000"
             />
             {terminalScrollback.trim() &&

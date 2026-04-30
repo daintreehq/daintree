@@ -1,9 +1,18 @@
 // @vitest-environment jsdom
+import React from "react";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
 import { useNotificationStore } from "@/store/notificationStore";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { notify } from "@/lib/notify";
 import { Toaster } from "../toaster";
+
+const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: dispatchMock },
+}));
 
 vi.stubGlobal(
   "requestAnimationFrame",
@@ -235,7 +244,7 @@ describe("Toast accessibility", () => {
     expect(toast.className).toContain("motion-reduce:duration-0");
   });
 
-  it("resets auto-dismiss timer when updatedAt changes", async () => {
+  it("resets auto-dismiss timer when the message changes", async () => {
     render(<Toaster />);
     let toastId: string;
     await act(async () => {
@@ -249,7 +258,7 @@ describe("Toast accessibility", () => {
     });
     expect(screen.getByText("Initial")).toBeTruthy();
 
-    // Update the notification — timer should reset
+    // Update with a NEW message — contentKey bumps, timer resets
     await act(async () => {
       useNotificationStore.getState().updateNotification(toastId!, {
         message: "Updated",
@@ -269,6 +278,267 @@ describe("Toast accessibility", () => {
     expect(screen.queryByText("Updated")).toBeNull();
   });
 
+  it("does NOT reset auto-dismiss timer on count-only coalesce (issue #5863)", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        duration: 3000,
+        message: "Same message",
+        correlationId: "entity-a",
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Advance 2s into the 3s timer
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByText("Same message")).toBeTruthy();
+
+    // Coalesce with the SAME message — count bumps but contentKey does not,
+    // so the auto-dismiss timer must NOT restart.
+    await act(async () => {
+      addToast({
+        duration: 3000,
+        message: "Same message",
+        correlationId: "entity-a",
+      });
+    });
+
+    // Advance past the original deadline. If the timer had reset, the toast
+    // would still be visible. With the fix it dismisses on schedule.
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+    expect(screen.queryByText("Same message")).toBeNull();
+  });
+
+  it("persistent (duration:0) toast stays for full new duration when promoted to auto-dismiss", async () => {
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ duration: 0, message: "Copying context…" });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Simulate a long async operation while the toast is persistent.
+    await act(async () => {
+      vi.advanceTimersByTime(20000);
+    });
+    expect(screen.getByText("Copying context…")).toBeTruthy();
+
+    // Operation completes; promote to auto-dismiss with a fresh duration.
+    await act(async () => {
+      useNotificationStore.getState().updateNotification(toastId!, {
+        message: "Copied 12 files",
+        duration: 3000,
+      });
+    });
+
+    // The toast must remain visible for the new duration, not dismiss
+    // immediately because firstShownAt was set 20s ago.
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+    });
+    expect(screen.getByText("Copied 12 files")).toBeTruthy();
+
+    // It does dismiss after the new duration elapses.
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(screen.queryByText("Copied 12 files")).toBeNull();
+  });
+
+  it("hard cap eventually dismisses toasts updated faster than their duration", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        duration: 3000,
+        message: "msg-0",
+        correlationId: "entity-a",
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Hard cap = min(3000 * 3, 15000) = 9000ms after firstShownAt. Drive four
+    // message-changing coalesces 2000ms apart; each resets the per-update
+    // timer (without the cap, the toast would live forever).
+    for (let i = 1; i <= 4; i++) {
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      await act(async () => {
+        addToast({
+          duration: 3000,
+          message: `msg-${i}`,
+          correlationId: "entity-a",
+        });
+      });
+    }
+
+    // After the 4th coalesce (~8016ms in), the capped delay collapses to
+    // ~984ms instead of resetting to a fresh 3000ms.
+    expect(screen.getByText("msg-4")).toBeTruthy();
+
+    // Cross the cap; timer fires, then 200ms fade-out removes the toast.
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(screen.queryByText(/msg-/)).toBeNull();
+  });
+
+  it("fires onDismiss when the user clicks the close button", async () => {
+    const onDismiss = vi.fn();
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ onDismiss });
+      vi.advanceTimersByTime(16);
+    });
+
+    const dismissButton = screen.getByLabelText("Dismiss notification");
+    await act(async () => {
+      fireEvent.click(dismissButton);
+    });
+
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fire onDismiss when the toast was programmatically dismissed (e.g. eviction)", async () => {
+    const onDismiss = vi.fn();
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ onDismiss });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Simulate MAX_VISIBLE_TOASTS eviction: dismissed flag gets set externally,
+    // without the user ever clicking the X button.
+    await act(async () => {
+      useNotificationStore.getState().dismissNotification(toastId!);
+    });
+
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it("does NOT double-fire onDismiss during the eviction fade window if the user then clicks X", async () => {
+    const onDismiss = vi.fn();
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ onDismiss });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Eviction-style dismissal already flipped `dismissed: true`.
+    await act(async () => {
+      useNotificationStore.getState().dismissNotification(toastId!);
+    });
+
+    // User clicks X during the 200ms fade window before removeNotification.
+    const dismissButton = screen.getByLabelText("Dismiss notification");
+    await act(async () => {
+      fireEvent.click(dismissButton);
+    });
+
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it("still dismisses the toast when the onDismiss handler throws synchronously", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        onDismiss: () => {
+          throw new Error("boom");
+        },
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    const dismissButton = screen.getByLabelText("Dismiss notification");
+    await act(async () => {
+      fireEvent.click(dismissButton);
+    });
+
+    // Toast still enters the fade-out path; after the 200ms cleanup runs it
+    // is removed from the store entirely.
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(screen.queryByText("Test message")).toBeNull();
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it.each([
+    ["success", "lucide-circle-check", "text-status-success", "status"],
+    ["error", "lucide-circle-x", "text-status-error", "alert"],
+    ["info", "lucide-info", "text-status-info", "status"],
+    ["warning", "lucide-triangle-alert", "text-status-warning", "status"],
+  ] as const)(
+    "renders a %s severity icon with the matching status colour",
+    async (type, iconClass, colourClass, role) => {
+      render(<Toaster />);
+      await act(async () => {
+        addToast({ type, message: `${type} message` });
+        vi.advanceTimersByTime(16);
+      });
+
+      const toast = screen.getByRole(role);
+      const icon = toast.querySelector(`.${iconClass}`);
+      expect(icon).not.toBeNull();
+      expect(icon?.parentElement?.className).toContain(colourClass);
+      expect(icon?.getAttribute("aria-hidden")).toBe("true");
+    }
+  );
+
+  it("falls back to the info icon for unknown severity types", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ type: "fatal" as unknown as "info", message: "Unknown severity" });
+      vi.advanceTimersByTime(16);
+    });
+
+    const toast = screen.getByRole("status");
+    const icon = toast.querySelector(".lucide-info");
+    expect(icon).not.toBeNull();
+    expect(icon?.parentElement?.className).toContain("text-status-info");
+  });
+
+  it("swaps icon, colour, and role when a toast's severity changes", async () => {
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ type: "info", message: "In progress" });
+      vi.advanceTimersByTime(16);
+    });
+
+    const initialToast = screen.getByRole("status");
+    expect(initialToast.textContent).toContain("In progress");
+    expect(initialToast.querySelector(".lucide-info")).not.toBeNull();
+
+    await act(async () => {
+      useNotificationStore.getState().updateNotification(toastId!, {
+        type: "error",
+        message: "Failed",
+      });
+    });
+
+    const updatedToast = screen.getByRole("alert");
+    expect(updatedToast.querySelector(".lucide-circle-x")).not.toBeNull();
+    expect(updatedToast.querySelector(".lucide-info")).toBeNull();
+    const iconWrapper = updatedToast.querySelector(".lucide-circle-x")?.parentElement;
+    expect(iconWrapper?.className).toContain("text-status-error");
+  });
+
   it("re-announces via screen reader when updatedAt changes", async () => {
     render(<Toaster />);
     let toastId: string;
@@ -286,5 +556,224 @@ describe("Toast accessibility", () => {
     });
 
     expect(useAnnouncerStore.getState().polite?.msg).toBe("2 agents done");
+  });
+});
+
+describe("Toast overflow menu", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useNotificationStore.getState().reset();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+    dispatchMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("does not render the options trigger when context is absent", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast();
+      vi.advanceTimersByTime(16);
+    });
+
+    expect(screen.queryByLabelText("Notification options")).toBeNull();
+  });
+
+  it("does not render the options trigger when context has no projectId", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ context: { worktreeId: "wt-1" } });
+      vi.advanceTimersByTime(16);
+    });
+
+    expect(screen.queryByLabelText("Notification options")).toBeNull();
+  });
+
+  it("renders the options trigger when context.projectId is set", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ context: { projectId: "p1" } });
+      vi.advanceTimersByTime(16);
+    });
+
+    expect(screen.getByLabelText("Notification options")).toBeTruthy();
+  });
+
+  it("dispatches project.muteNotifications and dismisses when Mute is selected", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ context: { projectId: "p1" }, duration: 0 });
+      vi.advanceTimersByTime(16);
+    });
+
+    const trigger = screen.getByLabelText("Notification options");
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+      vi.advanceTimersByTime(16);
+    });
+
+    const muteItem = screen.getByText("Mute project notifications");
+    await act(async () => {
+      fireEvent.click(muteItem);
+      vi.advanceTimersByTime(16);
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith("project.muteNotifications", {
+      projectId: "p1",
+    });
+  });
+});
+
+// Regression coverage for issue #5859 — toasts must dismiss based on severity,
+// not the old 3s render-layer fallback. Routes through notify() so the
+// severity-based defaults are exercised end-to-end.
+describe("Toast severity-based dismissal (issue #5859)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useNotificationStore.getState().reset();
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    useNotificationSettingsStore.setState({
+      enabled: true,
+      hydrated: true,
+      quietHoursEnabled: false,
+      quietHoursStartMin: 22 * 60,
+      quietHoursEndMin: 8 * 60,
+      quietHoursWeekdays: [],
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("error toast survives past the old 3s fallback", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      notify({ type: "error", message: "Something failed" });
+      vi.advanceTimersByTime(16);
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+    });
+    expect(screen.getByText("Something failed")).toBeTruthy();
+  });
+
+  it("error toast dismisses around the 12s severity default", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      notify({ type: "error", message: "Failed once" });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Just before 12s — still visible.
+    await act(async () => {
+      vi.advanceTimersByTime(11500);
+    });
+    expect(screen.getByText("Failed once")).toBeTruthy();
+
+    // Past 12s + the 200ms fade — gone.
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.queryByText("Failed once")).toBeNull();
+  });
+
+  it("success toast dismisses around the 4s severity default", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      notify({ type: "success", message: "Saved!" });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Just before 4s — still visible.
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+    });
+    expect(screen.getByText("Saved!")).toBeTruthy();
+
+    // Past 4s + the 200ms fade — gone.
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.queryByText("Saved!")).toBeNull();
+  });
+
+  it("direct addNotification without duration stays sticky (no instant-dismiss)", async () => {
+    // Documents the renderer's guard for callers that bypass notify().
+    render(<Toaster />);
+    await act(async () => {
+      useNotificationStore.getState().addNotification({
+        type: "error",
+        priority: "high",
+        message: "Stuck",
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByText("Stuck")).toBeTruthy();
+  });
+
+  describe("dev guard — inboxMessage invariant", () => {
+    it("logs dev guard when non-string message has no inboxMessage", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      render(<Toaster />);
+      const jsxElement = React.createElement("span", null, "rich");
+      await act(async () => {
+        addToast({ message: jsxElement as unknown as React.ReactNode });
+        vi.advanceTimersByTime(16);
+      });
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[Toaster] non-string message without inboxMessage"),
+        expect.anything()
+      );
+      consoleSpy.mockRestore();
+    });
+
+    it("does NOT log toaster guard when non-string message has inboxMessage", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      render(<Toaster />);
+      const jsxElement = React.createElement("span", null, "rich");
+      await act(async () => {
+        addToast({
+          message: jsxElement as unknown as React.ReactNode,
+          inboxMessage: "Fallback text",
+        });
+        vi.advanceTimersByTime(16);
+      });
+
+      const toasterGuardCall = consoleSpy.mock.calls.find(
+        (call) => typeof call[0] === "string" && call[0].includes("[Toaster]")
+      );
+      expect(toasterGuardCall).toBeUndefined();
+      consoleSpy.mockRestore();
+    });
+
+    it("does NOT log toaster guard for string message without inboxMessage", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      render(<Toaster />);
+      await act(async () => {
+        addToast({ message: "Plain string" });
+        vi.advanceTimersByTime(16);
+      });
+
+      const toasterGuardCall = consoleSpy.mock.calls.find(
+        (call) => typeof call[0] === "string" && call[0].includes("[Toaster]")
+      );
+      expect(toasterGuardCall).toBeUndefined();
+      consoleSpy.mockRestore();
+    });
   });
 });

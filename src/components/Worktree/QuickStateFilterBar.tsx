@@ -32,7 +32,7 @@ export function QuickStateFilterBar({ value, onChange, counts }: QuickStateFilte
             className={cn(
               "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
               isActive
-                ? "bg-daintree-accent/20 text-daintree-accent font-medium"
+                ? "bg-tint/[0.12] text-daintree-text font-medium"
                 : "text-daintree-text/50 hover:text-daintree-text/70 hover:bg-tint/[0.04]"
             )}
           >

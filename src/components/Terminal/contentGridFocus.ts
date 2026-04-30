@@ -22,5 +22,5 @@ export function getMaximizedGroupFocusTarget({
   }
 
   const activeTabId = getActiveTabId(groupId);
-  return groupPanels.find((panel) => panel.id === activeTabId)?.id ?? groupPanels[0].id;
+  return groupPanels.find((panel) => panel.id === activeTabId)?.id ?? groupPanels[0]!.id;
 }

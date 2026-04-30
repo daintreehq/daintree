@@ -1,15 +1,22 @@
-import type { TerminalType, PanelKind, PanelLocation } from "../panel.js";
+import type { PanelKind, PanelLocation, PanelTitleMode } from "../panel.js";
 import type { AgentId } from "../agent.js";
 import type { AgentState } from "../agent.js";
+import type { BuiltInAgentId } from "../../config/agentIds.js";
 
 /** Terminal spawn options */
 export interface TerminalSpawnOptions {
   /** Optional custom ID for the terminal */
   id?: string;
-  /** Terminal category */
+  /** Terminal category (only "terminal" makes sense for PTY spawns) */
   kind?: PanelKind;
-  /** Agent ID when kind is 'agent' */
-  agentId?: AgentId;
+  /**
+   * Launch hint — the agent this terminal is being launched to run. Used
+   * only to key agent-specific settings (model, preset, flags, session
+   * resume) and to derive the command to auto-inject. NOT an identity.
+   * Absent for plain-shell launches. See
+   * `docs/architecture/terminal-identity.md`.
+   */
+  launchAgentId?: AgentId;
   /** Project ID to associate with the terminal (captured at action time to avoid race conditions) */
   projectId?: string;
   /** Working directory for the terminal */
@@ -22,10 +29,10 @@ export interface TerminalSpawnOptions {
   cols: number;
   /** Initial number of rows */
   rows: number;
-  /** Legacy type of terminal */
-  type?: TerminalType;
   /** Display title for the terminal */
   title?: string;
+  /** How the title is owned. Absent defaults to "default". */
+  titleMode?: PanelTitleMode;
   /** Command to execute after shell starts (e.g., 'claude' for AI agents) */
   command?: string;
   /** Whether to restore previous session content (default: true). Set to false on restart. */
@@ -36,6 +43,14 @@ export interface TerminalSpawnOptions {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time */
   agentModelId?: string;
+  /** Worktree the terminal is spawned in; persisted in agent session history */
+  worktreeId?: string;
+  /** Preset ID the agent is being launched with (needed for fallback chain lookup on exit). */
+  agentPresetId?: string;
+  /** Preset brand color captured at launch time. */
+  agentPresetColor?: string;
+  /** Original user-selected preset ID; unchanged across fallback hops. */
+  originalAgentPresetId?: string;
 }
 
 /** Terminal state for app state persistence */
@@ -44,12 +59,16 @@ export interface TerminalState {
   id: string;
   /** Terminal category */
   kind?: PanelKind;
-  /** Legacy terminal type for persisted state */
-  type?: TerminalType;
-  /** Agent ID when kind is an agent - enables extensibility */
-  agentId?: AgentId;
+  /**
+   * Launch hint — the agent this terminal was launched to run. Persisted so
+   * restart/crash-recovery can re-inject the right command. Not identity.
+   * See `docs/architecture/terminal-identity.md`.
+   */
+  launchAgentId?: AgentId;
   /** Display title */
   title: string;
+  /** How the title is owned. Absent defaults to "default". */
+  titleMode?: PanelTitleMode;
   /** Current working directory (required for PTY panels, optional for non-PTY) */
   cwd?: string;
   /** Associated worktree ID */
@@ -58,10 +77,6 @@ export interface TerminalState {
   location?: PanelLocation;
   /** Command to execute after shell starts (e.g., 'claude' for AI agents) */
   command?: string;
-  /** Last detected agent type (for restoration hints) */
-  lastDetectedAgent?: TerminalType;
-  /** Last detected agent title (for restoration hints) */
-  lastDetectedAgentTitle?: string;
   isInputLocked?: boolean;
   /** Current URL for browser/dev-preview panes */
   browserUrl?: string;
@@ -69,14 +84,6 @@ export interface TerminalState {
   browserHistory?: import("../browser.js").BrowserHistory;
   /** Zoom factor for browser/dev-preview panes */
   browserZoom?: number;
-  /** Path to note file (kind === 'notes') */
-  notePath?: string;
-  /** Note ID (kind === 'notes') */
-  noteId?: string;
-  /** Note scope (kind === 'notes') */
-  scope?: "worktree" | "project";
-  /** Note creation timestamp (kind === 'notes') */
-  createdAt?: number;
   /** Dev command override for dev-preview panels */
   devCommand?: string;
   /** Dev server status for dev-preview panels */
@@ -99,6 +106,22 @@ export interface TerminalState {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Preset ID selected at launch time */
+  agentPresetId?: string;
+  /** Preset brand color captured at launch time */
+  agentPresetColor?: string;
+  /** Original user-selected preset ID; unchanged across fallback hops */
+  originalPresetId?: string;
+  /** Whether this panel is currently running on a fallback preset */
+  isUsingFallback?: boolean;
+  /** How many fallback hops have been consumed */
+  fallbackChainIndex?: number;
+  /**
+   * Extension ID of the plugin that registered this panel's kind, if applicable.
+   * Preserved across save/restore so the placeholder can name the missing plugin
+   * when its registration is gone.
+   */
+  pluginId?: string;
 }
 
 /** Terminal data payload for IPC */
@@ -136,9 +159,10 @@ export interface BackendTerminalInfo {
   id: string;
   projectId?: string;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  /** Launch hint — agent this terminal was launched to run. See `docs/architecture/terminal-identity.md`. */
+  launchAgentId?: AgentId;
   title?: string;
+  titleMode?: PanelTitleMode;
   cwd: string;
   agentState?: AgentState;
   lastStateChange?: number;
@@ -155,6 +179,26 @@ export interface BackendTerminalInfo {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time */
   agentModelId?: string;
+  /** Preset ID selected at launch time */
+  agentPresetId?: string;
+  /** Preset brand color captured at launch time */
+  agentPresetColor?: string;
+  /** Original user-selected preset ID; unchanged across fallback hops */
+  originalAgentPresetId?: string;
+  /**
+   * Sticky live-session flag. True once runtime detection fires in this
+   * session, even if no agent is currently detected. Not persisted;
+   * rehydrated here on reconnect.
+   */
+  everDetectedAgent?: boolean;
+  /**
+   * Live detected identity — the agent currently running in this terminal.
+   * The single source of truth for chrome. Not persisted; rehydrated here on
+   * reconnect. See `docs/architecture/terminal-identity.md`.
+   */
+  detectedAgentId?: BuiltInAgentId;
+  /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
+  detectedProcessId?: string;
 }
 
 /** Result from terminal reconnect operation */
@@ -163,9 +207,10 @@ export interface TerminalReconnectResult {
   id?: string;
   projectId?: string;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  /** Launch hint — agent this terminal was launched to run. See `docs/architecture/terminal-identity.md`. */
+  launchAgentId?: AgentId;
   title?: string;
+  titleMode?: PanelTitleMode;
   cwd?: string;
   agentState?: AgentState;
   lastStateChange?: number;
@@ -175,16 +220,29 @@ export interface TerminalReconnectResult {
   agentSessionId?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  agentPresetId?: string;
+  agentPresetColor?: string;
+  originalAgentPresetId?: string;
+  /** Sticky live-session flag. Rehydrated on reconnect. */
+  everDetectedAgent?: boolean;
+  /** Live detected identity; the single chrome source of truth. See `docs/architecture/terminal-identity.md`. */
+  detectedAgentId?: BuiltInAgentId;
+  /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
+  detectedProcessId?: string;
 }
 
-/** Terminal information payload for diagnostic display */
+/**
+ * Terminal information payload for diagnostic display.
+ * Consumed exclusively by `TerminalInfoDialog.tsx`.
+ */
 export interface TerminalInfoPayload {
   id: string;
   projectId?: string;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  /** Launch hint — agent this terminal was launched to run. Not identity. */
+  launchAgentId?: AgentId;
   title?: string;
+  titleMode?: PanelTitleMode;
   cwd: string;
   shell?: string;
   agentState?: AgentState;
@@ -198,10 +256,8 @@ export interface TerminalInfoPayload {
   restartCount: number;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
-  /** Whether this terminal is classified as an agent terminal */
-  isAgentTerminal?: boolean;
-  /** Runtime-detected agent type (from process tree analysis) */
-  detectedAgentType?: TerminalType;
+  /** Live detected identity — the agent currently running. Source of truth for chrome. */
+  detectedAgentId?: BuiltInAgentId;
   /** Whether semantic analysis is enabled for this terminal */
   analysisEnabled?: boolean;
   /** Resize strategy: "default" (immediate) or "settled" (batched for TUI agents) */
@@ -224,9 +280,25 @@ export interface TerminalInfoPayload {
   agentModelId?: string;
   /** Exit code when terminal has exited */
   exitCode?: number;
+  /**
+   * Sticky live-session flag. True once runtime detection fires in this
+   * session, even if no agent is currently detected.
+   */
+  everDetectedAgent?: boolean;
 }
 
 import type { TerminalActivityPayload } from "../terminal.js";
 
 /** Payload for terminal activity events */
 export { TerminalActivityPayload };
+
+/**
+ * Snippet match returned by the semantic-buffer search.
+ * `line` is ANSI-stripped; `matchStart`/`matchEnd` index into `line`.
+ */
+export interface SemanticSearchMatch {
+  terminalId: string;
+  line: string;
+  matchStart: number;
+  matchEnd: number;
+}

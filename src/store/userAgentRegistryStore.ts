@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { UserAgentRegistry, UserAgentConfig } from "@shared/types";
 import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
 import { setUserRegistry } from "../../shared/config/agentRegistry";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface UserAgentRegistryState {
   registry: UserAgentRegistry | null;
@@ -44,7 +45,7 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()((set, 
         set({ registry, isLoading: false, isInitialized: true });
       } catch (e) {
         set({
-          error: e instanceof Error ? e.message : "Failed to load user agent registry",
+          error: formatErrorMessage(e, "Failed to load user agent registry"),
           isLoading: false,
           isInitialized: false,
         });
@@ -69,7 +70,7 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()((set, 
       }
       return result;
     } catch (e) {
-      const error = e instanceof Error ? e.message : "Failed to add agent";
+      const error = formatErrorMessage(e, "Failed to add agent");
       set({ error });
       return { success: false, error };
     }
@@ -88,7 +89,7 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()((set, 
       }
       return result;
     } catch (e) {
-      const error = e instanceof Error ? e.message : "Failed to update agent";
+      const error = formatErrorMessage(e, "Failed to update agent");
       set({ error });
       return { success: false, error };
     }
@@ -107,7 +108,7 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()((set, 
       }
       return result;
     } catch (e) {
-      const error = e instanceof Error ? e.message : "Failed to remove agent";
+      const error = formatErrorMessage(e, "Failed to remove agent");
       set({ error });
       return { success: false, error };
     }
@@ -120,7 +121,7 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()((set, 
       setUserRegistry(registry);
       set({ registry });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : "Failed to refresh user agent registry" });
+      set({ error: formatErrorMessage(e, "Failed to refresh user agent registry") });
       throw e;
     }
   },

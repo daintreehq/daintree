@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
+import net from "node:net";
 import path from "node:path";
 import { resolveNextMajorVersion } from "../utils/resolveNextVersion.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -16,6 +17,7 @@ import type {
 import type { DevServerError } from "../../shared/utils/devServerErrors.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance } from "../utils/performance.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 interface DevPreviewSession extends DevPreviewSessionState {
   cwd: string;
@@ -143,6 +145,8 @@ export class DevPreviewSessionService {
   private readonly terminalToSession = new Map<string, string>();
   private readonly locks = new Map<string, Promise<void>>();
   private disposed = false;
+  private readonly portRegistry = new Map<string, number>(); // sessionKey -> allocated port
+  private readonly worktreeToSession = new Map<string, string>(); // worktreeId -> sessionKey
   private readonly onDataListener: (id: string, data: string | Uint8Array) => void;
   private readonly onExitListener: (id: string, exitCode: number) => void;
 
@@ -154,6 +158,70 @@ export class DevPreviewSessionService {
     this.onExitListener = this.handleExit.bind(this);
     this.ptyClient.on("data", this.onDataListener);
     this.ptyClient.on("exit", this.onExitListener);
+  }
+
+  private async allocatePort(sessionKey: string): Promise<number> {
+    const existing = this.portRegistry.get(sessionKey);
+    if (existing !== undefined) return existing;
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const candidate = 3000 + Math.floor(Math.random() * 7000);
+      const usedPorts = new Set(this.portRegistry.values());
+      if (usedPorts.has(candidate)) continue;
+      // Reserve before the async probe so concurrent allocatePort() calls for
+      // different session keys can't pick the same candidate between probe and registration.
+      this.portRegistry.set(sessionKey, candidate);
+      const available = await new Promise<boolean>((resolve) => {
+        const srv = net.createServer();
+        srv.once("error", () => resolve(false));
+        srv.listen(candidate, "127.0.0.1", () => srv.close(() => resolve(true)));
+      });
+      if (available) return candidate;
+      this.portRegistry.delete(sessionKey);
+    }
+    return new Promise<number>((resolve, reject) => {
+      const srv = net.createServer();
+      srv.listen(0, "127.0.0.1", () => {
+        const addr = srv.address();
+        const port = typeof addr === "object" && addr ? addr.port : 0;
+        srv.close(() => {
+          if (port) {
+            this.portRegistry.set(sessionKey, port);
+            resolve(port);
+          } else {
+            reject(new Error("Failed to allocate port"));
+          }
+        });
+      });
+    });
+  }
+
+  private releasePort(sessionKey: string): void {
+    this.portRegistry.delete(sessionKey);
+  }
+
+  /**
+   * After a session is deleted, remove its stale worktreeToSession entry and
+   * hand the mapping back to any surviving session that still claims the same worktreeId.
+   */
+  private restoreWorktreeMapping(worktreeId: string | undefined, deletedKey: string): void {
+    if (!worktreeId) return;
+    if (this.worktreeToSession.get(worktreeId) !== deletedKey) return;
+    this.worktreeToSession.delete(worktreeId);
+    for (const [survivingKey, survivingSession] of this.sessions) {
+      if (survivingSession.worktreeId === worktreeId) {
+        this.worktreeToSession.set(worktreeId, survivingKey);
+        break;
+      }
+    }
+  }
+
+  getByWorktree(worktreeId: string): DevPreviewSessionState | null {
+    const key = this.worktreeToSession.get(worktreeId);
+    if (!key) return null;
+    const session = this.sessions.get(key);
+    if (!session) return null;
+    return this.toPublicState(session);
   }
 
   dispose(): void {
@@ -169,7 +237,7 @@ export class DevPreviewSessionService {
       try {
         this.ptyClient.kill(terminalId, "dev-preview:dispose");
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = formatErrorMessage(err, "Failed to kill dev preview terminal");
         if (!this.isBenignMissingTerminalError(message)) {
           console.warn("[DevPreviewSessionService] Failed to kill terminal during dispose:", err);
         }
@@ -178,10 +246,13 @@ export class DevPreviewSessionService {
     this.terminalToSession.clear();
     this.sessions.clear();
     this.locks.clear();
+    this.portRegistry.clear();
+    this.worktreeToSession.clear();
   }
 
   async ensure(request: DevPreviewEnsureRequest): Promise<DevPreviewSessionState> {
     this.validateEnsureRequest(request);
+    if (this.disposed) return this.getSessionState(request.projectId, request.panelId);
     markPerformance(PERF_MARKS.DEVPREVIEW_ENSURE_START, {
       panelId: request.panelId,
       projectId: request.projectId,
@@ -189,6 +260,7 @@ export class DevPreviewSessionService {
     });
     const key = createSessionKey(request.projectId, request.panelId);
     await this.runLocked(key, async () => {
+      if (this.disposed) return;
       const session = this.getOrCreateSession(request.projectId, request.panelId);
       const envChanged = !envEquals(session.env, request.env);
       const nextTurbopackEnabled = request.turbopackEnabled ?? true;
@@ -200,11 +272,20 @@ export class DevPreviewSessionService {
         envChanged;
 
       session.cwd = request.cwd;
+      const prevWorktreeId = session.worktreeId;
       session.worktreeId = request.worktreeId;
       session.devCommand = request.devCommand;
       session.turbopackEnabled = nextTurbopackEnabled;
       if (envChanged) {
         session.env = cloneEnv(request.env);
+      }
+
+      if (prevWorktreeId && prevWorktreeId !== session.worktreeId) {
+        this.worktreeToSession.delete(prevWorktreeId);
+      }
+      if (session.worktreeId) {
+        const key = createSessionKey(session.projectId, session.panelId);
+        this.worktreeToSession.set(session.worktreeId, key);
       }
 
       const commandError = getInvalidCommandMessage(session.devCommand);
@@ -216,6 +297,7 @@ export class DevPreviewSessionService {
           status: "error",
           error: { type: "unknown", message: commandError },
           url: null,
+          assignedUrl: null,
           terminalId: null,
           isRestarting: false,
         });
@@ -253,6 +335,7 @@ export class DevPreviewSessionService {
             status: "error",
             error: { type: "unknown", message: commandError },
             url: null,
+            assignedUrl: null,
             terminalId: null,
             isRestarting: false,
           });
@@ -290,6 +373,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "stopped",
         url: null,
+        assignedUrl: null,
         error: null,
         terminalId: null,
         isRestarting: false,
@@ -313,16 +397,20 @@ export class DevPreviewSessionService {
             this.updateSession(session, {
               status: "stopped",
               url: null,
+              assignedUrl: null,
               error: null,
               terminalId: null,
               isRestarting: false,
             });
             this.sessions.delete(key);
+            this.releasePort(key);
+            this.restoreWorktreeMapping(session.worktreeId, key);
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = formatErrorMessage(err, "Failed to stop dev preview");
             this.updateSession(session, {
               status: "error",
               url: null,
+              assignedUrl: null,
               error: { type: "unknown", message: `Failed to stop dev preview: ${message}` },
               terminalId: null,
               isRestarting: false,
@@ -351,13 +439,16 @@ export class DevPreviewSessionService {
             this.updateSession(session, {
               status: "stopped",
               url: null,
+              assignedUrl: null,
               error: null,
               terminalId: null,
               isRestarting: false,
             });
             this.sessions.delete(key);
+            this.releasePort(key);
+            this.restoreWorktreeMapping(session.worktreeId, key);
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = formatErrorMessage(err, "Failed to stop dev preview");
             console.warn("[DevPreviewSessionService] stopByProject failed for session", {
               panelId: session.panelId,
               projectId: session.projectId,
@@ -446,6 +537,7 @@ export class DevPreviewSessionService {
       worktreeId: undefined,
       status: "stopped",
       url: null,
+      assignedUrl: null,
       error: null,
       terminalId: null,
       isRestarting: false,
@@ -465,6 +557,9 @@ export class DevPreviewSessionService {
       startupReplayTimer: null,
     };
     this.sessions.set(key, session);
+    if (session.worktreeId) {
+      this.worktreeToSession.set(session.worktreeId, key);
+    }
     return session;
   }
 
@@ -478,6 +573,7 @@ export class DevPreviewSessionService {
         worktreeId: undefined,
         status: "stopped",
         url: null,
+        assignedUrl: null,
         error: null,
         terminalId: null,
         isRestarting: false,
@@ -495,6 +591,7 @@ export class DevPreviewSessionService {
       worktreeId: session.worktreeId,
       status: session.status,
       url: session.url,
+      assignedUrl: session.assignedUrl,
       error: session.error,
       terminalId: session.terminalId,
       isRestarting: session.isRestarting,
@@ -508,13 +605,21 @@ export class DevPreviewSessionService {
     updates: Partial<
       Pick<
         DevPreviewSession,
-        "status" | "url" | "error" | "terminalId" | "isRestarting" | "worktreeId" | "generation"
+        | "status"
+        | "url"
+        | "assignedUrl"
+        | "error"
+        | "terminalId"
+        | "isRestarting"
+        | "worktreeId"
+        | "generation"
       >
     >
   ): void {
     if (this.disposed) return;
     if (updates.status !== undefined) session.status = updates.status;
     if (updates.url !== undefined) session.url = updates.url;
+    if (updates.assignedUrl !== undefined) session.assignedUrl = updates.assignedUrl;
     if (updates.error !== undefined) session.error = updates.error;
     if (updates.terminalId !== undefined) session.terminalId = updates.terminalId;
     if (updates.isRestarting !== undefined) session.isRestarting = updates.isRestarting;
@@ -569,7 +674,7 @@ export class DevPreviewSessionService {
       session.pendingUrl = null;
       session.needsInstall = false;
       session.isRunningInstall = false;
-      this.updateSession(session, { terminalId: null, url: null });
+      this.updateSession(session, { terminalId: null, url: null, assignedUrl: null });
     }
 
     await this.spawnSessionTerminal(session);
@@ -581,7 +686,7 @@ export class DevPreviewSessionService {
     } catch (err) {
       console.warn("[DevPreviewSessionService] replayRecentOutput failed for terminal:", {
         terminalId,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err, "Failed to replay terminal history"),
       });
     }
   }
@@ -590,13 +695,28 @@ export class DevPreviewSessionService {
     const terminalId = this.createTerminalId(session);
     const nextGeneration = session.generation + 1;
 
+    const sessionKey = createSessionKey(session.projectId, session.panelId);
+    const port = await this.allocatePort(sessionKey);
+    // dispose() can fire while allocatePort awaits its net probe. Guard here
+    // so we don't spawn a terminal on a disposed service; roll back the
+    // reservation to avoid a stale portRegistry entry after disposal cleared it.
+    if (this.disposed) {
+      this.portRegistry.delete(sessionKey);
+      return;
+    }
+    const assignedUrl = `http://localhost:${port}`;
+
+    const spawnEnv: Record<string, string> = { ...session.env, PORT: String(port) };
+
     session.buffer = "";
     session.lastErrorKey = null;
+    session.assignedUrl = assignedUrl;
     this.attachTerminal(session, terminalId);
     this.updateSession(session, {
       terminalId,
       status: "starting",
       url: null,
+      assignedUrl,
       error: null,
       generation: nextGeneration,
     });
@@ -609,7 +729,7 @@ export class DevPreviewSessionService {
         cols: 80,
         rows: 30,
         restore: false,
-        env: session.env,
+        env: spawnEnv,
         isEphemeral: true,
       });
       markPerformance(PERF_MARKS.DEVPREVIEW_TERMINAL_SPAWNED, {
@@ -618,11 +738,12 @@ export class DevPreviewSessionService {
         terminalId,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to start dev server");
       this.detachTerminal(session);
       this.updateSession(session, {
         status: "error",
         url: null,
+        assignedUrl: null,
         error: { type: "unknown", message: `Failed to start dev server: ${message}` },
         terminalId: null,
         isRestarting: false,
@@ -728,7 +849,7 @@ export class DevPreviewSessionService {
     try {
       this.ptyClient.kill(terminalId, `dev-preview:${context}`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err, "Failed to kill dev preview terminal");
       if (!this.isBenignMissingTerminalError(message)) {
         throw new Error(`Failed to kill terminal (${context}): ${message}`);
       }
@@ -823,6 +944,7 @@ export class DevPreviewSessionService {
       status: "error",
       error: result.error,
       url: null,
+      assignedUrl: null,
       isRestarting: false,
     });
   }
@@ -852,6 +974,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "error",
         url: null,
+        assignedUrl: null,
         error: {
           type: "missing-dependencies",
           message: `Dependency installation failed (exit code ${exitCode})`,
@@ -877,6 +1000,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "error",
         url: null,
+        assignedUrl: null,
         error,
         terminalId: null,
         isRestarting: false,
@@ -887,6 +1011,7 @@ export class DevPreviewSessionService {
     this.updateSession(session, {
       status: "stopped",
       url: null,
+      assignedUrl: null,
       error: null,
       terminalId: null,
       isRestarting: false,
@@ -925,11 +1050,12 @@ export class DevPreviewSessionService {
       });
     } catch (error) {
       session.isRunningInstall = false;
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to start dependency install");
       this.detachTerminal(session);
       this.updateSession(session, {
         status: "error",
         url: null,
+        assignedUrl: null,
         error: { type: "unknown", message: `Failed to start dependency install: ${message}` },
         terminalId: null,
         isRestarting: false,
@@ -987,6 +1113,7 @@ export class DevPreviewSessionService {
           this.updateSession(session, {
             status: "error",
             url: null,
+            assignedUrl: null,
             error: {
               type: "unknown",
               message: `Dev server at ${url} did not respond within ${READINESS_TIMEOUT_MS / 1000} seconds`,
@@ -1002,7 +1129,7 @@ export class DevPreviewSessionService {
         session.pendingUrl = null;
         session.readinessAbort = null;
 
-        const message = err instanceof Error ? err.message : String(err);
+        const message = formatErrorMessage(err, "Dev server readiness check failed");
         console.warn("[DevPreviewSessionService] Readiness poll error:", {
           url,
           panelId: session.panelId,
@@ -1011,6 +1138,7 @@ export class DevPreviewSessionService {
         this.updateSession(session, {
           status: "error",
           url: null,
+          assignedUrl: null,
           error: {
             type: "unknown",
             message: `Dev server readiness check failed: ${message}`,

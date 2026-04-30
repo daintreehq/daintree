@@ -5,11 +5,36 @@
  * supporting timeouts and automatic cleanup. Used by PtyClient and WorkspaceClient.
  */
 
+/**
+ * Discriminator for broker clear reasons so callers can distinguish a
+ * transient host exit (retry may be appropriate) from a terminal app shutdown.
+ */
+export type BrokerErrorCode = "HOST_EXITED" | "APP_SHUTDOWN";
+
+export class BrokerError extends Error {
+  constructor(
+    public readonly code: BrokerErrorCode,
+    message?: string
+  ) {
+    super(message ?? code);
+    this.name = this.constructor.name;
+    Error.captureStackTrace?.(this, this.constructor);
+  }
+}
+
 export interface PendingRequest<T = unknown> {
   resolve: (value: T) => void;
   reject: (error: Error) => void;
   timeout: NodeJS.Timeout;
   createdAt: number;
+  method?: string;
+}
+
+export interface RegisterOptions {
+  /** Logical method name for observability (attached to onTimeout) */
+  method?: string;
+  /** Timeout override in milliseconds */
+  timeoutMs?: number;
 }
 
 export interface BrokerOptions {
@@ -17,8 +42,8 @@ export interface BrokerOptions {
   defaultTimeoutMs?: number;
   /** Prefix for generated request IDs */
   idPrefix?: string;
-  /** Called when a request times out */
-  onTimeout?: (requestId: string) => void;
+  /** Called when a request times out. Receives the method label if one was provided to register(). */
+  onTimeout?: (requestId: string, method?: string) => void;
 }
 
 const DEFAULT_OPTIONS: Required<BrokerOptions> = {
@@ -48,10 +73,15 @@ export class RequestResponseBroker {
    * Register a pending request and return a promise that resolves with the response.
    *
    * @param requestId - Unique request identifier
-   * @param timeoutMs - Optional timeout override
+   * @param arg - Either a raw timeout override in ms, or an options object with
+   *   a logical `method` label and/or `timeoutMs`. The `method` label is forwarded
+   *   to `onTimeout` for observability.
    * @returns Promise that resolves with the response or rejects on timeout/error
    */
-  register<T>(requestId: string, timeoutMs?: number): Promise<T> {
+  register<T>(requestId: string, timeoutMs?: number): Promise<T>;
+  register<T>(requestId: string, options: RegisterOptions): Promise<T>;
+  register<T>(requestId: string, arg?: number | RegisterOptions): Promise<T> {
+    const { method, timeoutMs } = normalizeRegisterArg(arg);
     return new Promise((resolve, reject) => {
       const existing = this.pendingRequests.get(requestId);
       if (existing) {
@@ -68,7 +98,7 @@ export class RequestResponseBroker {
 
         this.pendingRequests.delete(requestId);
         try {
-          this.options.onTimeout(requestId);
+          this.options.onTimeout(requestId, pending.method);
         } catch {
           // onTimeout is a best-effort callback and must not block timeout rejection.
         }
@@ -80,6 +110,7 @@ export class RequestResponseBroker {
         reject,
         timeout,
         createdAt: Date.now(),
+        method,
       });
     });
   }
@@ -167,6 +198,15 @@ export class RequestResponseBroker {
    * Dispose of the broker, rejecting all pending requests.
    */
   dispose(): void {
-    this.clear(new Error("Broker disposed"));
+    this.clear(new BrokerError("APP_SHUTDOWN", "Broker disposed"));
   }
+}
+
+function normalizeRegisterArg(arg?: number | RegisterOptions): {
+  method?: string;
+  timeoutMs?: number;
+} {
+  if (arg == null) return {};
+  if (typeof arg === "number") return { timeoutMs: arg };
+  return { method: arg.method, timeoutMs: arg.timeoutMs };
 }

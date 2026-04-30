@@ -85,7 +85,6 @@ describe("trashPanel group cleanup", () => {
     const terminals: MockTerminal[] = [
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -94,7 +93,6 @@ describe("trashPanel group cleanup", () => {
       },
       {
         id: "term-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/test",
         cols: 80,
@@ -103,7 +101,6 @@ describe("trashPanel group cleanup", () => {
       },
       {
         id: "term-3",
-        type: "terminal",
         title: "Shell 3",
         cwd: "/test",
         cols: 80,
@@ -138,7 +135,6 @@ describe("trashPanel group cleanup", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -147,7 +143,6 @@ describe("trashPanel group cleanup", () => {
       },
       {
         id: "term-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/test",
         cols: 80,
@@ -156,7 +151,6 @@ describe("trashPanel group cleanup", () => {
       },
       {
         id: "term-3",
-        type: "terminal",
         title: "Shell 3",
         cwd: "/test",
         cols: 80,
@@ -185,7 +179,6 @@ describe("trashPanel group cleanup", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -194,7 +187,6 @@ describe("trashPanel group cleanup", () => {
       },
       {
         id: "term-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/test",
         cols: 80,
@@ -222,7 +214,6 @@ describe("trashPanel group cleanup", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -243,7 +234,6 @@ describe("trashPanel group cleanup", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -272,7 +262,6 @@ describe("trashPanel group cleanup", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -281,7 +270,6 @@ describe("trashPanel group cleanup", () => {
       },
       {
         id: "term-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/test",
         cols: 80,
@@ -290,7 +278,6 @@ describe("trashPanel group cleanup", () => {
       },
       {
         id: "term-3",
-        type: "terminal",
         title: "Shell 3",
         cwd: "/test",
         cols: 80,
@@ -320,7 +307,6 @@ describe("trashPanel group cleanup", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -329,7 +315,6 @@ describe("trashPanel group cleanup", () => {
       },
       {
         id: "term-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/test",
         cols: 80,
@@ -338,7 +323,6 @@ describe("trashPanel group cleanup", () => {
       },
       {
         id: "term-3",
-        type: "terminal",
         title: "Shell 3",
         cwd: "/test",
         cols: 80,
@@ -368,7 +352,6 @@ describe("trashPanel group cleanup", () => {
     setTerminals([
       {
         id: "term-1",
-        type: "terminal",
         title: "Shell 1",
         cwd: "/test",
         cols: 80,
@@ -377,7 +360,6 @@ describe("trashPanel group cleanup", () => {
       },
       {
         id: "term-2",
-        type: "terminal",
         title: "Shell 2",
         cwd: "/test",
         cols: 80,

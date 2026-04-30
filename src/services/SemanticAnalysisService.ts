@@ -12,6 +12,7 @@ import type {
   WorkerInboundMessage,
 } from "../../shared/types/worker-messages.js";
 import { logDebug, logWarn, logError } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 /** Event handlers for semantic analysis events */
 export interface SemanticAnalysisEventHandlers {
@@ -101,7 +102,7 @@ class SemanticAnalysisService {
     } catch (error) {
       logError("[SemanticAnalysisService] Failed to get analysis buffer", error);
       this.handlers.onError?.(
-        error instanceof Error ? error.message : String(error),
+        formatErrorMessage(error, "Failed to initialize semantic analysis worker"),
         "initialization"
       );
 
@@ -192,7 +193,7 @@ class SemanticAnalysisService {
     try {
       await this.initialize(this.handlers);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to restart semantic analysis worker");
       logError("[SemanticAnalysisService] Worker restart failed", undefined, { message });
       this.handlers.onError?.(message, "restart");
       return;

@@ -9,6 +9,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 export type { ActionCallbacks };
 
@@ -20,10 +21,13 @@ export type { ActionCallbacks };
  */
 export function useActionRegistry(options: ActionCallbacks): void {
   const registeredRef = useRef(false);
+  const validatedRef = useRef(false);
   const callbacksRef = useRef<ActionCallbacks>(options);
 
   // Always keep the ref updated with latest callbacks
-  callbacksRef.current = options;
+  useEffect(() => {
+    callbacksRef.current = options;
+  }, [options]);
 
   useEffect(() => {
     if (registeredRef.current) return;
@@ -45,6 +49,8 @@ export function useActionRegistry(options: ActionCallbacks): void {
       onCloseWorktreeOverview: () => callbacksRef.current.onCloseWorktreeOverview(),
       onOpenPanelPalette: () => callbacksRef.current.onOpenPanelPalette(),
       onOpenProjectSwitcherPalette: () => callbacksRef.current.onOpenProjectSwitcherPalette(),
+      onConfirmCloseActiveProject: (projectId) =>
+        callbacksRef.current.onConfirmCloseActiveProject(projectId),
       onOpenShortcuts: () => callbacksRef.current.onOpenShortcuts(),
       onLaunchAgent: (agentId, opts) => callbacksRef.current.onLaunchAgent(agentId, opts),
       onInject: (worktreeId) => callbacksRef.current.onInject(worktreeId),
@@ -87,12 +93,21 @@ export function useActionRegistry(options: ActionCallbacks): void {
         focusedWorktreeId: useWorktreeSelectionStore.getState().focusedWorktreeId ?? undefined,
         focusedTerminalId: focusedId ?? undefined,
         focusedTerminalKind: focusedTerminal?.kind,
-        focusedTerminalType: focusedTerminal?.type,
         focusedTerminalTitle: focusedTerminal?.title,
         isSettingsOpen: callbacksRef.current.getIsSettingsOpen(),
       };
     });
 
     registeredRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!registeredRef.current) return;
+    if (validatedRef.current) return;
+    validatedRef.current = true;
+    safeFireAndForget(
+      window.electron.plugin.validateActionIds(actionService.list().map((entry) => entry.id)),
+      { context: "Validating plugin action IDs" }
+    );
   }, []);
 }

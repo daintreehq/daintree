@@ -14,11 +14,9 @@ function createTerminal(overrides: Partial<TerminalInfo> = {}): TerminalInfo {
     lastOutputTime: 0,
     lastCheckTime: 0,
     restartCount: 0,
-    agentId: "claude",
+    launchAgentId: "claude",
     agentState: "idle",
     ptyProcess: {} as never,
-    inputWriteQueue: [],
-    inputWriteTimeout: null,
     outputBuffer: "",
     semanticBuffer: [],
     ...overrides,
@@ -88,6 +86,68 @@ describe("AgentStateService", () => {
 
     expect(changed).toBe(true);
     expect(terminal.agentState).toBe("exited");
+  });
+
+  it("transitions idle → exited on graceful agent exit detected from idle (Issue #5767)", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "idle" });
+    const stateChanges: Array<{ state: string; previousState: string; trigger: string }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({
+        state: payload.state,
+        previousState: payload.previousState,
+        trigger: payload.trigger,
+      });
+    });
+
+    const changed = service.updateAgentState(terminal, { type: "exit", code: 0 });
+
+    expect(changed).toBe(true);
+    expect(terminal.agentState).toBe("exited");
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.state).toBe("exited");
+    expect(stateChanges[0]?.previousState).toBe("idle");
+    expect(stateChanges[0]?.trigger).toBe("exit");
+  });
+
+  it("is idempotent when exit event fires on an already-exited terminal", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "exited" });
+    const stateChanges: unknown[] = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push(payload);
+    });
+
+    const changed = service.updateAgentState(terminal, { type: "exit", code: 0 });
+
+    expect(changed).toBe(false);
+    expect(terminal.agentState).toBe("exited");
+    expect(stateChanges).toHaveLength(0);
+  });
+
+  it("transitions exited → idle on respawn (Issue #5767 — agent re-detected in same PTY)", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "exited" });
+    const stateChanges: Array<{ state: string; previousState: string; trigger: string }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({
+        state: payload.state,
+        previousState: payload.previousState,
+        trigger: payload.trigger,
+      });
+    });
+
+    const changed = service.updateAgentState(terminal, { type: "respawn" });
+
+    expect(changed).toBe(true);
+    expect(terminal.agentState).toBe("idle");
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.state).toBe("idle");
+    expect(stateChanges[0]?.previousState).toBe("exited");
+    expect(stateChanges[0]?.trigger).toBe("activity");
   });
 
   it("error event is a no-op and does not change state", () => {
@@ -193,6 +253,126 @@ describe("AgentStateService", () => {
     expect(stateChanges[0]?.waitingReason).toBe("question");
   });
 
+  // #5773 — Runtime-detected agents (plain terminals where a CLI was detected
+  // via ProcessDetector) have no persisted launch-time agentId but should still
+  // flow through the state machine and emit agent events, keyed by their
+  // detectedAgentType.
+  describe("runtime-detected agent identity (#5773)", () => {
+    it("updateAgentState emits agent:state-changed using detectedAgentType when agentId is absent", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        launchAgentId: undefined,
+        detectedAgentId: "claude",
+        agentState: "idle",
+      });
+      const stateChanges: Array<{ state: string; agentId?: string }> = [];
+
+      events.on("agent:state-changed", (payload) => {
+        stateChanges.push({ state: payload.state, agentId: payload.agentId });
+      });
+
+      const changed = service.updateAgentState(terminal, { type: "busy" });
+
+      expect(changed).toBe(true);
+      expect(terminal.agentState).toBe("working");
+      expect(stateChanges).toHaveLength(1);
+      expect(stateChanges[0]?.agentId).toBe("claude");
+    });
+
+    it("handleActivityState transitions state for runtime-detected agents", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        launchAgentId: undefined,
+        detectedAgentId: "gemini",
+        agentState: "working",
+      });
+      const stateChanges: Array<{ state: string; agentId?: string }> = [];
+
+      events.on("agent:state-changed", (payload) => {
+        stateChanges.push({ state: payload.state, agentId: payload.agentId });
+      });
+
+      service.handleActivityState(terminal, "idle", { trigger: "timeout" });
+
+      expect(terminal.agentState).toBe("waiting");
+      expect(stateChanges).toHaveLength(1);
+      expect(stateChanges[0]?.agentId).toBe("gemini");
+    });
+
+    it("does nothing when both agentId and detectedAgentType are absent", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        launchAgentId: undefined,
+        detectedAgentId: undefined,
+        agentState: "idle",
+      });
+      const stateChanges: unknown[] = [];
+
+      events.on("agent:state-changed", (payload) => {
+        stateChanges.push(payload);
+      });
+
+      const changed = service.updateAgentState(terminal, { type: "busy" });
+
+      expect(changed).toBe(false);
+      expect(terminal.agentState).toBe("idle");
+      expect(stateChanges).toHaveLength(0);
+    });
+
+    it("emitTerminalActivity produces agent-style headline for detectedAgentType-only terminal", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        launchAgentId: undefined,
+        detectedAgentId: "claude",
+        agentState: "working",
+      });
+      const activityEvents: Array<{ headline: string; status: string }> = [];
+
+      events.on("terminal:activity", (payload) => {
+        activityEvents.push({ headline: payload.headline, status: payload.status });
+      });
+
+      service.emitTerminalActivity(terminal);
+
+      expect(activityEvents).toHaveLength(1);
+      expect(activityEvents[0]?.headline).toBe("Agent working");
+      expect(activityEvents[0]?.status).toBe("working");
+    });
+
+    it("emits 'exited' completion cue when runtime-detected agent exits", () => {
+      const service = new AgentStateService();
+      // Simulate the state of the terminal at the moment the exit transition
+      // is observed — detectedAgentType is still set (TerminalProcess clears
+      // it AFTER calling updateAgentState).
+      const terminal = createTerminal({
+        launchAgentId: undefined,
+        detectedAgentId: "claude",
+        agentState: "working",
+      });
+      const stateChanges: Array<{ state: string; agentId?: string }> = [];
+      const activityEvents: Array<{ headline: string }> = [];
+
+      events.on("agent:state-changed", (payload) => {
+        stateChanges.push({ state: payload.state, agentId: payload.agentId });
+      });
+      events.on("terminal:activity", (payload) => {
+        activityEvents.push({ headline: payload.headline });
+      });
+
+      const changed = service.updateAgentState(terminal, { type: "exit", code: 0 });
+
+      expect(changed).toBe(true);
+      expect(terminal.agentState).toBe("exited");
+      expect(stateChanges).toHaveLength(1);
+      expect(stateChanges[0]?.state).toBe("exited");
+      expect(stateChanges[0]?.agentId).toBe("claude");
+      // The completion cue produces the "Exited" headline before the caller
+      // clears detectedAgentType and reverts to shell mode.
+      expect(activityEvents).toHaveLength(1);
+      expect(activityEvents[0]?.headline).toBe("Exited");
+    });
+  });
+
   it("emits completed event with non-negative duration", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ spawnedAt: Date.now() + 10_000, agentState: "working" });
@@ -207,5 +387,103 @@ describe("AgentStateService", () => {
     expect(completedPayloads).toHaveLength(1);
     expect(completedPayloads[0]?.duration).toBe(0);
     expect(completedPayloads[0]?.exitCode).toBe(0);
+  });
+
+  // #5803: Runtime-detected agents have no launch-time agentId; lifecycle
+  // events must still fire using detectedAgentType as the live identity.
+  describe("lifecycle events use live identity (#5803)", () => {
+    it("emitAgentCompleted uses detectedAgentType when agentId is absent", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        launchAgentId: undefined,
+        detectedAgentId: "claude",
+        agentState: "working",
+      });
+      const payloads: Array<{ agentId: string }> = [];
+
+      events.on("agent:completed", (payload) => {
+        payloads.push({ agentId: payload.agentId });
+      });
+
+      service.emitAgentCompleted(terminal, 0);
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.agentId).toBe("claude");
+    });
+
+    it("emitAgentKilled uses detectedAgentType when agentId is absent", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        launchAgentId: undefined,
+        detectedAgentId: "gemini",
+        agentState: "working",
+      });
+      const payloads: Array<{ agentId: string; reason?: string }> = [];
+
+      events.on("agent:killed", (payload) => {
+        payloads.push({ agentId: payload.agentId, reason: payload.reason });
+      });
+
+      service.emitAgentKilled(terminal, "manual");
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.agentId).toBe("gemini");
+      expect(payloads[0]?.reason).toBe("manual");
+    });
+
+    it("emitAgentCompleted uses detectedAgentId when both launchAgentId and detectedAgentId are set (live identity wins)", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        launchAgentId: "claude",
+        detectedAgentId: "gemini",
+        agentState: "working",
+      });
+      const payloads: Array<{ agentId: string }> = [];
+
+      events.on("agent:completed", (payload) => {
+        payloads.push({ agentId: payload.agentId });
+      });
+
+      service.emitAgentCompleted(terminal, 0);
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.agentId).toBe("gemini");
+    });
+
+    it("emitAgentCompleted is a no-op when both agentId and detectedAgentType are absent", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        launchAgentId: undefined,
+        detectedAgentId: undefined,
+        agentState: "idle",
+      });
+      const payloads: unknown[] = [];
+
+      events.on("agent:completed", (payload) => {
+        payloads.push(payload);
+      });
+
+      service.emitAgentCompleted(terminal, 0);
+
+      expect(payloads).toHaveLength(0);
+    });
+
+    it("emitAgentKilled is a no-op when both agentId and detectedAgentType are absent", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        launchAgentId: undefined,
+        detectedAgentId: undefined,
+        agentState: "idle",
+      });
+      const payloads: unknown[] = [];
+
+      events.on("agent:killed", (payload) => {
+        payloads.push(payload);
+      });
+
+      service.emitAgentKilled(terminal, "manual");
+
+      expect(payloads).toHaveLength(0);
+    });
   });
 });

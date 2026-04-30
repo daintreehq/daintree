@@ -4,17 +4,17 @@ import {
   getMoreAgentsOption,
   type LaunchOption,
 } from "@/components/TerminalPalette/launchOptions";
-import type { LaunchAgentOptions } from "./useAgentLauncher";
 import { useWorktreeSelectionStore, usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { logError } from "@/utils/logger";
 import type { WorktreeState } from "@/types";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { actionService } from "@/services/ActionService";
 import { getEffectiveAgentIds } from "@shared/config/agentRegistry";
+import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 
 interface UseNewTerminalPaletteProps {
-  launchAgent: (type: string, options?: LaunchAgentOptions) => Promise<string | null>;
   worktreeMap: Map<string, WorktreeState>;
 }
 
@@ -36,23 +36,23 @@ function filterLaunchOptions(items: LaunchOption[], query: string): LaunchOption
 export const MORE_AGENTS_TERMINAL_ID = "more-agents";
 
 export function useNewTerminalPalette({
-  launchAgent,
   worktreeMap,
 }: UseNewTerminalPaletteProps): UseNewTerminalPaletteReturn {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
   const addPanel = usePanelStore((state) => state.addPanel);
-  const agentSettings = useAgentSettingsStore((state) => state.settings);
+  const availability = useCliAvailabilityStore((state) => state.availability);
+  const isAvailabilityInitialized = useCliAvailabilityStore((state) => state.isInitialized);
 
   const options = useMemo(() => {
     const allOptions = getLaunchOptions();
     const registryAgentIds = new Set(getEffectiveAgentIds());
 
-    // When settings haven't loaded yet, show all agents (no filter).
-    // When loaded, hide agents that are not pinned.
+    // Before availability is known, show all agents (avoids startup flicker).
+    // Once known, hide agents that are not installed.
     const isAgentHidden = (id: string): boolean => {
-      if (!agentSettings?.agents) return false;
-      return agentSettings.agents[id]?.pinned !== true;
+      if (!isAvailabilityInitialized) return false;
+      return !isAgentInstalled(availability[id]);
     };
 
     const filtered = allOptions.filter(
@@ -62,7 +62,7 @@ export function useNewTerminalPalette({
     filtered.push(getMoreAgentsOption());
 
     return filtered;
-  }, [agentSettings]);
+  }, [availability, isAvailabilityInitialized]);
 
   const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<LaunchOption>({
     items: options,
@@ -95,22 +95,32 @@ export function useNewTerminalPalette({
           return;
         }
 
-        await launchAgent(option.type, {
-          worktreeId: targetWorktreeId || undefined,
-          cwd,
-          location: "grid",
-        });
+        const result = await actionService.dispatch(
+          "agent.launch",
+          {
+            agentId: option.launchAgentId,
+            worktreeId: targetWorktreeId || undefined,
+            cwd,
+            location: "grid",
+          },
+          { source: "user" }
+        );
+        if (!result.ok) {
+          logError(`Failed to launch ${option.launchAgentId} terminal`, undefined, {
+            error: result.error,
+          });
+        }
         close();
       } catch (error) {
-        console.error(`Failed to launch ${option.type} terminal:`, error);
+        logError(`Failed to launch ${option.launchAgentId} terminal`, error);
       }
     },
-    [activeWorktreeId, worktreeMap, currentProject, launchAgent, addPanel, close]
+    [activeWorktreeId, worktreeMap, currentProject, addPanel, close]
   );
 
   const confirmSelection = useCallback(() => {
     if (results.length > 0 && selectedIndex >= 0) {
-      handleSelect(results[selectedIndex]);
+      handleSelect(results[selectedIndex]!);
     }
   }, [results, selectedIndex, handleSelect]);
 

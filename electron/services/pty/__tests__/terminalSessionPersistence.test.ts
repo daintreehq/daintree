@@ -73,6 +73,27 @@ describe("terminalSessionPersistence", () => {
     expect(fs.existsSync(asyncPath)).toBe(false);
   });
 
+  it("persists and restores snapshots via the atomic write helpers", async () => {
+    persistSessionSnapshotSync("term-rt-sync", "sync payload");
+    await persistSessionSnapshotAsync("term-rt-async", "async payload");
+
+    const sessionDir = path.join(userDataDir, "terminal-sessions");
+    const syncPath = path.join(sessionDir, "term-rt-sync.restore");
+    const asyncPath = path.join(sessionDir, "term-rt-async.restore");
+
+    expect(fs.readFileSync(syncPath, "utf8")).toBe("sync payload");
+    expect(fs.readFileSync(asyncPath, "utf8")).toBe("async payload");
+
+    // The atomic helpers must not leave temp files behind
+    const stragglers = fs.readdirSync(sessionDir).filter((name) => name.endsWith(".tmp"));
+    expect(stragglers).toEqual([]);
+
+    const headless = createMockHeadless();
+    const result = restoreSessionFromFile(headless as never, "term-rt-sync");
+    expect(result.restored).toBe(true);
+    expect(headless.write).toHaveBeenCalledWith("sync payload");
+  });
+
   it("restores valid snapshot and injects separator banner", async () => {
     const sessionDir = path.join(userDataDir, "terminal-sessions");
     await fsp.mkdir(sessionDir, { recursive: true });

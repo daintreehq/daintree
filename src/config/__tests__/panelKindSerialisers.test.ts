@@ -28,25 +28,6 @@ describe("panelKindSerialisers", () => {
     });
   });
 
-  describe("notes", () => {
-    it("extracts note fields", () => {
-      const deserialize = getDeserializer("notes");
-      const result = deserialize!({
-        id: "n1",
-        notePath: "/notes/a.md",
-        noteId: "note-1",
-        scope: "project",
-        createdAt: 1234567890,
-      });
-      expect(result).toEqual({
-        notePath: "/notes/a.md",
-        noteId: "note-1",
-        scope: "project",
-        createdAt: 1234567890,
-      });
-    });
-  });
-
   describe("dev-preview", () => {
     it("extracts dev-preview fields", () => {
       const deserialize = getDeserializer("dev-preview");

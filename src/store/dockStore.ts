@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { appClient } from "@/clients";
+import { logError } from "@/utils/logger";
 
 interface DockState {
   peek: boolean;
@@ -40,7 +41,7 @@ async function persistPopoverHeight(height: number): Promise<void> {
   try {
     await appClient.setState({ dockedPopoverHeight: height });
   } catch (error) {
-    console.error("Failed to persist docked popover height:", error);
+    logError("Failed to persist docked popover height", error);
   }
 }
 

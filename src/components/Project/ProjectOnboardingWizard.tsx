@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   SquareTerminal,
   Rocket,
@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   Settings2,
+  Shuffle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -17,6 +18,39 @@ import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
 import type { RunCommand } from "@/types";
 import { getProjectGradient } from "@/lib/colorUtils";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+
+const CURATED_EMOJIS = [
+  "🌲",
+  "🌿",
+  "🌴",
+  "🪴",
+  "🍃",
+  "🌱",
+  "🌳",
+  "🦊",
+  "🐢",
+  "🐙",
+  "🚀",
+  "⚡",
+  "🔥",
+  "📦",
+  "🧰",
+  "🛠️",
+  "💎",
+  "🎯",
+  "🌊",
+  "🧪",
+] as const;
+
+function shuffleArray<T>(arr: readonly T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j]!, a[i]!];
+  }
+  return a;
+}
 
 interface ProjectOnboardingWizardProps {
   isOpen: boolean;
@@ -45,6 +79,8 @@ export function ProjectOnboardingWizard({
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const initStartedRef = useRef(false);
+  const emojiShuffleQueueRef = useRef<string[]>([]);
+  const nameInputComposingRef = useRef(false);
 
   useEffect(() => {
     if (isOpen && !isLoading && settings && currentProject && !initStartedRef.current) {
@@ -76,6 +112,12 @@ export function ProjectOnboardingWizard({
     setIsSaving(true);
     setSaveError(null);
     try {
+      await saveSettings({
+        ...settings,
+        runCommands: sanitizedRunCommands,
+        devServerCommand: devServerCommand.trim() || undefined,
+      });
+
       if (currentProject) {
         await updateProject(projectId, {
           name: name.trim() || currentProject.name,
@@ -83,20 +125,27 @@ export function ProjectOnboardingWizard({
         });
       }
 
-      await saveSettings({
-        ...settings,
-        runCommands: sanitizedRunCommands,
-        devServerCommand: devServerCommand.trim() || undefined,
-      });
-
       onClose();
       onFinish?.(projectId);
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : "Failed to save settings");
+      setSaveError(formatErrorMessage(error, "Failed to save settings"));
     } finally {
       setIsSaving(false);
     }
   };
+
+  const handleShuffleEmoji = useCallback(() => {
+    const otherEmojis = CURATED_EMOJIS.filter((e) => e !== emoji);
+
+    emojiShuffleQueueRef.current = emojiShuffleQueueRef.current.filter((e) => e !== emoji);
+
+    if (emojiShuffleQueueRef.current.length === 0) {
+      emojiShuffleQueueRef.current = shuffleArray(otherEmojis);
+    }
+
+    const nextEmoji = emojiShuffleQueueRef.current.shift()!;
+    setEmoji(nextEmoji);
+  }, [emoji]);
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!isSaving}>
@@ -133,6 +182,14 @@ export function ProjectOnboardingWizard({
                     <span className="text-2xl select-none">{emoji}</span>
                   </button>
                 </PopoverTrigger>
+                <button
+                  type="button"
+                  aria-label="Randomize emoji"
+                  onClick={handleShuffleEmoji}
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-md)] hover:bg-daintree-border/50 transition-colors"
+                >
+                  <Shuffle className="h-4 w-4 text-daintree-text/60" />
+                </button>
                 <PopoverContent className="w-auto p-0">
                   <EmojiPicker
                     onEmojiSelect={({ emoji: e }) => {
@@ -155,7 +212,19 @@ export function ProjectOnboardingWizard({
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full bg-transparent border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
+                  onCompositionStart={() => {
+                    nameInputComposingRef.current = true;
+                  }}
+                  onCompositionEnd={() => {
+                    nameInputComposingRef.current = false;
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !nameInputComposingRef.current) {
+                      e.preventDefault();
+                      handleFinish();
+                    }
+                  }}
+                  className="w-full bg-transparent border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
                   placeholder="My Project"
                 />
               </div>
@@ -195,7 +264,7 @@ export function ProjectOnboardingWizard({
                     type="text"
                     value={devServerCommand}
                     onChange={(e) => setDevServerCommand(e.target.value)}
-                    className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
+                    className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
                     placeholder="npm run dev"
                     spellCheck={false}
                     autoCapitalize="off"
@@ -231,7 +300,7 @@ export function ProjectOnboardingWizard({
                                   return updated;
                                 });
                               }}
-                              className="w-full bg-transparent border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+                              className="w-full bg-transparent border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
                               placeholder="Command name"
                               aria-label="Run command name"
                             />
@@ -245,7 +314,7 @@ export function ProjectOnboardingWizard({
                                   return updated;
                                 });
                               }}
-                              className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-xs text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+                              className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-xs text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
                               placeholder="npm run build"
                               aria-label="Run command"
                             />
@@ -258,15 +327,15 @@ export function ProjectOnboardingWizard({
                                   setRunCommands((prev) => {
                                     const updated = [...prev];
                                     [updated[index - 1], updated[index]] = [
-                                      updated[index],
-                                      updated[index - 1],
+                                      updated[index]!,
+                                      updated[index - 1]!,
                                     ];
                                     return updated;
                                   });
                                 }
                               }}
                               disabled={index === 0}
-                              className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                              className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                               aria-label="Move up"
                             >
                               <ChevronUp className="h-3.5 w-3.5" />
@@ -278,15 +347,15 @@ export function ProjectOnboardingWizard({
                                   setRunCommands((prev) => {
                                     const updated = [...prev];
                                     [updated[index], updated[index + 1]] = [
-                                      updated[index + 1],
-                                      updated[index],
+                                      updated[index + 1]!,
+                                      updated[index]!,
                                     ];
                                     return updated;
                                   });
                                 }
                               }}
                               disabled={index === runCommands.length - 1}
-                              className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                              className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                               aria-label="Move down"
                             >
                               <ChevronDown className="h-3.5 w-3.5" />
@@ -310,7 +379,7 @@ export function ProjectOnboardingWizard({
                       onClick={() =>
                         setRunCommands((prev) => [
                           ...prev,
-                          { id: `cmd-${Date.now()}`, name: "", command: "" },
+                          { id: `cmd-${crypto.randomUUID()}`, name: "", command: "" },
                         ])
                       }
                       className="w-full"

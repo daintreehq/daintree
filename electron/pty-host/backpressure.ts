@@ -138,6 +138,19 @@ export class BackpressureManager {
     const nextTotal = this.totalPendingVisualBytes + remaining;
 
     if (nextTerminal > MAX_PENDING_BYTES_PER_TERMINAL || nextTotal > MAX_TOTAL_PENDING_BYTES) {
+      const capType = nextTerminal > MAX_PENDING_BYTES_PER_TERMINAL ? "per-terminal" : "total";
+      this.emitReliabilityMetric(
+        {
+          terminalId: id,
+          metricType: "pending-byte-cap-hit",
+          timestamp: Date.now(),
+          capType,
+          attemptedBytes: remaining,
+          currentPendingBytes: current,
+          totalPendingBytes: this.totalPendingVisualBytes,
+        },
+        true
+      );
       return false;
     }
 
@@ -183,7 +196,8 @@ export class BackpressureManager {
     id: string,
     status: TerminalFlowStatus,
     bufferUtilization?: number,
-    pauseDuration?: number
+    pauseDuration?: number,
+    reason?: string
   ): void {
     const previousStatus = this.terminalStatuses.get(id);
     if (previousStatus === status) {
@@ -196,16 +210,28 @@ export class BackpressureManager {
       status,
       bufferUtilization,
       pauseDuration,
+      reason,
       timestamp: Date.now(),
     });
   }
 
-  emitReliabilityMetric(payload: TerminalReliabilityMetricPayload): void {
-    if (!this.deps.metricsEnabled()) return;
+  emitReliabilityMetric(payload: TerminalReliabilityMetricPayload, forceEmit = false): void {
+    if (!forceEmit && !this.deps.metricsEnabled()) return;
     this.deps.sendEvent({
       type: "terminal-reliability-metric",
       payload,
     });
+  }
+
+  getPendingBytesSnapshot(): {
+    totalPendingBytes: number;
+    perTerminal: Array<{ terminalId: string; pendingBytes: number }>;
+  } {
+    const perTerminal: Array<{ terminalId: string; pendingBytes: number }> = [];
+    for (const [id, bytes] of this.pendingVisualBytes) {
+      perTerminal.push({ terminalId: id, pendingBytes: bytes });
+    }
+    return { totalPendingBytes: this.totalPendingVisualBytes, perTerminal };
   }
 
   suspendVisualStream(
@@ -230,7 +256,7 @@ export class BackpressureManager {
     this.suspendedDueToStall.add(id);
     this.clearPendingVisual(id);
 
-    this.emitTerminalStatus(id, "suspended", utilization, pauseDuration);
+    this.emitTerminalStatus(id, "suspended", utilization, pauseDuration, reason);
 
     if (utilization !== undefined) {
       console.warn(
@@ -240,14 +266,17 @@ export class BackpressureManager {
       console.warn(`[PtyHost] Suspended streaming for ${id} (${reason}).`);
     }
 
-    this.emitReliabilityMetric({
-      terminalId: id,
-      metricType: "suspend",
-      timestamp: Date.now(),
-      durationMs: pauseDuration,
-      bufferUtilization: utilization,
-      shardIndex,
-    });
+    this.emitReliabilityMetric(
+      {
+        terminalId: id,
+        metricType: "suspend",
+        timestamp: Date.now(),
+        durationMs: pauseDuration,
+        bufferUtilization: utilization,
+        shardIndex,
+      },
+      true
+    );
   }
 
   cleanupTerminal(id: string): void {

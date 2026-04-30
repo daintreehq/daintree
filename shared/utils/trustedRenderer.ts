@@ -26,6 +26,16 @@ export function isTrustedRendererUrl(urlString: string): boolean {
   return trustedOrigins.includes(origin as any);
 }
 
+export function isRecoveryPageUrl(urlString: string): boolean {
+  if (!isTrustedRendererUrl(urlString)) return false;
+  try {
+    const url = new URL(urlString);
+    return url.pathname === "/recovery.html";
+  } catch {
+    return false;
+  }
+}
+
 export function getTrustedOrigins(): readonly string[] {
   return getTrustedRendererOrigins();
 }

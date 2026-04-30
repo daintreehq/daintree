@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ActionDefinition } from "@shared/types/actions";
+import type { AnyActionDefinition } from "../../actionTypes";
 
 const mockNotify = vi.fn();
 vi.mock("@/lib/notify", () => ({
@@ -35,7 +35,7 @@ vi.mock("@/store/terminalStore", () => ({
   useTerminalStore: { getState: () => ({ addTerminal: vi.fn() }) },
 }));
 
-type ActionFactory = () => ActionDefinition;
+type ActionFactory = () => AnyActionDefinition;
 
 const RESOURCE_ACTION_IDS = [
   "worktree.resource.provision",
@@ -143,6 +143,10 @@ describe("worktree resource action definitions", () => {
         priority: "high",
         title: expectedTitle,
         message: "Command exited with code 1",
+        action: expect.objectContaining({
+          label: "Copy details",
+          onClick: expect.any(Function),
+        }),
       })
     );
   });
@@ -159,5 +163,42 @@ describe("worktree resource action definitions", () => {
     await def.run!({}, { activeWorktreeId: "/test" });
 
     expect(mockNotify).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["worktree.resource.provision", "Provision failed", "Resource provisioning failed"],
+    ["worktree.resource.teardown", "Teardown failed", "Resource teardown failed"],
+    ["worktree.resource.resume", "Resume failed", "Resource resume failed"],
+    ["worktree.resource.pause", "Pause failed", "Resource pause failed"],
+    ["worktree.resource.status", "Status check failed", "Resource status check failed"],
+  ] as const)(
+    "%s uses fallback message for non-Error rejections",
+    async (actionId, expectedTitle, fallbackMessage) => {
+      mockResourceAction.mockRejectedValueOnce(null);
+      const def = registry.get(actionId)!();
+      await def.run!({}, { activeWorktreeId: "/test" });
+
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: expectedTitle,
+          message: fallbackMessage,
+        })
+      );
+    }
+  );
+
+  it("copy details action writes the error message to the clipboard", async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
+
+    mockResourceAction.mockRejectedValueOnce(new Error("Command exited with code 1"));
+    const def = registry.get("worktree.resource.provision")!();
+    await def.run!({}, { activeWorktreeId: "/test" });
+
+    const callArgs = mockNotify.mock.calls[0]![0];
+    expect(callArgs.action.label).toBe("Copy details");
+    await callArgs.action.onClick();
+
+    expect(writeTextMock).toHaveBeenCalledWith("Command exited with code 1");
   });
 });

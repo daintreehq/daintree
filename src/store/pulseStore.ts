@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { ProjectPulse, PulseRangeDays } from "@shared/types";
 import { actionService } from "@/services/ActionService";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY = 2000;
@@ -132,8 +133,7 @@ export const usePulseStore = create<PulseStore>()((set, get) => ({
 
       return null;
     } catch (error) {
-      const technicalMessage =
-        error instanceof Error ? error.message : "Failed to fetch pulse data";
+      const technicalMessage = formatErrorMessage(error, "Failed to fetch pulse data");
       const userMessage = getUserFriendlyError(technicalMessage);
       const currentRetries = get().retryCount.get(worktreeId) ?? 0;
       const currentState = get();

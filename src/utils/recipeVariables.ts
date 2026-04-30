@@ -49,7 +49,7 @@ export function detectUnresolvedVariables(text: string, context: RecipeContext):
   let match: RegExpExecArray | null;
   const pattern = new RegExp(VARIABLE_PATTERN.source, VARIABLE_PATTERN.flags);
   while ((match = pattern.exec(text)) !== null) {
-    const name = match[1].toLowerCase();
+    const name = match[1]!.toLowerCase();
     if (seen.has(name)) continue;
     seen.add(name);
     if (name === "number") {

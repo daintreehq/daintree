@@ -8,6 +8,11 @@ const storeMock = vi.hoisted(() => ({
   set: vi.fn(),
 }));
 
+const windowStatesStoreMock = vi.hoisted(() => ({
+  get: vi.fn(),
+  set: vi.fn(),
+}));
+
 const appMock = vi.hoisted(() => ({
   getPath: vi.fn(() => "/fake/userData"),
   getVersion: vi.fn(() => "1.0.0"),
@@ -20,6 +25,7 @@ const browserWindowMock = vi.hoisted(() => ({
 
 vi.mock("../../store.js", () => ({
   store: storeMock,
+  windowStatesStore: windowStatesStoreMock,
 }));
 
 vi.mock("electron", () => ({
@@ -116,10 +122,10 @@ describe("CrashRecoveryService adversarial", () => {
     writeBackup(tmpDir, {
       capturedAt: Date.now(),
       appState: {
-        terminals: [{ id: "agent-1", kind: "agent", title: "Recovered" }],
+        terminals: [{ id: "agent-1", kind: "terminal", title: "Recovered" }],
       },
-      windowState: {
-        width: 1200,
+      windowStates: {
+        "/home/user/project-a": { width: 1200, height: 800, isMaximized: false },
       },
     });
     writeMarker(tmpDir);
@@ -136,10 +142,10 @@ describe("CrashRecoveryService adversarial", () => {
 
     expect(service.restoreBackup()).toBe(true);
     expect(storeMock.set).toHaveBeenCalledWith("appState", {
-      terminals: [{ id: "agent-1", kind: "agent", title: "Recovered" }],
+      terminals: [{ id: "agent-1", kind: "terminal", title: "Recovered" }],
     });
-    expect(storeMock.set).toHaveBeenCalledWith("windowState", {
-      width: 1200,
+    expect(windowStatesStoreMock.set).toHaveBeenCalledWith("windowStates", {
+      "/home/user/project-a": { width: 1200, height: 800, isMaximized: false },
     });
   });
 
@@ -161,7 +167,7 @@ describe("CrashRecoveryService adversarial", () => {
         terminals: [
           {
             id: "panel-1",
-            kind: "agent",
+            kind: "terminal",
             meta: {
               badges: ["active", "pinned"],
               layout: {
@@ -175,12 +181,8 @@ describe("CrashRecoveryService adversarial", () => {
       windowStates: {
         main: {
           bounds: { width: 1440, height: 900 },
-          tabs: [{ id: "panel-1", kind: "agent" }],
+          tabs: [{ id: "panel-1", kind: "terminal" }],
         },
-      },
-      windowState: {
-        x: 10,
-        y: 20,
       },
     });
 
@@ -191,7 +193,7 @@ describe("CrashRecoveryService adversarial", () => {
       terminals: [
         {
           id: "panel-1",
-          kind: "agent",
+          kind: "terminal",
           meta: {
             badges: ["active", "pinned"],
             layout: {
@@ -202,15 +204,11 @@ describe("CrashRecoveryService adversarial", () => {
         },
       ],
     });
-    expect(storeMock.set).toHaveBeenCalledWith("windowStates", {
+    expect(windowStatesStoreMock.set).toHaveBeenCalledWith("windowStates", {
       main: {
         bounds: { width: 1440, height: 900 },
-        tabs: [{ id: "panel-1", kind: "agent" }],
+        tabs: [{ id: "panel-1", kind: "terminal" }],
       },
-    });
-    expect(storeMock.set).toHaveBeenCalledWith("windowState", {
-      x: 10,
-      y: 20,
     });
   });
 

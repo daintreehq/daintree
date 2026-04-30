@@ -44,6 +44,7 @@ const createMockProjectClient = () => ({
   createFolder: vi.fn().mockResolvedValue(""),
   enableInRepoSettings: vi.fn().mockResolvedValue({}),
   disableInRepoSettings: vi.fn().mockResolvedValue({}),
+  detectContextFiles: vi.fn().mockResolvedValue([]),
   checkMissing: vi.fn().mockResolvedValue([]),
   locate: vi.fn().mockResolvedValue(null),
   cloneRepo: vi.fn().mockResolvedValue({ success: true }),
@@ -55,6 +56,7 @@ const createMockProjectClient = () => ({
   syncInRepoRecipes: vi.fn().mockResolvedValue(undefined),
   updateInRepoRecipe: vi.fn().mockResolvedValue(undefined),
   deleteInRepoRecipe: vi.fn().mockResolvedValue(undefined),
+  getInRepoPresets: vi.fn().mockResolvedValue({}),
 });
 
 describe("PanelPersistence.saveTabGroups", () => {
@@ -136,7 +138,7 @@ describe("PanelPersistence.saveTabGroups", () => {
         projectId,
         expect.arrayContaining([group1, group2])
       );
-      const savedGroups = client.setTabGroups.mock.calls[0][1] as TabGroup[];
+      const savedGroups = client.setTabGroups.mock.calls[0]![1] as TabGroup[];
       expect(savedGroups).toHaveLength(2);
     });
 
@@ -322,8 +324,8 @@ describe("PanelPersistence.saveTabGroups", () => {
       persistence.saveTabGroups(new Map([["group-1", worktreeGroup]]), projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const savedGroups = client.setTabGroups.mock.calls[0][1] as TabGroup[];
-      expect(savedGroups[0].worktreeId).toBe("wt-123");
+      const savedGroups = client.setTabGroups.mock.calls[0]![1] as TabGroup[];
+      expect(savedGroups[0]!.worktreeId).toBe("wt-123");
     });
 
     it("preserves undefined worktreeId for global groups", async () => {
@@ -341,8 +343,8 @@ describe("PanelPersistence.saveTabGroups", () => {
       persistence.saveTabGroups(new Map([["group-1", globalGroup]]), projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const savedGroups = client.setTabGroups.mock.calls[0][1] as TabGroup[];
-      expect(savedGroups[0].worktreeId).toBeUndefined();
+      const savedGroups = client.setTabGroups.mock.calls[0]![1] as TabGroup[];
+      expect(savedGroups[0]!.worktreeId).toBeUndefined();
     });
   });
 });

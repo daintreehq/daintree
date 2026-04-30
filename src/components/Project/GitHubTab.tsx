@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { RemoteInfo } from "@shared/types/ipc/github";
 
 interface GitHubTabProps {
@@ -29,7 +30,7 @@ export function GitHubTab({ githubRemote, onGithubRemoteChange, projectPath }: G
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
+          setError(formatErrorMessage(err, "Failed to load git remotes"));
           setLoading(false);
         }
       });
@@ -54,7 +55,7 @@ export function GitHubTab({ githubRemote, onGithubRemoteChange, projectPath }: G
           <select
             value={githubRemote || ""}
             onChange={(e) => onGithubRemoteChange(e.target.value || undefined)}
-            className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent"
+            className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
           >
             <option value="">Auto-detect (origin)</option>
             {remotes.map((r) => (

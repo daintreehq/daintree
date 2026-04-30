@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState, useEffect, memo } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   useDiagnosticsStore,
   type DiagnosticsTab,
@@ -12,9 +12,16 @@ import { useErrorStore } from "@/store";
 import { ProblemsContent } from "./ProblemsContent";
 import { LogsContent } from "./LogsContent";
 import { EventsContent } from "./EventsContent";
-import { ProblemsActions, LogsActions, EventsActions } from "./DiagnosticsActions";
+import { TelemetryContent } from "./TelemetryContent";
+import {
+  ProblemsActions,
+  LogsActions,
+  EventsActions,
+  TelemetryActions,
+} from "./DiagnosticsActions";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
+import { logError } from "@/utils/logger";
 
 interface TabButtonProps {
   tab: DiagnosticsTab;
@@ -38,7 +45,7 @@ const TabButton = memo(function TabButton({
       className={cn(
         "px-3 py-1.5 text-sm font-medium transition-colors relative rounded",
         "hover:text-daintree-text hover:bg-overlay-soft",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2 focus-visible:ring-offset-daintree-sidebar",
+        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2 focus-visible:ring-offset-daintree-sidebar",
         isActive ? "text-daintree-text" : "text-daintree-text/65"
       )}
       role="tab"
@@ -137,7 +144,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
         try {
           await appClient.setState({ diagnosticsHeight: height });
         } catch (error) {
-          console.error("Failed to persist diagnostics height:", error);
+          logError("Failed to persist diagnostics height", error);
         }
       }, 300);
       return () => clearTimeout(timer);
@@ -153,7 +160,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           setHeight(appState.diagnosticsHeight);
         }
       } catch (error) {
-        console.error("Failed to restore diagnostics height:", error);
+        logError("Failed to restore diagnostics height", error);
       }
     };
     restoreHeight();
@@ -165,6 +172,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     { id: "problems", label: "Problems", badge: errorCount },
     { id: "logs", label: "Logs" },
     { id: "events", label: "Events" },
+    { id: "telemetry", label: "Telemetry" },
   ];
 
   return (
@@ -182,8 +190,8 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       <div
         className={cn(
           "group h-3 cursor-ns-resize transition-colors flex items-center justify-center",
-          "hover:bg-overlay-soft focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
-          isResizing && "bg-daintree-accent/20"
+          "hover:bg-overlay-soft focus-visible:outline-hidden focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
+          isResizing && "bg-overlay-medium"
         )}
         onMouseDown={handleResizeStart}
         onKeyDown={handleKeyDown}
@@ -200,7 +208,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
             "w-10 h-px rounded-full transition-[height] duration-150 delay-100 group-hover:h-0.5",
             "bg-daintree-text/15",
             "group-hover:bg-daintree-text/30 group-focus-visible:bg-daintree-accent",
-            isResizing && "bg-daintree-accent"
+            isResizing && "bg-daintree-text/50"
           )}
         />
       </div>
@@ -223,21 +231,20 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           {activeTab === "problems" && <ProblemsActions />}
           {activeTab === "logs" && <LogsActions />}
           {activeTab === "events" && <EventsActions />}
+          {activeTab === "telemetry" && <TelemetryActions />}
 
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={closeDock}
-                  className="p-1.5 hover:bg-tint/[0.06] rounded-[var(--radius-md)] transition-colors text-daintree-text/60 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                  aria-label="Close diagnostics dock"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Close diagnostics dock</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={closeDock}
+                className="p-1.5 hover:bg-tint/[0.06] rounded-[var(--radius-md)] transition-colors text-daintree-text/60 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                aria-label="Close diagnostics dock"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Close diagnostics dock</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
@@ -270,6 +277,16 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
             className="h-full"
           >
             <EventsContent />
+          </div>
+        )}
+        {activeTab === "telemetry" && (
+          <div
+            id="diagnostics-telemetry-panel"
+            role="tabpanel"
+            aria-labelledby="diagnostics-telemetry-tab"
+            className="h-full"
+          >
+            <TelemetryContent />
           </div>
         )}
       </div>

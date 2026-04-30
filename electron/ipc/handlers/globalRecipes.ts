@@ -1,8 +1,8 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalRecipe } from "../../types/index.js";
+import { typedHandle } from "../utils.js";
 
 export function registerGlobalRecipesHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -10,13 +10,9 @@ export function registerGlobalRecipesHandlers(_deps: HandlerDependencies): () =>
   const handleGetRecipes = async (): Promise<TerminalRecipe[]> => {
     return projectStore.getGlobalRecipes();
   };
-  ipcMain.handle(CHANNELS.GLOBAL_GET_RECIPES, handleGetRecipes);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GLOBAL_GET_RECIPES));
+  handlers.push(typedHandle(CHANNELS.GLOBAL_GET_RECIPES, handleGetRecipes));
 
-  const handleAddRecipe = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { recipe: TerminalRecipe }
-  ): Promise<void> => {
+  const handleAddRecipe = async (payload: { recipe: TerminalRecipe }): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -44,16 +40,12 @@ export function registerGlobalRecipesHandlers(_deps: HandlerDependencies): () =>
     }
     return projectStore.addGlobalRecipe(recipe);
   };
-  ipcMain.handle(CHANNELS.GLOBAL_ADD_RECIPE, handleAddRecipe);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GLOBAL_ADD_RECIPE));
+  handlers.push(typedHandle(CHANNELS.GLOBAL_ADD_RECIPE, handleAddRecipe));
 
-  const handleUpdateRecipe = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: {
-      recipeId: string;
-      updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>;
-    }
-  ): Promise<void> => {
+  const handleUpdateRecipe = async (payload: {
+    recipeId: string;
+    updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>;
+  }): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -76,13 +68,9 @@ export function registerGlobalRecipesHandlers(_deps: HandlerDependencies): () =>
     }
     return projectStore.updateGlobalRecipe(recipeId, updates);
   };
-  ipcMain.handle(CHANNELS.GLOBAL_UPDATE_RECIPE, handleUpdateRecipe);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GLOBAL_UPDATE_RECIPE));
+  handlers.push(typedHandle(CHANNELS.GLOBAL_UPDATE_RECIPE, handleUpdateRecipe));
 
-  const handleDeleteRecipe = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { recipeId: string }
-  ): Promise<void> => {
+  const handleDeleteRecipe = async (payload: { recipeId: string }): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -92,8 +80,7 @@ export function registerGlobalRecipesHandlers(_deps: HandlerDependencies): () =>
     }
     return projectStore.deleteGlobalRecipe(recipeId);
   };
-  ipcMain.handle(CHANNELS.GLOBAL_DELETE_RECIPE, handleDeleteRecipe);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GLOBAL_DELETE_RECIPE));
+  handlers.push(typedHandle(CHANNELS.GLOBAL_DELETE_RECIPE, handleDeleteRecipe));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

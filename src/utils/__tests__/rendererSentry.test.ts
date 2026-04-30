@@ -54,7 +54,7 @@ describe("rendererSentry", () => {
     const mod = await import("../rendererSentry");
     await mod.initRendererSentry();
 
-    const opts = sentryInit.mock.calls[0][0];
+    const opts = sentryInit.mock.calls[0]![0];
     const integrations = opts.integrations as (
       defaults: Array<{ name: string }>
     ) => Array<{ name: string }>;
@@ -77,7 +77,7 @@ describe("rendererSentry", () => {
     const mod = await import("../rendererSentry");
     await mod.initRendererSentry();
 
-    const opts = sentryInit.mock.calls[0][0];
+    const opts = sentryInit.mock.calls[0]![0];
     const event = { message: "test" };
     const result = opts.beforeSend!(event);
     if (expected === null) {
@@ -92,7 +92,7 @@ describe("rendererSentry", () => {
     const mod = await import("../rendererSentry");
     await mod.initRendererSentry();
 
-    const opts = sentryInit.mock.calls[0][0];
+    const opts = sentryInit.mock.calls[0]![0];
     expect(opts.beforeBreadcrumb!({ message: "click" })).toBeNull();
   });
 
@@ -101,7 +101,7 @@ describe("rendererSentry", () => {
     const mod = await import("../rendererSentry");
     await mod.initRendererSentry();
 
-    const opts = sentryInit.mock.calls[0][0];
+    const opts = sentryInit.mock.calls[0]![0];
     expect(opts.beforeSend!({ message: "x" })).toBeNull();
   });
 
@@ -110,7 +110,7 @@ describe("rendererSentry", () => {
     const mod = await import("../rendererSentry");
     await mod.initRendererSentry();
 
-    const opts = sentryInit.mock.calls[0][0];
+    const opts = sentryInit.mock.calls[0]![0];
     expect(opts.beforeSend!({ message: "pre" })).toBeNull();
 
     consentListener?.({ level: "errors", hasSeenPrompt: true });
@@ -137,7 +137,7 @@ describe("rendererSentry", () => {
     resolveSnapshot({ level: "errors", hasSeenPrompt: true });
     await initPromise;
 
-    const opts = sentryInit.mock.calls[0][0];
+    const opts = sentryInit.mock.calls[0]![0];
     // The live broadcast must have won; beforeSend must still drop events.
     expect(opts.beforeSend!({ message: "x" })).toBeNull();
     expect(mod.getRendererSentryConsent()).toEqual({ level: "off", hasSeenPrompt: true });
@@ -149,7 +149,7 @@ describe("rendererSentry", () => {
     await mod.initRendererSentry();
 
     mod.updateRendererSentryConsent("full", true);
-    const opts = sentryInit.mock.calls[0][0];
+    const opts = sentryInit.mock.calls[0]![0];
     expect(opts.beforeSend!({ message: "x" })).toEqual({ message: "x" });
     expect(mod.getRendererSentryConsent()).toEqual({ level: "full", hasSeenPrompt: true });
   });

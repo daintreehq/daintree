@@ -8,6 +8,11 @@ const storeMock = vi.hoisted(() => ({
   set: vi.fn(),
 }));
 
+const windowStatesStoreMock = vi.hoisted(() => ({
+  get: vi.fn(),
+  set: vi.fn(),
+}));
+
 const appMock = vi.hoisted(() => ({
   getPath: vi.fn(() => "/fake/userData"),
   getVersion: vi.fn(() => "1.0.0"),
@@ -16,6 +21,7 @@ const appMock = vi.hoisted(() => ({
 
 vi.mock("../../store.js", () => ({
   store: storeMock,
+  windowStatesStore: windowStatesStoreMock,
 }));
 
 const browserWindowMock = vi.hoisted(() => ({
@@ -29,6 +35,14 @@ vi.mock("electron", () => ({
 
 vi.mock("../GpuCrashMonitorService.js", () => ({
   isGpuDisabledByFlag: vi.fn(() => false),
+}));
+
+const getRecentActionsMock = vi.hoisted(() => vi.fn(() => [] as unknown[]));
+
+vi.mock("../ActionBreadcrumbService.js", () => ({
+  getActionBreadcrumbService: () => ({
+    getRecentActions: getRecentActionsMock,
+  }),
 }));
 
 import { CrashRecoveryService } from "../CrashRecoveryService.js";
@@ -165,7 +179,7 @@ describe("CrashRecoveryService", () => {
           appState: {
             terminals: [
               { id: "t1", kind: "terminal" },
-              { id: "t2", kind: "agent" },
+              { id: "t2", kind: "terminal" },
             ],
           },
         })
@@ -189,7 +203,7 @@ describe("CrashRecoveryService", () => {
       expect(typeof pending!.entry.nodeVersion).toBe("string");
       expect(typeof pending!.entry.totalMemory).toBe("number");
       expect(pending!.entry.panelCount).toBe(2);
-      expect(pending!.entry.panelKinds).toEqual({ terminal: 1, agent: 1 });
+      expect(pending!.entry.panelKinds).toEqual({ terminal: 2 });
     });
 
     it("surfaces dev-mode marker with crashLogPath as a genuine crash", () => {
@@ -294,7 +308,7 @@ describe("CrashRecoveryService", () => {
           return {
             terminals: [
               { id: "t1", kind: "terminal" },
-              { id: "t2", kind: "agent" },
+              { id: "t2", kind: "terminal" },
               { id: "t3", kind: "terminal" },
             ],
           };
@@ -322,7 +336,7 @@ describe("CrashRecoveryService", () => {
       expect(entry.windowCount).toBe(1);
       expect(entry.gpuAccelerationDisabled).toBe(false);
       expect(entry.panelCount).toBe(3);
-      expect(entry.panelKinds).toEqual({ terminal: 2, agent: 1 });
+      expect(entry.panelKinds).toEqual({ terminal: 3 });
     });
 
     it("does not record crash twice (idempotent)", () => {
@@ -365,6 +379,57 @@ describe("CrashRecoveryService", () => {
       const entry = JSON.parse(fs.readFileSync(path.join(crashDir, files[0]), "utf8"));
       expect(entry.errorMessage).toBe("string error");
     });
+
+    it("includes recentActions in crash entry when the ring has entries", () => {
+      const actions = [
+        {
+          id: "a1",
+          actionId: "panel.focus",
+          category: "panel",
+          source: "user",
+          durationMs: 2,
+          timestamp: 1_700_000_000_000,
+          count: 1,
+        },
+      ];
+      getRecentActionsMock.mockReturnValueOnce(actions);
+
+      const svc = makeService();
+      svc.initialize();
+      svc.recordCrash(new Error("boom"));
+
+      const crashDir = path.join(userData, "crashes");
+      const files = fs.readdirSync(crashDir).filter((f) => f.endsWith(".json"));
+      const entry = JSON.parse(fs.readFileSync(path.join(crashDir, files[0]), "utf8"));
+      expect(entry.recentActions).toEqual(actions);
+    });
+
+    it("omits recentActions when the ring is empty", () => {
+      getRecentActionsMock.mockReturnValueOnce([]);
+
+      const svc = makeService();
+      svc.initialize();
+      svc.recordCrash(new Error("boom"));
+
+      const crashDir = path.join(userData, "crashes");
+      const files = fs.readdirSync(crashDir).filter((f) => f.endsWith(".json"));
+      const entry = JSON.parse(fs.readFileSync(path.join(crashDir, files[0]), "utf8"));
+      expect(entry.recentActions).toBeUndefined();
+    });
+
+    it("still records crash when ActionBreadcrumbService throws", () => {
+      getRecentActionsMock.mockImplementationOnce(() => {
+        throw new Error("ring corrupted");
+      });
+
+      const svc = makeService();
+      svc.initialize();
+      expect(() => svc.recordCrash(new Error("boom"))).not.toThrow();
+
+      const crashDir = path.join(userData, "crashes");
+      const files = fs.readdirSync(crashDir).filter((f) => f.endsWith(".json"));
+      expect(files.length).toBe(1);
+    });
   });
 
   describe("pruning", () => {
@@ -399,10 +464,10 @@ describe("CrashRecoveryService", () => {
     it("creates backup on takeBackup", () => {
       storeMock.get.mockImplementation((key: string) => {
         if (key === "appState") return { sidebarWidth: 400, terminals: [] };
-        if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
-        if (key === "windowStates")
-          return { "/home/user/project-a": { width: 1200, height: 800, isMaximized: false } };
         return { autoRestoreOnCrash: false };
+      });
+      windowStatesStoreMock.get.mockReturnValue({
+        "/home/user/project-a": { width: 1200, height: 800, isMaximized: false },
       });
 
       const svc = makeService();
@@ -414,7 +479,6 @@ describe("CrashRecoveryService", () => {
       const snapshot = JSON.parse(fs.readFileSync(backupPath, "utf8"));
       expect(typeof snapshot.capturedAt).toBe("number");
       expect(snapshot.appState).toBeDefined();
-      expect(snapshot.windowState).toBeDefined();
       expect(snapshot.windowStates).toBeDefined();
       expect(snapshot.projects).toBeUndefined();
     });
@@ -422,10 +486,13 @@ describe("CrashRecoveryService", () => {
     it("restoreBackup applies snapshot to store", () => {
       const backupDir = path.join(userData, "backups");
       fs.mkdirSync(backupDir, { recursive: true });
+      const windowStates = {
+        "/home/user/project-a": { width: 1400, height: 900, isMaximized: false },
+      };
       const snapshot = {
         capturedAt: Date.now(),
         appState: { sidebarWidth: 999, terminals: [] },
-        windowState: { width: 1400, height: 900, isMaximized: false },
+        windowStates,
       };
       fs.writeFileSync(path.join(backupDir, "session-state.json"), JSON.stringify(snapshot));
 
@@ -437,7 +504,7 @@ describe("CrashRecoveryService", () => {
 
       expect(result).toBe(true);
       expect(storeMock.set).toHaveBeenCalledWith("appState", snapshot.appState);
-      expect(storeMock.set).toHaveBeenCalledWith("windowState", snapshot.windowState);
+      expect(windowStatesStoreMock.set).toHaveBeenCalledWith("windowStates", windowStates);
     });
 
     it("restoreBackup filters terminals when panelIds is provided", () => {
@@ -449,11 +516,10 @@ describe("CrashRecoveryService", () => {
           sidebarWidth: 999,
           terminals: [
             { id: "t1", kind: "terminal", title: "T1" },
-            { id: "t2", kind: "agent", title: "T2" },
+            { id: "t2", kind: "terminal", title: "T2" },
             { id: "t3", kind: "browser", title: "T3" },
           ],
         },
-        windowState: { width: 1400, height: 900, isMaximized: false },
       };
       fs.writeFileSync(path.join(backupDir, "session-state.json"), JSON.stringify(snapshot));
 
@@ -482,7 +548,6 @@ describe("CrashRecoveryService", () => {
         capturedAt: Date.now(),
         appState: { sidebarWidth: 999, terminals: [] },
         projects: { list: [{ id: "p1", name: "Old" }], currentProjectId: "p1" },
-        windowState: { width: 1400, height: 900, isMaximized: false },
       };
       fs.writeFileSync(path.join(backupDir, "session-state.json"), JSON.stringify(snapshot));
 
@@ -507,9 +572,9 @@ describe("CrashRecoveryService", () => {
       storeMock.get.mockImplementation((key: string) => {
         if (key === "appState") return { sidebarWidth: 400, terminals: [] };
         if (key === "projects") return { list: [{ id: "p1" }], currentProjectId: "p1" };
-        if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
         return { autoRestoreOnCrash: false };
       });
+      windowStatesStoreMock.get.mockReturnValue({});
 
       const svc = makeService();
       svc.initialize();
@@ -523,9 +588,9 @@ describe("CrashRecoveryService", () => {
     it("captureSessionSnapshot never reads projects key from store", () => {
       storeMock.get.mockImplementation((key: string) => {
         if (key === "appState") return { sidebarWidth: 400, terminals: [] };
-        if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
         return { autoRestoreOnCrash: false };
       });
+      windowStatesStoreMock.get.mockReturnValue({});
 
       const svc = makeService();
       svc.initialize();
@@ -564,7 +629,7 @@ describe("CrashRecoveryService", () => {
       fs.mkdirSync(backupDir, { recursive: true });
       const terminals = [
         { id: "t1", kind: "terminal", title: "Shell", cwd: "/home", location: "grid" },
-        { id: "t2", kind: "agent", title: "Claude", location: "dock", worktreeId: "w1" },
+        { id: "t2", kind: "terminal", title: "Claude", location: "dock", worktreeId: "w1" },
       ];
       fs.writeFileSync(
         path.join(backupDir, "session-state.json"),
@@ -592,7 +657,7 @@ describe("CrashRecoveryService", () => {
       expect(pending!.panels).toBeDefined();
       expect(pending!.panels!.length).toBe(2);
       expect(pending!.panels![0]).toMatchObject({ id: "t1", kind: "terminal", title: "Shell" });
-      expect(pending!.panels![1]).toMatchObject({ id: "t2", kind: "agent", location: "dock" });
+      expect(pending!.panels![1]).toMatchObject({ id: "t2", kind: "terminal", location: "dock" });
     });
 
     it("marks panels as suspect when created near crash time", () => {
@@ -652,7 +717,7 @@ describe("CrashRecoveryService", () => {
         },
         {
           id: "t2",
-          kind: "agent",
+          kind: "terminal",
           title: "Claude",
           location: "dock",
           agentState: "working",
@@ -724,9 +789,9 @@ describe("CrashRecoveryService", () => {
       vi.useFakeTimers();
       storeMock.get.mockImplementation((key: string) => {
         if (key === "appState") return { sidebarWidth: 400, terminals: [] };
-        if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
         return { autoRestoreOnCrash: false };
       });
+      windowStatesStoreMock.get.mockReturnValue({});
 
       const svc = makeService();
       svc.initialize();
@@ -785,6 +850,28 @@ describe("CrashRecoveryService", () => {
     });
   });
 
+  describe("getLastBackupTimestamp", () => {
+    it("returns null when no backup file exists", () => {
+      const svc = makeService();
+      svc.initialize();
+      expect(svc.getLastBackupTimestamp()).toBeNull();
+    });
+
+    it("returns mtimeMs when backup file exists", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const backupPath = path.join(backupDir, "session-state.json");
+      fs.writeFileSync(backupPath, JSON.stringify({ capturedAt: Date.now(), appState: {} }));
+
+      const svc = makeService();
+      svc.initialize();
+
+      const ts = svc.getLastBackupTimestamp();
+      const stat = fs.statSync(backupPath);
+      expect(ts).toBe(stat.mtimeMs);
+    });
+  });
+
   describe("resetToFresh", () => {
     it("resets appState to clean workspace defaults", () => {
       storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
@@ -813,6 +900,39 @@ describe("CrashRecoveryService", () => {
       expect(storeMock.set).toHaveBeenCalledTimes(1);
       expect(storeMock.set.mock.calls[0][0]).toBe("appState");
     });
+
+    it("clears cached backup snapshot so restoreBackup has no stale reference", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { sidebarWidth: 999, terminals: [] },
+        })
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+      const svc = makeService();
+      svc.initialize();
+
+      // Delete backup file so restoreBackup can only succeed via cache
+      fs.unlinkSync(path.join(backupDir, "session-state.json"));
+
+      storeMock.set.mockClear();
+      svc.resetToFresh();
+
+      expect(svc.restoreBackup()).toBe(false);
+    });
   });
 
   describe("cleanupOnExit", () => {
@@ -840,6 +960,41 @@ describe("CrashRecoveryService", () => {
       // Actually in our impl, recordCrash writes a new lock with crash info, so it still exists
       // cleanupOnExit skips deletion when crashRecorded=true
       expect(fs.existsSync(markerPath)).toBe(true);
+    });
+
+    it("clears cached backup snapshot even when crashRecorded prevents backup/marker cleanup", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { sidebarWidth: 999, terminals: [] },
+        })
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+      const svc = makeService();
+      svc.initialize();
+
+      // Record crash so cleanupOnExit skips takeBackup/deleteMarker
+      svc.recordCrash(new Error("test crash"));
+
+      // Delete backup file so restoreBackup can only succeed via cache
+      fs.unlinkSync(path.join(backupDir, "session-state.json"));
+
+      svc.cleanupOnExit();
+
+      expect(svc.restoreBackup()).toBe(false);
     });
   });
 });

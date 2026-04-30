@@ -2,6 +2,7 @@ import { store } from "../store.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../../shared/types/index.js";
 import { UserAgentConfigSchema, UserAgentRegistrySchema } from "../../shared/types/index.js";
 import { setUserRegistry, isBuiltInAgent } from "../../shared/config/agentRegistry.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const RESERVED_REGISTRY_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const SAFE_AGENT_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
@@ -71,7 +72,7 @@ export class UserAgentRegistryService {
       this.syncToSharedRegistry();
       return { success: true };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = formatErrorMessage(error, "Failed to save user agent registry");
       console.error("[UserAgentRegistryService] Failed to save registry:", error);
       return { success: false, error: `Failed to save: ${message}` };
     }

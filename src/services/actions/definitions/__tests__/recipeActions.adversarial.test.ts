@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ActionDefinition } from "@shared/types/actions";
-import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
+import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const recipeStoreMock = vi.hoisted(() => ({
   getState: vi.fn(),
@@ -33,7 +32,7 @@ function setupActions(): (
   return async (id, args, ctx) => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
-    const def = factory() as ActionDefinition<unknown, unknown>;
+    const def = factory() as AnyActionDefinition;
     return def.run(args, (ctx ?? {}) as never);
   };
 }
@@ -224,7 +223,7 @@ describe("recipeActions adversarial", () => {
     await run("recipe.editor.openFromLayout", { worktreeId: "wt-a" });
 
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail: { worktreeId: string; initialTerminals: unknown[] };
     };
@@ -254,7 +253,7 @@ describe("recipeActions adversarial", () => {
       initialTerminals: [{ title: "x" }],
     });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail: { worktreeId: string; recipeId: string; initialTerminals: unknown };
     };
@@ -272,7 +271,7 @@ describe("recipeActions adversarial", () => {
     const run = setupActions();
     await run("recipe.manager.open");
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail?: unknown;
     };

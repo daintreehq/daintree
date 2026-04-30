@@ -1,8 +1,14 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
+import { terminalClient } from "@/clients";
+import { openSendToAgentPalette } from "@/hooks/useSendToAgentPalette";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
+import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
+import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
 export function registerTerminalInputActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -37,8 +43,6 @@ export function registerTerminalInputActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
-      const { terminalInstanceService } =
-        await import("@/services/terminal/TerminalInstanceService");
       const managed = terminalInstanceService.get(targetId);
       if (managed?.terminal) {
         const selection = managed.terminal.getSelection();
@@ -65,15 +69,11 @@ export function registerTerminalInputActions(
       if (!targetId) return;
       const terminal = state.panelsById[targetId];
       if (terminal?.isInputLocked) return;
-      const { terminalInstanceService } =
-        await import("@/services/terminal/TerminalInstanceService");
       const managed = terminalInstanceService.get(targetId);
       if (!managed || managed.isInputLocked) return;
       try {
         const text = await navigator.clipboard.readText();
         if (!text) return;
-        const { terminalClient } = await import("@/clients");
-        const { formatWithBracketedPaste } = await import("@shared/utils/terminalInputProtocol");
         if (managed.terminal.modes.bracketedPasteMode) {
           terminalClient.write(targetId, formatWithBracketedPaste(text));
         } else {
@@ -128,8 +128,8 @@ export function registerTerminalInputActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["save", "draft", "store", "park"],
     run: async () => {
-      const { triggerStashInput } = await import("@/store/terminalInputStore");
       const state = usePanelStore.getState();
       const targetId = state.focusedId;
       if (targetId) triggerStashInput(targetId);
@@ -144,8 +144,8 @@ export function registerTerminalInputActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["restore", "recall", "unstash"],
     run: async () => {
-      const { triggerPopStash } = await import("@/store/terminalInputStore");
       const state = usePanelStore.getState();
       const targetId = state.focusedId;
       if (targetId) triggerPopStash(targetId);
@@ -154,16 +154,15 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.bulkCommand", () => ({
     id: "terminal.bulkCommand",
-    title: "Bulk Operations",
-    description: "Send keystrokes or commands to multiple agent terminals",
+    title: "Fleet: Broadcast",
+    description: "Arm every terminal in the current worktree for broadcast",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["broadcast", "fleet", "multi"],
     run: async () => {
-      const { openBulkCommandPalette } =
-        await import("@/components/BulkCommandCenter/BulkCommandPalette");
-      openBulkCommandPalette();
+      useFleetArmingStore.getState().armAll("current");
     },
   }));
 
@@ -186,8 +185,107 @@ export function registerTerminalInputActions(
       if (!terminal) return;
       if (terminal.kind && !panelKindHasPty(terminal.kind)) return;
 
-      const { openSendToAgentPalette } = await import("@/hooks/useSendToAgentPalette");
       openSendToAgentPalette(sourceId);
+    },
+  }));
+
+  actions.set("terminal.arm", () => ({
+    id: "terminal.arm",
+    title: "Arm Terminal",
+    description: "Add a terminal to the fleet arming set",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string() }),
+    run: async (args: unknown) => {
+      const { terminalId } = args as { terminalId: string };
+      const terminal = usePanelStore.getState().panelsById[terminalId];
+      if (!isFleetArmEligible(terminal)) return;
+      useFleetArmingStore.getState().armId(terminalId);
+    },
+  }));
+
+  actions.set("terminal.disarm", () => ({
+    id: "terminal.disarm",
+    title: "Disarm Terminal",
+    description: "Remove a terminal from the fleet arming set",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string() }),
+    run: async (args: unknown) => {
+      const { terminalId } = args as { terminalId: string };
+      useFleetArmingStore.getState().disarmId(terminalId);
+    },
+  }));
+
+  actions.set("terminal.disarmAll", () => ({
+    id: "terminal.disarmAll",
+    title: "Disarm All",
+    description: "Clear the fleet arming set",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      useFleetArmingStore.getState().clear();
+    },
+  }));
+
+  actions.set("terminal.armByState", () => ({
+    id: "terminal.armByState",
+    title: "Arm by State",
+    description: "Arm all eligible agent terminals in a given agent state",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({
+      state: z.enum(["working", "waiting", "finished"]),
+      scope: z.enum(["current", "all"]).optional(),
+      extend: z.boolean().optional(),
+    }),
+    run: async (args: unknown) => {
+      const {
+        state,
+        scope = "current",
+        extend = false,
+      } = args as {
+        state: "working" | "waiting" | "finished";
+        scope?: "current" | "all";
+        extend?: boolean;
+      };
+      useFleetArmingStore.getState().armByState(state, scope, extend);
+    },
+  }));
+
+  actions.set("terminal.armAll", () => ({
+    id: "terminal.armAll",
+    title: "Arm All Eligible",
+    description: "Arm every eligible terminal",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ scope: z.enum(["current", "all"]).optional() }).optional(),
+    run: async (args: unknown) => {
+      const { scope = "current" } = (args ?? {}) as { scope?: "current" | "all" };
+      useFleetArmingStore.getState().armAll(scope);
+    },
+  }));
+
+  actions.set("terminal.armDefault", () => ({
+    id: "terminal.armDefault",
+    title: "Arm Current Worktree",
+    description: "Arm all eligible terminals in the active worktree",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      useFleetArmingStore.getState().armAll("current");
     },
   }));
 }

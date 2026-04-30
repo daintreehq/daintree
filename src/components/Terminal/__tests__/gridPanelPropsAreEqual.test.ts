@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { gridPanelPropsAreEqual, type GridPanelProps } from "../GridPanel";
 import type { TerminalInstance } from "@/store";
 import type { TabInfo } from "@/components/Panel/TabButton";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 const noop = () => {};
 
@@ -14,9 +15,7 @@ const baseTerminal: TerminalInstance = {
 const baseTab: TabInfo = {
   id: "t-1",
   title: "Terminal 1",
-  type: undefined,
-  agentId: undefined,
-  detectedProcessId: undefined,
+  chrome: deriveTerminalChrome(),
   kind: "terminal",
   agentState: undefined,
   isActive: true,
@@ -155,7 +154,17 @@ describe("gridPanelPropsAreEqual", () => {
 
   it("returns false when terminal.kind changes", () => {
     const prev = baseProps({ terminal: { ...baseTerminal, kind: "terminal" } as TerminalInstance });
-    const next = baseProps({ terminal: { ...baseTerminal, kind: "agent" } as TerminalInstance });
+    const next = baseProps({ terminal: { ...baseTerminal, kind: "browser" } as TerminalInstance });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when terminal.launchAgentId changes (identity swap)", () => {
+    const prev = baseProps({
+      terminal: { ...baseTerminal, kind: "terminal", launchAgentId: undefined } as TerminalInstance,
+    });
+    const next = baseProps({
+      terminal: { ...baseTerminal, kind: "terminal", launchAgentId: "claude" } as TerminalInstance,
+    });
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
   });
 
@@ -175,11 +184,45 @@ describe("gridPanelPropsAreEqual", () => {
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
   });
 
+  it("returns false when terminal.pluginId changes", () => {
+    const prev = baseProps({
+      terminal: { ...baseTerminal, pluginId: undefined } as TerminalInstance,
+    });
+    const next = baseProps({
+      terminal: { ...baseTerminal, pluginId: "my-plugin" } as TerminalInstance,
+    });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
   it("returns false when terminal.detectedProcessId changes", () => {
     const prev = baseProps({ terminal: { ...baseTerminal } as TerminalInstance });
     const next = baseProps({
       terminal: { ...baseTerminal, detectedProcessId: "node" } as TerminalInstance,
     });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when isFleetScope toggles", () => {
+    const prev = baseProps({ isFleetScope: false });
+    const next = baseProps({ isFleetScope: true });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns true when both isFleetScope are undefined", () => {
+    const prev = baseProps();
+    const next = baseProps();
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(true);
+  });
+
+  it("returns false when titleOverride changes", () => {
+    const prev = baseProps({ titleOverride: "wt-a — Claude" });
+    const next = baseProps({ titleOverride: "wt-b — Claude" });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when titleOverride becomes defined", () => {
+    const prev = baseProps({ titleOverride: undefined });
+    const next = baseProps({ titleOverride: "wt-a — Claude" });
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
   });
 });

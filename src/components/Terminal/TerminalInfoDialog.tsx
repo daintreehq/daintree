@@ -2,9 +2,11 @@ import { useState, useEffect } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Info } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { logError } from "@/utils/logger";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalInfoPayload } from "@/types/electron";
 import { actionService } from "@/services/ActionService";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface TerminalInfoDialogProps {
   isOpen: boolean;
@@ -79,12 +81,10 @@ function InfoRow({ label, value, mono = false }: InfoRowProps) {
     <div className="flex justify-between items-start gap-4 text-sm">
       <span className="text-daintree-text/70 shrink-0 select-none">{label}:</span>
       {typeof displayValue === "string" ? (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>{valueElement}</TooltipTrigger>
-            <TooltipContent side="bottom">{displayValue}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>{valueElement}</TooltipTrigger>
+          <TooltipContent side="bottom">{displayValue}</TooltipContent>
+        </Tooltip>
       ) : (
         valueElement
       )}
@@ -148,7 +148,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
           setInfo(result.result as TerminalInfoPayload);
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown error";
+        const message = formatErrorMessage(err, "Failed to load terminal info");
         if (isMounted) {
           setError(message);
         }
@@ -166,14 +166,18 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
     };
   }, [isOpen, terminalId]);
 
-  const showAgentSection = (info: TerminalInfoPayload): boolean =>
+  // "Launch Context" reflects how the panel was configured at spawn time.
+  const showAgentLaunchSection = (info: TerminalInfoPayload): boolean =>
     !!(
-      info.isAgentTerminal ||
       info.agentId ||
-      info.detectedAgentType ||
       (info.agentLaunchFlags && info.agentLaunchFlags.length > 0) ||
       info.agentModelId
     );
+  // "Live State" reflects what's running right now. Shown for agent panels,
+  // while a runtime agent is detected, or once an agent has ever been detected
+  // in this session (so plain terminals that ran `claude` still show the exit).
+  const showAgentLiveSection = (info: TerminalInfoPayload): boolean =>
+    !!(info.isAgentTerminal || info.detectedAgentId || info.everDetectedAgent);
 
   const formatArgsForClipboard = (args: string[] | undefined): string => {
     if (args === undefined) return "N/A";
@@ -184,15 +188,24 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   const copyToClipboard = async () => {
     if (!info) return;
 
-    const agentSection = showAgentSection(info)
+    const launchSection = showAgentLaunchSection(info)
       ? `
 
-Agent:
+Agent — Launch Context:
   Agent ID: ${info.agentId ?? "N/A"}
-  Detected Agent: ${info.detectedAgentType ?? "N/A"}
   Launch Flags: ${formatArgsForClipboard(info.agentLaunchFlags)}
   Model: ${info.agentModelId ?? "N/A"}`
       : "";
+
+    const liveSection = showAgentLiveSection(info)
+      ? `
+
+Agent — Live State:
+  Detected Agent ID: ${info.detectedAgentId ?? "None — agent has exited"}
+  Detected Agent Type: ${info.detectedAgentType ?? "N/A"}`
+      : "";
+
+    const agentSection = launchSection + liveSection;
 
     const diagnosticInfo = `Terminal Diagnostic Information
 =====================================
@@ -243,7 +256,7 @@ Performance & Diagnostics:
     try {
       await navigator.clipboard.writeText(diagnosticInfo);
     } catch (err) {
-      console.error("Failed to copy to clipboard:", err);
+      logError("Failed to copy to clipboard", err);
     }
   };
 
@@ -288,14 +301,20 @@ Performance & Diagnostics:
               <InfoListRow label="Args" items={info.spawnArgs} />
             </InfoSection>
 
-            {showAgentSection(info) && (
-              <InfoSection title="Agent">
+            {showAgentLaunchSection(info) && (
+              <InfoSection title="Agent — Launch Context">
                 {info.agentId && <InfoRow label="Agent ID" value={info.agentId} />}
-                {info.detectedAgentType && (
-                  <InfoRow label="Detected Agent" value={info.detectedAgentType} />
-                )}
                 <InfoListRow label="Launch Flags" items={info.agentLaunchFlags} />
                 {info.agentModelId && <InfoRow label="Model" value={info.agentModelId} mono />}
+              </InfoSection>
+            )}
+
+            {showAgentLiveSection(info) && (
+              <InfoSection title="Agent — Live State">
+                <InfoRow
+                  label="Detected Agent"
+                  value={info.detectedAgentId ?? "None — agent has exited"}
+                />
               </InfoSection>
             )}
 

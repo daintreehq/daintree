@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect, type ReactNode } from "react";
+import { useState, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Toolbar } from "./Toolbar";
 import { Sidebar } from "./Sidebar";
 import { TerminalDockRegion } from "./TerminalDockRegion";
@@ -6,19 +7,33 @@ import { DiagnosticsDock } from "../Diagnostics";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { PortalDock, PortalVisibilityController } from "../Portal";
 import { HelpPanel } from "../HelpPanel";
+import { ThemeBrowser } from "../ThemeBrowser";
 import { ProjectSwitchOverlay } from "@/components/Project";
+import { FleetArmingRibbon } from "@/components/Fleet";
 import { ChordIndicator } from "./ChordIndicator";
-import { DemoCursor, DemoOverlay } from "../Demo";
+import { DemoCaptureBridge, DemoCursor, DemoOverlay } from "../Demo";
 
 import { AllClearOverlay } from "../AllClearOverlay";
-import { useDiagnosticsStore, useDockStore, type PanelState } from "@/store";
+import {
+  useDiagnosticsStore,
+  useDockStore,
+  usePreferencesStore,
+  useUIStore,
+  type PanelState,
+} from "@/store";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { useThemeBrowserStore } from "@/store/themeBrowserStore";
+import { useCcrPresetsSubscription } from "@/hooks/useCcrPresetsSubscription";
+import { useProjectPresetsSubscription } from "@/hooks/useProjectPresetsSubscription";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
 import { useLayoutState } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
+import { suppressSidebarResizes } from "@/lib/sidebarToggle";
+import { logError } from "@/utils/logger";
 
 interface AppLayoutProps {
   children?: ReactNode;
@@ -51,9 +66,15 @@ export function AppLayout({
   isHydrated = true,
   projectSwitcherPalette,
 }: AppLayoutProps) {
+  useCcrPresetsSubscription();
+  useProjectPresetsSubscription();
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const currentProject = useProjectStore((state) => state.currentProject);
   const layout = useLayoutState();
+  const overlayClaims = useUIStore((s) => s.overlayClaims);
+  const isThemeBrowserOpen = overlayClaims.has("theme-browser");
+  const themeBrowserOpen = useThemeBrowserStore((s) => s.isOpen);
+  const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
   const showSidebar = !layout.isFocusMode && currentProject != null;
 
   useEffect(() => {
@@ -64,14 +85,25 @@ export function AppLayout({
     }
   }, [layout.performanceMode]);
 
-  const handleToggleProblems = useCallback(() => {
+  useEffect(() => {
+    if (reduceAnimations) {
+      document.body.setAttribute("data-reduce-animations", "true");
+    } else {
+      document.body.removeAttribute("data-reduce-animations");
+    }
+    return () => {
+      document.body.removeAttribute("data-reduce-animations");
+    };
+  }, [reduceAnimations]);
+
+  const handleToggleProblems = () => {
     const dock = useDiagnosticsStore.getState();
     if (!dock.isOpen || dock.activeTab !== "problems") {
       layout.openDiagnosticsDock("problems");
     } else {
       layout.setDiagnosticsOpen(false);
     }
-  }, [layout.openDiagnosticsDock, layout.setDiagnosticsOpen]);
+  };
 
   useEffect(() => {
     const restoreState = async () => {
@@ -89,8 +121,9 @@ export function AppLayout({
         useDockStore.getState().hydrate({
           popoverHeight: appState.dockedPopoverHeight,
         });
+        useFleetScopeFlagStore.getState().hydrate(appState.fleetScopeMode);
       } catch (error) {
-        console.error("Failed to restore app state:", error);
+        logError("Failed to restore app state", error);
       }
     };
     restoreState();
@@ -103,7 +136,7 @@ export function AppLayout({
       try {
         await appClient.setState({ sidebarWidth });
       } catch (error) {
-        console.error("Failed to persist sidebar width:", error);
+        logError("Failed to persist sidebar width", error);
       }
     };
 
@@ -125,7 +158,7 @@ export function AppLayout({
         try {
           await appClient.setState({ focusMode: layout.isFocusMode });
         } catch (error) {
-          console.error("Failed to persist focus mode to global state:", error);
+          logError("Failed to persist focus mode to global state", error);
         }
         return;
       }
@@ -137,7 +170,7 @@ export function AppLayout({
           layout.savedPanelState as PanelState | undefined
         );
       } catch (error) {
-        console.error("Failed to persist focus mode to project state:", error);
+        logError("Failed to persist focus mode to project state", error);
       }
     };
 
@@ -145,7 +178,7 @@ export function AppLayout({
     return () => clearTimeout(timer);
   }, [layout.isFocusMode, layout.savedPanelState, currentProject?.id, isHydrated]);
 
-  const handleToggleFocusMode = useCallback(async () => {
+  const handleToggleFocusMode = async () => {
     if (layout.isFocusMode) {
       if (layout.savedPanelState) {
         setSidebarWidth((layout.savedPanelState as PanelState).sidebarWidth);
@@ -159,14 +192,14 @@ export function AppLayout({
         try {
           await window.electron.project.setFocusMode(currentProject.id, false, undefined);
         } catch (error) {
-          console.error("Failed to clear focus panel state:", error);
+          logError("Failed to clear focus panel state", error);
         }
       } else {
         // Fall back to global state if no project
         try {
           await appClient.setState({ focusPanelState: undefined });
         } catch (error) {
-          console.error("Failed to clear focus panel state:", error);
+          logError("Failed to clear focus panel state", error);
         }
       }
     } else {
@@ -180,39 +213,40 @@ export function AppLayout({
         try {
           await window.electron.project.setFocusMode(currentProject.id, true, currentPanelState);
         } catch (error) {
-          console.error("Failed to persist focus panel state:", error);
+          logError("Failed to persist focus panel state", error);
         }
       } else {
         // Fall back to global state if no project
         try {
           await appClient.setState({ focusPanelState: currentPanelState });
         } catch (error) {
-          console.error("Failed to persist focus panel state:", error);
+          logError("Failed to persist focus panel state", error);
         }
       }
     }
-  }, [
-    layout.isFocusMode,
-    layout.savedPanelState,
-    layout.toggleFocusMode,
-    layout.diagnosticsOpen,
-    sidebarWidth,
-    currentProject?.id,
-  ]);
+  };
+
+  const handleToggleFocusModeRef = useRef(handleToggleFocusMode);
+  useEffect(() => {
+    handleToggleFocusModeRef.current = handleToggleFocusMode;
+  });
 
   useEffect(() => {
     const handleFocusModeToggle = () => {
-      handleToggleFocusMode();
+      if (useUIStore.getState().hasOpenOverlays()) return;
+      suppressSidebarResizes();
+      void handleToggleFocusModeRef.current();
     };
 
     window.addEventListener("daintree:toggle-focus-mode", handleFocusModeToggle);
     return () => {
       window.removeEventListener("daintree:toggle-focus-mode", handleFocusModeToggle);
     };
-  }, [handleToggleFocusMode]);
+  }, []);
 
   useEffect(() => {
     const handlePortalToggle = () => {
+      if (useUIStore.getState().hasOpenOverlays()) return;
       layout.togglePortal();
     };
 
@@ -221,7 +255,10 @@ export function AppLayout({
   }, [layout.togglePortal]);
 
   useEffect(() => {
-    const handleResetSidebarWidth = () => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+    const handleResetSidebarWidth = () => {
+      if (useUIStore.getState().hasOpenOverlays()) return;
+      setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+    };
     window.addEventListener("daintree:reset-sidebar-width", handleResetSidebarWidth);
     return () =>
       window.removeEventListener("daintree:reset-sidebar-width", handleResetSidebarWidth);
@@ -282,9 +319,6 @@ export function AppLayout({
       style={{
         height: "100vh",
         width: "100vw",
-        // Legacy Canopy build: reserve space for the permanent migration bar
-        // so bottom controls (status bar, dock tabs) stay clickable.
-        paddingBottom: IS_LEGACY_BUILD ? "var(--legacy-migration-bar-height, 40px)" : undefined,
         backgroundColor: "var(--color-daintree-bg)",
         display: "flex",
         flexDirection: "column",
@@ -292,19 +326,23 @@ export function AppLayout({
       }}
     >
       <PortalVisibilityController />
-      <Toolbar
-        onLaunchAgent={handleLaunchAgent}
-        onSettings={handleSettings}
-        onPreloadSettings={onPreloadSettings}
-        errorCount={layout.errorCount}
-        onToggleProblems={handleToggleProblems}
-        isFocusMode={layout.isFocusMode}
-        onToggleFocusMode={handleToggleFocusMode}
-        agentAvailability={agentAvailability}
-        agentSettings={agentSettings}
-        projectSwitcherPalette={projectSwitcherPalette}
-      />
+      <div {...(isThemeBrowserOpen ? { inert: true } : {})}>
+        <Toolbar
+          onLaunchAgent={handleLaunchAgent}
+          onSettings={handleSettings}
+          onPreloadSettings={onPreloadSettings}
+          errorCount={layout.errorCount}
+          onToggleProblems={handleToggleProblems}
+          isFocusMode={layout.isFocusMode}
+          onToggleFocusMode={handleToggleFocusMode}
+          agentAvailability={agentAvailability}
+          agentSettings={agentSettings}
+          projectSwitcherPalette={projectSwitcherPalette}
+        />
+        <FleetArmingRibbon />
+      </div>
       <div
+        {...(isThemeBrowserOpen ? { inert: true } : {})}
         className="flex-1 flex flex-col overflow-hidden"
         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
       >
@@ -312,7 +350,7 @@ export function AppLayout({
           className="flex-1 flex overflow-hidden"
           style={{ flex: 1, display: "flex", overflow: "hidden" }}
         >
-          {showSidebar && (
+          {currentProject != null && (
             <ErrorBoundary variant="section" componentName="Sidebar">
               <Sidebar width={effectiveSidebarWidth} onResize={handleSidebarResize}>
                 {sidebarContent}
@@ -321,6 +359,7 @@ export function AppLayout({
           )}
           <ErrorBoundary variant="section" componentName="MainContent">
             <main
+              aria-label="Content"
               className="flex-1 flex flex-col overflow-hidden bg-daintree-bg relative"
               style={{
                 flex: 1,
@@ -365,10 +404,35 @@ export function AppLayout({
       <ChordIndicator />
 
       <AllClearOverlay />
+      {themeBrowserOpen &&
+        createPortal(
+          <>
+            <div
+              aria-hidden="true"
+              className="fixed inset-0 z-30 bg-scrim-soft/30 transition-[backdrop-filter] duration-150 hover:backdrop-blur-[2px]"
+            />
+            <ErrorBoundary
+              variant="section"
+              componentName="ThemeBrowser"
+              onError={() => useThemeBrowserStore.getState().close()}
+            >
+              <div
+                className="fixed inset-y-0 z-40 pointer-events-auto"
+                style={{
+                  right: layout.portalOpen ? `${layout.portalWidth}px` : "0px",
+                }}
+              >
+                <ThemeBrowser />
+              </div>
+            </ErrorBoundary>
+          </>,
+          document.body
+        )}
       {window.electron?.demo && (
         <>
           <DemoOverlay />
           <DemoCursor />
+          <DemoCaptureBridge />
         </>
       )}
     </div>

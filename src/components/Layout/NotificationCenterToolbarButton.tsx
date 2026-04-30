@@ -1,15 +1,21 @@
-import { useRef, useEffect, memo } from "react";
+import { useRef, useEffect, useState, memo } from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
-import { Bell } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Bell, BellOff } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useUIStore } from "@/store/uiStore";
 import { useShallow } from "zustand/react/shallow";
+import { isScheduledQuietNow } from "@shared/utils/quietHours";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
+
+const timeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+});
 
 export const NotificationCenterToolbarButton = memo(function NotificationCenterToolbarButton({
   "data-toolbar-item": dataToolbarItem,
@@ -25,7 +31,94 @@ export const NotificationCenterToolbarButton = memo(function NotificationCenterT
   );
   const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
-  const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
+  const {
+    enabled: notificationsEnabled,
+    quietUntil,
+    quietHoursEnabled,
+    quietHoursStartMin,
+    quietHoursEndMin,
+    quietHoursWeekdays,
+  } = useNotificationSettingsStore(
+    useShallow((s) => ({
+      enabled: s.enabled,
+      quietUntil: s.quietUntil,
+      quietHoursEnabled: s.quietHoursEnabled,
+      quietHoursStartMin: s.quietHoursStartMin,
+      quietHoursEndMin: s.quietHoursEndMin,
+      quietHoursWeekdays: s.quietHoursWeekdays,
+    }))
+  );
+
+  // Force re-render at session-mute expiry and at scheduled quiet-hours
+  // boundaries. Without this the icon stays in its old state until something
+  // else triggers a render.
+  const [, forceTick] = useState(0);
+  const now = Date.now();
+  const isSessionMuted = quietUntil > now;
+  const isScheduledMuted = isScheduledQuietNow({
+    quietHoursEnabled,
+    quietHoursStartMin,
+    quietHoursEndMin,
+    quietHoursWeekdays,
+  });
+  const isDndActive = isSessionMuted || isScheduledMuted;
+
+  useEffect(() => {
+    const tick = () => forceTick((n) => n + 1);
+    const timeouts: ReturnType<typeof setTimeout>[] = [];
+    const intervals: ReturnType<typeof setInterval>[] = [];
+
+    const clearAll = () => {
+      for (const t of timeouts) clearTimeout(t);
+      for (const i of intervals) clearInterval(i);
+      timeouts.length = 0;
+      intervals.length = 0;
+    };
+
+    // Visibility may flip between scheduling and firing; bail out if hidden.
+    const tickIfVisible = () => {
+      if (document.hidden) return;
+      tick();
+    };
+
+    const schedule = () => {
+      if (isSessionMuted) {
+        const delay = Math.max(0, quietUntil - Date.now());
+        timeouts.push(setTimeout(tickIfVisible, delay + 50));
+      }
+
+      if (quietHoursEnabled) {
+        // Coarse minute-poll re-render. Aligns to the next minute, then repeats.
+        // Simpler than computing exact start/end edges across midnight/DST/weekday rollovers.
+        const msToNextMinute = 60_000 - (Date.now() % 60_000);
+        timeouts.push(
+          setTimeout(() => {
+            if (document.hidden) return;
+            tick();
+            intervals.push(setInterval(tickIfVisible, 60_000));
+          }, msToNextMinute + 50)
+        );
+      }
+    };
+
+    const handleVisibility = () => {
+      clearAll();
+      if (!document.hidden) {
+        tick();
+        schedule();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    if (!document.hidden) {
+      schedule();
+    }
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      clearAll();
+    };
+  }, [isSessionMuted, quietUntil, quietHoursEnabled]);
 
   useEffect(() => {
     if (!notificationsEnabled && notificationCenterOpen) closeNotificationCenter();
@@ -33,37 +126,45 @@ export const NotificationCenterToolbarButton = memo(function NotificationCenterT
 
   if (!notificationsEnabled) return null;
 
+  const label = (() => {
+    if (isSessionMuted) {
+      return `Notifications — muted until ${timeFormatter.format(new Date(quietUntil))}`;
+    }
+    if (isScheduledMuted) return "Notifications — scheduled quiet hours";
+    if (notificationUnreadCount > 0) return `Notifications — ${notificationUnreadCount} unread`;
+    return "Notifications";
+  })();
+
+  const Icon = isDndActive ? BellOff : Bell;
+  const dotColor = isDndActive ? "bg-daintree-text/30" : "bg-daintree-text/50";
+
   return (
     <div className="relative">
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={notificationCenterButtonRef}
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              onClick={toggleNotificationCenter}
-              className={toolbarIconButtonClass}
-              aria-label={
-                notificationUnreadCount > 0
-                  ? `Notifications — ${notificationUnreadCount} unread`
-                  : "Notifications"
-              }
-              aria-expanded={notificationCenterOpen}
-              aria-haspopup="dialog"
-            >
-              <Bell />
-              {notificationUnreadCount > 0 && (
-                <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-daintree-accent text-[9px] font-bold tabular-nums text-daintree-bg px-0.5 leading-none">
-                  {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
-                </span>
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Notifications</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            ref={notificationCenterButtonRef}
+            variant="ghost"
+            size="icon"
+            data-toolbar-item={dataToolbarItem}
+            data-dnd-active={isDndActive ? "true" : undefined}
+            onClick={toggleNotificationCenter}
+            className={toolbarIconButtonClass}
+            aria-label={label}
+            aria-expanded={notificationCenterOpen}
+            aria-haspopup="dialog"
+          >
+            <Icon />
+            {notificationUnreadCount > 0 && (
+              <span
+                data-testid="notification-unread-dot"
+                className={`absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full ring-1 ring-daintree-bg/60 ${dotColor}`}
+              />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{label}</TooltipContent>
+      </Tooltip>
       <FixedDropdown
         open={notificationCenterOpen}
         onOpenChange={(open) => {

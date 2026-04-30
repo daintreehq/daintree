@@ -84,7 +84,6 @@ describe("removePanel consoleCaptureStore cleanup", () => {
       panelsById: {
         [panelId]: {
           id: panelId,
-          type: "terminal",
           kind: "browser",
           title: "Browser",
           cwd: "/test",
@@ -122,7 +121,6 @@ describe("removePanel consoleCaptureStore cleanup", () => {
       panelsById: {
         [panelId]: {
           id: panelId,
-          type: "terminal",
           kind: "browser",
           title: "Browser",
           cwd: "/test",
@@ -161,7 +159,6 @@ describe("removePanel consoleCaptureStore cleanup", () => {
       panelsById: {
         "browser-a": {
           id: "browser-a",
-          type: "terminal",
           kind: "browser",
           title: "Browser A",
           cwd: "/test",
@@ -171,7 +168,6 @@ describe("removePanel consoleCaptureStore cleanup", () => {
         },
         "browser-b": {
           id: "browser-b",
-          type: "terminal",
           kind: "browser",
           title: "Browser B",
           cwd: "/test",
@@ -222,7 +218,6 @@ describe("removePanel consoleCaptureStore cleanup", () => {
       panelsById: {
         [panelId]: {
           id: panelId,
-          type: "terminal",
           title: "Shell",
           cwd: "/test",
           cols: 80,

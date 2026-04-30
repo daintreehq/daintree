@@ -140,7 +140,7 @@ describe("useReEntrySummary", () => {
 
     expect(result.current.visible).toBe(true);
     expect(result.current.entries).toHaveLength(1);
-    expect(result.current.entries[0].message).toBe("Second batch");
+    expect(result.current.entries[0]!.message).toBe("Second batch");
   });
 
   it("calls markSummarized on the store", () => {
@@ -161,7 +161,7 @@ describe("useReEntrySummary", () => {
     Date.now = realNow;
 
     const entries = useNotificationHistoryStore.getState().entries;
-    expect(entries[0].summarized).toBe(true);
+    expect(entries[0]!.summarized).toBe(true);
   });
 
   it("does not trigger when document.hasFocus() returns false", () => {
@@ -272,6 +272,6 @@ describe("useReEntrySummary", () => {
 
     expect(result.current.visible).toBe(true);
     expect(result.current.entries).toHaveLength(1);
-    expect(result.current.entries[0].message).toBe("During blur");
+    expect(result.current.entries[0]!.message).toBe("During blur");
   });
 });

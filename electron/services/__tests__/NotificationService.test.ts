@@ -155,6 +155,59 @@ describe("NotificationService", () => {
     expect(win2.off).toHaveBeenCalledWith("blur", expect.any(Function));
   });
 
+  it("detachWindowListeners clears focus state when the window was destroyed mid-session", () => {
+    const win = createWindowMock(true);
+    notificationService.initialize(createRegistryMock([win]) as never);
+
+    expect(notificationService.isWindowFocused()).toBe(true);
+
+    // Simulate native destruction before cleanup runs
+    win.isDestroyed.mockReturnValue(true);
+    notificationService.detachWindowListeners(win.id);
+
+    // Guarded: off() must NOT be called on a destroyed window (Electron 41 throws)
+    expect(win.off).not.toHaveBeenCalled();
+    // Stale focus state must be cleared so isWindowFocused() is correct
+    expect(notificationService.isWindowFocused()).toBe(false);
+
+    // Second call is a no-op — must not throw
+    expect(() => notificationService.detachWindowListeners(win.id)).not.toThrow();
+  });
+
+  it("detachWindowListeners removes focus/blur listeners when the window is still alive", () => {
+    const win = createWindowMock(true);
+    notificationService.initialize(createRegistryMock([win]) as never);
+
+    expect(notificationService.isWindowFocused()).toBe(true);
+
+    notificationService.detachWindowListeners(win.id);
+
+    expect(win.off).toHaveBeenCalledWith("focus", expect.any(Function));
+    expect(win.off).toHaveBeenCalledWith("blur", expect.any(Function));
+    expect(notificationService.isWindowFocused()).toBe(false);
+  });
+
+  it("detachWindowListeners only clears the targeted window in a multi-window setup", () => {
+    const win1 = createWindowMock(true);
+    const win2 = createWindowMock(true);
+    notificationService.initialize(createRegistryMock([win1, win2]) as never);
+
+    expect(notificationService.isWindowFocused()).toBe(true);
+
+    notificationService.detachWindowListeners(win1.id);
+
+    // win1's listeners gone
+    expect(win1.off).toHaveBeenCalledWith("focus", expect.any(Function));
+    expect(win1.off).toHaveBeenCalledWith("blur", expect.any(Function));
+    // win2 untouched
+    expect(win2.off).not.toHaveBeenCalled();
+    // win2 still focused, so service still reports focused
+    expect(notificationService.isWindowFocused()).toBe(true);
+
+    notificationService.detachWindowListeners(win2.id);
+    expect(notificationService.isWindowFocused()).toBe(false);
+  });
+
   it("isWindowFocused returns true if any window is focused", () => {
     const win1 = createWindowMock(false);
     const win2 = createWindowMock(false);

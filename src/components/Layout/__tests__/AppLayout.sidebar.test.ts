@@ -15,9 +15,14 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
     expect(source).toContain("const showSidebar = !layout.isFocusMode && currentProject != null");
   });
 
-  it("uses showSidebar for the sidebar JSX render guard", () => {
-    expect(source).toMatch(/\{showSidebar && \(/);
-    // The old bare isFocusMode guard should not be used for the sidebar
+  it("mounts the sidebar whenever a project is active so the width transition can run", () => {
+    // Issue #5697: the sidebar stays mounted in focus mode (width=0) so the
+    // CSS width transition runs instead of an abrupt unmount. The render guard
+    // is now `currentProject != null`; visibility is driven by width via
+    // effectiveSidebarWidth and by macro focus via setVisibility(showSidebar).
+    expect(source).toMatch(/\{currentProject != null && \(\s*\n\s*<ErrorBoundary[^>]*Sidebar/);
+    // The old unmount-in-focus-mode guard must not be reintroduced.
+    expect(source).not.toMatch(/\{showSidebar && \(\s*\n\s*<ErrorBoundary[^>]*Sidebar/);
     expect(source).not.toMatch(/\{!layout\.isFocusMode && \(\s*\n\s*<ErrorBoundary[^>]*Sidebar/);
   });
 

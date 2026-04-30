@@ -1,0 +1,15 @@
+{"time":0.0,"chunk":"   __( O)>","detectedState":"initializing","confidence":0.9,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":0.2,"chunk":"goose is ready — provider: anthropic, model: claude-sonnet-4-6","detectedState":"initializing","confidence":0.9,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":0.5,"chunk":"🪿 ","detectedState":"waiting","confidence":0.85,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":1.0,"chunk":"⠋ Thinking (Ctrl+C to interrupt)","detectedState":"working","confidence":0.95,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":2.0,"chunk":"⠙ Generating response (Ctrl+C to interrupt)","detectedState":"working","confidence":0.95,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":3.0,"chunk":"⠹ Reading files (Ctrl+C to interrupt)","detectedState":"working","confidence":0.95,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":4.0,"chunk":"▸ developer__shell","detectedState":"working","confidence":0.75,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":4.5,"chunk":"▸ developer__text_editor","detectedState":"working","confidence":0.75,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":5.0,"chunk":"⠸ Working on it (Ctrl+C to interrupt)","detectedState":"working","confidence":0.95,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":6.0,"chunk":"⠼ Calling tool (Ctrl+C to interrupt)","detectedState":"working","confidence":0.95,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":7.0,"chunk":"🪿 follow-up question?","detectedState":"waiting","confidence":0.85,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":8.0,"chunk":"⠴ Streaming (Ctrl+C to interrupt)","detectedState":"working","confidence":0.95,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":9.0,"chunk":"● session closed · 20260429_1","detectedState":"completed","confidence":0.9,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":10.0,"chunk":"context left: 78%","detectedState":"waiting","confidence":0.0,"agentId":"goose","agentVersion":"1.0.0"}
+{"time":11.0,"chunk":"Done. Ready for next instruction.","detectedState":"waiting","confidence":0.0,"agentId":"goose","agentVersion":"1.0.0"}

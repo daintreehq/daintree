@@ -4,6 +4,8 @@ import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import type { ProjectStatsService } from "../services/ProjectStatsService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
+import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
+import { agentConnectivityService } from "../services/connectivity/AgentConnectivityService.js";
 
 let resumeTimeout: NodeJS.Timeout | null = null;
 
@@ -41,6 +43,10 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
     clearResumeTimeout();
     resumeTimeout = setTimeout(async () => {
       resumeTimeout = null;
+      // Capture and clear suspendTime up front so a mid-handler exception
+      // can't leak it into the next wake cycle's sleepDuration calculation.
+      const sleepDuration = suspendTime ? Date.now() - suspendTime : 0;
+      suspendTime = null;
       try {
         const ptyClient = deps.getPtyClient();
         const workspaceClient = deps.getWorkspaceClient();
@@ -50,19 +56,35 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
         }
         if (workspaceClient) {
           await workspaceClient.waitForReady();
-          workspaceClient.setPollingEnabled(true);
+          // Only re-enable polling if a window is focused. If the app is
+          // still fully blurred (e.g. user suspended overnight, machine
+          // wakes before they return), leave polling paused —
+          // removeThrottle() will re-enable it on the next focus event.
+          if (BrowserWindow.getFocusedWindow()) {
+            workspaceClient.setPollingEnabled(true);
+          }
           workspaceClient.resumeHealthCheck();
-          await workspaceClient.refresh();
+          await workspaceClient.refreshOnWake();
         }
-        const sleepDuration = suspendTime ? Date.now() - suspendTime : 0;
+        // Force an immediate token-health probe on wake — a PAT that expired
+        // during a long laptop sleep would otherwise sit undetected until the
+        // next 30-minute poll tick.
+        void gitHubTokenHealthService.refresh({ force: true });
+        // Re-probe agent provider reachability on wake. A long sleep across a
+        // network change (Wi-Fi swap, airplane mode toggle) often invalidates
+        // the cached "reachable" state.
+        void agentConnectivityService.refresh({ force: true, reason: "resume" });
         BrowserWindow.getAllWindows().forEach((win) => {
           if (win && !win.isDestroyed()) {
             const wc = getAppWebContents(win);
             if (!wc.isDestroyed()) {
               try {
-                wc.send(CHANNELS.SYSTEM_WAKE, {
-                  sleepDuration,
-                  timestamp: Date.now(),
+                wc.send(CHANNELS.EVENTS_PUSH, {
+                  name: "system:wake",
+                  payload: {
+                    sleepDuration,
+                    timestamp: Date.now(),
+                  },
                 });
               } catch {
                 // Silently ignore send failures during window disposal.
@@ -70,7 +92,6 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
             }
           }
         });
-        suspendTime = null;
       } catch (error) {
         console.error("[MAIN] Error during resume:", error);
       }
@@ -111,6 +132,7 @@ function applyThrottle(): void {
       pollIntervalActive: WORKSPACE_ACTIVE_NORMAL * THROTTLE_MULTIPLIER,
       pollIntervalBackground: WORKSPACE_BACKGROUND_NORMAL * THROTTLE_MULTIPLIER,
     });
+    workspaceClient.setPollingEnabled(false);
   }
 
   const statsService = focusThrottleDeps.getProjectStatsService();
@@ -134,6 +156,7 @@ function removeThrottle(): void {
       pollIntervalActive: WORKSPACE_ACTIVE_NORMAL,
       pollIntervalBackground: WORKSPACE_BACKGROUND_NORMAL,
     });
+    workspaceClient.setPollingEnabled(true);
     void workspaceClient.refresh();
   }
 
@@ -147,6 +170,14 @@ function removeThrottle(): void {
   if (ptyClient) {
     ptyClient.setProcessTreePollInterval(PROCESS_TREE_NORMAL);
   }
+
+  // Opportunistic token-health re-check on focus regain, gated by the
+  // service's own 5-minute cooldown so rapid window switching doesn't
+  // hammer the API.
+  void gitHubTokenHealthService.refresh();
+  // Same opportunistic re-check for agent reachability — internal cooldown
+  // prevents the alt-tab path from fanning out probes.
+  void agentConnectivityService.refresh({ reason: "focus" });
 }
 
 export function setupWindowFocusThrottle(deps: WindowFocusThrottleDeps): void {

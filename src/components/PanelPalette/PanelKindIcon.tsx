@@ -1,6 +1,14 @@
-import { SquareTerminal, Globe, FileText, Monitor, StickyNote, LucideIcon } from "lucide-react";
+import {
+  SquareTerminal,
+  Globe,
+  FileText,
+  Monitor,
+  MonitorPlay,
+  StickyNote,
+  LucideIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DaintreeIcon, WorktreeIcon } from "@/components/icons";
+import { BrandMark, DaintreeIcon, FolderGit2 } from "@/components/icons";
 import { getAgentConfig } from "@/config/agents";
 import type { ComponentType } from "react";
 
@@ -8,8 +16,9 @@ const ICON_MAP: Record<string, LucideIcon | ComponentType<Record<string, unknown
   terminal: SquareTerminal,
   globe: Globe,
   "file-text": FileText,
-  "git-branch": WorktreeIcon,
+  "git-branch": FolderGit2,
   monitor: Monitor,
+  "monitor-play": MonitorPlay,
   "sticky-note": StickyNote,
   daintree: DaintreeIcon,
 };
@@ -25,13 +34,11 @@ export function PanelKindIcon({ iconId, color, size = 16, className }: PanelKind
   const agentConfig = getAgentConfig(iconId);
   if (agentConfig) {
     const AgentIcon = agentConfig.icon;
+    const brandColor = color ?? agentConfig.color;
     return (
-      <AgentIcon
-        brandColor={color}
-        className={cn("shrink-0", className)}
-        size={size}
-        aria-hidden="true"
-      />
+      <BrandMark brandColor={brandColor} size={size} className={cn("shrink-0", className)}>
+        <AgentIcon brandColor={brandColor} size={size} aria-hidden="true" />
+      </BrandMark>
     );
   }
 

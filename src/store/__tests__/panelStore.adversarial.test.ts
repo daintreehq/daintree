@@ -12,6 +12,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     destroy: vi.fn(),
     detachForProjectSwitch: vi.fn(),
     suppressResizesDuringProjectSwitch: vi.fn(),
+    applyRendererPolicy: vi.fn(),
   },
 }));
 
@@ -24,6 +25,15 @@ vi.mock("@/store/terminalInputStore", () => ({
     getState: () => ({ clearAllDraftInputs: vi.fn() }),
   },
 }));
+
+// Mock window.electron so terminalClient methods in trash/reset paths don't
+// blow up on `window.electron.terminal.*`.
+(globalThis as Record<string, unknown>).window = globalThis.window ?? {};
+(window as unknown as Record<string, unknown>).electron = {
+  terminal: {
+    trash: vi.fn().mockResolvedValue(undefined),
+  },
+};
 
 const baseWatched = () => new Set<string>();
 
@@ -184,5 +194,36 @@ describe("panelStore adversarial", () => {
     const post = usePanelStore.getState().watchedPanels;
     expect(post).not.toBe(pre);
     expect(post.size).toBe(0);
+  });
+
+  it("trashPanel preserves existing lastClosedConfig when snapshot returns null", async () => {
+    // Regression guard for #5211: if buildPanelSnapshotOptions returns null
+    // (broken agent panel), we must NOT overwrite lastClosedConfig with null —
+    // otherwise a later reopen would lose a valid prior snapshot and could
+    // resurrect the bare-shell agent bug.
+    const { buildPanelSnapshotOptions } =
+      await import("@/services/terminal/panelDuplicationService");
+    vi.mocked(buildPanelSnapshotOptions).mockReturnValueOnce(null);
+
+    const priorSnapshot = { kind: "terminal", command: "bash" } as never;
+    usePanelStore.setState({
+      panelsById: {
+        agent1: {
+          id: "agent1",
+          title: "Broken Agent",
+          cwd: "/a",
+          location: "grid",
+          createdAt: 1,
+          type: "claude",
+          kind: "terminal",
+        } as unknown as never,
+      },
+      panelIds: ["agent1"],
+      lastClosedConfig: priorSnapshot,
+    });
+
+    usePanelStore.getState().trashPanel("agent1");
+
+    expect(usePanelStore.getState().lastClosedConfig).toBe(priorSnapshot);
   });
 });

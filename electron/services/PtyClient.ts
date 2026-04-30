@@ -31,9 +31,17 @@ import path from "path";
 import os from "os";
 import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
-import { logInfo, logWarn } from "../utils/logger.js";
+import { performance } from "node:perf_hooks";
+import { createLogger, isValidLogOverrideLevel } from "../utils/logger.js";
+import { store } from "../store.js";
+
+const logger = createLogger("main:PtyClient");
+const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
+  ctx ? logger.info(msg, ctx) : logger.info(msg);
+const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
+  ctx ? logger.warn(msg, ctx) : logger.warn(msg);
 import { getTrashedPidTracker } from "./TrashedPidTracker.js";
-import { RequestResponseBroker } from "./rpc/index.js";
+import { RequestResponseBroker, BrokerError } from "./rpc/index.js";
 import { bridgePtyEvent } from "./pty/PtyEventsBridge.js";
 import type {
   PtyHostRequest,
@@ -45,12 +53,14 @@ import type {
   HostCrashPayload,
   SpawnResult,
   TerminalResourceBatchPayload,
+  BroadcastWriteResultPayload,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId } from "../../shared/types/agent.js";
-import type { TerminalType, PanelKind } from "../../shared/types/panel.js";
+import type { PanelKind } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
+import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,8 +69,7 @@ interface TerminalInfoResponse {
   id: string;
   projectId?: string;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  launchAgentId?: AgentId;
   title?: string;
   cwd: string;
   worktreeId?: string;
@@ -76,6 +85,17 @@ interface TerminalInfoResponse {
   agentSessionId?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  agentPresetId?: string;
+  agentPresetColor?: string;
+  originalAgentPresetId?: string;
+  /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
+  everDetectedAgent?: boolean;
+  /** Runtime-detected agent identity (cleared when the agent exits). */
+  detectedAgentId?: BuiltInAgentId;
+  /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
+  detectedProcessId?: string;
+  /** Capability mode — sealed-at-spawn agent capability surface. Set when the terminal was cold-launched as a built-in agent. */
+  capabilityAgentId?: BuiltInAgentId;
 }
 
 export interface PtyClientConfig {
@@ -95,6 +115,44 @@ const DEFAULT_CONFIG: Required<PtyClientConfig> = {
   showCrashDialog: true,
   memoryLimitMb: 512,
 };
+
+/**
+ * Centralized per-operation timeout policy for PTY host RPC calls.
+ * Keys are logical method labels forwarded to the broker's onTimeout hook
+ * so timeouts can be attributed to specific operations in logs and metrics.
+ */
+const PTY_TIMEOUTS = {
+  "graceful-kill": 5000,
+  "graceful-kill-by-project": 10000,
+  "kill-by-project": 10000,
+  "get-serialized-state": 15000,
+  "get-snapshot": 5000,
+  "get-all-snapshots": 5000,
+  "transition-state": 5000,
+} as const satisfies Record<string, number>;
+
+/**
+ * Map an authoritative `child-process-gone` reason (Electron 37+) to our CrashType.
+ * Used when `app.on("child-process-gone")` fires for the PTY host — the reason
+ * string is more reliable than the exit code heuristic in `classifyCrash()`.
+ */
+function mapGoneReasonToCrashType(reason: string): CrashType {
+  switch (reason) {
+    case "oom":
+    case "memory-eviction":
+      return "OUT_OF_MEMORY";
+    case "killed":
+      return "SIGNAL_TERMINATED";
+    case "clean-exit":
+      return "CLEAN_EXIT";
+    case "crashed":
+    case "abnormal-exit":
+    case "launch-failed":
+    case "integrity-failure":
+    default:
+      return "UNKNOWN_CRASH";
+  }
+}
 
 /**
  * Classify crash type based on exit code and signal.
@@ -122,6 +180,44 @@ function classifyCrash(code: number | null, signal: string | null): CrashType {
     return "UNKNOWN_CRASH";
   }
   return "CLEAN_EXIT";
+}
+
+/**
+ * Read and sanitize the persisted log-level override map. Invalid values are
+ * dropped — the stored payload is `Record<string, string>` but user edits to
+ * the config file could leave it in an unknown state, so we defensively
+ * filter before seeding the cache.
+ */
+function readPersistedOverrides(): Record<string, string> {
+  try {
+    const raw = store.get("logLevelOverrides") ?? {};
+    const clean: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof key === "string" && key && isValidLogOverrideLevel(value)) {
+        clean[key] = value as string;
+      }
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
+const RTT_BUFFER_SIZE = 20;
+const RTT_LOG_EVERY_N_SAMPLES = 10;
+const RTT_LOG_INTERVAL_MS = 5 * 60 * 1000;
+const RTT_WARN_THRESHOLD_MS = 5000;
+
+function rttPercentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  if (p <= 0) return sorted[0];
+  if (p >= 1) return sorted[sorted.length - 1];
+  const idx = p * (sorted.length - 1);
+  const low = Math.floor(idx);
+  const high = Math.ceil(idx);
+  if (low === high) return sorted[low];
+  const frac = idx - low;
+  return sorted[low] * (1 - frac) + sorted[high] * frac;
 }
 
 export class PtyClient extends EventEmitter {
@@ -154,22 +250,36 @@ export class PtyClient extends EventEmitter {
   private missedHeartbeats = 0;
   private readonly MAX_MISSED_HEARTBEATS = 3;
 
+  /**
+   * Cap on pendingSpawns to prevent restart-storm amplification. If the host
+   * crashes during spawn and respawnPending() replays the map, an unbounded map
+   * lets the next crash grow the replay burst. Capping admission keeps the
+   * respawn fan-out bounded under repeated crashes.
+   */
+  private readonly MAX_PENDING_SPAWNS = 250;
+
+  /**
+   * Cap on pendingKillCount to prevent unbounded growth after repeated host
+   * crashes. Entries are decremented via "exit" events; if the host crashes
+   * before emitting them, entries persist. 2x MAX_PENDING_SPAWNS since kills
+   * are fire-and-forget IPC messages with no replay cost.
+   */
+  private readonly MAX_PENDING_KILLS = 500;
+
+  /** RTT observability: timestamp of the in-flight health-check ping, or null if none. */
+  private lastPingTime: number | null = null;
+  private rttSamples: number[] = [];
+  private rttSamplesSinceLastLog = 0;
+  private lastRttLogTime = 0;
+
   /** Unified request/response broker for all async operations */
   private broker = new RequestResponseBroker({
     defaultTimeoutMs: 5000,
     idPrefix: "pty",
-    onTimeout: (requestId) => {
-      console.warn(`[PtyClient] Request timeout: ${requestId}`);
+    onTimeout: (requestId, method) => {
+      console.warn(`[PtyClient] Request timeout: ${method ? `${method} ` : ""}(${requestId})`);
     },
   });
-
-  /** Special callbacks that don't fit the request/response pattern */
-  private snapshotCallbacks: Map<string, (snapshot: TerminalSnapshot | null) => void> = new Map();
-  private snapshotTimeouts: Map<string, NodeJS.Timeout> = new Map();
-  private allSnapshotsCallbacks: Map<string, (snapshots: TerminalSnapshot[]) => void> = new Map();
-  private allSnapshotsTimeouts: Map<string, NodeJS.Timeout> = new Map();
-  private transitionCallbacks: Map<string, (success: boolean) => void> = new Map();
-  private transitionTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
   private readyPromise: Promise<void>;
   private readyResolve: (() => void) | null = null;
@@ -180,6 +290,25 @@ export class PtyClient extends EventEmitter {
 
   private hostStdoutBuffer = "";
   private hostStderrBuffer = "";
+
+  /** Cached log-level overrides. Replayed on every host spawn/restart via the
+   * `ready` event, which is the first moment the child's message listener is
+   * attached (push-on-spawn would race and silently drop the first message).
+   * Seeded from the persisted store so boot-time host spawns inherit the
+   * user's saved configuration without waiting for renderer IPC. */
+  private logLevelOverridesCache: Record<string, string> = readPersistedOverrides();
+
+  /**
+   * Authoritative crash reason captured from `app.on("child-process-gone")`.
+   * Consumed by the next `exit` handler via `setImmediate` deferral, since
+   * Electron 37-41 has a documented race where `exit` often fires before
+   * `child-process-gone` for utility-process crashes.
+   */
+  private pendingChildProcessGoneReason: { reason: string; exitCode: number } | null = null;
+  /** Stored handler reference so dispose() can deregister via app.off(). */
+  private childProcessGoneHandler:
+    | ((event: Electron.Event, details: Electron.Details) => void)
+    | null = null;
 
   constructor(config: PtyClientConfig = {}) {
     super();
@@ -196,7 +325,35 @@ export class PtyClient extends EventEmitter {
     // that affects all platforms. Use IPC fallback for terminal I/O.
     console.log("[PtyClient] Using IPC mode (SharedArrayBuffer not supported in UtilityProcess)");
 
+    this.registerChildProcessGoneListener();
     this.startHost();
+  }
+
+  /**
+   * Register a single app-level listener for `child-process-gone`, scoped to
+   * our PTY host by `type === "Utility"` and `name === "daintree-pty-host"`.
+   * The handler only records the authoritative reason; the `exit` handler
+   * consumes it via `setImmediate` deferral to handle the Electron 37-41 race
+   * where `exit` can fire before `child-process-gone`.
+   */
+  private registerChildProcessGoneListener(): void {
+    if (this.childProcessGoneHandler) return;
+    const handler = (_event: Electron.Event, details: Electron.Details): void => {
+      if (this.isDisposed) return;
+      if (details.type !== "Utility") return;
+      // Electron 41 populates `name` from `serviceName` at runtime, but both
+      // fields are typed as optional. Accept either to stay resilient to
+      // future runtime changes or edge cases where only one is set.
+      const matchesHost =
+        details.name === "daintree-pty-host" || details.serviceName === "daintree-pty-host";
+      if (!matchesHost) return;
+      this.pendingChildProcessGoneReason = {
+        reason: details.reason,
+        exitCode: details.exitCode,
+      };
+    };
+    this.childProcessGoneHandler = handler;
+    app.on("child-process-gone", handler);
   }
 
   private forwardHostOutput(kind: "stdout" | "stderr", chunk: Buffer): void {
@@ -279,6 +436,12 @@ export class PtyClient extends EventEmitter {
       this.restartTimer = null;
     }
 
+    // Defensive: clear any stale crash reason from a prior host cycle. Under
+    // normal flow the `exit` handler's setImmediate consumes this, but a missed
+    // exit event (or out-of-band listener fire) would otherwise leak into the
+    // next crash.
+    this.pendingChildProcessGoneReason = null;
+
     // Reset initialization state for restart
     this.isInitialized = false;
     this.readyPromise = new Promise((resolve, reject) => {
@@ -296,10 +459,23 @@ export class PtyClient extends EventEmitter {
         serviceName: "daintree-pty-host",
         stdio: "pipe",
         cwd: os.homedir(),
-        execArgv: [`--max-old-space-size=${this.config.memoryLimitMb}`],
+        // `--diagnostic-dir` redirects v8.setHeapSnapshotNearHeapLimit dumps
+        // (set in pty-host.ts) into the app's logs directory instead of the
+        // utility process CWD (homedir).
+        execArgv: [
+          `--max-old-space-size=${this.config.memoryLimitMb}`,
+          `--diagnostic-dir=${app.getPath("logs")}`,
+        ],
         env: {
           ...(process.env as Record<string, string>),
           DAINTREE_USER_DATA: app.getPath("userData"),
+          DAINTREE_UTILITY_PROCESS_KIND: "pty-host",
+          // node-pty 1.x hangs intermittently on Linux kernels with io_uring
+          // enabled (microsoft/node-pty#630, closed as not planned). The fix
+          // is permanent and must be set inside the explicit env object — a
+          // mutation on process.env wouldn't survive utilityProcess.fork's
+          // env override.
+          ...(process.platform === "linux" ? { UV_USE_IO_URING: "0" } : {}),
         },
       });
       console.log(`[PtyClient] Pty Host started with ${this.config.memoryLimitMb}MB memory limit`);
@@ -324,18 +500,17 @@ export class PtyClient extends EventEmitter {
       this.flushHostOutputBuffers();
       // Note: UtilityProcess exit event doesn't provide signal, but we can infer from code
       const signal = code !== null && code > 128 ? `SIG${code - 128}` : null;
-      const crashType = classifyCrash(code, signal);
-
-      console.error(
-        `[PtyClient] Pty Host exited with code ${code}` +
-          (crashType !== "CLEAN_EXIT" ? ` (${crashType})` : "")
-      );
+      const fallbackCrashType = classifyCrash(code, signal);
 
       // Clear health check
       if (this.healthCheckInterval) {
         clearInterval(this.healthCheckInterval);
         this.healthCheckInterval = null;
       }
+      this.lastPingTime = null;
+      this.rttSamples = [];
+      this.rttSamplesSinceLastLog = 0;
+      this.lastRttLogTime = 0;
 
       // Reject ready promise if host exited before becoming ready
       const wasReady = this.isInitialized;
@@ -343,7 +518,8 @@ export class PtyClient extends EventEmitter {
       this.child = null; // Prevent posting to dead process
 
       if (this.isDisposed) {
-        // Expected shutdown
+        // Expected shutdown - drop any buffered reason so it can't leak.
+        this.pendingChildProcessGoneReason = null;
         return;
       }
 
@@ -354,42 +530,82 @@ export class PtyClient extends EventEmitter {
         this.readyReject = null;
       }
 
-      this.cleanupOrphanedPtys(crashType);
+      this.cleanupOrphanedPtys(fallbackCrashType);
 
-      this.broker.clear(new Error("Pty host restarted"));
+      this.broker.clear(new BrokerError("HOST_EXITED", "Pty host exited"));
       this.shouldResyncProjectContext = true;
 
-      // Emit crash payload with classification for downstream consumers
-      if (crashType !== "CLEAN_EXIT") {
-        const crashPayload: HostCrashPayload = {
-          code,
-          signal,
-          crashType,
-          timestamp: Date.now(),
-        };
-        this.emit("host-crash-details", crashPayload);
-      }
+      // Electron 37-41 race: `exit` often fires before `child-process-gone`
+      // for utility-process crashes. Defer crash classification by one event
+      // loop tick so the authoritative reason can arrive; fall back to the
+      // exit-code heuristic when no reason was captured in time.
+      setImmediate(() => {
+        if (this.isDisposed) {
+          this.pendingChildProcessGoneReason = null;
+          return;
+        }
 
-      // Try to restart
-      if (this.restartAttempts < this.config.maxRestartAttempts) {
-        this.restartAttempts++;
-        const delay = Math.min(1000 * Math.pow(2, this.restartAttempts), 10000);
-        console.log(
-          `[PtyClient] Restarting Host in ${delay}ms (attempt ${this.restartAttempts}/${this.config.maxRestartAttempts})`
+        const gone = this.pendingChildProcessGoneReason;
+        this.pendingChildProcessGoneReason = null;
+        const crashType: CrashType = gone
+          ? mapGoneReasonToCrashType(gone.reason)
+          : fallbackCrashType;
+        // Prefer the authoritative exit code from `child-process-gone` over the
+        // (sometimes unreliable) one from `exit` — Electron 40-41 has a known
+        // signed/unsigned mangling bug on Windows for the exit event.
+        const reportedCode = gone ? gone.exitCode : code;
+
+        console.error(
+          `[PtyClient] Pty Host exited with code ${reportedCode}` +
+            (crashType !== "CLEAN_EXIT" ? ` (${crashType})` : "")
         );
 
-        if (this.restartTimer) {
-          clearTimeout(this.restartTimer);
+        this.cleanupOrphanedPtys(crashType);
+
+        // Emit crash payload with classification for downstream consumers
+        if (crashType !== "CLEAN_EXIT") {
+          const crashPayload: HostCrashPayload = {
+            code: reportedCode,
+            // When we have an authoritative reason, trust it and clear the
+            // derived-from-exit-code signal string.
+            signal: gone ? null : signal,
+            crashType,
+            timestamp: Date.now(),
+          };
+          this.emit("host-crash-details", crashPayload);
         }
-        this.restartTimer = setTimeout(() => {
-          this.restartTimer = null;
-          this.needsRespawn = true;
-          this.startHost();
-        }, delay);
-      } else {
-        console.error("[PtyClient] Max restart attempts reached, giving up");
-        this.emit("host-crash", code);
-      }
+
+        // If `manualRestart()` already spawned a new host during the defer
+        // window (possible via the renderer TERMINAL_RESTART_SERVICE IPC call),
+        // don't schedule a second auto-restart — it would orphan that host.
+        if (this.child !== null) return;
+
+        // Try to restart
+        if (this.restartAttempts < this.config.maxRestartAttempts) {
+          this.restartAttempts++;
+          // Full jitter with floor: break deterministic retry lockstep while
+          // keeping a minimum wait so instant-fail crashes don't spin the CPU.
+          const cap = Math.min(1000 * Math.pow(2, this.restartAttempts), 10000);
+          const floor = 100;
+          const delay = floor + Math.floor(Math.random() * Math.max(0, cap - floor));
+          console.log(
+            `[PtyClient] Restarting Host in ${delay}ms (attempt ${this.restartAttempts}/${this.config.maxRestartAttempts})`
+          );
+
+          if (this.restartTimer) {
+            clearTimeout(this.restartTimer);
+          }
+          this.restartTimer = setTimeout(() => {
+            this.restartTimer = null;
+            if (this.isDisposed || this.child !== null) return;
+            this.needsRespawn = true;
+            this.startHost();
+          }, delay);
+        } else {
+          console.error("[PtyClient] Max restart attempts reached, giving up");
+          this.emit("host-crash", reportedCode);
+        }
+      });
     });
 
     // Start health check with watchdog (only if not paused by system sleep)
@@ -414,6 +630,7 @@ export class PtyClient extends EventEmitter {
           status: payload.status,
           bufferUtilization: payload.bufferUtilization,
           pauseDuration: payload.pauseDuration,
+          reason: payload.reason,
           timestamp: payload.timestamp,
         };
         this.emit("terminal-status", statusPayload);
@@ -443,6 +660,13 @@ export class PtyClient extends EventEmitter {
           this.readyReject = null;
         }
         console.log("[PtyClient] Pty Host is ready");
+        // Replay log-level overrides on every ready (initial spawn + restarts).
+        // The child's message listener isn't attached until after it receives
+        // "ready", so pushing on spawn would race.
+        this.send({
+          type: "set-log-level-overrides",
+          overrides: this.logLevelOverridesCache,
+        });
         if (this.needsRespawn) {
           this.needsRespawn = false;
           this.respawnPending();
@@ -485,50 +709,26 @@ export class PtyClient extends EventEmitter {
         this.emit("error", event.id, event.error);
         break;
 
-      case "snapshot": {
-        const callback = this.snapshotCallbacks.get(event.requestId);
-        if (callback) {
-          this.snapshotCallbacks.delete(event.requestId);
-          const timeout = this.snapshotTimeouts.get(event.requestId);
-          if (timeout) {
-            clearTimeout(timeout);
-            this.snapshotTimeouts.delete(event.requestId);
-          }
-          callback(event.snapshot as TerminalSnapshot | null);
-        }
+      case "snapshot":
+        this.broker.resolve(event.requestId, (event.snapshot ?? null) as TerminalSnapshot | null);
         break;
-      }
 
-      case "all-snapshots": {
-        const callback = this.allSnapshotsCallbacks.get(event.requestId);
-        if (callback) {
-          this.allSnapshotsCallbacks.delete(event.requestId);
-          const timeout = this.allSnapshotsTimeouts.get(event.requestId);
-          if (timeout) {
-            clearTimeout(timeout);
-            this.allSnapshotsTimeouts.delete(event.requestId);
-          }
-          callback(event.snapshots as TerminalSnapshot[]);
-        }
+      case "all-snapshots":
+        this.broker.resolve(event.requestId, (event.snapshots ?? []) as TerminalSnapshot[]);
         break;
-      }
 
-      case "transition-result": {
-        const cb = this.transitionCallbacks.get(event.requestId);
-        if (cb) {
-          this.transitionCallbacks.delete(event.requestId);
-          const timeout = this.transitionTimeouts.get(event.requestId);
-          if (timeout) {
-            clearTimeout(timeout);
-            this.transitionTimeouts.delete(event.requestId);
-          }
-          cb(event.success);
-        }
+      case "transition-result":
+        this.broker.resolve(event.requestId, event.success);
         break;
-      }
 
       case "pong":
         this.missedHeartbeats = 0;
+        if (this.lastPingTime !== null) {
+          const now = performance.now();
+          const rtt = now - this.lastPingTime;
+          this.lastPingTime = null;
+          this.recordRtt(rtt, now);
+        }
         if (this.isWaitingForHandshake) {
           this.isWaitingForHandshake = false;
           if (this.handshakeTimeout) {
@@ -580,6 +780,16 @@ export class PtyClient extends EventEmitter {
           terminals: TerminalInfoResponse[];
         };
         this.broker.resolve(allEvent.requestId, allEvent.terminals ?? []);
+        break;
+      }
+
+      case "semantic-search-result": {
+        const semEvent = event as {
+          type: "semantic-search-result";
+          requestId: string;
+          matches: import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[];
+        };
+        this.broker.resolve(semEvent.requestId, semEvent.matches ?? []);
         break;
       }
 
@@ -654,9 +864,46 @@ export class PtyClient extends EventEmitter {
         break;
       }
 
+      case "broadcast-write-result": {
+        const brEvent = event as {
+          type: "broadcast-write-result";
+        } & BroadcastWriteResultPayload;
+        this.emit("broadcast-write-result", { results: brEvent.results });
+        break;
+      }
+
       default:
         console.warn("[PtyClient] Unknown event type:", (event as { type: string }).type);
     }
+  }
+
+  private recordRtt(rtt: number, now: number): void {
+    this.rttSamples.push(rtt);
+    if (this.rttSamples.length > RTT_BUFFER_SIZE) {
+      this.rttSamples.shift();
+    }
+    this.rttSamplesSinceLastLog++;
+
+    if (rtt > RTT_WARN_THRESHOLD_MS) {
+      console.warn(
+        `[PtyClient] Heartbeat RTT spike: ${rtt.toFixed(1)}ms (> ${RTT_WARN_THRESHOLD_MS}ms)`
+      );
+    }
+
+    const countTrigger = this.rttSamplesSinceLastLog >= RTT_LOG_EVERY_N_SAMPLES;
+    const timeTrigger = now - this.lastRttLogTime >= RTT_LOG_INTERVAL_MS;
+    if (!countTrigger && !timeTrigger) return;
+
+    const sorted = [...this.rttSamples].sort((a, b) => a - b);
+    const p50 = rttPercentile(sorted, 0.5);
+    const p95 = rttPercentile(sorted, 0.95);
+    const p99 = rttPercentile(sorted, 0.99);
+    const max = sorted[sorted.length - 1] ?? 0;
+    console.log(
+      `[PtyClient] Heartbeat RTT (last ${sorted.length}): p50=${p50.toFixed(1)}ms p95=${p95.toFixed(1)}ms p99=${p99.toFixed(1)}ms max=${max.toFixed(1)}ms samples=${this.rttSamplesSinceLastLog}`
+    );
+    this.rttSamplesSinceLastLog = 0;
+    this.lastRttLogTime = now;
   }
 
   private send(request: PtyHostRequest): void {
@@ -676,6 +923,13 @@ export class PtyClient extends EventEmitter {
   }
 
   private respawnPending(): void {
+    // Kills sent to the crashed host will never receive "exit" events, so
+    // pendingKillCount entries from that session are permanently stale.
+    // Unlike pendingSpawns (replayed below to recreate terminals on the new
+    // host), pendingKillCount is cleared — the terminals those kills targeted
+    // died with the host process.
+    this.pendingKillCount.clear();
+
     // Notify that ports need refresh after host restart
     if (this.onPortRefresh) {
       for (const port of this.pendingMessagePorts.values()) {
@@ -763,6 +1017,18 @@ export class PtyClient extends EventEmitter {
   /** Set callback for MessagePort refresh (called on host restart) */
   setPortRefreshCallback(callback: () => void): void {
     this.onPortRefresh = callback;
+  }
+
+  /**
+   * Update the cached log-level overrides and push immediately if the host is
+   * ready. On every subsequent restart the cached map is replayed via the
+   * `ready` handler — callers don't need to track restarts themselves.
+   */
+  setLogLevelOverrides(overrides: Record<string, string>): void {
+    this.logLevelOverridesCache = { ...overrides };
+    if (this.isInitialized && this.child) {
+      this.send({ type: "set-log-level-overrides", overrides: this.logLevelOverridesCache });
+    }
   }
 
   private flushPendingMessagePorts(): void {
@@ -879,6 +1145,22 @@ export class PtyClient extends EventEmitter {
   }
 
   spawn(id: string, options: PtyHostSpawnOptions): void {
+    if (!this.pendingSpawns.has(id) && this.pendingSpawns.size >= this.MAX_PENDING_SPAWNS) {
+      logWarn(
+        `[PtyClient] spawn rejected — pendingSpawns at cap (${this.MAX_PENDING_SPAWNS}), id=${id}`
+      );
+      const result: SpawnResult = {
+        success: false,
+        id,
+        error: {
+          code: "PENDING_SPAWNS_CAPPED",
+          message: `Too many pending terminal spawns (cap ${this.MAX_PENDING_SPAWNS}); close some terminals and try again.`,
+        },
+      };
+      this.emit("spawn-result", id, result);
+      return;
+    }
+
     const activeProjectId = this.activeProjectId ?? undefined;
     const normalizedProjectId =
       typeof options.projectId === "string" && options.projectId.trim()
@@ -910,15 +1192,63 @@ export class PtyClient extends EventEmitter {
     this.write(id, sequence);
   }
 
+  /**
+   * Fan out a double-Escape to each terminal. The per-PTY inter-escape
+   * delay is scheduled inside the PTY host utility process so the 50ms
+   * gap survives main-process IPC jitter (which can otherwise collapse two
+   * sub-10ms writes into a single Meta-Escape).
+   */
+  batchDoubleEscape(ids: string[]): void {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    const validIds = ids.filter((id) => typeof id === "string" && id.length > 0);
+    if (validIds.length === 0) return;
+    this.send({ type: "batch-double-escape", ids: validIds });
+  }
+
+  /**
+   * Fan one data payload to every id in a single pty-host message. Used by
+   * fleet broadcast: every keystroke becomes one main→host message instead
+   * of N renderer→main IPC hops, cutting fan-out latency on large fleets.
+   */
+  broadcastWrite(ids: string[], data: string): void {
+    if (!Array.isArray(ids) || ids.length === 0 || typeof data !== "string" || data.length === 0)
+      return;
+    const validIds = ids.filter((id) => typeof id === "string" && id.length > 0);
+    if (validIds.length === 0) return;
+    this.send({ type: "broadcast-write", ids: validIds, data });
+  }
+
   resize(id: string, cols: number, rows: number): void {
     this.send({ type: "resize", id, cols, rows });
   }
 
   kill(id: string, reason?: string): void {
     getTrashedPidTracker().removeTrashed(id);
-    this.pendingKillCount.set(id, (this.pendingKillCount.get(id) ?? 0) + 1);
+    const wasKnown = this.pendingSpawns.has(id);
     this.pendingSpawns.delete(id);
     this.ipcDataMirrorIds.delete(id);
+
+    // Only track pendingKillCount for ids we've seen locally. An "exit"
+    // decrement only arrives for terminals the host actually owned, so
+    // tracking kills for unknown ids would leak cap slots permanently.
+    //
+    // Cap is SOFT: the primary defense against unbounded growth is the
+    // clear-on-respawn in respawnPending(). Skipping tracking at cap would
+    // allow a late "exit" for this id to hit the exit handler's else branch
+    // and incorrectly delete a re-spawned entry for the same id (supported
+    // by the hydration flow via `requestedId`). So at cap we log a warning
+    // for observability but still track.
+    if (wasKnown) {
+      const current = this.pendingKillCount.get(id);
+      if (current === undefined && this.pendingKillCount.size >= this.MAX_PENDING_KILLS) {
+        logWarn(
+          `[PtyClient] pendingKillCount exceeds soft cap (${this.MAX_PENDING_KILLS}), id=${id}`
+        );
+      }
+      this.pendingKillCount.set(id, (current ?? 0) + 1);
+    }
+    // Always send the kill IPC. The host-side handler kills the terminal if
+    // it exists and removes any persisted session state for the id.
     this.send({ type: "kill", id, reason });
   }
 
@@ -1042,9 +1372,20 @@ export class PtyClient extends EventEmitter {
 
   async gracefulKill(id: string): Promise<string | null> {
     const requestId = this.broker.generateId(`graceful-kill-${id}`);
-    const promise = this.broker.register<string | null>(requestId, 5000);
+    const promise = this.broker.register<string | null>(requestId, {
+      method: "graceful-kill",
+      timeoutMs: PTY_TIMEOUTS["graceful-kill"],
+    });
     this.send({ type: "graceful-kill", id, requestId });
-    return promise.catch(() => {
+    return promise.catch((error: unknown) => {
+      // Sending a kill to a host that isn't there only mutates local bookkeeping.
+      // Skip whenever the host is known to be gone — either because the broker
+      // clear told us (typed BrokerError), or because we notice it ourselves
+      // (null child or disposed client, e.g. restart pending, max restarts
+      // exhausted, or app quit arriving during the 5s timeout window).
+      if (error instanceof BrokerError || !this.child || this.isDisposed) {
+        return null;
+      }
       this.kill(id, "graceful-kill-timeout");
       return null;
     });
@@ -1056,7 +1397,10 @@ export class PtyClient extends EventEmitter {
     const requestId = this.broker.generateId(`graceful-kill-by-project-${projectId}`);
     const promise = this.broker.register<Array<{ id: string; agentSessionId: string | null }>>(
       requestId,
-      10000
+      {
+        method: "graceful-kill-by-project",
+        timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"],
+      }
     );
     this.send({ type: "graceful-kill-by-project", projectId, requestId });
     return promise.catch(() => []);
@@ -1064,7 +1408,10 @@ export class PtyClient extends EventEmitter {
 
   async killByProject(projectId: string): Promise<number> {
     const requestId = this.broker.generateId(`kill-by-project-${projectId}`);
-    const promise = this.broker.register<number>(requestId, 10000);
+    const promise = this.broker.register<number>(requestId, {
+      method: "kill-by-project",
+      timeoutMs: PTY_TIMEOUTS["kill-by-project"],
+    });
     this.send({ type: "kill-by-project", projectId, requestId });
     return promise.catch(() => 0);
   }
@@ -1142,6 +1489,25 @@ export class PtyClient extends EventEmitter {
     return promise.catch(() => []);
   }
 
+  /**
+   * Scan every terminal's semantic buffer for `query` and return one
+   * ANSI-stripped snippet per matching terminal. Substring (case-insensitive)
+   * unless `isRegex` is true. Returns an empty array on regex compile error
+   * or IPC failure — UI never throws on bad input.
+   */
+  async searchSemanticBuffersAsync(
+    query: string,
+    isRegex: boolean
+  ): Promise<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]> {
+    const requestId = this.broker.generateId("semantic-search");
+    const promise =
+      this.broker.register<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]>(
+        requestId
+      );
+    this.send({ type: "search-semantic-buffers", query, isRegex, requestId });
+    return promise.catch(() => []);
+  }
+
   /** Replay terminal history */
   async replayHistoryAsync(id: string, maxLines: number = 100): Promise<number> {
     const requestId = this.broker.generateId(`replay-${id}`);
@@ -1158,8 +1524,11 @@ export class PtyClient extends EventEmitter {
    */
   async getSerializedStateAsync(id: string): Promise<string | null> {
     const requestId = this.broker.generateId(`serialize-${id}`);
-    // Extended timeout (15s) for large terminals with lots of scrollback.
-    const promise = this.broker.register<string | null>(requestId, 15000);
+    // Extended timeout for large terminals with lots of scrollback (see PTY_TIMEOUTS).
+    const promise = this.broker.register<string | null>(requestId, {
+      method: "get-serialized-state",
+      timeoutMs: PTY_TIMEOUTS["get-serialized-state"],
+    });
     this.send({ type: "get-serialized-state", id, requestId } as PtyHostRequest);
     return promise.catch(() => {
       console.warn(`[PtyClient] getSerializedState timeout for ${id}`);
@@ -1184,43 +1553,31 @@ export class PtyClient extends EventEmitter {
   /** Get a snapshot of terminal state (async due to IPC) */
   async getTerminalSnapshot(id: string): Promise<TerminalSnapshot | null> {
     const requestId = this.broker.generateId(`snapshot-${id}`);
-    return new Promise((resolve) => {
-      this.snapshotCallbacks.set(requestId, resolve);
-      this.send({ type: "get-snapshot", id, requestId });
-
-      // Timeout after 5s
-      const timeout = setTimeout(() => {
-        if (this.snapshotCallbacks.has(requestId)) {
-          this.snapshotCallbacks.delete(requestId);
-          this.snapshotTimeouts.delete(requestId);
-          resolve(null);
-        }
-      }, 5000);
-      this.snapshotTimeouts.set(requestId, timeout);
+    const promise = this.broker.register<TerminalSnapshot | null>(requestId, {
+      method: "get-snapshot",
+      timeoutMs: PTY_TIMEOUTS["get-snapshot"],
     });
+    this.send({ type: "get-snapshot", id, requestId });
+    return promise.catch(() => null);
   }
 
   /** Get snapshots for all terminals (async due to IPC) */
   async getAllTerminalSnapshots(): Promise<TerminalSnapshot[]> {
     const requestId = this.broker.generateId("all-snapshots");
-    return new Promise((resolve) => {
-      this.allSnapshotsCallbacks.set(requestId, resolve);
-      this.send({ type: "get-all-snapshots", requestId });
-
-      // Timeout after 5s
-      const timeout = setTimeout(() => {
-        if (this.allSnapshotsCallbacks.has(requestId)) {
-          this.allSnapshotsCallbacks.delete(requestId);
-          this.allSnapshotsTimeouts.delete(requestId);
-          resolve([]);
-        }
-      }, 5000);
-      this.allSnapshotsTimeouts.set(requestId, timeout);
+    const promise = this.broker.register<TerminalSnapshot[]>(requestId, {
+      method: "get-all-snapshots",
+      timeoutMs: PTY_TIMEOUTS["get-all-snapshots"],
     });
+    this.send({ type: "get-all-snapshots", requestId });
+    return promise.catch(() => []);
   }
 
   markChecked(id: string): void {
     this.send({ type: "mark-checked", id });
+  }
+
+  updateObservedTitle(id: string, title: string): void {
+    this.send({ type: "update-observed-title", id, title });
   }
 
   async transitionState(
@@ -1230,29 +1587,21 @@ export class PtyClient extends EventEmitter {
     confidence: number,
     spawnedAt?: number
   ): Promise<boolean> {
-    return new Promise((resolve) => {
-      const requestId = this.broker.generateId(`transition-${id}`);
-      this.transitionCallbacks.set(requestId, resolve);
-      this.send({
-        type: "transition-state",
-        id,
-        requestId,
-        event,
-        trigger,
-        confidence,
-        spawnedAt,
-      });
-
-      // Timeout after 5s
-      const timeout = setTimeout(() => {
-        if (this.transitionCallbacks.has(requestId)) {
-          this.transitionCallbacks.delete(requestId);
-          this.transitionTimeouts.delete(requestId);
-          resolve(false);
-        }
-      }, 5000);
-      this.transitionTimeouts.set(requestId, timeout);
+    const requestId = this.broker.generateId(`transition-${id}`);
+    const promise = this.broker.register<boolean>(requestId, {
+      method: "transition-state",
+      timeoutMs: PTY_TIMEOUTS["transition-state"],
     });
+    this.send({
+      type: "transition-state",
+      id,
+      requestId,
+      event,
+      trigger,
+      confidence,
+      spawnedAt,
+    });
+    return promise.catch(() => false);
   }
 
   /** Request PtyHost to trim scrollback on all terminals to reduce memory */
@@ -1290,6 +1639,7 @@ export class PtyClient extends EventEmitter {
       this.handshakeTimeout = null;
     }
     this.isWaitingForHandshake = false;
+    this.lastPingTime = null;
     console.log("[PtyClient] Health check paused");
   }
 
@@ -1319,6 +1669,7 @@ export class PtyClient extends EventEmitter {
     // Send handshake ping before resuming normal health checks
     console.log("[PtyClient] System resumed. Initiating handshake...");
     this.isWaitingForHandshake = true;
+    this.lastPingTime = performance.now();
     this.send({ type: "health-check" });
 
     // Timeout if no response within 5 seconds - fall back to immediate start
@@ -1327,6 +1678,7 @@ export class PtyClient extends EventEmitter {
         console.warn("[PtyClient] Handshake timeout - forcing health check resume");
         this.isWaitingForHandshake = false;
         this.handshakeTimeout = null;
+        this.lastPingTime = null;
         this.startHealthCheckInterval();
       }
     }, 5000);
@@ -1342,6 +1694,7 @@ export class PtyClient extends EventEmitter {
 
     // Reset watchdog counter when starting
     this.missedHeartbeats = 0;
+    this.lastRttLogTime = performance.now();
 
     this.healthCheckInterval = setInterval(() => {
       if (!this.isInitialized || !this.child || this.isHealthCheckPaused) return;
@@ -1367,11 +1720,13 @@ export class PtyClient extends EventEmitter {
           process.kill(this.child.pid, "SIGKILL");
         }
         this.missedHeartbeats = 0;
+        this.lastPingTime = null;
         return;
       }
 
       // Increment counter - will be reset by 'pong' response
       this.missedHeartbeats++;
+      this.lastPingTime = performance.now();
       this.send({ type: "health-check" });
     }, this.config.healthCheckIntervalMs);
 
@@ -1418,6 +1773,7 @@ export class PtyClient extends EventEmitter {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
     }
+    this.lastPingTime = null;
 
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
@@ -1450,30 +1806,21 @@ export class PtyClient extends EventEmitter {
       }, 1000);
     }
 
-    // Clean up all pending requests via broker
+    if (this.childProcessGoneHandler) {
+      app.off("child-process-gone", this.childProcessGoneHandler);
+      this.childProcessGoneHandler = null;
+    }
+    this.pendingChildProcessGoneReason = null;
+
+    // Clean up all pending requests via broker (rejects pending promises with
+    // "Broker disposed"; callers convert to sentinel values via .catch()).
     this.broker.dispose();
-
-    // Clean up remaining special callbacks
-    for (const cb of this.snapshotCallbacks.values()) cb(null);
-    for (const cb of this.allSnapshotsCallbacks.values()) cb([]);
-    for (const cb of this.transitionCallbacks.values()) cb(false);
-
-    // Clear all timeouts
-    for (const timeout of this.snapshotTimeouts.values()) clearTimeout(timeout);
-    for (const timeout of this.allSnapshotsTimeouts.values()) clearTimeout(timeout);
-    for (const timeout of this.transitionTimeouts.values()) clearTimeout(timeout);
 
     this.pendingSpawns.clear();
     this.pendingKillCount.clear();
     this.windowProjectContexts.clear();
     this.ipcDataMirrorIds.clear();
     this.terminalPids.clear();
-    this.snapshotCallbacks.clear();
-    this.snapshotTimeouts.clear();
-    this.allSnapshotsCallbacks.clear();
-    this.allSnapshotsTimeouts.clear();
-    this.transitionCallbacks.clear();
-    this.transitionTimeouts.clear();
     this.removeAllListeners();
 
     console.log("[PtyClient] Disposed");

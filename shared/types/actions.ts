@@ -79,6 +79,7 @@ export type BuiltInActionId =
   | "preferences.showDeveloperTools.set"
   | "preferences.showGridAgentHighlights.set"
   | "preferences.showDockAgentHighlights.set"
+  | "preferences.reduceAnimations.set"
   | "window.toggleFullscreen"
   | "window.reload"
   | "window.forceReload"
@@ -107,21 +108,31 @@ export type BuiltInActionId =
   | "project.update"
   | "project.remove"
   | "project.close"
+  | "project.closeActive"
   | "project.openDialog"
   | "project.getSettings"
   | "project.saveSettings"
+  | "project.muteNotifications"
   | "project.detectRunners"
   | "project.getStats"
   | "project.settings.open"
   | "project.cloneRepo"
   | "app.reloadConfig"
   | "app.developerMode.set"
+  | "app.theme.pick"
+  | "app.theme.toggle"
+  | "app.theme.browser.open"
   | "logs.openFile"
   | "logs.clear"
   | "logs.setVerbose"
   | "logs.getVerbose"
   | "logs.getAll"
   | "logs.getSources"
+  | "logs.setLogLevel"
+  | "logs.getLevelOverrides"
+  | "logs.setLevelOverrides"
+  | "logs.clearLevelOverrides"
+  | "logs.getRegistry"
   | "errors.clearAll"
   | "errors.openLogs"
   | "eventInspector.getEvents"
@@ -129,8 +140,11 @@ export type BuiltInActionId =
   | "eventInspector.subscribe"
   | "eventInspector.unsubscribe"
   | "eventInspector.clear"
+  | "telemetry.togglePreview"
+  | "telemetry.clearPreview"
   | "worktree.refresh"
   | "worktree.refreshPullRequests"
+  | "worktree.restartService"
   | "worktree.setActive"
   | "worktree.create"
   | "worktree.delete"
@@ -172,8 +186,10 @@ export type BuiltInActionId =
   | "worktree.overview.open"
   | "worktree.overview.close"
   | "action.palette.open"
+  | "action.repeatLast"
   | "actions.list"
   | "actions.getContext"
+  | "actions.persistedStores"
   | "terminal.moveToDock"
   | "terminal.moveToGrid"
   | "terminal.toggleDock"
@@ -189,7 +205,6 @@ export type BuiltInActionId =
   | "terminal.kill"
   | "terminal.moveToWorktree"
   | "terminal.moveToNewWorktree"
-  | "terminal.convertType"
   | "terminal.watch"
   | "terminal.viewInfo"
   | "browser.reload"
@@ -203,6 +218,7 @@ export type BuiltInActionId =
   | "browser.toggleConsole"
   | "browser.clearConsole"
   | "browser.toggleDevTools"
+  | "browser.hardReload"
   | "nav.toggleFocusMode"
   | "nav.quickSwitcher"
   | "find.inFocusedPanel"
@@ -246,12 +262,6 @@ export type BuiltInActionId =
   | "terminal.openWorktreeEditor"
   | "terminal.openWorktreeIssue"
   | "terminal.openWorktreePR"
-  | "notes.openPalette"
-  | "notes.create"
-  | "notes.list"
-  | "notes.read"
-  | "notes.delete"
-  | "notes.reveal"
   | "devServer.start"
   | "env.global.get"
   | "env.global.set"
@@ -269,13 +279,28 @@ export type BuiltInActionId =
   | "terminal.copy"
   | "terminal.paste"
   | "terminal.copyLink"
-  | "terminal.deleteNote"
   | "terminal.contextMenu"
   | "terminal.sendToAgent"
   | "terminal.bulkCommand"
   | "terminal.stashInput"
   | "terminal.popStash"
-  | "terminal.restartService";
+  | "terminal.restartService"
+  | "terminal.arm"
+  | "terminal.disarm"
+  | "terminal.disarmAll"
+  | "terminal.armByState"
+  | "terminal.armAll"
+  | "terminal.armDefault"
+  | "fleet.accept"
+  | "fleet.reject"
+  | "fleet.interrupt"
+  | "fleet.restart"
+  | "fleet.kill"
+  | "fleet.trash"
+  | "fleet.scope.enter"
+  | "fleet.scope.exit"
+  | "fleet.armMatchingFilter"
+  | "fleet.retryFailures";
 
 export type ActionId = BuiltInActionId | (string & {});
 
@@ -296,7 +321,14 @@ export interface ActionContext {
   isSettingsOpen?: boolean;
 }
 
-export interface ActionDefinition<Args = unknown, Result = unknown> {
+export type InferActionArgs<S extends z.ZodTypeAny | undefined> = [S] extends [z.ZodTypeAny]
+  ? z.infer<S>
+  : void;
+
+export interface ActionDefinition<
+  S extends z.ZodTypeAny | undefined = undefined,
+  Result = unknown,
+> {
   id: ActionId;
   title: string;
   description: string;
@@ -304,11 +336,27 @@ export interface ActionDefinition<Args = unknown, Result = unknown> {
   kind: ActionKind;
   danger: ActionDanger;
   scope: ActionScope;
-  argsSchema?: z.ZodType<Args>;
+  argsSchema?: S;
   resultSchema?: z.ZodType<Result>;
   isEnabled?: (ctx: ActionContext) => boolean;
   disabledReason?: (ctx: ActionContext) => string | undefined;
-  run: (args: Args, ctx: ActionContext) => Promise<Result>;
+  run: (args: InferActionArgs<S>, ctx: ActionContext) => Promise<Result>;
+  /**
+   * Opt-in allowlist of top-level arg keys that are safe to include in Sentry
+   * action breadcrumbs. Args are omitted by default — populate this only with
+   * keys whose values never carry secrets, file paths, or PII. Listed keys are
+   * copied verbatim (no further sanitization), so the allowlist is the policy.
+   */
+  safeBreadcrumbArgs?: readonly string[];
+  /**
+   * When true, `action.repeatLast` will not record this action as the last
+   * dispatched action. Use for palette-openers, pure navigation, modal control,
+   * and settings-open actions whose intent is transient/UI rather than a
+   * repeatable operation.
+   */
+  nonRepeatable?: boolean;
+  /** Synonyms and alternative mental-model terms for palette search. */
+  keywords?: string[];
 }
 
 export interface ActionManifestEntry {
@@ -328,6 +376,9 @@ export interface ActionManifestEntry {
   enabled: boolean;
   disabledReason?: string;
   requiresArgs: boolean;
+  keywords?: string[];
+  /** Set when this action was registered by a plugin (not a built-in). */
+  pluginId?: string;
 }
 
 export interface ActionDispatchSuccess<Result = unknown> {
@@ -378,4 +429,10 @@ export interface ActionDispatchPayload {
   context: ActionContext;
   source: ActionSource;
   timestamp: number;
+}
+
+export interface ActionFrecencyEntry {
+  id: string;
+  score: number;
+  lastAccessedAt: number;
 }

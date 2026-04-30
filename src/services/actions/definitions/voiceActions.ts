@@ -10,6 +10,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["dictate", "mic", "speech"],
     run: async () => {
       await voiceRecordingService.toggleFocusedPanel();
     },

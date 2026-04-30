@@ -1,4 +1,3 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import {
@@ -8,6 +7,7 @@ import {
 } from "../../schemas/index.js";
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalSnapshot, TabGroup } from "../../types/index.js";
+import { typedHandle } from "../utils.js";
 
 /**
  * Validate and filter terminal snapshots using the Zod schema.
@@ -69,23 +69,19 @@ export function sanitizeDraftInputs(inputs: Record<string, unknown>): Record<str
 export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleProjectGetTerminals = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectId: string
-  ): Promise<TerminalSnapshot[]> => {
+  const handleProjectGetTerminals = async (projectId: string): Promise<TerminalSnapshot[]> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
     const state = await projectStore.getProjectState(projectId);
     return state?.terminals ?? [];
   };
-  ipcMain.handle(CHANNELS.PROJECT_GET_TERMINALS, handleProjectGetTerminals);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_TERMINALS));
+  handlers.push(typedHandle(CHANNELS.PROJECT_GET_TERMINALS, handleProjectGetTerminals));
 
-  const handleProjectSetTerminals = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { projectId: string; terminals: TerminalSnapshot[] }
-  ): Promise<void> => {
+  const handleProjectSetTerminals = async (payload: {
+    projectId: string;
+    terminals: TerminalSnapshot[];
+  }): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -115,11 +111,9 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
 
     await projectStore.saveProjectState(projectId, newState);
   };
-  ipcMain.handle(CHANNELS.PROJECT_SET_TERMINALS, handleProjectSetTerminals);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_TERMINALS));
+  handlers.push(typedHandle(CHANNELS.PROJECT_SET_TERMINALS, handleProjectSetTerminals));
 
   const handleProjectGetTerminalSizes = async (
-    _event: Electron.IpcMainInvokeEvent,
     projectId: string
   ): Promise<Record<string, { cols: number; rows: number }>> => {
     if (typeof projectId !== "string" || !projectId) {
@@ -128,13 +122,9 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
     const state = await projectStore.getProjectState(projectId);
     return state?.terminalSizes ?? {};
   };
-  ipcMain.handle(CHANNELS.PROJECT_GET_TERMINAL_SIZES, handleProjectGetTerminalSizes);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_TERMINAL_SIZES));
+  handlers.push(typedHandle(CHANNELS.PROJECT_GET_TERMINAL_SIZES, handleProjectGetTerminalSizes));
 
-  const handleProjectSetTerminalSizes = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ): Promise<void> => {
+  const handleProjectSetTerminalSizes = async (payload: unknown): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -172,26 +162,21 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
 
     await projectStore.saveProjectState(projectId, newState);
   };
-  ipcMain.handle(CHANNELS.PROJECT_SET_TERMINAL_SIZES, handleProjectSetTerminalSizes);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_TERMINAL_SIZES));
+  handlers.push(typedHandle(CHANNELS.PROJECT_SET_TERMINAL_SIZES, handleProjectSetTerminalSizes));
 
-  const handleProjectGetTabGroups = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectId: string
-  ): Promise<TabGroup[]> => {
+  const handleProjectGetTabGroups = async (projectId: string): Promise<TabGroup[]> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
     const state = await projectStore.getProjectState(projectId);
     return state?.tabGroups ?? [];
   };
-  ipcMain.handle(CHANNELS.PROJECT_GET_TAB_GROUPS, handleProjectGetTabGroups);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_TAB_GROUPS));
+  handlers.push(typedHandle(CHANNELS.PROJECT_GET_TAB_GROUPS, handleProjectGetTabGroups));
 
-  const handleProjectSetTabGroups = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { projectId: string; tabGroups: TabGroup[] }
-  ): Promise<void> => {
+  const handleProjectSetTabGroups = async (payload: {
+    projectId: string;
+    tabGroups: TabGroup[];
+  }): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -220,11 +205,9 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
     };
     await projectStore.saveProjectState(projectId, newState);
   };
-  ipcMain.handle(CHANNELS.PROJECT_SET_TAB_GROUPS, handleProjectSetTabGroups);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_TAB_GROUPS));
+  handlers.push(typedHandle(CHANNELS.PROJECT_SET_TAB_GROUPS, handleProjectSetTabGroups));
 
   const handleProjectGetFocusMode = async (
-    _event: Electron.IpcMainInvokeEvent,
     projectId: string
   ): Promise<{
     focusMode: boolean;
@@ -239,17 +222,13 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
       focusPanelState: state?.focusPanelState,
     };
   };
-  ipcMain.handle(CHANNELS.PROJECT_GET_FOCUS_MODE, handleProjectGetFocusMode);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_FOCUS_MODE));
+  handlers.push(typedHandle(CHANNELS.PROJECT_GET_FOCUS_MODE, handleProjectGetFocusMode));
 
-  const handleProjectSetFocusMode = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: {
-      projectId: string;
-      focusMode: boolean;
-      focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
-    }
-  ): Promise<void> => {
+  const handleProjectSetFocusMode = async (payload: {
+    projectId: string;
+    focusMode: boolean;
+    focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
+  }): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -299,11 +278,9 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
 
     await projectStore.saveProjectState(projectId, newState);
   };
-  ipcMain.handle(CHANNELS.PROJECT_SET_FOCUS_MODE, handleProjectSetFocusMode);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_FOCUS_MODE));
+  handlers.push(typedHandle(CHANNELS.PROJECT_SET_FOCUS_MODE, handleProjectSetFocusMode));
 
   const handleProjectGetDraftInputs = async (
-    _event: Electron.IpcMainInvokeEvent,
     projectId: string
   ): Promise<Record<string, string>> => {
     if (typeof projectId !== "string" || !projectId) {
@@ -312,13 +289,9 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
     const state = await projectStore.getProjectState(projectId);
     return state?.draftInputs ?? {};
   };
-  ipcMain.handle(CHANNELS.PROJECT_GET_DRAFT_INPUTS, handleProjectGetDraftInputs);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_DRAFT_INPUTS));
+  handlers.push(typedHandle(CHANNELS.PROJECT_GET_DRAFT_INPUTS, handleProjectGetDraftInputs));
 
-  const handleProjectSetDraftInputs = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ): Promise<void> => {
+  const handleProjectSetDraftInputs = async (payload: unknown): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -356,8 +329,7 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
 
     await projectStore.saveProjectState(projectId, newState);
   };
-  ipcMain.handle(CHANNELS.PROJECT_SET_DRAFT_INPUTS, handleProjectSetDraftInputs);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_DRAFT_INPUTS));
+  handlers.push(typedHandle(CHANNELS.PROJECT_SET_DRAFT_INPUTS, handleProjectSetDraftInputs));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

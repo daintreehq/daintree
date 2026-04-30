@@ -203,11 +203,11 @@ describe("branchPickerUtils", () => {
 
         expect(rows[0]).toEqual({ kind: "section", label: "Recent" });
         const selectable = getSelectableRows(rows);
-        expect(selectable[0].name).toBe("feature/auth");
-        expect(selectable[0].isRecent).toBe(true);
-        expect(selectable[1].name).toBe("main");
-        expect(selectable[1].isRecent).toBe(true);
-        expect(selectable[2].isRecent).toBe(false);
+        expect(selectable[0]!.name).toBe("feature/auth");
+        expect(selectable[0]!.isRecent).toBe(true);
+        expect(selectable[1]!.name).toBe("main");
+        expect(selectable[1]!.isRecent).toBe(true);
+        expect(selectable[2]!.isRecent).toBe(false);
       });
 
       it("respects MRU order for recent branches", () => {
@@ -218,8 +218,8 @@ describe("branchPickerUtils", () => {
         });
 
         const selectable = getSelectableRows(rows);
-        expect(selectable[0].name).toBe("bugfix/login-crash");
-        expect(selectable[1].name).toBe("feature/auth");
+        expect(selectable[0]!.name).toBe("bugfix/login-crash");
+        expect(selectable[1]!.name).toBe("feature/auth");
       });
 
       it("ignores recent branch names that don't exist in the branch list", () => {
@@ -232,7 +232,7 @@ describe("branchPickerUtils", () => {
         const selectable = getSelectableRows(rows);
         const recent = selectable.filter((r) => r.isRecent);
         expect(recent).toHaveLength(1);
-        expect(recent[0].name).toBe("feature/auth");
+        expect(recent[0]!.name).toBe("feature/auth");
       });
 
       it("soft caps at emptyQueryLimit", () => {
@@ -259,7 +259,7 @@ describe("branchPickerUtils", () => {
 
         const selectable = getSelectableRows(rows);
         expect(selectable.length).toBeGreaterThanOrEqual(1);
-        expect(selectable[0].name).toBe("feature/auth");
+        expect(selectable[0]!.name).toBe("feature/auth");
       });
 
       it("matches fuzzy queries across slash separators", () => {
@@ -284,7 +284,7 @@ describe("branchPickerUtils", () => {
 
         const selectable = getSelectableRows(rows);
         expect(selectable.length).toBeGreaterThanOrEqual(1);
-        expect(selectable[0].name).toBe("feature/issue-2841-improve-branch-picker-fuzzy");
+        expect(selectable[0]!.name).toBe("feature/issue-2841-improve-branch-picker-fuzzy");
       });
 
       it("returns match ranges for highlighting", () => {
@@ -295,11 +295,11 @@ describe("branchPickerUtils", () => {
         });
 
         const selectable = getSelectableRows(rows);
-        expect(selectable[0].matchRanges.length).toBeGreaterThan(0);
+        expect(selectable[0]!.matchRanges.length).toBeGreaterThan(0);
         // Fuse may return multiple non-contiguous ranges for fuzzy matching
         // Verify the ranges cover the characters in the match
-        const allHighlighted = selectable[0].matchRanges.map((r) =>
-          selectable[0].name.substring(r.start, r.end + 1)
+        const allHighlighted = selectable[0]!.matchRanges.map((r) =>
+          selectable[0]!.name.substring(r.start, r.end + 1)
         );
         expect(allHighlighted.join("")).toContain("au");
       });
@@ -350,7 +350,7 @@ describe("branchPickerUtils", () => {
         });
         const selectable = getSelectableRows(rows);
         expect(selectable.length).toBeGreaterThanOrEqual(1);
-        expect(selectable[0].name).toBe("feature/foo.bar");
+        expect(selectable[0]!.name).toBe("feature/foo.bar");
       });
     });
 
@@ -392,7 +392,7 @@ describe("branchPickerUtils", () => {
         });
 
         const selectable = getSelectableRows(rows);
-        expect(selectable[0].inUseWorktree).toBe(wt);
+        expect(selectable[0]!.inUseWorktree).toBe(wt);
       });
     });
 

@@ -1,6 +1,7 @@
 import type { TerminalInstance } from "@/types";
 import { systemClient } from "@/clients/systemClient";
 import { getAgentConfig } from "@/config/agents";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export interface ValidationError {
   type: "cwd" | "cli" | "config";
@@ -32,7 +33,7 @@ export async function validateTerminalConfig(
         });
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to check directory");
       errors.push({
         type: "config",
         message: `Failed to validate working directory "${terminal.cwd}": ${message}`,
@@ -41,8 +42,12 @@ export async function validateTerminalConfig(
     }
   }
 
-  // Check agent CLI availability
-  const agentId = terminal.agentId ?? terminal.type;
+  // Check agent CLI availability.
+  // Launch-intent only: this runs before (or just after) launch to verify the CLI
+  // the user asked for is on PATH. `detectedAgentId` doesn't exist yet at that
+  // point, and using it later would validate the wrong binary for runtime-morphed
+  // sessions (e.g., a plain shell that started a different agent).
+  const agentId = terminal.launchAgentId;
   if (agentId && agentId !== "terminal") {
     try {
       const agentConfig = getAgentConfig(agentId);
@@ -56,7 +61,7 @@ export async function validateTerminalConfig(
         });
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatErrorMessage(error, "Failed to check CLI");
       errors.push({
         type: "config",
         message: `Failed to validate CLI "${agentId}": ${message}`,
@@ -84,7 +89,7 @@ export async function validateTerminals(
           results.set(terminal.id, result);
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = formatErrorMessage(error, "Failed to validate terminal");
         results.set(terminal.id, {
           valid: false,
           errors: [

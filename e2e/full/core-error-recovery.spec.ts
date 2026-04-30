@@ -40,7 +40,10 @@ test.describe.serial("Core: Error Recovery — Terminal Exit", () => {
   test("terminal shows exit indicator and banner after exit 1", async () => {
     const { window } = ctx;
 
-    const panel = await spawnTerminalAndVerify(window, "error-recovery-exit");
+    // Spawn terminal without verifying prompt content — the user's shell PS1
+    // may not echo the working directory name on cold start, which the older
+    // assertion relied on.
+    const panel = await spawnTerminalAndVerify(window);
 
     await runTerminalCommand(window, panel, "exit 1");
 
@@ -56,9 +59,14 @@ test.describe.serial("Core: Error Recovery — Terminal Exit", () => {
   test("terminal exit 0 auto-trashes panel", async () => {
     const { window } = ctx;
 
+    // Settle: the prior test left an exited terminal with focus and an active
+    // restart banner. Without a brief pause, a freshly-spawned panel can drop
+    // typed input — the residual focus/state bleed steals our keystrokes.
+    await window.waitForTimeout(1500);
+
     const countBefore = await getGridPanelCount(window);
 
-    const panel = await spawnTerminalAndVerify(window, "error-recovery-exit");
+    const panel = await spawnTerminalAndVerify(window);
     await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(countBefore + 1);
 
     await runTerminalCommand(window, panel, "exit 0");

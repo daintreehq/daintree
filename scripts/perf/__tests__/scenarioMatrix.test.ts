@@ -4,7 +4,7 @@ import { allScenarios, assertMatrixCoverage, getScenariosForMode } from "../scen
 describe("perf scenario matrix", () => {
   it("covers full PERF matrix", () => {
     expect(() => assertMatrixCoverage()).not.toThrow();
-    expect(allScenarios).toHaveLength(28);
+    expect(allScenarios).toHaveLength(30);
   });
 
   it("returns mode-specific scenario sets", () => {
@@ -23,5 +23,17 @@ describe("perf scenario matrix", () => {
     const ids = allScenarios.map((scenario) => scenario.id);
     const unique = new Set(ids);
     expect(unique.size).toBe(ids.length);
+  });
+
+  it("PERF-080 returns valid metrics and fixture meets size threshold", async () => {
+    const scenario = allScenarios.find((s) => s.id === "PERF-080");
+    expect(scenario).toBeDefined();
+
+    const context = { mode: "ci" as const, now: () => performance.now() };
+    const sample = await scenario!.run(context);
+
+    expect(sample.metrics).toBeDefined();
+    expect(sample.metrics!.terminalCount).toBeGreaterThan(0);
+    expect(sample.metrics!.bytes).toBeGreaterThan(0);
   });
 });

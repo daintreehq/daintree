@@ -6,6 +6,7 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 function cloneTerminal(t: RecipeTerminal): RecipeTerminal {
   return { ...t, env: t.env ? { ...t.env } : {} };
@@ -178,7 +179,9 @@ export function RecipeEditor({
     value: string | Record<string, string>
   ) => {
     const newTerminals = [...terminals];
-    newTerminals[index] = { ...newTerminals[index], [field]: value };
+    const current = newTerminals[index];
+    if (!current) return;
+    newTerminals[index] = { ...current, [field]: value };
     setTerminals(newTerminals);
   };
 
@@ -225,7 +228,7 @@ export function RecipeEditor({
         const savedRecipe: TerminalRecipe = recipe
           ? { ...recipe, name: recipeName, terminals }
           : {
-              id: `recipe-${Date.now()}`,
+              id: `recipe-${crypto.randomUUID()}`,
               name: recipeName,
               projectId: scope === "global" ? undefined : currentProject!.id,
               worktreeId: scope === "global" ? undefined : worktreeId,
@@ -237,7 +240,7 @@ export function RecipeEditor({
 
       onClose();
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Failed to save recipe");
+      setError(formatErrorMessage(error, "Failed to save recipe"));
     } finally {
       setIsSaving(false);
     }
@@ -270,7 +273,7 @@ export function RecipeEditor({
             value={recipeName}
             onChange={(e) => setRecipeName(e.target.value)}
             placeholder="e.g., Full Stack Dev"
-            className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent"
+            className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
           />
         </div>
 
@@ -292,7 +295,7 @@ export function RecipeEditor({
               id="recipe-scope"
               value={scope}
               onChange={(e) => setScope(e.target.value as "global" | "project")}
-              className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent"
+              className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
             >
               <option value="project">Project (current project only)</option>
               <option value="global">Global (all projects)</option>
@@ -332,7 +335,7 @@ export function RecipeEditor({
             value={autoAssign}
             onChange={(e) => setAutoAssign(e.target.value as "always" | "never" | "prompt")}
             aria-describedby="auto-assign-help"
-            className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent"
+            className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
           >
             <option value="always">Always assign to me</option>
             <option value="prompt">Ask before assigning</option>
@@ -370,28 +373,30 @@ export function RecipeEditor({
                     </label>
                     <select
                       id={`terminal-type-${index}`}
-                      value={terminal.type}
+                      value={undefined}
                       onChange={(e) => {
                         const newType = e.target.value as RecipeTerminalType;
                         setTerminals((prev) => {
                           const updated = [...prev];
-                          const prevType = updated[index].type;
+                          const current = updated[index];
+                          if (!current) return prev;
+                          const prevType = current.type;
                           updated[index] = {
-                            ...updated[index],
+                            ...current,
                             type: newType,
                             // Clear command when switching between types so the new type uses its default
-                            command: newType === prevType ? updated[index].command : "",
+                            command: newType === prevType ? current.command : "",
                             // Clear initialPrompt and args when switching to terminal or dev-preview
                             initialPrompt:
                               newType === "terminal" || newType === "dev-preview"
                                 ? ""
-                                : updated[index].initialPrompt,
+                                : current.initialPrompt,
                             args:
                               newType === "terminal" || newType === "dev-preview"
                                 ? ""
-                                : updated[index].args,
+                                : current.args,
                             // Clear devCommand when switching away from dev-preview
-                            devCommand: newType !== "dev-preview" ? "" : updated[index].devCommand,
+                            devCommand: newType !== "dev-preview" ? "" : current.devCommand,
                           };
                           return updated;
                         });

@@ -75,6 +75,7 @@ describe("TerminalInstanceService detach blur", () => {
       isDetached: false,
       isVisible: true,
       lastDetachAt: 0,
+      hoveredLink: null as unknown,
     };
   };
 
@@ -124,5 +125,40 @@ describe("TerminalInstanceService detach blur", () => {
 
     expect(managed.terminal.blur).toHaveBeenCalledTimes(1);
     expect(managed.isDetached).toBe(true);
+  });
+
+  it("detach() clears hoveredLink", () => {
+    const managed = makeMockManaged("t3");
+    managed.hoveredLink = { text: "https://example.com", range: {}, activate: vi.fn() };
+    const container = document.createElement("div");
+    container.appendChild(managed.hostElement);
+    service.instances.set("t3", managed);
+
+    vi.spyOn(service.offscreenManager, "getOffscreenSlot").mockReturnValue(undefined);
+    vi.spyOn(service.offscreenManager, "ensureHiddenContainer").mockReturnValue(
+      document.createElement("div")
+    );
+
+    service.detach("t3", container);
+
+    expect(managed.hoveredLink).toBeNull();
+  });
+
+  it("detachForProjectSwitch() clears hoveredLink", () => {
+    const managed = makeMockManaged("t4");
+    managed.hoveredLink = { text: "/file.tsx:1:1", range: {}, activate: vi.fn() };
+    const parent = document.createElement("div");
+    parent.appendChild(managed.hostElement);
+    service.instances.set("t4", managed);
+
+    vi.spyOn(service.offscreenManager, "ensureHiddenContainer").mockReturnValue(
+      document.createElement("div")
+    );
+    vi.spyOn(service.resizeController, "clearResizeJob").mockImplementation(() => {});
+    vi.spyOn(service.resizeController, "clearSettledTimer").mockImplementation(() => {});
+
+    service.detachForProjectSwitch("t4");
+
+    expect(managed.hoveredLink).toBeNull();
   });
 });

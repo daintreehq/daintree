@@ -33,3 +33,9 @@ export function ensureTerminalFontLoaded(): Promise<void> {
 
   return fontLoadPromise;
 }
+
+// Eagerly kick off the font load at module import so components can `use()`
+// the same promise reference without having to call `ensureTerminalFontLoaded()`
+// in render. Holding a stable module-level reference is required to prevent
+// `use()` from throwing a new promise on every render (infinite suspense).
+export const terminalFontReady: Promise<void> = ensureTerminalFontLoaded();

@@ -8,6 +8,7 @@ describe("shortcutHintStore", () => {
       hydrated: false,
       pointer: null,
       activeHint: null,
+      hintedHover: new Set(),
     });
     vi.stubGlobal("window", {
       electron: {
@@ -189,5 +190,92 @@ describe("shortcutHintStore", () => {
 
     expect(resultA).toBe(true);
     expect(resultB).toBe(false);
+  });
+
+  it("isHoverEligible returns false before hydration", () => {
+    const s = shortcutHintStore.getState();
+    // Store starts with hydrated: false (set in beforeEach)
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
+  });
+
+  // --- Hover path tests ---
+
+  it("show with position bypasses stale pointer", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 1 });
+    // No pointer recorded — dispatch path would fail
+    const result = s.show("nav.quickSwitcher", "⌘K", { x: 300, y: 400 });
+
+    expect(result).toBe(true);
+    const state = shortcutHintStore.getState();
+    expect(state.activeHint).toEqual({
+      actionId: "nav.quickSwitcher",
+      displayCombo: "⌘K",
+      x: 300,
+      y: 400,
+    });
+  });
+
+  it("isHoverEligible returns true for count 0", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 0 });
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true);
+  });
+
+  it("isHoverEligible returns true for unknown action (treated as count 0)", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({});
+    expect(s.isHoverEligible("terminal.new")).toBe(true);
+  });
+
+  it("isHoverEligible returns true for milestone count", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 1 });
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true);
+  });
+
+  it("isHoverEligible returns false for non-milestone non-zero count", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 4 });
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
+  });
+
+  it("isHoverEligible returns false after count was already hinted via hover (one-shot)", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 1 });
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true);
+    s.markHoverShown("nav.quickSwitcher");
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
+  });
+
+  it("markHoverShown gates count 0 as one-shot", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 0 });
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true);
+    s.markHoverShown("nav.quickSwitcher");
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
+  });
+
+  it("incrementCount clears hover tracking for that action", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 1 });
+    s.markHoverShown("nav.quickSwitcher");
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
+
+    s.incrementCount("nav.quickSwitcher");
+    // After increment, count is 2 (milestone) and tracking is cleared
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true);
+  });
+
+  it("incrementCount leaves hover tracking for other actions intact", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 1, "terminal.new": 2 });
+    s.markHoverShown("nav.quickSwitcher");
+    s.markHoverShown("terminal.new");
+
+    s.incrementCount("nav.quickSwitcher");
+    // terminal.new hover tracking should still be present
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true); // cleared + now at milestone 2
+    expect(s.isHoverEligible("terminal.new")).toBe(false); // still tracked at count 2
   });
 });

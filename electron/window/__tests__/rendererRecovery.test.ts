@@ -56,6 +56,7 @@ function createMockWindow() {
         wcListeners.get(event)!.push(handler);
       }),
       reload: vi.fn(),
+      forcefullyCrashRenderer: vi.fn(),
       loadURL: vi.fn(),
       getURL: vi.fn(() => "app://daintree/index.html"),
       setWindowOpenHandler: vi.fn(),
@@ -78,19 +79,23 @@ function createMockWindow() {
 
 interface CrashRecoveryOptions {
   onRecreateWindow?: () => Promise<void>;
+  backupTimestamp?: number | null;
 }
 
 function setupCrashRecovery(
   win: ReturnType<typeof createMockWindow>,
   options: CrashRecoveryOptions = {}
 ) {
-  const { onRecreateWindow } = options;
+  const { onRecreateWindow, backupTimestamp = null } = options;
   const rendererCrashTimestamps: number[] = [];
   const oomRecreationTimestamps: number[] = [];
   const recordCrash = vi.fn();
 
   const getRecoveryUrl = (reason: string, exitCode: number): string => {
     const params = new URLSearchParams({ reason, exitCode: String(exitCode) });
+    if (backupTimestamp !== null) {
+      params.set("backupTimestamp", String(backupTimestamp));
+    }
     return `app://daintree/recovery.html?${params}`;
   };
 
@@ -170,17 +175,18 @@ function setupUnresponsiveHandling(win: ReturnType<typeof createMockWindow>) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (dialog.showMessageBox as any)(win, {
       type: "warning",
-      buttons: ["Wait", "Reload"],
+      buttons: ["Wait", "Restart view"],
       defaultId: 0,
       title: "Window Not Responding",
       message: "The window is not responding.",
-      detail: "You can wait for it to recover or reload the window.",
+      detail:
+        "You can wait for it to recover, or force-restart the view. Force-restarting will immediately terminate and recover the view.",
     })
       .then(({ response }: { response: number }) => {
         if (dialogId !== unresponsiveDialogId) return;
         unresponsiveDialogOpen = false;
         if (response === 1 && !win.isDestroyed()) {
-          win.webContents.reload();
+          win.webContents.forcefullyCrashRenderer();
         }
       })
       .catch(() => {
@@ -490,6 +496,55 @@ describe("renderer crash recovery", () => {
     expect(notifyError).not.toHaveBeenCalled();
     expect(win.webContents.loadURL).toHaveBeenCalledOnce();
   });
+
+  it("recovery URL includes backupTimestamp when service returns one", () => {
+    const win = createMockWindow();
+    setupCrashRecovery(win, { backupTimestamp: 1_700_000_000_000 });
+
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    vi.advanceTimersByTime(0);
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    vi.advanceTimersByTime(0);
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    vi.advanceTimersByTime(0);
+
+    expect(win.webContents.loadURL).toHaveBeenCalledOnce();
+    const url = win.webContents.loadURL.mock.calls[0][0] as string;
+    expect(url).toContain("backupTimestamp=1700000000000");
+  });
+
+  it("recovery URL omits backupTimestamp when service returns null", () => {
+    const win = createMockWindow();
+    setupCrashRecovery(win, { backupTimestamp: null });
+
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    vi.advanceTimersByTime(0);
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    vi.advanceTimersByTime(0);
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    vi.advanceTimersByTime(0);
+
+    expect(win.webContents.loadURL).toHaveBeenCalledOnce();
+    const url = win.webContents.loadURL.mock.calls[0][0] as string;
+    expect(url).not.toContain("backupTimestamp");
+  });
+
+  it("killed reason on third crash still loads recovery page", () => {
+    const win = createMockWindow();
+    setupCrashRecovery(win);
+
+    win._emitWc("render-process-gone", { reason: "killed", exitCode: 137 });
+    vi.advanceTimersByTime(0);
+    win._emitWc("render-process-gone", { reason: "killed", exitCode: 137 });
+    vi.advanceTimersByTime(0);
+    win._emitWc("render-process-gone", { reason: "killed", exitCode: 137 });
+    vi.advanceTimersByTime(0);
+
+    expect(win.webContents.loadURL).toHaveBeenCalledOnce();
+    const url = win.webContents.loadURL.mock.calls[0][0] as string;
+    expect(url).toContain("reason=killed");
+    expect(url).toContain("exitCode=137");
+  });
 });
 
 describe("unresponsive handling", () => {
@@ -510,9 +565,13 @@ describe("unresponsive handling", () => {
     win._emit("unresponsive");
 
     expect(dialog.showMessageBox).toHaveBeenCalledOnce();
+    expect(dialog.showMessageBox).toHaveBeenCalledWith(
+      win,
+      expect.objectContaining({ buttons: ["Wait", "Restart view"] })
+    );
   });
 
-  it("reloads when user clicks Reload", async () => {
+  it("force-crashes renderer when user clicks Restart view", async () => {
     vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 1, checkboxChecked: false });
     const win = createMockWindow();
     setupUnresponsiveHandling(win);
@@ -520,10 +579,11 @@ describe("unresponsive handling", () => {
     win._emit("unresponsive");
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(win.webContents.reload).toHaveBeenCalledOnce();
+    expect(win.webContents.forcefullyCrashRenderer).toHaveBeenCalledOnce();
+    expect(win.webContents.reload).not.toHaveBeenCalled();
   });
 
-  it("does not reload when user clicks Wait", async () => {
+  it("does not act when user clicks Wait", async () => {
     vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 0, checkboxChecked: false });
     const win = createMockWindow();
     setupUnresponsiveHandling(win);
@@ -531,6 +591,7 @@ describe("unresponsive handling", () => {
     win._emit("unresponsive");
     await vi.advanceTimersByTimeAsync(0);
 
+    expect(win.webContents.forcefullyCrashRenderer).not.toHaveBeenCalled();
     expect(win.webContents.reload).not.toHaveBeenCalled();
   });
 
@@ -543,6 +604,7 @@ describe("unresponsive handling", () => {
     win._emit("responsive");
     await vi.advanceTimersByTimeAsync(0);
 
+    expect(win.webContents.forcefullyCrashRenderer).not.toHaveBeenCalled();
     expect(win.webContents.reload).not.toHaveBeenCalled();
   });
 

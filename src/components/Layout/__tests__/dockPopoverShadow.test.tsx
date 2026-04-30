@@ -106,6 +106,38 @@ describe("Dock Popover Visual Layer - Issue #2316", () => {
     });
   });
 
+  describe("Neutral Lift on Popover-Open Dock Buttons - Issue #5928", () => {
+    const dockButtonFiles = [
+      "../StatusContainer.tsx",
+      "../BackgroundContainer.tsx",
+      "../TrashContainer.tsx",
+      "../HelpAgentDockButton.tsx",
+    ];
+
+    for (const relativePath of dockButtonFiles) {
+      it(`should not use accent ring on isOpen state in ${relativePath}`, async () => {
+        const fs = await import("fs/promises");
+        const path = await import("path");
+
+        const filePath = path.resolve(__dirname, relativePath);
+        const content = await fs.readFile(filePath, "utf-8");
+
+        expect(content).not.toContain("ring-daintree-accent");
+        expect(content).not.toContain("border-daintree-accent/40");
+      });
+
+      it(`should use neutral lift tokens on isOpen state in ${relativePath}`, async () => {
+        const fs = await import("fs/promises");
+        const path = await import("path");
+
+        const filePath = path.resolve(__dirname, relativePath);
+        const content = await fs.readFile(filePath, "utf-8");
+
+        expect(content).toContain("bg-overlay-emphasis border-border-default");
+      });
+    }
+  });
+
   describe("Conditional Escape Key Guard - Issue #4572", () => {
     it("should export handleDockEscapeKeyDown from dockPopoverGuard", async () => {
       const fs = await import("fs/promises");

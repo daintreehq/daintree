@@ -6,7 +6,7 @@ import type { PendingCrash, CrashRecoveryConfig, CrashRecoveryAction } from "@sh
 
 const mockPanels = [
   { id: "t1", kind: "terminal", title: "Shell", location: "grid" as const, isSuspect: false },
-  { id: "t2", kind: "agent", title: "Claude", location: "dock" as const, isSuspect: false },
+  { id: "t2", kind: "terminal", title: "Claude", location: "dock" as const, isSuspect: false },
 ];
 
 const mockCrash: PendingCrash = {

@@ -5,7 +5,8 @@ import { app, screen } from "electron";
 import { sanitizePath } from "./TelemetryService.js";
 import { logBuffer } from "./LogBuffer.js";
 import { getPtyManager } from "./PtyManager.js";
-import { store } from "../store.js";
+import { scrubSecrets } from "../utils/secretScrubber.js";
+import { store, windowStatesStore } from "../store.js";
 import type { HandlerDependencies } from "../ipc/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -24,13 +25,15 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
 const SENSITIVE_KEY_PATTERN =
   /token|password|secret|apiKey|api_key|credential|authorization|private_key|passphrase/i;
 
+function sanitizeString(value: string): string {
+  return scrubSecrets(sanitizePath(value));
+}
+
 function redactDeep(value: unknown): unknown {
   if (value === null || value === undefined) return value;
 
   if (typeof value === "string") {
-    let result = sanitizePath(value);
-    result = result.replace(/https?:\/\/[^@\s]+@/g, "https://<redacted>@");
-    return result;
+    return sanitizeString(value);
   }
 
   if (Array.isArray(value)) {
@@ -299,9 +302,7 @@ async function collectGit() {
     result.remotes = remoteOutput
       .split("\n")
       .filter(Boolean)
-      .map((line) => {
-        return sanitizePath(line.replace(/https?:\/\/[^@\s]+@/g, "https://<redacted>@"));
-      });
+      .map((line) => sanitizeString(line));
   }
 
   const versionOutput = await runCommand("git", ["--version"]);
@@ -317,8 +318,6 @@ const SAFE_STORE_KEYS = [
   "keybindingOverrides",
   "worktreeConfig",
   "notificationSettings",
-  "windowState",
-  "windowStates",
   "onboarding",
   "voiceInput",
   "appTheme",
@@ -334,6 +333,11 @@ async function collectStoreConfig() {
       } catch {
         result[key] = { error: `Failed to read ${key}` };
       }
+    }
+    try {
+      result.windowStates = windowStatesStore.get("windowStates");
+    } catch {
+      result.windowStates = { error: "Failed to read window states" };
     }
     return redactDeep(result);
   } catch {
@@ -365,7 +369,7 @@ async function collectLogs() {
       totalEntries: entries.length,
       recentEntries: recent.map((e) => ({
         ...e,
-        message: truncateDiagnosticString(sanitizePath(e.message)),
+        message: truncateDiagnosticString(sanitizeString(e.message)),
         context: e.context ? truncateDeep(redactDeep(e.context)) : undefined,
       })),
     };
@@ -397,6 +401,13 @@ async function collectEvents(deps: HandlerDependencies) {
 }
 
 export async function collectDiagnostics(deps: HandlerDependencies): Promise<unknown> {
+  const { payload } = await collectDiagnosticsWithKeys(deps);
+  return payload;
+}
+
+export async function collectDiagnosticsWithKeys(
+  deps: HandlerDependencies
+): Promise<{ payload: Record<string, unknown>; sectionKeys: string[] }> {
   const sections = [
     { key: "metadata", fn: collectMetadata },
     { key: "runtime", fn: collectRuntime },
@@ -434,5 +445,8 @@ export async function collectDiagnostics(deps: HandlerDependencies): Promise<unk
     }
   }
 
-  return redactDeep(payload);
+  return {
+    payload: redactDeep(payload) as Record<string, unknown>,
+    sectionKeys: sections.map((s) => s.key),
+  };
 }

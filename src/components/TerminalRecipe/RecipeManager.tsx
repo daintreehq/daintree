@@ -13,17 +13,20 @@ import {
   Lock,
   GitBranch,
 } from "lucide-react";
-import { TerminalRecipeIcon } from "@/components/icons";
+import { Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { logError } from "@/utils/logger";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import type { TerminalRecipe } from "@/types";
 import { useRef } from "react";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface RecipeManagerProps {
   isOpen: boolean;
@@ -83,8 +86,8 @@ export function RecipeManager({
       await deleteRecipe(recipeId);
       setRecipeToDelete(null);
     } catch (err) {
-      console.error("Failed to delete recipe:", err);
-      setDeleteError(err instanceof Error ? err.message : "Failed to delete recipe");
+      logError("Failed to delete recipe", err);
+      setDeleteError(formatErrorMessage(err, "Failed to delete recipe"));
     }
   };
 
@@ -101,7 +104,7 @@ export function RecipeManager({
             exportTimeoutRef.current = null;
           }, 2000);
         } catch (err) {
-          console.error("Failed to copy to clipboard:", err);
+          logError("Failed to copy to clipboard", err);
         }
       }
     },
@@ -118,7 +121,7 @@ export function RecipeManager({
       setRecipeToSave(null);
       setRecipeToDeleteAfterSave(savedId);
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Failed to save recipe to repo");
+      setSaveError(formatErrorMessage(err, "Failed to save recipe to repo"));
     } finally {
       setIsSaving(false);
     }
@@ -129,7 +132,7 @@ export function RecipeManager({
     try {
       await deleteRecipe(recipeToDeleteAfterSave);
     } catch (err) {
-      console.error("Failed to delete original recipe:", err);
+      logError("Failed to delete original recipe", err);
     }
     setRecipeToDeleteAfterSave(null);
   };
@@ -146,7 +149,7 @@ export function RecipeManager({
       setShowImportDialog(false);
       setImportJson("");
     } catch (err) {
-      setImportError(err instanceof Error ? err.message : "Failed to import recipe");
+      setImportError(formatErrorMessage(err, "Failed to import recipe"));
     }
   };
 
@@ -280,12 +283,12 @@ export function RecipeManager({
   };
 
   return (
-    <TooltipProvider delayDuration={400} skipDelayDuration={300}>
+    <>
       <AppDialog isOpen={isOpen} onClose={onClose} size="lg">
         <AppDialog.Header>
           <AppDialog.Title>
             <span className="flex items-center gap-2">
-              <TerminalRecipeIcon className="h-5 w-5" />
+              <Workflow className="h-5 w-5" />
               Recipe Manager
             </span>
           </AppDialog.Title>
@@ -301,20 +304,33 @@ export function RecipeManager({
             </h3>
             <p className="text-xs text-daintree-text/60 mb-3">Available across all projects</p>
             {globalRecipes.length === 0 ? (
-              <div className="text-sm text-daintree-text/60 text-center py-4 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
-                No global recipes
+              <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+                <EmptyState
+                  variant="zero-data"
+                  icon={<Workflow />}
+                  title="No global recipes"
+                  description="Save a terminal layout once and launch it in any project."
+                  action={
+                    <Button variant="outline" size="sm" onClick={() => onCreateRecipe("global")}>
+                      <Plus className="h-3 w-3" />
+                      New global recipe
+                    </Button>
+                  }
+                />
               </div>
             ) : (
-              <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
-                {globalRecipes.map((r) => renderRecipeRow(r))}
-              </div>
+              <>
+                <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+                  {globalRecipes.map((r) => renderRecipeRow(r))}
+                </div>
+                <div className="flex gap-2 mt-2">
+                  <Button variant="outline" size="sm" onClick={() => onCreateRecipe("global")}>
+                    <Plus className="h-3 w-3" />
+                    New global recipe
+                  </Button>
+                </div>
+              </>
             )}
-            <div className="flex gap-2 mt-2">
-              <Button variant="outline" size="sm" onClick={() => onCreateRecipe("global")}>
-                <Plus className="h-3 w-3" />
-                New Global Recipe
-              </Button>
-            </div>
           </div>
 
           {/* Team Recipes Section (in-repo) */}
@@ -346,45 +362,73 @@ export function RecipeManager({
             </h3>
             <p className="text-xs text-daintree-text/60 mb-3">Specific to the current project</p>
             {projectRecipes.length === 0 ? (
-              <div className="text-sm text-daintree-text/60 text-center py-4 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
-                No project recipes
+              <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+                <EmptyState
+                  variant="zero-data"
+                  icon={<Workflow />}
+                  title="No project recipes"
+                  description="Project recipes stay private to this machine until you save them to the repo."
+                  action={
+                    <div className="flex flex-wrap gap-2 justify-center">
+                      <Button variant="outline" size="sm" onClick={() => onCreateRecipe("project")}>
+                        <Plus className="h-3 w-3" />
+                        New project recipe
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)}>
+                        <FileDown className="h-3 w-3" />
+                        Import from clipboard
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void importRecipeFromFile(currentProject?.id)}
+                      >
+                        <FileUp className="h-3 w-3" />
+                        Import from file
+                      </Button>
+                    </div>
+                  }
+                />
               </div>
             ) : (
-              <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
-                {projectRecipes.map((r) => renderRecipeRow(r))}
-              </div>
+              <>
+                <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+                  {projectRecipes.map((r) => renderRecipeRow(r))}
+                </div>
+                <div className="flex gap-2 mt-2">
+                  <Button variant="outline" size="sm" onClick={() => onCreateRecipe("project")}>
+                    <Plus className="h-3 w-3" />
+                    New project recipe
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)}>
+                    <FileDown className="h-3 w-3" />
+                    Import from clipboard
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void importRecipeFromFile(currentProject?.id)}
+                  >
+                    <FileUp className="h-3 w-3" />
+                    Import from file
+                  </Button>
+                </div>
+              </>
             )}
-            <div className="flex gap-2 mt-2">
-              <Button variant="outline" size="sm" onClick={() => onCreateRecipe("project")}>
-                <Plus className="h-3 w-3" />
-                New Project Recipe
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)}>
-                <FileDown className="h-3 w-3" />
-                Import from Clipboard
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void importRecipeFromFile(currentProject?.id)}
-              >
-                <FileUp className="h-3 w-3" />
-                Import from File
-              </Button>
-            </div>
           </div>
         </AppDialog.Body>
       </AppDialog>
 
       <ConfirmDialog
         isOpen={recipeToDelete !== null}
-        title="Delete Recipe"
+        title={`Delete '${globalRecipes.find((r) => r.id === recipeToDelete)?.name ?? projectRecipes.find((r) => r.id === recipeToDelete)?.name ?? inRepoRecipes.find((r) => r.id === recipeToDelete)?.name ?? "recipe"}'?`}
         description={
           deleteError
             ? `Error: ${deleteError}`
-            : "Are you sure you want to delete this recipe? This action cannot be undone."
+            : "The recipe will be permanently removed. This cannot be undone."
         }
-        confirmLabel={deleteError ? "Retry" : "Delete"}
+        confirmLabel={deleteError ? "Retry delete" : "Delete recipe"}
+        variant="destructive"
         onConfirm={() => {
           if (recipeToDelete) void handleDeleteRecipe(recipeToDelete);
         }}
@@ -396,13 +440,14 @@ export function RecipeManager({
 
       <ConfirmDialog
         isOpen={recipeToSave !== null}
-        title="Save to Team Recipes?"
+        title={`Save '${globalRecipes.find((r) => r.id === recipeToSave)?.name ?? projectRecipes.find((r) => r.id === recipeToSave)?.name ?? inRepoRecipes.find((r) => r.id === recipeToSave)?.name ?? "recipe"}' to team recipes?`}
         description={
           saveError
             ? `Error: ${saveError}`
             : "This recipe will be written to .daintree/recipes/ in the repository where it can be committed and shared with the team."
         }
-        confirmLabel={saveError ? "Retry" : "Save to Repo"}
+        confirmLabel={saveError ? "Retry save" : "Save to repo"}
+        variant="default"
         isConfirmLoading={isSaving}
         onConfirm={() => void handleSaveToRepo()}
         onClose={() => {
@@ -414,9 +459,9 @@ export function RecipeManager({
       <ConfirmDialog
         isOpen={recipeToDeleteAfterSave !== null}
         title="Delete original?"
-        description="The recipe has been saved to the repository. Do you want to remove the original copy from this machine?"
-        confirmLabel="Delete Original"
-        cancelLabel="Keep Both"
+        description="The recipe has been saved to the repository. The original copy on this machine will be permanently removed."
+        confirmLabel="Delete original"
+        cancelLabel="Keep both"
         variant="destructive"
         onConfirm={() => void handleDeleteAfterSave()}
         onClose={() => setRecipeToDeleteAfterSave(null)}
@@ -432,7 +477,7 @@ export function RecipeManager({
         size="md"
       >
         <AppDialog.Header>
-          <AppDialog.Title>Import Recipe</AppDialog.Title>
+          <AppDialog.Title>Import recipe</AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>
 
@@ -452,7 +497,7 @@ export function RecipeManager({
             value={importJson}
             onChange={(e) => setImportJson(e.target.value)}
             placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className="w-full h-48 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-none focus:ring-2 focus:ring-daintree-accent resize-none"
+            className="w-full h-48 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent resize-none"
             spellCheck={false}
           />
           {importError && (
@@ -478,6 +523,6 @@ export function RecipeManager({
           </Button>
         </AppDialog.Footer>
       </AppDialog>
-    </TooltipProvider>
+    </>
   );
 }

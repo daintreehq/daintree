@@ -26,7 +26,7 @@ test.describe.serial("First-run onboarding flow", () => {
     rmSync(userDataDir, { recursive: true, force: true });
   });
 
-  test("completes onboarding wizard on first launch", async () => {
+  test("welcome screen is non-blocking on first launch and agent setup is opt-in", async () => {
     ctx = await launchApp({
       userDataDir,
       env: FIRST_RUN_ENV,
@@ -34,51 +34,55 @@ test.describe.serial("First-run onboarding flow", () => {
     });
     const { window } = ctx;
 
-    // Welcome + agent selection are consolidated into a single Agent Setup dialog.
-    // First-run shows the Welcome heading (not "Choose your AI agents").
+    // The welcome screen should render and the toolbar should be interactive
+    // simultaneously — no blocking modal prevents access to the app.
     await expect(window.locator(SEL.firstRun.welcomeTitle)).toBeVisible({ timeout: T_MEDIUM });
-    await expect(window.locator(SEL.firstRun.agentSetupTitle)).toBeVisible({ timeout: T_MEDIUM });
-    await window.locator('button:has-text("Skip")').click();
-
-    // Onboarding complete — toolbar should become visible
     await expect(window.locator(SEL.toolbar.openSettings)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.locator(SEL.toolbar.openSettings)).toBeEnabled();
 
-    // Clean close for persistence
+    // The wizard must NOT auto-open — it is opt-in via the banner CTA.
+    await expect(window.locator(SEL.firstRun.agentSetupTitle)).not.toBeVisible();
+
+    // The setup banner is visible and invites the user in.
+    await expect(window.locator(SEL.firstRun.agentSetupBanner)).toBeVisible({ timeout: T_MEDIUM });
+
+    // Clicking the banner CTA opens the wizard on demand.
+    await window.locator(SEL.firstRun.agentSetupBannerCta).click();
+    await expect(window.locator(SEL.firstRun.agentSetupTitle)).toBeVisible({ timeout: T_MEDIUM });
+
+    // Skip closes the wizard and the toolbar remains interactive.
+    await window.locator('button:has-text("Skip")').click();
+    await expect(window.locator(SEL.firstRun.agentSetupTitle)).not.toBeVisible({
+      timeout: T_SETTLE,
+    });
+    await expect(window.locator(SEL.toolbar.openSettings)).toBeVisible();
+
+    // Clean close for persistence across the second-launch test below.
     const pid = ctx.app.process().pid!;
     await closeApp(ctx.app);
     await waitForProcessExit(pid);
     ctx = null;
   });
 
-  test("does not show onboarding on second launch", async () => {
-    // App renders a blank screen on the second launch when first-run was
-    // completed by skipping without selecting an agent. Likely interaction
-    // between OnboardingFlow's auto-open wizard and the new projectStore
-    // concurrency guards. Tracked separately.
-    test.fixme();
+  test("second launch does not reshow the banner or auto-open the wizard", async () => {
     ctx = await launchApp({
       userDataDir,
       env: FIRST_RUN_ENV,
     });
     const { window } = ctx;
 
-    // Toolbar should be visible (first-run completed previously)
+    // Toolbar should be visible (first-run completed previously).
     await expect(window.locator(SEL.toolbar.openSettings)).toBeVisible({ timeout: T_MEDIUM });
 
-    // Allow onboarding hydration to complete
+    // Allow onboarding hydration to complete.
     await window.waitForTimeout(T_SETTLE);
 
-    // First-run welcome must NOT appear again.
-    await expect(window.locator(SEL.firstRun.welcomeTitle)).not.toBeVisible();
+    // The first-run banner must NOT reappear: the user completed the wizard
+    // on first launch, which persists the onboarding-complete flag.
+    await expect(window.locator(SEL.firstRun.agentSetupBanner)).not.toBeVisible();
 
-    // The Agent Setup wizard auto-opens on subsequent launches when no agents are
-    // installed/selected (see OnboardingFlow auto-open effect). Dismiss it and verify
-    // the toolbar remains usable.
-    const agentSetupDialog = window.locator(SEL.firstRun.agentSetupTitle);
-    if (await agentSetupDialog.isVisible()) {
-      await window.keyboard.press("Escape");
-      await expect(agentSetupDialog).not.toBeVisible({ timeout: T_SETTLE });
-    }
-    await expect(window.locator(SEL.toolbar.openSettings)).toBeVisible();
+    // The wizard must not auto-open either — the old returning-user
+    // auto-open effect is gone.
+    await expect(window.locator(SEL.firstRun.agentSetupTitle)).not.toBeVisible();
   });
 });

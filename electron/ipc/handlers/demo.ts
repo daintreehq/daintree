@@ -1,16 +1,15 @@
-import { ipcMain } from "electron";
+import { ipcMain, session } from "electron";
 import { randomBytes } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import { spawn, type ChildProcess } from "child_process";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
+import { typedHandle } from "../utils.js";
 import type {
   DemoMoveToPayload,
   DemoMoveToSelectorPayload,
   DemoTypePayload,
-  DemoSetZoomPayload,
   DemoWaitForSelectorPayload,
   DemoSleepPayload,
   DemoScreenshotResult,
@@ -18,10 +17,8 @@ import type {
   DemoStartCaptureResult,
   DemoStopCaptureResult,
   DemoCaptureStatus,
-  DemoEncodePayload,
-  DemoEncodeProgressEvent,
-  DemoEncodeResult,
-  DemoEncodePreset,
+  DemoCaptureChunkPayload,
+  DemoCaptureStopPayload,
   DemoScrollPayload,
   DemoDragPayload,
   DemoPressKeyPayload,
@@ -32,10 +29,8 @@ import type {
   DemoWaitForIdlePayload,
 } from "../../../shared/types/ipc/demo.js";
 
-export function resolveFfmpegPath(): string {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require("ffmpeg-static") as string;
-}
+const CAPTURE_MIME_TYPE = "video/webm;codecs=vp9";
+const PROJECT_SESSION_PARTITION = "persist:daintree";
 
 export function registerDemoHandlers(deps: HandlerDependencies): () => void {
   if (!deps.isDemoMode) {
@@ -80,17 +75,11 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     });
   }
 
-  const handleMoveTo = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoMoveToPayload
-  ): Promise<void> => {
+  const handleMoveTo = async (payload: DemoMoveToPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_MOVE_TO, payload);
   };
 
-  const handleMoveToSelector = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoMoveToSelectorPayload
-  ): Promise<void> => {
+  const handleMoveToSelector = async (payload: DemoMoveToSelectorPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_MOVE_TO_SELECTOR, payload);
   };
 
@@ -98,18 +87,8 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_CLICK);
   };
 
-  const handleType = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoTypePayload
-  ): Promise<void> => {
+  const handleType = async (payload: DemoTypePayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_TYPE, payload);
-  };
-
-  const handleSetZoom = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoSetZoomPayload
-  ): Promise<void> => {
-    await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SET_ZOOM, payload);
   };
 
   const handleScreenshot = async (): Promise<DemoScreenshotResult> => {
@@ -127,10 +106,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     };
   };
 
-  const handleWaitForSelector = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoWaitForSelectorPayload
-  ): Promise<void> => {
+  const handleWaitForSelector = async (payload: DemoWaitForSelectorPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_WAIT_FOR_SELECTOR, payload);
   };
 
@@ -142,38 +118,23 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_RESUME);
   };
 
-  const handleSleep = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoSleepPayload
-  ): Promise<void> => {
+  const handleSleep = async (payload: DemoSleepPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SLEEP, payload);
   };
 
-  const handleScroll = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoScrollPayload
-  ): Promise<void> => {
+  const handleScroll = async (payload: DemoScrollPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SCROLL, payload);
   };
 
-  const handleDrag = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoDragPayload
-  ): Promise<void> => {
+  const handleDrag = async (payload: DemoDragPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_DRAG, payload);
   };
 
-  const handlePressKey = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoPressKeyPayload
-  ): Promise<void> => {
+  const handlePressKey = async (payload: DemoPressKeyPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_PRESS_KEY, payload);
   };
 
-  const handleSpotlight = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoSpotlightPayload
-  ): Promise<void> => {
+  const handleSpotlight = async (payload: DemoSpotlightPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SPOTLIGHT, payload);
   };
 
@@ -181,117 +142,77 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_DISMISS_SPOTLIGHT);
   };
 
-  const handleAnnotate = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoAnnotatePayload
-  ): Promise<DemoAnnotateResult> => {
+  const handleAnnotate = async (payload: DemoAnnotatePayload): Promise<DemoAnnotateResult> => {
     const id = payload.id ?? randomBytes(8).toString("hex");
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_ANNOTATE, { ...payload, id });
     return { id };
   };
 
-  const handleDismissAnnotation = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoDismissAnnotationPayload
-  ): Promise<void> => {
+  const handleDismissAnnotation = async (payload: DemoDismissAnnotationPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_DISMISS_ANNOTATION, payload);
   };
 
-  const handleWaitForIdle = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoWaitForIdlePayload
-  ): Promise<void> => {
+  const handleWaitForIdle = async (payload: DemoWaitForIdlePayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_WAIT_FOR_IDLE, payload);
   };
 
-  // --- Frame capture state ---
+  // --- MediaRecorder-based capture state ---
   interface CaptureSession {
-    ffmpegProc: ChildProcess;
-    ticker: ReturnType<typeof setInterval> | null;
-    captureToken: number;
-    lastFrameBuffer: Buffer | null;
-    frameWidth: number;
-    frameHeight: number;
-    frameCount: number;
-    maxFrames: number;
+    captureId: string;
     outputPath: string;
-    draining: boolean;
+    writeStream: fs.WriteStream;
+    frameCount: number;
     stopping: boolean;
-    fps: number;
+    finalized: boolean;
     finalizePromise: Promise<DemoStopCaptureResult>;
     resolveFinalizeWith: (result: DemoStopCaptureResult) => void;
     rejectFinalizeWith: (err: Error) => void;
   }
 
   let captureSession: CaptureSession | null = null;
-  let captureTokenCounter = 0;
 
-  function writeFrameToStdin(session: CaptureSession): void {
-    if (!session.lastFrameBuffer || session.stopping) return;
-    const ok = session.ffmpegProc.stdin!.write(session.lastFrameBuffer);
-    session.frameCount++;
-    if (session.frameCount >= session.maxFrames) {
-      stopCaptureSession();
-      return;
-    }
-    if (!ok) {
-      session.draining = true;
-      if (session.ticker !== null) {
-        clearInterval(session.ticker);
-        session.ticker = null;
+  const displayMediaHandlerSession = session.fromPartition(PROJECT_SESSION_PARTITION);
+  displayMediaHandlerSession.setDisplayMediaRequestHandler(
+    (request, callback) => {
+      if (request.frame) {
+        callback({ video: request.frame });
+      } else {
+        callback({});
       }
-      session.ffmpegProc.stdin!.once("drain", () => {
-        if (session !== captureSession || session.stopping) return;
-        session.draining = false;
-        session.ticker = setInterval(
-          () => writeFrameToStdin(session),
-          Math.round(1000 / session.fps)
-        );
-      });
-    }
-  }
+    },
+    { useSystemPicker: false }
+  );
 
-  function stopCaptureSession(): Promise<DemoStopCaptureResult> | null {
-    const session = captureSession;
-    if (!session || session.stopping) return session?.finalizePromise ?? null;
-    session.stopping = true;
-    captureTokenCounter++;
-    if (session.ticker !== null) {
-      clearInterval(session.ticker);
-      session.ticker = null;
-    }
-    session.ffmpegProc.stdin!.end();
-    return session.finalizePromise;
-  }
+  const onCaptureChunk = (_event: Electron.IpcMainEvent, payload: DemoCaptureChunkPayload) => {
+    const active = captureSession;
+    if (!active || active.captureId !== payload.captureId || active.finalized) return;
+    const buf = Buffer.from(payload.data.buffer, payload.data.byteOffset, payload.data.byteLength);
+    active.writeStream.write(buf);
+  };
 
-  function startCaptureLoop(session: CaptureSession, token: number): void {
-    const win = getMainWindow();
-    if (!win || win.isDestroyed()) return;
-    const wc = getAppWebContents(win);
-
-    void (async () => {
-      while (captureSession === session && session.captureToken === token && !session.stopping) {
-        try {
-          const image = await wc.capturePage();
-          if (captureSession !== session || session.captureToken !== token || session.stopping)
-            break;
-          const resized = image.resize({
-            width: session.frameWidth,
-            height: session.frameHeight,
-            quality: "best",
-          });
-          session.lastFrameBuffer = resized.toBitmap();
-        } catch {
-          // Keep lastFrameBuffer unchanged — ticker will duplicate
-        }
-        // Yield to event loop between captures to avoid starving the ticker
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  const onCaptureStop = (_event: Electron.IpcMainEvent, payload: DemoCaptureStopPayload) => {
+    const active = captureSession;
+    if (!active || active.captureId !== payload.captureId || active.finalized) return;
+    active.frameCount = payload.frameCount;
+    active.finalized = true;
+    const rendererError = payload.error;
+    active.writeStream.end(() => {
+      if (captureSession === active) captureSession = null;
+      if (rendererError) {
+        active.rejectFinalizeWith(new Error(`Capture failed: ${rendererError}`));
+      } else {
+        active.resolveFinalizeWith({
+          outputPath: active.outputPath,
+          frameCount: active.frameCount,
+        });
       }
-    })();
-  }
+    });
+  };
+
+  ipcMain.on(CHANNELS.DEMO_CAPTURE_CHUNK, onCaptureChunk);
+  ipcMain.on(CHANNELS.DEMO_CAPTURE_STOP, onCaptureStop);
 
   const handleStartCapture = async (
-    _event: Electron.IpcMainInvokeEvent,
     payload: DemoStartCapturePayload
   ): Promise<DemoStartCaptureResult> => {
     if (captureSession) {
@@ -299,53 +220,12 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     }
 
     const fps = payload.fps ?? 30;
-    const maxFrames = payload.maxFrames ?? 9000;
-    const { outputPath, preset } = payload;
-    const presetConfig = CAPTURE_PRESETS[preset];
-    if (!presetConfig) {
-      throw new Error(`Unknown capture preset: ${preset}`);
-    }
-
-    // Capture first frame to determine dimensions
-    const win = getMainWindow();
-    if (!win || win.isDestroyed()) {
-      throw new Error("No window available for capture");
-    }
-    const firstImage = await getAppWebContents(win).capturePage();
-    const logicalSize = firstImage.getSize();
-    const frameWidth = logicalSize.width;
-    const frameHeight = logicalSize.height;
-    const resizedFirst = firstImage.resize({
-      width: frameWidth,
-      height: frameHeight,
-      quality: "best",
-    });
-    const firstBitmap = resizedFirst.toBitmap();
+    const { outputPath } = payload;
 
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
-    const ffmpegBin = resolveFfmpegPath();
-    const args = [
-      "-y",
-      "-f",
-      "rawvideo",
-      "-pix_fmt",
-      "bgra",
-      "-video_size",
-      `${frameWidth}x${frameHeight}`,
-      "-framerate",
-      String(fps),
-      "-i",
-      "pipe:0",
-      ...presetConfig.outputOptions,
-      "-fps_mode",
-      "cfr",
-      outputPath,
-    ];
-
-    const ffmpegProc = spawn(ffmpegBin, args, { stdio: ["pipe", "pipe", "pipe"] });
-
-    const token = ++captureTokenCounter;
+    const captureId = randomBytes(8).toString("hex");
+    const writeStream = fs.createWriteStream(outputPath);
 
     let resolveFinalizeWith!: (result: DemoStopCaptureResult) => void;
     let rejectFinalizeWith!: (err: Error) => void;
@@ -353,383 +233,113 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
       resolveFinalizeWith = resolve;
       rejectFinalizeWith = reject;
     });
+    // Suppress unhandled rejection if nothing ever awaits finalize (e.g., handlers
+    // torn down before stopCapture is called). Real awaiters still observe the rejection.
+    finalizePromise.catch(() => {});
 
-    const session: CaptureSession = {
-      ffmpegProc,
-      ticker: null,
-      captureToken: token,
-      lastFrameBuffer: firstBitmap,
-      frameWidth,
-      frameHeight,
-      frameCount: 0,
-      maxFrames,
+    const newSession: CaptureSession = {
+      captureId,
       outputPath,
-      draining: false,
+      writeStream,
+      frameCount: 0,
       stopping: false,
-      fps,
+      finalized: false,
       finalizePromise,
       resolveFinalizeWith,
       rejectFinalizeWith,
     };
 
-    captureSession = session;
-
-    ffmpegProc.on("error", (err: Error) => {
-      if (captureSession === session) {
-        session.stopping = true;
-        if (session.ticker !== null) {
-          clearInterval(session.ticker);
-          session.ticker = null;
-        }
+    writeStream.on("error", (err: Error) => {
+      if (captureSession === newSession && !newSession.finalized) {
+        newSession.finalized = true;
         captureSession = null;
-        session.rejectFinalizeWith(new Error(`Capture encode failed: ${err.message}`));
+        rejectFinalizeWith(new Error(`Capture write failed: ${err.message}`));
       }
     });
 
-    ffmpegProc.on("close", (code) => {
-      session.stopping = true;
-      if (session.ticker !== null) {
-        clearInterval(session.ticker);
-        session.ticker = null;
-      }
-      if (captureSession === session) {
-        captureSession = null;
-      }
-      if (code === 0) {
-        session.resolveFinalizeWith({
-          outputPath: session.outputPath,
-          frameCount: session.frameCount,
-        });
-      } else {
-        session.rejectFinalizeWith(new Error(`ffmpeg exited with code ${code}`));
-      }
-    });
+    captureSession = newSession;
 
-    // Start the ticker and capture loop
-    session.ticker = setInterval(() => writeFrameToStdin(session), Math.round(1000 / fps));
-    startCaptureLoop(session, token);
+    try {
+      await sendCommandAndAwait(CHANNELS.DEMO_EXEC_START_CAPTURE, {
+        captureId,
+        fps,
+        mimeType: CAPTURE_MIME_TYPE,
+      });
+    } catch (err) {
+      captureSession = null;
+      writeStream.destroy();
+      throw err;
+    }
 
     return { outputPath };
   };
 
   const handleStopCapture = async (): Promise<DemoStopCaptureResult> => {
-    const promise = stopCaptureSession();
-    if (!promise) {
+    const active = captureSession;
+    if (!active) {
       throw new Error("No capture in progress");
     }
-    return promise;
+    if (active.stopping) {
+      return active.finalizePromise;
+    }
+    active.stopping = true;
+    try {
+      await sendCommandAndAwait(CHANNELS.DEMO_EXEC_STOP_CAPTURE, { captureId: active.captureId });
+    } catch (err) {
+      if (captureSession === active && !active.finalized) {
+        active.finalized = true;
+        captureSession = null;
+        active.writeStream.destroy();
+        active.rejectFinalizeWith(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+    return active.finalizePromise;
   };
 
   const handleGetCaptureStatus = async (): Promise<DemoCaptureStatus> => {
     return {
-      active: captureSession !== null && !captureSession.stopping,
+      active: captureSession !== null && !captureSession.finalized,
       frameCount: captureSession?.frameCount ?? 0,
       outputPath: captureSession?.outputPath ?? null,
     };
   };
 
-  // --- Encode presets for live capture (raw BGRA stdin → output file) ---
-
-  const CAPTURE_PRESETS: Record<DemoEncodePreset, { outputOptions: string[] }> = {
-    "youtube-4k": {
-      outputOptions: [
-        "-vf",
-        "scale=3840:2160:flags=lanczos",
-        "-c:v",
-        "libx264",
-        "-profile:v",
-        "high444",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv444p",
-        "-preset",
-        "slow",
-        "-g",
-        "15",
-        "-bf",
-        "2",
-        "-movflags",
-        "+faststart",
-        "-an",
-      ],
-    },
-    "youtube-1080p": {
-      outputOptions: [
-        "-vf",
-        "scale=1920:1080:flags=lanczos",
-        "-c:v",
-        "libx264",
-        "-profile:v",
-        "high444",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv444p",
-        "-preset",
-        "slow",
-        "-g",
-        "15",
-        "-bf",
-        "2",
-        "-movflags",
-        "+faststart",
-        "-an",
-      ],
-    },
-    "web-webm": {
-      outputOptions: [
-        "-c:v",
-        "libvpx-vp9",
-        "-crf",
-        "20",
-        "-b:v",
-        "0",
-        "-deadline",
-        "good",
-        "-cpu-used",
-        "1",
-        "-row-mt",
-        "1",
-        "-pix_fmt",
-        "yuv444p",
-        "-an",
-      ],
-    },
-  };
-
-  // --- Encode presets for offline re-encode (PNG files from disk) ---
-
-  const ENCODE_PRESETS = {
-    "youtube-4k": {
-      outputOptions: [
-        "-vf",
-        "scale=3840:2160:flags=lanczos",
-        "-c:v",
-        "libx264",
-        "-profile:v",
-        "high444",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv444p",
-        "-preset",
-        "slow",
-        "-g",
-        "15",
-        "-bf",
-        "2",
-        "-movflags",
-        "+faststart",
-        "-an",
-      ],
-    },
-    "youtube-1080p": {
-      outputOptions: [
-        "-vf",
-        "scale=1920:1080:flags=lanczos",
-        "-c:v",
-        "libx264",
-        "-profile:v",
-        "high444",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv444p",
-        "-preset",
-        "slow",
-        "-g",
-        "15",
-        "-bf",
-        "2",
-        "-movflags",
-        "+faststart",
-        "-an",
-      ],
-    },
-    "web-webm": {
-      outputOptions: [
-        "-c:v",
-        "libvpx-vp9",
-        "-crf",
-        "20",
-        "-b:v",
-        "0",
-        "-deadline",
-        "good",
-        "-cpu-used",
-        "1",
-        "-row-mt",
-        "1",
-        "-pix_fmt",
-        "yuv444p",
-        "-an",
-      ],
-    },
-  } as const;
-
-  let activeEncode: { kill: () => void } | null = null;
-
-  const handleEncode = async (
-    event: Electron.IpcMainInvokeEvent,
-    payload: DemoEncodePayload
-  ): Promise<DemoEncodeResult> => {
-    if (activeEncode) {
-      throw new Error("An encode is already in progress");
-    }
-
-    const ffmpegBin = resolveFfmpegPath();
-    const { framesDir, outputPath, preset, fps = 30 } = payload;
-    const presetConfig = ENCODE_PRESETS[preset];
-
-    const framePattern = /^frame-\d{6}\.png$/;
-    const pngFiles = fs
-      .readdirSync(framesDir)
-      .filter((f) => framePattern.test(f))
-      .sort();
-    if (pngFiles.length === 0) {
-      throw new Error(`No PNG frames matching frame-NNNNNN.png found in ${framesDir}`);
-    }
-    const totalFrames = pngFiles.length;
-
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-
-    const startTime = Date.now();
-    const inputPattern = path.join(framesDir, "frame-%06d.png");
-
-    const args = [
-      "-y",
-      "-framerate",
-      String(fps),
-      "-i",
-      inputPattern,
-      ...presetConfig.outputOptions,
-      "-progress",
-      "pipe:1",
-      "-nostats",
-      outputPath,
-    ];
-
-    return new Promise<DemoEncodeResult>((resolve, reject) => {
-      const proc: ChildProcess = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
-
-      activeEncode = {
-        kill: () => {
-          proc.kill("SIGKILL");
-        },
-      };
-
-      let stdoutBuffer = "";
-      let currentFrame = 0;
-      let currentFps = 0;
-
-      proc.stdout?.on("data", (chunk: Buffer) => {
-        stdoutBuffer += chunk.toString();
-        const lines = stdoutBuffer.split("\n");
-        stdoutBuffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          const eqIdx = line.indexOf("=");
-          if (eqIdx === -1) continue;
-          const key = line.slice(0, eqIdx).trim();
-          const value = line.slice(eqIdx + 1).trim();
-
-          if (key === "frame") {
-            currentFrame = parseInt(value, 10) || 0;
-          } else if (key === "fps") {
-            currentFps = parseFloat(value) || 0;
-          } else if (key === "progress") {
-            if (currentFrame > 0 && !event.sender.isDestroyed()) {
-              const percentComplete = Math.min((currentFrame / totalFrames) * 100, 100);
-              const etaSeconds = currentFps > 0 ? (totalFrames - currentFrame) / currentFps : 0;
-
-              const progressEvent: DemoEncodeProgressEvent = {
-                frame: currentFrame,
-                fps: currentFps,
-                percentComplete: Math.round(percentComplete * 100) / 100,
-                etaSeconds: Math.round(etaSeconds * 10) / 10,
-              };
-              event.sender.send(CHANNELS.DEMO_ENCODE_PROGRESS, progressEvent);
-            }
-          }
-        }
-      });
-
-      let stderrOutput = "";
-      proc.stderr?.on("data", (chunk: Buffer) => {
-        stderrOutput += chunk.toString();
-      });
-
-      proc.on("error", (err: Error) => {
-        activeEncode = null;
-        reject(new Error(`Encode failed: ${err.message}`));
-      });
-
-      proc.on("close", (code) => {
-        activeEncode = null;
-        if (code === 0) {
-          resolve({ outputPath, durationMs: Date.now() - startTime });
-        } else {
-          const lastLines = stderrOutput.trim().split("\n").slice(-3).join("\n");
-          reject(new Error(`ffmpeg exited with code ${code}: ${lastLines}`));
-        }
-      });
-    });
-  };
-
-  ipcMain.handle(CHANNELS.DEMO_MOVE_TO, handleMoveTo);
-  ipcMain.handle(CHANNELS.DEMO_MOVE_TO_SELECTOR, handleMoveToSelector);
-  ipcMain.handle(CHANNELS.DEMO_CLICK, handleClick);
-  ipcMain.handle(CHANNELS.DEMO_SCREENSHOT, handleScreenshot);
-  ipcMain.handle(CHANNELS.DEMO_TYPE, handleType);
-  ipcMain.handle(CHANNELS.DEMO_SET_ZOOM, handleSetZoom);
-  ipcMain.handle(CHANNELS.DEMO_WAIT_FOR_SELECTOR, handleWaitForSelector);
-  ipcMain.handle(CHANNELS.DEMO_PAUSE, handlePause);
-  ipcMain.handle(CHANNELS.DEMO_RESUME, handleResume);
-  ipcMain.handle(CHANNELS.DEMO_SLEEP, handleSleep);
-  ipcMain.handle(CHANNELS.DEMO_SCROLL, handleScroll);
-  ipcMain.handle(CHANNELS.DEMO_DRAG, handleDrag);
-  ipcMain.handle(CHANNELS.DEMO_PRESS_KEY, handlePressKey);
-  ipcMain.handle(CHANNELS.DEMO_SPOTLIGHT, handleSpotlight);
-  ipcMain.handle(CHANNELS.DEMO_DISMISS_SPOTLIGHT, handleDismissSpotlight);
-  ipcMain.handle(CHANNELS.DEMO_ANNOTATE, handleAnnotate);
-  ipcMain.handle(CHANNELS.DEMO_DISMISS_ANNOTATION, handleDismissAnnotation);
-  ipcMain.handle(CHANNELS.DEMO_WAIT_FOR_IDLE, handleWaitForIdle);
-  ipcMain.handle(CHANNELS.DEMO_START_CAPTURE, handleStartCapture);
-  ipcMain.handle(CHANNELS.DEMO_STOP_CAPTURE, handleStopCapture);
-  ipcMain.handle(CHANNELS.DEMO_GET_CAPTURE_STATUS, handleGetCaptureStatus);
-  ipcMain.handle(CHANNELS.DEMO_ENCODE, handleEncode);
+  const cleanups: Array<() => void> = [
+    typedHandle(CHANNELS.DEMO_MOVE_TO, handleMoveTo),
+    typedHandle(CHANNELS.DEMO_MOVE_TO_SELECTOR, handleMoveToSelector),
+    typedHandle(CHANNELS.DEMO_CLICK, handleClick),
+    typedHandle(CHANNELS.DEMO_SCREENSHOT, handleScreenshot),
+    typedHandle(CHANNELS.DEMO_TYPE, handleType),
+    typedHandle(CHANNELS.DEMO_WAIT_FOR_SELECTOR, handleWaitForSelector),
+    typedHandle(CHANNELS.DEMO_PAUSE, handlePause),
+    typedHandle(CHANNELS.DEMO_RESUME, handleResume),
+    typedHandle(CHANNELS.DEMO_SLEEP, handleSleep),
+    typedHandle(CHANNELS.DEMO_SCROLL, handleScroll),
+    typedHandle(CHANNELS.DEMO_DRAG, handleDrag),
+    typedHandle(CHANNELS.DEMO_PRESS_KEY, handlePressKey),
+    typedHandle(CHANNELS.DEMO_SPOTLIGHT, handleSpotlight),
+    typedHandle(CHANNELS.DEMO_DISMISS_SPOTLIGHT, handleDismissSpotlight),
+    typedHandle(CHANNELS.DEMO_ANNOTATE, handleAnnotate),
+    typedHandle(CHANNELS.DEMO_DISMISS_ANNOTATION, handleDismissAnnotation),
+    typedHandle(CHANNELS.DEMO_WAIT_FOR_IDLE, handleWaitForIdle),
+    typedHandle(CHANNELS.DEMO_START_CAPTURE, handleStartCapture),
+    typedHandle(CHANNELS.DEMO_STOP_CAPTURE, handleStopCapture),
+    typedHandle(CHANNELS.DEMO_GET_CAPTURE_STATUS, handleGetCaptureStatus),
+  ];
 
   return () => {
-    if (captureSession) {
-      stopCaptureSession();
-      captureSession?.ffmpegProc.kill("SIGKILL");
+    if (captureSession && !captureSession.finalized) {
+      const active = captureSession;
+      active.finalized = true;
+      active.writeStream.destroy();
+      active.rejectFinalizeWith(new Error("Capture aborted: handlers unregistered"));
+      captureSession = null;
     }
-    ipcMain.removeHandler(CHANNELS.DEMO_MOVE_TO);
-    ipcMain.removeHandler(CHANNELS.DEMO_MOVE_TO_SELECTOR);
-    ipcMain.removeHandler(CHANNELS.DEMO_CLICK);
-    ipcMain.removeHandler(CHANNELS.DEMO_SCREENSHOT);
-    ipcMain.removeHandler(CHANNELS.DEMO_TYPE);
-    ipcMain.removeHandler(CHANNELS.DEMO_SET_ZOOM);
-    ipcMain.removeHandler(CHANNELS.DEMO_WAIT_FOR_SELECTOR);
-    ipcMain.removeHandler(CHANNELS.DEMO_PAUSE);
-    ipcMain.removeHandler(CHANNELS.DEMO_RESUME);
-    ipcMain.removeHandler(CHANNELS.DEMO_SLEEP);
-    ipcMain.removeHandler(CHANNELS.DEMO_SCROLL);
-    ipcMain.removeHandler(CHANNELS.DEMO_DRAG);
-    ipcMain.removeHandler(CHANNELS.DEMO_PRESS_KEY);
-    ipcMain.removeHandler(CHANNELS.DEMO_SPOTLIGHT);
-    ipcMain.removeHandler(CHANNELS.DEMO_DISMISS_SPOTLIGHT);
-    ipcMain.removeHandler(CHANNELS.DEMO_ANNOTATE);
-    ipcMain.removeHandler(CHANNELS.DEMO_DISMISS_ANNOTATION);
-    ipcMain.removeHandler(CHANNELS.DEMO_WAIT_FOR_IDLE);
-    ipcMain.removeHandler(CHANNELS.DEMO_START_CAPTURE);
-    ipcMain.removeHandler(CHANNELS.DEMO_STOP_CAPTURE);
-    ipcMain.removeHandler(CHANNELS.DEMO_GET_CAPTURE_STATUS);
-    ipcMain.removeHandler(CHANNELS.DEMO_ENCODE);
-    if (activeEncode) {
-      activeEncode.kill();
-      activeEncode = null;
+    ipcMain.removeListener(CHANNELS.DEMO_CAPTURE_CHUNK, onCaptureChunk);
+    ipcMain.removeListener(CHANNELS.DEMO_CAPTURE_STOP, onCaptureStop);
+    displayMediaHandlerSession.setDisplayMediaRequestHandler(null);
+    for (const cleanup of cleanups) {
+      cleanup();
     }
   };
 }

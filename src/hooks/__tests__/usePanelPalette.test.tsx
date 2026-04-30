@@ -49,19 +49,18 @@ vi.mock("@/store/userAgentRegistryStore", () => ({
   ) => selector({ registry: {} }),
 }));
 
-vi.mock("@/store/agentSettingsStore", () => ({
-  useAgentSettingsStore: (
-    selector: (state: {
-      settings: { agents: Record<string, { pinned?: boolean }> } | null;
-    }) => unknown
-  ) => selector({ settings: { agents: { claude: { pinned: true }, gemini: { pinned: true } } } }),
-}));
-
 vi.mock("@/store/cliAvailabilityStore", () => {
   const store = (selector: (state: typeof cliAvailabilityState) => unknown) =>
     selector(cliAvailabilityState);
   store.getState = () => cliAvailabilityState;
   return { useCliAvailabilityStore: store };
+});
+
+vi.mock("@/store/worktreeStore", () => {
+  const state = { activeWorktreeId: null as string | null };
+  const store = (selector: (s: typeof state) => unknown) => selector(state);
+  store.getState = () => state;
+  return { useWorktreeSelectionStore: store };
 });
 
 import { usePanelPalette } from "../usePanelPalette";
@@ -174,6 +173,77 @@ describe("usePanelPalette", () => {
       const browserIdx = ids.indexOf("browser");
       const resumeIdx = ids.findIndex((id) => id.startsWith("resume:"));
       expect(resumeIdx).toBeGreaterThan(browserIdx);
+    });
+  });
+
+  it("filters out resume sessions with missing sessionId", async () => {
+    (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        sessionId: "",
+        agentId: "claude",
+        worktreeId: null,
+        title: "Fixing bug",
+        projectId: null,
+        savedAt: Date.now() - 1000,
+      },
+      {
+        sessionId: "valid-session",
+        agentId: "claude",
+        worktreeId: null,
+        title: null,
+        projectId: null,
+        savedAt: Date.now() - 2000,
+      },
+    ]);
+
+    const { result, rerender } = renderHook(() => usePanelPalette());
+    await vi.waitFor(() => {
+      rerender();
+      const resumeItems = result.current.results.filter((item) => item.id.startsWith("resume:"));
+      expect(resumeItems).toHaveLength(1);
+      expect(resumeItems[0]!.id).toBe("resume:valid-session");
+    });
+  });
+
+  it("prefers a meaningful session title in the resume label", async () => {
+    (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        sessionId: "with-title",
+        agentId: "claude",
+        worktreeId: null,
+        title: "Fixing auth bug",
+        projectId: null,
+        savedAt: Date.now() - 1000,
+      },
+    ]);
+
+    const { result, rerender } = renderHook(() => usePanelPalette());
+    await vi.waitFor(() => {
+      rerender();
+      const resume = result.current.results.find((item) => item.id.startsWith("resume:"));
+      expect(resume).toBeDefined();
+      expect(resume!.name).toBe("Resume: Fixing auth bug");
+    });
+  });
+
+  it("falls back to agent name when session title is useless", async () => {
+    (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        sessionId: "useless-title",
+        agentId: "claude",
+        worktreeId: null,
+        title: "claude",
+        projectId: null,
+        savedAt: Date.now() - 1000,
+      },
+    ]);
+
+    const { result, rerender } = renderHook(() => usePanelPalette());
+    await vi.waitFor(() => {
+      rerender();
+      const resume = result.current.results.find((item) => item.id.startsWith("resume:"));
+      expect(resume).toBeDefined();
+      expect(resume!.name).toBe("Resume Claude");
     });
   });
 
@@ -312,7 +382,7 @@ describe("usePanelPalette", () => {
       expect(claude?.installed).toBe(true);
     });
 
-    it("sets installed=false for unavailable agents", () => {
+    it("omits missing agents from the palette once availability is initialized", () => {
       getEffectiveAgentIdsMock.mockReturnValue(["gemini"]);
       getEffectiveAgentConfigMock.mockReturnValue({
         name: "Gemini",
@@ -325,7 +395,7 @@ describe("usePanelPalette", () => {
       const { result } = renderHook(() => usePanelPalette());
 
       const gemini = result.current.results.find((item) => item.id === "agent:gemini");
-      expect(gemini?.installed).toBe(false);
+      expect(gemini).toBeUndefined();
     });
 
     it("sets installed=undefined before availability is initialized", () => {
@@ -352,24 +422,22 @@ describe("usePanelPalette", () => {
       expect(moreAgents?.installed).toBeUndefined();
     });
 
-    it("handleSelect dispatches setup wizard and returns null for uninstalled agent", () => {
+    it("still defensively routes handleSelect to setup wizard when installed=false is passed", () => {
+      // Missing agents are now filtered out of the palette entirely (issue #5117), but the
+      // handleSelect branch guarding against `installed === false` is kept as a defensive
+      // fallback — e.g. for stale options held in closures or future code paths.
       const dispatchSpy = vi.spyOn(window, "dispatchEvent");
-      getEffectiveAgentIdsMock.mockReturnValue(["gemini"]);
-      getEffectiveAgentConfigMock.mockReturnValue({
+      const { result } = renderHook(() => usePanelPalette());
+      const syntheticOption = {
+        id: "agent:gemini",
         name: "Gemini",
         iconId: "gemini",
         color: "#4285f4",
-        tooltip: "Gemini agent",
-      });
-      cliAvailabilityState.availability = { gemini: "missing" };
+        category: "agent" as const,
+        installed: false,
+      };
 
-      const { result } = renderHook(() => usePanelPalette());
-
-      const gemini = result.current.results.find((item) => item.id === "agent:gemini");
-      expect(gemini).toBeDefined();
-      expect(gemini!.installed).toBe(false);
-
-      const selected = result.current.handleSelect(gemini!);
+      const selected = result.current.handleSelect(syntheticOption);
       expect(selected).toBeNull();
       expect(dispatchSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -402,6 +470,60 @@ describe("usePanelPalette", () => {
 
       const selected = result.current.handleSelect(claude!);
       expect(selected).toBe(claude);
+    });
+  });
+
+  describe("pin-independent visibility (issue #5117)", () => {
+    it("shows installed agents regardless of pin state", () => {
+      getEffectiveAgentIdsMock.mockReturnValue(["claude", "gemini"]);
+      getEffectiveAgentConfigMock.mockImplementation((id: string) => ({
+        name: id.charAt(0).toUpperCase() + id.slice(1),
+        iconId: id,
+        color: "#000",
+        tooltip: `${id} agent`,
+      }));
+      cliAvailabilityState.availability = { claude: "ready", gemini: "installed" };
+
+      const { result } = renderHook(() => usePanelPalette());
+
+      const ids = result.current.results.map((item) => item.id);
+      expect(ids).toContain("agent:claude");
+      expect(ids).toContain("agent:gemini");
+    });
+
+    it("hides missing agents once availability is initialized", () => {
+      getEffectiveAgentIdsMock.mockReturnValue(["claude", "gemini"]);
+      getEffectiveAgentConfigMock.mockImplementation((id: string) => ({
+        name: id,
+        iconId: id,
+        color: "#000",
+        tooltip: id,
+      }));
+      cliAvailabilityState.availability = { claude: "ready", gemini: "missing" };
+
+      const { result } = renderHook(() => usePanelPalette());
+
+      const ids = result.current.results.map((item) => item.id);
+      expect(ids).toContain("agent:claude");
+      expect(ids).not.toContain("agent:gemini");
+    });
+
+    it("shows all agents before availability initializes (no premature filter)", () => {
+      getEffectiveAgentIdsMock.mockReturnValue(["claude", "gemini"]);
+      getEffectiveAgentConfigMock.mockImplementation((id: string) => ({
+        name: id,
+        iconId: id,
+        color: "#000",
+        tooltip: id,
+      }));
+      cliAvailabilityState.isInitialized = false;
+      cliAvailabilityState.availability = {};
+
+      const { result } = renderHook(() => usePanelPalette());
+
+      const ids = result.current.results.map((item) => item.id);
+      expect(ids).toContain("agent:claude");
+      expect(ids).toContain("agent:gemini");
     });
   });
 });

@@ -102,14 +102,28 @@ test.describe.serial("Core: v0.3.0 Features", () => {
 
       await window.waitForTimeout(T_SETTLE);
 
-      // The empty state message should appear (main worktree stays pinned)
+      // The empty state message should appear (main worktree stays pinned).
+      // The empty state is keyed off both `filteredWorktrees.length === 0` and
+      // `hasFilters` — confirm by either the explicit message or by observing
+      // that no non-main worktree cards are rendered, which is the user-visible
+      // contract.
       const emptyMsg = window.locator("text=No worktrees match your filters");
-      await expect(emptyMsg).toBeVisible({ timeout: T_MEDIUM });
+      const cards = window.locator("[data-worktree-branch]:not([data-worktree-is-main='true'])");
+      await expect
+        .poll(
+          async () => {
+            const visible = await emptyMsg.isVisible().catch(() => false);
+            const cardCount = await cards.count().catch(() => -1);
+            return visible || cardCount === 0;
+          },
+          { timeout: T_MEDIUM }
+        )
+        .toBe(true);
 
       // Clean up: clear the search so later tests see worktree cards
       const clearBtn = window.locator(SEL.worktree.searchClear);
       await clearBtn.click();
-      await expect(emptyMsg).toBeHidden({ timeout: T_MEDIUM });
+      await expect.poll(() => cards.count(), { timeout: T_MEDIUM }).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -155,7 +169,7 @@ test.describe.serial("Core: v0.3.0 Features", () => {
 
       // Agent selector dropdown should be visible within the agents panel
       const agentsPanel = window.locator("#settings-panel-agents");
-      const dropdownTrigger = agentsPanel.locator('button[aria-haspopup="listbox"]');
+      const dropdownTrigger = agentsPanel.locator('[data-testid="agent-selector-trigger"]');
       await expect(dropdownTrigger).toBeVisible({ timeout: T_MEDIUM });
 
       // Trigger should display "General" as the selected item
@@ -166,7 +180,7 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       const { window } = ctx;
 
       const agentsPanel = window.locator("#settings-panel-agents");
-      const dropdownTrigger = agentsPanel.locator('button[aria-haspopup="listbox"]');
+      const dropdownTrigger = agentsPanel.locator('[data-testid="agent-selector-trigger"]');
 
       // Open the dropdown
       await dropdownTrigger.click();

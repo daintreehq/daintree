@@ -1,0 +1,10 @@
+{"version":2,"width":120,"height":10,"timestamp":1700000000,"title":"gemini-working-to-idle"}
+[0.05,"o","Gemini CLI 0.4.2 — Type your message or /help\r\n"]
+[0.10,"o","> "]
+[0.40,"o","⠋ Unpacking Project Details (esc to cancel, 1s)"]
+[0.85,"o","\r⠙ Unpacking Project Details (esc to cancel, 2s)"]
+[1.30,"o","\r⠹ Unpacking Project Details (esc to cancel, 3s)"]
+[1.75,"o","\r⠸ Unpacking Project Details (esc to cancel, 4s)"]
+[2.20,"o","\r\u001b[2K"]
+[2.25,"o","Project unpacked. Ready for your next message.\r\n"]
+[2.40,"o","\r\n> "]

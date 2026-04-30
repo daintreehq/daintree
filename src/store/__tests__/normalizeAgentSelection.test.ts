@@ -29,44 +29,45 @@ describe("normalizeAgentSelection", () => {
     });
     const availability = availabilityFor({ claude: "ready", gemini: "missing" });
     const result = normalizeAgentSelection(settings, availability, true);
-    expect(result.agents.claude.pinned).toBe(false);
-    expect(result.agents.gemini.pinned).toBe(true);
+    expect(result.agents.claude!.pinned).toBe(false);
+    expect(result.agents.gemini!.pinned).toBe(true);
   });
 
-  it("synthesizes pinned: true for installed agents when hasRealData is true", () => {
+  it("synthesizes pinned:true for installed agents with an existing entry (upgrader path)", () => {
+    // Upgrader: entry exists from prior sessions but was persisted without
+    // a `pinned` field. Preserve the implicit pin so their toolbar doesn't
+    // collapse on upgrade.
     const settings = makeSettings({ claude: {} });
     const availability = availabilityFor({ claude: "installed" });
     const result = normalizeAgentSelection(settings, availability, true);
-    expect(result.agents.claude.pinned).toBe(true);
+    expect(result.agents.claude!.pinned).toBe(true);
   });
 
-  it("synthesizes pinned: true for ready agents when hasRealData is true", () => {
+  it("synthesizes pinned:true for ready agents with an existing entry (upgrader path)", () => {
     const settings = makeSettings({ claude: {} });
     const availability = availabilityFor({ claude: "ready" });
     const result = normalizeAgentSelection(settings, availability, true);
-    expect(result.agents.claude.pinned).toBe(true);
+    expect(result.agents.claude!.pinned).toBe(true);
   });
 
-  it("synthesizes pinned: false for missing agents when hasRealData is true (issue #5158)", () => {
+  it("synthesizes pinned:false for missing agents with an existing entry (issue #5158)", () => {
     const settings = makeSettings({ claude: {} });
     const availability = availabilityFor({ claude: "missing" });
     const result = normalizeAgentSelection(settings, availability, true);
-    expect(result.agents.claude.pinned).toBe(false);
+    expect(result.agents.claude!.pinned).toBe(false);
   });
 
-  it("creates entries only for installed agents when store is empty and hasRealData is true", () => {
+  it("creates pinned:false entries for every agent when store is empty (fresh-install opt-in)", () => {
+    // Fresh install: no entries in the persisted store. Opt-in model means
+    // nothing is pinned until the user acts (welcome card, tray, etc).
     const settings: AgentSettings = { agents: {} };
     const allIds = getEffectiveAgentIds();
     const [firstInstalled] = allIds;
-    const availability = availabilityFor({ [firstInstalled]: "installed" });
+    const availability = availabilityFor({ [firstInstalled!]: "installed" });
     const result = normalizeAgentSelection(settings, availability, true);
 
     for (const id of allIds) {
-      if (id === firstInstalled) {
-        expect(result.agents[id]).toEqual({ pinned: true });
-      } else {
-        expect(result.agents[id]).toEqual({ pinned: false });
-      }
+      expect(result.agents[id]).toEqual({ pinned: false });
     }
   });
 
@@ -81,7 +82,7 @@ describe("normalizeAgentSelection", () => {
   it("leaves existing entries with pinned: undefined untouched when hasRealData is false", () => {
     const settings = makeSettings({ claude: {} });
     const result = normalizeAgentSelection(settings, availabilityFor(), false);
-    expect(result.agents.claude.pinned).toBeUndefined();
+    expect(result.agents.claude!.pinned).toBeUndefined();
   });
 
   it("returns same reference when no changes are needed", () => {
@@ -100,7 +101,7 @@ describe("normalizeAgentSelection", () => {
   it("treats undefined availability as fully missing when hasRealData is true", () => {
     const settings = makeSettings({ claude: {} });
     const result = normalizeAgentSelection(settings, undefined, true);
-    expect(result.agents.claude.pinned).toBe(false);
+    expect(result.agents.claude!.pinned).toBe(false);
   });
 
   it("defaults to the pre-probe branch when called with only settings (back-compat)", () => {

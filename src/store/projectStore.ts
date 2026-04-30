@@ -3,13 +3,16 @@ import { persist, subscribeWithSelector } from "zustand/middleware";
 import type { Project, ProjectCloseResult } from "@shared/types";
 import { projectClient } from "@/clients";
 import { notify } from "@/lib/notify";
+import { actionService } from "@/services/ActionService";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { panelPersistence, panelToSnapshot } from "./persistence/panelPersistence";
 import { useTerminalInputStore } from "./terminalInputStore";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 import type { TerminalInstance, TabGroup } from "@shared/types";
 
@@ -54,6 +57,15 @@ export function setWorktreeSelectionStoreGetter(
   _getWorktreeSelectionState = getter;
 }
 
+// Lazy reference to the fleet-arming store's clear() so a project switch can
+// drop armed selections synchronously before the WebContentsView gets detached.
+// Registered from fleetArmingStore at module init.
+let _clearFleetArming: (() => void) | null = null;
+
+export function setFleetArmingClear(callback: () => void): void {
+  _clearFleetArming = callback;
+}
+
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
   const activeWorktreeId = _getWorktreeSelectionState?.()?.activeWorktreeId ?? undefined;
@@ -69,10 +81,17 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
 
   const { panelsById, panelIds, tabGroups } = terminalState;
 
+  // Thread previously-persisted snapshots per panel so the outgoing state
+  // preserves kind-specific fields for unregistered kinds (issue #5201).
+  // The main process pre-applies this payload to the previous project's
+  // persisted state during PROJECT_SWITCH (see projectCrud.ts:184-217), so
+  // without preservation here a switch would silently overwrite an extension
+  // panel's on-disk fields with a base-only snapshot.
+  const prevSnapshotMap = panelPersistence.getPreviousSnapshotMap(projectId);
   const terminals = panelIds
     .map((id) => panelsById[id])
     .filter((t): t is TerminalInstance => t != null && shouldPersistTerminal(t))
-    .map(panelToSnapshot);
+    .map((t) => panelToSnapshot(t, prevSnapshotMap?.get(t.id)));
 
   const tabGroupArray = Array.from(tabGroups.values()).filter((g) => g.panelIds.length > 1);
 
@@ -99,7 +118,10 @@ interface ProjectState {
   loadProjects: () => Promise<void>;
   getCurrentProject: () => Promise<void>;
   addProject: () => Promise<void>;
-  addProjectByPath: (path: string) => Promise<void>;
+  addProjectByPath: (
+    path: string,
+    options?: { skipDubiousOwnershipRetry?: boolean }
+  ) => Promise<void>;
   createProjectFolder: (parentPath: string, folderName: string) => Promise<void>;
   switchProject: (projectId: string) => Promise<void>;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
@@ -169,15 +191,21 @@ function getProjectStoreListenerState(): ProjectStoreListenerState {
   return created;
 }
 
+function isDubiousOwnershipError(error: unknown): boolean {
+  const message = formatErrorMessage(error, "");
+  const lower = message.toLowerCase();
+  return lower.includes("dubious ownership") || lower.includes("safe.directory");
+}
+
 function getProjectOpenErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatErrorMessage(error, "");
   const lower = message.toLowerCase();
 
   if (lower.includes("spawn git enoent") || lower.includes("git: not found")) {
     return "Git executable not found. Install Git and ensure it is available on your PATH.";
   }
 
-  if (lower.includes("dubious ownership") || lower.includes("safe.directory")) {
+  if (isDubiousOwnershipError(error)) {
     return (
       "Git refused to open this repository due to 'dubious ownership'. " +
       "Mark it as safe.directory in Git settings and try again."
@@ -227,7 +255,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   cloneRepoDialogOpen: false,
   error: null,
 
-  addProjectByPath: async (path) => {
+  addProjectByPath: async (path, options) => {
     set({ isLoading: true, error: null });
     let resolvedPath: string | undefined | null;
     try {
@@ -262,15 +290,76 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         component: "projectStore",
         details: { path: resolvedPath || path },
       });
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to add project");
+
+      // Absolute-path check: POSIX (/...), Windows drive letter (C:\... / C:/...),
+      // and Windows UNC (\\server\share...) are all "absolute" here.
+      const isAbsolutePath = (p: string) =>
+        p.startsWith("/") || p.startsWith("\\\\") || /^[a-zA-Z]:[\\/]/.test(p);
 
       if (errorMessage.includes("Not a git repository")) {
         const gitInitPath =
           resolvedPath || path.trim() || errorMessage.match(/Not a git repository: (.+)/)?.[1];
-        const isAbsolutePath = (p: string) => p.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(p);
         if (gitInitPath && isAbsolutePath(gitInitPath)) {
           set({ isLoading: false });
           get().openGitInitDialog(gitInitPath);
+          return;
+        }
+      }
+
+      if (isDubiousOwnershipError(error) && !options?.skipDubiousOwnershipRetry) {
+        const targetPath = resolvedPath ?? path.trim();
+        if (targetPath && isAbsolutePath(targetPath)) {
+          notify({
+            type: "error",
+            title: "Repository ownership issue",
+            message:
+              "Git refused to open this repository due to an ownership mismatch. " +
+              "You can mark it as trusted to open it.",
+            duration: 0,
+            actions: [
+              {
+                label: "Mark as safe",
+                variant: "primary",
+                onClick: async () => {
+                  try {
+                    await window.electron.git.markSafeDirectory(targetPath);
+                  } catch (markError) {
+                    const markMessage = formatErrorMessage(
+                      markError,
+                      "Failed to mark directory as safe"
+                    );
+                    notify({
+                      type: "error",
+                      title: "Failed to mark as safe",
+                      message: markMessage,
+                      duration: 6000,
+                    });
+                    return;
+                  }
+                  // Pass skipDubiousOwnershipRetry so a persistent dubious
+                  // ownership error (e.g., the path we wrote doesn't match
+                  // what git canonicalizes to) falls through to the generic
+                  // error toast instead of showing the same CTA indefinitely.
+                  await get().addProjectByPath(targetPath, {
+                    skipDubiousOwnershipRetry: true,
+                  });
+                },
+              },
+              {
+                label: "Open logs",
+                variant: "secondary",
+                actionId: "errors.openLogs",
+                onClick: () => {
+                  void actionService.dispatch("errors.openLogs", undefined, { source: "user" });
+                },
+              },
+            ],
+          });
+          set({
+            error: "Git refused to open repository due to dubious ownership.",
+            isLoading: false,
+          });
           return;
         }
       }
@@ -280,7 +369,15 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         type: "error",
         title: "Failed to add project",
         message,
-        duration: 6000,
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => {
+              void get().addProjectByPath(path);
+            },
+          },
+        ],
       });
       set({ error: message, isLoading: false });
     }
@@ -337,6 +434,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     if (get().currentProject?.id === projectId) return;
     const requestId = ++projectTransitionRequestId;
 
+    // Drop fleet arming selections synchronously — the outgoing view's armed
+    // set is project-scoped and must not leak if the view is later restored
+    // from the LRU cache.
+    _clearFleetArming?.();
+
     // Capture outgoing state before the renderer gets detached
     const currentProjectId = get().currentProject?.id;
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
@@ -359,7 +461,15 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         type: "error",
         title: "Failed to switch project",
         message,
-        duration: 6000,
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => {
+              void get().switchProject(projectId);
+            },
+          },
+        ],
       });
       set({ error: message, isLoading: false });
     });
@@ -437,10 +547,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     try {
       const result = await projectClient.close(projectId, options);
 
-      if (!result.success) {
-        throw new Error(result.error || "Failed to close project");
-      }
-
       const action = options?.killTerminals ? "killed" : "backgrounded";
       logDebug("[ProjectStore] Closed project", { action, projectId });
 
@@ -466,10 +572,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
     try {
       const result = await projectClient.close(projectId, { killTerminals: true });
-
-      if (!result.success) {
-        throw new Error(result.error || "Failed to close project");
-      }
 
       logDebug("[ProjectStore] Closed active project, transitioning to no-project state", {
         projectId,
@@ -515,7 +617,15 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         type: "error",
         title: "Failed to reopen project",
         message,
-        duration: 6000,
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => {
+              void get().reopenProject(projectId);
+            },
+          },
+        ],
       });
       set({ error: message, isLoading: false });
     });
@@ -631,6 +741,12 @@ export const useProjectStore = create<ProjectState>()(
     )
   )
 );
+
+registerPersistedStore({
+  storeId: "projectStore",
+  store: useProjectStore,
+  persistedStateType: "{ projects: Project[] }",
+});
 
 // Break circular dependency by injecting project ID getter
 panelPersistence.setProjectIdGetter(() => useProjectStore.getState().currentProject?.id);

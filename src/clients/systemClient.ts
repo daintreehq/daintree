@@ -61,6 +61,18 @@ export const systemClient = {
     return window.electron.system.downloadDiagnostics();
   },
 
+  collectDiagnosticsForReview: (): Promise<
+    import("@shared/types/ipc/system").DiagnosticsReviewPayload
+  > => {
+    return window.electron.system.collectDiagnosticsForReview();
+  },
+
+  saveDiagnosticsBundle: (
+    payload: import("@shared/types/ipc/system").DiagnosticsBundleSavePayload
+  ): Promise<boolean> => {
+    return window.electron.system.saveDiagnosticsBundle(payload);
+  },
+
   getAppMetrics: (): ReturnType<typeof window.electron.system.getAppMetrics> => {
     return window.electron.system.getAppMetrics();
   },

@@ -63,11 +63,10 @@ test.describe.serial("Persistence: Layout & Window across restart", () => {
     });
     await w1.waitForTimeout(T_SETTLE);
 
-    // Toggle focus mode (hides sidebar)
+    // Toggle focus mode (collapses sidebar — width animates to 0)
     await w1.locator(SEL.toolbar.toggleSidebar).click();
-    await expect(w1.locator('aside[aria-label="Sidebar"]')).not.toBeVisible({
-      timeout: T_SHORT,
-    });
+    const resizer = w1.locator('[role="separator"][aria-label="Resize sidebar"]');
+    await expect(resizer).toHaveAttribute("aria-valuenow", "0", { timeout: T_SHORT });
     await w1.waitForTimeout(T_SETTLE);
 
     const pid1 = app1.process().pid!;
@@ -88,10 +87,10 @@ test.describe.serial("Persistence: Layout & Window across restart", () => {
     await expect.poll(() => getGridPanelCount(w2), { timeout: T_LONG }).toBeGreaterThanOrEqual(1);
     await expect.poll(() => getDockPanelCount(w2), { timeout: T_LONG }).toBeGreaterThanOrEqual(1);
 
-    // Verify sidebar is still hidden (focus mode persisted)
-    await expect(w2.locator('aside[aria-label="Sidebar"]')).not.toBeVisible({
-      timeout: T_SHORT,
-    });
+    // Verify sidebar is still hidden (focus mode persisted) — collapsed
+    // sidebar keeps the <aside> attached but with aria-valuenow="0".
+    const resizer2 = w2.locator('[role="separator"][aria-label="Resize sidebar"]');
+    await expect(resizer2).toHaveAttribute("aria-valuenow", "0", { timeout: T_SHORT });
 
     // Verify window dimensions within tolerance
     const bounds = await app2.evaluate(({ BrowserWindow }) => {

@@ -40,9 +40,9 @@ describe("TerminalParserHandler", () => {
 
     mockManaged = {
       terminal: mockTerminal,
-      kind: "agent", // Default to agent for blocking tests
-      agentId: "codex",
-      type: "codex",
+      kind: "terminal",
+      launchAgentId: "codex",
+      runtimeAgentId: "codex",
     } as any;
   });
 
@@ -59,8 +59,8 @@ describe("TerminalParserHandler", () => {
   });
 
   it("should NOT block TUI sequences for Claude agent terminals", () => {
-    mockManaged.agentId = "claude";
-    mockManaged.type = "claude";
+    mockManaged.launchAgentId = "claude";
+    mockManaged.runtimeAgentId = "claude";
 
     new TerminalParserHandler(mockManaged);
 
@@ -95,12 +95,18 @@ describe("TerminalParserHandler", () => {
 
   it("should NOT block for regular terminals", () => {
     mockManaged.kind = "terminal";
-    mockManaged.agentId = undefined;
+    mockManaged.launchAgentId = undefined;
+    mockManaged.runtimeAgentId = undefined;
 
     new TerminalParserHandler(mockManaged);
     expect(escHandlers).toHaveLength(0);
-    // 1 alt screen exit (?l) + 2 DECRQM blockers (? $ p and $ p)
-    expect(csiHandlers).toHaveLength(3);
+    // 1 alt screen exit (?l) + 2 dynamic agent blockers (?h) + 2 DECRQM blockers.
+    expect(csiHandlers).toHaveLength(5);
+    const dynamicBlockers = csiHandlers.filter(
+      (h) => h.opts.prefix === "?" && h.opts.final === "h"
+    );
+    expect(dynamicBlockers.some((h) => h.handler([1049]))).toBe(false);
+    expect(dynamicBlockers.some((h) => h.handler([1000]))).toBe(false);
     // OSC 52 clipboard block applies unconditionally to all terminal kinds
     expect(oscHandlers).toHaveLength(1);
     expect(oscHandlers[0].ident).toBe(52);
@@ -108,7 +114,8 @@ describe("TerminalParserHandler", () => {
 
   it("should block DECRQM queries to prevent xterm.js parser crash", () => {
     mockManaged.kind = "terminal";
-    mockManaged.agentId = undefined;
+    mockManaged.launchAgentId = undefined;
+    mockManaged.runtimeAgentId = undefined;
 
     new TerminalParserHandler(mockManaged);
 
@@ -125,24 +132,45 @@ describe("TerminalParserHandler", () => {
     expect(nonPrivateDecrqm.handler()).toBe(true);
   });
 
-  it("should NOT register alt screen blocker for OpenCode agent", () => {
-    mockManaged.agentId = "opencode";
-    mockManaged.type = "opencode";
+  it("should NOT block alt screen for OpenCode agent", () => {
+    mockManaged.launchAgentId = "opencode";
+    mockManaged.runtimeAgentId = "opencode";
 
     new TerminalParserHandler(mockManaged);
 
-    const altScreenBlocker = csiHandlers.find((h) => h.opts.prefix === "?" && h.opts.final === "h");
-    expect(altScreenBlocker).toBeUndefined();
+    const dynamicBlockers = csiHandlers.filter(
+      (h) => h.opts.prefix === "?" && h.opts.final === "h"
+    );
+    expect(dynamicBlockers).not.toHaveLength(0);
+    expect(dynamicBlockers.some((h) => h.handler([1049]))).toBe(false);
   });
 
   it("should register alt screen blocker for Codex agent (blockAltScreen: true)", () => {
-    mockManaged.agentId = "codex";
-    mockManaged.type = "codex";
+    mockManaged.launchAgentId = "codex";
+    mockManaged.runtimeAgentId = "codex";
 
     new TerminalParserHandler(mockManaged);
 
-    const altScreenBlocker = csiHandlers.find((h) => h.opts.prefix === "?" && h.opts.final === "h");
-    expect(altScreenBlocker).toBeDefined();
+    const dynamicBlockers = csiHandlers.filter(
+      (h) => h.opts.prefix === "?" && h.opts.final === "h"
+    );
+    expect(dynamicBlockers.some((h) => h.handler([1049]))).toBe(true);
+  });
+
+  it("starts blocking when a regular terminal is runtime-promoted", () => {
+    mockManaged.launchAgentId = undefined;
+    mockManaged.runtimeAgentId = undefined;
+
+    new TerminalParserHandler(mockManaged);
+
+    const dynamicBlockers = csiHandlers.filter(
+      (h) => h.opts.prefix === "?" && h.opts.final === "h"
+    );
+    expect(dynamicBlockers.some((h) => h.handler([1049]))).toBe(false);
+
+    mockManaged.runtimeAgentId = "codex";
+
+    expect(dynamicBlockers.some((h) => h.handler([1049]))).toBe(true);
   });
 
   it("should dispose handlers correctly", () => {
@@ -167,7 +195,8 @@ describe("TerminalParserHandler", () => {
 
   it("should block OSC 52 clipboard write on regular terminals", () => {
     mockManaged.kind = "terminal";
-    mockManaged.agentId = undefined;
+    mockManaged.launchAgentId = undefined;
+    mockManaged.runtimeAgentId = undefined;
 
     new TerminalParserHandler(mockManaged);
 

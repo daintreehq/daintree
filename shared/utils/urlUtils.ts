@@ -1,5 +1,5 @@
 /* eslint-disable no-control-regex */
-const ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1"];
+const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "::1"];
 const ALLOWED_PROTOCOLS = ["http:", "https:"];
 const LOCALHOST_HINTS = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"] as const;
 // Exclude C0 controls (\x00-\x1f), DEL (\x7f), and C1 controls (\x80-\x9f) from the URL
@@ -8,12 +8,87 @@ const LOCALHOST_HINTS = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"] as
 const LOCALHOST_URL_REGEX =
   /https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|::1)(:\d+)?([^\s"'<>)\x00-\x1f\x7f\x80-\x9f]*)?/gi;
 
+// RFC-reserved TLDs that cannot be delegated in public DNS (RFC 6761, RFC 6762) plus
+// `.internal` reserved by ICANN in July 2024 for private-use namespaces.
+const LOCAL_TLD_SUFFIXES = [".localhost", ".test", ".local", ".internal"] as const;
+
 export interface NormalizeResult {
   url?: string;
   error?: string;
+  /** Set when the URL is syntactically valid but points to a host that requires user approval. */
+  requiresConfirmation?: boolean;
+  /** The lowercase hostname the user must approve (populated when requiresConfirmation is true). */
+  hostname?: string;
 }
 
-export function normalizeBrowserUrl(input: string): NormalizeResult {
+export interface NormalizeBrowserUrlOptions {
+  /** Hostnames the user has already approved for this project. When omitted, only loopback is allowed. */
+  allowedHosts?: string[];
+}
+
+function stripBrackets(hostname: string): string {
+  return hostname.replace(/^\[|\]$/g, "");
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return LOOPBACK_HOSTS.includes(hostname);
+}
+
+function isRfc1918Ipv4(hostname: string): boolean {
+  const match = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!match) return false;
+  const a = Number(match[1]);
+  const b = Number(match[2]);
+  const c = Number(match[3]);
+  const d = Number(match[4]);
+  if ([a, b, c, d].some((o) => !Number.isFinite(o) || o < 0 || o > 255)) return false;
+  // 10.0.0.0/8
+  if (a === 10) return true;
+  // 172.16.0.0/12
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  // 192.168.0.0/16
+  if (a === 192 && b === 168) return true;
+  // 169.254.0.0/16 link-local
+  if (a === 169 && b === 254) return true;
+  return false;
+}
+
+function isPrivateIpv6(hostname: string): boolean {
+  // Link-local (fe80::/10) or unique-local (fc00::/7). Loopback ::1 handled by isLoopbackHost.
+  if (!hostname.includes(":")) return false;
+  const lower = hostname.toLowerCase();
+  if (
+    lower.startsWith("fe8") ||
+    lower.startsWith("fe9") ||
+    lower.startsWith("fea") ||
+    lower.startsWith("feb")
+  ) {
+    return true;
+  }
+  if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
+  return false;
+}
+
+/**
+ * Hostnames that should be allowed without prompting the user. Covers RFC-reserved
+ * local TLDs and private IP ranges that cannot route on the public internet.
+ */
+export function isImplicitlyAllowedHost(hostname: string): boolean {
+  if (!hostname) return false;
+  const host = stripBrackets(hostname.toLowerCase());
+  if (isLoopbackHost(host)) return true;
+  for (const suffix of LOCAL_TLD_SUFFIXES) {
+    if (host === suffix.slice(1) || host.endsWith(suffix)) return true;
+  }
+  if (isRfc1918Ipv4(host)) return true;
+  if (isPrivateIpv6(host)) return true;
+  return false;
+}
+
+export function normalizeBrowserUrl(
+  input: string,
+  options?: NormalizeBrowserUrlOptions
+): NormalizeResult {
   const trimmed = input.trim();
   if (!trimmed) {
     return { error: "URL cannot be empty" };
@@ -38,22 +113,39 @@ export function normalizeBrowserUrl(input: string): NormalizeResult {
     return { error: `Protocol "${parsed.protocol}" not allowed. Use http: or https:` };
   }
 
-  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (!ALLOWED_HOSTS.includes(hostname)) {
-    return { error: `Only localhost URLs are allowed (got "${hostname}")` };
-  }
-
   parsed.username = "";
   parsed.password = "";
 
-  return { url: parsed.toString() };
+  const hostname = stripBrackets(parsed.hostname.toLowerCase());
+  const strict = !options;
+  if (strict) {
+    if (!isLoopbackHost(hostname)) {
+      return { error: `Only localhost URLs are allowed (got "${hostname}")` };
+    }
+    return { url: parsed.toString() };
+  }
+
+  if (isImplicitlyAllowedHost(hostname)) {
+    return { url: parsed.toString() };
+  }
+
+  const approved = options?.allowedHosts ?? [];
+  if (approved.some((h) => h.toLowerCase() === hostname)) {
+    return { url: parsed.toString() };
+  }
+
+  return {
+    url: parsed.toString(),
+    requiresConfirmation: true,
+    hostname,
+  };
 }
 
 export function isLocalhostUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
     const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-    return ALLOWED_HOSTS.includes(hostname) && ALLOWED_PROTOCOLS.includes(parsed.protocol);
+    return LOOPBACK_HOSTS.includes(hostname) && ALLOWED_PROTOCOLS.includes(parsed.protocol);
   } catch {
     return false;
   }

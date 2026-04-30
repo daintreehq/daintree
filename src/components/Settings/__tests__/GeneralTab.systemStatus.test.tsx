@@ -31,11 +31,6 @@ vi.mock("@/components/Settings/SettingsSwitchCard", () => ({
   SettingsSwitchCard: () => null,
 }));
 
-vi.mock("@/components/icons", () => ({
-  DaintreeIcon: () => null,
-  ProjectPulseIcon: () => null,
-}));
-
 vi.mock("@/store", () => ({
   usePreferencesStore: (selector: (state: Record<string, boolean>) => unknown) =>
     selector({
@@ -115,7 +110,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     setupElectron();
   });
 
-  it("renders only installed, pinned agents (hides uninstalled)", async () => {
+  it("renders all installed agents (hides uninstalled)", async () => {
     setupDispatchMock(
       {
         claude: "ready",
@@ -141,7 +136,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     expect(screen.getAllByText("Ready")).toHaveLength(2);
   });
 
-  it("hides unpinned agents", async () => {
+  it("shows installed agents regardless of pin state (issue #5117)", async () => {
     setupDispatchMock(
       { claude: "ready", gemini: "ready", codex: "ready", opencode: "missing", cursor: "missing" },
       {
@@ -155,8 +150,62 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
       expect(screen.getByText("Claude")).toBeTruthy();
     });
 
-    expect(screen.queryByText("Gemini")).toBeNull();
+    // Gemini is installed but unpinned — it MUST appear in System Status.
+    expect(screen.getByText("Gemini")).toBeTruthy();
     expect(screen.getByText("Codex")).toBeTruthy();
+  });
+
+  it("shows ALL installed agents when none are pinned (issue #5117, adversarial)", async () => {
+    setupDispatchMock(
+      { claude: "ready", gemini: "ready", codex: "ready", opencode: "missing", cursor: "missing" },
+      {
+        agents: {
+          claude: { pinned: false },
+          gemini: { pinned: false },
+          codex: { pinned: false },
+        },
+      } as unknown as AgentSettings
+    );
+
+    await renderGeneralTab();
+
+    await waitFor(() => {
+      expect(screen.getByText("Claude")).toBeTruthy();
+    });
+
+    expect(screen.getByText("Gemini")).toBeTruthy();
+    expect(screen.getByText("Codex")).toBeTruthy();
+    expect(screen.queryByText("Opencode")).toBeNull();
+    expect(screen.queryByText("Cursor")).toBeNull();
+  });
+
+  it("hides pinned-but-missing agents (pin alone doesn't make an agent appear)", async () => {
+    setupDispatchMock(
+      {
+        claude: "missing",
+        gemini: "missing",
+        codex: "ready",
+        opencode: "missing",
+        cursor: "missing",
+      },
+      {
+        agents: {
+          claude: { pinned: true },
+          gemini: { pinned: true },
+          codex: { pinned: true },
+        },
+      } as unknown as AgentSettings
+    );
+
+    await renderGeneralTab();
+
+    await waitFor(() => {
+      expect(screen.getByText("Codex")).toBeTruthy();
+    });
+
+    // Pinned but missing → must NOT appear.
+    expect(screen.queryByText("Claude")).toBeNull();
+    expect(screen.queryByText("Gemini")).toBeNull();
   });
 
   it("shows summary for hidden agents with correct count and pluralization", async () => {
@@ -198,7 +247,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     });
   });
 
-  it("hides summary when all agents installed and pinned", async () => {
+  it("hides summary when all agents are installed", async () => {
     setupDispatchMock(
       { claude: "ready", gemini: "ready", codex: "ready", opencode: "ready", cursor: "ready" },
       {

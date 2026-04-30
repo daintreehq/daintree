@@ -2,10 +2,12 @@ import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { GitService } from "./GitService.js";
 import { Cache } from "../utils/cache.js";
 import { GitHubStatsCache } from "./GitHubStatsCache.js";
+import { GitHubFirstPageCache } from "./GitHubFirstPageCache.js";
 import type {
   GitHubIssue,
   GitHubPR,
   GitHubPRCIStatus,
+  GitHubPRCISummary,
   GitHubUser,
   GitHubListOptions,
   GitHubListResponse,
@@ -18,6 +20,7 @@ import {
   GitHubAuth,
   GITHUB_API_TIMEOUT_MS,
   REPO_STATS_QUERY,
+  REPO_STATS_AND_PAGE_QUERY,
   PROJECT_HEALTH_QUERY,
   LIST_ISSUES_QUERY,
   LIST_PRS_QUERY,
@@ -25,7 +28,14 @@ import {
   GET_ISSUE_QUERY,
   GET_PR_QUERY,
   buildBatchPRQuery,
+  buildBatchRequiredChecksQuery,
+  deriveRequiredCIStatus,
+  gitHubRateLimitService,
+  GitHubRateLimitError,
 } from "./github/index.js";
+import type { RollupContextNode } from "./github/index.js";
+import { getLastAuthMetadata } from "./github/GitHubAuth.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 import type {
   RepoContext,
@@ -62,6 +72,17 @@ const prListCache = new Cache<string, GitHubListResponse<GitHubPR>>({ defaultTTL
 const projectHealthCache = new Cache<string, ProjectHealth>({ defaultTTL: 60000 });
 const issueTooltipCache = new Cache<string, IssueTooltipData>({ defaultTTL: 300000 }); // 5 min TTL
 const prTooltipCache = new Cache<string, PRTooltipData>({ defaultTTL: 300000 }); // 5 min TTL
+
+// ETag cache for PR conditional revalidation. Key: `owner/repo#prNumber`.
+// Cleared on token rotation via clearGitHubCaches (ETags are token-scoped).
+const prETagCache = new Map<string, string>();
+
+interface PRRequiredStatusEntry {
+  ciStatus: GitHubPRCIStatus | undefined;
+  ciSummary: GitHubPRCISummary | undefined;
+}
+// Key: `${owner}/${repo}:${prNumber}`
+const prRequiredStatusCache = new Cache<string, PRRequiredStatusEntry>({ defaultTTL: 60000 });
 
 export function getGitHubToken(): string | undefined {
   return GitHubAuth.getToken();
@@ -178,7 +199,7 @@ export async function getRepoContext(cwd: string): Promise<RepoContext | null> {
 }
 
 function isRepoNotFoundError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatErrorMessage(error, "Failed to access GitHub repository");
   const lower = message.toLowerCase();
   // Broad pattern match - includes both repo-level and resource-level "not found" errors.
   // This is acceptable because withRepoContextRetry only retries when repo context actually
@@ -238,6 +259,24 @@ export async function getRepoStats(
       };
     }
     return { stats: null, error: "GitHub token not configured. Set it in Settings." };
+  }
+
+  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest();
+  if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
+    const diskCached = persistentCache.get(cacheKey);
+    const message = rateLimitMessage(rateLimitBlock.reason, rateLimitBlock.resumeAt);
+    if (diskCached) {
+      return {
+        stats: {
+          issueCount: diskCached.issueCount,
+          prCount: diskCached.prCount,
+          stale: true,
+          lastUpdated: diskCached.lastUpdated,
+        },
+        error: message,
+      };
+    }
+    return { stats: null, error: message };
   }
 
   if (!bypassCache) {
@@ -305,6 +344,288 @@ export async function getRepoStats(
       };
     }
     return { stats: null, error: parseGitHubError(error) };
+  }
+}
+
+export interface RepoStatsAndPageResult {
+  stats: RepoStats | null;
+  issues: {
+    items: GitHubIssue[];
+    endCursor: string | null;
+    hasNextPage: boolean;
+    totalCount: number;
+  } | null;
+  prs: {
+    items: GitHubPR[];
+    endCursor: string | null;
+    hasNextPage: boolean;
+    totalCount: number;
+  } | null;
+  /**
+   * `"network"` when the result came from a fresh GraphQL round-trip;
+   * `"memory-cache"` when the function short-circuited against the local
+   * in-memory caches. Callers (the IPC handler) use this to avoid
+   * broadcasting cache-extended data that would refresh the renderer's TTL
+   * with no genuine freshness gain.
+   */
+  source?: "network" | "memory-cache";
+  error?: string;
+}
+
+/**
+ * Combined fetch: counts + first page of open issues + open PRs in a single
+ * GraphQL round-trip. Used by the toolbar poll so the renderer can prime its
+ * `githubResourceCache` for the (open, created) default-filter cache key with
+ * no click-time round-trip. Falls back to disk-cached counts on auth/rate
+ * issues exactly like `getRepoStats` does, returning `issues: null` / `prs:
+ * null` so callers can choose to broadcast counts only.
+ */
+export async function getRepoStatsAndPage(
+  cwd: string,
+  bypassCache = false,
+  _retried = false
+): Promise<RepoStatsAndPageResult> {
+  const context = await getRepoContext(cwd);
+  if (!context) {
+    return { stats: null, issues: null, prs: null, error: "Not a GitHub repository" };
+  }
+
+  const cacheKey = `${context.owner}/${context.repo}`;
+  const persistentCache = GitHubStatsCache.getInstance();
+  const client = GitHubAuth.createClient();
+
+  if (!client) {
+    const diskCached = persistentCache.get(cacheKey);
+    if (diskCached) {
+      return {
+        stats: {
+          issueCount: diskCached.issueCount,
+          prCount: diskCached.prCount,
+          stale: true,
+          lastUpdated: diskCached.lastUpdated,
+        },
+        issues: null,
+        prs: null,
+        error: "GitHub token not configured. Set it in Settings.",
+      };
+    }
+    return {
+      stats: null,
+      issues: null,
+      prs: null,
+      error: "GitHub token not configured. Set it in Settings.",
+    };
+  }
+
+  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest();
+  if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
+    const diskCached = persistentCache.get(cacheKey);
+    const message = rateLimitMessage(rateLimitBlock.reason, rateLimitBlock.resumeAt);
+    if (diskCached) {
+      return {
+        stats: {
+          issueCount: diskCached.issueCount,
+          prCount: diskCached.prCount,
+          stale: true,
+          lastUpdated: diskCached.lastUpdated,
+        },
+        issues: null,
+        prs: null,
+        error: message,
+      };
+    }
+    return { stats: null, issues: null, prs: null, error: message };
+  }
+
+  // Memory-cache short-circuit: if counts cache is hot AND we already have a
+  // primed `issueListCache` / `prListCache` for the default filter, skip the
+  // full round-trip and return what we already have. The list caches share
+  // the 60s TTL, so when one is hot the other usually is too.
+  if (!bypassCache) {
+    const cachedStats = repoStatsCache.get(cacheKey);
+    const issuesCacheKey = buildListCacheKey(
+      "issue",
+      context.owner,
+      context.repo,
+      "open",
+      "",
+      "created",
+      ""
+    );
+    const prsCacheKey = buildListCacheKey(
+      "pr",
+      context.owner,
+      context.repo,
+      "open",
+      "",
+      "created",
+      ""
+    );
+    const cachedIssues = issueListCache.get(issuesCacheKey);
+    const cachedPRs = prListCache.get(prsCacheKey);
+    if (cachedStats && cachedIssues && cachedPRs) {
+      return {
+        stats: cachedStats,
+        issues: {
+          items: cachedIssues.items,
+          endCursor: cachedIssues.pageInfo.endCursor,
+          hasNextPage: cachedIssues.pageInfo.hasNextPage,
+          totalCount: cachedStats.issueCount,
+        },
+        prs: {
+          items: cachedPRs.items,
+          endCursor: cachedPRs.pageInfo.endCursor,
+          hasNextPage: cachedPRs.pageInfo.hasNextPage,
+          totalCount: cachedStats.prCount,
+        },
+        source: "memory-cache",
+      };
+    }
+  }
+
+  try {
+    const result = (await client(REPO_STATS_AND_PAGE_QUERY, {
+      owner: context.owner,
+      repo: context.repo,
+      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+    })) as GraphQlQueryResponseData;
+
+    const repository = result?.repository;
+    if (!repository) {
+      const diskCached = persistentCache.get(cacheKey);
+      if (diskCached) {
+        return {
+          stats: {
+            issueCount: diskCached.issueCount,
+            prCount: diskCached.prCount,
+            stale: true,
+            lastUpdated: diskCached.lastUpdated,
+          },
+          issues: null,
+          prs: null,
+          error: "Repository not found (showing cached data)",
+        };
+      }
+      return { stats: null, issues: null, prs: null, error: "Repository not found" };
+    }
+
+    const issuesData = repository.issues as
+      | {
+          totalCount?: number;
+          pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+          nodes?: Array<Record<string, unknown>>;
+        }
+      | undefined;
+    const prsData = repository.pullRequests as
+      | {
+          totalCount?: number;
+          pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+          nodes?: Array<Record<string, unknown>>;
+        }
+      | undefined;
+
+    const issueCount = issuesData?.totalCount ?? 0;
+    const prCount = prsData?.totalCount ?? 0;
+    const stats: RepoStats = {
+      issueCount,
+      prCount,
+      lastUpdated: Date.now(),
+    };
+
+    repoStatsCache.set(cacheKey, stats);
+    persistentCache.set(cacheKey, stats, cwd);
+
+    const parsedIssues = (issuesData?.nodes ?? []).filter(Boolean).map(parseIssueNode);
+    const parsedPRs = (prsData?.nodes ?? []).filter(Boolean).map(parsePRNode);
+
+    // Persist the first page to disk so that on the next cold start we can
+    // hydrate the renderer's resource cache before any network poll completes.
+    GitHubFirstPageCache.getInstance().set(
+      cacheKey,
+      {
+        issues: {
+          items: parsedIssues,
+          endCursor: issuesData?.pageInfo?.endCursor ?? null,
+          hasNextPage: issuesData?.pageInfo?.hasNextPage ?? false,
+        },
+        prs: {
+          items: parsedPRs,
+          endCursor: prsData?.pageInfo?.endCursor ?? null,
+          hasNextPage: prsData?.pageInfo?.hasNextPage ?? false,
+        },
+      },
+      cwd
+    );
+
+    // Prime the per-list memory caches under the default-filter key so a
+    // subsequent click-time `listIssues({ state: "open", sortOrder:
+    // "created" })` resolves from cache.
+    const issuesListCacheKey = buildListCacheKey(
+      "issue",
+      context.owner,
+      context.repo,
+      "open",
+      "",
+      "created",
+      ""
+    );
+    const prsListCacheKey = buildListCacheKey(
+      "pr",
+      context.owner,
+      context.repo,
+      "open",
+      "",
+      "created",
+      ""
+    );
+    const issuesPage = {
+      items: parsedIssues,
+      endCursor: issuesData?.pageInfo?.endCursor ?? null,
+      hasNextPage: issuesData?.pageInfo?.hasNextPage ?? false,
+      totalCount: issueCount,
+    };
+    const prsPage = {
+      items: parsedPRs,
+      endCursor: prsData?.pageInfo?.endCursor ?? null,
+      hasNextPage: prsData?.pageInfo?.hasNextPage ?? false,
+      totalCount: prCount,
+    };
+    issueListCache.set(issuesListCacheKey, {
+      items: issuesPage.items,
+      pageInfo: { hasNextPage: issuesPage.hasNextPage, endCursor: issuesPage.endCursor },
+    });
+    prListCache.set(prsListCacheKey, {
+      items: prsPage.items,
+      pageInfo: { hasNextPage: prsPage.hasNextPage, endCursor: prsPage.endCursor },
+    });
+
+    return { stats, issues: issuesPage, prs: prsPage, source: "network" };
+  } catch (error) {
+    if (!_retried && isRepoNotFoundError(error)) {
+      repoContextCache.invalidate(cwd);
+      const freshContext = await getRepoContext(cwd);
+      if (
+        freshContext &&
+        (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
+      ) {
+        return getRepoStatsAndPage(cwd, bypassCache, true);
+      }
+    }
+    const diskCached = persistentCache.get(cacheKey);
+    if (diskCached) {
+      return {
+        stats: {
+          issueCount: diskCached.issueCount,
+          prCount: diskCached.prCount,
+          stale: true,
+          lastUpdated: diskCached.lastUpdated,
+        },
+        issues: null,
+        prs: null,
+        error: parseGitHubError(error),
+      };
+    }
+    return { stats: null, issues: null, prs: null, error: parseGitHubError(error) };
   }
 }
 
@@ -398,6 +719,14 @@ export async function getProjectHealth(
   const client = GitHubAuth.createClient();
   if (!client) {
     return { health: null, error: "GitHub token not configured. Set it in Settings." };
+  }
+
+  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest();
+  if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
+    return {
+      health: null,
+      error: rateLimitMessage(rateLimitBlock.reason, rateLimitBlock.resumeAt),
+    };
   }
 
   if (!bypassCache) {
@@ -594,6 +923,91 @@ function parseBatchPRResponse(
   return results;
 }
 
+/**
+ * Conditional REST probe against `/repos/{owner}/{repo}/pulls/{number}`.
+ * A 304 (Not Modified) response signals the PR has not changed since the
+ * stored ETag and does NOT consume primary rate-limit quota for authenticated
+ * requests. Returns:
+ *   - "unchanged" on 304 (cached ETag still valid)
+ *   - "changed" on 200 (new data available; ETag refreshed when present, or
+ *     invalidated when the response omits one)
+ *   - "unknown" on any other outcome (network error, non-200/304 status, etc.)
+ *
+ * Callers should treat "unknown" as a cue to fall through to GraphQL —
+ * preserving correctness even if the REST path is transiently unavailable.
+ */
+async function probePRChange(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  token: string
+): Promise<"changed" | "unchanged" | "unknown"> {
+  const cacheKey = `${owner}/${repo}#${prNumber}`;
+  const cachedETag = prETagCache.get(cacheKey);
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (cachedETag) {
+    headers["If-None-Match"] = cachedETag;
+  }
+
+  try {
+    const response = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+
+    try {
+      gitHubRateLimitService.update(response.headers, response.status);
+    } catch {
+      // Rate-limit bookkeeping must never break the probe.
+    }
+
+    if (response.status === 304) {
+      return "unchanged";
+    }
+    if (response.status === 200) {
+      const etag = response.headers.get("etag");
+      if (etag) {
+        prETagCache.set(cacheKey, etag);
+      } else {
+        // If the new 200 response carries no ETag, drop any stale cached
+        // validator so the next cycle does not send a now-meaningless
+        // If-None-Match header.
+        prETagCache.delete(cacheKey);
+      }
+      return "changed";
+    }
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * When every candidate has a `knownPRNumber` (the revalidation path), probe
+ * each unique PR via REST conditional requests. If the entire batch is
+ * unchanged, the caller can skip the GraphQL query — the dominant per-cycle
+ * cost for PR polling — at zero primary quota impact. Duplicate PR numbers
+ * across candidates (multiple worktrees pointing at the same PR) are probed
+ * only once.
+ */
+async function allKnownPRsUnchanged(
+  owner: string,
+  repo: string,
+  candidates: PRCheckCandidate[],
+  token: string
+): Promise<boolean> {
+  const uniquePRNumbers = Array.from(new Set(candidates.map((c) => c.knownPRNumber!)));
+  const probes = await Promise.all(
+    uniquePRNumbers.map((prNumber) => probePRChange(owner, repo, prNumber, token))
+  );
+  return probes.every((result) => result === "unchanged");
+}
+
 export async function batchCheckLinkedPRs(
   cwd: string,
   candidates: PRCheckCandidate[]
@@ -610,6 +1024,40 @@ export async function batchCheckLinkedPRs(
   const context = await getRepoContext(cwd);
   if (!context) {
     return { results: new Map(), error: "Not a GitHub repository" };
+  }
+
+  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest();
+  if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
+    return {
+      results: new Map(),
+      error: rateLimitMessage(rateLimitBlock.reason, rateLimitBlock.resumeAt),
+      rateLimit: { kind: rateLimitBlock.reason, resumeAt: rateLimitBlock.resumeAt },
+    };
+  }
+
+  // ETag-gated fast path: if every candidate is a known PR (revalidation),
+  // probe each REST endpoint and skip GraphQL entirely when nothing has
+  // changed. Discovery cycles (any candidate without knownPRNumber) fall
+  // through to the normal GraphQL path.
+  const token = GitHubAuth.getToken();
+  const allRevalidation =
+    token !== undefined && candidates.every((c) => typeof c.knownPRNumber === "number");
+  if (allRevalidation) {
+    const allUnchanged = await allKnownPRsUnchanged(context.owner, context.repo, candidates, token);
+    if (allUnchanged) {
+      return { results: new Map() };
+    }
+    // A probe may itself have observed a 403/429 and updated the rate-limit
+    // service. Re-check before issuing the fallthrough GraphQL request so we
+    // do not burn an attempt while a known pause is already in effect.
+    const postProbeBlock = gitHubRateLimitService.shouldBlockRequest();
+    if (postProbeBlock.blocked && postProbeBlock.reason && postProbeBlock.resumeAt) {
+      return {
+        results: new Map(),
+        error: rateLimitMessage(postProbeBlock.reason, postProbeBlock.resumeAt),
+        rateLimit: { kind: postProbeBlock.reason, resumeAt: postProbeBlock.resumeAt },
+      };
+    }
   }
 
   try {
@@ -635,12 +1083,27 @@ export async function batchCheckLinkedPRs(
           })) as Record<string, unknown>;
           return { results: parseBatchPRResponse(retryResponse, candidates) };
         } catch (retryError) {
-          return { results: new Map(), error: parseGitHubError(retryError) };
+          return { results: new Map(), error: parseGitHubError(retryError), ...rateLimitMeta() };
         }
       }
     }
-    return { results: new Map(), error: parseGitHubError(error) };
+    return { results: new Map(), error: parseGitHubError(error), ...rateLimitMeta() };
   }
+}
+
+/**
+ * Capture the rate-limit snapshot synchronously after a caller's request
+ * fails, so downstream schedulers can route the failure as a rate-limit
+ * pause even if a concurrent 2xx clears the singleton before `handleError`
+ * reads it. Returns an empty object when no block is active so it spreads
+ * cleanly into result objects via rest-spread.
+ */
+function rateLimitMeta(): { rateLimit?: { kind: "primary" | "secondary"; resumeAt: number } } {
+  const block = gitHubRateLimitService.shouldBlockRequest();
+  if (block.blocked && block.reason && block.resumeAt) {
+    return { rateLimit: { kind: block.reason, resumeAt: block.resumeAt } };
+  }
+  return {};
 }
 
 export async function getRepoUrl(cwd: string): Promise<string | null> {
@@ -792,8 +1255,33 @@ function updateIssueAssigneeInCache(
   }
 }
 
-function parseGitHubError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+function rateLimitMessage(kind: "primary" | "secondary", resumeAt: number): string {
+  const seconds = Math.max(0, Math.ceil((resumeAt - Date.now()) / 1000));
+  const human = formatCountdown(seconds);
+  if (kind === "secondary") {
+    return `GitHub secondary rate limit triggered. Resuming in ${human}.`;
+  }
+  return `GitHub rate limit exceeded. Resets in ${human}.`;
+}
+
+function formatCountdown(totalSeconds: number): string {
+  if (totalSeconds <= 0) return "a moment";
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
+}
+
+export function parseGitHubError(error: unknown): string {
+  if (error instanceof GitHubRateLimitError) {
+    return rateLimitMessage(error.kind, error.resumeAt);
+  }
+  const message = formatErrorMessage(error, "GitHub request failed");
   const isTimeout = error instanceof Error && error.name === "TimeoutError";
 
   if (
@@ -809,12 +1297,34 @@ function parseGitHubError(error: unknown): string {
     return message;
   }
 
+  const blockState = gitHubRateLimitService.shouldBlockRequest();
+  if (blockState.blocked && blockState.reason && blockState.resumeAt) {
+    return rateLimitMessage(blockState.reason, blockState.resumeAt);
+  }
+
   if (message.includes("rate limit") || message.includes("API rate limit")) {
     return "GitHub rate limit exceeded. Try again in a few minutes.";
   }
 
   if (message.includes("401") || message.includes("Bad credentials")) {
     return "Invalid GitHub token. Please update in Settings.";
+  }
+
+  // Check SAML/SSO *before* the generic 403 branch — GitHub reports SSO
+  // enforcement failures as "Resource protected by organization SAML
+  // enforcement... (403)", so the substring "403" would otherwise swallow
+  // them into the generic permissions message and we'd lose the captured
+  // re-authorization URL.
+  if (message.includes("SAML") || message.includes("SSO")) {
+    // `rateLimitAwareFetch` captures the `X-GitHub-SSO: required; url=...`
+    // header passively. Surface the exact re-authorization URL when we have
+    // one so the user can re-authorize in a single click instead of hunting
+    // through github.com.
+    const ssoUrl = getLastAuthMetadata()?.ssoUrl;
+    if (ssoUrl) {
+      return `SSO authorization required. Re-authorize at: ${ssoUrl}`;
+    }
+    return "SSO authorization required. Re-authorize at github.com.";
   }
 
   if (message.includes("403")) {
@@ -839,10 +1349,6 @@ function parseGitHubError(error: unknown): string {
     return "Cannot reach GitHub. Check your internet connection.";
   }
 
-  if (message.includes("SAML") || message.includes("SSO")) {
-    return "SSO authorization required. Re-authorize at github.com.";
-  }
-
   return `GitHub API error: ${message}`;
 }
 
@@ -854,11 +1360,17 @@ export function clearGitHubCaches(): void {
   prListCache.clear();
   issueTooltipCache.clear();
   prTooltipCache.clear();
+  prETagCache.clear();
+  prRequiredStatusCache.clear();
+  // Token rotation invalidates persisted first-page data — a different
+  // identity may have access to a different repo set.
+  GitHubFirstPageCache.getInstance().clear();
 }
 
 export function clearPRCaches(): void {
   prListCache.clear();
   prTooltipCache.clear();
+  prRequiredStatusCache.clear();
 }
 
 function buildListCacheKey(
@@ -1074,8 +1586,10 @@ export async function listIssues(
       if (options.search) {
         const stateFilter =
           options.state === "closed" ? "is:closed" : options.state === "all" ? "" : "is:open";
+        const sortQualifier =
+          resolvedSortOrder === "updated" ? "sort:updated-desc" : "sort:created-desc";
         const searchQuery =
-          `repo:${context.owner}/${context.repo} is:issue ${stateFilter} sort:updated-desc ${options.search}`.trim();
+          `repo:${context.owner}/${context.repo} is:issue ${stateFilter} ${sortQualifier} ${options.search}`.trim();
 
         const response = (await client(SEARCH_QUERY, {
           searchQuery,
@@ -1152,6 +1666,104 @@ export async function listIssues(
   });
 }
 
+/**
+ * For each open PR with a raw statusCheckRollup state and no cached ciSummary,
+ * fetch per-PR contexts with `isRequired` and derive an effective CI status
+ * based on required checks only. Re-runs on every list query so a SUCCESS PR
+ * that flips back to PENDING/FAILURE on a re-push refreshes within the
+ * `prRequiredStatusCache` TTL. Best-effort: on any error, returns input unchanged.
+ */
+async function enrichPRsWithRequiredStatus(
+  context: RepoContext,
+  prs: GitHubPR[],
+  client: NonNullable<ReturnType<typeof GitHubAuth.createClient>>,
+  bypassCache = false
+): Promise<GitHubPR[]> {
+  const candidates = prs.filter(
+    (pr) => pr.state === "OPEN" && pr.ciStatus !== undefined && pr.ciSummary === undefined
+  );
+  if (candidates.length === 0) return prs;
+
+  const cacheKeyFor = (n: number) => `${context.owner}/${context.repo}:${n}`;
+  const numbersToFetch: number[] = [];
+  const cached = new Map<number, PRRequiredStatusEntry>();
+
+  for (const pr of candidates) {
+    const hit = bypassCache ? undefined : prRequiredStatusCache.get(cacheKeyFor(pr.number));
+    if (hit) {
+      cached.set(pr.number, hit);
+    } else {
+      numbersToFetch.push(pr.number);
+    }
+  }
+
+  let fetched = new Map<number, PRRequiredStatusEntry>();
+  if (numbersToFetch.length > 0) {
+    try {
+      const query = buildBatchRequiredChecksQuery(context.owner, context.repo, numbersToFetch);
+      if (query) {
+        const response = (await client(query, {
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+        })) as Record<string, unknown>;
+        fetched = parseBatchRequiredChecksResponse(response, numbersToFetch);
+        for (const [num, entry] of fetched) {
+          prRequiredStatusCache.set(cacheKeyFor(num), entry);
+        }
+      }
+    } catch {
+      // Best-effort — fall through; PRs keep their raw ciStatus and no ciSummary.
+    }
+  }
+
+  return prs.map((pr) => {
+    const entry = cached.get(pr.number) ?? fetched.get(pr.number);
+    if (!entry) return pr;
+    return {
+      ...pr,
+      ciStatus: entry.ciStatus ?? pr.ciStatus,
+      ciSummary: entry.ciSummary,
+    };
+  });
+}
+
+function parseBatchRequiredChecksResponse(
+  data: Record<string, unknown>,
+  prNumbers: number[]
+): Map<number, PRRequiredStatusEntry> {
+  const out = new Map<number, PRRequiredStatusEntry>();
+  for (const num of prNumbers) {
+    const alias = `pr_${num}`;
+    const repo = data?.[alias] as
+      | {
+          pullRequest?: {
+            commits?: {
+              nodes?: Array<{
+                commit?: {
+                  statusCheckRollup?: {
+                    state?: string | null;
+                    contexts?: {
+                      pageInfo?: { hasNextPage?: boolean };
+                      nodes?: RollupContextNode[];
+                    };
+                  } | null;
+                } | null;
+              }>;
+            };
+          };
+        }
+      | undefined;
+    const rollup = repo?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup;
+    if (!rollup) continue;
+    const derived = deriveRequiredCIStatus(
+      rollup.contexts?.nodes,
+      rollup.contexts?.pageInfo?.hasNextPage ?? false,
+      rollup.state
+    );
+    out.set(num, { ciStatus: derived.ciStatus, ciSummary: derived.ciSummary });
+  }
+  return out;
+}
+
 export async function listPullRequests(
   options: GitHubListOptions
 ): Promise<GitHubListResponse<GitHubPR>> {
@@ -1191,8 +1803,10 @@ export async function listPullRequests(
         else if (options.state === "closed") stateFilter = "is:closed is:unmerged";
         else if (options.state === "merged") stateFilter = "is:merged";
 
+        const sortQualifier =
+          resolvedSortOrder === "updated" ? "sort:updated-desc" : "sort:created-desc";
         const searchQuery =
-          `repo:${context.owner}/${context.repo} is:pr ${stateFilter} sort:updated-desc ${options.search}`.trim();
+          `repo:${context.owner}/${context.repo} is:pr ${stateFilter} ${sortQualifier} ${options.search}`.trim();
 
         const response = (await client(SEARCH_QUERY, {
           searchQuery,
@@ -1205,8 +1819,15 @@ export async function listPullRequests(
         const search = response?.search;
         const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
 
+        const parsedItems = nodes.filter(Boolean).map(parsePRNode);
+        const enrichedItems = await enrichPRsWithRequiredStatus(
+          context,
+          parsedItems,
+          client,
+          options.bypassCache ?? false
+        );
         result = {
-          items: nodes.filter(Boolean).map(parsePRNode),
+          items: enrichedItems,
           pageInfo: {
             hasNextPage: search?.pageInfo?.hasNextPage ?? false,
             endCursor: search?.pageInfo?.endCursor ?? null,
@@ -1233,8 +1854,15 @@ export async function listPullRequests(
         const nodes = (pullRequests?.nodes ?? []) as Array<Record<string, unknown>>;
         const totalCount = (pullRequests?.totalCount as number) ?? undefined;
 
+        const parsedItems = nodes.filter(Boolean).map(parsePRNode);
+        const enrichedItems = await enrichPRsWithRequiredStatus(
+          context,
+          parsedItems,
+          client,
+          options.bypassCache ?? false
+        );
         result = {
-          items: nodes.filter(Boolean).map(parsePRNode),
+          items: enrichedItems,
           pageInfo: {
             hasNextPage: pullRequests?.pageInfo?.hasNextPage ?? false,
             endCursor: pullRequests?.pageInfo?.endCursor ?? null,
@@ -1437,7 +2065,7 @@ export async function getIssueByNumber(
       return parseIssueNode(issue as Record<string, unknown>);
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error, "Failed to fetch GitHub issue");
     if (message === "Not a GitHub repository") {
       throw error;
     }
@@ -1471,7 +2099,7 @@ export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitH
       return parsePRNode(pr as Record<string, unknown>);
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error, "Failed to fetch GitHub pull request");
     if (message === "Not a GitHub repository") {
       throw error;
     }

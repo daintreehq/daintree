@@ -10,13 +10,14 @@ import {
   Copy,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { worktreeClient, githubClient, agentSettingsClient, systemClient } from "@/clients";
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
+import { resolveIssuePrequeries } from "./bulkCreatePrequery";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { notify } from "@/lib/notify";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -571,7 +572,7 @@ export function BulkCreateWorktreeDialog({
             queueRef.current = null;
             notify({
               type: "error",
-              title: "Bulk Create Partial Failure",
+              title: "Some worktrees couldn't be created",
               message: `0 created, ${failedItems.size} failed`,
             });
             return;
@@ -579,43 +580,35 @@ export function BulkCreateWorktreeDialog({
         }
       }
 
-      const assignedBranches = new Set<string>();
-      for (const planned of toCreate) {
+      // Batch pre-queries: parallel branch/path resolution with bounded concurrency.
+      // Two-phase approach: (1) resolve branch candidates with bounded concurrency,
+      // (2) apply deterministic uniqueness suffixes in input order, (3) resolve paths
+      // with bounded concurrency using final unique branch names.
+      const prequeryInput = toCreate.filter((p) => p.mode === "issue");
+
+      if (prequeryInput.length > 0) {
+        const { results, failedItems: prequeryFailures } = await resolveIssuePrequeries({
+          rootPath,
+          items: prequeryInput,
+          existingBranches: null,
+          getAvailableBranch: worktreeClient.getAvailableBranch,
+          getDefaultPath: worktreeClient.getDefaultPath,
+          isStaleRun: () => runIdRef.current !== currentRunId,
+        });
+
         if (runIdRef.current !== currentRunId) return;
-        if (planned.mode !== "issue") continue;
 
-        // Skip pre-query if the worktree already exists locally — the per-item
-        // path below will detect it via the worktree store and short-circuit.
-        const existingWorktrees = getCurrentViewStore().getState().worktrees;
-        let alreadyExists = false;
-        for (const wt of existingWorktrees.values()) {
-          if (wt.branch && wt.branch === planned.branchName) {
-            alreadyExists = true;
-            break;
-          }
+        for (const [number, { branch, path }] of results) {
+          precomputed.set(number, { branch, path });
         }
-        if (alreadyExists) continue;
 
-        try {
-          let branch = await worktreeClient.getAvailableBranch(rootPath, planned.branchName);
-          if (runIdRef.current !== currentRunId) return;
-          if (assignedBranches.has(branch)) {
-            let n = 2;
-            while (assignedBranches.has(`${branch}-${n}`)) n++;
-            branch = `${branch}-${n}`;
-          }
-          assignedBranches.add(branch);
-          const path = await worktreeClient.getDefaultPath(rootPath, branch);
-          if (runIdRef.current !== currentRunId) return;
-          precomputed.set(planned.item.number, { branch, path });
-        } catch (err) {
-          if (runIdRef.current !== currentRunId) return;
-          prequeryFailed.add(planned.item.number);
-          failedItems.add(planned.item.number);
+        for (const { number, error } of prequeryFailures) {
+          prequeryFailed.add(number);
+          failedItems.add(number);
           dispatchProgress({
             type: "ITEM_FAILED",
-            issueNumber: planned.item.number,
-            error: normalizeError(err),
+            issueNumber: number,
+            error: normalizeError(error),
             attempts: 1,
             failedStep: "worktree",
           });
@@ -644,8 +637,12 @@ export function BulkCreateWorktreeDialog({
 
               if (!worktreeId) {
                 const worktrees = getCurrentViewStore().getState().worktrees;
+                const pre = precomputed.get(itemNumber);
+                const searchBranches = pre
+                  ? [pre.branch, planned.branchName]
+                  : [planned.branchName];
                 for (const wt of worktrees.values()) {
-                  if (wt.branch && wt.branch === planned.branchName) {
+                  if (wt.branch && searchBranches.includes(wt.branch)) {
                     worktreeId = wt.worktreeId;
                     worktreePath = wt.path;
                     resolvedBranch = wt.branch;
@@ -799,13 +796,16 @@ export function BulkCreateWorktreeDialog({
                   type: "ITEM_TERMINALS_SPAWNING",
                   issueNumber: itemNumber,
                 });
-                try {
-                  for (const t of cloneTerminals) {
+                const spawnedIds: string[] = [];
+                const failedIndices: number[] = [];
+                for (const [index, t] of cloneTerminals.entries()) {
+                  try {
                     const isDevPreview = t.type === "dev-preview";
                     const isAgent = !isDevPreview && t.type !== "terminal";
 
+                    let panelId: string | null;
                     if (isDevPreview) {
-                      await usePanelStore.getState().addPanel({
+                      panelId = await usePanelStore.getState().addPanel({
                         kind: "dev-preview",
                         title: t.title,
                         cwd: worktreePath,
@@ -813,42 +813,75 @@ export function BulkCreateWorktreeDialog({
                         exitBehavior: t.exitBehavior,
                         devCommand: t.devCommand?.trim() || undefined,
                       });
-                      continue;
-                    }
-
-                    let command: string | undefined;
-                    if (isAgent) {
-                      const agentConfig = getAgentConfig(t.type);
-                      const baseCommand = agentConfig?.command || t.type;
-                      const entry = cloneAgentSettings?.agents?.[t.type] ?? {};
-                      command = generateAgentCommand(baseCommand, entry, t.type, {
+                    } else if (isAgent) {
+                      const agentId = t.type;
+                      const agentConfig = getAgentConfig(agentId);
+                      const baseCommand = agentConfig?.command ?? "";
+                      const entry = cloneAgentSettings?.agents?.[agentId] ?? {};
+                      const command = generateAgentCommand(baseCommand, entry, agentId, {
                         clipboardDirectory: cloneClipboardDirectory,
+                        modelId: t.agentModelId,
+                      });
+
+                      panelId = await usePanelStore.getState().addPanel({
+                        kind: "terminal",
+                        launchAgentId: agentId,
+                        command,
+                        title: t.title,
+                        cwd: worktreePath,
+                        worktreeId,
+                        exitBehavior: t.exitBehavior,
+                        agentModelId: t.agentModelId,
+                        agentLaunchFlags: t.agentLaunchFlags,
                       });
                     } else {
-                      command = t.command?.trim() || undefined;
+                      panelId = await usePanelStore.getState().addPanel({
+                        kind: "terminal",
+                        title: t.title,
+                        cwd: worktreePath,
+                        worktreeId,
+                        exitBehavior: t.exitBehavior,
+                        command: t.command?.trim() || undefined,
+                      });
                     }
 
-                    await usePanelStore.getState().addPanel({
-                      kind: isAgent ? "agent" : "terminal",
-                      agentId: isAgent ? t.type : undefined,
-                      title: t.title,
-                      cwd: worktreePath,
-                      worktreeId,
-                      exitBehavior: t.exitBehavior,
-                      command,
-                    });
+                    if (panelId != null) {
+                      spawnedIds.push(panelId);
+                    } else {
+                      failedIndices.push(index);
+                    }
+                  } catch {
+                    failedIndices.push(index);
                   }
-                  const updatedTracked = tracking.get(itemNumber);
-                  if (updatedTracked) updatedTracked.cloneComplete = true;
-                } catch {
-                  // Clone is best-effort; worktree was created
+                }
+                const updatedTracked = tracking.get(itemNumber);
+                if (updatedTracked) {
+                  updatedTracked.spawnedTerminalIds = [
+                    ...updatedTracked.spawnedTerminalIds,
+                    ...spawnedIds,
+                  ];
+                  updatedTracked.failedTerminalIndices = failedIndices;
+                  updatedTracked.cloneComplete = failedIndices.length === 0;
                 }
                 dispatchProgress({
                   type: "ITEM_TERMINALS_RESULT",
                   issueNumber: itemNumber,
-                  spawnedTerminalIds: [],
-                  failedTerminalIndices: [],
+                  spawnedTerminalIds: spawnedIds,
+                  failedTerminalIndices: failedIndices,
                 });
+
+                if (failedIndices.length > 0) {
+                  const errorMsg = `${failedIndices.length} terminal(s) failed to spawn`;
+                  failedItems.add(itemNumber);
+                  dispatchProgress({
+                    type: "ITEM_FAILED",
+                    issueNumber: itemNumber,
+                    error: errorMsg,
+                    attempts: attempt,
+                    failedStep: "terminals",
+                  });
+                  return;
+                }
               } else if (
                 selectedRecipeId &&
                 selectedRecipeId !== CLONE_LAYOUT_ID &&
@@ -1010,13 +1043,13 @@ export function BulkCreateWorktreeDialog({
       if (fCount === 0) {
         notify({
           type: "success",
-          title: "Bulk Create Complete",
+          title: "Worktrees created",
           message: `Created ${sCount} worktree${sCount !== 1 ? "s" : ""}`,
         });
       } else {
         notify({
           type: "error",
-          title: "Bulk Create Partial Failure",
+          title: "Some worktrees couldn't be created",
           message: `${sCount} created, ${fCount} failed`,
         });
       }
@@ -1032,7 +1065,7 @@ export function BulkCreateWorktreeDialog({
       if (toCreate.length === 0) {
         notify({
           type: "info",
-          title: "Nothing to Create",
+          title: "Nothing to create",
           message:
             mode === "pr"
               ? "All selected PRs already have worktrees or are ineligible"
@@ -1086,12 +1119,15 @@ export function BulkCreateWorktreeDialog({
       );
       if (toRetry.length === 0) return;
 
-      // Reset terminal tracking for retried items so verification doesn't use stale data
+      // Reset terminal tracking for retried items so verification doesn't use stale data.
+      // cloneComplete is also cleared so retry re-enters the clone branch — otherwise a
+      // post-success verification failure silently short-circuits to ITEM_SUCCEEDED.
       for (const issueNumber of failedIssueNumbers) {
         const tracked = batchTrackingRef.current.get(issueNumber);
         if (tracked) {
           tracked.spawnedTerminalIds = [];
           tracked.failedTerminalIndices = [];
+          tracked.cloneComplete = false;
         }
       }
 
@@ -1158,7 +1194,7 @@ export function BulkCreateWorktreeDialog({
         <AppDialog.Title
           icon={
             isExecuting ? (
-              <Spinner size="lg" className="text-daintree-accent" />
+              <Spinner size="lg" className="text-activity-working" />
             ) : isDone ? (
               failedCount > 0 ? (
                 <AlertTriangle className="w-5 h-5 text-status-warning" />
@@ -1166,15 +1202,15 @@ export function BulkCreateWorktreeDialog({
                 <Check className="w-5 h-5 text-status-success" />
               )
             ) : (
-              <WorktreeIcon className="w-5 h-5 text-daintree-accent" />
+              <FolderGit2 className="w-5 h-5 text-text-muted" />
             )
           }
         >
           {isExecuting
-            ? "Creating Worktrees\u2026"
+            ? "Creating worktrees\u2026"
             : isDone
-              ? "Creation Complete"
-              : `Create ${creatableCount} Worktree${creatableCount !== 1 ? "s" : ""}`}
+              ? "Creation complete"
+              : `Create ${creatableCount} worktree${creatableCount !== 1 ? "s" : ""}`}
         </AppDialog.Title>
         {!isExecuting && <AppDialog.CloseButton />}
       </AppDialog.Header>
@@ -1192,7 +1228,7 @@ export function BulkCreateWorktreeDialog({
                     className="w-8 h-8 rounded-full shrink-0"
                   />
                 ) : (
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-daintree-accent/10 text-daintree-accent">
+                  <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-overlay-medium text-daintree-text/60">
                     <UserPlus className="w-4 h-4" />
                   </div>
                 )}
@@ -1216,7 +1252,7 @@ export function BulkCreateWorktreeDialog({
                       "peer-focus-visible:ring-2 peer-focus-visible:ring-daintree-accent",
                       "after:content-[''] after:absolute after:top-0.5 after:left-0.5",
                       "after:rounded-full after:h-4 after:w-4",
-                      "after:transition-transform after:duration-200",
+                      "after:transition-transform after:duration-150",
                       assignWorktreeToSelf
                         ? "bg-daintree-accent after:translate-x-4 after:bg-text-inverse"
                         : "bg-daintree-border after:translate-x-0 after:bg-daintree-text"
@@ -1350,7 +1386,7 @@ export function BulkCreateWorktreeDialog({
                             {recipe.terminals.length !== 1 ? "s" : ""}
                           </span>
                           {recipe.id === defaultRecipeId && (
-                            <span className="text-xs text-daintree-accent shrink-0">(default)</span>
+                            <span className="text-xs text-status-info shrink-0">(default)</span>
                           )}
                         </div>
                         {recipe.id === selectedRecipeId && (
@@ -1386,7 +1422,7 @@ export function BulkCreateWorktreeDialog({
                       </div>
                       {!item.skipped && (
                         <div className="flex items-center gap-1.5 mt-0.5">
-                          <WorktreeIcon className="w-3 h-3 text-daintree-text/40 shrink-0" />
+                          <FolderGit2 className="w-3 h-3 text-daintree-text/40 shrink-0" />
                           <span className="text-xs text-daintree-text/50 font-mono truncate">
                             {item.branchName}
                           </span>
@@ -1424,7 +1460,7 @@ export function BulkCreateWorktreeDialog({
                     >
                       <div className="mt-0.5 shrink-0">
                         {isInProgress ? (
-                          <Spinner size="md" className="text-daintree-accent" />
+                          <Spinner size="md" className="text-activity-working" />
                         ) : itemStatus?.stage === "succeeded" ? (
                           <Check className="w-4 h-4 text-status-success" />
                         ) : itemStatus?.stage === "failed" ? (
@@ -1440,7 +1476,7 @@ export function BulkCreateWorktreeDialog({
                           </span>
                           <span className="text-daintree-text truncate">{item.item.title}</span>
                           {isInProgress && itemStatus.attempt > 1 && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-daintree-accent/10 text-daintree-accent shrink-0">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-info/10 text-status-info shrink-0">
                               retry {itemStatus.attempt - 1}
                             </span>
                           )}
@@ -1463,7 +1499,7 @@ export function BulkCreateWorktreeDialog({
             <div className="space-y-2">
               <div className="h-2 rounded-full bg-overlay-soft overflow-hidden">
                 <div
-                  className="h-full rounded-full bg-daintree-accent transition-[width] duration-300"
+                  className="h-full rounded-full bg-status-info transition-[width] duration-300"
                   style={{
                     width: `${progress.items.size > 0 ? (processedCount / progress.items.size) * 100 : 0}%`,
                   }}
@@ -1492,7 +1528,7 @@ export function BulkCreateWorktreeDialog({
                 data-testid="bulk-create-retry-button"
               >
                 <RotateCcw />
-                Retry Failed
+                Retry failed
               </Button>
             )}
             <Button onClick={handleDone} data-testid="bulk-create-done-button">
@@ -1516,7 +1552,7 @@ export function BulkCreateWorktreeDialog({
               data-testid="bulk-create-confirm-button"
             >
               <Check />
-              Create {creatableCount} Worktree{creatableCount !== 1 ? "s" : ""}
+              Create {creatableCount} worktree{creatableCount !== 1 ? "s" : ""}
             </Button>
           </>
         )}

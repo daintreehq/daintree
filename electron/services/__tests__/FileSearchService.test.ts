@@ -4,11 +4,18 @@ import os from "os";
 import path from "path";
 
 const simpleGitMock = vi.hoisted(() => vi.fn());
-const gitClientMock = vi.hoisted(() => ({
+const gitClientMock: {
+  env: ReturnType<typeof vi.fn>;
+  checkIsRepo: ReturnType<typeof vi.fn>;
+  revparse: ReturnType<typeof vi.fn>;
+  raw: ReturnType<typeof vi.fn>;
+} = vi.hoisted(() => ({
+  env: vi.fn(),
   checkIsRepo: vi.fn<() => Promise<boolean>>(),
   revparse: vi.fn<(args: string[]) => Promise<string>>(),
   raw: vi.fn<(args: string[]) => Promise<string>>(),
 }));
+gitClientMock.env.mockReturnValue(gitClientMock);
 
 vi.mock("simple-git", () => ({
   simpleGit: simpleGitMock,
@@ -30,6 +37,7 @@ describe("FileSearchService", () => {
     vi.resetModules();
     vi.clearAllMocks();
     simpleGitMock.mockImplementation(() => gitClientMock);
+    gitClientMock.env.mockReturnValue(gitClientMock);
     gitClientMock.checkIsRepo.mockResolvedValue(false);
     gitClientMock.revparse.mockResolvedValue("");
     gitClientMock.raw.mockResolvedValue("");

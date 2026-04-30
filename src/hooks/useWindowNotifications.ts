@@ -10,15 +10,14 @@ export function useWindowNotifications(): void {
   const windowFocusedRef = useRef(true);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const blurDimTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const blurTimeRef = useRef<number | null>(null);
-  const [, setTick] = useState(0);
+  const [blurTime, setBlurTime] = useState<number | null>(null);
 
-  const { waitingCount } = useTerminalNotificationCounts(blurTimeRef.current);
+  const { waitingCount } = useTerminalNotificationCounts(blurTime);
 
   useEffect(() => {
     const handleFocus = () => {
       windowFocusedRef.current = true;
-      blurTimeRef.current = null;
+      setBlurTime(null);
 
       if (blurDimTimerRef.current) {
         clearTimeout(blurDimTimerRef.current);
@@ -38,13 +37,11 @@ export function useWindowNotifications(): void {
       if (window.electron?.notification?.updateBadge) {
         window.electron.notification.updateBadge({ waitingCount: 0 });
       }
-
-      setTick((t) => t + 1);
     };
 
     const handleBlur = () => {
       windowFocusedRef.current = false;
-      blurTimeRef.current = Date.now();
+      setBlurTime(Date.now());
 
       if (blurDimTimerRef.current) {
         clearTimeout(blurDimTimerRef.current);
@@ -53,8 +50,6 @@ export function useWindowNotifications(): void {
         blurDimTimerRef.current = null;
         document.body.dataset.windowFocused = "false";
       }, FOCUS_BLUR_DEBOUNCE_MS);
-
-      setTick((t) => t + 1);
     };
 
     window.addEventListener("focus", handleFocus);

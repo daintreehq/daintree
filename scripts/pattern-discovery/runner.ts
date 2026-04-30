@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
-import { getAgentConfig } from "../../shared/config/agentRegistry.js";
+import { getAgentConfig, getAgentIds } from "../../shared/config/agentRegistry.js";
 import { buildPatternConfig } from "../../electron/services/pty/terminalActivityPatterns.js";
 import {
   createPatternDetector,
@@ -23,8 +23,6 @@ const DEFAULT_PROMPTS = [
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
-const SUPPORTED_AGENTS = ["claude", "gemini", "codex", "opencode"];
-
 function parseArgs(argv: string[]): RunnerOptions {
   const args = new Map<string, string>();
   for (let i = 0; i < argv.length; i++) {
@@ -38,9 +36,10 @@ function parseArgs(argv: string[]): RunnerOptions {
     }
   }
 
+  const supportedAgents = getAgentIds();
   const agentId = args.get("agent");
-  if (!agentId || !SUPPORTED_AGENTS.includes(agentId)) {
-    throw new Error(`--agent required. Supported: ${SUPPORTED_AGENTS.join(", ")}`);
+  if (!agentId || !supportedAgents.includes(agentId)) {
+    throw new Error(`--agent required. Supported: ${supportedAgents.join(", ")}`);
   }
 
   return {
@@ -148,7 +147,7 @@ async function runSession(options: RunnerOptions): Promise<string> {
 
       if (promptIndex >= options.prompts.length && silenceMs > 5000 && bootDetected) {
         console.log("[runner] All prompts sent, sending quit command");
-        const quitCmd = agentConfig.shutdown?.quitCommand ?? "/quit";
+        const quitCmd = agentConfig.resume?.quitCommand ?? "/quit";
         ptyProcess.write(quitCmd + "\r");
         clearInterval(promptInterval);
       }

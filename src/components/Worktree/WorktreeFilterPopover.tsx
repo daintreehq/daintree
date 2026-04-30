@@ -61,7 +61,7 @@ function FilterChip({ label, isActive, onClick }: FilterChipProps) {
       className={cn(
         "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full border transition-colors",
         isActive
-          ? "bg-daintree-accent/20 border-daintree-accent/40 text-daintree-accent"
+          ? "bg-tint/[0.08] border-daintree-border text-daintree-text"
           : "bg-daintree-bg border-daintree-border text-daintree-text/60 hover:bg-overlay-medium hover:text-daintree-text/80"
       )}
     >
@@ -106,7 +106,6 @@ const GITHUB_OPTIONS: { value: GitHubFilter; label: string }[] = [
 const SESSION_OPTIONS: { value: SessionFilter; label: string }[] = [
   { value: "hasTerminals", label: "Has Terminals" },
   { value: "working", label: "Working" },
-  { value: "running", label: "Running" },
   { value: "waiting", label: "Waiting" },
   { value: "completed", label: "Completed" },
   { value: "exited", label: "Exited" },
@@ -204,14 +203,14 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
             "relative flex items-center justify-center w-5 h-5 rounded",
             "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
             "transition-colors",
-            hasActiveFilters() && "text-daintree-accent"
+            hasActiveFilters() && "text-status-info"
           )}
           aria-label="Filter and sort worktrees"
           aria-haspopup="dialog"
         >
           <Filter className="w-3.5 h-3.5" />
           {showBadge && (
-            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-daintree-accent" />
+            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-info" />
           )}
         </button>
       </PopoverTrigger>
@@ -236,7 +235,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                     "w-full px-2.5 py-1.5 text-xs rounded",
                     "bg-daintree-bg border border-daintree-border",
                     "text-daintree-text placeholder-daintree-text/40",
-                    "focus:outline-none focus:border-daintree-accent/50"
+                    "focus:outline-hidden focus:border-daintree-accent/50"
                   )}
                 />
                 {localQuery && (
@@ -276,7 +275,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                     className={cn(
                       "flex items-center gap-2 px-2 py-1 text-xs rounded",
                       orderBy === option.value
-                        ? "bg-daintree-accent/10 text-daintree-accent"
+                        ? "bg-overlay-soft text-daintree-text"
                         : "text-daintree-text/70 hover:bg-overlay-medium"
                     )}
                   >
@@ -284,7 +283,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                       className={cn(
                         "w-3 h-3 rounded-full border",
                         orderBy === option.value
-                          ? "border-daintree-accent bg-daintree-accent"
+                          ? "border-daintree-text bg-daintree-text"
                           : "border-daintree-border"
                       )}
                     >

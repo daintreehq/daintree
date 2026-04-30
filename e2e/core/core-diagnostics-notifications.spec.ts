@@ -190,12 +190,9 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
       });
     });
 
-    test("empty state shows Configure but not Clear all", async () => {
+    test("empty state hides Clear all", async () => {
       const { window } = ctx;
 
-      await expect(window.locator(SEL.notifications.configureButton)).toBeVisible({
-        timeout: T_SHORT,
-      });
       await expect(window.locator(SEL.notifications.clearAllButton)).not.toBeVisible();
     });
 

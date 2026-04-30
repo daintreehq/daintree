@@ -4,6 +4,7 @@ import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import { soundService } from "./SoundService.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { isScheduledQuietNow } from "../../shared/utils/quietHours.js";
 
 const COMPLETION_DEBOUNCE_MS = 2000;
 const NOTIFICATION_STAGGER_MS = 500;
@@ -12,7 +13,7 @@ const WORKING_PULSE_INITIAL_DELAY_MS = 10_000;
 const WORKING_PULSE_MIN_INTERVAL_MS = 8_000;
 const WORKING_PULSE_MAX_INTERVAL_MS = 10_000;
 const ALL_CLEAR_DEBOUNCE_MS = 500;
-const ACTIVE_AGENT_STATES = new Set(["working", "running", "directing"]);
+const ACTIVE_AGENT_STATES = new Set(["working", "directing"]);
 
 /**
  * Grace period after spawn during which waiting sounds are suppressed.
@@ -69,12 +70,26 @@ class AgentNotificationService {
   private agentSpawnTimestamps = new Map<string, number>();
   /** Timestamp when the service was initialized — sounds are suppressed during boot */
   private initializedAt = 0;
+  /** Session-mute expiry mirrored from the renderer's quick-action buttons. */
+  private sessionMuteUntil = 0;
 
   syncWatchedPanels(panelIds: string[]): void {
     this.watchedTerminals = new Set(panelIds);
   }
 
+  setSessionMuteUntil(timestampMs: number): void {
+    this.sessionMuteUntil = Number.isFinite(timestampMs) ? timestampMs : 0;
+  }
+
+  private isSessionMuted(): boolean {
+    return Date.now() < this.sessionMuteUntil;
+  }
+
   initialize(): void {
+    // Idempotent — repeat calls are a no-op so a deferred-task race during
+    // window close + reopen can't double-subscribe event listeners.
+    if (this.unsubscribers.length > 0) return;
+
     this.initializedAt = Date.now();
 
     const unsubStateChanged = events.on("agent:state-changed", (payload) => {
@@ -82,7 +97,11 @@ class AgentNotificationService {
     });
 
     const unsubSpawned = events.on("agent:spawned", (payload) => {
-      const agentKey = payload.agentId ?? payload.terminalId;
+      // Prefer terminalId so grace keys are always unique per-terminal —
+      // runtime-detected agents share agentId values across terminals (both
+      // are just "claude"), and collisions would cause one terminal's grace
+      // to expire a sibling's. #5773
+      const agentKey = payload.terminalId ?? payload.agentId;
       if (agentKey) {
         this.agentSpawnTimestamps.set(agentKey, Date.now());
       }
@@ -91,7 +110,19 @@ class AgentNotificationService {
       }
     });
 
-    this.unsubscribers.push(unsubStateChanged, unsubSpawned);
+    // Runtime-detected agents (plain terminals where a CLI was detected) never
+    // fire agent:spawned — that event is only emitted for kind="agent" panels
+    // with a persisted launch-time agentId. Seed spawn grace from agent:detected
+    // so startup "waiting" states don't trigger immediate notification sounds
+    // for runtime-detected agents. Key exclusively by terminalId to avoid
+    // cross-terminal grace bleed when two terminals detect the same agent type.
+    // #5773
+    const unsubDetected = events.on("agent:detected", (payload) => {
+      if (!payload.agentType || !payload.terminalId) return;
+      this.agentSpawnTimestamps.set(payload.terminalId, Date.now());
+    });
+
+    this.unsubscribers.push(unsubStateChanged, unsubSpawned, unsubDetected);
   }
 
   private isWithinBootGrace(): boolean {
@@ -99,7 +130,9 @@ class AgentNotificationService {
   }
 
   private isWithinSpawnGrace(agentId?: string, terminalId?: string): boolean {
-    const key = agentId ?? terminalId;
+    // Prefer terminalId so grace lookups match the per-terminal key used when
+    // seeding from agent:spawned / agent:detected. #5773
+    const key = terminalId ?? agentId;
     if (!key) return false;
     const spawnTime = this.agentSpawnTimestamps.get(key);
     if (spawnTime === undefined) return false;
@@ -147,8 +180,8 @@ class AgentNotificationService {
     // Clear spawn grace tracking once the agent starts doing real work
     // (waiting→working means the user gave input, so future waiting sounds are legitimate)
     if (state === "working" && previousState === "waiting") {
-      const key = agentId ?? terminalId;
-      if (key) this.agentSpawnTimestamps.delete(key);
+      const graceKey = terminalId ?? agentId;
+      if (graceKey) this.agentSpawnTimestamps.delete(graceKey);
     }
 
     // All-clear tracking runs regardless of notification settings
@@ -157,7 +190,10 @@ class AgentNotificationService {
     // Allow same-state transitions for waitingReason changes (e.g., prompt -> question)
     if (state === previousState && !(state === "waiting" && waitingReason !== undefined)) return;
 
-    const key = agentId ?? worktreeId ?? "agent";
+    // Prefer terminalId so per-terminal dedup timers don't collide when two
+    // runtime-detected terminals share the same agentId value (e.g. both
+    // detected as "claude"). #5773
+    const key = terminalId ?? agentId ?? worktreeId ?? "agent";
 
     // Cancel any pending completion timer for this agent when it leaves "completed"
     // (must run even when master toggle is off to prevent stale timers)
@@ -499,7 +535,20 @@ class AgentNotificationService {
         this.clearWorkingPulse(terminalId);
         return;
       }
-      soundService.playPulse(currentSettings.workingPulseSoundFile);
+      // During scheduled quiet hours or an active session mute, skip this tick's
+      // sound but keep the loop alive so pulses resume automatically after.
+      if (isScheduledQuietNow(currentSettings) || this.isSessionMuted()) {
+        const jitter =
+          WORKING_PULSE_MIN_INTERVAL_MS +
+          Math.random() * (WORKING_PULSE_MAX_INTERVAL_MS - WORKING_PULSE_MIN_INTERVAL_MS);
+        const nextTimer = setTimeout(tick, jitter);
+        this.workingPulseIntervalTimers.set(terminalId, nextTimer);
+        return;
+      }
+      // Randomize pitch ±15 cents per pulse to slow auditory habituation.
+      // Exceeds JND (~5-10 cents) but preserves sound identity.
+      const detuneCents = Math.random() * 30 - 15;
+      soundService.playPulse(currentSettings.workingPulseSoundFile, detuneCents);
 
       const jitter =
         WORKING_PULSE_MIN_INTERVAL_MS +
@@ -547,6 +596,21 @@ class AgentNotificationService {
     const settings = projectStore.getEffectiveNotificationSettings();
     if (settings.enabled === false) {
       this.notificationQueue = [];
+      return;
+    }
+
+    // Quiet hours schedule and renderer-driven session mute both suppress
+    // completion/pulse alerts but not waiting alerts — waiting agents block
+    // user work and should page through.
+    if (isScheduledQuietNow(settings) || this.isSessionMuted()) {
+      if (this.notificationQueue.length > 0) {
+        this.staggerTimer = setTimeout(() => {
+          this.staggerTimer = null;
+          this.drainQueue();
+        }, NOTIFICATION_STAGGER_MS);
+      } else {
+        this.staggerTimer = null;
+      }
       return;
     }
 

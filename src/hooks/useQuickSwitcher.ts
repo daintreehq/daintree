@@ -6,6 +6,7 @@ import { useWorktrees } from "./useWorktrees";
 import { useWorktreeSelectionStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { useSearchablePalette } from "./useSearchablePalette";
+import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 
 export type QuickSwitcherItemType = "terminal" | "worktree";
 
@@ -14,10 +15,8 @@ export interface QuickSwitcherItem {
   type: QuickSwitcherItemType;
   title: string;
   subtitle?: string;
-  terminalType?: TerminalInstance["type"];
   terminalKind?: TerminalInstance["kind"];
-  agentId?: TerminalInstance["agentId"];
-  detectedProcessId?: TerminalInstance["detectedProcessId"];
+  chrome?: TerminalChromeDescriptor;
   worktreeId?: string;
 }
 
@@ -86,10 +85,8 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
             ? `${baseSubtitle} · Backgrounded`
             : "Backgrounded"
           : baseSubtitle,
-        terminalType: t.type,
         terminalKind: t.kind,
-        agentId: t.agentId,
-        detectedProcessId: t.detectedProcessId,
+        chrome: deriveTerminalChrome(t),
         worktreeId: t.worktreeId,
       });
     }
@@ -197,7 +194,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
 
   const confirmSelection = useCallback(() => {
     if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-      selectItem(results[selectedIndex]);
+      selectItem(results[selectedIndex]!);
     }
   }, [results, selectedIndex, selectItem]);
 

@@ -1,6 +1,11 @@
 import { useEffect, useRef } from "react";
 import { useNotificationStore } from "@/store/notificationStore";
+import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
+
+const AVAILABLE_HINT = 'Use "Check for Updates..." to check again.';
+const UPDATE_CORRELATION_ID = "app-update";
 
 function DownloadProgress({ percent }: { percent: number }) {
   const pct = Math.round(percent);
@@ -17,8 +22,14 @@ function DownloadProgress({ percent }: { percent: number }) {
   );
 }
 
+function findLiveUpdateToastId(): string | null {
+  const match = useNotificationStore
+    .getState()
+    .notifications.find((n) => !n.dismissed && n.correlationId === UPDATE_CORRELATION_ID);
+  return match?.id ?? null;
+}
+
 export function useUpdateListener(suppressToasts = false): void {
-  const toastIdRef = useRef<string | null>(null);
   const suppressRef = useRef(suppressToasts);
   const pendingUpdateRef = useRef<{ version: string; downloaded: boolean } | null>(null);
 
@@ -36,28 +47,48 @@ export function useUpdateListener(suppressToasts = false): void {
     pendingUpdateRef.current = null;
 
     if (downloaded) {
-      toastIdRef.current = useNotificationStore.getState().addNotification({
+      // urgent: the user already chose to lift suppression — surface this even
+      // if the scheduled quiet window is still active.
+      notify({
         type: "success",
-        title: "Update Ready",
+        title: "Update ready",
         message: `Version ${version} is ready to install.`,
         inboxMessage: `Version ${version} ready to install`,
         priority: "high",
+        urgent: true,
         duration: 0,
+        correlationId: UPDATE_CORRELATION_ID,
         action: {
-          label: "Restart to Update",
-          onClick: () => window.electron?.update?.quitAndInstall(),
+          label: "Restart to update",
+          onClick: () => {
+            const promise = window.electron?.update?.quitAndInstall();
+            if (promise) {
+              safeFireAndForget(promise, { context: "Quit and install update" });
+            }
+          },
         },
       });
     } else {
-      const id = notify({
+      notify({
         type: "info",
-        title: "Update Available",
+        title: "Update available",
         message: `Version ${version} is downloading...`,
-        inboxMessage: `Version ${version} is downloading`,
+        inboxMessage: `Version ${version} is downloading. ${AVAILABLE_HINT}`,
         priority: "high",
         duration: 0,
+        correlationId: UPDATE_CORRELATION_ID,
+        // Explicit undefined: if a prior "Update Ready" toast is live (stage
+        // regression), clear its "Restart to Update" action so the user does
+        // not accidentally restart into a stale build while a newer one is
+        // still downloading.
+        action: undefined,
+        onDismiss: () => {
+          // why: stays on the lightweight logError path — analytics-grade
+          // forward to main, not worth surfacing through Sentry/error store.
+          const promise = window.electron?.update?.notifyDismiss?.(version);
+          promise?.catch((err) => logError("[useUpdateListener] notifyDismiss failed", err));
+        },
       });
-      toastIdRef.current = id || null;
     }
   }, [suppressToasts]);
 
@@ -66,24 +97,47 @@ export function useUpdateListener(suppressToasts = false): void {
 
     const cleanupAvailable = window.electron.update.onUpdateAvailable((info) => {
       if (suppressRef.current) {
-        pendingUpdateRef.current = { version: info.version, downloaded: false };
+        // Never downgrade a pending "downloaded" to "available" — a follow-up
+        // re-check during the startup quiet period must not roll the stored
+        // state back so the user is still told "Update Ready" once toasts
+        // unmute.
+        if (!pendingUpdateRef.current?.downloaded) {
+          pendingUpdateRef.current = { version: info.version, downloaded: false };
+        }
         return;
       }
-      const id = notify({
+      // Repeats and re-checks collapse onto the same toast via correlationId;
+      // no bespoke dedup ref needed. The store's collapse path resets the
+      // auto-dismiss timer and increments the count badge.
+      const version = info.version;
+      notify({
         type: "info",
-        title: "Update Available",
-        message: `Version ${info.version} is downloading...`,
-        inboxMessage: `Version ${info.version} is downloading`,
+        title: "Update available",
+        message: `Version ${version} is downloading...`,
+        inboxMessage: `Version ${version} is downloading. ${AVAILABLE_HINT}`,
         priority: "high",
         duration: 0,
+        correlationId: UPDATE_CORRELATION_ID,
+        // Explicit undefined: see the pending-update effect above — same
+        // rationale (stage regression from Update Ready must not leave the
+        // restart action attached to a downloading-again toast).
+        action: undefined,
+        // Forwarded to main only when the user explicitly closes the toast —
+        // MAX_VISIBLE_TOASTS eviction and programmatic dismissals bypass this.
+        onDismiss: () => {
+          // why: stays on the lightweight logError path — analytics-grade
+          // forward to main, not worth surfacing through Sentry/error store.
+          const promise = window.electron?.update?.notifyDismiss?.(version);
+          promise?.catch((err) => logError("[useUpdateListener] notifyDismiss failed", err));
+        },
       });
-      toastIdRef.current = id || null;
     });
 
     const cleanupProgress = window.electron.update.onDownloadProgress((info) => {
-      if (!toastIdRef.current) return;
-      useNotificationStore.getState().updateNotification(toastIdRef.current, {
-        title: "Downloading Update",
+      const liveId = findLiveUpdateToastId();
+      if (!liveId) return;
+      useNotificationStore.getState().updateNotification(liveId, {
+        title: "Downloading update",
         message: <DownloadProgress percent={info.percent} />,
         inboxMessage: `Downloading update: ${Math.round(info.percent)}%`,
       });
@@ -94,31 +148,51 @@ export function useUpdateListener(suppressToasts = false): void {
         pendingUpdateRef.current = { version: info.version, downloaded: true };
         return;
       }
-      if (toastIdRef.current) {
-        useNotificationStore.getState().updateNotification(toastIdRef.current, {
+      const liveId = findLiveUpdateToastId();
+      if (liveId) {
+        // Stage transition: clear the Available-stage onDismiss so dismissing
+        // the Update Ready toast does not start the 24h Available cooldown.
+        // The user still needs to be re-reminded about the pending install.
+        useNotificationStore.getState().updateNotification(liveId, {
           type: "success",
-          title: "Update Ready",
+          title: "Update ready",
           message: `Version ${info.version} is ready to install.`,
           inboxMessage: `Version ${info.version} ready to install`,
           duration: 0,
           dismissed: false,
+          onDismiss: undefined,
           action: {
-            label: "Restart to Update",
-            onClick: () => window.electron?.update?.quitAndInstall(),
+            label: "Restart to update",
+            onClick: () => {
+              const promise = window.electron?.update?.quitAndInstall();
+              if (promise) {
+                safeFireAndForget(promise, { context: "Quit and install update" });
+              }
+            },
           },
         });
       } else {
-        // Quiet period was active when update-available fired — create fresh toast
-        toastIdRef.current = useNotificationStore.getState().addNotification({
+        // Either the quiet period was active when update-available fired, or
+        // the user dismissed the "Available" toast. Either way, the
+        // "Downloaded" stage is a distinct notification and must not be
+        // swallowed by the Available-stage cooldown — create a fresh toast.
+        notify({
           type: "success",
-          title: "Update Ready",
+          title: "Update ready",
           message: `Version ${info.version} is ready to install.`,
           inboxMessage: `Version ${info.version} ready to install`,
           priority: "high",
+          urgent: true,
           duration: 0,
+          correlationId: UPDATE_CORRELATION_ID,
           action: {
-            label: "Restart to Update",
-            onClick: () => window.electron?.update?.quitAndInstall(),
+            label: "Restart to update",
+            onClick: () => {
+              const promise = window.electron?.update?.quitAndInstall();
+              if (promise) {
+                safeFireAndForget(promise, { context: "Quit and install update" });
+              }
+            },
           },
         });
       }

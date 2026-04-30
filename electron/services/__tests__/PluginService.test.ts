@@ -1,22 +1,59 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
 
+const appMock = vi.hoisted(() => ({
+  getVersion: vi.fn(() => "0.0.0"),
+}));
+const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+
+vi.mock("electron", () => ({
+  app: appMock,
+}));
+vi.mock("../../ipc/utils.js", () => ({
+  broadcastToRenderer: broadcastToRendererMock,
+}));
 vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
   registerPanelKind: vi.fn(),
+  unregisterPluginPanelKinds: vi.fn(),
 }));
 vi.mock("../../../shared/config/toolbarButtonRegistry.js", () => ({
   registerToolbarButton: vi.fn(),
+  unregisterPluginToolbarButtons: vi.fn(),
 }));
 vi.mock("../pluginMenuRegistry.js", () => ({
   registerPluginMenuItem: vi.fn(),
+  unregisterPluginMenuItems: vi.fn(),
 }));
 
 import { PluginService } from "../PluginService.js";
-import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
-import { registerToolbarButton } from "../../../shared/config/toolbarButtonRegistry.js";
-import { registerPluginMenuItem } from "../pluginMenuRegistry.js";
+import { PluginManifestSchema } from "../../schemas/plugin.js";
+import {
+  BUILT_IN_PLUGIN_PERMISSIONS,
+  type PluginIpcContext,
+} from "../../../shared/types/plugin.js";
+import {
+  registerPanelKind,
+  unregisterPluginPanelKinds,
+} from "../../../shared/config/panelKindRegistry.js";
+import {
+  registerToolbarButton,
+  unregisterPluginToolbarButtons,
+} from "../../../shared/config/toolbarButtonRegistry.js";
+import { registerPluginMenuItem, unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
+import { CHANNELS } from "../../ipc/channels.js";
+
+function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
+  return {
+    projectId: null,
+    worktreeId: null,
+    webContentsId: 0,
+    pluginId,
+    ...overrides,
+  };
+}
 
 let tmpDir: string;
 
@@ -36,6 +73,186 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
+describe("PluginManifestSchema name validation", () => {
+  const validBase = { version: "1.0.0" };
+  const sixtyFourCharName = `a.${"b".repeat(62)}`; // 1 + 1 + 62 = 64 chars
+  const sixtyFiveCharName = `a.${"b".repeat(63)}`; // 1 + 1 + 63 = 65 chars
+
+  it.each([
+    "acme.linear-context",
+    "a.b",
+    "daintreehq.dev-tools",
+    "daintree-hq.my-cool-plugin",
+    "acme.good-1",
+    sixtyFourCharName,
+  ])("accepts scoped name %j", (name) => {
+    const result = PluginManifestSchema.safeParse({ name, ...validBase });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    "linear-context",
+    "test-plugin",
+    "Acme.linear-context",
+    "acme.Linear",
+    "acme..tools",
+    ".acme.tools",
+    "acme.tools.",
+    "acme.team.tools",
+    "acme/tools",
+    "acme_tools",
+    "acme.-foo",
+    "acme.foo-",
+    "-acme.foo",
+    "---.foo",
+    "acme.---",
+    " acme.foo",
+    "acme.foo ",
+    "acme.foo\n",
+    sixtyFiveCharName,
+    "",
+  ])("rejects unscoped or malformed name %j", (name) => {
+    const result = PluginManifestSchema.safeParse({ name, ...validBase });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path[0] === "name")).toBe(true);
+    }
+  });
+
+  it("rejection includes an explanatory error message", () => {
+    const result = PluginManifestSchema.safeParse({ name: "bare-plugin", ...validBase });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const nameIssue = result.error.issues.find((i) => i.path[0] === "name");
+      expect(nameIssue?.message).toContain("publisher.name");
+    }
+  });
+});
+
+describe("PluginManifestSchema permissions field", () => {
+  const validBase = { name: "acme.test", version: "1.0.0" };
+
+  it("defaults to empty array when omitted", () => {
+    const result = PluginManifestSchema.safeParse(validBase);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.permissions).toEqual([]);
+    }
+  });
+
+  it("accepts an empty permissions array", () => {
+    const result = PluginManifestSchema.safeParse({ ...validBase, permissions: [] });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.permissions).toEqual([]);
+    }
+  });
+
+  it("accepts built-in permission strings", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      permissions: ["fs:project-read", "network:fetch", "agent:invoke"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.permissions).toEqual(["fs:project-read", "network:fetch", "agent:invoke"]);
+    }
+  });
+
+  it("rejects custom (non-built-in) permission strings", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      permissions: ["custom:my-perm", "org.specific:do-thing"],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path[0] === "permissions")).toBe(true);
+    }
+  });
+
+  it("rejects empty string in permissions array", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      permissions: ["fs:project-read", ""],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path[0] === "permissions")).toBe(true);
+    }
+  });
+
+  it("rejects whitespace-padded permission strings (no implicit trim)", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      permissions: ["  fs:project-read  "],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path[0] === "permissions")).toBe(true);
+    }
+  });
+
+  it("rejects whitespace-only permission strings", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      permissions: ["   "],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects permission strings containing newline characters", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      permissions: ["fs:project-read\n"],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("BUILT_IN_PLUGIN_PERMISSIONS contains all documented capabilities", () => {
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("fs:project-read");
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("fs:project-write");
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("fs:user-data-read");
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("fs:user-data-write");
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("network:fetch");
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("agent:invoke");
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("agent:read");
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("git:read");
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("git:write");
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("clipboard:read");
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("clipboard:write");
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("shell:exec");
+  });
+
+  it("BUILT_IN_PLUGIN_PERMISSIONS has exactly 12 unique entries", () => {
+    expect(BUILT_IN_PLUGIN_PERMISSIONS).toHaveLength(12);
+    expect(new Set(BUILT_IN_PLUGIN_PERMISSIONS).size).toBe(12);
+  });
+
+  it("rejects null permissions value", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      permissions: null,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects scalar (non-array) permissions value", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      permissions: "git:read",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-string elements in permissions array", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      permissions: [1, "git:read"],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("PluginService", () => {
   it("returns empty list when plugins directory does not exist", async () => {
     const service = new PluginService(path.join(tmpDir, "nonexistent"));
@@ -51,7 +268,7 @@ describe("PluginService", () => {
 
   it("loads a valid plugin and registers panel kinds", async () => {
     await writePlugin("test-plugin", {
-      name: "test-plugin",
+      name: "acme.test-plugin",
       version: "1.0.0",
       displayName: "Test Plugin",
       contributes: {
@@ -71,13 +288,13 @@ describe("PluginService", () => {
 
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
-    expect(plugins[0].manifest.name).toBe("test-plugin");
+    expect(plugins[0].manifest.name).toBe("acme.test-plugin");
     expect(plugins[0].manifest.displayName).toBe("Test Plugin");
     expect(plugins[0].dir).toBe(path.join(tmpDir, "test-plugin"));
 
     expect(registerPanelKind).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "test-plugin.viewer",
+        id: "acme.test-plugin.viewer",
         name: "Test Viewer",
         iconId: "eye",
         color: "#ff0000",
@@ -85,7 +302,7 @@ describe("PluginService", () => {
         canRestart: false,
         canConvert: false,
         showInPalette: true,
-        extensionId: "test-plugin",
+        extensionId: "acme.test-plugin",
       })
     );
   });
@@ -120,9 +337,9 @@ describe("PluginService", () => {
   });
 
   it("loads multiple plugins and skips invalid ones", async () => {
-    await writePlugin("good-1", { name: "good-1", version: "1.0.0" });
+    await writePlugin("good-1", { name: "acme.good-1", version: "1.0.0" });
     await writePlugin("bad", { version: "1.0.0" }); // missing name
-    await writePlugin("good-2", { name: "good-2", version: "2.0.0" });
+    await writePlugin("good-2", { name: "acme.good-2", version: "2.0.0" });
 
     const service = new PluginService(tmpDir);
     await service.initialize();
@@ -130,11 +347,11 @@ describe("PluginService", () => {
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(2);
     const names = plugins.map((p) => p.manifest.name).sort();
-    expect(names).toEqual(["good-1", "good-2"]);
+    expect(names).toEqual(["acme.good-1", "acme.good-2"]);
   });
 
   it("is idempotent — second initialize is a no-op", async () => {
-    await writePlugin("test-plugin", { name: "test-plugin", version: "1.0.0" });
+    await writePlugin("test-plugin", { name: "acme.test-plugin", version: "1.0.0" });
 
     const service = new PluginService(tmpDir);
     await service.initialize();
@@ -146,7 +363,7 @@ describe("PluginService", () => {
 
   it("namespaces panel IDs as pluginName.panelId", async () => {
     await writePlugin("my-plugin", {
-      name: "my-plugin",
+      name: "acme.my-plugin",
       version: "1.0.0",
       contributes: {
         panels: [
@@ -161,19 +378,18 @@ describe("PluginService", () => {
 
     expect(registerPanelKind).toHaveBeenCalledTimes(2);
     expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "my-plugin.viewer" })
+      expect.objectContaining({ id: "acme.my-plugin.viewer" })
     );
     expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "my-plugin.editor" })
+      expect.objectContaining({ id: "acme.my-plugin.editor" })
     );
   });
 
   it("rejects main entry paths that escape the plugin directory", async () => {
     await writePlugin("escape-test", {
-      name: "escape-test",
+      name: "acme.escape-test",
       version: "1.0.0",
       main: "../evil.js",
-      renderer: "dist/renderer.js",
     });
 
     const service = new PluginService(tmpDir);
@@ -181,34 +397,13 @@ describe("PluginService", () => {
 
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
-    // Valid renderer should be resolved, but escaping main should not
-    expect(plugins[0].resolvedRenderer).toBe(
-      path.join(tmpDir, "escape-test", "dist", "renderer.js")
-    );
     // The plugin loads but main is silently rejected (no import attempted)
     expect(plugins[0].manifest.main).toBe("../evil.js");
   });
 
-  it("resolves valid renderer entry path", async () => {
-    await writePlugin("renderer-test", {
-      name: "renderer-test",
-      version: "1.0.0",
-      renderer: "dist/renderer.js",
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const plugins = service.listPlugins();
-    expect(plugins).toHaveLength(1);
-    expect(plugins[0].resolvedRenderer).toBe(
-      path.join(tmpDir, "renderer-test", "dist", "renderer.js")
-    );
-  });
-
   it("does not include resolvedMain in listPlugins output", async () => {
     await writePlugin("main-test", {
-      name: "main-test",
+      name: "acme.main-test",
       version: "1.0.0",
       main: "dist/main.js",
     });
@@ -240,7 +435,7 @@ describe("PluginService", () => {
 
   it("rejects panel with invalid ID characters", async () => {
     await writePlugin("bad-panel", {
-      name: "bad-panel",
+      name: "acme.bad-panel",
       version: "1.0.0",
       contributes: {
         panels: [{ id: "../../hack", name: "Hack", iconId: "x", color: "#000" }],
@@ -252,22 +447,44 @@ describe("PluginService", () => {
     expect(service.listPlugins()).toEqual([]);
   });
 
-  it("warns on duplicate plugin names and keeps the last one", async () => {
-    await writePlugin("dir-a", { name: "same-name", version: "1.0.0", description: "first" });
-    await writePlugin("dir-b", { name: "same-name", version: "2.0.0", description: "second" });
+  it("rejects duplicate plugin names with error", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writePlugin("dir-a", {
+        name: "acme.same-name",
+        version: "1.0.0",
+        description: "first",
+      });
+      await writePlugin("dir-b", {
+        name: "acme.same-name",
+        version: "2.0.0",
+        description: "second",
+      });
 
-    const service = new PluginService(tmpDir);
-    await service.initialize();
+      const service = new PluginService(tmpDir);
+      await service.initialize();
 
-    const plugins = service.listPlugins();
-    expect(plugins).toHaveLength(1);
-    expect(plugins[0].manifest.name).toBe("same-name");
+      const plugins = service.listPlugins();
+      expect(plugins).toHaveLength(1);
+      // Initialize loads plugins concurrently via Promise.allSettled; the winner
+      // is whichever finishes first, which depends on fs.readFile completion
+      // order. The contract being tested is "first wins, duplicates rejected" —
+      // not which directory happens to win on a given filesystem.
+      const winner = plugins[0].manifest.description;
+      expect(winner === "first" || winner === "second").toBe(true);
+      const loser = winner === "first" ? "dir-b" : "dir-a";
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`Duplicate plugin name "acme.same-name" in ${loser}`)
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("allows retry after non-ENOENT initialize failure", async () => {
     const badRoot = path.join(tmpDir, "unreadable");
     await fs.mkdir(badRoot);
-    await writePlugin("good", { name: "good", version: "1.0.0" });
+    await writePlugin("good", { name: "acme.good", version: "1.0.0" });
 
     const service = new PluginService(tmpDir);
 
@@ -282,7 +499,7 @@ describe("PluginService", () => {
 
   it("registers toolbar buttons from plugin manifest", async () => {
     await writePlugin("toolbar-test", {
-      name: "toolbar-test",
+      name: "acme.toolbar-test",
       version: "1.0.0",
       contributes: {
         toolbarButtons: [
@@ -290,7 +507,7 @@ describe("PluginService", () => {
             id: "my-btn",
             label: "My Button",
             iconId: "puzzle",
-            actionId: "toolbar-test.doThing",
+            actionId: "acme.toolbar-test.doThing",
             priority: 4,
           },
         ],
@@ -302,19 +519,19 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "plugin.toolbar-test.my-btn",
+        id: "plugin.acme.toolbar-test.my-btn",
         label: "My Button",
         iconId: "puzzle",
-        actionId: "toolbar-test.doThing",
+        actionId: "acme.toolbar-test.doThing",
         priority: 4,
-        pluginId: "toolbar-test",
+        pluginId: "acme.toolbar-test",
       })
     );
   });
 
   it("uses default priority 3 when not specified in toolbar button", async () => {
     await writePlugin("default-priority", {
-      name: "default-priority",
+      name: "acme.default-priority",
       version: "1.0.0",
       contributes: {
         toolbarButtons: [
@@ -333,7 +550,7 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "plugin.default-priority.btn",
+        id: "plugin.acme.default-priority.btn",
         priority: 3,
       })
     );
@@ -341,13 +558,13 @@ describe("PluginService", () => {
 
   it("registers menu items from plugin manifest", async () => {
     await writePlugin("menu-test", {
-      name: "menu-test",
+      name: "acme.menu-test",
       version: "1.0.0",
       contributes: {
         menuItems: [
           {
             label: "Do Something",
-            actionId: "menu-test.doSomething",
+            actionId: "acme.menu-test.doSomething",
             location: "terminal",
           },
         ],
@@ -357,16 +574,16 @@ describe("PluginService", () => {
     const service = new PluginService(tmpDir);
     await service.initialize();
 
-    expect(registerPluginMenuItem).toHaveBeenCalledWith("menu-test", {
+    expect(registerPluginMenuItem).toHaveBeenCalledWith("acme.menu-test", {
       label: "Do Something",
-      actionId: "menu-test.doSomething",
+      actionId: "acme.menu-test.doSomething",
       location: "terminal",
     });
   });
 
   it("does not call toolbar/menu registration when no contributions", async () => {
     await writePlugin("empty-contribs", {
-      name: "empty-contribs",
+      name: "acme.empty-contribs",
       version: "1.0.0",
     });
 
@@ -382,89 +599,1500 @@ describe("Plugin IPC handler registration", () => {
   let service: PluginService;
 
   beforeEach(async () => {
-    await writePlugin("test-plugin", { name: "test-plugin", version: "1.0.0" });
+    await writePlugin("test-plugin", { name: "acme.test-plugin", version: "1.0.0" });
     service = new PluginService(tmpDir);
     await service.initialize();
   });
 
   it("registerHandler succeeds for a loaded plugin with valid channel", () => {
     const handler = vi.fn();
-    expect(() => service.registerHandler("test-plugin", "get-data", handler)).not.toThrow();
+    expect(() => service.registerHandler("acme.test-plugin", "get-data", handler)).not.toThrow();
   });
 
   it("registerHandler throws when pluginId is not loaded", () => {
-    expect(() => service.registerHandler("unknown-plugin", "get-data", vi.fn())).toThrow(
-      "Unknown plugin: unknown-plugin"
+    expect(() => service.registerHandler("acme.unknown-plugin", "get-data", vi.fn())).toThrow(
+      "Unknown plugin: acme.unknown-plugin"
     );
   });
 
   it("registerHandler throws when channel contains a colon", () => {
-    expect(() => service.registerHandler("test-plugin", "bad:channel", vi.fn())).toThrow(
+    expect(() => service.registerHandler("acme.test-plugin", "bad:channel", vi.fn())).toThrow(
       "Plugin channel must not contain colons: bad:channel"
     );
   });
 
   it("registerHandler throws when handler is not a function", () => {
     expect(() =>
-      service.registerHandler("test-plugin", "get-data", "not-a-function" as never)
+      service.registerHandler("acme.test-plugin", "get-data", "not-a-function" as never)
     ).toThrow("Plugin handler must be a function, got string");
   });
 
   it("dispatchHandler calls the registered handler and returns its result", async () => {
     const handler = vi.fn().mockResolvedValue({ value: 42 });
-    service.registerHandler("test-plugin", "get-data", handler);
+    service.registerHandler("acme.test-plugin", "get-data", handler);
 
-    const result = await service.dispatchHandler("test-plugin", "get-data", ["arg1", "arg2"]);
-    expect(handler).toHaveBeenCalledWith("arg1", "arg2");
+    const ctx = makeCtx("acme.test-plugin", { webContentsId: 7 });
+    const result = await service.dispatchHandler("acme.test-plugin", "get-data", ctx, [
+      "arg1",
+      "arg2",
+    ]);
+    expect(handler).toHaveBeenCalledWith(ctx, "arg1", "arg2");
     expect(result).toEqual({ value: 42 });
   });
 
+  it("dispatchHandler passes the context as the first argument to the handler", async () => {
+    const handler = vi.fn().mockResolvedValue("ok");
+    service.registerHandler("acme.test-plugin", "get-ctx", handler);
+
+    const ctx = makeCtx("acme.test-plugin", {
+      projectId: "p1",
+      worktreeId: "w1",
+      webContentsId: 42,
+    });
+    await service.dispatchHandler("acme.test-plugin", "get-ctx", ctx, ["x"]);
+    expect(handler.mock.calls[0][0]).toEqual(ctx);
+    expect(handler.mock.calls[0][1]).toBe("x");
+  });
+
   it("dispatchHandler throws when no handler is found", async () => {
-    await expect(service.dispatchHandler("test-plugin", "unknown", [])).rejects.toThrow(
-      "No plugin handler registered for test-plugin:unknown"
-    );
+    await expect(
+      service.dispatchHandler("acme.test-plugin", "unknown", makeCtx("acme.test-plugin"), [])
+    ).rejects.toThrow("No plugin handler registered for acme.test-plugin:unknown");
   });
 
   it("registering same (pluginId, channel) twice overwrites the handler", async () => {
     const handler1 = vi.fn().mockReturnValue("first");
     const handler2 = vi.fn().mockReturnValue("second");
-    service.registerHandler("test-plugin", "get-data", handler1);
-    service.registerHandler("test-plugin", "get-data", handler2);
+    service.registerHandler("acme.test-plugin", "get-data", handler1);
+    service.registerHandler("acme.test-plugin", "get-data", handler2);
 
-    const result = await service.dispatchHandler("test-plugin", "get-data", []);
+    const result = await service.dispatchHandler(
+      "acme.test-plugin",
+      "get-data",
+      makeCtx("acme.test-plugin"),
+      []
+    );
     expect(result).toBe("second");
     expect(handler1).not.toHaveBeenCalled();
   });
 
   it("removeHandlers removes all handlers for a plugin, leaving others intact", async () => {
-    await writePlugin("other-plugin", { name: "other-plugin", version: "1.0.0" });
+    await writePlugin("other-plugin", { name: "acme.other-plugin", version: "1.0.0" });
     const service2 = new PluginService(tmpDir);
     await service2.initialize();
 
-    service2.registerHandler("test-plugin", "ch-a", vi.fn().mockReturnValue("a"));
-    service2.registerHandler("test-plugin", "ch-b", vi.fn().mockReturnValue("b"));
-    service2.registerHandler("other-plugin", "ch-c", vi.fn().mockReturnValue("c"));
+    service2.registerHandler("acme.test-plugin", "ch-a", vi.fn().mockReturnValue("a"));
+    service2.registerHandler("acme.test-plugin", "ch-b", vi.fn().mockReturnValue("b"));
+    service2.registerHandler("acme.other-plugin", "ch-c", vi.fn().mockReturnValue("c"));
 
-    service2.removeHandlers("test-plugin");
+    service2.removeHandlers("acme.test-plugin");
 
-    await expect(service2.dispatchHandler("test-plugin", "ch-a", [])).rejects.toThrow();
-    await expect(service2.dispatchHandler("test-plugin", "ch-b", [])).rejects.toThrow();
-    expect(await service2.dispatchHandler("other-plugin", "ch-c", [])).toBe("c");
+    await expect(
+      service2.dispatchHandler("acme.test-plugin", "ch-a", makeCtx("acme.test-plugin"), [])
+    ).rejects.toThrow();
+    await expect(
+      service2.dispatchHandler("acme.test-plugin", "ch-b", makeCtx("acme.test-plugin"), [])
+    ).rejects.toThrow();
+    expect(
+      await service2.dispatchHandler("acme.other-plugin", "ch-c", makeCtx("acme.other-plugin"), [])
+    ).toBe("c");
   });
 
   it("hasPlugin returns true for loaded plugins and false otherwise", () => {
-    expect(service.hasPlugin("test-plugin")).toBe(true);
+    expect(service.hasPlugin("acme.test-plugin")).toBe(true);
     expect(service.hasPlugin("nonexistent")).toBe(false);
   });
 
   it("registerHandler throws for empty channel", () => {
-    expect(() => service.registerHandler("test-plugin", "", vi.fn())).not.toThrow();
+    expect(() => service.registerHandler("acme.test-plugin", "", vi.fn())).not.toThrow();
     // Empty channel is technically valid — no colons
   });
 
   it("dispatchHandler handles synchronous handlers", async () => {
-    service.registerHandler("test-plugin", "sync", () => "sync-result");
-    const result = await service.dispatchHandler("test-plugin", "sync", []);
+    service.registerHandler("acme.test-plugin", "sync", () => "sync-result");
+    const result = await service.dispatchHandler(
+      "acme.test-plugin",
+      "sync",
+      makeCtx("acme.test-plugin"),
+      []
+    );
     expect(result).toBe("sync-result");
+  });
+});
+
+describe("engines.daintree compatibility gate", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it("loads a plugin when app version satisfies engines.daintree", async () => {
+    await writePlugin("compatible", {
+      name: "acme.compatible",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a plugin when app version does not satisfy engines.daintree", async () => {
+    await writePlugin("incompatible", {
+      name: "acme.incompatible",
+      displayName: "Incompatible Plugin",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.8.0");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Plugin "acme.incompatible" requires Daintree ^0.7.0')
+    );
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(
+      CHANNELS.NOTIFICATION_SHOW_TOAST,
+      expect.objectContaining({
+        type: "error",
+        title: "Plugin incompatible",
+        message: expect.stringContaining("Incompatible Plugin"),
+      })
+    );
+  });
+
+  it("treats app prerelease versions as satisfying their release-series range", async () => {
+    await writePlugin("prerelease-compatible", {
+      name: "acme.prerelease-compatible",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.1-rc.1");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("loads plugins that omit engines.daintree with a warning", async () => {
+    await writePlugin("no-engines", { name: "acme.no-engines", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Plugin "acme.no-engines" does not declare engines.daintree')
+    );
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("loads plugins with empty engines object (daintree absent) with a warning", async () => {
+    await writePlugin("empty-engines", {
+      name: "acme.empty-engines",
+      version: "1.0.0",
+      engines: {},
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Plugin "acme.empty-engines" does not declare engines.daintree')
+    );
+  });
+
+  it("rejects manifests with an invalid semver range at schema level", async () => {
+    await writePlugin("bad-range", {
+      name: "acme.bad-range",
+      version: "1.0.0",
+      engines: { daintree: "not-a-range" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugins requiring a future major version", async () => {
+    await writePlugin("future", {
+      name: "acme.future",
+      version: "1.0.0",
+      engines: { daintree: "^1.0.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.1");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not attempt main import or register contributions for incompatible plugins", async () => {
+    await writePlugin("skip-side-effects", {
+      name: "acme.skip-side-effects",
+      version: "1.0.0",
+      main: "dist/main.js",
+      engines: { daintree: "^1.0.0" },
+      contributes: {
+        panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
+        toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "x.y" }],
+        menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.1");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(registerToolbarButton).not.toHaveBeenCalled();
+    expect(registerPluginMenuItem).not.toHaveBeenCalled();
+  });
+
+  it("loads only the compatible plugins in a mixed batch", async () => {
+    await writePlugin("good", {
+      name: "acme.good",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+    });
+    await writePlugin("bad", {
+      name: "acme.bad",
+      version: "1.0.0",
+      engines: { daintree: "^1.0.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const names = service.listPlugins().map((p) => p.manifest.name);
+    expect(names).toEqual(["acme.good"]);
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts the wildcard range '*'", async () => {
+    await writePlugin("wildcard", {
+      name: "acme.wildcard",
+      version: "1.0.0",
+      engines: { daintree: "*" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.1");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects whitespace-only range strings at the schema layer", async () => {
+    await writePlugin("whitespace-range", {
+      name: "acme.whitespace-range",
+      version: "1.0.0",
+      engines: { daintree: "   " },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an app prerelease that is below a non-prerelease range's lower bound", async () => {
+    await writePlugin("prerelease-too-early", {
+      name: "acme.prerelease-too-early",
+      version: "1.0.0",
+      engines: { daintree: ">=0.7.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.0-rc.1");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts an exact-version range when the app matches precisely", async () => {
+    await writePlugin("exact-match", {
+      name: "acme.exact-match",
+      version: "1.0.0",
+      engines: { daintree: "0.7.5" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an exact-version range when the app does not match", async () => {
+    await writePlugin("exact-mismatch", {
+      name: "acme.exact-mismatch",
+      version: "1.0.0",
+      engines: { daintree: "0.7.5" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.4");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("strict schema validation", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  it("rejects manifests with unknown fields like 'renderer'", async () => {
+    await writePlugin("bad-field", {
+      name: "acme.bad-field",
+      version: "1.0.0",
+      renderer: "dist/renderer.js",
+      engines: { daintree: "*" },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in bad-field"),
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "unrecognized_keys",
+          keys: ["renderer"],
+        }),
+      ])
+    );
+  });
+});
+
+describe("Plugin unload lifecycle", () => {
+  it("unloadPlugin calls all registry unregister functions for the plugin", async () => {
+    await writePlugin("unloadable", {
+      name: "acme.unloadable",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+        toolbarButtons: [{ id: "btn", label: "Btn", iconId: "icon", actionId: "x.y" }],
+        menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.hasPlugin("acme.unloadable")).toBe(true);
+
+    service.unloadPlugin("acme.unloadable");
+
+    expect(unregisterPluginMenuItems).toHaveBeenCalledWith("acme.unloadable");
+    expect(unregisterPluginToolbarButtons).toHaveBeenCalledWith("acme.unloadable");
+    expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("acme.unloadable");
+  });
+
+  it("unloadPlugin removes the plugin from hasPlugin and listPlugins", async () => {
+    await writePlugin("goodbye", { name: "acme.goodbye", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    expect(service.hasPlugin("acme.goodbye")).toBe(true);
+
+    service.unloadPlugin("acme.goodbye");
+
+    expect(service.hasPlugin("acme.goodbye")).toBe(false);
+    expect(service.listPlugins()).toEqual([]);
+  });
+
+  it("unloadPlugin removes IPC handlers registered for the plugin", async () => {
+    await writePlugin("handler-host", { name: "acme.handler-host", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    service.registerHandler("acme.handler-host", "ping", () => "pong");
+    expect(
+      await service.dispatchHandler("acme.handler-host", "ping", makeCtx("acme.handler-host"), [])
+    ).toBe("pong");
+
+    service.unloadPlugin("acme.handler-host");
+
+    await expect(
+      service.dispatchHandler("acme.handler-host", "ping", makeCtx("acme.handler-host"), [])
+    ).rejects.toThrow("No plugin handler registered for acme.handler-host:ping");
+  });
+
+  it("unloadPlugin is a no-op when the plugin is not loaded", async () => {
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(() => service.unloadPlugin("acme.never-loaded")).not.toThrow();
+    expect(unregisterPluginMenuItems).not.toHaveBeenCalled();
+    expect(unregisterPluginToolbarButtons).not.toHaveBeenCalled();
+    expect(unregisterPluginPanelKinds).not.toHaveBeenCalled();
+  });
+
+  it("unloadPlugin is idempotent across repeated calls", async () => {
+    await writePlugin("twice", { name: "acme.twice", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    service.unloadPlugin("acme.twice");
+    expect(service.hasPlugin("acme.twice")).toBe(false);
+
+    // Second call finds nothing to remove and stays silent.
+    service.unloadPlugin("acme.twice");
+    expect(unregisterPluginMenuItems).toHaveBeenCalledTimes(1);
+    expect(unregisterPluginToolbarButtons).toHaveBeenCalledTimes(1);
+    expect(unregisterPluginPanelKinds).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers plugin before importing main so sync host-API calls see it as loaded", async () => {
+    const pluginDir = path.join(tmpDir, "sync-init");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.sync-init",
+        version: "1.0.0",
+        main: "main.mjs",
+      })
+    );
+    // Plugin main module calls a global hook synchronously during import to
+    // observe whether its own pluginId is already registered. Proxies the
+    // real-world pattern where a host API call depends on this.plugins.has().
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__pluginInitObserved = globalThis.__pluginInitCheck('acme.sync-init');"
+    );
+
+    const service = new PluginService(tmpDir);
+    (globalThis as { __pluginInitCheck?: (name: string) => boolean }).__pluginInitCheck = (name) =>
+      service.hasPlugin(name);
+
+    try {
+      await service.initialize();
+      expect((globalThis as { __pluginInitObserved?: boolean }).__pluginInitObserved).toBe(true);
+    } finally {
+      delete (globalThis as { __pluginInitCheck?: unknown }).__pluginInitCheck;
+      delete (globalThis as { __pluginInitObserved?: unknown }).__pluginInitObserved;
+    }
+  });
+
+  it("supports load → unload → reload lifecycle via fresh service instance", async () => {
+    await writePlugin("lifecycle", {
+      name: "acme.lifecycle",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+      },
+    });
+
+    const first = new PluginService(tmpDir);
+    await first.initialize();
+    expect(registerPanelKind).toHaveBeenCalledTimes(1);
+
+    first.unloadPlugin("acme.lifecycle");
+    expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("acme.lifecycle");
+    expect(first.hasPlugin("acme.lifecycle")).toBe(false);
+
+    // A fresh service instance re-reads the plugin directory and re-registers.
+    vi.clearAllMocks();
+    const second = new PluginService(tmpDir);
+    await second.initialize();
+
+    expect(second.hasPlugin("acme.lifecycle")).toBe(true);
+    expect(registerPanelKind).toHaveBeenCalledTimes(1);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.lifecycle.viewer", extensionId: "acme.lifecycle" })
+    );
+  });
+});
+
+type CreateHostShape = (pluginId: string) => {
+  host: {
+    pluginId: string;
+    registerHandler: (channel: string, handler: (...args: unknown[]) => unknown) => void;
+    broadcastToRenderer: (channel: string, payload: unknown) => void;
+  };
+  revoke: () => void;
+};
+
+describe("createHost (plugin activation API)", () => {
+  it("host.registerHandler delegates with the plugin's own namespace", async () => {
+    await writePlugin("host-test", { name: "acme.host-test", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.host-test"
+    );
+
+    expect(host.pluginId).toBe("acme.host-test");
+
+    const handler = vi.fn().mockReturnValue("ok");
+    host.registerHandler("probe", handler);
+
+    const ctx = makeCtx("acme.host-test");
+    const result = await service.dispatchHandler("acme.host-test", "probe", ctx, ["a"]);
+    expect(handler).toHaveBeenCalledWith(ctx, "a");
+    expect(result).toBe("ok");
+  });
+
+  it("host.broadcastToRenderer namespaces channels as plugin:{pluginId}:{channel}", async () => {
+    await writePlugin("bcast-test", { name: "acme.bcast-test", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.bcast-test"
+    );
+
+    broadcastToRendererMock.mockClear();
+    host.broadcastToRenderer("status", { ok: true });
+    expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.bcast-test:status", {
+      ok: true,
+    });
+  });
+
+  it("host.broadcastToRenderer rejects channels containing colons", async () => {
+    await writePlugin("bcast-reject", { name: "acme.bcast-reject", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.bcast-reject"
+    );
+
+    expect(() => host.broadcastToRenderer("bad:channel", null)).toThrow(
+      "Plugin broadcast channel must be a string without colons"
+    );
+  });
+
+  it("revoked host rejects registerHandler and broadcastToRenderer calls", async () => {
+    await writePlugin("revoke-test", { name: "acme.revoke-test", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host, revoke } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.revoke-test"
+    );
+
+    revoke();
+
+    expect(() => host.registerHandler("x", () => undefined)).toThrow(
+      /host revoked: registerHandler/
+    );
+    expect(() => host.broadcastToRenderer("x", null)).toThrow(/host revoked: broadcastToRenderer/);
+  });
+});
+
+describe("Plugin action registry", () => {
+  let service: PluginService;
+
+  const validContribution = () => ({
+    id: "acme.my-plugin.doThing",
+    title: "Do Thing",
+    description: "Does a thing",
+    category: "plugin",
+    kind: "command" as const,
+    danger: "safe" as const,
+  });
+
+  beforeEach(async () => {
+    await writePlugin("test-plugin", { name: "acme.my-plugin", version: "1.0.0" });
+    service = new PluginService(tmpDir);
+    await service.initialize();
+    broadcastToRendererMock.mockClear();
+  });
+
+  it("registerPluginAction adds a descriptor and broadcasts the full list", () => {
+    service.registerPluginAction("acme.my-plugin", validContribution());
+
+    const actions = service.listPluginActions();
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      pluginId: "acme.my-plugin",
+      id: "acme.my-plugin.doThing",
+      title: "Do Thing",
+      category: "plugin",
+      kind: "command",
+      danger: "safe",
+    });
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:actions-changed",
+      payload: { actions },
+    });
+  });
+
+  it("registerPluginAction throws when the plugin is not loaded", () => {
+    expect(() => service.registerPluginAction("acme.unknown", validContribution())).toThrow(
+      /Unknown plugin/
+    );
+  });
+
+  it("registerPluginAction throws for ids not prefixed with the plugin id", () => {
+    expect(() =>
+      service.registerPluginAction("acme.my-plugin", {
+        ...validContribution(),
+        id: "other.plugin.doThing",
+      })
+    ).toThrow(/must be prefixed with the plugin's own id/);
+  });
+
+  it("registerPluginAction throws for malformed ids", () => {
+    for (const badId of ["no-dot", "Acme.UpperCase", "", "acme..double"]) {
+      expect(() =>
+        service.registerPluginAction("acme.my-plugin", {
+          ...validContribution(),
+          id: badId,
+        })
+      ).toThrow(/invalid/i);
+    }
+  });
+
+  it("registerPluginAction throws when id has no suffix after the pluginId", () => {
+    expect(() =>
+      service.registerPluginAction("acme.my-plugin", {
+        ...validContribution(),
+        id: "acme.my-plugin",
+      })
+    ).toThrow(/must be prefixed with the plugin's own id/);
+  });
+
+  it("registerPluginAction rejects restricted danger", () => {
+    expect(() =>
+      service.registerPluginAction("acme.my-plugin", {
+        ...validContribution(),
+        danger: "restricted" as unknown as "safe",
+      })
+    ).toThrow(/invalid danger/i);
+  });
+
+  it("registerPluginAction rejects unknown kind", () => {
+    expect(() =>
+      service.registerPluginAction("acme.my-plugin", {
+        ...validContribution(),
+        kind: "navigation" as unknown as "command",
+      })
+    ).toThrow(/invalid kind/i);
+  });
+
+  it("registerPluginAction throws on duplicate id", () => {
+    service.registerPluginAction("acme.my-plugin", validContribution());
+    expect(() => service.registerPluginAction("acme.my-plugin", validContribution())).toThrow(
+      /already registered/
+    );
+  });
+
+  it("unregisterPluginAction removes a single action and broadcasts", () => {
+    service.registerPluginAction("acme.my-plugin", validContribution());
+    broadcastToRendererMock.mockClear();
+
+    service.unregisterPluginAction("acme.my-plugin", "acme.my-plugin.doThing");
+
+    expect(service.listPluginActions()).toEqual([]);
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:actions-changed",
+      payload: { actions: [] },
+    });
+  });
+
+  it("unregisterPluginAction is a silent no-op for unknown ids", () => {
+    service.unregisterPluginAction("acme.my-plugin", "acme.my-plugin.missing");
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("unregisterPluginAction does not remove actions owned by a different plugin", async () => {
+    await writePlugin("other", { name: "acme.other", version: "1.0.0" });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.my-plugin", validContribution());
+
+    svc.unregisterPluginAction("acme.other", "acme.my-plugin.doThing");
+    expect(svc.listPluginActions()).toHaveLength(1);
+  });
+
+  it("unloadPlugin bulk-removes plugin actions", async () => {
+    service.registerPluginAction("acme.my-plugin", validContribution());
+    service.registerPluginAction("acme.my-plugin", {
+      ...validContribution(),
+      id: "acme.my-plugin.other",
+    });
+    expect(service.listPluginActions()).toHaveLength(2);
+
+    broadcastToRendererMock.mockClear();
+    service.unloadPlugin("acme.my-plugin");
+
+    expect(service.listPluginActions()).toEqual([]);
+    // Exactly one broadcast for the bulk removal (no per-action spam)
+    const broadcasts = broadcastToRendererMock.mock.calls.filter(
+      (call: unknown[]) =>
+        call[0] === CHANNELS.EVENTS_PUSH &&
+        typeof call[1] === "object" &&
+        call[1] !== null &&
+        (call[1] as { name?: unknown }).name === "plugin:actions-changed"
+    );
+    expect(broadcasts).toHaveLength(1);
+  });
+
+  it("descriptor keeps a defensive copy of keywords", () => {
+    const keywords = ["foo", "bar"];
+    service.registerPluginAction("acme.my-plugin", {
+      ...validContribution(),
+      keywords,
+    });
+    keywords.push("mutated");
+
+    const [descriptor] = service.listPluginActions();
+    expect(descriptor.keywords).toEqual(["foo", "bar"]);
+  });
+
+  it("descriptor keeps a defensive copy of inputSchema", () => {
+    const inputSchema: Record<string, unknown> = { type: "object", properties: { a: 1 } };
+    service.registerPluginAction("acme.my-plugin", {
+      ...validContribution(),
+      inputSchema,
+    });
+    (inputSchema as Record<string, unknown>).properties = { a: 999 };
+
+    const [descriptor] = service.listPluginActions();
+    expect(descriptor.inputSchema).toEqual({ type: "object", properties: { a: 1 } });
+  });
+});
+
+describe("permissions declaration logging", () => {
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it("logs declared permissions when plugin has permissions", async () => {
+    await writePlugin("perm-plugin", {
+      name: "acme.perm-plugin",
+      version: "1.0.0",
+      permissions: ["fs:project-read", "network:fetch"],
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Plugin "acme.perm-plugin" declares permissions: fs:project-read, network:fetch'
+      )
+    );
+  });
+
+  it("does not log when plugin has no permissions", async () => {
+    await writePlugin("no-perms", {
+      name: "acme.no-perms",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    const permLogs = logSpy.mock.calls.filter(
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+    );
+    expect(permLogs).toHaveLength(0);
+  });
+
+  it("does not log permissions for incompatible plugins", async () => {
+    await writePlugin("incompatible-perms", {
+      name: "acme.incompatible-perms",
+      version: "1.0.0",
+      permissions: ["fs:project-read"],
+      engines: { daintree: "^1.0.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    const permLogs = logSpy.mock.calls.filter(
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+    );
+    expect(permLogs).toHaveLength(0);
+  });
+
+  it("includes permissions in loaded plugin manifest", async () => {
+    await writePlugin("with-perms", {
+      name: "acme.with-perms",
+      version: "1.0.0",
+      permissions: ["git:read", "agent:invoke"],
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins[0].manifest.permissions).toEqual(["git:read", "agent:invoke"]);
+  });
+
+  it("defaults permissions to empty array for plugins without the field", async () => {
+    await writePlugin("no-field", {
+      name: "acme.no-field",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins[0].manifest.permissions).toEqual([]);
+  });
+
+  it("rejects plugins that declare unknown permissions and does not log them", async () => {
+    await writePlugin("unknown-perm", {
+      name: "acme.unknown-perm",
+      version: "1.0.0",
+      permissions: ["shell:exec", "invalid:perm"],
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    const permLogs = logSpy.mock.calls.filter(
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+    );
+    expect(permLogs).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest"),
+      expect.any(Array)
+    );
+  });
+
+  it("rejects plugins with newline characters in permission strings", async () => {
+    await writePlugin("padded-perm", {
+      name: "acme.padded-perm",
+      version: "1.0.0",
+      permissions: ["fs:project-read\n", "agent:invoke\r"],
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    const permLogs = logSpy.mock.calls.filter(
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+    );
+    expect(permLogs).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest"),
+      expect.any(Array)
+    );
+  });
+
+  it("rejects plugins where any one permission in a mixed array is invalid", async () => {
+    await writePlugin("mixed-perm", {
+      name: "acme.mixed-perm",
+      version: "1.0.0",
+      permissions: ["fs:project-read", "invalid:perm", "git:read"],
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    const permLogs = logSpy.mock.calls.filter(
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+    );
+    expect(permLogs).toHaveLength(0);
+  });
+});
+
+describe("Plugin worktree host API", () => {
+  type WorktreeSnapshotLike = {
+    id: string;
+    worktreeId: string;
+    path: string;
+    name: string;
+    isCurrent: boolean;
+    branch?: string;
+    aheadCount?: number;
+    issueNumber?: number;
+    lastActivityTimestamp?: number | null;
+    _secret?: string;
+  };
+
+  function mkSnap(over: Partial<WorktreeSnapshotLike> & { id: string }): WorktreeSnapshotLike {
+    return {
+      worktreeId: over.id,
+      path: `/tmp/${over.id}`,
+      name: over.id,
+      isCurrent: false,
+      ...over,
+    };
+  }
+
+  function createMockClient(initial: WorktreeSnapshotLike[] = []) {
+    const emitter = new EventEmitter();
+    let states = initial;
+    const getAllStatesAsync = vi.fn(() => Promise.resolve(states));
+    const client = Object.assign(emitter, {
+      getAllStatesAsync,
+      setStates: (next: WorktreeSnapshotLike[]) => {
+        states = next;
+      },
+    });
+    return client;
+  }
+
+  type HostWithWorktree = {
+    pluginId: string;
+    registerHandler: (c: string, h: (...args: unknown[]) => unknown) => void;
+    broadcastToRenderer: (c: string, p: unknown) => void;
+    getActiveWorktree: () => Promise<unknown>;
+    getWorktrees: () => Promise<unknown[]>;
+    onDidChangeActiveWorktree: (cb: (s: unknown) => void) => () => void;
+    onDidChangeWorktrees: (cb: (list: unknown[]) => void) => () => void;
+  };
+
+  async function setup(snapshots: WorktreeSnapshotLike[] = []) {
+    await writePlugin("wt-host", { name: "acme.wt-host", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const client = createMockClient(snapshots);
+    (service as unknown as { setWorkspaceClient: (c: unknown) => void }).setWorkspaceClient(client);
+    const { host, revoke } = (
+      service as unknown as {
+        createHost: (id: string) => {
+          host: HostWithWorktree;
+          revoke: () => void;
+        };
+      }
+    ).createHost("acme.wt-host");
+    return { service, client, host, revoke };
+  }
+
+  it("getActiveWorktree returns a frozen projection of the isCurrent snapshot", async () => {
+    const { host } = await setup([
+      mkSnap({ id: "a", isCurrent: false }),
+      mkSnap({ id: "b", isCurrent: true, branch: "feature/x", _secret: "leak" }),
+    ]);
+
+    const active = (await host.getActiveWorktree()) as Record<string, unknown> | null;
+    expect(active).not.toBeNull();
+    expect(active!.id).toBe("b");
+    expect(active!.branch).toBe("feature/x");
+    // Internal fields must not leak through the projection
+    expect("_secret" in active!).toBe(false);
+    expect(Object.isFrozen(active)).toBe(true);
+  });
+
+  it("getActiveWorktree returns null when no worktree is current", async () => {
+    const { host } = await setup([mkSnap({ id: "a", isCurrent: false })]);
+    expect(await host.getActiveWorktree()).toBeNull();
+  });
+
+  it("getWorktrees returns frozen snapshots for every worktree", async () => {
+    const { host } = await setup([
+      mkSnap({ id: "a", isCurrent: false }),
+      mkSnap({ id: "b", isCurrent: true }),
+    ]);
+    const list = (await host.getWorktrees()) as Array<Record<string, unknown>>;
+    expect(list).toHaveLength(2);
+    expect(list.map((s) => s.id).sort()).toEqual(["a", "b"]);
+    expect(list.every((s) => Object.isFrozen(s))).toBe(true);
+  });
+
+  it("getActiveWorktree returns null when WorkspaceClient is not wired", async () => {
+    await writePlugin("wt-nowsc", { name: "acme.wt-nowsc", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    // Intentionally skip setWorkspaceClient
+    const { host } = (
+      service as unknown as {
+        createHost: (id: string) => { host: HostWithWorktree; revoke: () => void };
+      }
+    ).createHost("acme.wt-nowsc");
+    expect(await host.getActiveWorktree()).toBeNull();
+    expect(await host.getWorktrees()).toEqual([]);
+  });
+
+  it("onDidChangeActiveWorktree fires with the new active snapshot", async () => {
+    const snaps = [mkSnap({ id: "a", isCurrent: true })];
+    const { host, client, revoke } = await setup(snaps);
+
+    // Subscribe during "activate" window (before revoke), as a real plugin would.
+    const cb = vi.fn();
+    const dispose = host.onDidChangeActiveWorktree(cb);
+    revoke();
+
+    client.setStates([mkSnap({ id: "b", isCurrent: true, branch: "dev" })]);
+    client.emit("worktree-activated", { worktreeId: "b", projectPath: "/p" });
+
+    await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(1));
+    const arg = cb.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.id).toBe("b");
+    expect(arg.branch).toBe("dev");
+
+    dispose();
+    client.emit("worktree-activated", { worktreeId: "a", projectPath: "/p" });
+    // Ensure no additional calls after dispose
+    await new Promise((r) => setTimeout(r, 10));
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("onDidChangeWorktrees fires with the full list on worktree-update", async () => {
+    const { host, client, revoke } = await setup([
+      mkSnap({ id: "a", isCurrent: true }),
+      mkSnap({ id: "b", isCurrent: false }),
+    ]);
+
+    const cb = vi.fn();
+    host.onDidChangeWorktrees(cb);
+    revoke();
+
+    client.emit("worktree-update", {
+      worktree: mkSnap({ id: "a", isCurrent: true }),
+      projectPath: "/p",
+    });
+
+    await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(1));
+    const list = cb.mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(list.map((s) => s.id).sort()).toEqual(["a", "b"]);
+  });
+
+  it("disposers are idempotent and only remove the matching listener", async () => {
+    const { host, client, revoke } = await setup();
+
+    const cbA = vi.fn();
+    const cbB = vi.fn();
+    const disposeA = host.onDidChangeActiveWorktree(cbA);
+    host.onDidChangeActiveWorktree(cbB);
+    revoke();
+
+    disposeA();
+    disposeA(); // no-op
+
+    client.setStates([mkSnap({ id: "a", isCurrent: true })]);
+    client.emit("worktree-activated", { worktreeId: "a", projectPath: "/p" });
+    await vi.waitFor(() => expect(cbB).toHaveBeenCalledTimes(1));
+    expect(cbA).not.toHaveBeenCalled();
+  });
+
+  it("unloadPlugin flushes every worktree event listener for the plugin", async () => {
+    const { service, host, client, revoke } = await setup();
+
+    const cb1 = vi.fn();
+    const cb2 = vi.fn();
+    host.onDidChangeActiveWorktree(cb1);
+    host.onDidChangeWorktrees(cb2);
+    revoke();
+
+    expect(client.listenerCount("worktree-activated")).toBe(1);
+    expect(client.listenerCount("worktree-update")).toBe(1);
+
+    service.unloadPlugin("acme.wt-host");
+
+    expect(client.listenerCount("worktree-activated")).toBe(0);
+    expect(client.listenerCount("worktree-update")).toBe(0);
+
+    client.emit("worktree-activated", { worktreeId: "x", projectPath: "/p" });
+    client.emit("worktree-update", { worktree: mkSnap({ id: "x" }), projectPath: "/p" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(cb1).not.toHaveBeenCalled();
+    expect(cb2).not.toHaveBeenCalled();
+  });
+
+  it("registering an event subscription after revoke throws", async () => {
+    const { host, revoke } = await setup();
+
+    // Pre-revoke registration is allowed (this is the activate() window).
+    expect(() => host.onDidChangeActiveWorktree(() => {})).not.toThrow();
+
+    revoke();
+
+    // Post-revoke registration is rejected — simulates a plugin holding the
+    // host reference and trying to subscribe after activate() returned.
+    expect(() => host.onDidChangeActiveWorktree(() => {})).toThrow(/host revoked/);
+    expect(() => host.onDidChangeWorktrees(() => {})).toThrow(/host revoked/);
+  });
+
+  it("callbacks do not fire after unloadPlugin even if the client emits again", async () => {
+    const { service, host, client, revoke } = await setup();
+    const cb = vi.fn();
+    host.onDidChangeActiveWorktree(cb);
+    revoke();
+
+    service.unloadPlugin("acme.wt-host");
+
+    client.setStates([mkSnap({ id: "a", isCurrent: true })]);
+    client.emit("worktree-activated", { worktreeId: "a", projectPath: "/p" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("subscriptions registered before setWorkspaceClient replay against the new client", async () => {
+    await writePlugin("wt-boot", { name: "acme.wt-boot", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    // Intentionally do NOT set the workspace client yet — this simulates a
+    // plugin calling host.onDidChange* during its activate() on cold boot,
+    // before windowServices wires up WorkspaceClient.
+    const { host, revoke } = (
+      service as unknown as {
+        createHost: (id: string) => { host: HostWithWorktree; revoke: () => void };
+      }
+    ).createHost("acme.wt-boot");
+
+    const cb = vi.fn();
+    host.onDidChangeActiveWorktree(cb);
+    revoke();
+
+    // Now the client becomes available — subscriptions must be replayed.
+    const client = createMockClient([mkSnap({ id: "b", isCurrent: true, branch: "dev" })]);
+    (service as unknown as { setWorkspaceClient: (c: unknown) => void }).setWorkspaceClient(client);
+
+    expect(client.listenerCount("worktree-activated")).toBe(1);
+
+    client.emit("worktree-activated", { worktreeId: "b", projectPath: "/p" });
+    await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(1));
+    const arg = cb.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.id).toBe("b");
+  });
+
+  it("disposing a pending subscription before setWorkspaceClient stops replay", async () => {
+    await writePlugin("wt-boot2", { name: "acme.wt-boot2", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const { host, revoke } = (
+      service as unknown as {
+        createHost: (id: string) => { host: HostWithWorktree; revoke: () => void };
+      }
+    ).createHost("acme.wt-boot2");
+
+    const cb = vi.fn();
+    const dispose = host.onDidChangeActiveWorktree(cb);
+    revoke();
+    dispose();
+
+    const client = createMockClient([mkSnap({ id: "a", isCurrent: true })]);
+    (service as unknown as { setWorkspaceClient: (c: unknown) => void }).setWorkspaceClient(client);
+
+    expect(client.listenerCount("worktree-activated")).toBe(0);
+    client.emit("worktree-activated", { worktreeId: "a", projectPath: "/p" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("onDidChangeWorktrees fires on worktree-removed with the post-removal list", async () => {
+    const { host, client, revoke } = await setup([
+      mkSnap({ id: "a", isCurrent: true }),
+      mkSnap({ id: "b", isCurrent: false }),
+    ]);
+
+    const cb = vi.fn();
+    host.onDidChangeWorktrees(cb);
+    revoke();
+
+    client.setStates([mkSnap({ id: "a", isCurrent: true })]);
+    client.emit("worktree-removed", { worktreeId: "b", projectPath: "/p" });
+
+    await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(1));
+    const list = cb.mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(list.map((s) => s.id)).toEqual(["a"]);
+  });
+
+  it("onDidChangeWorktrees disposer stops both update and remove subscriptions", async () => {
+    const { host, client, revoke } = await setup([mkSnap({ id: "a", isCurrent: true })]);
+
+    const cb = vi.fn();
+    const dispose = host.onDidChangeWorktrees(cb);
+    revoke();
+    expect(client.listenerCount("worktree-update")).toBe(1);
+    expect(client.listenerCount("worktree-removed")).toBe(1);
+
+    dispose();
+    expect(client.listenerCount("worktree-update")).toBe(0);
+    expect(client.listenerCount("worktree-removed")).toBe(0);
+  });
+
+  it("plugin snapshot exposes exactly the documented allowlist fields", async () => {
+    const { host } = await setup([
+      mkSnap({
+        id: "a",
+        isCurrent: true,
+        branch: "main",
+        aheadCount: 1,
+        // A field that must NOT leak to plugins — the real WorktreeSnapshot
+        // has dozens of these; we sample one as a guard.
+        _secret: "leak-me",
+      }),
+    ]);
+
+    const active = (await host.getActiveWorktree()) as Record<string, unknown>;
+    expect(active).not.toBeNull();
+    const expected = [
+      "aheadCount",
+      "behindCount",
+      "branch",
+      "createdAt",
+      "id",
+      "isCurrent",
+      "isMainWorktree",
+      "issueNumber",
+      "issueTitle",
+      "lastActivityTimestamp",
+      "mood",
+      "name",
+      "path",
+      "prNumber",
+      "prState",
+      "prTitle",
+      "prUrl",
+      "worktreeId",
+    ];
+    expect(Object.keys(active).sort()).toEqual(expected);
+    expect("_secret" in active).toBe(false);
+  });
+});
+
+describe("reserved contribution point warnings", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it("accepts a contributes.views entry and logs a 'not yet implemented' warning", async () => {
+    await writePlugin("views", {
+      name: "acme.views",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        views: [
+          {
+            id: "main",
+            name: "Main",
+            componentPath: "./dist/view.js",
+            location: "panel",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Plugin "acme.views": contributes.views is not yet implemented')
+    );
+  });
+
+  it("accepts a contributes.mcpServers entry and logs a 'not yet implemented' warning", async () => {
+    await writePlugin("mcp", {
+      name: "acme.mcp",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        mcpServers: [
+          {
+            id: "linear",
+            name: "Linear MCP",
+            command: "node",
+            args: ["./server.js"],
+            env: { LINEAR_API_KEY: "secret" },
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Plugin "acme.mcp": contributes.mcpServers is not yet implemented')
+    );
+  });
+
+  it("does not warn about reserved points when the manifest omits them", async () => {
+    await writePlugin("plain", {
+      name: "acme.plain",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(warnMessages.some((m: string) => m.includes("contributes.views"))).toBe(false);
+    expect(warnMessages.some((m: string) => m.includes("contributes.mcpServers"))).toBe(false);
+  });
+
+  it("does not warn when reserved arrays are explicitly present but empty", async () => {
+    await writePlugin("explicit-empty", {
+      name: "acme.explicit-empty",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: { views: [], mcpServers: [] },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(warnMessages.some((m: string) => m.includes("contributes.views"))).toBe(false);
+    expect(warnMessages.some((m: string) => m.includes("contributes.mcpServers"))).toBe(false);
+  });
+
+  it("still processes other contributions when reserved points are present", async () => {
+    await writePlugin("mixed", {
+      name: "acme.mixed",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+        views: [{ id: "main", name: "Main", componentPath: "./v.js", location: "sidebar" }],
+        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(registerPanelKind).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("contributes.views is not yet implemented")
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("contributes.mcpServers is not yet implemented")
+    );
+  });
+
+  it("warns once per category regardless of entry count", async () => {
+    await writePlugin("many", {
+      name: "acme.many",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        views: [
+          { id: "a", name: "A", componentPath: "./a.js", location: "panel" },
+          { id: "b", name: "B", componentPath: "./b.js", location: "sidebar" },
+          { id: "c", name: "C", componentPath: "./c.js", location: "panel" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const viewWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes("contributes.views is not yet implemented")
+    );
+    expect(viewWarnings).toHaveLength(1);
+  });
+
+  it("rejects a views entry with an invalid location at schema level", () => {
+    const result = PluginManifestSchema.safeParse({
+      name: "acme.bad-location",
+      version: "1.0.0",
+      contributes: {
+        views: [{ id: "main", name: "Main", componentPath: "./v.js", location: "floating" }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a views entry missing componentPath", () => {
+    const result = PluginManifestSchema.safeParse({
+      name: "acme.no-path",
+      version: "1.0.0",
+      contributes: {
+        views: [{ id: "main", name: "Main", location: "panel" }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an mcpServers entry missing command", () => {
+    const result = PluginManifestSchema.safeParse({
+      name: "acme.no-cmd",
+      version: "1.0.0",
+      contributes: {
+        mcpServers: [{ id: "svc", name: "Svc" }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an mcpServers entry with non-string env values", () => {
+    const result = PluginManifestSchema.safeParse({
+      name: "acme.bad-env",
+      version: "1.0.0",
+      contributes: {
+        mcpServers: [{ id: "svc", name: "Svc", command: "node", env: { PORT: 8080 } }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts an mcpServers entry without optional args/env fields", () => {
+    const result = PluginManifestSchema.safeParse({
+      name: "acme.minimal-mcp",
+      version: "1.0.0",
+      contributes: {
+        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+      },
+    });
+    expect(result.success).toBe(true);
   });
 });

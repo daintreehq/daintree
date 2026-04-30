@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
+import { logError } from "@/utils/logger";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useAppThemeStore, injectSchemeToDOM } from "@/store/appThemeStore";
-import { useNotificationStore } from "@/store/notificationStore";
+import { notify } from "@/lib/notify";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { resolveAppTheme } from "@shared/theme";
@@ -36,9 +37,10 @@ function ThemeListItem({
       role="option"
       aria-selected={isSelected}
       className={cn(
-        "w-full text-left px-3 py-2 rounded-[var(--radius-md)] border flex items-center gap-3 transition-colors",
+        "relative w-full text-left px-3 py-2 rounded-[var(--radius-md)] border flex items-center gap-3 transition-colors",
         "border-daintree-border/40 hover:border-daintree-border/60 hover:bg-surface",
-        isSelected && "border-daintree-accent/60 bg-daintree-accent/10"
+        isSelected &&
+          "border-overlay bg-overlay-soft text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
       )}
     >
       <PaletteStrip scheme={scheme} />
@@ -142,7 +144,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       return;
     }
     if (selectedIndex < 0 || selectedIndex >= results.length) return;
-    injectSchemeToDOM(results[selectedIndex]);
+    injectSchemeToDOM(results[selectedIndex]!);
   }, [isOpen, results, selectedIndex]);
 
   const commit = useCallback(
@@ -150,10 +152,10 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       committedRef.current = true;
       setSelectedSchemeId(scheme.id);
       appThemeClient.setColorScheme(scheme.id).catch((error) => {
-        console.error("Failed to persist theme selection:", error);
-        useNotificationStore.getState().addNotification({
+        logError("Failed to persist theme selection", error);
+        notify({
           type: "error",
-          priority: "low",
+          priority: "high",
           message: `Failed to save theme: ${scheme.name}`,
           duration: 3000,
         });
@@ -168,7 +170,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       onClose();
       return;
     }
-    commit(results[selectedIndex]);
+    commit(results[selectedIndex]!);
   }, [results, selectedIndex, commit, onClose]);
 
   return (
@@ -205,5 +207,3 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     />
   );
 }
-
-export default ThemePalette;

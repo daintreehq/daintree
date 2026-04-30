@@ -1,10 +1,16 @@
 import os from "os";
 import PQueue from "p-queue";
+import { execFile } from "child_process";
 import { mkdir, writeFile, stat, readFile } from "fs/promises";
 import { join as pathJoin, dirname, resolve as pathResolve, isAbsolute } from "path";
 import { generateProjectId, settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
-import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
+import {
+  createHardenedGit,
+  createAuthenticatedGit,
+  getGitLocaleEnv,
+} from "../utils/hardenedGit.js";
+import { classifyGitError, getGitRecoveryAction } from "../../shared/utils/gitOperationErrors.js";
 import type { Worktree, WorktreeResourceStatus } from "../../shared/types/worktree.js";
 import type {
   WorkspaceHostEvent,
@@ -15,8 +21,8 @@ import type {
   PRServiceStatus,
 } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
+import { detectWslPath, listFirstWslDistro } from "../utils/wsl.js";
 import { getGitDir, clearGitDirCache } from "../utils/gitUtils.js";
-import { ensureDaintreeDirMigrated } from "../services/projectDirMigration.js";
 import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { pullRequestService } from "../services/PullRequestService.js";
@@ -27,10 +33,70 @@ import { WorktreeMonitor } from "./WorktreeMonitor.js";
 import { WorktreeListService } from "./WorktreeListService.js";
 import { PRIntegrationService } from "./PRIntegrationService.js";
 import { waitForPathExists } from "../utils/fs.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 // Configuration
 const DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS = 2000;
 const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
+
+// Hard ceiling on the `git lfs version` probe. `git` is already on PATH, so a
+// healthy probe returns in milliseconds; the 3 s cap only matters on slow/
+// network-mounted filesystems or misconfigured shells. On timeout we treat LFS
+// as unavailable rather than delay the load-project-result event (precedent:
+// #4852 — don't block startup on optional probes).
+const LFS_PROBE_TIMEOUT_MS = 3000;
+
+/**
+ * Probe whether `git lfs` is installed on the user's PATH. Uses raw `execFile`
+ * (not simple-git / hardenedGit) because LFS availability is a read-only CLI
+ * check that has nothing to do with the project's git repo; routing it through
+ * hardenedGit would strip credential helpers for no reason. Returns `false` on
+ * any error, non-matching stdout, or timeout.
+ */
+export function probeGitLfsAvailable(): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const child = execFile(
+      "git",
+      ["lfs", "version"],
+      {
+        timeout: LFS_PROBE_TIMEOUT_MS,
+        windowsHide: true,
+        env: { ...process.env, ...getGitLocaleEnv(), LC_ALL: "" },
+      },
+      (err, stdout) => {
+        if (err) {
+          done(false);
+          return;
+        }
+        done(/^git-lfs\//.test(stdout.trim()));
+      }
+    );
+
+    // Defence in depth: if execFile's timeout fails to fire (e.g. child is
+    // detached from the event loop), cap the wait ourselves.
+    const timer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        // Best-effort — process may already have exited.
+      }
+      done(false);
+    }, LFS_PROBE_TIMEOUT_MS + 500);
+
+    child.on("exit", () => clearTimeout(timer));
+    child.on("error", () => {
+      clearTimeout(timer);
+      done(false);
+    });
+  });
+}
 
 async function ensureNoteFile(worktreePath: string): Promise<void> {
   const gitDir = getGitDir(worktreePath);
@@ -78,6 +144,17 @@ export class WorkspaceService {
   private _shutdownController = new AbortController();
   private resourceActionQueues = new Map<string, PQueue>();
   private resourceActionAbortControllers = new Map<string, AbortController>();
+  /** Session-scoped guard so we notify the user about Linux inotify limits
+   *  only once, even if many worktrees hit ENOSPC concurrently. */
+  private inotifyLimitNotified = false;
+  /** Session-scoped guard so we notify the user about the macOS FSEvents file
+   *  descriptor ceiling only once, even if many worktrees hit EMFILE concurrently. */
+  private emfileLimitNotified = false;
+
+  /** Per-worktree WSL git opt-in state forwarded from main on load and toggle. */
+  private wslGitByWorktree: Record<string, { enabled: boolean; dismissed: boolean }> = {};
+  /** Cached default WSL distro (populated lazily on first WSL-path detection). */
+  private wslDefaultDistroPromise: Promise<string | null> | null = null;
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
     this.prService = new PRIntegrationService(pullRequestService, events, {
@@ -160,14 +237,17 @@ export class WorkspaceService {
   async loadProject(
     requestId: string,
     projectRootPath: string,
-    globalEnvVars?: Record<string, string>
+    globalEnvVars?: Record<string, string>,
+    wslGitByWorktree?: Record<string, { enabled: boolean; dismissed: boolean }>
   ): Promise<void> {
     try {
       this.projectRootPath = projectRootPath;
-      // TODO(0.9.0): Remove — .canopy -> .daintree project dir rename.
-      // Must run before any .daintree/config.json read so legacy worktree
-      // lifecycle configs and recipes from pre-rebrand repos migrate in time.
-      await ensureDaintreeDirMigrated(projectRootPath);
+      if (wslGitByWorktree && typeof wslGitByWorktree === "object") {
+        // Merge instead of replacing: a `set-wsl-opt-in` message arriving
+        // during this load-project's async work would otherwise be silently
+        // overwritten. The most recent in-memory value wins on conflict.
+        this.wslGitByWorktree = { ...wslGitByWorktree, ...this.wslGitByWorktree };
+      }
       // Merge: global (lowest priority) < project-level < DAINTREE_* (set in buildEnv)
       const projectEnvVars = await this.loadProjectEnvVars(projectRootPath);
       this.projectEnvVars = { ...(globalEnvVars ?? {}), ...projectEnvVars };
@@ -177,9 +257,16 @@ export class WorkspaceService {
       const rawWorktrees = await this.listService.list();
       const worktrees = this.listService.mapToWorktrees(rawWorktrees);
 
-      await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
+      // Run the LFS probe concurrently with monitor sync so we don't add its
+      // 3s worst case on top of sync latency. The probe is a read-only CLI
+      // check (no PATH side-effects); its result travels on the load-project
+      // event so the renderer can warn proactively when a repo uses LFS.
+      const [, lfsAvailable] = await Promise.all([
+        this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true),
+        probeGitLfsAvailable(),
+      ]);
 
-      this.sendEvent({ type: "load-project-result", requestId, success: true });
+      this.sendEvent({ type: "load-project-result", requestId, success: true, lfsAvailable });
 
       void Promise.allSettled([this.initializePRService(), this.refreshAll()]).then((results) => {
         const [prResult, refreshResult] = results;
@@ -329,6 +416,52 @@ export class WorkspaceService {
    * If a monitor already exists for `wt.id`, this is a no-op (race safety for
    * overlapping create/delete on the same path).
    */
+  /**
+   * Detect whether a worktree is mounted via WSL and, if so, attach the
+   * detection metadata + persisted opt-in state. No-op on non-Windows. Bind
+   * time only — the result is folded into the `Worktree` passed to
+   * `WorktreeMonitor`.
+   */
+  private async enrichWorktreeWithWsl(wt: Worktree): Promise<Worktree> {
+    if (process.platform !== "win32") return wt;
+    const detected = detectWslPath(wt.path);
+    if (!detected) return wt;
+
+    if (!this.wslDefaultDistroPromise) {
+      this.wslDefaultDistroPromise = listFirstWslDistro().catch(() => null);
+    }
+    const defaultDistro = await this.wslDefaultDistroPromise;
+    // UNC paths are case-insensitive on Windows; `wsl --list --quiet` returns
+    // the canonical case (e.g. "Ubuntu"). Normalize before comparing so a
+    // worktree opened via `\\wsl$\ubuntu\...` still matches the default.
+    const eligible =
+      defaultDistro !== null && defaultDistro.toLowerCase() === detected.distro.toLowerCase();
+    const persisted = this.wslGitByWorktree[wt.id];
+
+    return {
+      ...wt,
+      isWslPath: true,
+      wslDistro: detected.distro,
+      wslGitEligible: eligible,
+      wslGitOptIn: Boolean(persisted?.enabled),
+      wslGitDismissed: Boolean(persisted?.dismissed),
+    };
+  }
+
+  /**
+   * Update WSL git routing state for a single worktree. Persists the new
+   * preference into the in-memory map and forwards to the matching monitor
+   * (which re-emits its snapshot). Called by the workspace-host message
+   * handler in response to renderer-driven IPC.
+   */
+  setWslOptIn(worktreeId: string, enabled: boolean, dismissed: boolean): void {
+    this.wslGitByWorktree[worktreeId] = { enabled, dismissed };
+    const monitor = this.monitors.get(worktreeId);
+    if (monitor) {
+      monitor.setWslOptIn(enabled, dismissed);
+    }
+  }
+
   private async addNewWorktreeMonitor(
     wt: Worktree,
     isActive: boolean,
@@ -337,6 +470,9 @@ export class WorkspaceService {
     if (this.monitors.has(wt.id)) {
       return;
     }
+
+    const enrichedWt = await this.enrichWorktreeWithWsl(wt);
+    wt = enrichedWt;
 
     await ensureNoteFile(wt.path);
     const issueNumber = wt.branch ? extractIssueNumberSync(wt.branch, wt.name) : null;
@@ -379,6 +515,8 @@ export class WorkspaceService {
             { origin: "auto-poll" }
           );
         },
+        onInotifyLimitReached: () => this.handleInotifyLimitReached(),
+        onEmfileLimitReached: () => this.handleEmfileLimitReached(),
       },
       this.mainBranch,
       this.pollQueue
@@ -399,7 +537,15 @@ export class WorkspaceService {
       void this.extractIssueNumberAsync(monitor, wt.branch, wt.name);
     }
 
-    void this.initResourceConfigAsync(monitor, wt.path);
+    void (async () => {
+      await this.initResourceConfigAsync(monitor, wt.path);
+      // Emit a secondary update if config was loaded and monitor is running.
+      // This ensures the renderer receives the resource config metadata even when
+      // initResourceConfigAsync completes after the initial snapshot was emitted.
+      if (monitor.isRunning && monitor.hasResourceConfig) {
+        this.emitUpdate(monitor);
+      }
+    })();
   }
 
   private async initResourceConfigAsync(
@@ -435,7 +581,12 @@ export class WorkspaceService {
           }
         }
       }
-      if (!resourceConfig || !monitor.isRunning) return;
+      if (!resourceConfig) return;
+
+      // Cache resource config metadata regardless of monitor.isRunning state.
+      // This ensures the UI shows the Resource submenu even during cold start
+      // before the monitor begins polling. Runtime behavior (emits, polling)
+      // is still guarded by isRunning below.
       const vars = this.lifecycleService.buildVariables(
         worktreePath,
         this.projectRootPath,
@@ -456,11 +607,18 @@ export class WorkspaceService {
       if (resourceConfig.statusInterval) {
         monitor.setResourcePollInterval(resourceConfig.statusInterval * 1000);
       }
+
+      // Runtime behavior (emits, polling) requires monitor.isRunning
+      if (!monitor.isRunning) return;
+
       if (monitor.hasInitialStatus) {
         this.emitUpdate(monitor);
       }
-    } catch {
-      // Silently ignore — resource config is optional
+    } catch (error) {
+      console.warn(
+        "[WorkspaceHost] Resource config initialization failed (continuing without resources):",
+        formatErrorMessage(error, "Resource config initialization failed")
+      );
     }
   }
 
@@ -498,6 +656,20 @@ export class WorkspaceService {
       worktree: snapshot,
     });
     events.emit("sys:worktree:update", snapshot as any);
+  }
+
+  private handleInotifyLimitReached(): void {
+    if (process.platform !== "linux") return;
+    if (this.inotifyLimitNotified) return;
+    this.inotifyLimitNotified = true;
+    this.sendEvent({ type: "inotify-limit-reached" });
+  }
+
+  private handleEmfileLimitReached(): void {
+    if (process.platform !== "darwin") return;
+    if (this.emfileLimitNotified) return;
+    this.emfileLimitNotified = true;
+    this.sendEvent({ type: "emfile-limit-reached" });
   }
 
   private handleExternalWorktreeRemoval(worktreeId: string): void {
@@ -610,6 +782,46 @@ export class WorkspaceService {
         await this.refreshAll();
         await pullRequestService.refresh();
       }
+      this.sendEvent({ type: "refresh-result", requestId, success: true });
+    } catch (error) {
+      this.sendEvent({
+        type: "refresh-result",
+        requestId,
+        success: false,
+        error: (error as Error).message,
+      });
+    }
+  }
+
+  /**
+   * Refresh the workspace after the OS wakes from sleep.
+   *
+   * Resets each monitor's adaptive polling strategy synchronously before
+   * enqueuing a serialized refresh, so pre-sleep operation durations and
+   * circuit-breaker counters don't poison the post-wake polling cadence.
+   * The wake refresh runs through a dedicated `concurrency: 1` queue rather
+   * than the shared `pollQueue` so we don't burst N concurrent `git status`
+   * processes against shared `packed-refs` / `gc.pid` immediately on wake.
+   */
+  async refreshOnWake(requestId: string): Promise<void> {
+    try {
+      for (const monitor of this.monitors.values()) {
+        monitor.resetPollingStrategy();
+      }
+      const wakeQueue = new PQueue({ concurrency: 1 });
+      const promises = Array.from(this.monitors.values()).map((monitor) =>
+        wakeQueue.add(async () => {
+          try {
+            await monitor.updateGitStatus(true);
+          } finally {
+            if (monitor.isRunning && this.pollingEnabled) {
+              monitor.reschedulePolling();
+            }
+          }
+        })
+      );
+      await Promise.all(promises);
+      await pullRequestService.refresh();
       this.sendEvent({ type: "refresh-result", requestId, success: true });
     } catch (error) {
       this.sendEvent({
@@ -1319,11 +1531,14 @@ export class WorkspaceService {
       await git.raw(["fetch", "origin", `pull/${prNumber}/head:${headRefName}`]);
       this.sendEvent({ type: "fetch-pr-branch-result", requestId, success: true });
     } catch (error) {
+      const gitReason = classifyGitError(error);
       this.sendEvent({
         type: "fetch-pr-branch-result",
         requestId,
         success: false,
         error: (error as Error).message,
+        gitReason,
+        recoveryAction: getGitRecoveryAction(gitReason),
       });
     }
   }
@@ -2079,7 +2294,7 @@ ${connectCommand} "$@"
 
       await writeFile(wrapperPath, scriptContent, { mode: 0o755 });
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = formatErrorMessage(error, "Failed to generate daintree-remote wrapper");
       console.warn("[WorkspaceService] Failed to generate daintree-remote wrapper:", msg);
     }
   }

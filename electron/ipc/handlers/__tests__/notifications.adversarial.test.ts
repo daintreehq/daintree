@@ -99,12 +99,12 @@ describe("notifications IPC adversarial", () => {
       escalationSoundFile: "unknown-file.mp3",
     });
 
-    const call = storeMock.set.mock.calls[0];
-    expect(call[0]).toBe("notificationSettings");
-    const saved = call[1] as Record<string, unknown>;
-    expect(saved.completedSoundFile).toBe("completed.mp3");
-    expect(saved.waitingSoundFile).toBeUndefined();
-    expect(saved.escalationSoundFile).toBeUndefined();
+    // Dot-path writes only land for validated fields. Unsafe values must not
+    // reach the store at all — assert no call targets any sound-file leaf.
+    const writtenKeys = storeMock.set.mock.calls.map((c) => String(c[0]));
+    expect(writtenKeys).not.toContain("notificationSettings.completedSoundFile");
+    expect(writtenKeys).not.toContain("notificationSettings.waitingSoundFile");
+    expect(writtenKeys).not.toContain("notificationSettings.escalationSoundFile");
   });
 
   it("settingsSet accepts allowed sound file names", async () => {
@@ -112,24 +112,30 @@ describe("notifications IPC adversarial", () => {
       completedSoundFile: "waiting.mp3",
     });
 
-    const saved = storeMock.set.mock.calls[0][1] as Record<string, unknown>;
-    expect(saved.completedSoundFile).toBe("waiting.mp3");
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "notificationSettings.completedSoundFile",
+      "waiting.mp3"
+    );
   });
 
   it("settingsSet clamps waitingEscalationDelayMs below 30s up to 30s", async () => {
     await getHandler(CHANNELS.NOTIFICATION_SETTINGS_SET)(fakeEvent(), {
       waitingEscalationDelayMs: 0,
     });
-    const saved = storeMock.set.mock.calls[0][1] as Record<string, unknown>;
-    expect(saved.waitingEscalationDelayMs).toBe(30_000);
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "notificationSettings.waitingEscalationDelayMs",
+      30_000
+    );
   });
 
   it("settingsSet clamps waitingEscalationDelayMs above 1h down to 1h", async () => {
     await getHandler(CHANNELS.NOTIFICATION_SETTINGS_SET)(fakeEvent(), {
       waitingEscalationDelayMs: 3_600_001,
     });
-    const saved = storeMock.set.mock.calls[0][1] as Record<string, unknown>;
-    expect(saved.waitingEscalationDelayMs).toBe(3_600_000);
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "notificationSettings.waitingEscalationDelayMs",
+      3_600_000
+    );
   });
 
   it("settingsSet rejects non-finite escalation delay (NaN, Infinity)", async () => {
@@ -140,10 +146,8 @@ describe("notifications IPC adversarial", () => {
       waitingEscalationDelayMs: Number.POSITIVE_INFINITY,
     });
 
-    for (const call of storeMock.set.mock.calls) {
-      const saved = call[1] as Record<string, unknown>;
-      expect(saved.waitingEscalationDelayMs).toBeUndefined();
-    }
+    const writtenKeys = storeMock.set.mock.calls.map((c) => String(c[0]));
+    expect(writtenKeys).not.toContain("notificationSettings.waitingEscalationDelayMs");
   });
 
   it("settingsSet ignores non-object payloads silently", async () => {
@@ -175,7 +179,7 @@ describe("notifications IPC adversarial", () => {
     expect(soundServiceMock.play).not.toHaveBeenCalled();
   });
 
-  it("syncWatched filters non-string entries from the id array", () => {
+  it("syncWatched filters non-string entries from the id array", async () => {
     getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED)(fakeEvent() as Electron.IpcMainEvent, [
       "a",
       1,
@@ -184,6 +188,8 @@ describe("notifications IPC adversarial", () => {
       { id: "nope" },
     ]);
 
+    // Listener uses fire-and-forget dynamic import — await microtask drain
+    await new Promise((resolve) => setImmediate(resolve));
     expect(agentNotificationServiceMock.syncWatchedPanels).toHaveBeenCalledWith(["a", "b"]);
   });
 

@@ -1,7 +1,8 @@
 import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { SlidersHorizontal } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -10,10 +11,10 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { createTooltipWithShortcut } from "@/lib/platform";
-import { useKeybindingDisplay } from "@/hooks";
+import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
+const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors relative";
 
 const SETTINGS_CONTEXT_MENU_TABS = [
   { tab: "general", label: "General" },
@@ -36,30 +37,35 @@ export const ToolbarSettingsButton = memo(function ToolbarSettingsButton({
   "data-toolbar-item": dataToolbarItem,
 }: ToolbarSettingsButtonProps) {
   const settingsShortcut = useKeybindingDisplay("app.settings");
+  const settingsHover = useShortcutHintHover("app.settings");
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                data-toolbar-item={dataToolbarItem}
-                onClick={onSettings}
-                onPointerEnter={onPreloadSettings}
-                className={toolbarIconButtonClass}
-                aria-label="Open settings"
-              >
-                <SlidersHorizontal />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {createTooltipWithShortcut("Open Settings", settingsShortcut)}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              data-toolbar-item={dataToolbarItem}
+              onClick={onSettings}
+              onPointerEnter={(e) => {
+                onPreloadSettings?.();
+                settingsHover.onPointerEnter(e);
+              }}
+              onPointerLeave={settingsHover.onPointerLeave}
+              onPointerDown={settingsHover.onPointerDown}
+              className={toolbarIconButtonClass}
+              aria-label="Open settings"
+            >
+              <SlidersHorizontal />
+              <ShortcutRevealChip actionId="app.settings" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {createTooltipWithShortcut("Open Settings", settingsShortcut)}
+          </TooltipContent>
+        </Tooltip>
       </ContextMenuTrigger>
       <ContextMenuContent>
         {SETTINGS_CONTEXT_MENU_TABS.map(({ tab, label }) => (

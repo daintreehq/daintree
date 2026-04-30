@@ -29,6 +29,7 @@ const mockState = vi.hoisted(() => ({
         focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
       }
     | undefined,
+  projectStateQuarantinedPath: undefined as string | undefined,
   safeMode: false,
   gpuStatus: { webgl2: "enabled" },
   gpuWebGLHardware: true,
@@ -39,6 +40,12 @@ const getProjectByIdMock = vi.hoisted(() =>
   vi.fn((projectId: string) => (projectId === mockState.project?.id ? mockState.project : null))
 );
 const getProjectStateMock = vi.hoisted(() => vi.fn(async () => mockState.projectState));
+const getProjectStateWithRecoveryMock = vi.hoisted(() =>
+  vi.fn(async () => ({
+    state: mockState.projectState,
+    quarantinedPath: mockState.projectStateQuarantinedPath,
+  }))
+);
 const storeGetMock = vi.hoisted(() =>
   vi.fn((key: string) => {
     if (key === "appState") return mockState.appState;
@@ -69,6 +76,7 @@ vi.mock("../ProjectStore.js", () => ({
   projectStore: {
     getProjectById: getProjectByIdMock,
     getProjectState: getProjectStateMock,
+    getProjectStateWithRecovery: getProjectStateWithRecoveryMock,
   },
 }));
 
@@ -109,6 +117,7 @@ describe("AppHydrationService adversarial", () => {
     mockState.agentSettings = { defaultAgent: "codex" };
     mockState.project = { id: "project-1", name: "Project One", path: "/project/one" };
     mockState.projectState = undefined;
+    mockState.projectStateQuarantinedPath = undefined;
     mockState.safeMode = false;
     mockState.gpuStatus = { webgl2: "enabled" };
     mockState.gpuWebGLHardware = true;
@@ -234,31 +243,75 @@ describe("AppHydrationService adversarial", () => {
     expect(result.appState.activeWorktreeId).toBe("wt-global");
     expect(result.appState.focusMode).toBe(true);
     expect(result.settingsRecovery).toBeNull();
+    expect(result.projectStateRecovery).toBeNull();
   });
 
   it("CONCURRENT_CALLS_READ_ONLY", async () => {
-    let resolveProjectState!: (value: {
+    type ProjectStateFixture = {
       terminals?: unknown[];
       activeWorktreeId?: string;
       focusMode?: boolean;
       focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
+    };
+    let resolveProjectState!: (value: {
+      state: ProjectStateFixture;
+      quarantinedPath: string | undefined;
     }) => void;
     const pendingProjectState = new Promise<{
-      terminals?: unknown[];
-      activeWorktreeId?: string;
-      focusMode?: boolean;
-      focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
+      state: ProjectStateFixture;
+      quarantinedPath: string | undefined;
     }>((resolve) => {
       resolveProjectState = resolve;
     });
-    getProjectStateMock.mockReturnValueOnce(pendingProjectState);
-    getProjectStateMock.mockReturnValueOnce(pendingProjectState);
+    getProjectStateWithRecoveryMock.mockReturnValueOnce(pendingProjectState);
+    getProjectStateWithRecoveryMock.mockReturnValueOnce(pendingProjectState);
 
     const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
     const firstPromise = buildSwitchHydrateResult("project-1");
     const secondPromise = buildSwitchHydrateResult("project-1");
 
     resolveProjectState({
+      state: {
+        terminals: [
+          {
+            id: "project-terminal",
+            type: "terminal",
+            title: "Project Terminal",
+            cwd: "/project",
+            location: "grid",
+          },
+        ],
+        focusMode: false,
+        activeWorktreeId: "wt-project",
+      },
+      quarantinedPath: undefined,
+    });
+
+    const [first, second] = (await Promise.all([firstPromise, secondPromise])) as [
+      HydrateResult,
+      HydrateResult,
+    ];
+
+    expect(first).toEqual(second);
+    expect(getProjectStateWithRecoveryMock).toHaveBeenCalledTimes(2);
+    expect(storeGetMock).not.toHaveBeenCalledWith("pendingSettingsRecovery");
+  });
+
+  it("PROJECT_STATE_RECOVERY_PROPAGATED", async () => {
+    mockState.projectState = undefined;
+    mockState.projectStateQuarantinedPath = "/projects/abc/state.json.corrupted";
+
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("project-1");
+
+    expect(result.projectStateRecovery).toEqual({
+      quarantinedPath: "/projects/abc/state.json.corrupted",
+    });
+    expect(result.appState.terminals).toEqual([]);
+  });
+
+  it("PROJECT_STATE_RECOVERY_NULL_WHEN_CLEAN", async () => {
+    mockState.projectState = {
       terminals: [
         {
           id: "project-terminal",
@@ -268,18 +321,13 @@ describe("AppHydrationService adversarial", () => {
           location: "grid",
         },
       ],
-      focusMode: false,
-      activeWorktreeId: "wt-project",
-    });
+    };
+    mockState.projectStateQuarantinedPath = undefined;
 
-    const [first, second] = (await Promise.all([firstPromise, secondPromise])) as [
-      HydrateResult,
-      HydrateResult,
-    ];
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("project-1");
 
-    expect(first).toEqual(second);
-    expect(getProjectStateMock).toHaveBeenCalledTimes(2);
-    expect(storeGetMock).not.toHaveBeenCalledWith("pendingSettingsRecovery");
+    expect(result.projectStateRecovery).toBeNull();
   });
 
   it("UNKNOWN_PROJECT_ID_STILL_VALID", async () => {

@@ -1,0 +1,13 @@
+{"time":0.0,"chunk":"CRUSH\nRemember your first Crush?","detectedState":"initializing","confidence":0.9,"agentId":"crush","agentVersion":"0.1.0"}
+{"time":0.5,"chunk":"❯ ","detectedState":"waiting","confidence":0.85,"agentId":"crush","agentVersion":"0.1.0"}
+{"time":1.0,"chunk":"⠋ Thinking...","detectedState":"working","confidence":0.95,"agentId":"crush","agentVersion":"0.1.0"}
+{"time":2.0,"chunk":"⠙ Reading project files","detectedState":"working","confidence":0.95,"agentId":"crush","agentVersion":"0.1.0"}
+{"time":3.5,"chunk":"⠹ Generating response","detectedState":"working","confidence":0.95,"agentId":"crush","agentVersion":"0.1.0"}
+{"time":5.0,"chunk":"⠸ Running tool: edit","detectedState":"working","confidence":0.95,"agentId":"crush","agentVersion":"0.1.0"}
+{"time":6.5,"chunk":"⠼ Building tool call","detectedState":"working","confidence":0.7,"agentId":"crush","agentVersion":"0.1.0"}
+{"time":8.0,"chunk":"⠴ Working on response","detectedState":"working","confidence":0.7,"agentId":"crush","agentVersion":"0.1.0"}
+{"time":9.5,"chunk":"⠦ Streaming output","detectedState":"working","confidence":0.7,"agentId":"crush","agentVersion":"0.1.0"}
+{"time":11.0,"chunk":"$0.04 · 1240 tokens","detectedState":"completed","confidence":0.9,"agentId":"crush","agentVersion":"0.1.0"}
+{"time":11.5,"chunk":"Task completed","detectedState":"completed","confidence":0.9,"agentId":"crush","agentVersion":"0.1.0"}
+{"time":12.0,"chunk":"❯ ","detectedState":"waiting","confidence":0.85,"agentId":"crush","agentVersion":"0.1.0"}
+{"time":13.0,"chunk":"Type a message","detectedState":"waiting","confidence":0.85,"agentId":"crush","agentVersion":"0.1.0"}

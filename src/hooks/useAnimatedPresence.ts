@@ -31,9 +31,11 @@ export function useAnimatedPresence({
   const animationDurationRef = useRef(animationDuration);
   const minimumDisplayDurationRef = useRef(minimumDisplayDuration);
 
-  onAnimateOutRef.current = onAnimateOut;
-  animationDurationRef.current = animationDuration;
-  minimumDisplayDurationRef.current = minimumDisplayDuration;
+  useEffect(() => {
+    onAnimateOutRef.current = onAnimateOut;
+    animationDurationRef.current = animationDuration;
+    minimumDisplayDurationRef.current = minimumDisplayDuration;
+  });
 
   const cleanup = useCallback(() => {
     if (closeTimeoutRef.current) {

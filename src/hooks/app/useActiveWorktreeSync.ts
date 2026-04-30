@@ -26,7 +26,7 @@ export function useActiveWorktreeSync() {
 
     const worktreeExists = activeWorktreeId && worktrees.some((w) => w.id === activeWorktreeId);
     if (!worktreeExists) {
-      const mainWorktree = worktrees.find((w) => w.isMainWorktree) ?? worktrees[0];
+      const mainWorktree = worktrees.find((w) => w.isMainWorktree) ?? worktrees[0]!;
       selectWorktree(mainWorktree.id);
     }
   }, [worktrees, activeWorktreeId, selectWorktree]);

@@ -14,7 +14,7 @@ export const theme: BuiltInThemeSource = {
       sidebar: "#F0F1F4",
       canvas: "#F5F6F8",
       panel: "#FAFBFC",
-      elevated: "#FDFDFE",
+      elevated: "#FFFFFF",
     },
     text: {
       primary: "#1C2028",
@@ -24,6 +24,7 @@ export const theme: BuiltInThemeSource = {
     },
     border: "#D8DBDF",
     accent: "#145A44",
+    accentSecondary: "#0FA8C0",
     status: {
       success: "#2D5E3A",
       warning: "#7A4516",
@@ -34,7 +35,7 @@ export const theme: BuiltInThemeSource = {
       active: "#1E5C34",
       idle: "#8E939A",
       working: "#1E5C34",
-      waiting: "#7A6512",
+      waiting: "#9C7715",
     },
     terminal: {
       background: "#1E252E",
@@ -71,7 +72,7 @@ export const theme: BuiltInThemeSource = {
     strategy: {
       shadowStyle: "crisp",
       materialBlur: 12,
-      materialSaturation: 120,
+      materialSaturation: 115,
     },
   },
   tokens: {
@@ -81,11 +82,7 @@ export const theme: BuiltInThemeSource = {
     "border-interactive": "rgba(0,0,0,0.10)",
     "border-strong": "rgba(0,0,0,0.14)",
     "border-subtle": "rgba(0,0,0,0.05)",
-    "focus-ring": "rgba(20,90,68,0.28)",
-    "github-closed": "#CF222E",
-    "github-draft": "#8B949E",
-    "github-merged": "#8250DF",
-    "github-open": "#1A7F37",
+    "focus-ring": "rgba(20,90,68,0.25)",
     "overlay-emphasis": "rgba(0,0,0,0.12)",
     "overlay-medium": "rgba(0,0,0,0.05)",
     "overlay-soft": "rgba(0,0,0,0.03)",
@@ -117,7 +114,7 @@ export const theme: BuiltInThemeSource = {
   extensions: {
     "dock-bg": "#F0F1F4",
     "dock-shadow": "0 -1px 4px rgba(0,0,0,0.04)",
-    "panel-grid-bg": "#FBFCFD",
+    "panel-grid-bg": "#FFFFFF",
     "pulse-before-bg": "#EDEFF2",
     "pulse-card-bg": "#FDFDFE",
     "pulse-card-shadow": "0 1px 3px rgba(0,0,0,0.06)",

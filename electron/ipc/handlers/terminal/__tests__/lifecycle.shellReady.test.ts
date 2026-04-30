@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 
+const ipcMainMock = vi.hoisted(() => ({
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
-  ipcMain: {
-    handle: vi.fn(),
-    removeHandler: vi.fn(),
-  },
+  ipcMain: ipcMainMock,
   app: {
     getPath: vi.fn(() => "/tmp/test"),
   },
@@ -29,9 +31,45 @@ vi.mock("../../../../services/pty/terminalShell.js", () => ({
   getDefaultShell: vi.fn(() => "/bin/zsh"),
 }));
 
-vi.mock("../../utils.js", () => ({
+type SafeParseable = {
+  safeParse: (v: unknown) => { success: true; data: unknown } | { success: false; error: unknown };
+};
+
+vi.mock("../../../utils.js", () => ({
   waitForRateLimitSlot: vi.fn(async () => {}),
   consumeRestoreQuota: vi.fn(() => false),
+  typedHandle: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: null,
+          projectId: null,
+        };
+        return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleValidated: (channel: string, schema: SafeParseable, handler: unknown) => {
+    ipcMainMock.handle(channel, async (_e: unknown, ...args: unknown[]) => {
+      const parsed = schema.safeParse(args[0]);
+      if (!parsed.success) {
+        console.error(`[IPC] Validation failed for ${channel}:`, parsed.error);
+        throw new Error(`IPC validation failed: ${channel}`);
+      }
+      return (handler as (payload: unknown) => unknown)(parsed.data);
+    });
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 vi.mock("../../../../shared/config/agentRegistry.js", () => ({
@@ -62,7 +100,20 @@ function createEmitterPtyClient() {
   });
 }
 
-describe("agent command injection via shell -c flag", () => {
+/**
+ * Drain pending microtasks interleaved with fake-timer advances. Resolving a
+ * Promise from a timer callback queues a microtask that cannot be flushed by
+ * `vi.advanceTimersByTimeAsync` alone, so `.then(...)` bodies (the command
+ * write) may still be pending after the last timer fires. Alternating timer
+ * advances with `await Promise.resolve()` flushes them deterministically.
+ */
+async function flush(ms = 0) {
+  await vi.advanceTimersByTimeAsync(ms);
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe("agent command launch", () => {
   const project = { id: "proj-id", name: "Project", path: process.cwd() };
   const originalPlatform = process.platform;
 
@@ -70,7 +121,7 @@ describe("agent command injection via shell -c flag", () => {
   let cleanup: (() => void) | undefined;
 
   beforeEach(() => {
-    vi.useRealTimers();
+    vi.useFakeTimers();
     vi.clearAllMocks();
     Object.defineProperty(process, "platform", { value: "linux" });
     ptyClient = createEmitterPtyClient();
@@ -84,9 +135,10 @@ describe("agent command injection via shell -c flag", () => {
     Object.defineProperty(process, "platform", { value: originalPlatform });
     cleanup?.();
     ptyClient.removeAllListeners();
+    vi.useRealTimers();
   });
 
-  it("spawns agent with -lic flag on Unix instead of writing to stdin", async () => {
+  it("launches a POSIX agent command through shell startup without echoing stdin", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -94,38 +146,27 @@ describe("agent command injection via shell -c flag", () => {
     await handler({} as Electron.IpcMainInvokeEvent, {
       cols: 80,
       rows: 24,
-      kind: "agent",
-      agentId: "claude",
+      kind: "terminal",
+      launchAgentId: "claude",
       command: "claude --dangerously-skip-permissions",
     });
 
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.args).toEqual(["-lic", "exec claude --dangerously-skip-permissions"]);
-    // No stdin writes for Unix agent terminals
+    expect(spawnArgs.shell).toBe("/bin/zsh");
+    expect(spawnArgs.args).toEqual([
+      "-lic",
+      "trap : INT\nclaude --dangerously-skip-permissions\ntrap - INT\nexec '/bin/zsh' -l",
+    ]);
+    const id = ptyClient.spawn.mock.calls[0][0];
+
     expect(ptyClient.write).not.toHaveBeenCalled();
+    expect(ptyClient.listenerCount("data")).toBe(0);
+    expect(ptyClient.listenerCount("exit")).toBe(0);
+    expect(id).toBeTruthy();
   });
 
-  it("uses -c without -li for non-bash/zsh shells", async () => {
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    cleanup = registerTerminalLifecycleHandlers(deps);
-    const handler = getSpawnHandler();
-
-    await handler({} as Electron.IpcMainInvokeEvent, {
-      cols: 80,
-      rows: 24,
-      kind: "agent",
-      agentId: "claude",
-      command: "claude",
-      shell: "/usr/bin/fish",
-    });
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.args).toEqual(["-c", "exec claude"]);
-    expect(ptyClient.write).not.toHaveBeenCalled();
-  });
-
-  it("non-agent terminal with command uses delayed stdin write", async () => {
+  it("does not wait for slow shell RC output before launching the command", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -136,20 +177,30 @@ describe("agent command injection via shell -c flag", () => {
       command: "ls -la",
     });
 
-    // No immediate writes
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.args).toEqual(["-lic", "trap : INT\nls -la\ntrap - INT\nexec '/bin/zsh' -l"]);
     expect(ptyClient.write).not.toHaveBeenCalled();
-
-    // Command written after delay
-    await vi.waitFor(
-      () => {
-        expect(ptyClient.write).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 500 }
-    );
-    expect(ptyClient.write.mock.calls[0][1]).toBe("ls -la\r");
   });
 
-  it("Windows agent terminal falls back to stdin write", async () => {
+  it("does not register shell-ready listeners for p10k-style prompt output", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    cleanup = registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      command: "echo hi",
+    });
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.args).toEqual(["-lic", "trap : INT\necho hi\ntrap - INT\nexec '/bin/zsh' -l"]);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+    expect(ptyClient.listenerCount("data")).toBe(0);
+    expect(ptyClient.listenerCount("exit")).toBe(0);
+  });
+
+  it("Windows agent terminal writes command immediately without clear preamble", async () => {
     Object.defineProperty(process, "platform", { value: "win32" });
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -159,48 +210,81 @@ describe("agent command injection via shell -c flag", () => {
     await handler({} as Electron.IpcMainInvokeEvent, {
       cols: 80,
       rows: 24,
-      kind: "agent",
-      agentId: "claude",
+      kind: "terminal",
+      launchAgentId: "claude",
       command: "claude",
     });
 
-    // Spawn args should NOT include -lic on Windows
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.args).toBeUndefined();
-
-    // Command written to stdin after delay
-    await vi.waitFor(
-      () => {
-        expect(ptyClient.write).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 500 }
-    );
-    expect(ptyClient.write.mock.calls[0][1]).toContain("claude");
+    expect(ptyClient.write).toHaveBeenCalledTimes(1);
+    expect(ptyClient.write.mock.calls[0][1]).toBe("claude\r");
   });
 
-  it("rejects multi-line commands for agent terminals", async () => {
+  it("skips stdin write entirely for POSIX command launches", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    ptyClient.hasTerminal.mockReturnValue(false);
+    cleanup = registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+    });
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.args).toEqual(["-lic", "trap : INT\nclaude\ntrap - INT\nexec '/bin/zsh' -l"]);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+    expect(ptyClient.listenerCount("data")).toBe(0);
+    expect(ptyClient.listenerCount("exit")).toBe(0);
+  });
+
+  it("launches the command without a timeout fallback when no prompt appears", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    cleanup = registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      command: "ls",
+    });
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.args).toEqual(["-lic", "trap : INT\nls\ntrap - INT\nexec '/bin/zsh' -l"]);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+    expect(ptyClient.listenerCount("data")).toBe(0);
+    expect(ptyClient.listenerCount("exit")).toBe(0);
+  });
+
+  it("rejects multi-line commands for agent terminals at the schema boundary (#6065)", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
 
-    await handler({} as Electron.IpcMainInvokeEvent, {
-      cols: 80,
-      rows: 24,
-      kind: "agent",
-      agentId: "claude",
-      command: "claude\nmalicious",
-    });
+    await expect(
+      handler({} as Electron.IpcMainInvokeEvent, {
+        cols: 80,
+        rows: 24,
+        kind: "terminal",
+        launchAgentId: "claude",
+        command: "claude\nmalicious",
+      })
+    ).rejects.toThrow(/IPC validation failed: terminal:spawn/);
 
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("Multi-line"));
-    // Spawn should still happen (just without the command in args)
-    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.args).toBeUndefined();
+    expect(consoleSpy).toHaveBeenCalled();
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+
+    await flush(1_500);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+    expect(ptyClient.listenerCount("data")).toBe(0);
+    expect(ptyClient.listenerCount("exit")).toBe(0);
     consoleSpy.mockRestore();
   });
 
-  it("does not register data/exit listeners for Unix agent terminals", async () => {
+  it("does not register listeners for terminals spawned without a command", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -208,13 +292,10 @@ describe("agent command injection via shell -c flag", () => {
     await handler({} as Electron.IpcMainInvokeEvent, {
       cols: 80,
       rows: 24,
-      kind: "agent",
-      agentId: "gemini",
-      command: "gemini chat",
     });
 
-    // No data/exit listeners since we don't need sentinel detection
     expect(ptyClient.listenerCount("data")).toBe(0);
     expect(ptyClient.listenerCount("exit")).toBe(0);
+    expect(ptyClient.write).not.toHaveBeenCalled();
   });
 });

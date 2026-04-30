@@ -126,7 +126,7 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
   const terminalElement = makeTerminalElement();
   hostElement.appendChild(terminalElement);
 
-  return {
+  const managed = {
     terminal: {
       element: terminalElement,
       rows: 24,
@@ -142,7 +142,6 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
       dispose: vi.fn(),
       options: {},
     } as unknown as ManagedTerminal["terminal"],
-    type: "terminal",
     kind: "terminal",
     agentStateSubscribers: new Set(),
     fitAddon: { fit: vi.fn() } as unknown as ManagedTerminal["fitAddon"],
@@ -151,6 +150,7 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
     searchAddon: {} as ManagedTerminal["searchAddon"],
     fileLinksDisposable: null,
     webLinksAddon: null,
+    hoveredLink: null,
     hostElement,
     isOpened: true,
     listeners: [],
@@ -182,7 +182,9 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
     isHibernated: false,
     pendingWrites: 0,
     ...overrides,
-  };
+  } as ManagedTerminal;
+  managed.runtimeAgentId ??= managed.launchAgentId;
+  return managed;
 }
 
 describe("TerminalInstanceService adversarial", () => {
@@ -259,14 +261,14 @@ describe("TerminalInstanceService adversarial", () => {
     TerminalWebGLManager.setMaxContexts(1);
 
     const managedA = makeManaged({
-      kind: "agent",
-      type: "claude",
+      kind: "terminal",
+      launchAgentId: "claude",
       isOpened: false,
       lastAppliedTier: TerminalRefreshTier.FOCUSED,
     });
     const managedB = makeManaged({
-      kind: "agent",
-      type: "codex",
+      kind: "terminal",
+      launchAgentId: "codex",
       isOpened: false,
       lastAppliedTier: TerminalRefreshTier.FOCUSED,
     });
@@ -278,15 +280,15 @@ describe("TerminalInstanceService adversarial", () => {
     service.attach("b", document.createElement("div"));
 
     expect(testState.webglAddons).toHaveLength(2);
-    expect(testState.webglAddons[0].dispose).toHaveBeenCalledTimes(1);
+    expect(testState.webglAddons[0]!.dispose).toHaveBeenCalledTimes(1);
     expect(service.webGLManager.isActive("a")).toBe(false);
     expect(service.webGLManager.isActive("b")).toBe(true);
   });
 
   it("ATTACH_AFTER_DESTROY_RETURNS_NULL", () => {
     const managed = makeManaged({
-      kind: "agent",
-      type: "claude",
+      kind: "terminal",
+      launchAgentId: "claude",
       isOpened: false,
       lastAppliedTier: TerminalRefreshTier.FOCUSED,
     });

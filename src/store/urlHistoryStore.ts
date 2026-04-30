@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { UrlHistoryEntry } from "@shared/types/browser";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 const MAX_ENTRIES_PER_PROJECT = 500;
 
@@ -23,7 +24,7 @@ export function getFrecencySuggestions(
   query: string,
   limit = 5
 ): UrlHistoryEntry[] {
-  if (!query.trim()) return [];
+  if (!query.trim()) return entries.slice(0, limit);
   const lowerQuery = query.toLowerCase();
   const now = Date.now();
   return entries
@@ -38,6 +39,8 @@ interface UrlHistoryState {
   entries: Record<string, UrlHistoryEntry[]>;
   recordVisit: (projectId: string, url: string, title?: string) => void;
   updateTitle: (projectId: string, url: string, title: string) => void;
+  updateFavicon: (projectId: string, url: string, favicon: string) => void;
+  removeUrl: (projectId: string, url: string) => void;
   removeProjectHistory: (projectId: string) => void;
 }
 
@@ -53,7 +56,7 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
           const now = Date.now();
 
           if (existingIndex >= 0) {
-            const existing = projectEntries[existingIndex];
+            const existing = projectEntries[existingIndex]!;
             projectEntries[existingIndex] = {
               ...existing,
               visitCount: existing.visitCount + 1,
@@ -84,8 +87,29 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
           const index = projectEntries.findIndex((e) => e.url === url);
           if (index < 0) return state;
           const updated = [...projectEntries];
-          updated[index] = { ...updated[index], title };
+          updated[index] = { ...updated[index]!, title };
           return { entries: { ...state.entries, [projectId]: updated } };
+        }),
+
+      updateFavicon: (projectId, url, favicon) =>
+        set((state) => {
+          const projectEntries = [...(state.entries[projectId] ?? [])];
+          const index = projectEntries.findIndex((e) => e.url === url);
+          if (index >= 0) {
+            projectEntries[index] = { ...projectEntries[index]!, favicon };
+          } else {
+            projectEntries.push({ url, title: "", visitCount: 0, lastVisitAt: 0, favicon });
+          }
+          return { entries: { ...state.entries, [projectId]: projectEntries } };
+        }),
+
+      removeUrl: (projectId, url) =>
+        set((state) => {
+          const projectEntries = state.entries[projectId];
+          if (!projectEntries) return state;
+          const filtered = projectEntries.filter((e) => e.url !== url);
+          if (filtered.length === projectEntries.length) return state;
+          return { entries: { ...state.entries, [projectId]: filtered } };
         }),
 
       removeProjectHistory: (projectId) =>
@@ -97,7 +121,15 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
     {
       name: "daintree-url-history",
       storage: createSafeJSONStorage(),
+      version: 0,
+      migrate: (persistedState) => persistedState as UrlHistoryState,
       partialize: (state) => ({ entries: state.entries }),
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "urlHistoryStore",
+  store: useUrlHistoryStore,
+  persistedStateType: "{ entries: Record<string, UrlHistoryEntry[]> }",
+});

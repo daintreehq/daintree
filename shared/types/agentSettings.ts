@@ -89,6 +89,40 @@ export interface AgentSettingsEntry {
   shareClipboardDirectory?: boolean;
   /** Override the default model for this agent in assistant/help contexts (e.g., "claude-opus-4-6") */
   assistantModelId?: string;
+  /**
+   * Agent-level default preset ID (persists across worktrees). Used as the
+   * fallback when a worktree has no scoped override. Set from Settings →
+   * Presets; the toolbar dropdown writes to `worktreePresets` instead so
+   * picking a preset in one worktree doesn't silently change what launches
+   * in another.
+   */
+  presetId?: string;
+  /**
+   * Per-worktree preset overrides, keyed by worktreeId. Wins over `presetId`
+   * when resolving the effective launch preset. Updates via
+   * `updateWorktreePreset` in the renderer store so the IPC shallow-merge
+   * doesn't clobber sibling worktree keys.
+   */
+  worktreePresets?: Record<string, string>;
+  /** User-defined custom presets for this agent (persisted, editable from Settings) */
+  customPresets?: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    env?: Record<string, string>;
+    args?: string[];
+    dangerousEnabled?: boolean;
+    customFlags?: string;
+    inlineMode?: boolean;
+    color?: string;
+    /** Ordered preset IDs to fall over to when provider is unreachable. */
+    fallbacks?: string[];
+  }>;
+  /**
+   * Environment variables applied to every launch of this agent, regardless of preset.
+   * Preset-level env overrides these when keys overlap.
+   */
+  globalEnv?: Record<string, string>;
   [key: string]: unknown;
 }
 
@@ -101,6 +135,8 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   gemini: "--yolo",
   codex: "--dangerously-bypass-approvals-and-sandbox",
   cursor: "--force",
+  interpreter: "--auto_run",
+  amp: "--dangerously-allow-all",
 };
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
@@ -123,6 +159,22 @@ export function getAgentSettingsEntry(
 ): AgentSettingsEntry {
   if (!settings || !settings.agents) return {};
   return settings.agents[agentId] ?? {};
+}
+
+/**
+ * Resolves the effective preset ID for a launch: worktree-scoped override
+ * wins, then agent-level default, else `undefined`. Single source of truth
+ * shared by `useAgentLauncher` and the toolbar components so resolution
+ * can't drift between call sites.
+ */
+export function resolveEffectivePresetId(
+  entry: AgentSettingsEntry | null | undefined,
+  worktreeId: string | null | undefined
+): string | undefined {
+  if (!entry) return undefined;
+  const scoped =
+    worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
+  return scoped ?? entry.presetId;
 }
 
 export interface GenerateAgentFlagsOptions {
@@ -181,6 +233,8 @@ export interface GenerateAgentCommandOptions {
   modelId?: string;
   /** Additional CLI arguments from recipe terminal (whitespace-separated string) */
   recipeArgs?: string;
+  /** Additional CLI arguments from agent preset (whitespace-separated string) */
+  presetArgs?: string;
 }
 
 /**
@@ -237,6 +291,17 @@ export function generateAgentCommand(
   // Add --model flag if a specific model was selected for this launch
   if (options?.modelId) {
     parts.push("--model", options.modelId);
+  }
+
+  // Add preset-level args (env overrides applied separately via spawn env)
+  if (options?.presetArgs) {
+    for (const token of options.presetArgs.trim().split(/\s+/).filter(Boolean)) {
+      if (token.startsWith("-")) {
+        parts.push(token);
+      } else {
+        parts.push(escapeShellArg(token));
+      }
+    }
   }
 
   // Add recipe-level args (per-terminal overrides from recipe editor)
@@ -321,7 +386,7 @@ export function generateAgentCommand(
 export function buildAgentLaunchFlags(
   entry: AgentSettingsEntry,
   agentId: string,
-  options?: { modelId?: string }
+  options?: { modelId?: string; presetArgs?: string[] }
 ): string[] {
   const agentConfig = getEffectiveAgentConfig(agentId);
   const flags: string[] = [];
@@ -342,6 +407,12 @@ export function buildAgentLaunchFlags(
     flags.push("--model", options.modelId);
   }
 
+  // Preset-level args are process-level launch configuration. Persist them so
+  // restart/resume paths reproduce the same provider/mode selection as launch.
+  if (options?.presetArgs?.length) {
+    flags.push(...options.presetArgs);
+  }
+
   // Dangerous args and custom flags (from generateAgentFlags, excluding clipboard dir)
   const settingsFlags = generateAgentFlags(entry, agentId);
   flags.push(...settingsFlags);
@@ -354,6 +425,11 @@ export function buildAgentLaunchFlags(
  * When launchFlags are provided, they are prepended before the resume args
  * to restore the original process-level configuration.
  *
+ * Dispatches on `resume.kind` (see {@link AgentResume}). The `sessionId`
+ * parameter is passed verbatim — for `named-target` it is reinterpreted as
+ * the user-named target — so existing call sites that pass a session ID
+ * positionally continue to work without an API change.
+ *
  * @returns The resume command string, or undefined if the agent has no resume config.
  */
 export function buildResumeCommand(
@@ -362,7 +438,8 @@ export function buildResumeCommand(
   launchFlags?: string[]
 ): string | undefined {
   const agentConfig = getEffectiveAgentConfig(agentId);
-  if (!agentConfig?.resume) return undefined;
+  const resume = agentConfig?.resume;
+  if (!agentConfig || !resume) return undefined;
 
   const parts = [agentConfig.command];
 
@@ -377,12 +454,88 @@ export function buildResumeCommand(
     }
   }
 
-  const args = agentConfig.resume.args(sessionId);
+  let args: string[];
+  switch (resume.kind) {
+    case "session-id":
+      args = resume.args(sessionId);
+      break;
+    case "rolling-history":
+      args = resume.args();
+      break;
+    case "named-target":
+      args = resume.argsForTarget(sessionId);
+      break;
+    case "project-scoped":
+      args = resume.args();
+      break;
+    default: {
+      const _exhaustive: never = resume;
+      void _exhaustive;
+      return undefined;
+    }
+  }
+
   for (const arg of args) {
     if (arg.startsWith("-")) {
       parts.push(arg);
     } else {
       parts.push(escapeShellArgOptional(arg));
+    }
+  }
+  return parts.join(" ");
+}
+
+export interface BuildLaunchCommandFromFlagsOptions {
+  /** Absolute path to the clipboard temp directory (re-injected for agents that support it) */
+  clipboardDirectory?: string;
+  /**
+   * Current `shareClipboardDirectory` setting for the agent entry. When not `false`
+   * and the agent supports clipboard injection (e.g. Gemini), `--include-directories
+   * <clipboardDirectory>` is appended if not already present.
+   */
+  shareClipboardDirectory?: boolean;
+}
+
+/**
+ * Reconstructs an agent launch command from persisted launch flags.
+ *
+ * Used on respawn/restart paths when no resumable session is available but
+ * the original `agentLaunchFlags` are persisted. Mirrors the shell-escaping
+ * rules of `buildResumeCommand` (raw for flag-style `-`-prefixed tokens,
+ * `escapeShellArg` for positional values).
+ *
+ * Re-injects runtime-dynamic values that `buildAgentLaunchFlags` deliberately
+ * excluded at capture time — today, only Gemini's `--include-directories
+ * <clipboardDirectory>` (with dedup if already present in the persisted flags).
+ */
+export function buildLaunchCommandFromFlags(
+  baseCommand: string,
+  agentId: string,
+  launchFlags: readonly string[],
+  options?: BuildLaunchCommandFromFlagsOptions
+): string {
+  const flags: string[] = [...launchFlags];
+
+  if (
+    agentId === "gemini" &&
+    options?.shareClipboardDirectory !== false &&
+    options?.clipboardDirectory
+  ) {
+    const dir = options.clipboardDirectory;
+    const alreadyIncluded = flags.some(
+      (flag, i) => flag === "--include-directories" && flags[i + 1] === dir
+    );
+    if (!alreadyIncluded) {
+      flags.push("--include-directories", dir);
+    }
+  }
+
+  const parts: string[] = [baseCommand];
+  for (const flag of flags) {
+    if (flag.startsWith("-")) {
+      parts.push(flag);
+    } else {
+      parts.push(escapeShellArg(flag));
     }
   }
   return parts.join(" ");

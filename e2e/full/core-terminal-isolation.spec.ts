@@ -64,6 +64,7 @@ async function ptySubmit(page: import("@playwright/test").Page, panelId: string,
         await w.electron.terminal.submit(id, payload);
         return { ok: true };
       } catch (err) {
+        // eslint-disable-next-line no-restricted-syntax -- runs inside page.evaluate, cannot import shared helpers.
         return { ok: false, reason: err instanceof Error ? err.message : String(err) };
       }
     },

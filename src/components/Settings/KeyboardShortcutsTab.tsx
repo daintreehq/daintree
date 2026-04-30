@@ -1,209 +1,17 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { isMac } from "@/lib/platform";
-import { Search, X, RotateCcw, AlertTriangle } from "lucide-react";
+import { Search, X, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  keybindingService,
-  KeybindingConfig,
-  normalizeKeyForBinding,
-} from "@/services/KeybindingService";
+import { keybindingService, KeybindingConfig } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { KeybindingProfileActions } from "./KeybindingProfileActions";
+import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
 
 interface ShortcutBinding extends KeybindingConfig {
   effectiveCombo: string;
   isOverridden: boolean;
-}
-
-interface KeyRecorderProps {
-  onCapture: (combo: string) => void;
-  onCancel: () => void;
-  excludeActionId: string;
-}
-
-const CHORD_TIMEOUT_MS = 1000;
-
-function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps) {
-  const [recording, setRecording] = useState(false);
-  const [capturedCombos, setCapturedCombos] = useState<string[]>([]);
-  const [chordStep, setChordStep] = useState<"first" | "waiting" | "complete">("first");
-  const chordTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const chordTokenRef = useRef(0);
-
-  const capturedCombo = capturedCombos.length > 0 ? capturedCombos.join(" ") : null;
-
-  const conflicts = useMemo(() => {
-    if (!capturedCombo) return [];
-    return keybindingService.findConflicts(capturedCombo, excludeActionId);
-  }, [capturedCombo, excludeActionId]);
-
-  const clearChordTimeout = useCallback(() => {
-    if (chordTimeoutRef.current) {
-      clearTimeout(chordTimeoutRef.current);
-      chordTimeoutRef.current = null;
-    }
-  }, []);
-
-  const finishRecording = useCallback(
-    (combos: string[]) => {
-      clearChordTimeout();
-      setCapturedCombos(combos);
-      setRecording(false);
-      setChordStep("complete");
-    },
-    [clearChordTimeout]
-  );
-
-  useEffect(() => {
-    if (!recording) return;
-
-    const handler = (e: KeyboardEvent) => {
-      if (e.repeat) return;
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      const parts: string[] = [];
-      const mac = isMac();
-
-      if (mac && e.metaKey) parts.push("Cmd");
-      if (!mac && e.ctrlKey) parts.push("Cmd");
-      if (e.shiftKey) parts.push("Shift");
-      if (e.altKey) parts.push("Alt");
-
-      // Use normalizeKeyForBinding to handle physical key codes correctly
-      // This fixes issues where Option+/ records as ÷ instead of /
-      const key = normalizeKeyForBinding(e);
-      if (!["Meta", "Control", "Alt", "Shift"].includes(key)) {
-        parts.push(key);
-        const combo = parts.join("+");
-
-        setCapturedCombos((prev) => {
-          const newCombos = [...prev, combo];
-
-          if (prev.length === 0) {
-            setChordStep("waiting");
-            clearChordTimeout();
-            chordTokenRef.current += 1;
-            const token = chordTokenRef.current;
-            chordTimeoutRef.current = setTimeout(() => {
-              if (chordTokenRef.current !== token) return;
-              finishRecording(newCombos);
-            }, CHORD_TIMEOUT_MS);
-          } else {
-            chordTokenRef.current += 1;
-            finishRecording(newCombos);
-          }
-
-          return newCombos;
-        });
-      }
-    };
-
-    window.addEventListener("keydown", handler, { capture: true });
-    return () => {
-      window.removeEventListener("keydown", handler, { capture: true });
-      clearChordTimeout();
-    };
-  }, [recording, clearChordTimeout, finishRecording]);
-
-  const handleStartRecording = () => {
-    setCapturedCombos([]);
-    setChordStep("first");
-    setRecording(true);
-  };
-
-  const handleSave = () => {
-    if (capturedCombo) {
-      clearChordTimeout();
-      setRecording(false);
-      onCapture(capturedCombo);
-    }
-  };
-
-  const handleClear = () => {
-    clearChordTimeout();
-    setRecording(false);
-    onCapture("");
-  };
-
-  const handleCancel = () => {
-    clearChordTimeout();
-    setRecording(false);
-    onCancel();
-  };
-
-  const isChord = capturedCombos.length > 1;
-
-  return (
-    <div className="bg-daintree-bg/50 border border-daintree-border rounded-[var(--radius-lg)] p-4 space-y-3">
-      <div className="flex items-center gap-2">
-        {recording ? (
-          <div className="flex-1 px-4 py-2 border border-daintree-accent rounded bg-daintree-accent/10 text-daintree-accent animate-pulse text-center">
-            {chordStep === "first" ? (
-              "Press key combination..."
-            ) : chordStep === "waiting" ? (
-              <span>
-                <span className="font-mono">
-                  {keybindingService.formatComboForDisplay(capturedCombos[0])}
-                </span>
-                <span className="text-daintree-accent/70">
-                  {" "}
-                  — press second key or wait to finish
-                </span>
-              </span>
-            ) : null}
-          </div>
-        ) : capturedCombo ? (
-          <div className="flex-1 px-4 py-2 border border-daintree-border rounded bg-daintree-bg text-daintree-text text-center font-mono">
-            <span>{keybindingService.formatComboForDisplay(capturedCombo)}</span>
-            {isChord && <span className="ml-2 text-xs text-daintree-text/50">(chord)</span>}
-          </div>
-        ) : (
-          <button
-            onClick={handleStartRecording}
-            className="flex-1 px-4 py-2 border border-daintree-border rounded bg-daintree-bg text-daintree-text/60 hover:text-daintree-text hover:border-daintree-accent transition-colors"
-          >
-            Click to record shortcut
-          </button>
-        )}
-      </div>
-
-      {conflicts.length > 0 && (
-        <div className="flex items-start gap-2 text-status-warning text-sm">
-          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-          <span>
-            Conflicts with: {conflicts.map((c) => c.description || c.actionId).join(", ")}
-          </span>
-        </div>
-      )}
-
-      <div className="flex gap-2 justify-end">
-        <button
-          onClick={handleCancel}
-          className="px-3 py-1.5 text-sm text-daintree-text/60 hover:text-daintree-text transition-colors"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={handleClear}
-          className="px-3 py-1.5 text-sm text-daintree-text/60 hover:text-daintree-text transition-colors"
-        >
-          Clear
-        </button>
-        {capturedCombo && (
-          <button
-            onClick={handleSave}
-            className="px-3 py-1.5 text-sm bg-daintree-accent text-daintree-bg rounded hover:bg-daintree-accent/90 transition-colors"
-          >
-            Save
-          </button>
-        )}
-      </div>
-    </div>
-  );
 }
 
 interface ShortcutRowProps {
@@ -228,7 +36,7 @@ function ShortcutRow({ binding, isEditing, onEdit, onSave, onCancel, onReset }: 
             {binding.description || binding.actionId}
           </span>
         </div>
-        <KeyRecorder
+        <SettingsShortcutCapture
           onCapture={handleCapture}
           onCancel={onCancel}
           excludeActionId={binding.actionId}
@@ -246,7 +54,7 @@ function ShortcutRow({ binding, isEditing, onEdit, onSave, onCancel, onReset }: 
             className={cn(
               "px-2 py-0.5 text-xs font-mono rounded",
               binding.isOverridden
-                ? "bg-daintree-accent/20 text-daintree-accent"
+                ? "bg-status-info/15 text-status-info"
                 : "bg-daintree-border text-daintree-text"
             )}
           >
@@ -262,20 +70,18 @@ function ShortcutRow({ binding, isEditing, onEdit, onSave, onCancel, onReset }: 
           Edit
         </button>
         {binding.isOverridden && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={onReset}
-                  className="p-0.5 text-daintree-text/60 hover:text-daintree-text opacity-0 group-hover:opacity-100 transition-opacity"
-                  aria-label="Reset to default"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Reset to default</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={onReset}
+                className="p-0.5 text-daintree-text/60 hover:text-daintree-text opacity-0 group-hover:opacity-100 transition-opacity"
+                aria-label="Reset to default"
+              >
+                <RotateCcw className="w-3 h-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Reset to default</TooltipContent>
+          </Tooltip>
         )}
       </div>
     </div>
@@ -344,7 +150,7 @@ export function KeyboardShortcutsTab() {
       { source: "user" }
     );
     if (!result.ok) {
-      console.error("Failed to save keybinding override:", result.error);
+      logError("Failed to save keybinding override", undefined, { error: result.error });
     }
     setEditingActionId(null);
     loadBindings();
@@ -357,7 +163,7 @@ export function KeyboardShortcutsTab() {
       { source: "user" }
     );
     if (!result.ok) {
-      console.error("Failed to reset keybinding override:", result.error);
+      logError("Failed to reset keybinding override", undefined, { error: result.error });
     }
     loadBindings();
   };
@@ -376,7 +182,7 @@ export function KeyboardShortcutsTab() {
         confirmed: true,
       });
       if (!result.ok) {
-        console.error("Failed to reset all keybinding overrides:", result.error);
+        logError("Failed to reset all keybinding overrides", undefined, { error: result.error });
         return;
       }
       await keybindingService.loadOverrides();
@@ -435,7 +241,7 @@ export function KeyboardShortcutsTab() {
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={handleSearchKeyDown}
             aria-label="Search shortcuts"
-            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-muted focus:outline-none"
+            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-muted focus:outline-hidden"
           />
           {searchQuery && (
             <button
@@ -498,13 +304,13 @@ export function KeyboardShortcutsTab() {
       <ConfirmDialog
         isOpen={isResetDialogOpen}
         onClose={isResetting ? undefined : handleCancelReset}
-        title="Reset Keyboard Shortcuts?"
+        title="Reset keyboard shortcuts?"
         description={
           hasOverrides
             ? "All keyboard shortcuts will be reset to their default values. Any customized shortcuts will be removed."
             : "There are no customized shortcuts to reset. All shortcuts are already at their default values."
         }
-        confirmLabel="Reset to Defaults"
+        confirmLabel="Reset shortcuts"
         cancelLabel="Cancel"
         onConfirm={handleConfirmReset}
         isConfirmLoading={isResetting}

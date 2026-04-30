@@ -5,8 +5,10 @@ import {
   type PRCheckCandidate,
   type LinkedPR,
 } from "./GitHubService.js";
+import { gitHubRateLimitService } from "./github/index.js";
 import { logInfo, logWarn, logDebug } from "../utils/logger.js";
 import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 60 * 1000;
 
@@ -147,7 +149,7 @@ class PullRequestService {
         logDebug("Running debounced PR check", { candidateCount: this.candidates.size });
         void this.checkForPRs().catch((err) =>
           logWarn("Debounced PR check failed", {
-            error: err instanceof Error ? err.message : String(err),
+            error: formatErrorMessage(err, "Debounced PR check failed"),
           })
         );
 
@@ -266,7 +268,7 @@ class PullRequestService {
           this.consecutiveErrors = 0;
           this.nextRetryAt = 0;
           void this.checkForPRs()
-            .catch((err) => this.handleError(err instanceof Error ? err.message : String(err)))
+            .catch((err) => this.handleError(formatErrorMessage(err, "PR check failed")))
             .finally(() => this.scheduleNextPoll());
         }, delay);
       }
@@ -288,7 +290,7 @@ class PullRequestService {
     this.pollTimer = setTimeout(() => {
       this.pollTimer = null;
       void this.checkForPRs()
-        .catch((err) => this.handleError(err instanceof Error ? err.message : String(err)))
+        .catch((err) => this.handleError(formatErrorMessage(err, "PR check failed")))
         .finally(() => this.scheduleNextPoll());
     }, interval);
   }
@@ -327,7 +329,7 @@ class PullRequestService {
       void this.revalidateResolvedPRs()
         .catch((err) =>
           logWarn("Revalidation unexpected error", {
-            error: err instanceof Error ? err.message : String(err),
+            error: formatErrorMessage(err, "PR revalidation failed"),
           })
         )
         .finally(() => this.scheduleRevalidation());
@@ -339,15 +341,29 @@ class PullRequestService {
       return;
     }
 
-    // Collect resolved worktrees that need revalidation
+    const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest();
+    if (rateLimitBlock.blocked && rateLimitBlock.resumeAt) {
+      this.nextRetryAt = rateLimitBlock.resumeAt;
+      logDebug("Skipping PR revalidation — GitHub rate limit active", {
+        reason: rateLimitBlock.reason,
+        resumeAt: rateLimitBlock.resumeAt,
+      });
+      return;
+    }
+
+    // Collect resolved worktrees that need revalidation. Always include the
+    // detected PR number so GitHubService can use ETag conditional requests
+    // to skip GraphQL when nothing has changed.
     const candidatesToRevalidate: PRCheckCandidate[] = [];
     for (const worktreeId of this.resolvedWorktrees) {
       const context = this.candidates.get(worktreeId);
-      if (context) {
+      const detectedPR = this.detectedPRs.get(worktreeId);
+      if (context && detectedPR) {
         candidatesToRevalidate.push({
           worktreeId,
           issueNumber: context.issueNumber,
           branchName: context.branchName,
+          knownPRNumber: detectedPR.number,
         });
       }
     }
@@ -424,12 +440,28 @@ class PullRequestService {
       }
     } catch (error) {
       logWarn("Revalidation check error", {
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: formatErrorMessage(error, "PR revalidation failed"),
       });
     }
   }
 
   private async checkForPRs(): Promise<void> {
+    const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest();
+    if (rateLimitBlock.blocked && rateLimitBlock.resumeAt) {
+      // Park polling at the known resume time without incrementing the
+      // circuit breaker. GitHub docs explicitly warn that retrying through a
+      // secondary rate limit can escalate to a permanent ban, so even for
+      // secondary limits we use the same one-shot resume pattern rather than
+      // touching `consecutiveErrors`.
+      this.nextRetryAt = rateLimitBlock.resumeAt;
+      logDebug("Skipping PR check — GitHub rate limit active", {
+        reason: rateLimitBlock.reason,
+        resumeAt: rateLimitBlock.resumeAt,
+        waitMs: rateLimitBlock.resumeAt - Date.now(),
+      });
+      return;
+    }
+
     const activeCandidates: PRCheckCandidate[] = [];
     for (const [worktreeId, context] of this.candidates) {
       if (!this.resolvedWorktrees.has(worktreeId)) {
@@ -452,7 +484,7 @@ class PullRequestService {
       const result = await batchCheckLinkedPRs(this.cwd, activeCandidates);
 
       if (result.error) {
-        this.handleError(result.error);
+        this.handleError(result.error, result.rateLimit);
         return;
       }
 
@@ -499,11 +531,29 @@ class PullRequestService {
         }
       }
     } catch (error) {
-      this.handleError(error instanceof Error ? error.message : "Unknown error");
+      this.handleError(formatErrorMessage(error, "PR check failed"));
     }
   }
 
-  private handleError(errorMsg: string): void {
+  private handleError(
+    errorMsg: string,
+    rateLimit?: { kind: "primary" | "secondary"; resumeAt: number }
+  ): void {
+    // Prefer a rate-limit marker captured synchronously alongside the
+    // failing request — checking the mutable singleton here would race
+    // with a concurrent 2xx clearing state between the 429 and this
+    // handler. Treat a rate-limit pause distinctly from a circuit-breaker
+    // trip: GitHub's docs warn that blind retry through secondary limits
+    // can escalate to a permanent ban.
+    if (rateLimit) {
+      this.nextRetryAt = rateLimit.resumeAt;
+      logWarn("PR check hit a GitHub rate limit — pausing without tripping circuit breaker", {
+        reason: rateLimit.kind,
+        resumeAt: rateLimit.resumeAt,
+      });
+      return;
+    }
+
     this.consecutiveErrors++;
     logWarn("PR check failed", { error: errorMsg, consecutiveErrors: this.consecutiveErrors });
 

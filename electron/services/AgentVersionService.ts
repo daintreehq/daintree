@@ -9,6 +9,8 @@ import type { AgentVersionInfo } from "../../shared/types/ipc/system.js";
 import type { AgentId } from "../../shared/types/agent.js";
 import { CliAvailabilityService } from "./CliAvailabilityService.js";
 import { isAgentInstalled } from "../../shared/utils/agentAvailability.js";
+import { buildProbeEnv } from "../utils/spawnEnv.js";
+import { scrubSecrets } from "../utils/secretScrubber.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -21,7 +23,7 @@ interface CachedVersionInfo {
 export class AgentVersionService {
   private cache = new Map<AgentId, CachedVersionInfo>();
   private readonly CACHE_TTL_MS = 12 * 60 * 60 * 1000;
-  private readonly TIMEOUT_MS = 5000;
+  private readonly TIMEOUT_MS = 10000;
   private readonly MAX_BUFFER = 256 * 1024;
   private inFlightChecks = new Map<AgentId, Promise<AgentVersionInfo>>();
   private generation = 0;
@@ -186,6 +188,7 @@ export class AgentVersionService {
         maxBuffer: this.MAX_BUFFER,
         shell: false,
         windowsHide: true,
+        env: buildProbeEnv(),
       });
       stdout = result.stdout || result.stderr || "";
     } catch (error: any) {
@@ -200,7 +203,7 @@ export class AgentVersionService {
       }
       stdout = error.stdout?.toString() || error.stderr?.toString() || "";
       if (!stdout) {
-        throw new Error(`Command failed: ${error.message}`);
+        throw new Error(`Command failed: ${scrubSecrets(error.message ?? "")}`);
       }
     }
 
@@ -234,7 +237,48 @@ export class AgentVersionService {
       return this.getLatestNpmVersion(config.version.npmPackage);
     }
 
+    if (config.version.pypiPackage) {
+      return this.getLatestPypiVersion(config.version.pypiPackage);
+    }
+
     return null;
+  }
+
+  private async getLatestPypiVersion(packageName: string): Promise<string | null> {
+    try {
+      const url = `https://pypi.org/pypi/${packageName}/json`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
+
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            Accept: "application/json",
+            "User-Agent": "Daintree-Electron",
+          },
+        });
+
+        if (response.status === 404) {
+          throw new Error(`PyPI package not found: ${packageName}`);
+        }
+
+        if (!response.ok) {
+          throw new Error(`PyPI returned ${response.status}`);
+        }
+
+        const data = (await response.json()) as { info?: { version?: string } };
+        const version = data.info?.version;
+        if (typeof version !== "string" || !version) return null;
+        return this.parseVersion(version);
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (error) {
+      throw new Error(`Failed to fetch PyPI version: ${this.toErrorString(error)}`, {
+        cause: error,
+      });
+    }
   }
 
   private async getLatestNpmVersion(packageName: string): Promise<string | null> {

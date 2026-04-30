@@ -4,7 +4,20 @@ import { readJson } from "../perf/lib/io.js";
 import { replayCorpus } from "./corpus-replay.js";
 import type { AnalyzerOutput, PatternCandidate } from "./types.js";
 
-const REGISTRY_PATH = path.resolve(import.meta.dirname, "../../shared/config/agentRegistry.ts");
+const AGENTS_DIR = path.resolve(import.meta.dirname, "../../shared/config/agents");
+
+/**
+ * Resolve the per-agent config file path. After the registry split (#6130),
+ * `@generated:` sentinels live in `shared/config/agents/<id>.ts`, not in the
+ * monolithic `agentRegistry.ts`. The id is validated to defeat path traversal
+ * — agents/<arbitrary>../foo.ts would otherwise escape the config dir.
+ */
+function getAgentConfigPath(agentId: string): string {
+  if (!/^[a-z0-9-]+$/.test(agentId)) {
+    throw new Error(`Invalid agent id: ${agentId}`);
+  }
+  return path.join(AGENTS_DIR, `${agentId}.ts`);
+}
 
 const CORPUS_DIR = path.resolve(import.meta.dirname, "corpus");
 
@@ -123,7 +136,8 @@ function main(): void {
   );
 
   const grouped = groupCandidatesByCategory(analysis.candidates);
-  let source = fs.readFileSync(REGISTRY_PATH, "utf-8");
+  const registryPath = getAgentConfigPath(analysis.agentId);
+  let source = fs.readFileSync(registryPath, "utf-8");
   let changes = 0;
 
   for (const [field, patterns] of grouped) {
@@ -155,7 +169,7 @@ function main(): void {
   }
 
   // Validate with corpus replay BEFORE writing
-  const originalSource = fs.readFileSync(REGISTRY_PATH, "utf-8");
+  const originalSource = fs.readFileSync(registryPath, "utf-8");
   const corpusFiles = fs.existsSync(CORPUS_DIR)
     ? fs
         .readdirSync(CORPUS_DIR)
@@ -164,7 +178,7 @@ function main(): void {
 
   if (corpusFiles.length > 0) {
     // Write temporarily to validate, restore on failure
-    fs.writeFileSync(REGISTRY_PATH, source, "utf-8");
+    fs.writeFileSync(registryPath, source, "utf-8");
     let validationFailed = false;
 
     console.log("[update-registry] Running corpus replay validation...");
@@ -182,7 +196,7 @@ function main(): void {
     }
 
     if (validationFailed) {
-      fs.writeFileSync(REGISTRY_PATH, originalSource, "utf-8");
+      fs.writeFileSync(registryPath, originalSource, "utf-8");
       console.error("[update-registry] Validation failed, registry restored to original");
       process.exitCode = 1;
       return;
@@ -190,7 +204,7 @@ function main(): void {
 
     console.log(`[update-registry] Registry updated and validated (${changes} fields)`);
   } else {
-    fs.writeFileSync(REGISTRY_PATH, source, "utf-8");
+    fs.writeFileSync(registryPath, source, "utf-8");
     console.log(`[update-registry] Registry updated (${changes} fields, no corpus for validation)`);
   }
 }

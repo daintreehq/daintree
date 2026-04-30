@@ -45,8 +45,8 @@ describe("SettingsSwitchCard", () => {
   });
 
   const getThumb = (container: HTMLElement) => {
-    const track = container.querySelector('[role="switch"]')?.querySelector("[aria-hidden]");
-    return track?.firstElementChild ?? null;
+    const switchEl = container.querySelector('[role="switch"]');
+    return switchEl?.querySelector("span") ?? null;
   };
 
   it("uses bg-daintree-text on the thumb in the OFF state for WCAG 1.4.11 contrast", () => {
@@ -55,7 +55,7 @@ describe("SettingsSwitchCard", () => {
     expect(thumb).not.toBeNull();
     const classes = thumb?.className.split(/\s+/) ?? [];
     expect(classes).toContain("bg-daintree-text");
-    expect(classes).not.toContain("bg-text-inverse");
+    expect(classes).toContain("data-[state=checked]:bg-text-inverse");
   });
 
   it("uses bg-text-inverse on the thumb in the ON state (sits on accent track)", () => {
@@ -63,7 +63,35 @@ describe("SettingsSwitchCard", () => {
     const thumb = getThumb(container);
     expect(thumb).not.toBeNull();
     const classes = thumb?.className.split(/\s+/) ?? [];
-    expect(classes).toContain("bg-text-inverse");
-    expect(classes).not.toContain("bg-daintree-text");
+    expect(classes).toContain("bg-daintree-text");
+    expect(classes).toContain("data-[state=checked]:bg-text-inverse");
+  });
+
+  it("applies amber color scheme to switch track when enabled", () => {
+    const { container } = render(
+      <SettingsSwitchCard {...defaultProps} isEnabled={true} colorScheme="amber" />
+    );
+    const switchEl = container.querySelector('[role="switch"]');
+    expect(switchEl?.className).toContain("data-[state=checked]:bg-status-warning");
+  });
+
+  it("applies danger color scheme to switch track when enabled", () => {
+    const { container } = render(
+      <SettingsSwitchCard {...defaultProps} isEnabled={true} colorScheme="danger" />
+    );
+    const switchEl = container.querySelector('[role="switch"]');
+    expect(switchEl?.className).toContain("data-[state=checked]:bg-status-error");
+  });
+
+  it("applies accent color scheme by default", () => {
+    const { container } = render(<SettingsSwitchCard {...defaultProps} isEnabled={true} />);
+    const switchEl = container.querySelector('[role="switch"]');
+    expect(switchEl?.className).toContain("data-[state=checked]:bg-daintree-accent");
+  });
+
+  it("wraps content in subgrid container", () => {
+    const { container } = render(<SettingsSwitchCard {...defaultProps} />);
+    const outer = container.firstElementChild as HTMLElement;
+    expect(outer.classList.contains("grid-cols-subgrid")).toBe(true);
   });
 });

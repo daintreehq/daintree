@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import { existsSync } from "fs";
 import { resilientRename, resilientAtomicWriteFile } from "../utils/fs.js";
 import { getProjectStateDir, recipesFilePath } from "./projectStorePaths.js";
+import { TerminalRecipeSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 
 export class ProjectFileStore {
   constructor(private projectsConfigDir: string) {}
@@ -24,18 +25,15 @@ export class ProjectFileStore {
         return [];
       }
 
-      return parsed.filter(
-        (recipe: unknown): recipe is TerminalRecipe =>
-          recipe !== null &&
-          typeof recipe === "object" &&
-          typeof (recipe as TerminalRecipe).id === "string" &&
-          typeof (recipe as TerminalRecipe).name === "string" &&
-          Array.isArray((recipe as TerminalRecipe).terminals)
+      return filterValidTerminalEntries(
+        parsed,
+        TerminalRecipeSchema,
+        `ProjectFileStore(${projectId})`
       );
     } catch (error) {
       console.error(`[ProjectFileStore] Failed to load recipes for ${projectId}:`, error);
       try {
-        const quarantinePath = `${filePath}.corrupted`;
+        const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
         await resilientRename(filePath, quarantinePath);
         console.warn(`[ProjectFileStore] Corrupted recipes file moved to ${quarantinePath}`);
       } catch {

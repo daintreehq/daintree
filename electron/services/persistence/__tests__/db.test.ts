@@ -7,8 +7,16 @@ vi.mock("electron", () => ({
   app: { getPath: () => "/fake/userData" },
 }));
 
+const mockGetCurrentDiskSpaceStatus = vi.fn();
+
+vi.mock("../../DiskSpaceMonitor.js", () => ({
+  getCurrentDiskSpaceStatus: () => mockGetCurrentDiskSpaceStatus(),
+}));
+
 const mockPragma = vi.fn();
 const mockClose = vi.fn();
+const mockExec = vi.fn();
+const mockPrepare = vi.fn(() => ({ run: vi.fn() }));
 const mockDatabaseConstructor = vi.fn();
 
 vi.mock("better-sqlite3", () => {
@@ -21,11 +29,17 @@ vi.mock("better-sqlite3", () => {
       }
       pragma = mockPragma;
       close = mockClose;
+      exec = mockExec;
+      prepare = mockPrepare;
     },
   };
 });
 
-import { probeDb, attemptRecovery, closeSharedDb } from "../db.js";
+vi.mock("drizzle-orm/better-sqlite3", () => ({
+  drizzle: vi.fn(() => ({})),
+}));
+
+import { probeDb, attemptRecovery, closeSharedDb, withDiskRecovery } from "../db.js";
 
 describe("probeDb", () => {
   let tmpDir: string;
@@ -176,5 +190,174 @@ describe("attemptRecovery", () => {
 describe("closeSharedDb", () => {
   it("does nothing when no shared instance exists", () => {
     expect(() => closeSharedDb({ checkpoint: true })).not.toThrow();
+  });
+});
+
+describe("withDiskRecovery", () => {
+  type SqliteHandle = Parameters<typeof withDiskRecovery>[0];
+  let pragma: ReturnType<typeof vi.fn>;
+  let sqlite: SqliteHandle;
+
+  function makeError(code: string, message = code): Error & { code: string } {
+    const err = new Error(message) as Error & { code: string };
+    err.code = code;
+    return err;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    pragma = vi.fn();
+    sqlite = { pragma } as unknown as SqliteHandle;
+    mockGetCurrentDiskSpaceStatus.mockReturnValue({
+      status: "normal",
+      availableMb: 4096,
+      writesSuppressed: false,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns the result without retrying when fn succeeds", () => {
+    const fn = vi.fn(() => "ok");
+
+    expect(withDiskRecovery(sqlite, fn)).toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(pragma).not.toHaveBeenCalled();
+    expect(mockGetCurrentDiskSpaceStatus).not.toHaveBeenCalled();
+  });
+
+  it("checkpoints WAL and retries once on SQLITE_FULL when disk is not critical", () => {
+    const fn = vi
+      .fn<() => string>()
+      .mockImplementationOnce(() => {
+        throw makeError("SQLITE_FULL", "database or disk is full");
+      })
+      .mockImplementationOnce(() => "recovered");
+
+    expect(withDiskRecovery(sqlite, fn)).toBe("recovered");
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(pragma).toHaveBeenCalledWith("wal_checkpoint(TRUNCATE)");
+  });
+
+  it("retries on SQLITE_IOERR_WRITE (extended IOERR variant)", () => {
+    const fn = vi
+      .fn<() => string>()
+      .mockImplementationOnce(() => {
+        throw makeError("SQLITE_IOERR_WRITE", "io write failed");
+      })
+      .mockImplementationOnce(() => "recovered");
+
+    expect(withDiskRecovery(sqlite, fn)).toBe("recovered");
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(pragma).toHaveBeenCalledWith("wal_checkpoint(TRUNCATE)");
+  });
+
+  it("retries when disk status is warning (not just normal)", () => {
+    mockGetCurrentDiskSpaceStatus.mockReturnValue({
+      status: "warning",
+      availableMb: 1024,
+      writesSuppressed: false,
+    });
+    const fn = vi
+      .fn<() => string>()
+      .mockImplementationOnce(() => {
+        throw makeError("SQLITE_FULL", "disk full");
+      })
+      .mockImplementationOnce(() => "recovered");
+
+    expect(withDiskRecovery(sqlite, fn)).toBe("recovered");
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(pragma).toHaveBeenCalledWith("wal_checkpoint(TRUNCATE)");
+  });
+
+  it.each([
+    "SQLITE_IOERR_READ",
+    "SQLITE_IOERR_LOCK",
+    "SQLITE_IOERR_ACCESS",
+    "SQLITE_IOERR_SHMOPEN",
+  ])("does not retry on non-write IOERR variant %s", (code) => {
+    const err = makeError(code);
+    const fn = vi.fn(() => {
+      throw err;
+    });
+
+    expect(() => withDiskRecovery(sqlite, fn)).toThrow(err);
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(pragma).not.toHaveBeenCalled();
+    expect(mockGetCurrentDiskSpaceStatus).not.toHaveBeenCalled();
+  });
+
+  it("does not crash and rethrows when error.code is not a string", () => {
+    const weirdError = { code: 5 };
+    const fn = vi.fn(() => {
+      throw weirdError;
+    });
+
+    expect(() => withDiskRecovery(sqlite, fn)).toThrow();
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(pragma).not.toHaveBeenCalled();
+  });
+
+  it("re-throws original error and does not retry when disk is critical", () => {
+    mockGetCurrentDiskSpaceStatus.mockReturnValue({
+      status: "critical",
+      availableMb: 100,
+      writesSuppressed: true,
+    });
+    const fullErr = makeError("SQLITE_FULL", "no space left");
+    const fn = vi.fn(() => {
+      throw fullErr;
+    });
+
+    expect(() => withDiskRecovery(sqlite, fn)).toThrow(fullErr);
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(pragma).not.toHaveBeenCalled();
+  });
+
+  it("does not retry on non-recoverable error (e.g. SQLITE_CORRUPT)", () => {
+    const corruptErr = makeError("SQLITE_CORRUPT", "image malformed");
+    const fn = vi.fn(() => {
+      throw corruptErr;
+    });
+
+    expect(() => withDiskRecovery(sqlite, fn)).toThrow(corruptErr);
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(pragma).not.toHaveBeenCalled();
+    expect(mockGetCurrentDiskSpaceStatus).not.toHaveBeenCalled();
+  });
+
+  it("propagates the retry error if the second attempt also throws", () => {
+    const firstErr = makeError("SQLITE_FULL", "first");
+    const retryErr = makeError("SQLITE_FULL", "second");
+    const fn = vi
+      .fn<() => string>()
+      .mockImplementationOnce(() => {
+        throw firstErr;
+      })
+      .mockImplementationOnce(() => {
+        throw retryErr;
+      });
+
+    expect(() => withDiskRecovery(sqlite, fn)).toThrow(retryErr);
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(pragma).toHaveBeenCalledWith("wal_checkpoint(TRUNCATE)");
+  });
+
+  it("still attempts the retry when the recovery checkpoint itself throws", () => {
+    pragma.mockImplementationOnce(() => {
+      throw makeError("SQLITE_FULL", "checkpoint failed");
+    });
+    const fn = vi
+      .fn<() => string>()
+      .mockImplementationOnce(() => {
+        throw makeError("SQLITE_FULL", "first");
+      })
+      .mockImplementationOnce(() => "recovered");
+
+    expect(withDiskRecovery(sqlite, fn)).toBe("recovered");
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 });

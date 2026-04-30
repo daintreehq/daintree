@@ -47,7 +47,7 @@ function setTerminals(terminals: MockTerminal[]) {
 
 function getTerminals() {
   const state = usePanelStore.getState();
-  return state.panelIds.map((id: string) => state.panelsById[id]);
+  return state.panelIds.map((id: string) => state.panelsById[id]!);
 }
 
 describe("Terminal Store Integration", () => {
@@ -84,7 +84,6 @@ describe("Terminal Store Integration", () => {
 
       await mockAddTerminal({
         id: "test-id-1",
-        type: "terminal",
         cwd: "/test",
         cols: 80,
         rows: 24,
@@ -132,7 +131,6 @@ describe("Terminal Store Integration", () => {
 
       await usePanelStore.getState().addPanel({
         id: "test-id-3",
-        type: "terminal",
         cwd: "/test",
         cols: 80,
         rows: 24,
@@ -158,7 +156,6 @@ describe("Terminal Store Integration", () => {
 
       await usePanelStore.getState().addPanel({
         id: "test-id-4",
-        type: "terminal",
         cwd: "/test",
         cols: 80,
         rows: 24,
@@ -175,7 +172,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -184,7 +180,6 @@ describe("Terminal Store Integration", () => {
         },
         {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -199,7 +194,7 @@ describe("Terminal Store Integration", () => {
       const mockMoveToDock = vi.fn((id: string) => {
         const state = usePanelStore.getState();
         const terminals = state.panelIds.map((tid: string) => {
-          const t = state.panelsById[tid];
+          const t = state.panelsById[tid]!;
           return t.id === id ? { ...t, location: "dock" as const } : t;
         });
 
@@ -229,7 +224,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -241,7 +235,7 @@ describe("Terminal Store Integration", () => {
       const mockMoveToGrid = vi.fn((id: string) => {
         const state = usePanelStore.getState();
         const terminals = state.panelIds.map((tid: string) => {
-          const t = state.panelsById[tid];
+          const t = state.panelsById[tid]!;
           return t.id === id ? { ...t, location: "grid" as const } : t;
         });
         usePanelStore.setState({
@@ -267,7 +261,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -276,7 +269,6 @@ describe("Terminal Store Integration", () => {
         },
         {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -291,7 +283,7 @@ describe("Terminal Store Integration", () => {
       const mockTrash = vi.fn((id: string) => {
         const state = usePanelStore.getState();
         const terminals = state.panelIds.map((tid: string) => {
-          const t = state.panelsById[tid];
+          const t = state.panelsById[tid]!;
           return t.id === id ? { ...t, location: "trash" as const } : t;
         });
 
@@ -321,7 +313,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -333,7 +324,7 @@ describe("Terminal Store Integration", () => {
       const mockRestore = vi.fn((id: string) => {
         const state = usePanelStore.getState();
         const terminals = state.panelIds.map((tid: string) => {
-          const t = state.panelsById[tid];
+          const t = state.panelsById[tid]!;
           return t.id === id ? { ...t, location: "grid" as const } : t;
         });
         usePanelStore.setState({
@@ -356,7 +347,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -372,7 +362,7 @@ describe("Terminal Store Integration", () => {
       const mockTrash = vi.fn((id: string) => {
         const state = usePanelStore.getState();
         const terminals = state.panelIds.map((tid: string) => {
-          const t = state.panelsById[tid];
+          const t = state.panelsById[tid]!;
           return t.id === id ? { ...t, location: "trash" as const } : t;
         });
 
@@ -406,7 +396,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "claude",
           title: "Claude",
           cwd: "/test",
           cols: 80,
@@ -419,7 +408,7 @@ describe("Terminal Store Integration", () => {
 
     it("should update agent state", () => {
       const state = usePanelStore.getState();
-      const terminal = state.panelsById["term-1"];
+      const terminal = state.panelsById["term-1"]!;
 
       usePanelStore.setState({
         panelsById: {
@@ -442,7 +431,7 @@ describe("Terminal Store Integration", () => {
 
       states.forEach((agentState) => {
         const curState = usePanelStore.getState();
-        const terminal = curState.panelsById["term-1"];
+        const terminal = curState.panelsById["term-1"]!;
         usePanelStore.setState({
           panelsById: {
             ...curState.panelsById,
@@ -457,7 +446,7 @@ describe("Terminal Store Integration", () => {
 
     it("should handle completed state", () => {
       const state = usePanelStore.getState();
-      const terminal = state.panelsById["term-1"];
+      const terminal = state.panelsById["term-1"]!;
 
       usePanelStore.setState({
         panelsById: {
@@ -476,7 +465,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -485,7 +473,6 @@ describe("Terminal Store Integration", () => {
         },
         {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -525,7 +512,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "claude",
           title: "Claude Agent",
           cwd: "/test/worktree",
           cols: 120,
@@ -536,8 +522,8 @@ describe("Terminal Store Integration", () => {
         },
       ]);
 
-      const terminal = usePanelStore.getState().panelsById["term-1"];
-      expect(terminal.type).toBe("claude");
+      const terminal = usePanelStore.getState().panelsById["term-1"]!;
+      expect(undefined).toBe("claude");
       expect(terminal.title).toBe("Claude Agent");
       expect(terminal.worktreeId).toBe("worktree-1");
       expect(terminal.agentState).toBe("working");
@@ -547,7 +533,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell",
           cwd: "/test",
           cols: 80,
@@ -559,7 +544,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Updated Title",
           cwd: "/test",
           cols: 100,
@@ -568,7 +552,7 @@ describe("Terminal Store Integration", () => {
         },
       ]);
 
-      const terminal = usePanelStore.getState().panelsById["term-1"];
+      const terminal = usePanelStore.getState().panelsById["term-1"]!;
       expect(terminal.title).toBe("Updated Title");
       expect(terminal.cols).toBe(100);
       expect(terminal.rows).toBe(30);

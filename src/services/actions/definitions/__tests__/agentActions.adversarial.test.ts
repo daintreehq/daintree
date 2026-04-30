@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ActionDefinition } from "@shared/types/actions";
-import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
+import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const panelStoreMock = vi.hoisted(() => ({
   getState: vi.fn(),
@@ -51,7 +50,7 @@ function setupActions(callbacks: ActionCallbacks) {
 function callAction(actions: ActionRegistry, id: string, args?: unknown): Promise<unknown> {
   const factory = actions.get(id);
   if (!factory) throw new Error(`missing ${id}`);
-  const def = factory() as ActionDefinition<unknown, unknown>;
+  const def = factory() as AnyActionDefinition;
   return def.run(args, {} as never);
 }
 
@@ -161,7 +160,7 @@ describe("agentActions adversarial", () => {
     await callAction(actions, "agent.focusNextWaiting");
 
     expect(focusNextWaiting).toHaveBeenCalledTimes(1);
-    const [isInTrash, set] = focusNextWaiting.mock.calls[0];
+    const [isInTrash, set] = focusNextWaiting.mock.calls[0]!;
     expect(isInTrash).toBe(true);
     expect(set instanceof Set).toBe(true);
     expect([...(set as Set<string>)].sort()).toEqual(["alias-a", "key-a", "key-b"]);
@@ -243,7 +242,92 @@ describe("agentActions adversarial", () => {
     const actions = setupActions(callbacks);
     await callAction(actions, "agent.focusNextAgent");
 
-    const [, set] = focusNextAgent.mock.calls[0];
+    const [, set] = focusNextAgent.mock.calls[0]!;
     expect([...(set as Set<string>)].sort()).toEqual(["backup", "other", "primary"]);
+  });
+});
+
+describe("agent.launch dispatch integration", () => {
+  it("routes through ActionService.dispatch with validated args and returns terminalId", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const result = await service.dispatch<{ terminalId: string }>(
+      "agent.launch",
+      { agentId: "claude", worktreeId: "wt-1", location: "grid" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.result).toEqual({ terminalId: "term-1" });
+    }
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith("claude", {
+      location: "grid",
+      cwd: undefined,
+      worktreeId: "wt-1",
+      prompt: undefined,
+      interactive: undefined,
+      modelId: undefined,
+    });
+  });
+
+  it("rejects malformed args with a VALIDATION_ERROR targeting agentId and never invokes the callback", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "not-a-real-agent" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("VALIDATION_ERROR");
+      expect(JSON.stringify(result.error.details)).toContain("agentId");
+    }
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("accepts dev-preview through the schema so worktree-card dev-preview launches don't silently fail", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "dev-preview", worktreeId: "wt-1", location: "grid" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "dev-preview",
+      expect.objectContaining({ worktreeId: "wt-1", location: "grid" })
+    );
   });
 });

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  ChevronDown,
   ChevronRight,
   Moon,
   CheckCircle,
@@ -11,15 +10,16 @@ import {
   Info,
   ExternalLink,
   RefreshCw,
+  Gauge,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DaintreeIcon, ProjectPulseIcon } from "@/components/icons";
+import { DaintreeIcon, Activity } from "@/components/icons";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
-import { DEFAULT_AGENT_SETTINGS, getAgentSettingsEntry } from "@shared/types";
+import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type {
   HibernationConfig,
@@ -27,11 +27,17 @@ import type {
   CliAvailability,
   AgentSettings,
 } from "@shared/types";
-import { isAgentInstalled, isAgentReady } from "../../../shared/utils/agentAvailability";
-import { isAgentPinned } from "../../../shared/utils/agentPinned";
+import {
+  isAgentInstalled,
+  isAgentReady,
+  isAgentBlocked,
+  isAgentUnauthenticated,
+} from "../../../shared/utils/agentAvailability";
 import { usePreferencesStore } from "@/store";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 const GENERAL_SUBTABS: SettingsSubtabItem[] = [
   { id: "overview", label: "Overview" },
@@ -63,6 +69,7 @@ const CURATED_SHORTCUTS = [
       "terminal.new",
       "terminal.focusNext",
       "terminal.focusPrevious",
+      "terminal.focusAlternate",
     ],
   },
   {
@@ -129,6 +136,7 @@ export function GeneralTab({
   const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
   const showGridAgentHighlights = usePreferencesStore((s) => s.showGridAgentHighlights);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
+  const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,8 +145,9 @@ export function GeneralTab({
       .then((ch) => {
         if (!cancelled) setUpdateChannel(ch);
       })
-      .catch(() => {
+      .catch((error) => {
         if (!cancelled) setUpdateChannel("stable");
+        logError("Failed to get update channel", error);
       });
     return () => {
       cancelled = true;
@@ -152,7 +161,7 @@ export function GeneralTab({
       const result = await window.electron.update.setChannel(channel);
       if (isMountedRef.current) setUpdateChannel(result);
     } catch (error) {
-      console.error("Failed to set update channel:", error);
+      logError("Failed to set update channel", error);
     } finally {
       if (isMountedRef.current) setChannelSaving(false);
     }
@@ -180,8 +189,8 @@ export function GeneralTab({
       .catch((error) => {
         clearTimeout(timer);
         if (cancelled) return;
-        console.error("Failed to load hibernation config:", error);
-        setConfigError(error instanceof Error ? error.message : "Failed to load settings");
+        logError("Failed to load hibernation config", error);
+        setConfigError(formatErrorMessage(error, "Failed to load hibernation settings"));
       });
 
     actionService
@@ -195,7 +204,7 @@ export function GeneralTab({
       })
       .catch((error) => {
         if (cancelled) return;
-        console.error("Failed to load idle terminal notify config:", error);
+        logError("Failed to load idle terminal notify config", error);
       });
 
     return () => {
@@ -237,7 +246,7 @@ export function GeneralTab({
       })
       .catch((error) => {
         if (cancelled) return;
-        console.error("[GeneralTab] Failed to load agent availability:", error);
+        logError("[GeneralTab] Failed to load agent availability", error);
         setCliCheckFailed(true);
       })
       .finally(() => clearTimeout(timeoutId));
@@ -310,7 +319,7 @@ export function GeneralTab({
       setHibernationConfig(result.result as HibernationConfig);
     } catch (error) {
       if (!isMountedRef.current) return;
-      console.error("Failed to update hibernation config:", error);
+      logError("Failed to update hibernation config", error);
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
@@ -334,7 +343,7 @@ export function GeneralTab({
       setIdleNotifyConfig(result.result as IdleTerminalNotifyConfig);
     } catch (error) {
       if (!isMountedRef.current) return;
-      console.error("Failed to update idle terminal notify config:", error);
+      logError("Failed to update idle terminal notify config", error);
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -358,7 +367,7 @@ export function GeneralTab({
       setIdleNotifyConfig(result.result as IdleTerminalNotifyConfig);
     } catch (error) {
       if (!isMountedRef.current) return;
-      console.error("Failed to update idle terminal notify threshold:", error);
+      logError("Failed to update idle terminal notify threshold", error);
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -382,7 +391,7 @@ export function GeneralTab({
       setHibernationConfig(result.result as HibernationConfig);
     } catch (error) {
       if (!isMountedRef.current) return;
-      console.error("Failed to update hibernation threshold:", error);
+      logError("Failed to update hibernation threshold", error);
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
@@ -404,16 +413,13 @@ export function GeneralTab({
             id="general-about"
             className="settings-card flex items-start gap-4 p-4 rounded-[var(--radius-md)] border border-daintree-border"
           >
-            <div
-              className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0"
-              style={{ backgroundColor: "#151616" }}
-            >
+            <div className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0 bg-surface-panel-elevated">
               <DaintreeIcon size={28} className="shrink-0" style={{ color: "#36CE94" }} />
             </div>
             <div className="flex-1 min-w-0 space-y-1">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-semibold text-daintree-text">Daintree</span>
-                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-daintree-accent/15 text-daintree-accent leading-none">
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info leading-none">
                   Beta
                 </span>
                 <span className="text-xs text-text-muted font-mono ml-auto">v{appVersion}</span>
@@ -430,7 +436,7 @@ export function GeneralTab({
                     { source: "user" }
                   )
                 }
-                className="flex items-center gap-1.5 text-xs text-text-muted hover:text-daintree-accent transition-colors pt-1"
+                className="flex items-center gap-1.5 text-xs text-text-muted hover:text-daintree-text transition-colors pt-1"
               >
                 <ExternalLink className="w-3 h-3" />
                 daintree.org
@@ -451,10 +457,8 @@ export function GeneralTab({
             ) : (
               (() => {
                 const allAgentIds = getAgentIds();
-                const installedAgentIds = allAgentIds.filter(
-                  (id) =>
-                    isAgentInstalled(cliAvailability[id]) &&
-                    isAgentPinned(getAgentSettingsEntry(agentSettings, id))
+                const installedAgentIds = allAgentIds.filter((id) =>
+                  isAgentInstalled(cliAvailability[id])
                 );
                 const hiddenCount = allAgentIds.length - installedAgentIds.length;
 
@@ -465,7 +469,7 @@ export function GeneralTab({
                       <div className="flex items-center gap-3">
                         <button
                           type="button"
-                          className="text-xs text-daintree-accent hover:underline"
+                          className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline"
                           onClick={() =>
                             window.dispatchEvent(
                               new CustomEvent("daintree:open-agent-setup-wizard")
@@ -477,7 +481,7 @@ export function GeneralTab({
                         {onNavigateToAgents && (
                           <button
                             type="button"
-                            className="text-xs text-daintree-accent hover:underline"
+                            className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline"
                             onClick={() => onNavigateToAgents?.()}
                           >
                             Browse available agents
@@ -494,6 +498,26 @@ export function GeneralTab({
                       const config = getAgentConfig(id);
                       const name = config?.name ?? id;
                       const ready = isAgentReady(cliAvailability[id]);
+                      const unauthenticated = isAgentUnauthenticated(cliAvailability[id]);
+                      const blocked = isAgentBlocked(cliAvailability[id]);
+                      // A blocked agent is installed but can't run — show it
+                      // distinctly from the authentication-needed case so the
+                      // user doesn't waste time re-authenticating a binary
+                      // that an endpoint security tool is blocking.
+                      const statusLabel = blocked
+                        ? "Blocked"
+                        : unauthenticated
+                          ? "Login required"
+                          : ready
+                            ? "Ready"
+                            : "Needs setup";
+                      const statusClass = blocked
+                        ? "text-status-warning"
+                        : unauthenticated
+                          ? "text-status-warning"
+                          : ready
+                            ? "text-status-success"
+                            : "text-status-warning";
 
                       return (
                         <button
@@ -505,20 +529,8 @@ export function GeneralTab({
                         >
                           <span className="text-text-secondary">{name}</span>
                           <span className="flex items-center gap-2">
-                            <CheckCircle
-                              className={cn(
-                                "w-3.5 h-3.5",
-                                ready ? "text-status-success" : "text-status-warning"
-                              )}
-                            />
-                            <span
-                              className={cn(
-                                "text-xs",
-                                ready ? "text-status-success" : "text-status-warning"
-                              )}
-                            >
-                              {ready ? "Ready" : "Needs setup"}
-                            </span>
+                            <CheckCircle className={cn("w-3.5 h-3.5", statusClass)} />
+                            <span className={cn("text-xs", statusClass)}>{statusLabel}</span>
                           </span>
                         </button>
                       );
@@ -528,7 +540,7 @@ export function GeneralTab({
                       <button
                         type="button"
                         onClick={() => onNavigateToAgents?.()}
-                        className="text-xs text-daintree-accent hover:underline"
+                        className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline"
                       >
                         {`Daintree supports ${hiddenCount} more ${hiddenCount === 1 ? "agent" : "agents"} →`}
                       </button>
@@ -554,7 +566,7 @@ export function GeneralTab({
                   className={cn(
                     "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors capitalize",
                     updateChannel === ch
-                      ? "bg-daintree-accent/10 border border-daintree-accent text-daintree-accent"
+                      ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
                       : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                   )}
                 >
@@ -582,11 +594,13 @@ export function GeneralTab({
               aria-controls="keyboard-shortcuts-content"
               className="flex items-center gap-2 text-sm text-daintree-text/60 hover:text-daintree-text transition-colors"
             >
-              {isShortcutsOpen ? (
-                <ChevronDown className="w-4 h-4" />
-              ) : (
-                <ChevronRight className="w-4 h-4" />
-              )}
+              <ChevronRight
+                data-animated-chevron
+                className={cn(
+                  "w-4 h-4 transition-transform duration-150 ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+                  isShortcutsOpen && "rotate-90"
+                )}
+              />
               <span>{isShortcutsOpen ? "Hide shortcuts" : "Show shortcuts"}</span>
             </button>
 
@@ -631,16 +645,8 @@ export function GeneralTab({
             >
               <SettingsSwitchCard
                 icon={Moon}
-                title={
-                  idleNotifyConfig.enabled
-                    ? "Idle Notifications Enabled"
-                    : "Enable Idle Notifications"
-                }
-                subtitle={
-                  idleNotifyConfig.enabled
-                    ? `After ${idleNotifyConfig.thresholdMinutes} min of terminal inactivity`
-                    : "Notify me about idle terminals in background projects"
-                }
+                title="Idle Terminal Notifications"
+                subtitle="Notify when background project terminals have been idle past a threshold"
                 isEnabled={idleNotifyConfig.enabled}
                 onChange={handleIdleNotifyToggle}
                 ariaLabel="Idle Terminal Notifications Toggle"
@@ -659,7 +665,7 @@ export function GeneralTab({
                         className={cn(
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                           idleNotifyConfig.thresholdMinutes === value
-                            ? "bg-daintree-accent/10 border border-daintree-accent text-daintree-accent"
+                            ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
                             : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                         )}
                       >
@@ -690,14 +696,8 @@ export function GeneralTab({
             >
               <SettingsSwitchCard
                 icon={Moon}
-                title={
-                  hibernationConfig.enabled ? "Auto-Hibernation Enabled" : "Enable Auto-Hibernation"
-                }
-                subtitle={
-                  hibernationConfig.enabled
-                    ? `After ${hibernationConfig.inactiveThresholdHours}h of inactivity`
-                    : "Save resources by hibernating idle projects"
-                }
+                title="Auto-Hibernation"
+                subtitle="Automatically stop terminals and servers for inactive projects"
                 isEnabled={hibernationConfig.enabled}
                 onChange={handleHibernationToggle}
                 ariaLabel="Auto-Hibernation Toggle"
@@ -716,7 +716,7 @@ export function GeneralTab({
                         className={cn(
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                           hibernationConfig.inactiveThresholdHours === value
-                            ? "bg-daintree-accent/10 border border-daintree-accent text-daintree-accent"
+                            ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
                             : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                         )}
                       >
@@ -738,13 +738,13 @@ export function GeneralTab({
 
       {effectiveSubtab === "display" && (
         <SettingsSection
-          icon={ProjectPulseIcon}
+          icon={Activity}
           title="Display"
           description="Control which interface elements are visible."
           id="general-project-pulse"
         >
           <SettingsSwitchCard
-            icon={ProjectPulseIcon}
+            icon={Activity}
             title="Project Pulse"
             subtitle="Show activity heatmap on the empty panel grid"
             isEnabled={showProjectPulse}
@@ -766,80 +766,101 @@ export function GeneralTab({
             }
           />
 
-          <div id="general-developer-tools">
-            <SettingsSwitchCard
-              icon={Wrench}
-              title="Developer Tools"
-              subtitle="Show problems panel button in the toolbar"
-              isEnabled={showDeveloperTools}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showDeveloperTools.set",
-                  { show: !showDeveloperTools },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Developer Tools Toggle"
-              isModified={showDeveloperTools}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showDeveloperTools.set",
-                  { show: false },
-                  { source: "user" }
-                )
-              }
-            />
-          </div>
+          <SettingsSwitchCard
+            id="general-developer-tools"
+            icon={Wrench}
+            title="Developer Tools"
+            subtitle="Show problems panel button in the toolbar"
+            isEnabled={showDeveloperTools}
+            onChange={() =>
+              void actionService.dispatch(
+                "preferences.showDeveloperTools.set",
+                { show: !showDeveloperTools },
+                { source: "user" }
+              )
+            }
+            ariaLabel="Developer Tools Toggle"
+            isModified={showDeveloperTools}
+            onReset={() =>
+              void actionService.dispatch(
+                "preferences.showDeveloperTools.set",
+                { show: false },
+                { source: "user" }
+              )
+            }
+          />
 
-          <div id="general-grid-agent-highlights">
-            <SettingsSwitchCard
-              icon={LayoutGrid}
-              title="Grid Panel Agent Highlights"
-              subtitle="Show waiting and working state borders on grid panels. Failed state borders are always visible."
-              isEnabled={showGridAgentHighlights}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showGridAgentHighlights.set",
-                  { show: !showGridAgentHighlights },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Grid Panel Agent Highlights Toggle"
-              isModified={showGridAgentHighlights}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showGridAgentHighlights.set",
-                  { show: false },
-                  { source: "user" }
-                )
-              }
-            />
-          </div>
+          <SettingsSwitchCard
+            id="general-grid-agent-highlights"
+            icon={LayoutGrid}
+            title="Grid Panel Agent Highlights"
+            subtitle="Show waiting and working state borders on grid panels. Failed state borders are always visible."
+            isEnabled={showGridAgentHighlights}
+            onChange={() =>
+              void actionService.dispatch(
+                "preferences.showGridAgentHighlights.set",
+                { show: !showGridAgentHighlights },
+                { source: "user" }
+              )
+            }
+            ariaLabel="Grid Panel Agent Highlights Toggle"
+            isModified={showGridAgentHighlights}
+            onReset={() =>
+              void actionService.dispatch(
+                "preferences.showGridAgentHighlights.set",
+                { show: false },
+                { source: "user" }
+              )
+            }
+          />
 
-          <div id="general-dock-agent-highlights">
-            <SettingsSwitchCard
-              icon={PanelBottom}
-              title="Dock Item Agent Highlights"
-              subtitle="Show waiting state borders on dock items. Failed state borders are always visible."
-              isEnabled={showDockAgentHighlights}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showDockAgentHighlights.set",
-                  { show: !showDockAgentHighlights },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Dock Item Agent Highlights Toggle"
-              isModified={showDockAgentHighlights}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showDockAgentHighlights.set",
-                  { show: false },
-                  { source: "user" }
-                )
-              }
-            />
-          </div>
+          <SettingsSwitchCard
+            id="general-dock-agent-highlights"
+            icon={PanelBottom}
+            title="Dock Item Agent Highlights"
+            subtitle="Show waiting state borders on dock items. Failed state borders are always visible."
+            isEnabled={showDockAgentHighlights}
+            onChange={() =>
+              void actionService.dispatch(
+                "preferences.showDockAgentHighlights.set",
+                { show: !showDockAgentHighlights },
+                { source: "user" }
+              )
+            }
+            ariaLabel="Dock Item Agent Highlights Toggle"
+            isModified={showDockAgentHighlights}
+            onReset={() =>
+              void actionService.dispatch(
+                "preferences.showDockAgentHighlights.set",
+                { show: false },
+                { source: "user" }
+              )
+            }
+          />
+
+          <SettingsSwitchCard
+            id="general-reduce-animations"
+            icon={Gauge}
+            title="Reduce UI Animations"
+            subtitle="Minimize motion across the interface, independent of your OS reduce-motion setting."
+            isEnabled={reduceAnimations}
+            onChange={() =>
+              void actionService.dispatch(
+                "preferences.reduceAnimations.set",
+                { value: !reduceAnimations },
+                { source: "user" }
+              )
+            }
+            ariaLabel="Reduce UI Animations Toggle"
+            isModified={reduceAnimations}
+            onReset={() =>
+              void actionService.dispatch(
+                "preferences.reduceAnimations.set",
+                { value: false },
+                { source: "user" }
+              )
+            }
+          />
         </SettingsSection>
       )}
     </div>

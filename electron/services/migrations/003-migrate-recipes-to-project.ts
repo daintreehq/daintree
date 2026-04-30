@@ -52,23 +52,12 @@ export const migration003: Migration = {
           return true;
         })
         .map((legacyRecipe) => {
-          const terminals: RecipeTerminal[] = (legacyRecipe.terminals || []).map(
-            (t: {
-              type: string;
-              title?: string;
-              command?: string;
-              env?: Record<string, string>;
-              initialPrompt?: string;
-              devCommand?: string;
-            }) => ({
-              type: t.type as RecipeTerminal["type"],
-              title: t.title,
-              command: t.command,
-              env: t.env,
-              initialPrompt: t.initialPrompt,
-              devCommand: t.devCommand,
-            })
-          );
+          const terminals: RecipeTerminal[] = (legacyRecipe.terminals || []).map((t) => ({
+            type: (t.launchAgentId ?? "terminal") as RecipeTerminal["type"],
+            title: t.title,
+            command: t.command,
+            env: t.env,
+          }));
 
           return {
             id: legacyRecipe.id,

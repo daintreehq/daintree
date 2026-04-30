@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { WindowRegistry } from "../WindowRegistry.js";
+import { toDisposable } from "../../utils/lifecycle.js";
 import type { BrowserWindow } from "electron";
 
 type Handler = () => void;
@@ -56,7 +57,7 @@ describe("WindowRegistry adversarial", () => {
     const cleanup = vi.fn();
 
     const ctx = registry.register(win);
-    ctx.cleanup.push(cleanup);
+    ctx.cleanup.add(toDisposable(cleanup));
 
     registry.unregister(1);
     win._fireClosed();
@@ -107,11 +108,11 @@ describe("WindowRegistry adversarial", () => {
     const cleanup = vi.fn();
 
     const firstCtx = registry.register(first);
-    firstCtx.cleanup.push(cleanup);
+    firstCtx.cleanup.add(toDisposable(cleanup));
     registry.unregister(1);
 
     const secondCtx = registry.register(second);
-    secondCtx.cleanup.push(cleanup);
+    secondCtx.cleanup.add(toDisposable(cleanup));
     second._fireClosed();
 
     expect(cleanup).toHaveBeenCalledTimes(2);

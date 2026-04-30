@@ -3,7 +3,6 @@
  * Exposes command registry and execution to the renderer process.
  */
 
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { commandService } from "../../services/CommandService.js";
 import type {
@@ -14,23 +13,20 @@ import type {
   CommandResult,
   DaintreeCommand,
 } from "../../../shared/types/commands.js";
+import { typedHandle } from "../utils.js";
+import { AppError } from "../../utils/errorTypes.js";
 
 export function registerCommandHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
   // List all commands
-  const handleCommandsList = async (
-    _event: Electron.IpcMainInvokeEvent,
-    context?: CommandContext
-  ): Promise<CommandManifestEntry[]> => {
+  const handleCommandsList = async (context?: CommandContext): Promise<CommandManifestEntry[]> => {
     return await commandService.list(context);
   };
-  ipcMain.handle(CHANNELS.COMMANDS_LIST, handleCommandsList);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COMMANDS_LIST));
+  handlers.push(typedHandle(CHANNELS.COMMANDS_LIST, handleCommandsList));
 
   // Get single command
   const handleCommandsGet = async (
-    _event: Electron.IpcMainInvokeEvent,
     payload: CommandGetPayload
   ): Promise<CommandManifestEntry | null> => {
     if (!payload || typeof payload.commandId !== "string") {
@@ -39,56 +35,45 @@ export function registerCommandHandlers(): () => void {
     }
     return (await commandService.getManifest(payload.commandId, payload.context)) ?? null;
   };
-  ipcMain.handle(CHANNELS.COMMANDS_GET, handleCommandsGet);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COMMANDS_GET));
+  handlers.push(typedHandle(CHANNELS.COMMANDS_GET, handleCommandsGet));
 
-  // Execute command
-  const handleCommandsExecute = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: CommandExecutePayload
-  ): Promise<CommandResult> => {
+  // Execute command. Validation failures throw `AppError({code: "VALIDATION"})`;
+  // command-domain success/failure is still carried by the returned
+  // `CommandResult` (the commands system has its own structured result contract
+  // that includes optional `prompt` injection — intentional, not an envelope).
+  const handleCommandsExecute = async (payload: CommandExecutePayload): Promise<CommandResult> => {
     if (!payload || typeof payload.commandId !== "string") {
-      return {
-        success: false,
-        error: {
-          code: "INVALID_PAYLOAD",
-          message: "Invalid command execution payload",
-        },
-      };
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Invalid command execution payload",
+      });
     }
 
-    // Validate context is a plain object
     const context = payload.context ?? {};
     if (typeof context !== "object" || Array.isArray(context)) {
-      return {
-        success: false,
-        error: {
-          code: "INVALID_PAYLOAD",
-          message: "Context must be a plain object",
-        },
-      };
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Context must be a plain object",
+      });
     }
 
-    // Validate args is a plain object
     const args = payload.args ?? {};
     if (args !== null && (typeof args !== "object" || Array.isArray(args))) {
-      return {
-        success: false,
-        error: {
-          code: "INVALID_PAYLOAD",
-          message: "Arguments must be a plain object",
-        },
-      };
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Arguments must be a plain object",
+      });
     }
 
     return commandService.execute(payload.commandId, context, args);
   };
-  ipcMain.handle(CHANNELS.COMMANDS_EXECUTE, handleCommandsExecute);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COMMANDS_EXECUTE));
+  handlers.push(
+    // @ts-expect-error: result type CommandResult contains {success} — pending migration to throw AppError. See #6020.
+    typedHandle(CHANNELS.COMMANDS_EXECUTE, handleCommandsExecute)
+  );
 
   // Get command builder
   const handleCommandsGetBuilder = async (
-    _event: Electron.IpcMainInvokeEvent,
     commandId: string
   ): Promise<DaintreeCommand["builder"] | null> => {
     if (typeof commandId !== "string") {
@@ -96,8 +81,7 @@ export function registerCommandHandlers(): () => void {
     }
     return commandService.getBuilder(commandId) ?? null;
   };
-  ipcMain.handle(CHANNELS.COMMANDS_GET_BUILDER, handleCommandsGetBuilder);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COMMANDS_GET_BUILDER));
+  handlers.push(typedHandle(CHANNELS.COMMANDS_GET_BUILDER, handleCommandsGetBuilder));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

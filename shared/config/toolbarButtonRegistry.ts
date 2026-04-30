@@ -30,6 +30,15 @@ export function isRegisteredPluginButton(id: string): boolean {
   return id.startsWith("plugin.") && id in TOOLBAR_BUTTON_REGISTRY;
 }
 
+export function unregisterPluginToolbarButtons(pluginId: string): void {
+  if (typeof pluginId !== "string" || pluginId.length === 0) return;
+  for (const [key, config] of Object.entries(TOOLBAR_BUTTON_REGISTRY)) {
+    if (config.pluginId === pluginId) {
+      delete TOOLBAR_BUTTON_REGISTRY[key];
+    }
+  }
+}
+
 export function clearToolbarButtonRegistry(): void {
   for (const key of Object.keys(TOOLBAR_BUTTON_REGISTRY)) {
     delete TOOLBAR_BUTTON_REGISTRY[key];

@@ -1,10 +1,10 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import {
   getHibernationService,
   type HibernationConfig,
 } from "../../services/HibernationService.js";
 import type { HandlerDependencies } from "../types.js";
+import { typedHandle } from "../utils.js";
 
 export function registerHibernationHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -13,11 +13,9 @@ export function registerHibernationHandlers(_deps: HandlerDependencies): () => v
   const handleGetConfig = async (): Promise<HibernationConfig> => {
     return hibernationService.getConfig();
   };
-  ipcMain.handle(CHANNELS.HIBERNATION_GET_CONFIG, handleGetConfig);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.HIBERNATION_GET_CONFIG));
+  handlers.push(typedHandle(CHANNELS.HIBERNATION_GET_CONFIG, handleGetConfig));
 
   const handleUpdateConfig = async (
-    _event: Electron.IpcMainInvokeEvent,
     config: Partial<HibernationConfig>
   ): Promise<HibernationConfig> => {
     if (typeof config !== "object" || config === null || Array.isArray(config)) {
@@ -44,8 +42,7 @@ export function registerHibernationHandlers(_deps: HandlerDependencies): () => v
     hibernationService.updateConfig(config);
     return hibernationService.getConfig();
   };
-  ipcMain.handle(CHANNELS.HIBERNATION_UPDATE_CONFIG, handleUpdateConfig);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.HIBERNATION_UPDATE_CONFIG));
+  handlers.push(typedHandle(CHANNELS.HIBERNATION_UPDATE_CONFIG, handleUpdateConfig));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

@@ -80,7 +80,7 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
   (termEl as HTMLDivElement & { __paddingTopHistory: string[] }).__paddingTopHistory =
     paddingTopHistory;
 
-  return {
+  const managed = {
     terminal: { element: termEl } as unknown as ManagedTerminal["terminal"],
     type: "terminal",
     kind: "terminal",
@@ -123,6 +123,8 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
     webLinksAddon: null,
     ...overrides,
   } as ManagedTerminal;
+  managed.runtimeAgentId ??= managed.launchAgentId;
+  return managed;
 }
 
 function paddingHistory(managed: ManagedTerminal): string[] {
@@ -182,7 +184,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
   });
 
   it("skips agent terminals (WebGL — immune)", () => {
-    const managed = makeManaged({ kind: "agent" });
+    const managed = makeManaged({ kind: "terminal", launchAgentId: "claude" });
     service.maybeReflowTerminal(managed);
     expect(paddingHistory(managed).length).toBe(0);
     expect(managed.lastReflowAt).toBe(0);
@@ -281,5 +283,71 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     // The escape hatch — forceXtermReflow — must still run even if fit throws.
     expect(paddingHistory(managed)).toContain("0.01px");
     expect(managed.lastReflowAt).toBe(0);
+  });
+});
+
+describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
+  let service: ReflowTestService;
+  let visibilityState: DocumentVisibilityState;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    visibilityState = "visible";
+    Object.defineProperty(document, "visibilityState", {
+      get: () => visibilityState,
+      configurable: true,
+    });
+
+    vi.resetModules();
+    ({ terminalInstanceService: service } =
+      (await import("../TerminalInstanceService")) as unknown as {
+        terminalInstanceService: ReflowTestService;
+      });
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    service.instances.clear();
+    document.body.innerHTML = "";
+    // Replace the live getter with a plain "visible" value so the document is
+    // back to a clean state for any subsequent tests.
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it("skips reflows while document is hidden", () => {
+    visibilityState = "hidden";
+    const managed = makeManaged();
+    service.instances.set("t1", managed);
+
+    vi.advanceTimersByTime(3000);
+    expect(paddingHistory(managed).length).toBe(0);
+    expect(managed.lastReflowAt).toBe(0);
+  });
+
+  it("performs reflows on heartbeat when visible", () => {
+    const managed = makeManaged();
+    service.instances.set("t1", managed);
+
+    vi.advanceTimersByTime(3000);
+    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(managed.lastReflowAt).toBeGreaterThan(0);
+  });
+
+  it("resumes reflows when visibility transitions hidden → visible", () => {
+    visibilityState = "hidden";
+    const managed = makeManaged();
+    service.instances.set("t1", managed);
+
+    vi.advanceTimersByTime(3000);
+    expect(paddingHistory(managed).length).toBe(0);
+
+    visibilityState = "visible";
+    vi.advanceTimersByTime(3000);
+    expect(paddingHistory(managed)).toContain("0.01px");
   });
 });

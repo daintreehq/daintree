@@ -17,7 +17,6 @@ import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -29,7 +28,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
-import { useOverlayState } from "@/hooks";
+import { useOverlayClaim } from "@/hooks";
 import { usePaletteStore } from "@/store/paletteStore";
 import type { ProjectSwitcherMode, SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useUIStore } from "@/store/uiStore";
@@ -84,7 +83,7 @@ const StatusDot = memo(function StatusDot({ project }: { project: SearchableProj
   if (hasActive) {
     return (
       <div
-        className="w-1.5 h-1.5 rounded-full bg-daintree-accent animate-agent-pulse shrink-0"
+        className="w-1.5 h-1.5 rounded-full bg-activity-active animate-activity-pulse shrink-0"
         aria-label="Agents working"
       />
     );
@@ -130,7 +129,7 @@ const ProjectListItem = memo(function ProjectListItem({
     if (project.isMissing)
       return { secondaryText: "Directory not found", secondaryClass: "text-status-warning/70" };
     if (project.activeAgentCount > 0)
-      return { secondaryText: "Agent working\u2026", secondaryClass: "text-daintree-accent/80" };
+      return { secondaryText: "Agent working\u2026", secondaryClass: "text-activity-working" };
     if (project.waitingAgentCount > 0)
       return { secondaryText: "Needs review", secondaryClass: "text-status-warning/80" };
     if (project.lastOpened > 0)
@@ -166,7 +165,7 @@ const ProjectListItem = memo(function ProjectListItem({
 
       <div
         className={cn(
-          "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] shrink-0 transition duration-200",
+          "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] shrink-0 transition duration-150",
           "h-8 w-8 text-base"
         )}
         style={{
@@ -241,6 +240,12 @@ const ProjectListItem = memo(function ProjectListItem({
           <ContextMenuItem destructive onClick={() => onStopProject(project.id)}>
             <Square className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Stop all agents
+          </ContextMenuItem>
+        )}
+        {onCloseProject && project.isActive && (
+          <ContextMenuItem destructive onClick={() => onCloseProject(project.id)}>
+            <X className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Close project
           </ContextMenuItem>
         )}
         {onCloseProject && !project.isActive && (
@@ -329,17 +334,17 @@ function ProjectListContent({
       older: [],
     };
     for (const p of remaining) {
-      buckets[getTemporalBucket(p.lastOpened, todayStart, weekStart)].push(p);
+      buckets[getTemporalBucket(p.lastOpened, todayStart, weekStart)]!.push(p);
     }
 
     return [
       current.length > 0 ? { key: "current", label: null, items: current } : null,
       pinned.length > 0 ? { key: "pinned", label: "Pinned", items: pinned } : null,
-      buckets.today.length > 0 ? { key: "today", label: "Today", items: buckets.today } : null,
-      buckets["this-week"].length > 0
-        ? { key: "this-week", label: "This Week", items: buckets["this-week"] }
+      buckets.today!.length > 0 ? { key: "today", label: "Today", items: buckets.today! } : null,
+      buckets["this-week"]!.length > 0
+        ? { key: "this-week", label: "This Week", items: buckets["this-week"]! }
         : null,
-      buckets.older.length > 0 ? { key: "older", label: "Older", items: buckets.older } : null,
+      buckets.older!.length > 0 ? { key: "older", label: "Older", items: buckets.older! } : null,
     ].filter((s): s is TemporalSection => s !== null);
   }, [results, isSearching, mode]);
 
@@ -386,7 +391,7 @@ function ProjectListContent({
               ) : mode === "modal" ? (
                 "No active projects"
               ) : (
-                "No projects available"
+                "No projects available — add one below"
               )}
             </div>
           </div>
@@ -516,7 +521,7 @@ function ProjectPaletteInner({
   useEffect(() => {
     if (listRef.current && selectedIndex >= 0 && selectedIndex < results.length) {
       const selectedItem = listRef.current.querySelector(
-        `#project-option-${results[selectedIndex].id}`
+        `#project-option-${results[selectedIndex]!.id}`
       );
       if (selectedItem) {
         selectedItem.scrollIntoView({ block: "nearest" });
@@ -541,7 +546,7 @@ function ProjectPaletteInner({
           e.preventDefault();
           e.stopPropagation();
           if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-            const selected = results[selectedIndex];
+            const selected = results[selectedIndex]!;
             if (e.altKey && onSelectBackground) {
               onSelectBackground(selected);
             } else if (
@@ -571,7 +576,7 @@ function ProjectPaletteInner({
           ) {
             e.preventDefault();
             e.stopPropagation();
-            onCloseProject(results[selectedIndex].id);
+            onCloseProject(results[selectedIndex]!.id);
           }
           break;
       }
@@ -592,7 +597,7 @@ function ProjectPaletteInner({
   const activeResult = results[selectedIndex];
 
   return (
-    <TooltipProvider>
+    <>
       <AppPaletteDialog.Header
         label="Switch Project"
         keyHint={projectSwitcherShortcut}
@@ -697,7 +702,7 @@ function ProjectPaletteInner({
       <AppPaletteDialog.Footer>
         <ProjectSwitcherFooter mode={mode} />
       </AppPaletteDialog.Footer>
-    </TooltipProvider>
+    </>
   );
 }
 
@@ -707,7 +712,7 @@ function ModalContent({
   mode,
   ...innerProps
 }: Omit<ProjectSwitcherPaletteProps, "children" | "dropdownAlign">) {
-  useOverlayState(isOpen);
+  useOverlayClaim("project-switcher", isOpen);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -820,8 +825,8 @@ function DropdownContent({
 }: ProjectSwitcherPaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const overlayCount = useUIStore((state) => state.overlayCount);
-  const prevOverlayCountRef = useRef<number>(overlayCount);
+  const overlayClaimsSize = useUIStore((state) => state.overlayClaims.size);
+  const prevOverlayClaimsSizeRef = useRef<number>(overlayClaimsSize);
   const focusRafRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -839,11 +844,11 @@ function DropdownContent({
   }, [isOpen]);
 
   useEffect(() => {
-    if (isOpen && overlayCount > prevOverlayCountRef.current && overlayCount > 0) {
+    if (isOpen && overlayClaimsSize > prevOverlayClaimsSizeRef.current && overlayClaimsSize > 0) {
       onClose();
     }
-    prevOverlayCountRef.current = overlayCount;
-  }, [isOpen, overlayCount, onClose]);
+    prevOverlayClaimsSizeRef.current = overlayClaimsSize;
+  }, [isOpen, overlayClaimsSize, onClose]);
 
   return (
     <Popover open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -983,9 +988,9 @@ export function ProjectSwitcherPalette({
         <ConfirmDialog
           isOpen={true}
           onClose={isRemovingProject ? undefined : onRemoveConfirmClose}
-          title={removeConfirmProject.isActive ? "Close Project?" : "Remove Project from List?"}
+          title={removeConfirmProject.isActive ? "Close project?" : "Remove project from list?"}
           zIndex="nested"
-          confirmLabel={removeConfirmProject.isActive ? "Close Project" : "Remove Project"}
+          confirmLabel={removeConfirmProject.isActive ? "Close project" : "Remove project"}
           cancelLabel="Cancel"
           onConfirm={onConfirmRemove}
           isConfirmLoading={isRemovingProject}

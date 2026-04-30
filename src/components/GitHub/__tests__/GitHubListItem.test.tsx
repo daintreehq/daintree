@@ -33,6 +33,13 @@ vi.mock("@/utils/timeAgo", () => ({
   formatTimeAgo: (date: number | string) => `time:${date}`,
 }));
 
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
 const baseIssue: GitHubIssue = {
   number: 42,
   title: "Fix the thing",

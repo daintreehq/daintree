@@ -1,5 +1,6 @@
 import { store } from "../store.js";
 import type { AppAgentConfig } from "../../shared/types/appAgent.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
 
@@ -11,8 +12,11 @@ export class AppAgentService {
   }
 
   setConfig(config: Partial<AppAgentConfig>): void {
-    const currentConfig = store.get("appAgentConfig");
-    store.set("appAgentConfig", { ...currentConfig, ...config });
+    if (!config || typeof config !== "object") return;
+    for (const [field, value] of Object.entries(config)) {
+      if (value === undefined) continue;
+      store.set(`appAgentConfig.${field}`, value);
+    }
   }
 
   hasApiKey(): boolean {
@@ -79,7 +83,7 @@ export class AppAgentService {
 
       return {
         valid: false,
-        error: error instanceof Error ? error.message : "Failed to connect to API",
+        error: formatErrorMessage(error, "Failed to connect to API"),
       };
     }
   }
@@ -148,7 +152,7 @@ export class AppAgentService {
 
       return {
         valid: false,
-        error: error instanceof Error ? error.message : "Failed to connect to API",
+        error: formatErrorMessage(error, "Failed to connect to API"),
       };
     }
   }

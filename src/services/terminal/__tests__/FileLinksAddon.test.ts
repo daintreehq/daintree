@@ -32,8 +32,8 @@ describe("FileLinksAddon", () => {
         addon.provideLinks(1, (links) => {
           expect(links).toBeDefined();
           expect(links).toHaveLength(1);
-          expect(links![0].text).toBe("/home/user/project/src/App.tsx:45:12");
-          expect(links![0].range.start.y).toBe(1);
+          expect(links![0]!.text).toBe("/home/user/project/src/App.tsx:45:12");
+          expect(links![0]!.range.start.y).toBe(1);
           resolve();
         });
       });
@@ -51,7 +51,7 @@ describe("FileLinksAddon", () => {
         addon.provideLinks(1, (links) => {
           expect(links).toBeDefined();
           expect(links).toHaveLength(1);
-          expect(links![0].text).toBe("src/App.tsx:45:12");
+          expect(links![0]!.text).toBe("src/App.tsx:45:12");
           resolve();
         });
       });
@@ -69,7 +69,7 @@ describe("FileLinksAddon", () => {
         addon.provideLinks(1, (links) => {
           expect(links).toBeDefined();
           expect(links).toHaveLength(1);
-          expect(links![0].text).toBe("C:\\Users\\user\\project\\src\\App.tsx:45:12");
+          expect(links![0]!.text).toBe("C:\\Users\\user\\project\\src\\App.tsx:45:12");
           resolve();
         });
       });
@@ -87,7 +87,7 @@ describe("FileLinksAddon", () => {
         addon.provideLinks(1, (links) => {
           expect(links).toBeDefined();
           expect(links).toHaveLength(1);
-          expect(links![0].text).toBe("src/App.tsx");
+          expect(links![0]!.text).toBe("src/App.tsx");
           resolve();
         });
       });
@@ -173,6 +173,56 @@ describe("FileLinksAddon", () => {
 
         addon.provideLinks(1, (links) => {
           expect(links).toBeUndefined();
+          resolve();
+        });
+      });
+    });
+  });
+
+  describe("hover tracking", () => {
+    it("invokes onHover with the link on hover() and null on leave()", () => {
+      return new Promise<void>((resolve) => {
+        const terminal = createMockTerminal();
+        const getCwd = () => "/home/user/project";
+        const calls: Array<unknown> = [];
+        const addon = new FileLinksAddon(terminal, getCwd, (link) => calls.push(link));
+
+        const line = createMockLine("Error at src/App.tsx:10");
+        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(line);
+
+        addon.provideLinks(1, (links) => {
+          expect(links).toBeDefined();
+          const link = links![0]!;
+          const mouseEvent = new Event("mousemove") as unknown as MouseEvent;
+
+          link.hover?.(mouseEvent, link.text);
+          expect(calls.length).toBe(1);
+          expect(calls[0]).toBe(link);
+
+          link.leave?.(mouseEvent, link.text);
+          expect(calls.length).toBe(2);
+          expect(calls[1]).toBeNull();
+
+          resolve();
+        });
+      });
+    });
+
+    it("works without an onHover callback (backwards compatible)", () => {
+      return new Promise<void>((resolve) => {
+        const terminal = createMockTerminal();
+        const getCwd = () => "/home/user/project";
+        const addon = new FileLinksAddon(terminal, getCwd);
+
+        const line = createMockLine("src/App.tsx:10");
+        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(line);
+
+        addon.provideLinks(1, (links) => {
+          expect(links).toBeDefined();
+          const link = links![0]!;
+          const mouseEvent = new Event("mousemove") as unknown as MouseEvent;
+          expect(() => link.hover?.(mouseEvent, link.text)).not.toThrow();
+          expect(() => link.leave?.(mouseEvent, link.text)).not.toThrow();
           resolve();
         });
       });

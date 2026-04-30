@@ -2,12 +2,16 @@
  * Terminal snapshot handlers - getSerializedState, wake, getInfo.
  */
 
-import { ipcMain } from "electron";
+import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 import { TerminalReplayHistoryPayloadSchema } from "../../../schemas/index.js";
-import { logDebug, logInfo, logWarn, logError } from "../../../utils/logger.js";
+import { logDebug, logInfo, logWarn } from "../../../utils/logger.js";
 import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
+import { typedHandle, typedHandleValidated } from "../../utils.js";
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+
+type ValidatedReplayHistoryPayload = z.output<typeof TerminalReplayHistoryPayloadSchema>;
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -17,7 +21,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   const handlers: Array<() => void> = [];
 
   const handleTerminalWake = async (
-    _event: Electron.IpcMainInvokeEvent,
     id: string
   ): Promise<{ state: string | null; warnings?: string[] }> => {
     try {
@@ -26,17 +29,13 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       }
       return await ptyClient.wakeTerminal(id);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to wake terminal");
       throw new Error(`Failed to wake terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_WAKE, handleTerminalWake);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_WAKE));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_WAKE, handleTerminalWake));
 
-  const handleTerminalGetSerializedState = async (
-    _event: Electron.IpcMainInvokeEvent,
-    terminalId: string
-  ): Promise<string | null> => {
+  const handleTerminalGetSerializedState = async (terminalId: string): Promise<string | null> => {
     try {
       if (typeof terminalId !== "string" || !terminalId) {
         throw new Error("Invalid terminal ID: must be a non-empty string");
@@ -51,15 +50,15 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       }
       return serializedState;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to get serialized terminal state");
       throw new Error(`Failed to get serialized terminal state: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, handleTerminalGetSerializedState);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_SERIALIZED_STATE));
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, handleTerminalGetSerializedState)
+  );
 
   const handleTerminalGetSerializedStates = async (
-    _event: Electron.IpcMainInvokeEvent,
     terminalIds: string[]
   ): Promise<Record<string, string | null>> => {
     if (!Array.isArray(terminalIds)) {
@@ -95,11 +94,11 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
     return Object.fromEntries(results);
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, handleTerminalGetSerializedStates);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_SERIALIZED_STATES));
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, handleTerminalGetSerializedStates)
+  );
 
   const handleTerminalGetInfo = async (
-    _event: Electron.IpcMainInvokeEvent,
     id: string
   ): Promise<import("../../../../shared/types/ipc.js").TerminalInfoPayload> => {
     try {
@@ -115,12 +114,11 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
       return terminalInfo;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to get terminal info");
       throw new Error(`Failed to get terminal info: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_INFO, handleTerminalGetInfo);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_INFO));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_INFO, handleTerminalGetInfo));
 
   const handleTerminalGetSharedBuffers = async (): Promise<{
     visualBuffers: SharedArrayBuffer[];
@@ -133,8 +131,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       return { visualBuffers: [], signalBuffer: null };
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_SHARED_BUFFERS, handleTerminalGetSharedBuffers);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_SHARED_BUFFERS));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_SHARED_BUFFERS, handleTerminalGetSharedBuffers));
 
   const handleTerminalGetAnalysisBuffer = async (): Promise<SharedArrayBuffer | null> => {
     try {
@@ -144,40 +141,35 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       return null;
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER, handleTerminalGetAnalysisBuffer);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER));
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER, handleTerminalGetAnalysisBuffer)
+  );
 
-  const handleTerminalReplayHistory = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ) => {
-    const parseResult = TerminalReplayHistoryPayloadSchema.safeParse(payload);
-    if (!parseResult.success) {
-      logError("terminal:replayHistory validation failed", undefined, {
-        error: parseResult.error.format(),
-      });
-      throw new Error(`Invalid payload: ${parseResult.error.message}`);
-    }
-
-    const { terminalId, maxLines } = parseResult.data;
-
+  const handleTerminalReplayHistory = async ({
+    terminalId,
+    maxLines,
+  }: ValidatedReplayHistoryPayload) => {
     try {
       const replayed = await ptyClient.replayHistoryAsync(terminalId, maxLines);
 
       logInfo(`terminal:replayHistory(${terminalId}): replayed ${replayed} lines`);
       return { replayed };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to replay terminal history");
       throw new Error(`Failed to replay terminal history: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_REPLAY_HISTORY, handleTerminalReplayHistory);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_REPLAY_HISTORY));
+  handlers.push(
+    typedHandleValidated(
+      CHANNELS.TERMINAL_REPLAY_HISTORY,
+      TerminalReplayHistoryPayloadSchema,
+      handleTerminalReplayHistory
+    )
+  );
 
   const handleTerminalGetForProject = async (
-    _event: Electron.IpcMainInvokeEvent,
     projectId: string
-  ) => {
+  ): Promise<import("../../../../shared/types/ipc.js").BackendTerminalInfo[]> => {
     try {
       if (typeof projectId !== "string" || !projectId) {
         throw new Error("Invalid project ID: must be a non-empty string");
@@ -185,7 +177,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
       const terminalIds = await ptyClient.getTerminalsForProjectAsync(projectId);
 
-      const terminals = [];
+      const terminals: import("../../../../shared/types/ipc.js").BackendTerminalInfo[] = [];
       for (const id of terminalIds) {
         const terminal = await ptyClient.getTerminalAsync(id);
         // Dev preview and help PTYs should not be rehydrated as generic terminal
@@ -199,13 +191,11 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
             id: terminal.id,
             projectId: terminal.projectId,
             kind: terminal.kind,
-            type: terminal.type,
-            agentId: terminal.agentId,
+
+            launchAgentId: terminal.launchAgentId,
             title: terminal.title,
             cwd: terminal.cwd,
-            worktreeId: terminal.worktreeId,
             agentState: terminal.agentState,
-            waitingReason: terminal.waitingReason,
             lastStateChange: terminal.lastStateChange,
             spawnedAt: terminal.spawnedAt,
             isTrashed: terminal.isTrashed,
@@ -215,6 +205,12 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
             agentSessionId: terminal.agentSessionId,
             agentLaunchFlags: terminal.agentLaunchFlags,
             agentModelId: terminal.agentModelId,
+            agentPresetId: terminal.agentPresetId,
+            agentPresetColor: terminal.agentPresetColor,
+            originalAgentPresetId: terminal.originalAgentPresetId,
+            everDetectedAgent: terminal.everDetectedAgent,
+            detectedAgentId: terminal.detectedAgentId,
+            detectedProcessId: terminal.detectedProcessId,
           });
         }
       }
@@ -231,14 +227,15 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       );
       return terminals;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to get terminals for project");
       throw new Error(`Failed to get terminals for project: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_FOR_PROJECT, handleTerminalGetForProject);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_FOR_PROJECT));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_FOR_PROJECT, handleTerminalGetForProject));
 
-  const handleTerminalGetAvailable = async () => {
+  const handleTerminalGetAvailable = async (): Promise<
+    import("../../../../shared/types/ipc.js").BackendTerminalInfo[]
+  > => {
     try {
       const terminals = await ptyClient.getAvailableTerminalsAsync();
 
@@ -248,8 +245,8 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           id: t.id,
           projectId: t.projectId,
           kind: t.kind,
-          type: t.type,
-          agentId: t.agentId,
+
+          launchAgentId: t.launchAgentId,
           title: t.title,
           cwd: t.cwd,
           worktreeId: t.worktreeId,
@@ -263,19 +260,26 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           agentSessionId: t.agentSessionId,
           agentLaunchFlags: t.agentLaunchFlags,
           agentModelId: t.agentModelId,
+          agentPresetId: t.agentPresetId,
+          agentPresetColor: t.agentPresetColor,
+          originalAgentPresetId: t.originalAgentPresetId,
+          everDetectedAgent: t.everDetectedAgent,
+          detectedAgentId: t.detectedAgentId,
+          detectedProcessId: t.detectedProcessId,
         }));
 
       logInfo(`terminal:getAvailable: found ${sanitized.length} available terminals`);
       return sanitized;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to get available terminals");
       throw new Error(`Failed to get available terminals: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_AVAILABLE, handleTerminalGetAvailable);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_AVAILABLE));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_AVAILABLE, handleTerminalGetAvailable));
 
-  const handleTerminalGetByState = async (_event: Electron.IpcMainInvokeEvent, state: string) => {
+  const handleTerminalGetByState = async (
+    state: string
+  ): Promise<import("../../../../shared/types/ipc.js").BackendTerminalInfo[]> => {
     try {
       if (typeof state !== "string" || !state) {
         throw new Error("Invalid state: must be a non-empty string");
@@ -296,8 +300,8 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           id: t.id,
           projectId: t.projectId,
           kind: t.kind,
-          type: t.type,
-          agentId: t.agentId,
+
+          launchAgentId: t.launchAgentId,
           title: t.title,
           cwd: t.cwd,
           worktreeId: t.worktreeId,
@@ -311,19 +315,26 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           agentSessionId: t.agentSessionId,
           agentLaunchFlags: t.agentLaunchFlags,
           agentModelId: t.agentModelId,
+          agentPresetId: t.agentPresetId,
+          agentPresetColor: t.agentPresetColor,
+          originalAgentPresetId: t.originalAgentPresetId,
+          everDetectedAgent: t.everDetectedAgent,
+          detectedAgentId: t.detectedAgentId,
+          detectedProcessId: t.detectedProcessId,
         }));
 
       logInfo(`terminal:getByState(${state}): found ${sanitized.length} terminals`);
       return sanitized;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to get terminals by state");
       throw new Error(`Failed to get terminals by state: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_BY_STATE, handleTerminalGetByState);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_BY_STATE));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_BY_STATE, handleTerminalGetByState));
 
-  const handleTerminalGetAll = async () => {
+  const handleTerminalGetAll = async (): Promise<
+    import("../../../../shared/types/ipc.js").BackendTerminalInfo[]
+  > => {
     try {
       const terminals = await ptyClient.getAllTerminalsAsync();
 
@@ -333,8 +344,8 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           id: t.id,
           projectId: t.projectId,
           kind: t.kind,
-          type: t.type,
-          agentId: t.agentId,
+
+          launchAgentId: t.launchAgentId,
           title: t.title,
           cwd: t.cwd,
           worktreeId: t.worktreeId,
@@ -348,22 +359,52 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           agentSessionId: t.agentSessionId,
           agentLaunchFlags: t.agentLaunchFlags,
           agentModelId: t.agentModelId,
+          agentPresetId: t.agentPresetId,
+          agentPresetColor: t.agentPresetColor,
+          originalAgentPresetId: t.originalAgentPresetId,
+          everDetectedAgent: t.everDetectedAgent,
+          detectedAgentId: t.detectedAgentId,
+          detectedProcessId: t.detectedProcessId,
         }));
 
       logInfo(`terminal:getAll: found ${sanitized.length} terminals`);
       return sanitized;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to get all terminals");
       throw new Error(`Failed to get all terminals: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_ALL, handleTerminalGetAll);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_ALL));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_ALL, handleTerminalGetAll));
+
+  const handleTerminalSearchSemanticBuffers = async (
+    query: string,
+    isRegex: boolean
+  ): Promise<import("../../../../shared/types/ipc/terminal.js").SemanticSearchMatch[]> => {
+    if (typeof query !== "string") {
+      throw new Error("Invalid query: must be a string");
+    }
+    if (typeof isRegex !== "boolean") {
+      throw new Error("Invalid isRegex: must be a boolean");
+    }
+    // Cap query length so a pathological regex can't lock up the pty-host
+    // event loop scanning every terminal's buffer.
+    if (query.length === 0 || query.length > 500) {
+      return [];
+    }
+    try {
+      return await ptyClient.searchSemanticBuffersAsync(query, isRegex);
+    } catch (error) {
+      logWarn("terminal:searchSemanticBuffers failed", { error });
+      return [];
+    }
+  };
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS, handleTerminalSearchSemanticBuffers)
+  );
 
   const handleTerminalReconnect = async (
-    _event: Electron.IpcMainInvokeEvent,
     terminalId: string
-  ) => {
+  ): Promise<import("../../../../shared/types/ipc.js").TerminalReconnectResult> => {
     try {
       if (typeof terminalId !== "string" || !terminalId) {
         throw new Error("Invalid terminal ID: must be a non-empty string");
@@ -373,12 +414,12 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
       if (!terminal) {
         logWarn(`terminal:reconnect: Terminal ${terminalId} not found`);
-        return { exists: false, error: "Terminal not found in backend" };
+        return { exists: false };
       }
 
       if (getAgentAvailabilityStore().isHelpTerminal(terminal.id)) {
         logInfo(`terminal:reconnect: Skipping help terminal ${terminalId}`);
-        return { exists: false, error: "Terminal is a help terminal" };
+        return { exists: false };
       }
 
       logInfo(`terminal:reconnect: Reconnecting to ${terminalId}`);
@@ -388,13 +429,11 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         id: terminal.id,
         projectId: terminal.projectId,
         kind: terminal.kind,
-        type: terminal.type,
-        agentId: terminal.agentId,
+
+        launchAgentId: terminal.launchAgentId,
         title: terminal.title,
         cwd: terminal.cwd,
-        worktreeId: terminal.worktreeId,
         agentState: terminal.agentState,
-        waitingReason: terminal.waitingReason,
         lastStateChange: terminal.lastStateChange,
         spawnedAt: terminal.spawnedAt,
         activityTier: terminal.activityTier,
@@ -402,14 +441,19 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         agentSessionId: terminal.agentSessionId,
         agentLaunchFlags: terminal.agentLaunchFlags,
         agentModelId: terminal.agentModelId,
+        agentPresetId: terminal.agentPresetId,
+        agentPresetColor: terminal.agentPresetColor,
+        originalAgentPresetId: terminal.originalAgentPresetId,
+        everDetectedAgent: terminal.everDetectedAgent,
+        detectedAgentId: terminal.detectedAgentId,
+        detectedProcessId: terminal.detectedProcessId,
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error, "Failed to reconnect to terminal");
       throw new Error(`Failed to reconnect to terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_RECONNECT, handleTerminalReconnect);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_RECONNECT));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_RECONNECT, handleTerminalReconnect));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

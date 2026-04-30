@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { projectClient } from "@/clients";
+import { logError } from "@/utils/logger";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import type { ProjectSettings } from "@/types";
@@ -55,10 +56,10 @@ export function useNewWorktreeProjectSettings({
           }
         }
       })
-      .catch((err) => console.error("Failed to load project settings:", err));
+      .catch((err) => logError("Failed to load project settings", err));
 
     if (recipes.length === 0 && currentProject?.id) {
-      loadRecipes(currentProject.id).catch((err) => console.error("Failed to load recipes:", err));
+      loadRecipes(currentProject.id).catch((err) => logError("Failed to load recipes", err));
     }
   }, [isOpen, currentProject, recipes.length, loadRecipes]);
 

@@ -27,21 +27,8 @@ const fixPathMock = vi.hoisted(() => ({
   default: vi.fn(),
 }));
 
-const sqliteMock = vi.hoisted(() => ({
-  get: vi.fn(),
-  prepare: vi.fn(),
-  close: vi.fn(),
-  Database: vi.fn(),
-}));
-
-const fsUtilsMock = vi.hoisted(() => ({
-  resilientAtomicWriteFileSync: vi.fn(),
-  resilientRename: vi.fn(),
-  resilientRenameSync: vi.fn(),
-  resilientDirectWriteFile: vi.fn(),
-  resilientAtomicWriteFile: vi.fn(),
-  resilientUnlink: vi.fn(),
-  waitForPathExists: vi.fn(),
+const osMock = vi.hoisted(() => ({
+  totalmem: vi.fn<() => number>(),
 }));
 
 vi.mock("fs", () => ({
@@ -67,10 +54,6 @@ vi.mock("electron", () => electronMock);
 
 vi.mock("fix-path", () => fixPathMock);
 
-vi.mock("better-sqlite3", () => ({ default: sqliteMock.Database }));
-
-vi.mock("../../utils/fs.js", () => fsUtilsMock);
-
 vi.mock("node:v8", () => ({
   default: { setFlagsFromString: vi.fn() },
 }));
@@ -80,8 +63,9 @@ vi.mock("node:vm", () => ({
 }));
 
 vi.mock("os", () => ({
-  default: { homedir: () => "C:\\Users\\testuser" },
+  default: { homedir: () => "C:\\Users\\testuser", totalmem: osMock.totalmem },
   homedir: () => "C:\\Users\\testuser",
+  totalmem: osMock.totalmem,
 }));
 
 const originalPlatform = process.platform;
@@ -93,11 +77,8 @@ function getCandidatePaths(): string[] {
     .filter(
       (p) =>
         !p.includes("gpu-disabled.flag") &&
-        !p.includes(".rebrand-migrated") &&
         !p.includes("canopy-app-dev") &&
-        !p.includes("daintree-dev") &&
-        !p.endsWith("Canopy") &&
-        !p.endsWith("Daintree")
+        !p.includes("daintree-dev")
     );
 }
 
@@ -396,6 +377,8 @@ describe("Windows Git PATH discovery", () => {
 });
 
 describe("GPU memory flags", () => {
+  const GIB = 1024 ** 3;
+
   beforeEach(() => {
     vi.resetModules();
     vi.resetAllMocks();
@@ -408,8 +391,29 @@ describe("GPU memory flags", () => {
     process.argv = originalArgv;
   });
 
-  it("sets force-gpu-mem-available-mb to 1024", async () => {
+  it("sets force-gpu-mem-available-mb to 768 on a 4 GiB machine", async () => {
     fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(4 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "768");
+  });
+
+  it("sets force-gpu-mem-available-mb to 768 at the 8 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(8 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "768");
+  });
+
+  it("sets force-gpu-mem-available-mb to 1024 just above the 8 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(8 * GIB + 1);
 
     await import("../environment.js");
 
@@ -417,8 +421,39 @@ describe("GPU memory flags", () => {
     expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "1024");
   });
 
+  it("sets force-gpu-mem-available-mb to 1024 at the 16 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "1024");
+  });
+
+  it("sets force-gpu-mem-available-mb to 2048 just above the 16 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB + 1);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "2048");
+  });
+
+  it("sets force-gpu-mem-available-mb to 2048 on a 32 GiB machine", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(32 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "2048");
+  });
+
   it("does not set gpu-rasterization-msaa-sample-count", async () => {
     fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB);
 
     await import("../environment.js");
 
@@ -620,383 +655,5 @@ describe("fixPath packaging guard", () => {
     await import("../environment.js");
 
     expect(fixPathMock.default).toHaveBeenCalledOnce();
-  });
-});
-
-describe("Canopy -> Daintree userData migration gating", () => {
-  const originalVariant = process.env.BUILD_VARIANT;
-
-  beforeEach(() => {
-    vi.resetModules();
-    vi.resetAllMocks();
-    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
-    process.argv = ["electron", "main.js"];
-    electronMock.app.isPackaged = true;
-    electronMock.app.getPath.mockImplementation((key?: string) => {
-      if (key === "userData") return "/tmp/user-data/Daintree";
-      if (key === "appData") return "/tmp/user-data";
-      return "/tmp/test";
-    });
-    // Re-wire the better-sqlite3 chain after vi.resetAllMocks() — the reset
-    // clears the implementation set inside vi.mock(...) factories, so the
-    // Database -> prepare -> get chain has to be rebuilt every test. Vitest
-    // 4 requires `mockImplementation` with a `class` (or `function`, not arrow)
-    // when the mock is invoked with `new`. Default: probe returns 0 rows
-    // (empty DB) so migration proceeds unless a test overrides.
-    sqliteMock.get.mockReturnValue({ count: 0 });
-    sqliteMock.prepare.mockReturnValue({ get: sqliteMock.get });
-    sqliteMock.Database.mockImplementation(
-      class {
-        prepare = sqliteMock.prepare;
-        close = sqliteMock.close;
-      } as never
-    );
-  });
-
-  afterEach(() => {
-    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
-    process.argv = originalArgv;
-    if (originalVariant === undefined) {
-      Reflect.deleteProperty(process.env, "BUILD_VARIANT");
-    } else {
-      (process.env as Record<string, string | undefined>).BUILD_VARIANT = originalVariant;
-    }
-  });
-
-  it("runs the migration when BUILD_VARIANT is unset (Daintree default)", async () => {
-    Reflect.deleteProperty(process.env, "BUILD_VARIANT");
-    // Legacy Canopy userData exists; new Daintree userData does not (no
-    // daintree.db marker).
-    fsMock.existsSync.mockImplementation((p: string) => {
-      if (p.endsWith(".rebrand-migrated")) return false;
-      if (p.endsWith("daintree.db")) return false;
-      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
-      return false;
-    });
-
-    await import("../environment.js");
-
-    // Copy goes into a staging dir first (atomic rename pattern) with a
-    // filter that excludes Chromium singleton/cache/crashpad state.
-    expect(fsMock.cpSync).toHaveBeenCalledWith(
-      path.join("/tmp/user-data", "Canopy"),
-      "/tmp/user-data/Daintree.migrating",
-      expect.objectContaining({
-        recursive: true,
-        filter: expect.any(Function),
-      })
-    );
-    // Staging is atomically promoted into place.
-    expect(fsMock.renameSync).toHaveBeenCalledWith(
-      "/tmp/user-data/Daintree.migrating",
-      "/tmp/user-data/Daintree"
-    );
-  });
-
-  it("skips the migration when Daintree data already exists (daintree.db has rows)", async () => {
-    Reflect.deleteProperty(process.env, "BUILD_VARIANT");
-    fsMock.existsSync.mockImplementation((p: string) => {
-      if (p.endsWith(".rebrand-migrated")) return false;
-      if (p.endsWith("daintree.db")) return true;
-      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
-      return false;
-    });
-    // The DB exists AND has real rows — a real Daintree user.
-    sqliteMock.get.mockReturnValue({ count: 1 });
-
-    await import("../environment.js");
-
-    // Must not touch the existing Daintree userData. A previous migration
-    // attempt may have crashed between the copy and the marker write — the
-    // user has since used Daintree and accumulated real state.
-    expect(fsMock.cpSync).not.toHaveBeenCalled();
-    expect(fsMock.rmSync).not.toHaveBeenCalled();
-    expect(fsUtilsMock.resilientAtomicWriteFileSync).toHaveBeenCalledWith(
-      expect.stringContaining(".rebrand-migrated"),
-      expect.stringContaining("skipped: daintree.db already present")
-    );
-  });
-
-  it("migrates when daintree.db exists but the projects table is empty (issue #5156)", async () => {
-    // Pre-release Daintree launches caused openDb() to create a schema-only
-    // empty daintree.db. The previous existsSync-only guard mistook this for
-    // a real install and silently left user data unmigrated. Now we probe
-    // for actual rows.
-    Reflect.deleteProperty(process.env, "BUILD_VARIANT");
-    fsMock.existsSync.mockImplementation((p: string) => {
-      if (p.endsWith(".rebrand-migrated")) return false;
-      if (p.endsWith("daintree.db")) return true; // file exists but...
-      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
-      return false;
-    });
-    // ...projects table has 0 rows (default beforeEach mock value).
-
-    await import("../environment.js");
-
-    // Migration runs into the staging dir and is atomically promoted.
-    expect(fsMock.cpSync).toHaveBeenCalledWith(
-      path.join("/tmp/user-data", "Canopy"),
-      "/tmp/user-data/Daintree.migrating",
-      expect.objectContaining({ recursive: true, filter: expect.any(Function) })
-    );
-    expect(fsMock.renameSync).toHaveBeenCalledWith(
-      "/tmp/user-data/Daintree.migrating",
-      "/tmp/user-data/Daintree"
-    );
-    // The skip marker is NOT written.
-    expect(fsUtilsMock.resilientAtomicWriteFileSync).not.toHaveBeenCalledWith(
-      expect.stringContaining(".rebrand-migrated"),
-      expect.stringContaining("skipped: daintree.db already present")
-    );
-  });
-
-  it("auto-heals: deletes a stale skip marker and re-runs migration when daintree.db is empty and canopy.db has rows", async () => {
-    Reflect.deleteProperty(process.env, "BUILD_VARIANT");
-    // Marker is initially present but gets deleted by the auto-heal pre-check;
-    // the !existsSync(markerPath) gate has to flip after rmSync runs.
-    let markerDeleted = false;
-    fsMock.existsSync.mockImplementation((p: string) => {
-      if (p.endsWith(".rebrand-migrated")) return !markerDeleted;
-      if (p.endsWith("daintree.db")) return true;
-      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
-      return false;
-    });
-    fsMock.rmSync.mockImplementation((p: string) => {
-      if (typeof p === "string" && p.endsWith(".rebrand-migrated")) {
-        markerDeleted = true;
-      }
-    });
-    fsMock.readFileSync.mockReturnValue(
-      "2026-04-16T14:31:00.178Z\nskipped: daintree.db already present\n"
-    );
-    // Discriminate by path: empty daintree.db, populated canopy.db. Vitest 4
-    // requires a class (not an arrow function) when the mock is `new`-called.
-    sqliteMock.Database.mockImplementation(
-      class {
-        constructor(dbPath: unknown) {
-          const isCanopy = typeof dbPath === "string" && dbPath.endsWith("canopy.db");
-          (this as unknown as { prepare: unknown }).prepare = () => ({
-            get: () => ({ count: isCanopy ? 3 : 0 }),
-          });
-          (this as unknown as { close: unknown }).close = vi.fn();
-        }
-      } as never
-    );
-
-    await import("../environment.js");
-
-    // Stale marker is deleted, then the migration runs.
-    expect(fsMock.rmSync).toHaveBeenCalledWith(
-      path.join("/tmp/user-data/Daintree", ".rebrand-migrated")
-    );
-    expect(fsMock.cpSync).toHaveBeenCalledWith(
-      path.join("/tmp/user-data", "Canopy"),
-      "/tmp/user-data/Daintree.migrating",
-      expect.objectContaining({ recursive: true, filter: expect.any(Function) })
-    );
-    expect(fsMock.renameSync).toHaveBeenCalledWith(
-      "/tmp/user-data/Daintree.migrating",
-      "/tmp/user-data/Daintree"
-    );
-  });
-
-  it("does NOT auto-heal when the marker says skipped but canopy.db has no rows", async () => {
-    // Edge case: legitimate first-launch user with zero projects in Canopy
-    // who somehow got the skip marker — we must not re-trigger migration
-    // and clobber whatever's in Daintree.
-    Reflect.deleteProperty(process.env, "BUILD_VARIANT");
-    fsMock.existsSync.mockImplementation((p: string) => {
-      if (p.endsWith(".rebrand-migrated")) return true; // marker stays
-      if (p.endsWith("daintree.db")) return true;
-      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
-      return false;
-    });
-    fsMock.readFileSync.mockReturnValue(
-      "2026-04-16T14:31:00.178Z\nskipped: daintree.db already present\n"
-    );
-    // Both DBs report 0 rows.
-    sqliteMock.get.mockReturnValue({ count: 0 });
-
-    await import("../environment.js");
-
-    // Marker is NOT deleted, migration does NOT run.
-    expect(fsMock.rmSync).not.toHaveBeenCalledWith(
-      path.join("/tmp/user-data/Daintree", ".rebrand-migrated")
-    );
-    expect(fsMock.cpSync).not.toHaveBeenCalled();
-  });
-
-  it("fail-safe: treats DB probe error as 'has data' and skips migration", async () => {
-    // If daintree.db is corrupt, locked, or otherwise unreadable we must
-    // never overwrite it — the user's data could still be in there.
-    Reflect.deleteProperty(process.env, "BUILD_VARIANT");
-    fsMock.existsSync.mockImplementation((p: string) => {
-      if (p.endsWith(".rebrand-migrated")) return false;
-      if (p.endsWith("daintree.db")) return true;
-      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
-      return false;
-    });
-    sqliteMock.Database.mockImplementation(
-      class {
-        constructor() {
-          const err = new Error("file is not a database") as Error & { code: string };
-          err.code = "SQLITE_NOTADB";
-          throw err;
-        }
-      } as never
-    );
-
-    await import("../environment.js");
-
-    expect(fsMock.cpSync).not.toHaveBeenCalled();
-    expect(fsUtilsMock.resilientAtomicWriteFileSync).toHaveBeenCalledWith(
-      expect.stringContaining(".rebrand-migrated"),
-      expect.stringContaining("skipped: daintree.db already present")
-    );
-  });
-
-  it("fail-safe: treats prepare/get error as 'has data' and closes the DB", async () => {
-    // Covers a different SQLITE error path: constructor succeeds but the
-    // probe query throws (e.g. SQLITE_BUSY mid-read or a missing table).
-    // The finally block must still close the connection so WAL/SHM handles
-    // don't leak into the persistence service that opens this DB seconds later.
-    Reflect.deleteProperty(process.env, "BUILD_VARIANT");
-    fsMock.existsSync.mockImplementation((p: string) => {
-      if (p.endsWith(".rebrand-migrated")) return false;
-      if (p.endsWith("daintree.db")) return true;
-      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
-      return false;
-    });
-    const closeSpy = vi.fn();
-    sqliteMock.Database.mockImplementation(
-      class {
-        prepare = () => ({
-          get: () => {
-            const err = new Error("database is locked") as Error & { code: string };
-            err.code = "SQLITE_BUSY";
-            throw err;
-          },
-        });
-        close = closeSpy;
-      } as never
-    );
-
-    await import("../environment.js");
-
-    expect(closeSpy).toHaveBeenCalled();
-    expect(fsMock.cpSync).not.toHaveBeenCalled();
-    expect(fsUtilsMock.resilientAtomicWriteFileSync).toHaveBeenCalledWith(
-      expect.stringContaining(".rebrand-migrated"),
-      expect.stringContaining("skipped: daintree.db already present")
-    );
-  });
-
-  it("does NOT migrate when daintree.db is empty but Chromium-side state exists (Preferences)", async () => {
-    // A pre-release Daintree user who customized prefs/themes but never opened
-    // a project leaves zero rows in projects but does write `Preferences`.
-    // Migrating Canopy data over them would wipe out their customization at
-    // the rmSync(newUserData, recursive) step. This is the symmetric bug to
-    // #5156 — a regression in the opposite direction.
-    Reflect.deleteProperty(process.env, "BUILD_VARIANT");
-    fsMock.existsSync.mockImplementation((p: string) => {
-      if (p.endsWith(".rebrand-migrated")) return false;
-      if (p.endsWith("daintree.db")) return true;
-      if (p.endsWith("/Daintree/Preferences") || p.endsWith("\\Daintree\\Preferences")) return true;
-      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
-      return false;
-    });
-    // Zero rows is the default beforeEach mock — the usage-marker check is
-    // what must catch this case.
-
-    await import("../environment.js");
-
-    expect(fsMock.cpSync).not.toHaveBeenCalled();
-    expect(fsMock.rmSync).not.toHaveBeenCalled();
-    expect(fsUtilsMock.resilientAtomicWriteFileSync).toHaveBeenCalledWith(
-      expect.stringContaining(".rebrand-migrated"),
-      expect.stringContaining("skipped: daintree.db already present")
-    );
-  });
-
-  it("does NOT auto-heal when Chromium-side Daintree state exists (Local Storage)", async () => {
-    // Same protection in the auto-heal direction — a pre-release user with a
-    // stale skip marker who customized Daintree (creating Local Storage) but
-    // never opened a project must not have their state wiped by auto-heal.
-    Reflect.deleteProperty(process.env, "BUILD_VARIANT");
-    fsMock.existsSync.mockImplementation((p: string) => {
-      if (p.endsWith(".rebrand-migrated")) return true; // marker stays
-      if (p.endsWith("daintree.db")) return true;
-      if (p.endsWith("/Daintree/Local Storage") || p.endsWith("\\Daintree\\Local Storage"))
-        return true;
-      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
-      return false;
-    });
-    fsMock.readFileSync.mockReturnValue(
-      "2026-04-16T14:31:00.178Z\nskipped: daintree.db already present\n"
-    );
-    sqliteMock.Database.mockImplementation(
-      class {
-        constructor(dbPath: unknown) {
-          const isCanopy = typeof dbPath === "string" && dbPath.endsWith("canopy.db");
-          (this as unknown as { prepare: unknown }).prepare = () => ({
-            get: () => ({ count: isCanopy ? 5 : 0 }),
-          });
-          (this as unknown as { close: unknown }).close = vi.fn();
-        }
-      } as never
-    );
-
-    await import("../environment.js");
-
-    expect(fsMock.rmSync).not.toHaveBeenCalledWith(
-      path.join("/tmp/user-data/Daintree", ".rebrand-migrated")
-    );
-    expect(fsMock.cpSync).not.toHaveBeenCalled();
-  });
-
-  it("excludes Chromium singleton / cache / crashpad state from the copy", async () => {
-    Reflect.deleteProperty(process.env, "BUILD_VARIANT");
-    fsMock.existsSync.mockImplementation((p: string) => {
-      if (p.endsWith(".rebrand-migrated")) return false;
-      if (p.endsWith("daintree.db")) return false;
-      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
-      return false;
-    });
-
-    await import("../environment.js");
-
-    const cpCall = fsMock.cpSync.mock.calls[0];
-    expect(cpCall).toBeDefined();
-    const filter = cpCall[2].filter as (src: string) => boolean;
-    // Inheriting SingletonLock that points at a live Canopy PID would make
-    // Daintree fail to launch (Chromium treats it as a secondary instance).
-    expect(filter("/tmp/user-data/Canopy/SingletonLock")).toBe(false);
-    expect(filter("/tmp/user-data/Canopy/SingletonCookie")).toBe(false);
-    expect(filter("/tmp/user-data/Canopy/SingletonSocket")).toBe(false);
-    // Crashpad state would re-report Canopy's old crashes under Daintree's
-    // bundle id.
-    expect(filter("/tmp/user-data/Canopy/Crashpad")).toBe(false);
-    expect(filter("/tmp/user-data/Canopy/Crash Reports")).toBe(false);
-    // Caches regenerate — copying wastes I/O.
-    expect(filter("/tmp/user-data/Canopy/GPUCache")).toBe(false);
-    expect(filter("/tmp/user-data/Canopy/Code Cache")).toBe(false);
-    // Real user state is kept.
-    expect(filter("/tmp/user-data/Canopy/canopy.db")).toBe(true);
-    expect(filter("/tmp/user-data/Canopy/Preferences")).toBe(true);
-    expect(filter("/tmp/user-data/Canopy/Local Storage")).toBe(true);
-  });
-
-  it("skips the migration when BUILD_VARIANT=canopy (legacy build)", async () => {
-    (process.env as Record<string, string | undefined>).BUILD_VARIANT = "canopy";
-    fsMock.existsSync.mockImplementation((p: string) => {
-      if (p.endsWith(".rebrand-migrated")) return false;
-      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
-      return false;
-    });
-
-    await import("../environment.js");
-
-    expect(fsMock.cpSync).not.toHaveBeenCalled();
-    expect(fsMock.renameSync).not.toHaveBeenCalled();
   });
 });

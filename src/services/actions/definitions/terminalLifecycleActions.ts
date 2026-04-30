@@ -1,6 +1,8 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { terminalClient } from "@/clients";
+import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
 export function registerTerminalLifecycleActions(
   actions: ActionRegistry,
@@ -124,8 +126,6 @@ export function registerTerminalLifecycleActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        const { terminalInstanceService } =
-          await import("@/services/terminal/TerminalInstanceService");
         terminalInstanceService.resetRenderer(targetId);
       }
     },
@@ -310,8 +310,7 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.restartService", () => ({
     id: "terminal.restartService",
     title: "Restart Terminal Service",
-    description:
-      "Restart the PTY host process without reloading the application. Only available when the terminal backend is disconnected.",
+    description: "Restart the PTY host. Available only when the terminal backend is disconnected.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -326,11 +325,12 @@ export function registerTerminalLifecycleActions(
     id: "terminal.watch",
     title: "Watch This Terminal",
     description:
-      "Toggle a one-shot watch on the focused terminal — fires a high-priority notification when the agent completes or waits for input",
+      "Toggle a one-shot watch — notifies when the agent completes, exits, or waits for input.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["monitor", "observe", "notify", "alert"],
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     isEnabled: (ctx) => !!ctx.focusedTerminalId,
     run: async (args: unknown, ctx) => {
@@ -348,42 +348,10 @@ export function registerTerminalLifecycleActions(
           terminal?.agentState === "waiting" ||
           terminal?.agentState === "exited"
         ) {
-          const { fireWatchNotification } = await import("@/lib/watchNotification");
           fireWatchNotification(targetId, terminal.title ?? targetId, terminal.agentState);
         } else {
           state.watchPanel(targetId);
         }
-      }
-    },
-  }));
-
-  actions.set("terminal.deleteNote", () => ({
-    id: "terminal.deleteNote",
-    title: "Delete Note",
-    description: "Delete the note file and remove the panel",
-    category: "terminal",
-    kind: "command",
-    danger: "confirm",
-    scope: "renderer",
-    argsSchema: z.object({
-      terminalId: z.string(),
-      notePath: z.string(),
-      noteTitle: z.string().optional(),
-    }),
-    run: async (args: unknown) => {
-      const { terminalId, notePath, noteTitle } = args as {
-        terminalId: string;
-        notePath: string;
-        noteTitle?: string;
-      };
-      const { actionService } = await import("@/services/ActionService");
-      const result = await actionService.dispatch(
-        "notes.delete",
-        { notePath, noteTitle },
-        { source: "context-menu" }
-      );
-      if (result.ok) {
-        usePanelStore.getState().removePanel(terminalId);
       }
     },
   }));

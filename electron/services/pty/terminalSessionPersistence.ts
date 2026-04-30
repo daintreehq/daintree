@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
-import { mkdir, readdir, stat, writeFile, unlink } from "node:fs/promises";
-import { resilientRename, resilientRenameSync } from "../../utils/fs.js";
+import { mkdir, readdir, stat, unlink } from "node:fs/promises";
+import { resilientAtomicWriteFile, resilientAtomicWriteFileSync } from "../../utils/fs.js";
 import path from "node:path";
 import type { Terminal as HeadlessTerminalType, IMarker } from "@xterm/headless";
 
@@ -133,19 +133,7 @@ export function persistSessionSnapshotSync(terminalId: string, state: string): v
   if (Buffer.byteLength(state, "utf8") > SESSION_SNAPSHOT_MAX_BYTES) return;
 
   mkdirSync(dir, { recursive: true });
-
-  const tmpPath = `${sessionPath}.tmp`;
-  try {
-    writeFileSync(tmpPath, state, "utf8");
-    resilientRenameSync(tmpPath, sessionPath);
-  } catch (error) {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      /* best-effort cleanup */
-    }
-    throw error;
-  }
+  resilientAtomicWriteFileSync(sessionPath, state, "utf8");
 }
 
 export async function persistSessionSnapshotAsync(
@@ -158,17 +146,7 @@ export async function persistSessionSnapshotAsync(
   if (Buffer.byteLength(state, "utf8") > SESSION_SNAPSHOT_MAX_BYTES) return;
 
   await mkdir(dir, { recursive: true });
-
-  const tmpPath = `${sessionPath}.tmp`;
-  try {
-    await writeFile(tmpPath, state, "utf8");
-    await resilientRename(tmpPath, sessionPath);
-  } catch (error) {
-    unlink(tmpPath).catch(() => {
-      /* best-effort cleanup */
-    });
-    throw error;
-  }
+  await resilientAtomicWriteFile(sessionPath, state, "utf8");
 }
 
 export async function deleteSessionFile(terminalId: string): Promise<void> {

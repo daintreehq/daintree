@@ -10,6 +10,8 @@ vi.mock("electron", () => ({
   },
   app: {
     getPath: vi.fn().mockReturnValue("/mock/user/data"),
+    on: vi.fn(),
+    off: vi.fn(),
   },
 }));
 
@@ -54,6 +56,8 @@ describe("PtyClient multi-port support", () => {
       },
       app: {
         getPath: vi.fn().mockReturnValue("/mock/user/data"),
+        on: vi.fn(),
+        off: vi.fn(),
       },
     }));
 

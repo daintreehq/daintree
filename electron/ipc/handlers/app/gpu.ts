@@ -1,4 +1,4 @@
-import { ipcMain, app } from "electron";
+import { app } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { store } from "../../../store.js";
 import {
@@ -7,6 +7,7 @@ import {
   clearGpuDisabledFlag,
 } from "../../../services/GpuCrashMonitorService.js";
 import { closeTelemetry } from "../../../services/TelemetryService.js";
+import { typedHandle } from "../../utils.js";
 
 export function registerGpuHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -17,13 +18,9 @@ export function registerGpuHandlers(): () => void {
       hardwareAccelerationDisabled: isGpuDisabledByFlag(userDataPath),
     };
   };
-  ipcMain.handle(CHANNELS.GPU_GET_STATUS, handleGetStatus);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GPU_GET_STATUS));
+  handlers.push(typedHandle(CHANNELS.GPU_GET_STATUS, handleGetStatus));
 
-  const handleSetHardwareAcceleration = async (
-    _event: Electron.IpcMainInvokeEvent,
-    enabled: boolean
-  ) => {
+  const handleSetHardwareAcceleration = async (enabled: boolean) => {
     const userDataPath = app.getPath("userData");
     if (enabled) {
       clearGpuDisabledFlag(userDataPath);
@@ -36,8 +33,7 @@ export function registerGpuHandlers(): () => void {
     await closeTelemetry();
     app.exit(0);
   };
-  ipcMain.handle(CHANNELS.GPU_SET_HARDWARE_ACCELERATION, handleSetHardwareAcceleration);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GPU_SET_HARDWARE_ACCELERATION));
+  handlers.push(typedHandle(CHANNELS.GPU_SET_HARDWARE_ACCELERATION, handleSetHardwareAcceleration));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

@@ -1,17 +1,28 @@
-import React, { useCallback, useRef, forwardRef, useMemo, useEffect, type ReactNode } from "react";
+import React, {
+  useCallback,
+  useRef,
+  forwardRef,
+  useMemo,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { cn } from "@/lib/utils";
 import { PanelHeader } from "./PanelHeader";
 import { useIsDragging } from "@/components/DragDrop";
 import { TitleEditingProvider, useTitleEditing } from "./TitleEditingContext";
 import { TerminalHeaderContent } from "@/components/Terminal/TerminalHeaderContent";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
-import type { PanelKind, TerminalType, AgentState } from "@/types";
+import type { PanelKind, AgentState } from "@/types";
+import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
 import { usePreferencesStore } from "@/store";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 
 /**
  * Base props for all panel types.
@@ -50,16 +61,27 @@ export interface ContentPanelProps extends BasePanelProps {
   tabIndex?: number;
   role?: string;
   "aria-label"?: string;
+  "aria-selected"?: boolean;
 
   // Terminal-specific header props (optional, only used for terminal/agent panels)
-  type?: TerminalType;
   agentId?: string;
+  /** Runtime-detected agent identity (cleared on agent exit). Drives panel chrome. */
+  detectedAgentId?: string;
+  /** Canonical live runtime identity for terminal chrome. */
+  runtimeIdentity?: TerminalRuntimeIdentity;
+  /** Single descriptor consumed by all terminal chrome renderers. */
+  chrome?: TerminalChromeDescriptor;
+  /** Sticky: has an agent ever been live-detected. Not used for chrome. */
+  everDetectedAgent?: boolean;
   detectedProcessId?: string;
+  presetColor?: string;
+  agentLaunchFlags?: string[];
   isExited?: boolean;
   exitCode?: number | null;
   isWorking?: boolean;
   agentState?: AgentState;
   activity?: ActivityState | null;
+  activityStatus?: "working" | "waiting" | "success" | "failure";
   lastCommand?: string;
   queueCount?: number;
   flowStatus?: "running" | "paused-backpressure" | "paused-user" | "suspended";
@@ -70,6 +92,19 @@ export interface ContentPanelProps extends BasePanelProps {
   // When set, this overrides agentState for container border styling so hidden tabs
   // surface their state on the group container without changing the header chip.
   ambientAgentState?: AgentState;
+
+  // Multi-select indicator. When the pane is part of an armed set of 2+
+  // terminals, the title bar lifts. The outer container border stays as-is —
+  // no extra outline. Focus styling differentiates "the pane I'm typing in"
+  // from the other selected panes.
+  isSelected?: boolean;
+
+  // Receiver indicator for live broadcast. True when this pane is armed,
+  // not the focused pane, and the fleet has 2+ members — i.e. keystrokes
+  // typed elsewhere will fan out here. Renders an amber left stripe on the
+  // title bar so the user can verify "yes, this pane will mirror" without
+  // looking up at the fleet ribbon.
+  isFleetFollower?: boolean;
 
   // Tab support
   tabs?: TabInfo[];
@@ -108,14 +143,21 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     tabIndex,
     role,
     "aria-label": ariaLabel,
-    type,
+    "aria-selected": ariaSelected,
     agentId,
+    detectedAgentId,
+    runtimeIdentity,
+    chrome,
+    everDetectedAgent,
     detectedProcessId,
+    presetColor,
+    agentLaunchFlags,
     isExited = false,
     exitCode = null,
     isWorking: _isWorking = false,
     agentState,
     activity,
+    activityStatus,
     lastCommand,
     queueCount = 0,
     flowStatus,
@@ -123,6 +165,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isPinged,
     wasJustSelected,
     ambientAgentState,
+    isSelected = false,
+    isFleetFollower = false,
     tabs,
     groupId,
     onTabClick,
@@ -136,6 +180,35 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const isDragging = useIsDragging();
   const titleInputRef = useRef<HTMLInputElement>(null);
   const titleEditing = useTitleEditing();
+
+  // Hover/focus preview from the fleet selection menu — true when the user
+  // is previewing a state-preset menu item that *would* arm this pane. The
+  // pane's title bar lifts to a neutral surface tint (not accent) so the
+  // preview is unmistakable but doesn't squat on the focus anchor color.
+  const isFleetPreviewed = useFleetArmingStore((s) => s.previewArmedIds.has(id));
+
+  // One-shot ring pulse when this pane becomes the new primary on fleet
+  // exit. Listens for the CustomEvent dispatched from FleetArmingRibbon's
+  // exitFleet — keeps the cosmetic event out of any persistent store.
+  const [showExitPulse, setShowExitPulse] = useState(false);
+  useEffect(() => {
+    let pulseTimer: number | null = null;
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ panelId?: string }>).detail;
+      if (!detail || detail.panelId !== id) return;
+      setShowExitPulse(true);
+      if (pulseTimer !== null) window.clearTimeout(pulseTimer);
+      pulseTimer = window.setTimeout(() => {
+        setShowExitPulse(false);
+        pulseTimer = null;
+      }, 240);
+    };
+    window.addEventListener("daintree:fleet-exit-pulse", handler);
+    return () => {
+      window.removeEventListener("daintree:fleet-exit-pulse", handler);
+      if (pulseTimer !== null) window.clearTimeout(pulseTimer);
+    };
+  }, [id]);
 
   // Focus and select input when editing starts (handles context menu rename).
   // Use a short delay instead of rAF so the context menu's focus restoration
@@ -164,23 +237,52 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     )
   );
 
+  const terminalChrome = useMemo(
+    () =>
+      chrome ??
+      deriveTerminalChrome({
+        kind,
+        launchAgentId: agentId,
+        runtimeIdentity,
+        detectedAgentId,
+        detectedProcessId,
+        agentState,
+        runtimeStatus: isExited ? "exited" : undefined,
+        exitCode,
+        presetColor,
+      }),
+    [
+      chrome,
+      kind,
+      agentId,
+      runtimeIdentity,
+      detectedAgentId,
+      detectedProcessId,
+      agentState,
+      isExited,
+      exitCode,
+      presetColor,
+    ]
+  );
+  const ownAgentState = terminalChrome.isAgent ? agentState : undefined;
   // Determine effective agent state for container border styling.
   // ambientAgentState takes priority so tab groups can surface highest-urgency
-  // state from hidden tabs without affecting the header chip (which uses agentState).
-  const effectiveAgentState = ambientAgentState ?? agentState;
+  // state from hidden live-agent tabs without affecting the active header chip.
+  const effectiveAgentState = ambientAgentState ?? ownAgentState;
   const blockedState = useDockBlockedState(effectiveAgentState);
   const isWorkingState = effectiveAgentState === "working";
-  // Auto-construct TerminalHeaderContent for terminal/agent kinds if headerContent not provided
+
+  // Auto-construct TerminalHeaderContent for PTY-backed terminals if headerContent not provided
   const resolvedHeaderContent = useMemo(() => {
     if (headerContent !== undefined) return headerContent;
-    if (kind === "terminal" || kind === "agent") {
+    if (kind === "terminal") {
       return (
         <TerminalHeaderContent
           id={id}
           kind={kind}
-          type={type}
-          agentState={agentState}
+          agentState={ownAgentState}
           activity={activity}
+          activityStatus={activityStatus}
           lastCommand={lastCommand}
           isExited={isExited}
           exitCode={exitCode}
@@ -194,9 +296,9 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     headerContent,
     kind,
     id,
-    type,
-    agentState,
+    ownAgentState,
     activity,
+    activityStatus,
     lastCommand,
     isExited,
     exitCode,
@@ -261,6 +363,16 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         ref={ref}
         data-panel-id={id}
         data-panel-location={location}
+        data-detected-process-id={detectedProcessId || undefined}
+        data-detected-agent-id={detectedAgentId || undefined}
+        data-launch-agent-id={agentId || undefined}
+        data-ever-detected-agent={everDetectedAgent ? "true" : undefined}
+        data-chrome-agent-id={terminalChrome.agentId || undefined}
+        data-agent-state={ownAgentState || undefined}
+        data-ambient-agent-state={ambientAgentState || undefined}
+        data-runtime-kind={terminalChrome.runtimeKind}
+        data-runtime-icon-id={terminalChrome.iconId || undefined}
+        data-selected={isSelected || undefined}
         style={{
           contain: "content",
           ...(worktreeAccentColor
@@ -268,7 +380,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             : undefined),
         }}
         className={cn(
-          "flex flex-col h-full overflow-hidden group",
+          "flex flex-col h-full overflow-hidden group/panel",
           location === "grid" && !isMaximized && "bg-surface",
           (location === "dock" || isMaximized) && "bg-daintree-bg",
           location === "grid" &&
@@ -276,7 +388,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
           location === "grid" &&
             !isMaximized &&
-            (isFocused && showGridAttention
+            ((isFocused || isSelected) && showGridAttention
               ? "terminal-selected"
               : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
                 ? "panel-state-waiting"
@@ -293,15 +405,17 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         tabIndex={tabIndex}
         role={role}
         aria-label={ariaLabel}
+        aria-selected={ariaSelected}
       >
         <PanelHeader
           isDragging={isDragging}
           id={id}
           title={title}
           kind={kind}
-          type={type}
           agentId={agentId}
-          detectedProcessId={detectedProcessId}
+          chrome={terminalChrome}
+          presetColor={presetColor}
+          agentLaunchFlags={agentLaunchFlags}
           worktreeAccentColor={worktreeAccentColor}
           worktreeBranch={worktreeBranch}
           isFocused={isFocused}
@@ -324,6 +438,9 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           onRestart={onRestart}
           isPinged={isPinged}
           wasJustSelected={wasJustSelected}
+          isSelected={isSelected}
+          isFleetFollower={isFleetFollower}
+          isFleetPreviewed={isFleetPreviewed}
           headerContent={resolvedHeaderContent}
           headerActions={headerActions}
           tabs={tabs}
@@ -338,6 +455,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         {toolbar}
 
         <div className="flex-1 min-h-0 relative flex flex-col">{children}</div>
+
+        {showExitPulse ? <span className="fleet-exit-pulse-overlay" aria-hidden="true" /> : null}
       </div>
     </TerminalContextMenu>
   );

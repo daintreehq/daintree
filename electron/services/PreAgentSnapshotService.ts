@@ -2,6 +2,7 @@ import { events } from "./events.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import type { SnapshotInfo } from "../../shared/types/ipc/git.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const STASH_PREFIX = "daintree:pre-agent:";
 const DEFAULT_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours
@@ -50,7 +51,7 @@ class PreAgentSnapshotService {
       this.snapshots.delete(worktreeId);
       logWarn("[PreAgentSnapshot] Failed to create snapshot", {
         worktreeId,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err, "Failed to create pre-agent snapshot"),
       });
       events.emit("ui:notify", {
         type: "warning",
@@ -228,7 +229,7 @@ class PreAgentSnapshotService {
         } catch (err) {
           logWarn("[PreAgentSnapshot] Failed to prune snapshot", {
             worktreeId,
-            error: err instanceof Error ? err.message : String(err),
+            error: formatErrorMessage(err, "Failed to prune pre-agent snapshot"),
           });
         }
       }

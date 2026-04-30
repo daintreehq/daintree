@@ -2,7 +2,6 @@ export const PANEL_KIND_BRAND_COLORS = {
   terminal: "var(--theme-activity-idle)",
   agent: "var(--theme-accent-primary)",
   browser: "var(--theme-category-blue)",
-  notes: "var(--theme-category-amber)",
   "dev-preview": "var(--theme-category-violet)",
 } as const;
 

@@ -39,7 +39,7 @@ describe("useIssueSelection", () => {
 
   it("selects a range from the last toggled item", () => {
     const { result } = renderHook(() => useIssueSelection());
-    const getIdAt = (i: number) => [10, 20, 30, 40, 50][i];
+    const getIdAt = (i: number) => [10, 20, 30, 40, 50][i]!;
 
     // Select item at index 1
     act(() => result.current.toggle(20, 1));
@@ -54,7 +54,7 @@ describe("useIssueSelection", () => {
 
   it("handles reverse range selection", () => {
     const { result } = renderHook(() => useIssueSelection());
-    const getIdAt = (i: number) => [10, 20, 30, 40, 50][i];
+    const getIdAt = (i: number) => [10, 20, 30, 40, 50][i]!;
 
     act(() => result.current.toggle(50, 4));
     act(() => result.current.toggleRange(1, getIdAt));
@@ -85,7 +85,7 @@ describe("useIssueSelection", () => {
 
   it("range select without prior anchor defaults to single toggle", () => {
     const { result } = renderHook(() => useIssueSelection());
-    const getIdAt = (i: number) => [10, 20, 30][i];
+    const getIdAt = (i: number) => [10, 20, 30][i]!;
 
     // No prior toggle, so no anchor — should fall back to single toggle
     act(() => result.current.toggleRange(2, getIdAt));

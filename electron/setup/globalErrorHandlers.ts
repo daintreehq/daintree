@@ -5,7 +5,8 @@ import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { store } from "../store.js";
-import type { AppError } from "../../shared/types/ipc/errors.js";
+import type { ErrorRecord } from "../../shared/types/ipc/errors.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 let handlingFatal = false;
 
@@ -14,8 +15,8 @@ export function _resetHandlingFatalForTesting(): void {
   handlingFatal = false;
 }
 
-function buildFatalAppError(kind: string, error: unknown): AppError {
-  const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+function buildFatalErrorRecord(kind: string, error: unknown): ErrorRecord {
+  const message = formatErrorMessage(error, "Unknown fatal error");
   const id = `fatal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   return {
@@ -34,7 +35,7 @@ function buildFatalAppError(kind: string, error: unknown): AppError {
   };
 }
 
-function notifyRenderer(appError: AppError): void {
+function notifyRenderer(appError: ErrorRecord): void {
   try {
     broadcastToRenderer(CHANNELS.ERROR_NOTIFY, appError);
   } catch {
@@ -42,7 +43,7 @@ function notifyRenderer(appError: AppError): void {
   }
 }
 
-function persistPendingError(appError: AppError): void {
+function persistPendingError(appError: ErrorRecord): void {
   try {
     const existing = store.get("pendingErrors");
     const pending = Array.isArray(existing) ? existing : [];
@@ -78,7 +79,7 @@ export function registerGlobalErrorHandlers(): void {
       // silent
     }
 
-    const appError = buildFatalAppError("UNCAUGHT_EXCEPTION", error);
+    const appError = buildFatalErrorRecord("UNCAUGHT_EXCEPTION", error);
 
     try {
       persistPendingError(appError);
@@ -124,7 +125,7 @@ export function registerGlobalErrorHandlers(): void {
       // silent
     }
 
-    const appError = buildFatalAppError("UNHANDLED_REJECTION", reason);
+    const appError = buildFatalErrorRecord("UNHANDLED_REJECTION", reason);
 
     try {
       persistPendingError(appError);

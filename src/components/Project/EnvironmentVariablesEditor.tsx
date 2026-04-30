@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Key, Lock, ShieldAlert, Eye, EyeOff, Plus, Trash2, Save, Globe } from "lucide-react";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { EnvVar } from "./projectSettingsDirty";
 import type { ProjectSettings } from "@shared/types/project";
 
@@ -58,7 +59,7 @@ export function EnvironmentVariablesEditor({
   }, [globalEnvironmentVariables]);
 
   const addRow = () => {
-    setRows((prev) => [...prev, { id: `env-${Date.now()}-${Math.random()}`, key: "", value: "" }]);
+    setRows((prev) => [...prev, { id: `env-${crypto.randomUUID()}`, key: "", value: "" }]);
   };
 
   const deleteRow = (index: number, id: string) => {
@@ -83,6 +84,7 @@ export function EnvironmentVariablesEditor({
     setRows((prev) => {
       const updated = [...prev];
       const row = updated[index];
+      if (!row) return prev;
       const rowId = row.id;
       updated[index] = { ...row, [field]: value };
       setRowErrors((prevErrors) => {
@@ -132,7 +134,7 @@ export function EnvironmentVariablesEditor({
         await onFlush();
       }
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Failed to save environment variables");
+      setSaveError(formatErrorMessage(err, "Failed to save environment variables"));
     } finally {
       setIsSaving(false);
     }
@@ -187,7 +189,7 @@ export function EnvironmentVariablesEditor({
                       Overridden
                     </span>
                   ) : (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-daintree-accent/15 text-daintree-accent font-medium">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-info/15 text-status-info font-medium">
                       Global
                     </span>
                   )}
@@ -268,7 +270,7 @@ export function EnvironmentVariablesEditor({
                     onChange={(e) => updateRow(index, "key", e.target.value)}
                     spellCheck={false}
                     autoCapitalize="none"
-                    className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+                    className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
                     placeholder="VARIABLE_NAME"
                     aria-label="Environment variable name"
                   />
@@ -282,7 +284,7 @@ export function EnvironmentVariablesEditor({
                       autoCapitalize="none"
                       autoComplete={isSensitive ? "new-password" : "off"}
                       className={cn(
-                        "w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30",
+                        "w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30",
                         isSensitive && "pr-8"
                       )}
                       placeholder="value"

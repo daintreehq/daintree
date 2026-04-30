@@ -13,6 +13,7 @@ describe("AGENT_DESCRIPTIONS", () => {
     expect(AGENT_DESCRIPTIONS).toHaveProperty("opencode");
     expect(AGENT_DESCRIPTIONS).toHaveProperty("cursor");
     expect(AGENT_DESCRIPTIONS).toHaveProperty("kiro");
+    expect(AGENT_DESCRIPTIONS).toHaveProperty("kimi");
   });
 
   it("all descriptions are non-empty strings", () => {

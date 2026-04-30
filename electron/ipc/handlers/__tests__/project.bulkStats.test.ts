@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import os from "os";
 
+const ipcMainMock = vi.hoisted(() => ({
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
-  ipcMain: {
-    handle: vi.fn(),
-    removeHandler: vi.fn(),
-  },
+  ipcMain: ipcMainMock,
   dialog: {
     showOpenDialog: vi.fn(),
     showErrorBox: vi.fn(),
@@ -19,6 +21,35 @@ vi.mock("electron", () => ({
   },
   BrowserWindow: {
     getAllWindows: () => [],
+  },
+}));
+
+const checkRateLimitMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../utils.js", () => ({
+  checkRateLimit: checkRateLimitMock,
+  broadcastToRenderer: vi.fn(),
+  sendToRenderer: vi.fn(),
+  typedHandle: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: null,
+          projectId: null,
+        };
+        return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
   },
 }));
 
@@ -57,7 +88,7 @@ vi.mock("../../../window/portDistribution.js", () => ({
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
-import { registerProjectCrudHandlers } from "../projectCrud.js";
+import { registerProjectCrudHandlers } from "../projectCrud/index.js";
 import type { HandlerDependencies } from "../../types.js";
 
 function makePtyClient(overrides: Record<string, unknown> = {}) {
@@ -111,8 +142,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t1",
           projectId: "proj-a",
-          kind: "agent",
-          agentId: "claude",
+          kind: "terminal",
+          launchAgentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -136,7 +167,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t1",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          launchAgentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -145,7 +177,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t2",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          launchAgentId: "claude",
           agentState: "waiting",
           hasPty: true,
           cwd: "/tmp",
@@ -154,8 +187,9 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t3",
           projectId: "proj-a",
-          kind: "agent",
-          agentState: "running",
+          kind: "terminal",
+          launchAgentId: "claude",
+          agentState: "working",
           hasPty: true,
           cwd: "/tmp",
           spawnedAt: 3,
@@ -163,7 +197,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t4",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          launchAgentId: "claude",
           agentState: "idle",
           hasPty: true,
           cwd: "/tmp",
@@ -179,7 +214,7 @@ describe("handleProjectGetBulkStats", () => {
       { activeAgentCount: number; waitingAgentCount: number }
     >;
 
-    expect(result["proj-a"].activeAgentCount).toBe(2); // working + running
+    expect(result["proj-a"].activeAgentCount).toBe(2); // working only
     expect(result["proj-a"].waitingAgentCount).toBe(1); // waiting only
   });
 
@@ -189,7 +224,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t1",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          launchAgentId: "claude",
           agentState: "working",
           hasPty: true,
           isTrashed: true,
@@ -208,7 +244,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t3",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          launchAgentId: "claude",
           agentState: "working",
           hasPty: false,
           cwd: "/tmp",
@@ -218,6 +255,7 @@ describe("handleProjectGetBulkStats", () => {
           id: "t4",
           projectId: "proj-a",
           kind: "terminal",
+          // Plain terminal (no launchAgentId/detectedAgentId) — filtered out by the agent-count guard.
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -226,7 +264,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t5",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          launchAgentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -246,14 +285,67 @@ describe("handleProjectGetBulkStats", () => {
     expect(result["proj-a"].activeAgentCount).toBe(1);
   });
 
-  it("counts terminals with agentId as agents even without kind=agent", async () => {
+  it("counts launchAgentId only as a boot-window agent before detection commits", async () => {
     const ptyClient = makePtyClient({
       getAllTerminalsAsync: vi.fn().mockResolvedValue([
         {
           id: "t1",
           projectId: "proj-a",
           kind: "terminal",
-          agentId: "claude",
+          launchAgentId: "claude",
+          agentState: "working",
+          hasPty: true,
+          cwd: "/tmp",
+          spawnedAt: 1,
+        },
+      ]),
+    });
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+    const handler = getBulkStatsHandler();
+
+    const result = (await handler(fakeEvent, ["proj-a"])) as Record<
+      string,
+      { activeAgentCount: number }
+    >;
+
+    expect(result["proj-a"].activeAgentCount).toBe(1);
+  });
+
+  it("does not count demoted launch-agent terminals as active agents", async () => {
+    const ptyClient = makePtyClient({
+      getAllTerminalsAsync: vi.fn().mockResolvedValue([
+        {
+          id: "t1",
+          projectId: "proj-a",
+          kind: "terminal",
+          launchAgentId: "claude",
+          everDetectedAgent: true,
+          agentState: "working",
+          hasPty: true,
+          cwd: "/tmp",
+          spawnedAt: 1,
+        },
+      ]),
+    });
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+    const handler = getBulkStatsHandler();
+
+    const result = (await handler(fakeEvent, ["proj-a"])) as Record<
+      string,
+      { activeAgentCount: number }
+    >;
+
+    expect(result["proj-a"].activeAgentCount).toBe(0);
+  });
+
+  it("counts runtime-detected agents launched from plain terminals", async () => {
+    const ptyClient = makePtyClient({
+      getAllTerminalsAsync: vi.fn().mockResolvedValue([
+        {
+          id: "t1",
+          projectId: "proj-a",
+          kind: "terminal",
+          detectedAgentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -285,7 +377,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t1",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          launchAgentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -294,7 +387,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t2",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          launchAgentId: "claude",
           agentState: "waiting",
           hasPty: true,
           cwd: "/tmp",
@@ -303,8 +397,9 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t3",
           projectId: "proj-b",
-          kind: "agent",
-          agentState: "running",
+          kind: "terminal",
+          launchAgentId: "claude",
+          agentState: "working",
           hasPty: true,
           cwd: "/tmp",
           spawnedAt: 3,
@@ -312,7 +407,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t4",
           projectId: "proj-c",
-          kind: "agent",
+          kind: "terminal",
+          launchAgentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -372,7 +468,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t1",
           projectId: "proj-ok",
-          kind: "agent",
+          kind: "terminal",
+          launchAgentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -407,14 +504,46 @@ describe("handleProjectGetBulkStats", () => {
     expect(result["proj-a"].terminalCount).toBe(2);
   });
 
+  it("calls checkRateLimit with project:get-bulk-stats limits", async () => {
+    const ptyClient = makePtyClient();
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+    const handler = getBulkStatsHandler();
+
+    await handler(fakeEvent, ["proj-a"]);
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.PROJECT_GET_BULK_STATS, 10, 10_000);
+  });
+
+  it("propagates rate-limit errors without fetching terminals or stats", async () => {
+    checkRateLimitMock.mockImplementationOnce(() => {
+      throw new Error("Rate limit exceeded");
+    });
+    const ptyClient = makePtyClient();
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+    const handler = getBulkStatsHandler();
+
+    await expect(handler(fakeEvent, ["proj-a"])).rejects.toThrow("Rate limit exceeded");
+    expect(ptyClient.getAllTerminalsAsync).not.toHaveBeenCalled();
+    expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
+  });
+
   it("skips terminals without a projectId", async () => {
     const ptyClient = makePtyClient({
       getAllTerminalsAsync: vi.fn().mockResolvedValue([
-        { id: "t1", kind: "agent", agentState: "working", hasPty: true, cwd: "/tmp", spawnedAt: 1 }, // no projectId
+        {
+          id: "t1",
+          kind: "terminal",
+          launchAgentId: "claude",
+          agentState: "working",
+          hasPty: true,
+          cwd: "/tmp",
+          spawnedAt: 1,
+        }, // no projectId
         {
           id: "t2",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          launchAgentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",

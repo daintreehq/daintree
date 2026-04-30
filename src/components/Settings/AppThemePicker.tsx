@@ -7,7 +7,7 @@ import {
   type FormEvent,
   type MouseEvent,
 } from "react";
-import { AlertTriangle, Check, Monitor, Search, Shuffle } from "lucide-react";
+import { AlertTriangle, Monitor, Shuffle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
@@ -15,22 +15,23 @@ import { appThemeClient } from "@/clients/appThemeClient";
 import { runThemeReveal } from "@/lib/appThemeViewTransition";
 import { applyAccentOverrideToScheme, resolveAppTheme } from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
-import { APP_THEME_PREVIEW_KEYS, getAppThemeWarnings } from "@shared/theme";
+import { APP_THEME_PREVIEW_KEYS } from "@shared/theme";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { logError } from "@/utils/logger";
 
 function shuffleArray<T>(arr: T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+    [a[i], a[j]] = [a[j]!, a[i]!];
   }
   return a;
 }
 
 async function persistCustomSchemes() {
   const { customSchemes } = useAppThemeStore.getState();
-  await appThemeClient.setCustomSchemes(JSON.stringify(customSchemes));
+  await appThemeClient.setCustomSchemes(customSchemes);
 }
 
 function PreferredSchemePicker({
@@ -58,7 +59,7 @@ function PreferredSchemePicker({
             className={cn(
               "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-xs transition-colors",
               selectedId === scheme.id
-                ? "border-daintree-accent/30 bg-daintree-accent/10 text-daintree-text"
+                ? "border-border-strong bg-overlay-medium text-daintree-text"
                 : "border-daintree-border text-daintree-text/70 hover:bg-surface-hover"
             )}
           >
@@ -74,65 +75,11 @@ function PreferredSchemePicker({
   );
 }
 
-function ThemeRow({
-  scheme,
-  isSelected,
-  onSelect,
-  warnings,
-}: {
-  scheme: AppColorScheme;
-  isSelected: boolean;
-  onSelect: (id: string, origin: { x: number; y: number }) => void;
-  warnings: AppThemeValidationWarning[];
-}) {
-  return (
-    <button
-      type="button"
-      role="option"
-      aria-selected={isSelected}
-      onClick={(e) => onSelect(scheme.id, { x: e.clientX, y: e.clientY })}
-      className={cn(
-        "w-full flex items-center gap-2.5 px-2.5 py-2 text-left transition-colors",
-        isSelected ? "bg-daintree-accent/10" : "hover:bg-surface-hover"
-      )}
-    >
-      {scheme.heroImage ? (
-        <img
-          src={scheme.heroImage.replace("/themes/", "/themes/thumb/")}
-          alt=""
-          className="w-10 h-10 rounded-sm shrink-0 object-cover"
-        />
-      ) : (
-        <div
-          className="w-10 h-10 rounded-sm shrink-0 border border-daintree-border/50"
-          style={{ backgroundColor: scheme.tokens[APP_THEME_PREVIEW_KEYS.background] }}
-        />
-      )}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs font-medium text-daintree-text truncate">{scheme.name}</span>
-          {warnings.length > 0 && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] text-status-warning shrink-0">
-              <AlertTriangle className="h-2.5 w-2.5" />
-              {warnings.length}
-            </span>
-          )}
-        </div>
-        {scheme.location && (
-          <span className="text-[11px] text-daintree-text/40 truncate block">
-            {scheme.location}
-          </span>
-        )}
-      </div>
-      <PaletteStrip scheme={scheme} />
-      <div className="w-4 shrink-0 flex items-center justify-center">
-        {isSelected && <Check className="w-3.5 h-3.5 text-daintree-accent" />}
-      </div>
-    </button>
-  );
+interface AppThemePickerProps {
+  onClose?: () => void;
 }
 
-export function AppThemePicker() {
+export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   const customSchemes = useAppThemeStore((s) => s.customSchemes);
   const commitSchemeSelection = useAppThemeStore((s) => s.commitSchemeSelection);
@@ -147,14 +94,6 @@ export function AppThemePicker() {
   const setAccentColorOverride = useAppThemeStore((s) => s.setAccentColorOverride);
   const [importWarnings, setImportWarnings] = useState<AppThemeValidationWarning[]>([]);
   const [importMessage, setImportMessage] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState<"dark" | "light">(() =>
-    (selectedSchemeId &&
-      [...BUILT_IN_APP_SCHEMES, ...customSchemes].find((s) => s.id === selectedSchemeId)?.type) ===
-    "light"
-      ? "light"
-      : "dark"
-  );
 
   const shuffleQueueRef = useRef<string[]>([]);
 
@@ -162,26 +101,8 @@ export function AppThemePicker() {
   const darkSchemes = useMemo(() => allSchemes.filter((s) => s.type !== "light"), [allSchemes]);
   const lightSchemes = useMemo(() => allSchemes.filter((s) => s.type === "light"), [allSchemes]);
   const selectedScheme = useMemo(
-    () => allSchemes.find((s) => s.id === selectedSchemeId) ?? allSchemes[0],
+    () => allSchemes.find((s) => s.id === selectedSchemeId) ?? allSchemes[0]!,
     [allSchemes, selectedSchemeId]
-  );
-
-  const lowerQuery = query.toLowerCase();
-  const filteredThemes = useMemo(() => {
-    const byType = typeFilter === "light" ? lightSchemes : darkSchemes;
-    if (!lowerQuery) return byType;
-    return byType.filter((s) => s.name.toLowerCase().includes(lowerQuery));
-  }, [darkSchemes, lightSchemes, typeFilter, lowerQuery]);
-
-  const warningsByScheme = useMemo(
-    () =>
-      new Map(
-        allSchemes.map((scheme) => [
-          scheme.id,
-          getAppThemeWarnings(applyAccentOverrideToScheme(scheme, accentColorOverride)),
-        ])
-      ),
-    [allSchemes, accentColorOverride]
   );
 
   const effectiveAccent = useMemo(
@@ -204,7 +125,7 @@ export function AppThemePicker() {
     (e: ChangeEvent<HTMLInputElement>) => {
       setAccentColorOverride(e.target.value);
       appThemeClient.setAccentColorOverride(e.target.value).catch((error) => {
-        console.error("Failed to persist accent color override:", error);
+        logError("Failed to persist accent color override", error);
       });
     },
     [setAccentColorOverride]
@@ -213,7 +134,7 @@ export function AppThemePicker() {
   const handleAccentReset = useCallback(() => {
     setAccentColorOverride(null);
     appThemeClient.setAccentColorOverride(null).catch((error) => {
-      console.error("Failed to clear accent color override:", error);
+      logError("Failed to clear accent color override", error);
     });
   }, [setAccentColorOverride]);
 
@@ -221,19 +142,20 @@ export function AppThemePicker() {
     async (id: string, origin?: { x: number; y: number }) => {
       if (followSystem) {
         setFollowSystem(false);
-        appThemeClient.setFollowSystem(false).catch(console.error);
+        appThemeClient
+          .setFollowSystem(false)
+          .catch((err) => logError("Failed to clear follow system", err));
       }
 
-      const scheme = resolveAppTheme(id, useAppThemeStore.getState().customSchemes);
       commitSchemeSelection(id);
-      setTypeFilter(scheme.type === "light" ? "light" : "dark");
+      const scheme = resolveAppTheme(id, useAppThemeStore.getState().customSchemes);
       runThemeReveal(origin ?? null, () => injectSchemeToDOM(scheme));
 
       try {
         await appThemeClient.setColorScheme(id);
         await appThemeClient.setRecentSchemeIds(useAppThemeStore.getState().recentSchemeIds);
       } catch (error) {
-        console.error("Failed to persist app theme:", error);
+        logError("Failed to persist app theme", error);
       }
     },
     [commitSchemeSelection, followSystem, setFollowSystem]
@@ -245,7 +167,7 @@ export function AppThemePicker() {
     try {
       await appThemeClient.setFollowSystem(newValue);
     } catch (error) {
-      console.error("Failed to persist follow system:", error);
+      logError("Failed to persist follow system", error);
     }
   }, [followSystem, setFollowSystem]);
 
@@ -255,7 +177,7 @@ export function AppThemePicker() {
       try {
         await appThemeClient.setPreferredDarkScheme(id);
       } catch (error) {
-        console.error("Failed to persist preferred dark scheme:", error);
+        logError("Failed to persist preferred dark scheme", error);
       }
     },
     [setPreferredDarkSchemeId]
@@ -267,7 +189,7 @@ export function AppThemePicker() {
       try {
         await appThemeClient.setPreferredLightScheme(id);
       } catch (error) {
-        console.error("Failed to persist preferred light scheme:", error);
+        logError("Failed to persist preferred light scheme", error);
       }
     },
     [setPreferredLightSchemeId]
@@ -299,7 +221,7 @@ export function AppThemePicker() {
         setImportMessage(`Imported "${result.scheme.name}".`);
       }
     } catch (error) {
-      console.error("Failed to import app theme:", error);
+      logError("Failed to import app theme", error);
       setImportMessage("Failed to import app theme.");
     }
   }, [addCustomScheme, handleSelect]);
@@ -310,7 +232,7 @@ export function AppThemePicker() {
       const effectiveScheme = applyAccentOverrideToScheme(selectedScheme, accentColorOverride);
       await appThemeClient.exportTheme(effectiveScheme);
     } catch (error) {
-      console.error("Failed to export app theme:", error);
+      logError("Failed to export app theme", error);
       setImportMessage("Failed to export app theme.");
     }
   }, [selectedScheme, accentColorOverride]);
@@ -332,7 +254,9 @@ export function AppThemePicker() {
     [allSchemes, selectedSchemeId, handleSelect]
   );
 
-  const isEmpty = filteredThemes.length === 0;
+  const handleChangeTheme = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("daintree:open-theme-browser"));
+  }, []);
 
   return (
     <div className="space-y-3">
@@ -421,67 +345,16 @@ export function AppThemePicker() {
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-daintree-border shrink-0">
-          <div className="flex items-center gap-1.5 flex-1 min-w-0 focus-within:border-daintree-accent">
-            <Search className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none" />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.stopPropagation();
-                  setQuery("");
-                }
-              }}
-              placeholder="Filter themes..."
-              aria-label="Filter themes"
-              className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-none"
-            />
-          </div>
-          <div className="flex rounded-[var(--radius-md)] border border-daintree-border overflow-hidden shrink-0">
+        <div className="flex items-center justify-between px-3 py-2 border-t border-daintree-border bg-daintree-bg">
+          <span className="text-xs text-daintree-text/60">Current theme</span>
+          {onClose && (
             <button
               type="button"
-              onClick={() => setTypeFilter("dark")}
-              className={cn(
-                "px-2.5 py-0.5 text-[11px] font-medium transition-colors",
-                typeFilter === "dark"
-                  ? "bg-daintree-accent/15 text-daintree-text"
-                  : "text-daintree-text/50 hover:text-daintree-text/70"
-              )}
+              onClick={handleChangeTheme}
+              className="text-xs font-medium text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
             >
-              Dark
+              Change theme…
             </button>
-            <button
-              type="button"
-              onClick={() => setTypeFilter("light")}
-              className={cn(
-                "px-2.5 py-0.5 text-[11px] font-medium transition-colors border-l border-daintree-border",
-                typeFilter === "light"
-                  ? "bg-daintree-accent/15 text-daintree-text"
-                  : "text-daintree-text/50 hover:text-daintree-text/70"
-              )}
-            >
-              Light
-            </button>
-          </div>
-        </div>
-
-        <div role="listbox" aria-label="Theme list">
-          {isEmpty ? (
-            <p className="text-xs text-daintree-text/50 text-center py-4">
-              No themes match your search.
-            </p>
-          ) : (
-            filteredThemes.map((scheme) => (
-              <ThemeRow
-                key={scheme.id}
-                scheme={scheme}
-                isSelected={scheme.id === selectedSchemeId}
-                onSelect={handleSelect}
-                warnings={warningsByScheme.get(scheme.id) ?? []}
-              />
-            ))
           )}
         </div>
       </div>
@@ -524,7 +397,7 @@ export function AppThemePicker() {
             type="button"
             onClick={handleAccentReset}
             data-testid="accent-color-override-reset"
-            className="text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors shrink-0"
+            className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors shrink-0"
           >
             Reset to theme default
           </button>
@@ -534,13 +407,13 @@ export function AppThemePicker() {
       <div className="flex items-center gap-3">
         <button
           onClick={handleExport}
-          className="text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors"
+          className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
         >
           Export app theme...
         </button>
         <button
           onClick={handleImport}
-          className="text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors"
+          className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
         >
           Import app theme...
         </button>
@@ -548,7 +421,7 @@ export function AppThemePicker() {
           <button
             type="button"
             onClick={handleShuffle}
-            className="ml-auto flex items-center gap-1.5 text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors"
+            className="ml-auto flex items-center gap-1.5 text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
           >
             <Shuffle className="h-3 w-3" />
             Random theme

@@ -6,7 +6,6 @@ import type {
   DemoMoveToPayload,
   DemoMoveToSelectorPayload,
   DemoTypePayload,
-  DemoSetZoomPayload,
   DemoWaitForSelectorPayload,
   DemoSleepPayload,
   DemoScrollPayload,
@@ -193,10 +192,10 @@ export function DemoCursor() {
         });
         await ballisticAnim.finished;
 
-        const lastBallistic = allKeyframes[splitIndex].transform;
+        const lastBallistic = allKeyframes[splitIndex]!.transform;
         const match = lastBallistic.match(/translate\(([^p]+)px,\s*([^p]+)px\)/);
-        const midX = fromX + (match ? parseFloat(match[1]) : dx * 0.8);
-        const midY = fromY + (match ? parseFloat(match[2]) : dy * 0.8);
+        const midX = fromX + (match ? parseFloat(match[1]!) : dx * 0.8);
+        const midY = fromY + (match ? parseFloat(match[2]!) : dy * 0.8);
         el.style.left = `${midX}px`;
         el.style.top = `${midY}px`;
         el.style.transform = "";
@@ -206,8 +205,8 @@ export function DemoCursor() {
           if (i === 0) return { transform: "translate(0px, 0px)" };
           const m = kf.transform.match(/translate\(([^p]+)px,\s*([^p]+)px\)/);
           if (!m) return kf;
-          const origX = parseFloat(m[1]) + fromX;
-          const origY = parseFloat(m[2]) + fromY;
+          const origX = parseFloat(m[1]!) + fromX;
+          const origY = parseFloat(m[2]!) + fromY;
           return { transform: `translate(${origX - midX}px, ${origY - midY}px)` };
         });
 
@@ -417,42 +416,6 @@ export function DemoCursor() {
               prevChar = char;
             }
           }
-          sendDone(payload.requestId);
-        } catch (err) {
-          sendDone(payload.requestId, String(err));
-        }
-      })
-    );
-
-    cleanups.push(
-      demo.onExecCommand("demo:exec-set-zoom", async (raw: Record<string, unknown>) => {
-        const payload = raw as unknown as DemoSetZoomPayload & { requestId: string };
-        try {
-          await waitIfPaused();
-          const start = demo.getZoomFactor();
-          const target = payload.factor;
-          const duration = payload.durationMs ?? 300;
-
-          if (duration <= 0) {
-            demo.setZoomFactor(target);
-            sendDone(payload.requestId);
-            return;
-          }
-
-          await new Promise<void>((resolve) => {
-            const startTime = performance.now();
-            function step(now: number) {
-              const t = Math.min((now - startTime) / duration, 1);
-              const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
-              demo.setZoomFactor(start + (target - start) * eased);
-              if (t < 1) {
-                requestAnimationFrame(step);
-              } else {
-                resolve();
-              }
-            }
-            requestAnimationFrame(step);
-          });
           sendDone(payload.requestId);
         } catch (err) {
           sendDone(payload.requestId, String(err));

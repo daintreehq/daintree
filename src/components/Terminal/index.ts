@@ -1,7 +1,7 @@
 export { XtermAdapter } from "./XtermAdapter";
 export type { XtermAdapterProps } from "./XtermAdapter";
 export { TerminalPane } from "./TerminalPane";
-export type { TerminalPaneProps, TerminalType, ActivityState } from "./TerminalPane";
+export type { TerminalPaneProps, ActivityState } from "./TerminalPane";
 export { ContentGrid } from "./ContentGrid";
 export type { ContentGridProps } from "./ContentGrid";
 export { TerminalCountWarning } from "./TerminalCountWarning";

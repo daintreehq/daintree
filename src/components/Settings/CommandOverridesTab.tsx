@@ -1,19 +1,12 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import {
-  ChevronDown,
-  ChevronRight,
-  RotateCcw,
-  Power,
-  PowerOff,
-  AlertCircle,
-  Search,
-} from "lucide-react";
+import { ChevronRight, RotateCcw, Power, PowerOff, AlertCircle, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { commandsClient } from "@/clients/commandsClient";
 import type { CommandManifestEntry, CommandOverride } from "@shared/types/commands";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { extractTemplateVariables, validatePromptTemplate } from "@shared/utils/promptTemplate";
+import { logError } from "@/utils/logger";
 
 interface CommandOverridesTabProps {
   projectId: string;
@@ -43,7 +36,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
           setCommands(result);
         }
       } catch (error) {
-        console.error("Failed to load commands:", error);
+        logError("Failed to load commands", error);
       } finally {
         if (mounted) {
           setIsLoading(false);
@@ -282,7 +275,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
             placeholder="Search commands..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-daintree-bg border border-border-strong rounded text-sm text-daintree-text placeholder:text-text-muted focus:outline-none focus:border-daintree-accent"
+            className="w-full pl-9 pr-3 py-2 bg-daintree-bg border border-border-strong rounded text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent"
             aria-label="Search commands"
           />
         </div>
@@ -292,10 +285,10 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
               key={mode}
               onClick={() => setFilterMode(mode)}
               className={cn(
-                "px-3 py-1.5 text-xs font-medium rounded transition-colors capitalize",
+                "px-3 py-1.5 text-xs font-medium rounded transition-colors capitalize border",
                 filterMode === mode
-                  ? "bg-daintree-accent text-daintree-bg"
-                  : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
+                  ? "border-border-strong bg-overlay-medium text-daintree-text"
+                  : "border-transparent bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
               )}
             >
               {mode}
@@ -330,7 +323,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
               className={cn(
                 "rounded-[var(--radius-md)] border transition-colors",
                 hasOverride(command.id)
-                  ? "border-daintree-accent/30 bg-daintree-accent/5"
+                  ? "border-border-strong bg-overlay-subtle"
                   : "border-daintree-border bg-daintree-bg"
               )}
             >
@@ -341,11 +334,13 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                     className="p-0.5 rounded hover:bg-daintree-border/50 transition-colors"
                     aria-label={isExpanded ? "Collapse" : "Expand"}
                   >
-                    {isExpanded ? (
-                      <ChevronDown className="h-4 w-4 text-daintree-text/60" />
-                    ) : (
-                      <ChevronRight className="h-4 w-4 text-daintree-text/60" />
-                    )}
+                    <ChevronRight
+                      data-animated-chevron
+                      className={cn(
+                        "h-4 w-4 text-daintree-text/60 transition-transform duration-150 ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+                        isExpanded && "rotate-90"
+                      )}
+                    />
                   </button>
                 )}
                 {!canExpand && <div className="w-5" />}
@@ -361,7 +356,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                       {command.id}
                     </span>
                     {hasOverride(command.id) && (
-                      <span className="text-[11px] text-daintree-accent bg-daintree-accent/10 px-1.5 py-0.5 rounded font-medium">
+                      <span className="text-[11px] text-daintree-text/70 bg-overlay-medium px-1.5 py-0.5 rounded font-medium">
                         {override?.prompt ? "Custom Prompt" : "Modified"}
                       </span>
                     )}
@@ -378,50 +373,46 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
 
                 <div className="flex items-center gap-1 shrink-0">
                   {hasOverride(command.id) && (
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => resetToDefaults(command.id)}
-                            className="h-7 px-2"
-                            aria-label="Reset to defaults"
-                          >
-                            <RotateCcw />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">Reset to defaults</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  )}
-                  <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <button
-                          onClick={() => toggleDisabled(command.id)}
-                          className={cn(
-                            "p-1.5 rounded transition-colors",
-                            isDisabled
-                              ? "text-status-error hover:bg-status-error/10"
-                              : "text-status-success hover:bg-status-success/10"
-                          )}
-                          aria-label={
-                            isDisabled ? "Command disabled for this project" : "Command enabled"
-                          }
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => resetToDefaults(command.id)}
+                          className="h-7 px-2"
+                          aria-label="Reset to defaults"
                         >
-                          {isDisabled ? (
-                            <PowerOff className="h-4 w-4" />
-                          ) : (
-                            <Power className="h-4 w-4" />
-                          )}
-                        </button>
+                          <RotateCcw />
+                        </Button>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        {isDisabled ? "Command disabled for this project" : "Command enabled"}
-                      </TooltipContent>
+                      <TooltipContent side="bottom">Reset to defaults</TooltipContent>
                     </Tooltip>
-                  </TooltipProvider>
+                  )}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => toggleDisabled(command.id)}
+                        className={cn(
+                          "p-1.5 rounded transition-colors",
+                          isDisabled
+                            ? "text-status-error hover:bg-status-error/10"
+                            : "text-status-success hover:bg-status-success/10"
+                        )}
+                        aria-label={
+                          isDisabled ? "Command disabled for this project" : "Command enabled"
+                        }
+                      >
+                        {isDisabled ? (
+                          <PowerOff className="h-4 w-4" />
+                        ) : (
+                          <Power className="h-4 w-4" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {isDisabled ? "Command disabled for this project" : "Command enabled"}
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               </div>
 
@@ -434,10 +425,10 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                         <button
                           onClick={() => setOverrideMode(command.id, "defaults")}
                           className={cn(
-                            "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+                            "px-3 py-1.5 text-xs font-medium rounded-md transition-colors border",
                             currentMode === "defaults"
-                              ? "bg-daintree-accent text-daintree-bg"
-                              : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
+                              ? "border-border-strong bg-overlay-medium text-daintree-text"
+                              : "border-transparent bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
                           )}
                         >
                           Default Values
@@ -446,10 +437,10 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                       <button
                         onClick={() => setOverrideMode(command.id, "prompt")}
                         className={cn(
-                          "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+                          "px-3 py-1.5 text-xs font-medium rounded-md transition-colors border",
                           currentMode === "prompt"
-                            ? "bg-daintree-accent text-daintree-bg"
-                            : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
+                            ? "border-border-strong bg-overlay-medium text-daintree-text"
+                            : "border-transparent bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
                         )}
                       >
                         Custom Prompt
@@ -481,7 +472,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                   )}
                                 </label>
                                 {hasDefaultValue && (
-                                  <span className="text-[10px] text-daintree-accent bg-daintree-accent/10 px-1.5 py-0.5 rounded">
+                                  <span className="text-[10px] text-daintree-text/70 bg-overlay-medium px-1.5 py-0.5 rounded">
                                     Custom
                                   </span>
                                 )}
@@ -493,7 +484,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                 onChange={(e) =>
                                   updateDefault(command.id, arg.name, e.target.value)
                                 }
-                                className="w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1.5 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+                                className="w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1.5 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
                                 placeholder={
                                   arg.default ? `Default: ${arg.default}` : `Enter ${arg.name}`
                                 }
@@ -555,7 +546,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
         <p className="text-xs text-daintree-text/60 mb-2 select-text">
           Define a custom prompt to send to the agent instead of executing the default command
           behavior. Use template variables like{" "}
-          <code className="text-daintree-accent">
+          <code className="text-text-secondary">
             {"{"}variableName{"}"}
           </code>{" "}
           to include argument values.
@@ -566,28 +557,26 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
             <p className="text-xs font-medium text-daintree-text/70 mb-1.5">Available variables:</p>
             <div className="flex flex-wrap gap-1.5">
               {args.map((arg) => (
-                <TooltipProvider key={arg.name}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => onChange(value + `{${arg.name}}`)}
-                        className={cn(
-                          "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
-                          usedVariables.includes(arg.name)
-                            ? "bg-daintree-accent/20 text-daintree-accent border border-daintree-accent/30"
-                            : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border border border-daintree-border"
-                        )}
-                      >
-                        {"{"}
-                        {arg.name}
-                        {"}"}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      {arg.description || `Insert {${arg.name}}`}
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip key={arg.name}>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => onChange(value + `{${arg.name}}`)}
+                      className={cn(
+                        "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
+                        usedVariables.includes(arg.name)
+                          ? "bg-overlay-medium text-daintree-text/70 border border-border-strong"
+                          : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border border border-daintree-border"
+                      )}
+                    >
+                      {"{"}
+                      {arg.name}
+                      {"}"}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {arg.description || `Insert {${arg.name}}`}
+                  </TooltipContent>
+                </Tooltip>
               ))}
             </div>
           </div>
@@ -606,7 +595,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className={cn(
-            "w-full bg-daintree-sidebar border rounded px-2 py-1.5 text-sm text-daintree-text font-mono focus:outline-none focus:ring-1 min-h-[120px] resize-y",
+            "w-full bg-daintree-sidebar border rounded px-2 py-1.5 text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-1 min-h-[120px] resize-y",
             validation && !validation.valid
               ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
               : "border-border-strong focus:border-daintree-accent focus:ring-daintree-accent/30"

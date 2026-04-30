@@ -88,6 +88,7 @@ describe("BackpressureManager adversarial", () => {
         type: "terminal-status",
         id: "term-1",
         status: "suspended",
+        reason: "consumer stalled",
       })
     );
     expect(sendEvent).toHaveBeenCalledWith(
@@ -149,6 +150,131 @@ describe("BackpressureManager adversarial", () => {
     expect(backpressure.isSuspended("term-1")).toBe(false);
     expect(backpressure.terminalStatusesMap.has("term-1")).toBe(false);
     expect(backpressure.terminalActivityTiersMap.has("term-1")).toBe(false);
+  });
+
+  it("emits pending-byte-cap-hit metric (per-terminal) when per-terminal cap is exceeded, even when metrics are disabled", () => {
+    const backpressure = new BackpressureManager({
+      getTerminal: vi.fn(),
+      getPauseCoordinator: () => undefined,
+      sendEvent,
+      metricsEnabled: () => false,
+    });
+
+    const fullSegment = new Uint8Array(MAX_PENDING_BYTES_PER_TERMINAL);
+    expect(backpressure.enqueuePendingSegment("term-1", { data: fullSegment, offset: 0 })).toBe(
+      true
+    );
+
+    // Per-terminal cap exceeded — should refuse and emit
+    expect(
+      backpressure.enqueuePendingSegment("term-1", { data: new Uint8Array(1), offset: 0 })
+    ).toBe(false);
+
+    expect(sendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "terminal-reliability-metric",
+        payload: expect.objectContaining({
+          terminalId: "term-1",
+          metricType: "pending-byte-cap-hit",
+          capType: "per-terminal",
+          attemptedBytes: 1,
+        }),
+      })
+    );
+  });
+
+  it("emits pending-byte-cap-hit metric (total) when total cap is exceeded, even when metrics are disabled", () => {
+    const backpressure = new BackpressureManager({
+      getTerminal: vi.fn(),
+      getPauseCoordinator: () => undefined,
+      sendEvent,
+      metricsEnabled: () => false,
+    });
+
+    // Fill 4 terminals to the per-terminal max = 16MB total
+    for (let i = 0; i < 4; i++) {
+      expect(
+        backpressure.enqueuePendingSegment(`term-${i}`, {
+          data: new Uint8Array(MAX_PENDING_BYTES_PER_TERMINAL),
+          offset: 0,
+        })
+      ).toBe(true);
+    }
+
+    // Total cap exceeded
+    expect(
+      backpressure.enqueuePendingSegment("term-new", { data: new Uint8Array(1), offset: 0 })
+    ).toBe(false);
+
+    expect(sendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "terminal-reliability-metric",
+        payload: expect.objectContaining({
+          terminalId: "term-new",
+          metricType: "pending-byte-cap-hit",
+          capType: "total",
+          attemptedBytes: 1,
+        }),
+      })
+    );
+  });
+
+  it("getPendingBytesSnapshot returns correct totals and does not mutate state", () => {
+    const backpressure = manager();
+
+    backpressure.enqueuePendingSegment("term-a", { data: new Uint8Array(100), offset: 0 });
+    backpressure.enqueuePendingSegment("term-b", { data: new Uint8Array(200), offset: 0 });
+
+    const snap1 = backpressure.getPendingBytesSnapshot();
+    expect(snap1.totalPendingBytes).toBe(300);
+    expect(snap1.perTerminal).toHaveLength(2);
+    expect(snap1.perTerminal).toEqual(
+      expect.arrayContaining([
+        { terminalId: "term-a", pendingBytes: 100 },
+        { terminalId: "term-b", pendingBytes: 200 },
+      ])
+    );
+
+    // Does not mutate — second call returns same data
+    const snap2 = backpressure.getPendingBytesSnapshot();
+    expect(snap2).toEqual(snap1);
+  });
+
+  it("suspendVisualStream fires reliability metric even when metrics are disabled", () => {
+    const coordinator = createCoordinator();
+    coordinators.set("term-1", coordinator);
+
+    const backpressure = new BackpressureManager({
+      getTerminal: vi.fn(),
+      getPauseCoordinator: (id) =>
+        coordinators.get(id) as unknown as PtyPauseCoordinator | undefined,
+      sendEvent,
+      metricsEnabled: () => false,
+    });
+
+    backpressure.suspendVisualStream("term-1", "consumer stalled", 85.0, 500, 1);
+
+    expect(sendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "terminal-reliability-metric",
+        payload: expect.objectContaining({
+          terminalId: "term-1",
+          metricType: "suspend",
+          durationMs: 500,
+          bufferUtilization: 85.0,
+        }),
+      })
+    );
+
+    // terminal-status should include the reason
+    expect(sendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "terminal-status",
+        id: "term-1",
+        status: "suspended",
+        reason: "consumer stalled",
+      })
+    );
   });
 
   it.todo(

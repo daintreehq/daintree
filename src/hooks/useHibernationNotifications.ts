@@ -15,7 +15,7 @@ export function useHibernationNotifications(): void {
     didAttachListener.current = true;
 
     const unsubscribe = hibernationClient.onProjectHibernated((payload) => {
-      const { projectName, terminalsKilled, reason } = payload;
+      const { projectId, projectName, terminalsKilled, reason } = payload;
       const reasonLabel = reason === "memory-pressure" ? " (memory pressure)" : "";
 
       notify({
@@ -24,6 +24,7 @@ export function useHibernationNotifications(): void {
         message: `"${projectName}" — ${terminalsKilled} terminal${terminalsKilled === 1 ? "" : "s"} suspended${reasonLabel}`,
         inboxMessage: `"${projectName}" — ${terminalsKilled} terminal${terminalsKilled === 1 ? "" : "s"} suspended${reasonLabel}`,
         priority: "watch",
+        context: { projectId },
         coalesce: {
           key: "hibernation:project",
           windowMs: 10000,

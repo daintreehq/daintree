@@ -3,7 +3,9 @@ import { registerEscape, updateHandler } from "@/lib/escapeStack";
 
 export function useEscapeStack(enabled: boolean, handler: () => void): void {
   const handlerRef = useRef(handler);
-  handlerRef.current = handler;
+  useEffect(() => {
+    handlerRef.current = handler;
+  }, [handler]);
 
   const entryRef = useRef<{ id: symbol; unregister: () => void } | null>(null);
 

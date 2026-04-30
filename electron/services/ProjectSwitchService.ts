@@ -13,6 +13,7 @@ import { store } from "../store.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
 import { buildSwitchHydrateResult } from "./AppHydrationService.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export class ProjectSwitchService {
   private deps: HandlerDependencies;
@@ -230,7 +231,7 @@ export class ProjectSwitchService {
       return {};
     } catch (err) {
       console.error("[ProjectSwitch] Failed to load worktrees for project:", err);
-      return { error: err instanceof Error ? err.message : "Failed to load worktrees" };
+      return { error: formatErrorMessage(err, "Failed to load worktrees") };
     }
   }
 

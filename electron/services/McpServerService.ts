@@ -13,45 +13,12 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import type { ActionManifestEntry, ActionDispatchResult } from "../../shared/types/actions.js";
 import { store } from "../store.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const DISCOVERY_DIR = path.join(os.homedir(), ".daintree");
-const LEGACY_DISCOVERY_DIR = path.join(os.homedir(), ".canopy");
 const DISCOVERY_FILE = path.join(DISCOVERY_DIR, "mcp.json");
 const MCP_SERVER_KEY = "daintree";
 
-// TODO(0.9.0): Remove this temporary Canopy -> Daintree discovery-dir rename
-// after the 0.8.x migration window closes.
-// One-shot rebrand migration: rename ~/.canopy -> ~/.daintree if the new dir
-// doesn't exist yet and the old one does. Success and "nothing-to-do"
-// outcomes are cached; transient failures are not, so retries stay possible.
-let discoverySettled = false;
-async function migrateDiscoveryDir(): Promise<void> {
-  if (discoverySettled) return;
-  try {
-    await fs.access(DISCOVERY_DIR);
-    discoverySettled = true;
-    return;
-  } catch {
-    /* fall through */
-  }
-  try {
-    const stat = await fs.lstat(LEGACY_DISCOVERY_DIR);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      discoverySettled = true;
-      return;
-    }
-  } catch {
-    discoverySettled = true; // Legacy dir absent — nothing to do.
-    return;
-  }
-  try {
-    await fs.rename(LEGACY_DISCOVERY_DIR, DISCOVERY_DIR);
-    discoverySettled = true;
-    console.log(`[daintree] Migrated ${LEGACY_DISCOVERY_DIR} -> ${DISCOVERY_DIR}`);
-  } catch {
-    /* transient failure — leave uncached so writeDiscoveryFile() retries */
-  }
-}
 const DEFAULT_PORT = 45454;
 const MAX_PORT_RETRIES = 10;
 
@@ -117,9 +84,33 @@ export class McpServerService {
   private pendingManifests = new Map<string, PendingRequest<ActionManifestEntry[]>>();
   private pendingDispatches = new Map<string, PendingRequest<ActionDispatchResult>>();
   private cleanupListeners: Array<() => void> = [];
+  private statusListeners = new Set<(running: boolean) => void>();
 
   get isRunning(): boolean {
     return this.httpServer !== null && this.port !== null;
+  }
+
+  /**
+   * Register a subscriber that fires whenever the server transitions between
+   * running and stopped. Used by `ServiceConnectivityRegistry` to surface MCP
+   * reachability without polling.
+   */
+  onStatusChange(listener: (running: boolean) => void): () => void {
+    this.statusListeners.add(listener);
+    return () => {
+      this.statusListeners.delete(listener);
+    };
+  }
+
+  private emitStatusChange(): void {
+    const running = this.isRunning;
+    for (const listener of this.statusListeners) {
+      try {
+        listener(running);
+      } catch (err) {
+        console.error("[MCP] Status change listener threw:", err);
+      }
+    }
   }
 
   get currentPort(): number | null {
@@ -209,6 +200,7 @@ export class McpServerService {
     this.httpServer = server;
     await this.writeDiscoveryFile();
     console.log(`[MCP] Server started on http://127.0.0.1:${this.port}/sse`);
+    this.emitStatusChange();
   }
 
   async stop(): Promise<void> {
@@ -237,7 +229,9 @@ export class McpServerService {
       this.pendingDispatches.delete(id);
     }
 
+    let wasRunning = false;
     if (this.httpServer) {
+      wasRunning = true;
       await new Promise<void>((resolve) => {
         this.httpServer!.close(() => resolve());
       });
@@ -247,6 +241,9 @@ export class McpServerService {
 
     await this.removeDiscoveryFile();
     console.log("[MCP] Server stopped");
+    if (wasRunning) {
+      this.emitStatusChange();
+    }
   }
 
   getStatus(): {
@@ -448,7 +445,7 @@ export class McpServerService {
           content: [
             {
               type: "text" as const,
-              text: `Error: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Error: ${formatErrorMessage(err, "Action dispatch failed")}`,
             },
           ],
           isError: true,
@@ -650,7 +647,6 @@ export class McpServerService {
   private async writeDiscoveryFile(): Promise<void> {
     if (!this.port) return;
     try {
-      await migrateDiscoveryDir();
       await fs.mkdir(DISCOVERY_DIR, { recursive: true });
 
       let existing: Record<string, unknown> = {};

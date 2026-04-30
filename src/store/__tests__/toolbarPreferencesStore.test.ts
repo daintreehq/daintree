@@ -1,8 +1,21 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Mirror the production agent IDs so the v5 migration is exercised against
+// the real set, not a subset. Keeping the mock in sync guards against
+// regressions when new built-in agents ship.
 vi.mock("@shared/config/agentIds", () => ({
-  BUILT_IN_AGENT_IDS: ["claude", "gemini", "codex", "opencode", "cursor"] as const,
+  BUILT_IN_AGENT_IDS: [
+    "claude",
+    "gemini",
+    "codex",
+    "opencode",
+    "cursor",
+    "kiro",
+    "copilot",
+    "crush",
+    "amp",
+  ] as const,
 }));
 
 let useToolbarPreferencesStore: typeof import("../toolbarPreferencesStore").useToolbarPreferencesStore;
@@ -66,24 +79,24 @@ describe("toolbarPreferencesStore", () => {
     it("adds button to hiddenButtons without removing from ordering array", async () => {
       const store = await loadStore();
       const { layout } = store.getState();
-      expect(layout.rightButtons).toContain("notes");
-      expect(layout.hiddenButtons).not.toContain("notes");
+      expect(layout.rightButtons).toContain("copy-tree");
+      expect(layout.hiddenButtons).not.toContain("copy-tree");
 
-      store.getState().toggleButtonVisibility("notes", "right");
+      store.getState().toggleButtonVisibility("copy-tree", "right");
 
       const updated = store.getState();
-      expect(updated.layout.hiddenButtons).toContain("notes");
-      expect(updated.layout.rightButtons).toContain("notes");
+      expect(updated.layout.hiddenButtons).toContain("copy-tree");
+      expect(updated.layout.rightButtons).toContain("copy-tree");
     });
 
     it("removes button from hiddenButtons when toggled again", async () => {
       const store = await loadStore();
 
-      store.getState().toggleButtonVisibility("notes", "right");
-      expect(store.getState().layout.hiddenButtons).toContain("notes");
+      store.getState().toggleButtonVisibility("copy-tree", "right");
+      expect(store.getState().layout.hiddenButtons).toContain("copy-tree");
 
-      store.getState().toggleButtonVisibility("notes", "right");
-      expect(store.getState().layout.hiddenButtons).not.toContain("notes");
+      store.getState().toggleButtonVisibility("copy-tree", "right");
+      expect(store.getState().layout.hiddenButtons).not.toContain("copy-tree");
     });
 
     it("does not modify leftButtons or rightButtons arrays", async () => {
@@ -104,11 +117,11 @@ describe("toolbarPreferencesStore", () => {
   describe("moveButton preserves hiddenButtons", () => {
     it("does not lose hiddenButtons when reordering", async () => {
       const store = await loadStore();
-      store.getState().toggleButtonVisibility("notes", "right");
-      expect(store.getState().layout.hiddenButtons).toContain("notes");
+      store.getState().toggleButtonVisibility("copy-tree", "right");
+      expect(store.getState().layout.hiddenButtons).toContain("copy-tree");
 
       store.getState().moveButton("settings", "right", "right", 0);
-      expect(store.getState().layout.hiddenButtons).toContain("notes");
+      expect(store.getState().layout.hiddenButtons).toContain("copy-tree");
     });
   });
 
@@ -129,7 +142,7 @@ describe("toolbarPreferencesStore", () => {
       const store = await loadStore();
       const defaults = { ...store.getState().layout };
 
-      store.getState().toggleButtonVisibility("notes", "right");
+      store.getState().toggleButtonVisibility("copy-tree", "right");
       store.getState().toggleButtonVisibility("terminal", "left");
       store.getState().setLeftButtons([...store.getState().layout.leftButtons].reverse());
 
@@ -143,55 +156,68 @@ describe("toolbarPreferencesStore", () => {
   describe("persistence", () => {
     it("persists hiddenButtons to localStorage", async () => {
       const store = await loadStore();
-      store.getState().toggleButtonVisibility("notes", "right");
+      store.getState().toggleButtonVisibility("copy-tree", "right");
 
       // Wait for persist to write
       await vi.waitFor(() => {
         const raw = storageMock.getItem(STORAGE_KEY);
         expect(raw).toBeTruthy();
         const parsed = JSON.parse(raw!);
-        expect(parsed.state.layout.hiddenButtons).toContain("notes");
+        expect(parsed.state.layout.hiddenButtons).toContain("copy-tree");
       });
     });
 
     it("restores hiddenButtons from persisted state on rehydration", async () => {
-      setStoredState({
-        layout: {
-          leftButtons: ["terminal", "browser"],
-          rightButtons: ["notes", "settings"],
-          hiddenButtons: ["notes"],
+      setStoredState(
+        {
+          layout: {
+            leftButtons: ["terminal", "browser"],
+            rightButtons: ["copy-tree", "settings"],
+            hiddenButtons: ["copy-tree"],
+          },
+          launcher: { alwaysShowDevServer: false },
         },
-        launcher: { alwaysShowDevServer: false },
-      });
+        6
+      );
 
       const store = await loadStore();
-      expect(store.getState().layout.hiddenButtons).toContain("notes");
-      expect(store.getState().layout.rightButtons).toContain("notes");
+      expect(store.getState().layout.hiddenButtons).toContain("copy-tree");
+      expect(store.getState().layout.rightButtons).toContain("copy-tree");
     });
 
     it("restores multiple hidden buttons across both sides", async () => {
-      setStoredState({
-        layout: {
-          leftButtons: ["terminal", "browser", "dev-server"],
-          rightButtons: ["notes", "settings", "copy-tree"],
-          hiddenButtons: ["terminal", "notes", "copy-tree"],
+      setStoredState(
+        {
+          layout: {
+            leftButtons: ["terminal", "browser", "dev-server"],
+            rightButtons: ["github-stats", "settings", "copy-tree"],
+            hiddenButtons: ["terminal", "github-stats", "copy-tree"],
+          },
+          launcher: { alwaysShowDevServer: false },
         },
-        launcher: { alwaysShowDevServer: false },
-      });
+        6
+      );
 
       const store = await loadStore();
-      expect(store.getState().layout.hiddenButtons).toEqual(["terminal", "notes", "copy-tree"]);
+      expect(store.getState().layout.hiddenButtons).toEqual([
+        "terminal",
+        "github-stats",
+        "copy-tree",
+      ]);
     });
 
     it("merges new default buttons without re-inserting hidden ones", async () => {
-      setStoredState({
-        layout: {
-          leftButtons: ["terminal"],
-          rightButtons: ["notes", "settings"],
-          hiddenButtons: ["browser"],
+      setStoredState(
+        {
+          layout: {
+            leftButtons: ["terminal"],
+            rightButtons: ["copy-tree", "settings"],
+            hiddenButtons: ["browser"],
+          },
+          launcher: { alwaysShowDevServer: false },
         },
-        launcher: { alwaysShowDevServer: false },
-      });
+        6
+      );
 
       const store = await loadStore();
       // "browser" was hidden — it should be re-added to leftButtons by mergeButtonList
@@ -341,6 +367,147 @@ describe("toolbarPreferencesStore", () => {
             launcher: { alwaysShowDevServer: false },
           },
           version: 3,
+        })
+      );
+
+      const store = await loadStore();
+      expect(store.getState().layout.leftButtons).toBeDefined();
+    });
+
+    it("v4→v5 strips built-in agent IDs from hiddenButtons", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["agent-tray", "claude", "gemini", "terminal"],
+              rightButtons: ["settings"],
+              hiddenButtons: ["claude", "copy-tree", "gemini"],
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 4,
+        })
+      );
+
+      const store = await loadStore();
+      const { layout } = store.getState();
+      // Agent IDs stripped; non-agent entries preserved.
+      expect(layout.hiddenButtons).toEqual(["copy-tree"]);
+      // Ordering arrays untouched.
+      expect(layout.leftButtons).toContain("claude");
+      expect(layout.leftButtons).toContain("gemini");
+    });
+
+    it("v4→v5 strips every built-in agent ID including rarer ones", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["agent-tray", "terminal"],
+              rightButtons: ["settings"],
+              hiddenButtons: [
+                "claude",
+                "gemini",
+                "codex",
+                "opencode",
+                "cursor",
+                "kiro",
+                "copilot",
+                "crush",
+                "amp",
+                "copy-tree",
+              ],
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 4,
+        })
+      );
+
+      const store = await loadStore();
+      // All built-in agent IDs stripped; non-agent entries preserved.
+      expect(store.getState().layout.hiddenButtons).toEqual(["copy-tree"]);
+    });
+
+    it("v4→v5 leaves hiddenButtons untouched when no agent IDs are present", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["agent-tray", "terminal"],
+              rightButtons: ["settings"],
+              hiddenButtons: ["github-stats", "copy-tree"],
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 4,
+        })
+      );
+
+      const store = await loadStore();
+      expect(store.getState().layout.hiddenButtons).toEqual(["github-stats", "copy-tree"]);
+    });
+
+    it("v4→v5 is a no-op on already-v5 state (idempotency guard)", async () => {
+      // Rehydrating a store that's already at v5 must not re-apply the v4→v5
+      // agent-stripping migration — agent IDs legitimately absent from
+      // hiddenButtons should stay absent. The v5→v6 migration still runs and
+      // strips any lingering "notes" entry.
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["agent-tray", "claude", "terminal"],
+              rightButtons: ["settings"],
+              hiddenButtons: ["copy-tree"],
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 5,
+        })
+      );
+
+      const store = await loadStore();
+      expect(store.getState().layout.hiddenButtons).toEqual(["copy-tree"]);
+      // Ordering arrays untouched.
+      expect(store.getState().layout.leftButtons).toContain("claude");
+    });
+
+    it("v5→v6 strips 'notes' from all button arrays", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal", "notes", "browser"],
+              rightButtons: ["notes", "settings"],
+              hiddenButtons: ["notes"],
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 5,
+        })
+      );
+
+      const store = await loadStore();
+      const { layout } = store.getState();
+      expect(layout.leftButtons).not.toContain("notes");
+      expect(layout.rightButtons).not.toContain("notes");
+      expect(layout.hiddenButtons).not.toContain("notes");
+    });
+
+    it("v4→v5 handles missing layout without throwing", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 4,
         })
       );
 

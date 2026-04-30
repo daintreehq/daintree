@@ -32,6 +32,9 @@ import {
   WARMUP_INTERVALS,
   PRESSURE_COUNT_TIER2,
   MITIGATION_COOLDOWN_MS,
+  recordBlinkSample,
+  forgetBlinkSample,
+  getBlinkSamples,
   type MemoryPressureActions,
 } from "../ProcessMemoryMonitor.js";
 
@@ -583,6 +586,117 @@ describe("ProcessMemoryMonitor", () => {
 
       expect(mockActions.clearCaches).not.toHaveBeenCalled();
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("blink memory sampling (issue #6272)", () => {
+    beforeEach(() => {
+      // Sample map is module-scoped; clear per-test so order doesn't matter.
+      for (const wcId of Array.from(getBlinkSamples().keys())) {
+        forgetBlinkSample(wcId);
+      }
+    });
+
+    it("recordBlinkSample stores per-webContentsId payload (values in KB) and emits debug log", () => {
+      // Electron's BlinkMemoryInfo reports kilobytes; 50 MB == 50*1024 KB.
+      recordBlinkSample(42, {
+        allocated: 50 * 1024,
+        marked: 10 * 1024,
+        total: 60 * 1024,
+        partitionAlloc: 8 * 1024,
+      });
+
+      const stored = getBlinkSamples().get(42);
+      expect(stored?.allocated).toBe(50 * 1024);
+      expect(stored?.marked).toBe(10 * 1024);
+      expect(stored?.total).toBe(60 * 1024);
+      expect(stored?.partitionAlloc).toBe(8 * 1024);
+      expect(typeof stored?.timestamp).toBe("number");
+
+      expect(logDebug).toHaveBeenCalledWith(
+        "blink-memory-sample",
+        expect.objectContaining({ webContentsId: 42, allocatedMb: 50, totalMb: 60 })
+      );
+    });
+
+    it("recordBlinkSample log conversion is KB → MB (regression for unit bug)", () => {
+      // 512 MB worth of Blink memory == 512*1024 KB.
+      recordBlinkSample(99, { allocated: 512 * 1024 });
+      expect(logDebug).toHaveBeenCalledWith(
+        "blink-memory-sample",
+        expect.objectContaining({ webContentsId: 99, allocatedMb: 512 })
+      );
+    });
+
+    it("recordBlinkSample overwrites the previous value for the same webContentsId", () => {
+      recordBlinkSample(7, { allocated: 10 });
+      recordBlinkSample(7, { allocated: 99 });
+      expect(getBlinkSamples().get(7)?.allocated).toBe(99);
+    });
+
+    it("forgetBlinkSample removes the recorded sample (used by view eviction)", () => {
+      recordBlinkSample(11, { allocated: 5 });
+      expect(getBlinkSamples().has(11)).toBe(true);
+      forgetBlinkSample(11);
+      expect(getBlinkSamples().has(11)).toBe(false);
+    });
+
+    it("startAppMetricsMonitor invokes actions.sampleBlinkMemory once per poll", () => {
+      const sampleBlinkMemory = vi.fn();
+      const actions: MemoryPressureActions = {
+        clearCaches: vi.fn().mockResolvedValue(undefined),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+        sampleBlinkMemory,
+      };
+
+      stop = startAppMetricsMonitor(actions);
+
+      vi.advanceTimersByTime(30_000);
+      expect(sampleBlinkMemory).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(30_000);
+      expect(sampleBlinkMemory).toHaveBeenCalledTimes(2);
+
+      vi.advanceTimersByTime(30_000);
+      expect(sampleBlinkMemory).toHaveBeenCalledTimes(3);
+    });
+
+    it("sampleBlinkMemory throwing does not break the poll loop", () => {
+      const sampleBlinkMemory = vi.fn().mockImplementation(() => {
+        throw new Error("renderer port closed");
+      });
+      const actions: MemoryPressureActions = {
+        clearCaches: vi.fn().mockResolvedValue(undefined),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+        sampleBlinkMemory,
+      };
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
+      stop = startAppMetricsMonitor(actions);
+
+      // Two consecutive polls — both should still log the debug sample even
+      // though sampleBlinkMemory throws every time.
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+
+      expect(sampleBlinkMemory).toHaveBeenCalledTimes(2);
+      expect(logDebug).toHaveBeenCalledWith("process-memory-sample", expect.any(Object));
+    });
+
+    it("works without sampleBlinkMemory (optional field, backwards compat)", () => {
+      const actions: MemoryPressureActions = {
+        clearCaches: vi.fn().mockResolvedValue(undefined),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+      };
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
+      stop = startAppMetricsMonitor(actions);
+
+      // Should not throw — sampleBlinkMemory is optional.
+      expect(() => vi.advanceTimersByTime(30_000)).not.toThrow();
     });
   });
 });

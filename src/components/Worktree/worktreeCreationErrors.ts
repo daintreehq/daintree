@@ -1,9 +1,13 @@
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { classifyGitError, getGitRecoveryHint } from "../../../shared/utils/gitOperationErrors";
+import type { GitOperationReason } from "../../../shared/types/ipc/errors";
 
 export interface WorktreeCreationError {
   friendly: string;
   raw: string;
+  /** Classified git reason when the error comes from a git operation. */
+  gitReason?: GitOperationReason;
   recovery?: {
     label: string;
     onAction: () => void;
@@ -43,6 +47,7 @@ export function mapCreationError(rawMessage: string, onClose?: () => void): Work
     return {
       friendly: "Cannot create directory — check permissions or available disk space.",
       raw: rawMessage,
+      gitReason: "system-io-error",
     };
   }
 
@@ -50,6 +55,7 @@ export function mapCreationError(rawMessage: string, onClose?: () => void): Work
     return {
       friendly: "The branch name contains invalid characters.",
       raw: rawMessage,
+      gitReason: "pathspec-invalid",
     };
   }
 
@@ -57,8 +63,15 @@ export function mapCreationError(rawMessage: string, onClose?: () => void): Work
     return {
       friendly: "A worktree already exists at this path.",
       raw: rawMessage,
+      gitReason: "system-io-error",
     };
   }
 
-  return { friendly: rawMessage, raw: rawMessage };
+  const gitReason = classifyGitError(rawMessage);
+  const hint = getGitRecoveryHint(gitReason);
+  return {
+    friendly: hint ?? rawMessage,
+    raw: rawMessage,
+    gitReason: gitReason === "unknown" ? undefined : gitReason,
+  };
 }

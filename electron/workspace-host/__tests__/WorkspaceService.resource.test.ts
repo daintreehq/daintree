@@ -1538,3 +1538,198 @@ describe("WorkspaceService.runResourceAction — concurrency", () => {
     expect(service["resourceActionAbortControllers"].has("/test/worktree")).toBe(false);
   });
 });
+
+describe("WorkspaceService.initResourceConfigAsync", () => {
+  let service: WorkspaceService;
+  let mockSendEvent: ReturnType<typeof vi.fn>;
+  let WorktreeMonitorClass: typeof WorktreeMonitor;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockSendEvent = vi.fn();
+
+    const WorkspaceServiceModule = await import("../WorkspaceService.js");
+    service = new WorkspaceServiceModule.WorkspaceService(
+      mockSendEvent as unknown as (event: WorkspaceHostEvent) => void
+    );
+
+    const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
+    WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
+
+    service["projectRootPath"] = "/test/root";
+    service["git"] = mockSimpleGit as unknown as SimpleGit;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function createAndRegisterMonitor(overrides: Partial<Worktree> = {}): WorktreeMonitor {
+    const wt = createTestWorktree(overrides);
+    const monitor = new WorktreeMonitorClass(
+      wt,
+      {
+        basePollingInterval: 10000,
+        adaptiveBackoff: false,
+        pollIntervalMax: 30000,
+        circuitBreakerThreshold: 3,
+        gitWatchEnabled: false,
+      },
+      { onUpdate: vi.fn() },
+      "main"
+    );
+    service["monitors"].set(wt.id, monitor);
+    return monitor;
+  }
+
+  async function setupConfig(config: Record<string, unknown>) {
+    const fsModule = await import("fs/promises");
+    const mockAccess = vi.mocked(fsModule.access);
+    const mockReadFile = vi.mocked(fsModule.readFile);
+
+    mockAccess.mockImplementation(async (p: unknown) => {
+      if (n(p as string).endsWith("/test/root/.daintree/config.json")) return undefined;
+      throw new Error("ENOENT");
+    });
+    mockReadFile.mockResolvedValue(JSON.stringify(config) as never);
+  }
+
+  it("caches hasResourceConfig on monitor creation regardless of monitor.isRunning", async () => {
+    const monitor = createAndRegisterMonitor();
+
+    const config = {
+      resource: {
+        provision: ["terraform apply"],
+        status: "check-status",
+      },
+    };
+    await setupConfig(config);
+
+    // Monitor is not running (isRunning defaults to false until start() is called)
+    expect(monitor.isRunning).toBe(false);
+
+    // Call initResourceConfigAsync directly
+    await service["initResourceConfigAsync"](monitor, "/test/worktree");
+
+    // Metadata should be cached even though monitor is not running
+    expect(monitor.hasResourceConfig).toBe(true);
+    expect(monitor.hasStatusCommand).toBe(true);
+    expect(monitor.hasProvisionCommand).toBe(true);
+  });
+
+  it("sets resource flags from config.resources with environment key matching worktreeMode", async () => {
+    const monitor = createAndRegisterMonitor();
+    monitor.setWorktreeMode("dev");
+
+    const config = {
+      resources: {
+        dev: {
+          provider: "akash",
+          provision: ["terraform apply"],
+          status: "check-status",
+          pause: ["pause-cmd"],
+          resume: ["resume-cmd"],
+          teardown: ["destroy-cmd"],
+        },
+        prod: {
+          provision: ["prod-cmd"],
+        },
+      },
+    };
+    await setupConfig(config);
+
+    await service["initResourceConfigAsync"](monitor, "/test/worktree");
+
+    expect(monitor.hasResourceConfig).toBe(true);
+    expect(monitor.hasStatusCommand).toBe(true);
+    expect(monitor.hasProvisionCommand).toBe(true);
+    expect(monitor.hasPauseCommand).toBe(true);
+    expect(monitor.hasResumeCommand).toBe(true);
+    expect(monitor.hasTeardownCommand).toBe(true);
+    expect(monitor.resourceProvider).toBe("akash");
+  });
+
+  it("falls back to 'default' environment when worktreeMode not found in resources", async () => {
+    const monitor = createAndRegisterMonitor();
+    monitor.setWorktreeMode("staging");
+
+    const config = {
+      resources: {
+        default: {
+          provider: "aws",
+          provision: ["default-cmd"],
+        },
+      },
+    };
+    await setupConfig(config);
+
+    await service["initResourceConfigAsync"](monitor, "/test/worktree");
+
+    expect(monitor.hasResourceConfig).toBe(true);
+    expect(monitor.hasProvisionCommand).toBe(true);
+    expect(monitor.resourceProvider).toBe("aws");
+  });
+
+  it("uses first available resource environment when no default or matching key", async () => {
+    const monitor = createAndRegisterMonitor();
+    monitor.setWorktreeMode("nonexistent");
+
+    const config = {
+      resources: {
+        env1: {
+          provision: ["env1-cmd"],
+        },
+        env2: {
+          provision: ["env2-cmd"],
+        },
+      },
+    };
+    await setupConfig(config);
+
+    await service["initResourceConfigAsync"](monitor, "/test/worktree");
+
+    expect(monitor.hasResourceConfig).toBe(true);
+    expect(monitor.hasProvisionCommand).toBe(true);
+  });
+
+  it("does not set hasResourceConfig when no resource config exists", async () => {
+    const monitor = createAndRegisterMonitor();
+
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.access).mockRejectedValue(new Error("ENOENT"));
+
+    await service["initResourceConfigAsync"](monitor, "/test/worktree");
+
+    expect(monitor.hasResourceConfig).toBe(false);
+  });
+
+  it("substitutes variables in connect command", async () => {
+    const monitor = createAndRegisterMonitor({ name: "my-worktree", branch: "feature/x" });
+
+    const config = {
+      resource: {
+        connect: "ssh {{worktree_name}}@{{branch}}.example.com",
+        status: "check",
+      },
+    };
+    await setupConfig(config);
+
+    await service["initResourceConfigAsync"](monitor, "/test/worktree");
+
+    expect(monitor.resourceConnectCommand).toBe("ssh 'my-worktree'@'feature/x'.example.com");
+  });
+
+  it("returns early when projectRootPath is not set", async () => {
+    const monitor = createAndRegisterMonitor();
+    service["projectRootPath"] = null;
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await service["initResourceConfigAsync"](monitor, "/test/worktree");
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(monitor.hasResourceConfig).toBe(false);
+
+    warnSpy.mockRestore();
+  });
+});

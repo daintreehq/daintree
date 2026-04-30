@@ -300,7 +300,7 @@ export class PacketParser {
         return packets;
       }
 
-      const idLen = fullData[offset];
+      const idLen = fullData[offset]!;
       const dataView = new DataView(fullData.buffer, fullData.byteOffset + offset);
       const dataLen = dataView.getUint16(1, false);
 

@@ -15,8 +15,8 @@ export function extractCodeBlocks(text: string): CodeBlock[] {
 
   while ((match = regex.exec(text)) !== null) {
     const languageHint = match[1]?.trim();
-    const language = languageHint ? languageHint.split(/\s+/)[0] : "text";
-    const content = match[2].trim();
+    const language = languageHint ? (languageHint.split(/\s+/)[0] ?? "text") : "text";
+    const content = match[2]!.trim();
     if (content) {
       blocks.push({ language, content });
     }
@@ -105,17 +105,17 @@ export function suggestFilename(language: string, content: string): string | und
 
   const classMatch = content.match(/(?:export\s+)?(?:class|interface)\s+(\w+)/);
   if (classMatch) {
-    name = classMatch[1];
+    name = classMatch[1]!;
   }
 
   const functionMatch = content.match(/(?:export\s+)?(?:function|const)\s+(\w+)/);
   if (functionMatch && !classMatch) {
-    name = functionMatch[1];
+    name = functionMatch[1]!;
   }
 
   const pythonMatch = content.match(/(?:class|def)\s+(\w+)/);
   if (pythonMatch && language === "python") {
-    name = pythonMatch[1];
+    name = pythonMatch[1]!;
   }
 
   return name + extension;

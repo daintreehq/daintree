@@ -1,0 +1,13 @@
+{"version":2,"width":120,"height":10,"timestamp":1700000000,"title":"claude-normal-turn"}
+[0.05,"o","Claude Code v2.1.79 (Sonnet 4.6)\r\n"]
+[0.10,"o","\u001b[2m  Type your message or /help\u001b[22m\r\n"]
+[0.20,"o","> "]
+[0.50,"o","✽ Deliberating… (1s · esc to interrupt)"]
+[0.95,"o","\r✽ Deliberating… (2s · esc to interrupt)"]
+[1.40,"o","\r✽ Deliberating… (3s · esc to interrupt)"]
+[1.85,"o","\r✽ Deliberating… (4s · esc to interrupt)"]
+[2.30,"o","\r\u001b[2K"]
+[2.35,"o","Here is the answer to your question.\r\n"]
+[2.40,"o","✻ Task completed for 2.3s\r\n"]
+[2.50,"o","Total cost: $0.0123\r\n"]
+[2.60,"o","\r\n> "]

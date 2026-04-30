@@ -1,0 +1,9 @@
+{
+  "agentId": "claude",
+  "settleMs": 4000,
+  "transitions": [
+    { "atMs": 0, "state": "busy", "trigger": "pattern" },
+    { "atMs": 2950, "state": "completed", "trigger": "pattern", "sessionCost": 0.0123 },
+    { "atMs": 3450, "state": "idle", "trigger": "pattern" }
+  ]
+}

@@ -10,7 +10,12 @@ export interface TerminalScrollIndicatorProps {
 
 export function TerminalScrollIndicator({ terminalId }: TerminalScrollIndicatorProps) {
   const { hasUnseenOutput } = useUnseenOutput(terminalId);
-  const { isVisible, shouldRender } = useAnimatedPresence({ isOpen: hasUnseenOutput });
+  // Instant hide (animationDuration: 0): once the user catches up the pill
+  // should disappear immediately rather than fade out symmetrically with show.
+  const { isVisible, shouldRender } = useAnimatedPresence({
+    isOpen: hasUnseenOutput,
+    animationDuration: 0,
+  });
 
   if (!shouldRender) return null;
 
@@ -21,7 +26,7 @@ export function TerminalScrollIndicator({ terminalId }: TerminalScrollIndicatorP
   };
 
   return (
-    <div className="absolute inset-0 z-30 pointer-events-none flex items-end justify-center pb-4">
+    <div className="absolute inset-0 z-30 pointer-events-none flex items-end justify-end pb-4 pr-[14px]">
       <button
         type="button"
         className={cn(

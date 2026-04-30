@@ -61,13 +61,14 @@ vi.mock("../../../window/portDistribution.js", () => ({
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
-import { registerProjectCrudHandlers } from "../projectCrud.js";
+import { registerProjectCrudHandlers } from "../projectCrud/index.js";
 import type { HandlerDependencies } from "../../types.js";
 import type {
   WindowRegistry,
   WindowContext,
   WindowServices,
 } from "../../../window/WindowRegistry.js";
+import { DisposableStore } from "../../../utils/lifecycle.js";
 
 function makeWindowContext(
   windowId: number,
@@ -81,7 +82,7 @@ function makeWindowContext(
     projectPath: null,
     abortController: new AbortController(),
     services: services as WindowServices,
-    cleanup: [],
+    cleanup: new DisposableStore(),
   };
 }
 

@@ -12,6 +12,7 @@ Complete reference for Daintree's semantic token system. Every built-in and cust
 | Accent   | `accent-*`                                           | Primary and optional secondary interaction color                                 |
 | Status   | `status-*`                                           | Semantic outcome colors                                                          |
 | Activity | `activity-*`                                         | Real-time agent state indicators                                                 |
+| Form     | `knob-base`, `state-modified`                        | Form component styling (Switch/Slider knobs, modified indicators)                |
 | Overlay  | `overlay-*`                                          | Interactive state tinting ladder                                                 |
 | Wash     | `wash-*`                                             | Atmospheric tinted fills                                                         |
 | Scrim    | `scrim-*`                                            | Modal backdrop dimming                                                           |
@@ -42,6 +43,7 @@ Five-level depth hierarchy plus semantic interactive surfaces.
 | `surface-inset`          | Recessed content within panels         | Derived: `tint` 3-4%                               |
 | `surface-hover`          | Hover overlay on interactive elements  | Derived: `tint` 3-5%                               |
 | `surface-active`         | Active/pressed overlay                 | Derived: `tint` 6-8%                               |
+| `surface-disabled`       | Disabled input background              | Derived: `input` blended 70% with `canvas`         |
 
 **Design rule:** Adjacent surface pairs must have clear perceptual separation. Grid -> sidebar -> canvas -> panel -> elevated should read as a smooth depth ramp.
 
@@ -95,12 +97,13 @@ An optional second color lane for themes with two distinct interaction colors.
 
 Fixed hue families across all themes. Each theme tunes brightness/saturation.
 
-| Token            | Hue family                     |
-| ---------------- | ------------------------------ |
-| `status-success` | Green — completed/ready states |
-| `status-warning` | Amber — caution states         |
-| `status-danger`  | Red — error/destructive states |
-| `status-info`    | Blue — neutral informational   |
+| Token                   | Hue family                         | Derived?                         |
+| ----------------------- | ---------------------------------- | -------------------------------- |
+| `status-success`        | Green — completed/ready states     | Required                         |
+| `status-warning`        | Amber — caution states             | Required                         |
+| `status-danger`         | Red — error/destructive states     | Required                         |
+| `status-info`           | Blue — neutral informational       | Required                         |
+| `status-danger-surface` | Validation wash for invalid fields | Derived: `danger` at 8-10% alpha |
 
 ## Activity Tokens
 
@@ -131,6 +134,8 @@ A single-knob color input (`overlay-base`) drives the entire opacity ladder.
 | `overlay-active`   | General active/pressed            | tint 8%      | tint 6%       |
 | `overlay-selected` | Selected state                    | tint 4%      | tint 5%       |
 | `overlay-elevated` | Elevated hover                    | tint 6%      | tint 8%       |
+
+**See [Canonical Interaction State Recipes](./interaction-state-recipes.md)** for hover/focus implementation patterns using these overlay tokens.
 
 Set `overlay-base` to a hued color to tint all hover and fill states (e.g. Fiordland: icy blue `#B4DCF0`, Arashiyama: warm cream `#FFECE6`).
 
@@ -289,6 +294,20 @@ Theme-controlled colors for the diff viewer. Derived from `status-success` and `
 | `panel-state-edge-radius`      | Rail end-cap radius                | `2px`                                 | `2px`           |
 | `focus-ring-offset`            | Offset between element and ring    | `2px`                                 | `2px`           |
 | `chrome-noise-texture`         | CSS `background-image` grain layer | `none`                                | `none`          |
+
+## Form State Tokens
+
+Specialized tokens for form component styling (Switch, Slider, validation states). These tokens split from existing tokens to enable finer control over form element appearance.
+
+| Token            | Purpose                                                | Dark default                                 | Light default          |
+| ---------------- | ------------------------------------------------------ | -------------------------------------------- | ---------------------- |
+| `knob-base`      | Switch/Slider knob fill (polarity-aware)               | `oklch(0.98 0.003 90)`                       | `oklch(0.18 0.01 240)` |
+| `state-modified` | Modified-from-default indicator (distinct from accent) | Derived: `status-info` mixed 90% with `tint` | Same                   |
+
+**Design notes:**
+
+- `knob-base` uses polarity-aware static colors: off-white in dark themes, near-black in light themes. This avoids subpixel antialiasing artifacts from `text-inverse` and provides consistent contrast against accent-colored tracks.
+- `state-modified` derives from `status-info` (blue) rather than `accent-primary` to allow independent tuning for "unsaved changes" indicators without affecting buttons and active rails.
 
 ## Shared Tokens
 

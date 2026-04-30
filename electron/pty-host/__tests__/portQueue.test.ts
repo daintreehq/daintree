@@ -158,6 +158,37 @@ describe("PortQueueManager", () => {
     expect(coordinator!.resume).toHaveBeenCalledWith("port-queue");
   });
 
+  it("safety timeout clears stale queuedBytes so next byte does not re-pause (#6244)", () => {
+    // When the renderer crashes and stops draining the port, the safety
+    // timeout fires after IPC_MAX_PAUSE_MS. It must drop the stale byte
+    // accounting along with the pause maps, otherwise the very next
+    // PTY byte re-triggers applyBackpressure and the pause loop wedges
+    // for the entire reload window.
+    const deps = createMockDeps();
+    const mgr = new PortQueueManager(deps);
+
+    const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
+    mgr.addBytes("t1", highWatermark + 1);
+    mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
+
+    vi.advanceTimersByTime(5000);
+
+    expect(mgr.getQueuedBytes("t1")).toBe(0);
+
+    const coordinator = deps.getPauseCoordinator("t1");
+    const pauseCallsAfterTimeout = (coordinator!.pause as ReturnType<typeof vi.fn>).mock.calls
+      .length;
+
+    mgr.addBytes("t1", 1);
+    const result = mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
+
+    expect(result).toBe(false);
+    expect(mgr.isPaused("t1")).toBe(false);
+    expect((coordinator!.pause as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      pauseCallsAfterTimeout
+    );
+  });
+
   it("clearQueue clears all state for a terminal", () => {
     const deps = createMockDeps();
     const mgr = new PortQueueManager(deps);

@@ -23,7 +23,14 @@ export const ABSOLUTE_MAX_GRID_TERMINALS = 16;
 
 export const GRID_TRANSITION_DURATION_MS = 200;
 export const GRID_FIT_DELAY_MS = GRID_TRANSITION_DURATION_MS + 50;
-export const SIDEBAR_TOGGLE_LOCK_MS = GRID_FIT_DELAY_MS;
+
+/**
+ * Sidebar width transition duration. Mirrors the `duration-[var(--duration-250)]`
+ * value applied in Sidebar.tsx. Used to gate PTY resize propagation so xterm
+ * doesn't deliver mid-animation fractional dimensions to the host.
+ */
+export const SIDEBAR_TRANSITION_MS = 250;
+export const SIDEBAR_TOGGLE_LOCK_MS = SIDEBAR_TRANSITION_MS;
 
 /**
  * Calculate the maximum number of panels that can fit in the grid
@@ -59,6 +66,22 @@ export function getMaxGridCapacity(width: number | null, height: number | null):
 }
 
 /**
+ * Schmitt-trigger boundaries for breakpoint hysteresis. Each entry promotes
+ * `from`→`to` columns once `count` reaches `widenAt`, and only relaxes back
+ * to `from` once `count` drops to `narrowAt`. The buffer between the two
+ * thresholds prevents single-panel toggles from re-flowing the grid.
+ */
+const HYSTERESIS_BANDS: ReadonlyArray<{
+  from: number;
+  to: number;
+  widenAt: number;
+  narrowAt: number;
+}> = [
+  { from: 2, to: 3, widenAt: 6, narrowAt: 4 },
+  { from: 3, to: 4, widenAt: 12, narrowAt: 10 },
+];
+
+/**
  * Pure function to calculate optimal grid columns for automatic layout.
  *
  * Design principles:
@@ -73,8 +96,19 @@ export function getMaxGridCapacity(width: number | null, height: number | null):
  * - 2-5 terminals: 2 columns (stable for common use, max 3 rows)
  * - 6-11 terminals: 3 columns (prevents pancakes, max 4 rows)
  * - 12+ terminals: 4 columns (high density fleet, max 4 rows)
+ *
+ * Breakpoint hysteresis: when `previousCols` is supplied (the column count from
+ * the prior render), the function holds the wider count through a buffer zone
+ * — e.g. once at 3 cols (count≥6), it stays at 3 down to count=5 and only
+ * narrows back to 2 at count≤4. `maxFeasibleCols` still caps the result so a
+ * narrowing viewport always overrides a sticky widen. Calling without
+ * `previousCols` preserves the original symmetric behavior.
  */
-export function getAutoGridCols(count: number, width: number | null): number {
+export function getAutoGridCols(
+  count: number,
+  width: number | null,
+  previousCols?: number
+): number {
   if (count <= 1) return 1;
 
   // Calculate max feasible columns based on minimum terminal width
@@ -96,10 +130,26 @@ export function getAutoGridCols(count: number, width: number | null): number {
     targetCols = 4;
   }
 
+  // Apply hysteresis: walk every band whose `to` is at or below `previousCols`,
+  // hold the highest one whose narrowAt has not yet been reached. Cascading
+  // through intermediate bands matters when count drops several tiers at once
+  // (e.g. previousCols=4 → count=5 should pass through 3 cols, not jump to 2).
+  if (previousCols !== undefined) {
+    let stickyCols = targetCols;
+    for (const band of HYSTERESIS_BANDS) {
+      if (previousCols >= band.to && count > band.narrowAt && band.to > stickyCols) {
+        stickyCols = band.to;
+      }
+    }
+    targetCols = stickyCols;
+  }
+
   // Don't use more columns than we have terminals (no empty columns)
   targetCols = Math.min(targetCols, count);
 
-  // Respect width constraints - never exceed what the viewport can fit
+  // Respect width constraints - never exceed what the viewport can fit.
+  // This is an unconditional override: a viewport that can't fit the sticky
+  // count must narrow regardless of hysteresis.
   return Math.min(maxFeasibleCols, targetCols);
 }
 
@@ -114,7 +164,8 @@ export function computeGridColumns(
   count: number,
   gridWidth: number | null,
   strategy: TerminalLayoutStrategy,
-  value?: number
+  value?: number,
+  previousCols?: number
 ): number {
   if (count === 0) return 1;
 
@@ -126,7 +177,7 @@ export function computeGridColumns(
 
   switch (strategy) {
     case "automatic":
-      return getAutoGridCols(count, gridWidth);
+      return getAutoGridCols(count, gridWidth, previousCols);
     case "fixed-rows": {
       const rows = Math.max(1, Math.min(value ?? 3, 10));
       return Math.ceil(count / rows);
@@ -134,6 +185,6 @@ export function computeGridColumns(
     case "fixed-columns":
       return Math.max(1, Math.min(value ?? 2, 10));
     default:
-      return getAutoGridCols(count, gridWidth);
+      return getAutoGridCols(count, gridWidth, previousCols);
   }
 }

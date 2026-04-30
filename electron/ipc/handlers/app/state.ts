@@ -1,4 +1,4 @@
-import { ipcMain, app } from "electron";
+import { app } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";
 import { projectStore } from "../../../services/ProjectStore.js";
@@ -12,7 +12,12 @@ import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.
 import { isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
 import { isGpuDisabledByFlag } from "../../../services/GpuCrashMonitorService.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
+import { closeTelemetry } from "../../../services/TelemetryService.js";
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
+import { typedHandle, typedHandleWithContext } from "../../utils.js";
+import { signalFirstInteractive } from "../../../window/deferredInitQueue.js";
+import { markPerformance } from "../../../utils/performance.js";
+import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 
 export function registerAppStateHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -32,9 +37,12 @@ export function registerAppStateHandlers(): () => void {
     let focusPanelStateToUse = globalAppState.focusPanelState;
     // Active worktree state to include in response
     let activeWorktreeIdToUse = globalAppState.activeWorktreeId;
+    let projectStateQuarantinedPath: string | undefined;
 
     if (projectId) {
-      const projectState = await projectStore.getProjectState(projectId);
+      const { state: projectState, quarantinedPath } =
+        await projectStore.getProjectStateWithRecovery(projectId);
+      projectStateQuarantinedPath = quarantinedPath;
       // Per-project state exists (even if empty) - use it as authoritative
       if (projectState?.terminals !== undefined) {
         // Use per-project terminals, excluding trashed and normalizing location
@@ -185,12 +193,19 @@ export function registerAppStateHandlers(): () => void {
       terminalsSource = "global-fallback";
     }
 
-    // In safe mode, skip terminal restoration to break crash loops
-    const inSafeMode = getCrashLoopGuard().isSafeMode();
+    // In safe mode, skip terminal restoration to break crash loops.
+    // Capture the count of panels we're about to drop so the renderer
+    // banner can tell users how much was deferred.
+    const guard = getCrashLoopGuard();
+    const inSafeMode = guard.isSafeMode();
+    let skippedPanelCount = 0;
     if (inSafeMode) {
+      skippedPanelCount = terminalsToUse.length;
       terminalsToUse = [];
       terminalsSource = "safe-mode";
-      console.log("[AppHydrate] Safe mode active — skipping terminal restoration");
+      console.log(
+        `[AppHydrate] Safe mode active — skipping ${skippedPanelCount} terminal(s) restoration`
+      );
     }
 
     // Apply one-shot crash recovery panel filter if set
@@ -230,36 +245,41 @@ export function registerAppStateHandlers(): () => void {
     }
 
     return {
-      appState,
+      appState: appState as import("../../../../shared/types/ipc/app.js").AppState,
       terminalConfig: store.get("terminalConfig"),
       project: currentProject,
       agentSettings: store.get("agentSettings"),
       gpuWebGLHardware,
       gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
       safeMode: inSafeMode,
+      skippedPanelCount,
+      crashCount: guard.getCrashCount(),
+      lastCrashAt: guard.getLastCrashTimestamp(),
       settingsRecovery: consumePendingSettingsRecovery(),
+      projectStateRecovery: projectStateQuarantinedPath
+        ? { quarantinedPath: projectStateQuarantinedPath }
+        : null,
     };
   };
-  ipcMain.handle(CHANNELS.APP_HYDRATE, handleAppHydrate);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_HYDRATE));
+  handlers.push(typedHandle(CHANNELS.APP_HYDRATE, handleAppHydrate));
 
   const handleAppGetState = async () => {
-    return store.get("appState");
+    return store.get("appState") as import("../../../../shared/types/ipc/app.js").AppState;
   };
-  ipcMain.handle(CHANNELS.APP_GET_STATE, handleAppGetState);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_GET_STATE));
+  handlers.push(typedHandle(CHANNELS.APP_GET_STATE, handleAppGetState));
 
   const handleAppSetState = async (
-    _event: Electron.IpcMainInvokeEvent,
-    partialState: Partial<typeof store.store.appState>
+    incoming: Partial<import("../../../../shared/types/ipc/app.js").AppState>
   ) => {
     try {
-      if (!partialState || typeof partialState !== "object" || Array.isArray(partialState)) {
-        console.error("Invalid app state payload:", partialState);
+      if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+        console.error("Invalid app state payload:", incoming);
         return;
       }
 
-      const currentState = store.get("appState");
+      // Handler performs its own structural validation before writing; cast to the
+      // store schema to keep the `updates` object compatible with persistence types.
+      const partialState = incoming as Partial<typeof store.store.appState>;
 
       const updates: Partial<typeof store.store.appState> = {};
 
@@ -397,23 +417,79 @@ export function registerAppStateHandlers(): () => void {
 
       if ("actionMruList" in partialState && Array.isArray(partialState.actionMruList)) {
         const ACTION_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,127}$/;
-        const seen = new Set<string>();
-        const sanitized: string[] = [];
-        for (const id of partialState.actionMruList) {
-          if (
-            typeof id === "string" &&
-            ACTION_ID_PATTERN.test(id) &&
-            !seen.has(id) &&
-            sanitized.length < 20
-          ) {
-            seen.add(id);
-            sanitized.push(id);
+        const MAX_ENTRIES = 20;
+        const MAX_SCORE = 100;
+        const now = Date.now();
+
+        const isLegacy =
+          partialState.actionMruList.length > 0 &&
+          typeof partialState.actionMruList[0] === "string";
+
+        if (isLegacy) {
+          const seen = new Set<string>();
+          const sanitized: string[] = [];
+          for (const id of partialState.actionMruList as string[]) {
+            if (
+              typeof id === "string" &&
+              ACTION_ID_PATTERN.test(id) &&
+              !seen.has(id) &&
+              sanitized.length < MAX_ENTRIES
+            ) {
+              seen.add(id);
+              sanitized.push(id);
+            }
           }
+          updates.actionMruList = sanitized;
+        } else {
+          const seen = new Set<string>();
+          const sanitized: Array<{ id: string; score: number; lastAccessedAt: number }> = [];
+          for (const entry of partialState.actionMruList as Array<{
+            id?: unknown;
+            score?: unknown;
+            lastAccessedAt?: unknown;
+          }>) {
+            if (entry == null) continue;
+            const id = entry.id;
+            const score = typeof entry.score === "number" ? entry.score : 0;
+            const lastAccessedAt =
+              typeof entry.lastAccessedAt === "number" ? entry.lastAccessedAt : 0;
+
+            if (
+              typeof id === "string" &&
+              ACTION_ID_PATTERN.test(id) &&
+              !seen.has(id) &&
+              sanitized.length < MAX_ENTRIES
+            ) {
+              seen.add(id);
+              sanitized.push({
+                id,
+                score: Math.max(0, Math.min(MAX_SCORE, score)),
+                lastAccessedAt: Math.max(0, Math.min(now, lastAccessedAt)),
+              });
+            }
+          }
+          updates.actionMruList = sanitized;
         }
-        updates.actionMruList = sanitized;
       }
 
-      store.set("appState", { ...currentState, ...updates });
+      if ("fleetScopeMode" in partialState) {
+        const mode = partialState.fleetScopeMode;
+        if (mode === "legacy" || mode === "scoped") {
+          updates.fleetScopeMode = mode;
+        }
+      }
+
+      for (const [field, value] of Object.entries(updates)) {
+        if (value === undefined) {
+          // electron-store v11 throws on `set(key, undefined)`. Use delete to
+          // clear the field — matches the prior bulk-spread behavior, where
+          // `JSON.stringify` silently omitted undefined values from the slice.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (store.delete as (k: string) => void)(`appState.${field}` as any);
+        } else {
+          store.set(`appState.${field}`, value);
+        }
+      }
 
       // Note: We intentionally do NOT save per-project terminal state.
       // Terminals stay running in the backend and are discovered on hydration.
@@ -421,26 +497,43 @@ export function registerAppStateHandlers(): () => void {
       console.error("Failed to set app state:", error);
     }
   };
-  ipcMain.handle(CHANNELS.APP_SET_STATE, handleAppSetState);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_SET_STATE));
+  handlers.push(typedHandle(CHANNELS.APP_SET_STATE, handleAppSetState));
 
   const handleAppGetVersion = async () => {
     return app.getVersion();
   };
-  ipcMain.handle(CHANNELS.APP_GET_VERSION, handleAppGetVersion);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_GET_VERSION));
+  handlers.push(typedHandle(CHANNELS.APP_GET_VERSION, handleAppGetVersion));
 
   const handleAppQuit = async () => {
     app.quit();
   };
-  ipcMain.handle(CHANNELS.APP_QUIT, handleAppQuit);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_QUIT));
+  handlers.push(typedHandle(CHANNELS.APP_QUIT, handleAppQuit));
 
   const handleAppForceQuit = async () => {
     app.exit(0);
   };
-  ipcMain.handle(CHANNELS.APP_FORCE_QUIT, handleAppForceQuit);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_FORCE_QUIT));
+  handlers.push(typedHandle(CHANNELS.APP_FORCE_QUIT, handleAppForceQuit));
+
+  const handleAppResetAndRelaunch = async () => {
+    // Clear the crash-loop sentinel before relaunch so the next boot starts
+    // fresh. Mirrors the gpu.ts pattern: prepare state -> relaunch -> close
+    // telemetry -> exit. Use app.exit (not app.quit) so beforeunload listeners
+    // can't veto the restart.
+    getCrashLoopGuard().resetForNormalBoot();
+    app.relaunch();
+    await closeTelemetry();
+    app.exit(0);
+  };
+  handlers.push(typedHandle(CHANNELS.APP_RESET_AND_RELAUNCH, handleAppResetAndRelaunch));
+
+  handlers.push(
+    typedHandleWithContext(CHANNELS.APP_FIRST_INTERACTIVE, async (ctx) => {
+      markPerformance(PERF_MARKS.RENDERER_FIRST_INTERACTIVE, {
+        webContentsId: ctx.webContentsId,
+      });
+      signalFirstInteractive(ctx.webContentsId);
+    })
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

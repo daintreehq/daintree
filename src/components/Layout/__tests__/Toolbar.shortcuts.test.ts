@@ -38,10 +38,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(portalSource).toContain('useKeybindingDisplay("panel.togglePortal")');
     });
 
-    it("uses dynamic hook for notes.openPalette", () => {
-      expect(source).toContain('useKeybindingDisplay("notes.openPalette")');
-    });
-
     it("uses dynamic hook for worktree.copyTree", () => {
       expect(source).toContain('useKeybindingDisplay("worktree.copyTree")');
     });
@@ -85,10 +81,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(launcherSource).toContain("createTooltipWithShortcut(config.tooltipLabel, shortcut)");
     });
 
-    it("uses createTooltipWithShortcut for notes tooltip", () => {
-      expect(source).toContain('createTooltipWithShortcut("Notes", notesShortcut)');
-    });
-
     it("uses createTooltipWithShortcut for settings tooltip", () => {
       expect(settingsSource).toContain(
         'createTooltipWithShortcut("Open Settings", settingsShortcut)'
@@ -124,13 +116,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(depsMatch).not.toBeNull();
       const deps = depsMatch![1];
       expect(deps).toContain("sidebarShortcut");
-    });
-
-    it("includes notesShortcut in useMemo deps", () => {
-      const depsMatch = source.match(/\}\),\s*\[([^\]]+)\]\s*\);/s);
-      expect(depsMatch).not.toBeNull();
-      const deps = depsMatch![1];
-      expect(deps).toContain("notesShortcut");
     });
 
     it("includes copyTreeShortcut in useMemo deps", () => {

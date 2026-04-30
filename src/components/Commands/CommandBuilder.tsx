@@ -109,7 +109,7 @@ function BuilderTextField({
         className={cn(
           "w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
           "bg-daintree-bg border text-daintree-text placeholder:text-text-muted",
-          "focus:outline-none focus:ring-1",
+          "focus:outline-hidden focus:ring-1",
           error
             ? "border-status-error focus:border-status-error focus:ring-status-error"
             : "border-daintree-border focus:border-daintree-accent focus:ring-daintree-accent"
@@ -161,7 +161,7 @@ function BuilderTextareaField({
         className={cn(
           "w-full px-3 py-2 text-sm rounded-[var(--radius-md)] resize-y min-h-[100px]",
           "bg-daintree-bg border text-daintree-text placeholder:text-text-muted",
-          "focus:outline-none focus:ring-1",
+          "focus:outline-hidden focus:ring-1",
           error
             ? "border-status-error focus:border-status-error focus:ring-status-error"
             : "border-daintree-border focus:border-daintree-accent focus:ring-daintree-accent"
@@ -211,7 +211,7 @@ function BuilderSelectField({
         className={cn(
           "w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
           "bg-daintree-bg border text-daintree-text",
-          "focus:outline-none focus:ring-1",
+          "focus:outline-hidden focus:ring-1",
           error
             ? "border-status-error focus:border-status-error focus:ring-status-error"
             : "border-daintree-border focus:border-daintree-accent focus:ring-daintree-accent"

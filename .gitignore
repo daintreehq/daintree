@@ -5,6 +5,7 @@ node_modules/
 # Build outputs
 dist/
 dist-electron/
+dist-typecheck/
 out/
 release/
 *.asar
@@ -58,6 +59,9 @@ perf-metrics.ndjson
 # Demo recording output
 demo-output/
 
+# Demo authoring project (daintreehq/demo-studio clone target)
+demo/
+
 # Cache
 .cache/
 *.tsbuildinfo
@@ -84,7 +88,6 @@ reports/
 *.AppImage
 *.deb
 *.rpm
-.daintree/notes/
 .daintree/daintree-remote
 
 # Planning docs (private)
@@ -92,3 +95,9 @@ planning/
 .planning/
 .tmp
 *.tgz
+
+# Claude Code session markers
+.claude/nf-session-seen-*.flag
+
+# Claude scratch / working notes (private, ephemeral)
+.claude-scratch/

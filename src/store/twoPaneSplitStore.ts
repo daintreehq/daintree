@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 export interface TwoPaneSplitConfig {
   enabled: boolean;
@@ -115,8 +116,9 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
 
       getWorktreeRatio: (worktreeId) => {
         const state = get();
-        if (worktreeId && worktreeId in state.ratioByWorktreeId) {
-          return state.ratioByWorktreeId[worktreeId].ratio;
+        if (worktreeId) {
+          const entry = state.ratioByWorktreeId[worktreeId];
+          if (entry) return entry.ratio;
         }
         return state.config.defaultRatio;
       },
@@ -151,3 +153,10 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "twoPaneSplitStore",
+  store: useTwoPaneSplitStore,
+  persistedStateType:
+    "{ config: TwoPaneSplitConfig; ratioByWorktreeId: Record<string, WorktreeRatioEntry> }",
+});

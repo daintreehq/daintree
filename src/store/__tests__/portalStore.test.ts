@@ -32,6 +32,7 @@ vi.hoisted(() => {
 });
 
 import { usePortalStore } from "../portalStore";
+import { useUIStore } from "../uiStore";
 import { PORTAL_MIN_WIDTH, PORTAL_MAX_WIDTH, PORTAL_DEFAULT_WIDTH } from "@shared/types";
 
 function createLocalStorageMock() {
@@ -213,5 +214,169 @@ describe("portalStore", () => {
   it("unmarkTabCreated is idempotent", () => {
     usePortalStore.getState().unmarkTabCreated("non-existent-tab");
     expect(() => usePortalStore.getState().unmarkTabCreated("non-existent-tab")).not.toThrow();
+  });
+
+  describe("toggle with overlay claims", () => {
+    beforeEach(() => {
+      useUIStore.setState({ overlayClaims: new Set<string>() });
+      usePortalStore.setState({ isOpen: false });
+    });
+
+    afterEach(() => {
+      useUIStore.setState({ overlayClaims: new Set<string>() });
+    });
+
+    it("opens the portal when there are no active claims", () => {
+      usePortalStore.getState().toggle();
+      expect(usePortalStore.getState().isOpen).toBe(true);
+    });
+
+    it("blocks the closed→open transition when a claim is active", () => {
+      useUIStore.getState().addOverlayClaim("settings");
+      usePortalStore.getState().toggle();
+      expect(usePortalStore.getState().isOpen).toBe(false);
+    });
+
+    it("allows closing the portal even when a claim is active", () => {
+      usePortalStore.setState({ isOpen: true });
+      useUIStore.getState().addOverlayClaim("settings");
+      usePortalStore.getState().toggle();
+      expect(usePortalStore.getState().isOpen).toBe(false);
+    });
+
+    it("opens the portal once the blocking claim is released", () => {
+      useUIStore.getState().addOverlayClaim("settings");
+      usePortalStore.getState().toggle();
+      expect(usePortalStore.getState().isOpen).toBe(false);
+
+      useUIStore.getState().removeOverlayClaim("settings");
+      usePortalStore.getState().toggle();
+      expect(usePortalStore.getState().isOpen).toBe(true);
+    });
+
+    it("leaves the rest of the store untouched when the open transition is blocked", () => {
+      usePortalStore.setState({
+        isOpen: false,
+        tabs: [{ id: "tab-1", title: "One", url: "https://example.com" }],
+        activeTabId: "tab-1",
+        createdTabs: new Set<string>(["tab-1"]),
+      });
+      useUIStore.getState().addOverlayClaim("settings");
+
+      const before = usePortalStore.getState();
+      usePortalStore.getState().toggle();
+      const after = usePortalStore.getState();
+
+      expect(after.isOpen).toBe(false);
+      expect(after.tabs).toBe(before.tabs);
+      expect(after.activeTabId).toBe(before.activeTabId);
+      expect(after.createdTabs).toBe(before.createdTabs);
+    });
+  });
+});
+
+describe("portalStore persistence migration", () => {
+  const STORAGE_KEY = "portal-storage";
+
+  function installLocalStorageWith(initial: Record<string, string>): Map<string, string> {
+    const backing = new Map<string, string>(Object.entries(initial));
+    const mock = {
+      getItem: (key: string) => backing.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        backing.set(key, value);
+      },
+      removeItem: (key: string) => {
+        backing.delete(key);
+      },
+      clear: () => {
+        backing.clear();
+      },
+    } as unknown as Storage;
+    (globalThis as unknown as { localStorage: Storage }).localStorage = mock;
+    window.localStorage = mock;
+    return backing;
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("rehydrates a legacy unversioned blob and keeps user links", async () => {
+    const legacyBlob = JSON.stringify({
+      state: {
+        width: 600,
+        links: [
+          {
+            id: "user-1",
+            type: "user",
+            title: "Custom",
+            url: "https://example.com",
+            icon: "globe",
+            enabled: true,
+            order: 0,
+          },
+        ],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: legacyBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    const userLinks = store.getState().links.filter((l) => l.type === "user");
+    expect(userLinks).toHaveLength(1);
+    expect(userLinks[0]!.id).toBe("user-1");
+    expect(store.getState().width).toBe(600);
+  });
+
+  it("still runs the discovered→system merge migration after version check", async () => {
+    const legacyBlob = JSON.stringify({
+      state: {
+        links: [
+          {
+            id: "discovered-foo",
+            type: "discovered",
+            title: "Foo",
+            url: "https://foo.test",
+            icon: "globe",
+            enabled: true,
+          },
+        ],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: legacyBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    const migrated = store.getState().links.find((l) => l.id === "system-foo");
+    expect(migrated).toBeDefined();
+    expect(migrated!.type).toBe("system");
+    expect(store.getState().links.some((l) => l.id === "discovered-foo")).toBe(false);
+  });
+
+  it("writes version: 0 on the next persist after rehydration", async () => {
+    const legacyBlob = JSON.stringify({
+      state: {
+        width: 600,
+        links: [],
+      },
+    });
+    const backing = installLocalStorageWith({ [STORAGE_KEY]: legacyBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+    store.getState().setWidth(620);
+
+    const written = backing.get(STORAGE_KEY);
+    expect(written).toBeDefined();
+    const parsed = JSON.parse(written!) as {
+      version: number;
+      state: { width: number };
+    };
+    expect(parsed.version).toBe(0);
+    expect(parsed.state.width).toBe(620);
   });
 });

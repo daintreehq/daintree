@@ -13,7 +13,8 @@ import { EditorView, Decoration, type DecorationSet, keymap } from "@codemirror/
 import { type Extension, StateEffect, StateField } from "@codemirror/state";
 import { LanguageDescription } from "@codemirror/language";
 import { search, openSearchPanel, gotoLine } from "@codemirror/search";
-import { daintreeTheme } from "@/components/Notes/editorTheme";
+import { daintreeTheme } from "./editorTheme";
+import { editorSearchHighlightTheme } from "./editorSearchTheme";
 import { cn } from "@/lib/utils";
 
 export interface CodeViewerHandle {
@@ -57,7 +58,7 @@ const highlightedLineField = StateField.define<DecorationSet>({
 
 const highlightLineTheme = EditorView.baseTheme({
   ".cm-highlightedLine": {
-    backgroundColor: "rgba(234, 179, 8, 0.1) !important",
+    backgroundColor: "var(--color-search-highlight-background) !important",
   },
 });
 
@@ -106,12 +107,6 @@ const searchPanelTheme = EditorView.theme({
     borderRadius: "3px",
     outline: "none",
   },
-  ".cm-searchMatch": {
-    backgroundColor: "rgba(234, 179, 8, 0.3)",
-  },
-  ".cm-searchMatch.cm-searchMatch-selected": {
-    backgroundColor: "rgba(234, 179, 8, 0.6)",
-  },
 });
 
 const BASE_EXTENSIONS: Extension[] = [
@@ -120,6 +115,7 @@ const BASE_EXTENSIONS: Extension[] = [
   search({ top: true }),
   keymap.of([{ key: "Mod-l", run: gotoLine }]),
   searchPanelTheme,
+  editorSearchHighlightTheme,
 ];
 
 export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function CodeViewer(

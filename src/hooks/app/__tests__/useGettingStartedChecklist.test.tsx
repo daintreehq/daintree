@@ -35,7 +35,14 @@ vi.mock("../../useElectron", () => ({
   isElectronAvailable: () => true,
 }));
 
-type TerminalLike = { id?: string; kind?: string; agentState?: string };
+type TerminalLike = {
+  id?: string;
+  kind?: string;
+  agentState?: string;
+  launchAgentId?: string;
+  detectedAgentId?: string;
+  everDetectedAgent?: boolean;
+};
 type WorktreeLike = { prState?: string };
 
 let projectState = { currentProject: null as string | null };
@@ -147,7 +154,9 @@ describe("useGettingStartedChecklist", () => {
 
   it("marks openedProject when project store fires", async () => {
     renderHook(() => useGettingStartedChecklist(true));
-    await vi.advanceTimersByTimeAsync(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
 
     act(() => {
       const prev = { currentProject: null };
@@ -160,7 +169,9 @@ describe("useGettingStartedChecklist", () => {
 
   it("marks launchedAgent when terminal store fires", async () => {
     renderHook(() => useGettingStartedChecklist(true));
-    await vi.advanceTimersByTimeAsync(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
 
     act(() => {
       const prev = {
@@ -168,10 +179,9 @@ describe("useGettingStartedChecklist", () => {
         panelIds: [] as string[],
       };
       const next = {
-        panelsById: { t1: { id: "t1", kind: "agent", agentState: "idle" } } as Record<
-          string,
-          TerminalLike
-        >,
+        panelsById: {
+          t1: { id: "t1", kind: "terminal", launchAgentId: "claude", agentState: "idle" },
+        } as Record<string, TerminalLike>,
         panelIds: ["t1"],
       };
       for (const sub of terminalSubscribers) sub(next, prev);
@@ -180,9 +190,57 @@ describe("useGettingStartedChecklist", () => {
     expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("launchedAgent");
   });
 
+  it("marks launchedAgent when panel has everDetectedAgent (plain terminal, runtime-detected)", async () => {
+    renderHook(() => useGettingStartedChecklist(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    act(() => {
+      const prev = {
+        panelsById: {} as Record<string, TerminalLike>,
+        panelIds: [] as string[],
+      };
+      const next = {
+        panelsById: {
+          t1: { id: "t1", kind: "terminal", everDetectedAgent: true },
+        } as Record<string, TerminalLike>,
+        panelIds: ["t1"],
+      };
+      for (const sub of terminalSubscribers) sub(next, prev);
+    });
+
+    expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("launchedAgent");
+  });
+
+  it("does not mark launchedAgent for plain terminal without everDetectedAgent", async () => {
+    renderHook(() => useGettingStartedChecklist(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    act(() => {
+      const prev = {
+        panelsById: {} as Record<string, TerminalLike>,
+        panelIds: [] as string[],
+      };
+      const next = {
+        panelsById: {
+          t1: { id: "t1", kind: "terminal" },
+        } as Record<string, TerminalLike>,
+        panelIds: ["t1"],
+      };
+      for (const sub of terminalSubscribers) sub(next, prev);
+    });
+
+    expect(onboardingMock.markChecklistItem).not.toHaveBeenCalledWith("launchedAgent");
+  });
+
   it("marks createdWorktree when worktree store fires", async () => {
     renderHook(() => useGettingStartedChecklist(true));
-    await vi.advanceTimersByTimeAsync(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
 
     act(() => {
       const prev = { worktrees: new Map([["main", {}]]) };

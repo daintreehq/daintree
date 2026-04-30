@@ -58,7 +58,7 @@ export function BranchLabel({
     }
 
     const [prefix, ...tail] = parts;
-    const config = BRANCH_PREFIX_MAP[prefix.toLowerCase()];
+    const config = BRANCH_PREFIX_MAP[prefix!.toLowerCase()];
 
     if (config) {
       return {
@@ -69,9 +69,9 @@ export function BranchLabel({
     } else {
       return {
         displayName:
-          prefix.length <= 4
-            ? prefix.toUpperCase()
-            : prefix.charAt(0).toUpperCase() + prefix.slice(1).toLowerCase(),
+          prefix!.length <= 4
+            ? prefix!.toUpperCase()
+            : prefix!.charAt(0).toUpperCase() + prefix!.slice(1).toLowerCase(),
         typeId: DEFAULT_BRANCH_TYPE.id,
         rest: middleTruncate(tail.join("/"), 36),
       };
@@ -88,7 +88,7 @@ export function BranchLabel({
             <span className="shrink-0 flex items-center" aria-label={displayName}>
               <Icon
                 className={cn(
-                  "w-3.5 h-3.5 transition-colors duration-200",
+                  "w-3.5 h-3.5 transition-colors duration-150",
                   isMuted ? "text-text-muted" : "text-text-secondary"
                 )}
                 strokeWidth={2.5}
@@ -98,7 +98,7 @@ export function BranchLabel({
           )}
           <span
             className={cn(
-              "truncate font-mono transition-colors duration-200",
+              "truncate font-mono transition-colors duration-150",
               isMainWorktree ? "text-[13px] font-bold tracking-wide" : "text-[11px] font-medium",
               isActive
                 ? "text-text-primary/90"

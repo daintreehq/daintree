@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect } from "react";
+import { Suspense, useState, useCallback, useEffect } from "react";
 import { ChevronUp, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { XtermAdapter } from "../Terminal/XtermAdapter";
 import { terminalInstanceService } from "../../services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
@@ -98,7 +98,7 @@ export function ConsoleDrawer({
         <button
           type="button"
           onClick={toggleDrawer}
-          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-daintree-text/80 transition-colors hover:bg-overlay-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-status-info"
+          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-daintree-text/80 transition-colors hover:bg-overlay-medium focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info"
           aria-expanded={isOpen}
           aria-controls={`console-drawer-${terminalId}`}
           aria-label={toggleLabel}
@@ -116,28 +116,26 @@ export function ConsoleDrawer({
         </div>
 
         {onHardRestart && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <button
-                    type="button"
-                    onClick={onHardRestart}
-                    disabled={hardRestartDisabled}
-                    className={cn(
-                      "p-1.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed transition-colors",
-                      isRestarting && "animate-spin"
-                    )}
-                    aria-label={restartTooltip}
-                    aria-busy={isRestarting}
-                  >
-                    <RotateCw className="h-3.5 w-3.5" />
-                  </button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{restartTooltip}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <button
+                  type="button"
+                  onClick={onHardRestart}
+                  disabled={hardRestartDisabled}
+                  className={cn(
+                    "p-1.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors",
+                    isRestarting && "animate-spin"
+                  )}
+                  aria-label={restartTooltip}
+                  aria-busy={isRestarting}
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{restartTooltip}</TooltipContent>
+          </Tooltip>
         )}
       </div>
 
@@ -147,12 +145,14 @@ export function ConsoleDrawer({
         aria-hidden={!isOpen}
       >
         <div className="h-[300px] bg-surface-canvas">
-          <XtermAdapter
-            terminalId={terminalId}
-            getRefreshTier={getRefreshTier}
-            restoreOnAttach={true}
-            className="!rounded-none !px-0 !pt-0 !pb-0"
-          />
+          <Suspense fallback={null}>
+            <XtermAdapter
+              terminalId={terminalId}
+              getRefreshTier={getRefreshTier}
+              restoreOnAttach={true}
+              className="!rounded-none !px-0 !pt-0 !pb-0"
+            />
+          </Suspense>
         </div>
       </div>
     </div>

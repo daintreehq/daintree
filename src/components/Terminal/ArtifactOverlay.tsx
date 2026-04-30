@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useArtifacts } from "@/hooks/useArtifacts";
 import type { Artifact } from "@shared/types";
 
@@ -32,10 +32,10 @@ const ARTIFACT_TYPE_ICONS: Record<string, string> = {
 interface ArtifactItemProps {
   artifact: Artifact;
   onCopy: (artifact: Artifact) => Promise<boolean>;
-  onSave: (artifact: Artifact) => Promise<{ filePath: string; success: boolean } | null>;
+  onSave: (artifact: Artifact) => Promise<{ filePath: string } | null>;
   onApplyPatch: (
     artifact: Artifact
-  ) => Promise<{ success: boolean; error?: string; modifiedFiles?: string[] }>;
+  ) => Promise<{ success: true; modifiedFiles: string[] } | { success: false; error: string }>;
   canApplyPatch: boolean;
   isProcessing: boolean;
 }
@@ -77,7 +77,7 @@ function ArtifactItem({
 
   const handleSave = useCallback(async () => {
     const result = await onSave(artifact);
-    if (result?.success) {
+    if (result?.filePath) {
       showFeedback("Saved!", "success");
     } else {
       showFeedback("Save failed", "error");
@@ -93,7 +93,7 @@ function ArtifactItem({
     }
   }, [artifact, onApplyPatch, showFeedback]);
 
-  const colorClass = ARTIFACT_TYPE_COLORS[artifact.type] || ARTIFACT_TYPE_COLORS.other;
+  const colorClass = ARTIFACT_TYPE_COLORS[artifact.type] || ARTIFACT_TYPE_COLORS.other!;
   const icon = ARTIFACT_TYPE_ICONS[artifact.type] || ARTIFACT_TYPE_ICONS.other;
   const title = artifact.filename || artifact.language || artifact.type;
   const previewLines = artifact.content.split("\n").slice(0, 2);
@@ -143,7 +143,7 @@ function ArtifactItem({
               className={cn(
                 "px-3 py-1 text-xs rounded transition-colors",
                 "border border-status-info/30 text-status-info hover:bg-status-info/10",
-                "disabled:opacity-50 disabled:cursor-not-allowed"
+                "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
               )}
             >
               Copy Code
@@ -154,34 +154,32 @@ function ArtifactItem({
               className={cn(
                 "px-3 py-1 text-xs rounded transition-colors",
                 "bg-daintree-border hover:bg-[color-mix(in_oklab,var(--color-daintree-border)_100%,white_20%)] text-daintree-text",
-                "disabled:opacity-50 disabled:cursor-not-allowed"
+                "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
               )}
             >
               Save to File
             </button>
             {artifact.type === "patch" && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex">
-                      <button
-                        onClick={handleApplyPatch}
-                        disabled={isProcessing || !canApplyPatch}
-                        className={cn(
-                          "px-3 py-1 text-xs rounded transition-colors",
-                          "bg-status-success hover:brightness-110 text-daintree-bg",
-                          "disabled:opacity-50 disabled:cursor-not-allowed"
-                        )}
-                      >
-                        Apply Patch
-                      </button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {!canApplyPatch ? "No worktree context available" : "Apply patch to worktree"}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <button
+                      onClick={handleApplyPatch}
+                      disabled={isProcessing || !canApplyPatch}
+                      className={cn(
+                        "px-3 py-1 text-xs rounded transition-colors",
+                        "bg-status-success hover:brightness-110 text-daintree-bg",
+                        "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      )}
+                    >
+                      Apply Patch
+                    </button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {!canApplyPatch ? "No worktree context available" : "Apply patch to worktree"}
+                </TooltipContent>
+              </Tooltip>
             )}
             {feedback && (
               <span
@@ -356,7 +354,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   type="button"
                   onClick={clearArtifacts}
                   disabled={isBulkActionRunning}
-                  className="text-xs text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="text-xs text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                   aria-label="Clear all artifacts"
                 >
                   Clear
@@ -365,7 +363,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   type="button"
                   onClick={() => setIsExpanded(false)}
                   disabled={isBulkActionRunning}
-                  className="text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                   aria-label="Close artifact overlay"
                 >
                   ×
@@ -389,32 +387,30 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     >
                       Copy All
                     </button>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="inline-flex">
-                            <button
-                              type="button"
-                              onClick={() => setIncludeAllTypes((v) => !v)}
-                              disabled={isBulkActionRunning}
-                              className={cn(
-                                "px-2 py-1 text-xs rounded transition-colors",
-                                includeAllTypes
-                                  ? "bg-daintree-border text-daintree-text"
-                                  : "bg-daintree-sidebar text-daintree-text/60",
-                                "hover:brightness-110",
-                                "disabled:opacity-50 disabled:cursor-not-allowed"
-                              )}
-                            >
-                              {includeAllTypes ? "All" : "Code"}
-                            </button>
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">
-                          {includeAllTypes ? "Copying all types" : "Copying code only"}
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">
+                          <button
+                            type="button"
+                            onClick={() => setIncludeAllTypes((v) => !v)}
+                            disabled={isBulkActionRunning}
+                            className={cn(
+                              "px-2 py-1 text-xs rounded transition-colors",
+                              includeAllTypes
+                                ? "bg-daintree-border text-daintree-text"
+                                : "bg-daintree-sidebar text-daintree-text/60",
+                              "hover:brightness-110",
+                              "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+                            )}
+                          >
+                            {includeAllTypes ? "All" : "Code"}
+                          </button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {includeAllTypes ? "Copying all types" : "Copying code only"}
+                      </TooltipContent>
+                    </Tooltip>
                   </div>
                 )}
                 {showSaveAll && (
@@ -425,36 +421,34 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     className={cn(
                       "px-3 py-1 text-xs rounded transition-colors",
                       "bg-daintree-border hover:bg-[color-mix(in_oklab,var(--color-daintree-border)_100%,white_20%)] text-daintree-text",
-                      "disabled:opacity-50 disabled:cursor-not-allowed"
+                      "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                     )}
                   >
                     Save All
                   </button>
                 )}
                 {showApplyAll && (
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex">
-                          <button
-                            type="button"
-                            onClick={handleApplyAllPatches}
-                            disabled={isBulkActionRunning || !canApplyAll}
-                            className={cn(
-                              "px-3 py-1 text-xs rounded transition-colors",
-                              "bg-status-success hover:brightness-110 text-daintree-bg",
-                              "disabled:opacity-50 disabled:cursor-not-allowed"
-                            )}
-                          >
-                            Apply All Patches
-                          </button>
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        {!canApplyAll ? "No worktree context available" : "Apply all patches"}
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <button
+                          type="button"
+                          onClick={handleApplyAllPatches}
+                          disabled={isBulkActionRunning || !canApplyAll}
+                          className={cn(
+                            "px-3 py-1 text-xs rounded transition-colors",
+                            "bg-status-success hover:brightness-110 text-daintree-bg",
+                            "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+                          )}
+                        >
+                          Apply All Patches
+                        </button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {!canApplyAll ? "No worktree context available" : "Apply all patches"}
+                    </TooltipContent>
+                  </Tooltip>
                 )}
                 {bulkProgress && (
                   <span className="text-xs tabular-nums text-daintree-text/60 ml-auto">
@@ -499,5 +493,3 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     </div>
   );
 }
-
-export default ArtifactOverlay;

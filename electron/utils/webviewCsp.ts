@@ -1,4 +1,7 @@
 import type { OnHeadersReceivedListenerDetails } from "electron";
+import { getDaintreeAppCSP } from "../../shared/config/csp.js";
+
+export { getDaintreeAppCSP };
 
 export type WebviewPartitionType = "browser" | "dev-preview" | "portal" | "project" | "unknown";
 
@@ -32,7 +35,8 @@ export function classifyPartition(partition: string): WebviewPartitionType {
 
 /**
  * Returns the CSP policy string for localhost-based dev server webviews.
- * Used for browser panels and dev preview panels that load localhost content.
+ * Used for dev-preview panels that load localhost content. Browser panels
+ * host arbitrary remote sites and intentionally have no CSP overlay applied.
  * Includes https: and wss: for secure localhost dev servers.
  *
  * 'unsafe-inline' is kept in script-src and style-src because dev servers

@@ -1,5 +1,7 @@
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+
 export function renderBootstrapError(rootEl: HTMLElement, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatErrorMessage(error, "Renderer failed to initialize");
   const stack = error instanceof Error ? error.stack : undefined;
 
   rootEl.innerHTML = "";

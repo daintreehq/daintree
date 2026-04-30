@@ -1,6 +1,6 @@
 import { readdir, stat } from "fs/promises";
 import path from "path";
-import type { AgentState } from "../../shared/types/agent.js";
+import { ACTIVE_AGENT_STATES } from "../../shared/types/agent.js";
 import type { HibernationProjectHibernatedPayload } from "../../shared/types/ipc/hibernation.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
@@ -29,13 +29,6 @@ const GIT_SENTINEL_NAMES = new Set([
   "rebase-merge",
   "rebase-apply",
 ]);
-const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set([
-  "working",
-  "running",
-  "waiting",
-  "directing",
-]);
-
 /**
  * HibernationService - Auto-hibernates inactive projects to free resources.
  *

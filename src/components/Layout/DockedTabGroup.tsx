@@ -12,10 +12,11 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
+import { LayoutGroup, LazyMotion, domMax } from "framer-motion";
 import { Plus } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, getBaseTitle } from "@/lib/utils";
-import { getBrandColorHex } from "@/lib/colorUtils";
+import { logError } from "@/utils/logger";
 import {
   useTerminalInputStore,
   usePanelStore,
@@ -23,9 +24,14 @@ import {
   useFocusStore,
   type TerminalInstance,
 } from "@/store";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
@@ -35,6 +41,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 import {
   useDockBlockedState,
+  getDockDisplayAgentState,
   getGroupBlockedAgentState,
   isGroupDeprioritized,
 } from "./useDockBlockedState";
@@ -43,7 +50,7 @@ import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { usePreferencesStore } from "@/store";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTabGroupProps {
   group: TabGroup;
@@ -336,7 +343,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
       setFocused(newPanelId);
       openDockTerminal(newPanelId);
     } catch (error) {
-      console.error("Failed to add tab:", error);
+      logError("Failed to add tab", error);
     }
   }, [
     activePanel,
@@ -353,17 +360,50 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const isDeprioritized = !isOpen && isGroupDeprioritized(panels);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
 
+  const agentSettingsAll = useAgentSettingsStore((s) => s.settings);
+  const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
+  const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
+
+  // Per-panel preset colors for tab bar
+  const panelPresetColors = useMemo(() => {
+    return new Map(
+      panels.map((p) => {
+        const fallbackColor = deriveTerminalChrome(p).color;
+        if (!p.agentPresetId || !p.launchAgentId) return [p.id, fallbackColor] as const;
+        const presets = getMergedPresets(
+          p.launchAgentId,
+          agentSettingsAll?.agents?.[p.launchAgentId]?.customPresets,
+          ccrPresetsByAgent[p.launchAgentId],
+          projectPresetsByAgent[p.launchAgentId]
+        );
+        const preset = presets.find((f) => f.id === p.agentPresetId);
+        return [p.id, preset?.color ?? p.agentPresetColor ?? fallbackColor] as const;
+      })
+    );
+  }, [panels, agentSettingsAll, ccrPresetsByAgent, projectPresetsByAgent]);
+
   if (!activePanel || panels.length === 0) {
     return null;
   }
 
-  const isWorking = activePanel.agentState === "working";
-  const isRunning = activePanel.agentState === "running";
-  const isWaiting = activePanel.agentState === "waiting";
-  const isActive = isWorking || isRunning || isWaiting;
+  const brandColor =
+    panelPresetColors.get(activePanel.id) ?? deriveTerminalChrome(activePanel).color;
+  const activeChrome = deriveTerminalChrome({
+    kind: activePanel.kind,
+    launchAgentId: activePanel.launchAgentId,
+    runtimeIdentity: activePanel.runtimeIdentity,
+    detectedAgentId: activePanel.detectedAgentId,
+    detectedProcessId: activePanel.detectedProcessId,
+    agentState: activePanel.agentState,
+    runtimeStatus: activePanel.runtimeStatus,
+    exitCode: activePanel.exitCode,
+    presetColor: brandColor,
+  });
+  const agentState = activeChrome.isAgent ? getDockDisplayAgentState(activePanel) : undefined;
+  const isWorking = agentState === "working";
+  const isWaiting = agentState === "waiting";
+  const isActive = isWorking || isWaiting;
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
-  const brandColor = getBrandColorHex(activePanel.agentId ?? activePanel.type);
-  const agentState = activePanel.agentState;
   const displayTitle = getBaseTitle(activePanel.title);
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
   const StateIcon = showStateIcon
@@ -408,14 +448,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
           >
             <div className="flex items-center justify-center shrink-0">
-              <TerminalIcon
-                type={activePanel.type}
-                kind={activePanel.kind}
-                agentId={activePanel.agentId}
-                detectedProcessId={activePanel.detectedProcessId}
-                className="w-3.5 h-3.5"
-                brandColor={brandColor}
-              />
+              <TerminalIcon kind={activePanel.kind} chrome={activeChrome} className="w-3.5 h-3.5" />
             </div>
             <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
               {displayTitle}
@@ -429,42 +462,38 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             {isActive && commandText && (
               <>
                 <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
-                        {commandText}
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">{commandText}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
+                      {commandText}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{commandText}</TooltipContent>
+                </Tooltip>
               </>
             )}
 
             {showStateIcon && StateIcon && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div
+                    className={cn(
+                      "flex items-center shrink-0",
+                      getEffectiveStateColor(agentState, activePanel.waitingReason)
+                    )}
+                  >
+                    <StateIcon
                       className={cn(
-                        "flex items-center shrink-0",
-                        getEffectiveStateColor(agentState, activePanel.waitingReason)
+                        "w-3.5 h-3.5",
+                        agentState === "working" && "animate-spin-slow",
+                        "motion-reduce:animate-none"
                       )}
-                    >
-                      <StateIcon
-                        className={cn(
-                          "w-3.5 h-3.5",
-                          agentState === "working" && "animate-spin-slow",
-                          "motion-reduce:animate-none"
-                        )}
-                        aria-hidden="true"
-                      />
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+                      aria-hidden="true"
+                    />
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
+              </Tooltip>
             )}
           </button>
         </PopoverTrigger>
@@ -481,7 +510,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const focusTarget = getTerminalFocusTarget({
-            isAgentTerminal: activePanel.type !== "terminal",
+            hasHybridInputSurface: activeChrome.isAgent,
             isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
             hybridInputEnabled,
             hybridInputAutoFocus,
@@ -502,49 +531,64 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
         >
           <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
-            <div
-              ref={tabListRef}
-              className="flex items-center border-b border-divider bg-daintree-sidebar shrink-0"
-              role="tablist"
-              aria-label="Dock panel tabs"
-              onKeyDown={handleTabListKeyDown}
-            >
-              {panels.map((panel) => (
-                <SortableTabButton
-                  key={panel.id}
-                  id={panel.id}
-                  title={getBaseTitle(panel.title)}
-                  type={panel.type}
-                  agentId={panel.agentId}
-                  detectedProcessId={panel.detectedProcessId}
-                  kind={panel.kind ?? "terminal"}
-                  agentState={panel.agentState}
-                  isActive={panel.id === activeTabId}
-                  onClick={() => handleTabClick(panel.id)}
-                  onClose={() => handleTabClose(panel.id)}
-                  onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
-                />
-              ))}
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleAddTab();
-                      }}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                      aria-label="Duplicate panel as new tab"
-                      type="button"
-                    >
-                      <Plus className="w-3 h-3" aria-hidden="true" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </div>
+            <LazyMotion features={domMax}>
+              <LayoutGroup id={`dock-tabs-${group.id}`}>
+                <div
+                  ref={tabListRef}
+                  className="flex items-center border-b border-divider bg-daintree-sidebar shrink-0"
+                  role="tablist"
+                  aria-label="Dock panel tabs"
+                  onKeyDown={handleTabListKeyDown}
+                >
+                  {panels.map((panel) => {
+                    const tabChrome = deriveTerminalChrome({
+                      kind: panel.kind,
+                      launchAgentId: panel.launchAgentId,
+                      runtimeIdentity: panel.runtimeIdentity,
+                      detectedAgentId: panel.detectedAgentId,
+                      detectedProcessId: panel.detectedProcessId,
+                      agentState: panel.agentState,
+                      runtimeStatus: panel.runtimeStatus,
+                      exitCode: panel.exitCode,
+                      presetColor: panelPresetColors.get(panel.id),
+                    });
+                    return (
+                      <SortableTabButton
+                        key={panel.id}
+                        id={panel.id}
+                        title={getBaseTitle(panel.title)}
+                        chrome={tabChrome}
+                        kind={panel.kind ?? "terminal"}
+                        agentState={tabChrome.isAgent ? getDockDisplayAgentState(panel) : undefined}
+                        isActive={panel.id === activeTabId}
+                        presetColor={panelPresetColors.get(panel.id)}
+                        isUsingFallback={panel.isUsingFallback}
+                        onClick={() => handleTabClick(panel.id)}
+                        onClose={() => handleTabClose(panel.id)}
+                        onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
+                      />
+                    );
+                  })}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleAddTab();
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                        aria-label="Duplicate panel as new tab"
+                        type="button"
+                      >
+                        <Plus className="w-3 h-3" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                  </Tooltip>
+                </div>
+              </LayoutGroup>
+            </LazyMotion>
           </SortableContext>
         </DndContext>
 

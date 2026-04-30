@@ -26,6 +26,11 @@ declare global {
     };
     __DAINTREE_E2E_MODE__?: boolean;
     __DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__?: boolean;
+    __daintreeDispatchAction?: (
+      actionId: string,
+      args?: unknown,
+      options?: { source?: string; confirmed?: boolean }
+    ) => unknown;
   }
 }
 

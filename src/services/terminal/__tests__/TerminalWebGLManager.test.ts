@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ManagedTerminal } from "../types";
 
 let mockAddonDispose: ReturnType<typeof vi.fn>;
@@ -275,6 +275,178 @@ describe("TerminalWebGLManager", () => {
         (args) => typeof args[0] === "string" && args[0].includes("software-only GPU")
       );
       expect(softwareWarnings).toHaveLength(1);
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe("circuit breaker", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function captureContextLossHandlers(): Array<() => void> {
+      const handlers: Array<() => void> = [];
+      WebglAddonMock.mockImplementation(function () {
+        return {
+          dispose: vi.fn(),
+          onContextLoss: vi.fn((handler: () => void) => {
+            handlers.push(handler);
+            return { dispose: vi.fn() };
+          }),
+        };
+      });
+      return handlers;
+    }
+
+    it("trips after LOSS_THRESHOLD rapid losses and disables WebGL for the session", () => {
+      const handlers = captureContextLossHandlers();
+
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      const m3 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+      manager.ensureContext("t3", m3);
+
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
+
+      const before = WebglAddonMock.mock.calls.length;
+      const m4 = makeManagedTerminal();
+      manager.ensureContext("t4", m4);
+      expect(WebglAddonMock.mock.calls.length).toBe(before);
+      expect(manager.isActive("t4")).toBe(false);
+    });
+
+    it("does not trip when losses fall outside the sliding window", () => {
+      const handlers = captureContextLossHandlers();
+
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+
+      handlers[0]!();
+      handlers[1]!();
+
+      vi.setSystemTime(60_000);
+
+      const m3 = makeManagedTerminal();
+      manager.ensureContext("t3", m3);
+      handlers[2]!();
+
+      const before = WebglAddonMock.mock.calls.length;
+      const m4 = makeManagedTerminal();
+      manager.ensureContext("t4", m4);
+      expect(WebglAddonMock.mock.calls.length).toBe(before + 1);
+      expect(manager.isActive("t4")).toBe(true);
+    });
+
+    it("does not evict already-active contexts when the breaker trips", () => {
+      const handlers = captureContextLossHandlers();
+
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      const m3 = makeManagedTerminal();
+      const m4 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+      manager.ensureContext("t3", m3);
+      manager.ensureContext("t4", m4);
+
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
+
+      expect(manager.isActive("t4")).toBe(true);
+    });
+
+    it("stale handlers from recycled ids do not contribute to the loss count", () => {
+      const handlers = captureContextLossHandlers();
+
+      const managed = makeManagedTerminal();
+      manager.ensureContext("t1", managed);
+      manager.releaseContext("t1");
+      manager.ensureContext("t1", managed);
+      manager.releaseContext("t1");
+      manager.ensureContext("t1", managed);
+      manager.releaseContext("t1");
+      manager.ensureContext("t1", managed);
+
+      // Fire all three stale handlers — must NOT trip the breaker
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
+
+      const before = WebglAddonMock.mock.calls.length;
+      const m2 = makeManagedTerminal();
+      manager.ensureContext("t2", m2);
+      expect(WebglAddonMock.mock.calls.length).toBe(before + 1);
+      expect(manager.isActive("t2")).toBe(true);
+    });
+
+    it("does not log the software-GPU warning after the breaker trips", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const handlers = captureContextLossHandlers();
+
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      const m3 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+      manager.ensureContext("t3", m3);
+
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
+
+      const m4 = makeManagedTerminal();
+      manager.ensureContext("t4", m4);
+
+      const softwareWarnings = warnSpy.mock.calls.filter(
+        (args) => typeof args[0] === "string" && args[0].includes("software-only GPU")
+      );
+      expect(softwareWarnings).toHaveLength(0);
+      warnSpy.mockRestore();
+    });
+
+    it("logs the breaker-trip warning only once", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const handlers = captureContextLossHandlers();
+
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      const m3 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+      manager.ensureContext("t3", m3);
+
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
+
+      // Re-acquire and trip again — should not log a second time
+      const m4 = makeManagedTerminal();
+      const m5 = makeManagedTerminal();
+      const m6 = makeManagedTerminal();
+      manager.setHardwareAvailable(true);
+      manager.ensureContext("t4", m4);
+      manager.ensureContext("t5", m5);
+      manager.ensureContext("t6", m6);
+      handlers[3]?.();
+      handlers[4]?.();
+      handlers[5]?.();
+
+      const breakerWarnings = warnSpy.mock.calls.filter(
+        (args) => typeof args[0] === "string" && args[0].includes("circuit breaker")
+      );
+      expect(breakerWarnings).toHaveLength(1);
       warnSpy.mockRestore();
     });
   });

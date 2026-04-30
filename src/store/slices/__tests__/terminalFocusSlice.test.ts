@@ -9,13 +9,13 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 }));
 
 const mockGetActiveWorktreeId = vi.fn(() => "worktree-1" as string | null);
+const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 
 describe("TerminalFocusSlice - Layout Snapshot", () => {
   const mockTerminals: TerminalInstance[] = [
     {
       id: "term-1",
       title: "Terminal 1",
-      type: "claude",
       cwd: "/test",
       location: "grid",
       agentState: "idle",
@@ -27,7 +27,6 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
     {
       id: "term-2",
       title: "Terminal 2",
-      type: "terminal",
       cwd: "/test",
       location: "grid",
       agentState: "idle",
@@ -90,7 +89,7 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
     state.maximizeTarget = { type: "panel", id: "term-1" };
     state.preMaximizeLayout = { gridCols: 2, gridItemCount: 4, worktreeId: "worktree-1" };
 
-    state.handleTerminalRemoved("term-1", [mockTerminals[1]], 0);
+    state.handleTerminalRemoved("term-1", [mockTerminals[1]!], 0);
 
     expect(state.maximizedId).toBe(null);
     expect(state.maximizeTarget).toBe(null);
@@ -136,7 +135,6 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
     {
       id: "term-1",
       title: "Terminal 1",
-      type: "claude",
       cwd: "/test",
       location: "grid",
       agentState: "idle",
@@ -148,7 +146,6 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
     {
       id: "term-2",
       title: "Terminal 2",
-      type: "terminal",
       cwd: "/test",
       location: "grid",
       agentState: "idle",
@@ -160,7 +157,6 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
     {
       id: "term-3",
       title: "Terminal 3",
-      type: "terminal",
       cwd: "/test",
       location: "grid",
       agentState: "idle",
@@ -316,7 +312,7 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
   });
 
   it("should clear maximize when panel is moved to trash", () => {
-    const trashedTerminal = { ...mockTerminals[0], location: "trash" as const };
+    const trashedTerminal = { ...mockTerminals[0]!, location: "trash" as const };
     const mockGetTerminal = vi.fn((id: string) =>
       id === "term-1" ? trashedTerminal : mockTerminals.find((t) => t.id === id)
     );
@@ -501,6 +497,29 @@ describe("TerminalFocusSlice - dock focus sync invariant", () => {
     expect(state.focusedId).toBe("unknown-id");
     expect(state.activeDockTerminalId).toBeNull();
   });
+
+  it("openDockTerminal opens only dock terminals", () => {
+    state.openDockTerminal("dock-1");
+
+    expect(state.focusedId).toBe("dock-1");
+    expect(state.activeDockTerminalId).toBe("dock-1");
+    expect(terminalInstanceService.wake).toHaveBeenCalledWith("dock-1");
+  });
+
+  it("openDockTerminal clears stale dock activation for grid or missing terminals", () => {
+    state.focusedId = "grid-1";
+    state.activeDockTerminalId = "dock-1";
+
+    state.openDockTerminal("grid-1");
+
+    expect(state.focusedId).toBeNull();
+    expect(state.activeDockTerminalId).toBeNull();
+
+    state.activeDockTerminalId = "dock-2";
+    state.openDockTerminal("missing-id");
+
+    expect(state.activeDockTerminalId).toBeNull();
+  });
 });
 
 describe("TerminalFocusSlice - focusNextBlockedDock", () => {
@@ -632,5 +651,706 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
       (state as TerminalFocusSlice & { setActiveTab: ReturnType<typeof vi.fn> }).setActiveTab
     ).toHaveBeenCalledWith("group-1", "d1");
     expect(state.activeDockTerminalId).toBe("d1");
+  });
+});
+
+describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime identity", () => {
+  beforeAll(() => {
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        electron: {
+          notification: { acknowledgeWaiting: vi.fn(), acknowledgeWorkingPulse: vi.fn() },
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterAll(() => {
+    Object.defineProperty(globalThis, "window", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  const makeTerminal = (
+    id: string,
+    opts: {
+      kind?: "agent" | "terminal";
+      launchAgentId?: string;
+      detectedAgentId?: string;
+      everDetectedAgent?: boolean;
+      agentState?: string;
+    } = {}
+  ): TerminalInstance =>
+    ({
+      id,
+      title: id,
+      kind: opts.kind,
+      launchAgentId: opts.launchAgentId,
+      detectedAgentId: opts.detectedAgentId,
+      everDetectedAgent: opts.everDetectedAgent,
+      cwd: "/test",
+      location: "grid",
+      agentState: opts.agentState ?? "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId: "worktree-1",
+    }) as TerminalInstance;
+
+  let terminals: TerminalInstance[];
+  let state: TerminalFocusSlice;
+
+  const setup = () => {
+    const getTerminals = vi.fn(() => terminals);
+    const getState = vi.fn((): TerminalFocusSlice => state);
+    const setState = vi.fn(
+      (
+        updater:
+          | Partial<TerminalFocusSlice>
+          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+      ) => {
+        const currentState = getState();
+        const updates = typeof updater === "function" ? updater(currentState) : updater;
+        state = { ...currentState, ...updates };
+      }
+    );
+    return { getTerminals, setState, getState };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const { getTerminals, setState, getState } = setup();
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+      setState as never,
+      getState as never,
+      {} as never
+    );
+  });
+
+  const neverInTrash = () => false;
+  const validWorktrees = new Set(["worktree-1"]);
+
+  it("includes a launch-affinity agent before detection rehydrates", () => {
+    terminals = [
+      makeTerminal("launch-agent", {
+        kind: "terminal",
+        launchAgentId: "claude",
+      }),
+      makeTerminal("shell", { kind: "terminal" }),
+    ];
+    state.focusedId = "shell";
+
+    state.focusNextAgent(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("launch-agent");
+  });
+
+  it("excludes an ex-agent panel whose runtime identity has cleared", () => {
+    // Spawned as agent, detector fired then a strong exit arrived — no longer
+    // in cycle even though launchAgentId remains persisted for restart/resume.
+    terminals = [
+      makeTerminal("ex-agent", {
+        kind: "terminal",
+        launchAgentId: "claude",
+        everDetectedAgent: true,
+        agentState: "exited",
+      }),
+      makeTerminal("live-agent", {
+        kind: "terminal",
+        launchAgentId: "gemini",
+        detectedAgentId: "gemini",
+      }),
+    ];
+    // Seed focus on the ex-agent so the cycle has to make a choice
+    state.focusedId = "ex-agent";
+
+    state.focusNextAgent(neverInTrash, validWorktrees);
+
+    // Only live-agent is a runtime agent; cycle lands there regardless of seed
+    expect(state.focusedId).toBe("live-agent");
+  });
+
+  it("includes a promoted shell that a runtime agent has entered", () => {
+    terminals = [
+      makeTerminal("promoted-shell", {
+        kind: "terminal",
+        detectedAgentId: "claude",
+      }),
+      makeTerminal("shell-2", { kind: "terminal" }),
+    ];
+    state.focusedId = "shell-2";
+
+    state.focusNextAgent(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("promoted-shell");
+  });
+
+  it("focusPreviousAgent wraps across a mixed set using runtime identity", () => {
+    terminals = [
+      makeTerminal("agent-1", {
+        kind: "terminal",
+        launchAgentId: "claude",
+        detectedAgentId: "claude",
+      }),
+      // Demoted: kind agent but detection fired and cleared → skipped
+      makeTerminal("demoted", {
+        kind: "terminal",
+        launchAgentId: "gemini",
+        everDetectedAgent: true,
+        agentState: "exited",
+      }),
+      makeTerminal("shell", { kind: "terminal" }),
+      makeTerminal("agent-2", {
+        kind: "terminal",
+        launchAgentId: "codex",
+        detectedAgentId: "codex",
+      }),
+    ];
+    state.focusedId = "agent-1";
+
+    state.focusPreviousAgent(neverInTrash, validWorktrees);
+
+    // Previous from agent-1 wraps to agent-2, skipping "demoted" and shell
+    expect(state.focusedId).toBe("agent-2");
+  });
+
+  it("is a no-op when only ex-agent panels remain", () => {
+    terminals = [
+      makeTerminal("ex-agent", {
+        kind: "terminal",
+        launchAgentId: "claude",
+        everDetectedAgent: true,
+        agentState: "exited",
+      }),
+    ];
+    state.focusedId = "ex-agent";
+
+    state.focusNextAgent(neverInTrash, validWorktrees);
+
+    // No cycle candidates because the sole agent has a strong exit signal;
+    // focus is left untouched.
+    expect(state.focusedId).toBe("ex-agent");
+  });
+});
+
+describe("TerminalFocusSlice - cycle from non-matching focus (issue #5834)", () => {
+  beforeAll(() => {
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        electron: {
+          notification: { acknowledgeWaiting: vi.fn(), acknowledgeWorkingPulse: vi.fn() },
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterAll(() => {
+    Object.defineProperty(globalThis, "window", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  const makeTerminal = (
+    id: string,
+    opts: {
+      kind?: "agent" | "terminal";
+      launchAgentId?: string;
+      detectedAgentId?: string;
+      everDetectedAgent?: boolean;
+      agentState?: string;
+    } = {}
+  ): TerminalInstance =>
+    ({
+      id,
+      title: id,
+      kind: opts.kind ?? "terminal",
+      launchAgentId: opts.launchAgentId,
+      detectedAgentId: opts.detectedAgentId,
+      everDetectedAgent: opts.everDetectedAgent,
+      cwd: "/test",
+      location: "grid",
+      agentState: opts.agentState ?? "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId: "worktree-1",
+    }) as TerminalInstance;
+
+  let terminals: TerminalInstance[];
+  let state: TerminalFocusSlice;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const getTerminals = vi.fn(() => terminals);
+    const getState = vi.fn((): TerminalFocusSlice => state);
+    const setState = vi.fn(
+      (
+        updater:
+          | Partial<TerminalFocusSlice>
+          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+      ) => {
+        const currentState = getState();
+        const updates = typeof updater === "function" ? updater(currentState) : updater;
+        state = { ...currentState, ...updates };
+      }
+    );
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+      setState as never,
+      getState as never,
+      {} as never
+    );
+  });
+
+  const neverInTrash = () => false;
+  const validWorktrees = new Set(["worktree-1"]);
+
+  it("focusNextWaiting from a non-waiting terminal between two waiting terminals lands on the next waiting after focus, not the first", () => {
+    terminals = [
+      makeTerminal("waiting-a", { agentState: "waiting" }),
+      makeTerminal("idle-x", { agentState: "idle" }),
+      makeTerminal("waiting-b", { agentState: "waiting" }),
+      makeTerminal("idle-y", { agentState: "idle" }),
+      makeTerminal("waiting-c", { agentState: "waiting" }),
+    ];
+    state.focusedId = "idle-y";
+
+    state.focusNextWaiting(neverInTrash, validWorktrees);
+
+    // idle-y sits between waiting-b and waiting-c; the next waiting after that
+    // spatial position is waiting-c. The pre-fix code returned waiting-a (index 0).
+    expect(state.focusedId).toBe("waiting-c");
+  });
+
+  it("focusNextWorking from a non-working terminal between two working terminals advances spatially", () => {
+    terminals = [
+      makeTerminal("working-a", { agentState: "working" }),
+      makeTerminal("idle-x", { agentState: "idle" }),
+      makeTerminal("working-b", { agentState: "working" }),
+    ];
+    state.focusedId = "idle-x";
+
+    state.focusNextWorking(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("working-b");
+  });
+
+  it("focusNextAgent from a non-agent shell between two agents advances spatially", () => {
+    terminals = [
+      makeTerminal("agent-a", { detectedAgentId: "claude" }),
+      makeTerminal("shell", {}),
+      makeTerminal("agent-b", { detectedAgentId: "gemini" }),
+    ];
+    state.focusedId = "shell";
+
+    state.focusNextAgent(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("agent-b");
+  });
+
+  it("focusPreviousAgent from a non-agent shell lands on the agent immediately before, not the last agent", () => {
+    terminals = [
+      makeTerminal("agent-a", { detectedAgentId: "claude" }),
+      makeTerminal("shell", {}),
+      makeTerminal("agent-b", { detectedAgentId: "gemini" }),
+    ];
+    state.focusedId = "shell";
+
+    state.focusPreviousAgent(neverInTrash, validWorktrees);
+
+    // Before the fix this returned agent-b (last in the filtered subset).
+    expect(state.focusedId).toBe("agent-a");
+  });
+
+  it("focusNextWaiting wraps from the last waiting back to the first", () => {
+    terminals = [
+      makeTerminal("waiting-a", { agentState: "waiting" }),
+      makeTerminal("idle-x", { agentState: "idle" }),
+      makeTerminal("waiting-b", { agentState: "waiting" }),
+    ];
+    state.focusedId = "waiting-b";
+
+    state.focusNextWaiting(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("waiting-a");
+  });
+
+  it("focusNextWaiting advances when the previously-focused waiting terminal transitions out of waiting between presses", () => {
+    terminals = [
+      makeTerminal("waiting-a", { agentState: "waiting" }),
+      makeTerminal("waiting-b", { agentState: "waiting" }),
+      makeTerminal("waiting-c", { agentState: "waiting" }),
+    ];
+    state.focusedId = "outside";
+
+    // First press from a non-waiting/non-existent focus → lands on the first waiting.
+    state.focusNextWaiting(neverInTrash, validWorktrees);
+    expect(state.focusedId).toBe("waiting-a");
+
+    // Simulate state churn: the just-focused terminal transitions to working.
+    terminals = [
+      makeTerminal("waiting-a", { agentState: "working" }),
+      makeTerminal("waiting-b", { agentState: "waiting" }),
+      makeTerminal("waiting-c", { agentState: "waiting" }),
+    ];
+
+    // Second press should advance to waiting-b, not loop back to itself.
+    state.focusNextWaiting(neverInTrash, validWorktrees);
+    expect(state.focusedId).toBe("waiting-b");
+  });
+
+  it("focusNextAgent with focus on a non-existent terminal lands on the first agent", () => {
+    terminals = [
+      makeTerminal("agent-a", { detectedAgentId: "claude" }),
+      makeTerminal("agent-b", { detectedAgentId: "gemini" }),
+    ];
+    state.focusedId = "ghost";
+
+    state.focusNextAgent(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("agent-a");
+  });
+
+  it("focusPreviousAgent with focus on a non-existent terminal lands on the last agent", () => {
+    terminals = [
+      makeTerminal("agent-a", { detectedAgentId: "claude" }),
+      makeTerminal("agent-b", { detectedAgentId: "gemini" }),
+    ];
+    state.focusedId = "ghost";
+
+    state.focusPreviousAgent(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("agent-b");
+  });
+});
+
+describe("TerminalFocusSlice - setFocused ping gating", () => {
+  const mockTerminals: TerminalInstance[] = [
+    {
+      id: "term-1",
+      title: "Terminal 1",
+      cwd: "/test",
+      location: "grid",
+      agentState: "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId: "worktree-1",
+    },
+    {
+      id: "term-2",
+      title: "Terminal 2",
+      cwd: "/test",
+      location: "grid",
+      agentState: "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId: "worktree-1",
+    },
+  ] as TerminalInstance[];
+
+  const getTerminals = vi.fn(() => mockTerminals);
+
+  let state: TerminalFocusSlice;
+  let setState: any;
+  let getState: any;
+  let pingSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setState = vi.fn((updater) => {
+      const currentState = getState();
+      const updates = typeof updater === "function" ? updater(currentState) : updater;
+      state = { ...currentState, ...updates };
+    });
+    getState = vi.fn(() => state);
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+      setState,
+      getState,
+      {} as never
+    );
+    // Spy on pingTerminal so we can assert without running the 1600ms timer.
+    pingSpy = vi.fn();
+    state.pingTerminal = pingSpy as unknown as TerminalFocusSlice["pingTerminal"];
+  });
+
+  it("pings on initial focus (no previously focused terminal)", () => {
+    state.setFocused("term-1", true);
+    expect(pingSpy).toHaveBeenCalledWith("term-1");
+  });
+
+  it("pings when focus moves to a different terminal", () => {
+    state.setFocused("term-1", true);
+    pingSpy.mockClear();
+
+    state.setFocused("term-2", true);
+    expect(pingSpy).toHaveBeenCalledWith("term-2");
+  });
+
+  it("does not ping when re-focusing the already-focused terminal", () => {
+    state.setFocused("term-1", true);
+    pingSpy.mockClear();
+
+    state.setFocused("term-1", true);
+    expect(pingSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not ping when shouldPing is false, even on focus change", () => {
+    state.setFocused("term-1", false);
+    expect(pingSpy).not.toHaveBeenCalled();
+    state.setFocused("term-2", false);
+    expect(pingSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalFocusSlice - focusAlternate (last-pane toggle)", () => {
+  beforeAll(() => {
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        electron: {
+          notification: { acknowledgeWaiting: vi.fn(), acknowledgeWorkingPulse: vi.fn() },
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterAll(() => {
+    Object.defineProperty(globalThis, "window", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  const makeTerminal = (
+    id: string,
+    location: "grid" | "dock" | "trash" | "background" = "grid",
+    worktreeId = "worktree-1"
+  ): TerminalInstance =>
+    ({
+      id,
+      title: id,
+      cwd: "/test",
+      location,
+      agentState: "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId,
+    }) as TerminalInstance;
+
+  let terminals: TerminalInstance[];
+  let state: TerminalFocusSlice;
+
+  const setup = () => {
+    const getTerminals = vi.fn(() => terminals);
+    const getState = vi.fn((): TerminalFocusSlice => state);
+    const setState = vi.fn(
+      (
+        updater:
+          | Partial<TerminalFocusSlice>
+          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+      ) => {
+        const currentState = getState();
+        const updates = typeof updater === "function" ? updater(currentState) : updater;
+        state = { ...currentState, ...updates };
+      }
+    );
+    return { getTerminals, setState, getState };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    terminals = [
+      makeTerminal("a"),
+      makeTerminal("b"),
+      makeTerminal("c"),
+      makeTerminal("dock-1", "dock"),
+    ];
+    const { getTerminals, setState, getState } = setup();
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+      setState as never,
+      getState as never,
+      {} as never
+    );
+  });
+
+  it("initializes previousFocusedId to null", () => {
+    expect(state.previousFocusedId).toBeNull();
+  });
+
+  it("setFocused records the prior focus as previousFocusedId on a real change", () => {
+    state.setFocused("a");
+    expect(state.focusedId).toBe("a");
+    expect(state.previousFocusedId).toBeNull();
+
+    state.setFocused("b");
+    expect(state.focusedId).toBe("b");
+    expect(state.previousFocusedId).toBe("a");
+  });
+
+  it("setFocused does not corrupt previousFocusedId when re-focusing the active panel", () => {
+    state.setFocused("a");
+    state.setFocused("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    // Re-focusing the already-active panel must not overwrite the alternate
+    // pointer with itself — that would break A↔B round-tripping.
+    state.setFocused("b");
+    expect(state.previousFocusedId).toBe("a");
+  });
+
+  it("activateTerminal records the prior focus as previousFocusedId on a real change", () => {
+    state.activateTerminal("a");
+    expect(state.previousFocusedId).toBeNull();
+
+    state.activateTerminal("b");
+    expect(state.previousFocusedId).toBe("a");
+  });
+
+  it("activateTerminal does not corrupt previousFocusedId when re-activating the active panel", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    state.activateTerminal("b");
+    expect(state.previousFocusedId).toBe("a");
+  });
+
+  it("focusAlternate is a no-op when previousFocusedId is null", () => {
+    state.activateTerminal("a");
+    expect(state.previousFocusedId).toBeNull();
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("a");
+  });
+
+  it("focusAlternate swaps to the previous panel and back (A↔B round-trip)", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+    expect(state.focusedId).toBe("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("a");
+    expect(state.previousFocusedId).toBe("b");
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("b");
+    expect(state.previousFocusedId).toBe("a");
+  });
+
+  it("focusAlternate ignores trashed targets", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    // Simulate the panel being trashed in place (without going through
+    // handleTerminalRemoved, which would null the pointer itself).
+    terminals = terminals.map((t) => (t.id === "a" ? { ...t, location: "trash" } : t));
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("b");
+  });
+
+  it("focusAlternate ignores background (hibernated) targets", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+
+    terminals = terminals.map((t) => (t.id === "a" ? { ...t, location: "background" } : t));
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("b");
+  });
+
+  it("focusAlternate is a no-op when the previous panel was removed entirely", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+
+    terminals = terminals.filter((t) => t.id !== "a");
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("b");
+  });
+
+  it("works across grid and dock panels", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("dock-1");
+    expect(state.focusedId).toBe("dock-1");
+    expect(state.activeDockTerminalId).toBe("dock-1");
+    expect(state.previousFocusedId).toBe("a");
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("a");
+    expect(state.activeDockTerminalId).toBeNull();
+    expect(state.previousFocusedId).toBe("dock-1");
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("dock-1");
+    expect(state.activeDockTerminalId).toBe("dock-1");
+  });
+
+  it("handleTerminalRemoved clears previousFocusedId when the removed panel was the alternate", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    state.handleTerminalRemoved(
+      "a",
+      terminals.filter((t) => t.id !== "a"),
+      0
+    );
+    expect(state.previousFocusedId).toBeNull();
+    expect(state.focusedId).toBe("b");
+  });
+
+  it("handleTerminalRemoved clears previousFocusedId when the focused panel is removed (auto-fallback)", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    // b is currently focused; removing b reassigns focusedId to a fallback,
+    // and the old previousFocusedId is no longer the user's preceding choice.
+    state.handleTerminalRemoved(
+      "b",
+      terminals.filter((t) => t.id !== "b"),
+      1
+    );
+    expect(state.previousFocusedId).toBeNull();
+  });
+
+  it("openDockTerminal records the prior focus as previousFocusedId", () => {
+    // Most dock-focus entry points (clicks in DockedTerminalItem, focusDock
+    // action, navigateTab dock branch, focusNextBlockedDock) route through
+    // openDockTerminal — the alternate chain must include them.
+    state.activateTerminal("a");
+
+    state.openDockTerminal("dock-1");
+    expect(state.focusedId).toBe("dock-1");
+    expect(state.activeDockTerminalId).toBe("dock-1");
+    expect(state.previousFocusedId).toBe("a");
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("a");
+    expect(state.previousFocusedId).toBe("dock-1");
+  });
+
+  it("openDockTerminal does not corrupt previousFocusedId when reopening the same dock panel", () => {
+    state.activateTerminal("a");
+    state.openDockTerminal("dock-1");
+    expect(state.previousFocusedId).toBe("a");
+
+    state.openDockTerminal("dock-1");
+    expect(state.previousFocusedId).toBe("a");
   });
 });

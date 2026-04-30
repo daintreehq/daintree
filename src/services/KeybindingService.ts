@@ -6,6 +6,10 @@ import { isMac } from "@/lib/platform";
 export * from "./keybindingUtils";
 export * from "./defaultKeybindings";
 
+function scopesConflict(a: KeyScope, b: KeyScope): boolean {
+  return a === b || a === "global" || b === "global";
+}
+
 class KeybindingService {
   private bindings: Map<string, KeybindingConfig> = new Map();
   private overrides: Map<string, string[]> = new Map();
@@ -275,7 +279,7 @@ class KeybindingService {
           }
         } else {
           // Check if this is the start of a chord
-          if (normalizedCurrentCombo === chordParts[0].trim().toLowerCase()) {
+          if (normalizedCurrentCombo === chordParts[0]!.trim().toLowerCase()) {
             foundChordPrefix = true;
           }
         }
@@ -323,6 +327,19 @@ class KeybindingService {
   }
 
   registerBinding(config: KeybindingConfig): void {
+    if (config.combo) {
+      const normalized = config.combo.trim().toLowerCase();
+      for (const existing of this.bindings.values()) {
+        if (existing.actionId === config.actionId) continue;
+        if (!existing.combo) continue;
+        if (existing.combo.trim().toLowerCase() !== normalized) continue;
+        if (!scopesConflict(existing.scope, config.scope)) continue;
+        console.warn(
+          `[KeybindingService] Skipping binding for "${config.actionId}" (${config.combo}, scope=${config.scope}) — combo already registered to "${existing.actionId}" (scope=${existing.scope}). Use setOverride() to rebind.`
+        );
+        return;
+      }
+    }
     this.bindings.set(config.actionId, config);
   }
 
@@ -407,9 +424,10 @@ class KeybindingService {
       if (!binding.effectiveCombo) continue;
       const parts = binding.effectiveCombo.trim().split(" ");
       if (parts.length < 3) continue;
-      if (parts[0].toLowerCase() !== normalizedPrefix) continue;
+      if (parts[0]!.toLowerCase() !== normalizedPrefix) continue;
 
       const nextKey = parts[1];
+      if (nextKey === undefined) continue;
       const normalizedNext = nextKey.toLowerCase();
       if (!deeperPrefixes.has(normalizedNext)) {
         deeperPrefixes.set(normalizedNext, {
@@ -426,9 +444,10 @@ class KeybindingService {
       const combo = binding.effectiveCombo.trim();
       const parts = combo.split(" ");
       if (parts.length !== 2) continue;
-      if (parts[0].toLowerCase() !== normalizedPrefix) continue;
+      if (parts[0]!.toLowerCase() !== normalizedPrefix) continue;
 
       const secondKey = parts[1];
+      if (secondKey === undefined) continue;
       const normalizedSecond = secondKey.toLowerCase();
       addedSecondKeys.add(normalizedSecond);
 

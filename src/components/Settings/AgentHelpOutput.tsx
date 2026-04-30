@@ -7,6 +7,8 @@ import { cliAvailabilityClient } from "@/clients";
 import type { AgentHelpResult } from "@shared/types/ipc/agent";
 import type { AgentAvailabilityState } from "@shared/types";
 import { isAgentInstalled, isAgentMissing } from "../../../shared/utils/agentAvailability";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 interface AgentHelpOutputProps {
   agentId: string;
@@ -81,7 +83,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
         const result = await agentHelpClient.get({ agentId, refresh });
         setHelpResult(result);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load help output");
+        setError(formatErrorMessage(err, "Failed to load help output"));
       } finally {
         setIsLoading(false);
       }
@@ -114,7 +116,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
         copyTimeoutRef.current = null;
       }, 2000);
     } catch (err) {
-      console.error("Failed to copy to clipboard:", err);
+      logError("Failed to copy to clipboard", err);
     }
   }, [helpResult]);
 
@@ -158,42 +160,44 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
   };
 
   return (
-    <div className="space-y-3 pt-4 border-t border-daintree-border">
-      <div className="flex items-center justify-between">
-        <div>
-          <h5 className="text-sm font-medium text-daintree-text">Help Output</h5>
-          <p className="text-xs text-daintree-text/50 select-text">
-            Available CLI flags for {agentName}
-          </p>
-        </div>
+    <div className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4">
+      <div className="pb-3 border-b border-daintree-border">
+        <div className="flex items-center justify-between">
+          <div>
+            <h5 className="text-sm font-medium text-daintree-text">Help Output</h5>
+            <p className="text-xs text-daintree-text/50 select-text">
+              Available CLI flags for {agentName}
+            </p>
+          </div>
 
-        {isAgentInstalled(isCliAvailable ?? undefined) && (
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => void loadHelp(!!helpResult)}
-              disabled={isLoading}
-              className="text-daintree-text/50 hover:text-daintree-text"
-            >
-              <RefreshCw size={14} />
-              {helpResult ? "Refresh" : "Load"}
-            </Button>
-
-            {helpResult && (
+          {isAgentInstalled(isCliAvailable ?? undefined) && (
+            <div className="flex items-center gap-2">
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => void handleCopy()}
+                onClick={() => void loadHelp(!!helpResult)}
                 disabled={isLoading}
                 className="text-daintree-text/50 hover:text-daintree-text"
               >
-                <Copy size={14} />
-                {isCopied ? "Copied!" : "Copy"}
+                <RefreshCw size={14} />
+                {helpResult ? "Refresh" : "Load"}
               </Button>
-            )}
-          </div>
-        )}
+
+              {helpResult && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void handleCopy()}
+                  disabled={isLoading}
+                  className="text-daintree-text/50 hover:text-daintree-text"
+                >
+                  <Copy size={14} />
+                  {isCopied ? "Copied!" : "Copy"}
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {isLoading && (
@@ -213,7 +217,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
               size="sm"
               variant="ghost"
               onClick={() => window.electron.system.openExternal(usageUrl)}
-              className="text-daintree-accent hover:text-daintree-accent/80 mt-2"
+              className="mt-2"
             >
               Install Instructions
             </Button>

@@ -85,7 +85,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
-            className="w-full px-3 py-1.5 text-sm bg-daintree-sidebar border border-daintree-border rounded-md text-daintree-text focus:outline-none focus:ring-1 focus:ring-daintree-accent/50 mb-4"
+            className="w-full px-3 py-1.5 text-sm bg-daintree-sidebar border border-daintree-border rounded-md text-daintree-text focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/50 mb-4"
           />
         )}
 
@@ -94,7 +94,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             <button
               type="button"
               onClick={handleCancel}
-              className="px-3 py-1.5 text-xs font-medium text-daintree-text/70 bg-daintree-bg hover:bg-tint/5 border border-daintree-border rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-daintree-accent/50"
+              className="px-3 py-1.5 text-xs font-medium text-daintree-text/70 bg-daintree-bg hover:bg-tint/5 border border-daintree-border rounded-md transition-colors focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/50"
             >
               Cancel
             </button>
@@ -103,7 +103,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             ref={okRef}
             type="button"
             onClick={handleOk}
-            className="px-3 py-1.5 text-xs font-medium text-text-inverse bg-daintree-accent hover:bg-daintree-accent/90 rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-daintree-accent/50"
+            className="px-3 py-1.5 text-xs font-medium text-text-inverse bg-daintree-accent hover:bg-daintree-accent/90 rounded-md transition-colors focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/50"
           >
             OK
           </button>

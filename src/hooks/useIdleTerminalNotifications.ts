@@ -43,7 +43,7 @@ export function useIdleTerminalNotifications(): void {
           };
 
       const dismissAction = {
-        label: "Dismiss",
+        label: "Mute project",
         onClick: () => {
           if (single) {
             void idleTerminalClient.dismissProject(single.projectId);
