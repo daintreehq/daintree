@@ -315,6 +315,27 @@ describe("AgentInstallService adversarial", () => {
         expect(opts.env.NVM_DIR).toBe("/home/u/.nvm");
       });
 
+      it("scrubs secrets from spawn-error messages emitted via the 'error' event", async () => {
+        getAgentConfigMock.mockReturnValue({
+          install: { byOs: { linux: [{ commands: ["nope"] }] } },
+        });
+        const child = makeFakeChild();
+        spawnMock.mockReturnValue(child);
+        const onProgress = vi.fn();
+
+        const pending = runAgentInstall({ agentId: "a", jobId: "j1" }, onProgress);
+        const leakingKey = "sk-ant-" + "A".repeat(95);
+        child.emitError(new Error(`spawn failed for env=${leakingKey}`));
+        await pending;
+
+        const errorEvent = onProgress.mock.calls
+          .map(([e]) => e as { stream: string; chunk: string })
+          .find((e) => e.stream === "stderr" && e.chunk.includes("spawn failed"));
+        expect(errorEvent).toBeDefined();
+        expect(errorEvent!.chunk).not.toContain(leakingKey);
+        expect(errorEvent!.chunk).toContain("[REDACTED]");
+      });
+
       it("scrubs secrets from streamed stdout chunks at the emit boundary", async () => {
         getAgentConfigMock.mockReturnValue({
           install: { byOs: { linux: [{ commands: ["npm install -g foo"] }] } },

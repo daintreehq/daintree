@@ -64,6 +64,10 @@ const INSTALL_EXTRA_KEYS = new Set([
   "PIPX_BIN_DIR",
 ]);
 
+// `DAINTREE_*` is the application namespace — vars like `DAINTREE_WORKTREE_PATH`
+// and `DAINTREE_RECIPE_ID` are injected by recipe runners and read by spawned
+// CLIs. Accepted risk: a user who mirrors a credential into a `DAINTREE_*` var
+// (e.g., `DAINTREE_GITHUB_TOKEN` in CI) gets it forwarded to children.
 const ALLOWED_PREFIXES = ["LC_", "DAINTREE_"];
 
 function defaultPath(): string {

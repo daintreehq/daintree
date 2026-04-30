@@ -82,7 +82,7 @@ function runSingleCommand(
 
     child.on("close", (code) => finalize(code));
     child.on("error", (err) => {
-      onProgress({ jobId, chunk: err.message + "\n", stream: "stderr" });
+      onProgress({ jobId, chunk: scrubSecrets(err.message) + "\n", stream: "stderr" });
       finalize(1);
     });
   });
