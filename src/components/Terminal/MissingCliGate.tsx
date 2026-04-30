@@ -23,7 +23,7 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
   if (state === "ready") {
     return (
       <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/5">
-        <Check className="w-5 h-5 text-green-500 shrink-0 mt-px" />
+        <Check className="w-5 h-5 text-status-success shrink-0 mt-px" />
         <div>
           <p className="text-sm font-medium">CLI is now available</p>
           <p className="text-xs text-daintree-text/60 mt-1">
@@ -152,7 +152,7 @@ function CopyableCommand({ command }: { command: string }) {
         aria-label={copied ? "Copied" : "Copy command"}
       >
         {copied ? (
-          <Check className="w-3.5 h-3.5 text-green-500" />
+          <Check className="w-3.5 h-3.5 text-status-success" />
         ) : (
           <Clipboard className="w-3.5 h-3.5" />
         )}
