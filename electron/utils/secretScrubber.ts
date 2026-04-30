@@ -1,10 +1,16 @@
 /**
- * Pattern-based scrubbing for free-text secrets in telemetry and diagnostic
- * bundles. Complements the key-based redaction in `TelemetryService.sanitizeEvent`
- * and `DiagnosticsCollector.redactDeep`.
+ * Pattern-based scrubbing for free-text secrets in telemetry, diagnostic
+ * bundles, log files, and IPC error envelopes. Complements the key-based
+ * redaction in `TelemetryService.sanitizeEvent` and `DiagnosticsCollector.redactDeep`.
  *
- * Apply at two boundaries only — Sentry `beforeSend` and DiagnosticsCollector
- * string output. NEVER call on the logger hot write path.
+ * Apply at outbound boundaries only — never on the in-memory `logBuffer` path
+ * that feeds the diagnostics dock. Approved call sites:
+ *   1. Sentry `beforeSend` (TelemetryService)
+ *   2. DiagnosticsCollector string output
+ *   3. Logger file-write (`writeToLogFile`) and console-mirror in `emit`/`emitError`
+ *   4. Main-process emergency crash log (`emergencyLogMainFatal`)
+ *   5. Pty-host emergency crash log (`emergencyLogFatal`)
+ *   6. IPC error envelope (`sanitizeErrorForRenderer` in setup/security.ts)
  *
  * All patterns use bounded quantifiers for ReDoS safety. See the
  * `secretScrubber.test.ts` sibling for the `safe-regex2` assertion that

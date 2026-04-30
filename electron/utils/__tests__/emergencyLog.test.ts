@@ -97,5 +97,19 @@ describe("emergencyLog", () => {
       expect(content).toContain(`platform=${process.platform}`);
       expect(content).toContain("memory.rss=");
     });
+
+    it("scrubs known secret sigils from error.message and stack", () => {
+      const githubPat = `ghp_${"A".repeat(40)}`;
+      const anthropicKey = `sk-ant-${"a".repeat(95)}`;
+      const err = new Error(`auth failed with ${githubPat}`);
+      err.stack = `Error: bad key ${anthropicKey}\n    at fake (/tmp/x.js:1:1)`;
+
+      emergencyLogMainFatal("UNCAUGHT_EXCEPTION", err);
+
+      const content = fs.readFileSync(getMainCrashLogPath(), "utf8");
+      expect(content).toContain("[REDACTED]");
+      expect(content).not.toContain(githubPat);
+      expect(content).not.toContain(anthropicKey);
+    });
   });
 });

@@ -27,6 +27,8 @@ const {
   portalSession,
   daintreeAppSession,
   sessionCreatedListeners,
+  appMock,
+  ipcMainMock,
 } = vi.hoisted(() => {
   return {
     defaultSession: createMockSession(),
@@ -37,26 +39,28 @@ const {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (ses: any) => void
     >,
+    appMock: { isPackaged: false } as { isPackaged: boolean; on: ReturnType<typeof vi.fn> },
+    ipcMainMock: {
+      handle: vi.fn(),
+      handleOnce: vi.fn(),
+      on: vi.fn(),
+      removeListener: vi.fn(),
+      removeAllListeners: vi.fn(),
+      off: vi.fn(),
+    },
   };
 });
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+appMock.on = vi.fn((event: string, listener: (ses: any) => void) => {
+  if (event === "session-created") {
+    sessionCreatedListeners.push(listener);
+  }
+});
+
 vi.mock("electron", () => ({
-  app: {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    on: vi.fn((event: string, listener: (ses: any) => void) => {
-      if (event === "session-created") {
-        sessionCreatedListeners.push(listener);
-      }
-    }),
-  },
-  ipcMain: {
-    handle: vi.fn(),
-    handleOnce: vi.fn(),
-    on: vi.fn(),
-    removeListener: vi.fn(),
-    removeAllListeners: vi.fn(),
-    off: vi.fn(),
-  },
+  app: appMock,
+  ipcMain: ipcMainMock,
   session: {
     defaultSession,
     fromPartition: vi.fn((partition: string) => {
@@ -75,6 +79,7 @@ vi.mock("../../../shared/utils/trustedRenderer.js", () => ({
 import {
   setupPermissionLockdown,
   enforceIpcSenderValidation,
+  sanitizeErrorForRenderer,
   _resetPermissionLockdownForTesting,
 } from "../security.js";
 import { assertIpcSecurityReady, _resetIpcGuardForTesting } from "../../ipc/ipcGuard.js";
@@ -450,6 +455,14 @@ describe("enforceIpcSenderValidation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetIpcGuardForTesting();
+    appMock.isPackaged = false;
+    // Reset wrapped handles so each test starts with a fresh vi.fn()
+    ipcMainMock.handle = vi.fn();
+    ipcMainMock.handleOnce = vi.fn();
+    ipcMainMock.on = vi.fn();
+    ipcMainMock.removeListener = vi.fn();
+    ipcMainMock.removeAllListeners = vi.fn();
+    ipcMainMock.off = vi.fn();
   });
 
   it("marks the IPC guard ready so subsequent registrations pass", () => {
@@ -460,5 +473,124 @@ describe("enforceIpcSenderValidation", () => {
     logSpy.mockRestore();
 
     expect(() => assertIpcSecurityReady("any:channel")).not.toThrow();
+  });
+
+  it("scrubs secrets from serialized.message and serialized.userMessage in packaged builds", async () => {
+    appMock.isPackaged = true;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // Capture the original vi.fn before enforceIpcSenderValidation reassigns the property
+    const originalHandle = ipcMainMock.handle;
+    enforceIpcSenderValidation();
+
+    const githubPat = `ghp_${"A".repeat(40)}`;
+    const anthropicKey = `sk-ant-${"a".repeat(95)}`;
+    const failingHandler = () => {
+      const err = new Error(`token leak: ${githubPat}`) as Error & { userMessage?: string };
+      err.userMessage = `please rotate ${anthropicKey}`;
+      throw err;
+    };
+    // The reassigned ipcMain.handle is the wrapper; calling it forwards to originalHandle (the vi.fn)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ipcMainMock.handle("test:channel", failingHandler as any);
+
+    const lastCall = originalHandle.mock.calls[originalHandle.mock.calls.length - 1];
+    expect(lastCall).toBeDefined();
+    const wrappedListener = lastCall[1] as (event: unknown, ...args: unknown[]) => Promise<unknown>;
+    const fakeEvent = { senderFrame: { url: "http://localhost:3000" } };
+    const envelope = (await wrappedListener(fakeEvent)) as {
+      ok: false;
+      error: { message: string; userMessage?: string };
+    };
+
+    expect(envelope.ok).toBe(false);
+    expect(envelope.error.message).toContain("[REDACTED]");
+    expect(envelope.error.message).not.toContain(githubPat);
+    expect(envelope.error.userMessage).toContain("[REDACTED]");
+    expect(envelope.error.userMessage).not.toContain(anthropicKey);
+
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it("preserves a clean serialized.userMessage in packaged builds", async () => {
+    appMock.isPackaged = true;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const originalHandle = ipcMainMock.handle;
+    enforceIpcSenderValidation();
+
+    const failingHandler = () => {
+      const err = new Error("plain error") as Error & { userMessage?: string };
+      err.userMessage = "Please try again later";
+      throw err;
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ipcMainMock.handle("test:channel", failingHandler as any);
+
+    const lastCall = originalHandle.mock.calls[originalHandle.mock.calls.length - 1];
+    const wrappedListener = lastCall[1] as (event: unknown, ...args: unknown[]) => Promise<unknown>;
+    const fakeEvent = { senderFrame: { url: "http://localhost:3000" } };
+    const envelope = (await wrappedListener(fakeEvent)) as {
+      error: { userMessage?: string };
+    };
+
+    expect(envelope.error.userMessage).toBe("Please try again later");
+
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+});
+
+describe("sanitizeErrorForRenderer", () => {
+  it("strips POSIX user paths", () => {
+    const out = sanitizeErrorForRenderer("ENOENT: no file at /Users/alice/secret/code.ts");
+    expect(out).toContain("<path>");
+    expect(out).not.toContain("/Users/alice/secret/code.ts");
+  });
+
+  it("strips Windows paths", () => {
+    const out = sanitizeErrorForRenderer("Cannot open C:\\Users\\bob\\file.ts");
+    expect(out).toContain("<path>");
+    expect(out).not.toContain("C:\\Users\\bob\\file.ts");
+  });
+
+  it("scrubs GitHub personal access tokens", () => {
+    const pat = `ghp_${"A".repeat(40)}`;
+    const out = sanitizeErrorForRenderer(`bad credential: ${pat}`);
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain(pat);
+  });
+
+  it("scrubs Anthropic API keys", () => {
+    const key = `sk-ant-${"a".repeat(95)}`;
+    const out = sanitizeErrorForRenderer(`unauthorized: ${key}`);
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain(key);
+  });
+
+  it("scrubs Bearer tokens", () => {
+    const out = sanitizeErrorForRenderer(`Authorization: Bearer ${"x".repeat(60)}`);
+    expect(out).toContain("Bearer [REDACTED]");
+    expect(out).not.toMatch(/Bearer x{60}/);
+  });
+
+  it("strips paths and tokens in the same message", () => {
+    const pat = `ghp_${"B".repeat(40)}`;
+    const out = sanitizeErrorForRenderer(`failed at /Users/alice/x.ts using ${pat}`);
+    expect(out).toContain("<path>");
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain("/Users/alice/x.ts");
+    expect(out).not.toContain(pat);
+  });
+
+  it("passes clean strings through unchanged", () => {
+    expect(sanitizeErrorForRenderer("simple error")).toBe("simple error");
+  });
+
+  it("handles the empty string", () => {
+    expect(sanitizeErrorForRenderer("")).toBe("");
   });
 });

@@ -15,6 +15,7 @@ import { join } from "path";
 import { logBuffer, type LogEntry } from "../services/LogBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { resilientRenameSync } from "./fs.js";
+import { scrubSecrets } from "./secretScrubber.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -525,7 +526,7 @@ function writeToLogFile(level: string, message: string, context?: LogContext): v
     if (!rotateLogsIfNeeded()) {
       return;
     }
-    appendFileSync(logFile, logLine, "utf8");
+    appendFileSync(logFile, scrubSecrets(logLine), "utf8");
   } catch (_error) {
     // ignore
   }
@@ -600,7 +601,10 @@ function emit(source: string, level: LogLevel, message: string, context?: LogCon
     const prefix = `[${level.toUpperCase()}] [${source}]`;
     const consoleFn =
       level === "error" ? console.error : level === "warn" ? console.warn : console.log;
-    consoleFn(`${prefix} ${message}`, context ? safeStringify(safeContext) : "");
+    consoleFn(
+      `${prefix} ${scrubSecrets(message)}`,
+      context ? scrubSecrets(safeStringify(safeContext)) : ""
+    );
   }
 }
 
@@ -623,9 +627,9 @@ function emitError(source: string, message: string, error?: unknown, context?: L
 
   if (!IS_TEST) {
     console.error(
-      `[ERROR] [${source}] ${message}`,
-      errorDetails ? safeStringify(errorDetails) : "",
-      context ? safeStringify(context) : ""
+      `[ERROR] [${source}] ${scrubSecrets(message)}`,
+      errorDetails ? scrubSecrets(safeStringify(errorDetails)) : "",
+      context ? scrubSecrets(safeStringify(context)) : ""
     );
   }
 }

@@ -321,4 +321,37 @@ describe("logger", () => {
       expect(getRegisteredLoggerNames()).not.toContain("main:ShouldClear");
     });
   });
+
+  describe("secret scrubbing at outbound boundaries", () => {
+    const GITHUB_PAT = `ghp_${"A".repeat(40)}`;
+    const ANTHROPIC_KEY = `sk-ant-${"a".repeat(95)}`;
+
+    it("scrubs secrets in the message before writing to the log file", () => {
+      initializeLogger(TEST_LOG_DIR);
+      logInfo(`auth header set with token ${GITHUB_PAT}`);
+
+      const content = readFileSync(getLogFilePath(), "utf8");
+      expect(content).toContain("[REDACTED]");
+      expect(content).not.toContain(GITHUB_PAT);
+    });
+
+    it("scrubs secrets that appear in the context payload", () => {
+      initializeLogger(TEST_LOG_DIR);
+      // SENSITIVE_KEYS doesn't catch arbitrary string fields — pattern scrub is the safety net
+      logInfo("request received", { traceLine: `Bearer ${"x".repeat(40)}` });
+
+      const content = readFileSync(getLogFilePath(), "utf8");
+      expect(content).toContain("Bearer [REDACTED]");
+      expect(content).not.toMatch(/Bearer x{40}/);
+    });
+
+    it("scrubs secrets from error.message when logging via logError", () => {
+      initializeLogger(TEST_LOG_DIR);
+      logError("auth failure", new Error(`bad key ${ANTHROPIC_KEY}`));
+
+      const content = readFileSync(getLogFilePath(), "utf8");
+      expect(content).toContain("[REDACTED]");
+      expect(content).not.toContain(ANTHROPIC_KEY);
+    });
+  });
 });
