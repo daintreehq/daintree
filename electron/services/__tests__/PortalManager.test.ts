@@ -360,17 +360,22 @@ describe("PortalManager", () => {
       const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-nav-invalid", "http://localhost:3000");
+      const wc = createdWebContents[createdWebContents.length - 1];
+      const initialLoadCount = wc.loadURL.mock.calls.length;
 
-      // Should not throw, just log error
       expect(() => manager.navigate("tab-nav-invalid", "file:///etc/passwd")).not.toThrow();
+      expect(wc.loadURL.mock.calls.length).toBe(initialLoadCount);
     });
 
     it("rejects navigation to javascript: URL", () => {
       const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-nav-js", "http://localhost:3000");
+      const wc = createdWebContents[createdWebContents.length - 1];
+      const initialLoadCount = wc.loadURL.mock.calls.length;
 
       expect(() => manager.navigate("tab-nav-js", "javascript:alert(1)")).not.toThrow();
+      expect(wc.loadURL.mock.calls.length).toBe(initialLoadCount);
     });
 
     it("does nothing for non-existent tab", () => {

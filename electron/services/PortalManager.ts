@@ -284,6 +284,17 @@ export class PortalManager {
         }
       });
 
+      // Subframe coverage: will-navigate is main-frame only, so iframes inside
+      // a portal page can otherwise navigate to file:/data:/etc. unblocked.
+      view.webContents.on("will-frame-navigate", (details) => {
+        if (!isSafeNavigationUrl(details.url)) {
+          console.warn(
+            `[PortalManager] Blocked portal frame navigation to unsafe URL: ${details.url}`
+          );
+          details.preventDefault();
+        }
+      });
+
       view.webContents.loadURL(url).catch((err) => {
         console.error(`[PortalManager] Failed to load URL ${url} in tab ${tabId}:`, err);
       });
