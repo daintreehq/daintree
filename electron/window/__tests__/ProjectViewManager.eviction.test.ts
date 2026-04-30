@@ -546,7 +546,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     expect(onViewCached).toHaveBeenCalledWith(wcA.id);
     // Newly-activated view's wcId must NOT have been passed to onViewCached
     const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
-    const wcB = bEntry!.view.webContents as ReturnType<typeof createMockWebContents>;
+    const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
     expect(onViewCached).not.toHaveBeenCalledWith(wcB.id);
   });
 
@@ -586,11 +586,11 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
 
     await manager.switchTo("proj-b", "/path/b");
     const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
-    const wcB = bEntry!.view.webContents as ReturnType<typeof createMockWebContents>;
+    const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
 
     await manager.switchTo("proj-c", "/path/c");
     const cEntry = manager.getAllViews().find((v) => v.projectId === "proj-c");
-    const wcC = cEntry!.view.webContents as ReturnType<typeof createMockWebContents>;
+    const wcC = cEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
 
     const calls = onViewCached.mock.calls.map(([id]) => id);
     expect(calls).toEqual([wcA.id, wcB.id]);
