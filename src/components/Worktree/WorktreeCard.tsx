@@ -693,7 +693,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             isFocused && !isActive && variant === "grid" && "bg-overlay-soft",
             isOver &&
               !isActive &&
-              "ring-2 ring-overlay bg-overlay-soft border-overlay transition-colors duration-200",
+              "ring-2 ring-overlay bg-overlay-soft border-overlay transition-colors",
             worktree.isCurrent &&
               "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
           )}

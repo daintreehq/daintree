@@ -230,7 +230,7 @@ function RotatingTip() {
   const tip = filteredTips[mountIndex.current % filteredTips.length]!;
 
   return (
-    <div className="flex flex-col items-center gap-2 animate-in fade-in duration-300">
+    <div className="flex flex-col items-center gap-2 animate-in fade-in duration-200">
       <p className="text-xs text-daintree-text/70 text-center">Tip: {tip.message}</p>
       {tip.actionId && tip.actionLabel && (
         <button

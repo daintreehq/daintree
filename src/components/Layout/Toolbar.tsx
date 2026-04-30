@@ -882,7 +882,7 @@ export function Toolbar({
           {isMac() && (
             <div
               className={cn(
-                "shrink-0 transition-[width] duration-200",
+                "shrink-0 transition-[width] duration-150",
                 isFullscreen ? "w-0" : "w-16"
               )}
             />

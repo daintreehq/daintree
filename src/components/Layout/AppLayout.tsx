@@ -409,7 +409,7 @@ export function AppLayout({
           <>
             <div
               aria-hidden="true"
-              className="fixed inset-0 z-30 bg-scrim-soft/30 transition-[backdrop-filter] duration-200 hover:backdrop-blur-[2px]"
+              className="fixed inset-0 z-30 bg-scrim-soft/30 transition-[backdrop-filter] duration-150 hover:backdrop-blur-[2px]"
             />
             <ErrorBoundary
               variant="section"

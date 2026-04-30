@@ -945,7 +945,7 @@ export function NewWorktreeDialog({
                       "peer-focus-visible:ring-2 peer-focus-visible:ring-daintree-accent",
                       "after:content-[''] after:absolute after:top-0.5 after:left-0.5",
                       "after:rounded-full after:h-4 after:w-4",
-                      "after:transition-transform after:duration-200",
+                      "after:transition-transform after:duration-150",
                       assignWorktreeToSelf
                         ? "bg-daintree-accent after:translate-x-4 after:bg-text-inverse"
                         : "bg-daintree-border after:translate-x-0 after:bg-daintree-text",
