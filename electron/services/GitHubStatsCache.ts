@@ -1,5 +1,6 @@
 import { readFileSync, existsSync, mkdirSync } from "fs";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
+import { getWritesSuppressed } from "./diskPressureState.js";
 import path from "path";
 import os from "os";
 
@@ -180,6 +181,12 @@ export class GitHubStatsCache {
   }
 
   private save(cache: CacheFile): void {
+    // Keep the in-memory cache fresh regardless of disk pressure so in-process
+    // reads stay consistent. Skip the atomic write to disk when suppressed.
+    this.memoryCache = cache;
+
+    if (getWritesSuppressed()) return;
+
     try {
       const dir = path.dirname(this.cacheFilePath);
       if (!existsSync(dir)) {
@@ -187,7 +194,6 @@ export class GitHubStatsCache {
       }
 
       resilientAtomicWriteFileSync(this.cacheFilePath, JSON.stringify(cache, null, 2), "utf8");
-      this.memoryCache = cache;
     } catch (error) {
       console.error("[GitHubStatsCache] Failed to save cache:", error);
     }

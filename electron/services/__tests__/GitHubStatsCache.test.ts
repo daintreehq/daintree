@@ -20,6 +20,8 @@ describe("GitHubStatsCache", () => {
   afterEach(async () => {
     const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
     GitHubStatsCache.resetInstance();
+    const { resetWritesSuppressedForTesting } = await import("../diskPressureState.js");
+    resetWritesSuppressedForTesting();
     delete process.env.DAINTREE_USER_DATA;
     vi.useRealTimers();
     vi.resetModules();
@@ -168,6 +170,48 @@ describe("GitHubStatsCache", () => {
       projects: Record<string, unknown>;
     };
     expect(Object.keys(disk.projects)).toHaveLength(10);
+  });
+
+  it("does not write to disk when disk pressure suppresses writes", async () => {
+    const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
+    const { setWritesSuppressed } = await import("../diskPressureState.js");
+    GitHubStatsCache.resetInstance();
+    const cache = GitHubStatsCache.getInstance();
+
+    setWritesSuppressed(true);
+    cache.set("octocat/under-pressure", { issueCount: 5, prCount: 2 }, "/repo/under-pressure");
+
+    expect(fs.existsSync(cacheFilePath)).toBe(false);
+    // Memory cache stays consistent so in-process reads still work.
+    expect(cache.get("octocat/under-pressure")).toEqual({
+      issueCount: 5,
+      prCount: 2,
+      lastUpdated: Date.now(),
+      projectPath: "/repo/under-pressure",
+    });
+  });
+
+  it("resumes writing to disk after pressure clears", async () => {
+    const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
+    const { setWritesSuppressed } = await import("../diskPressureState.js");
+    GitHubStatsCache.resetInstance();
+    const cache = GitHubStatsCache.getInstance();
+
+    setWritesSuppressed(true);
+    cache.set("octocat/dropped", { issueCount: 1, prCount: 1 }, "/repo/dropped");
+    expect(fs.existsSync(cacheFilePath)).toBe(false);
+
+    setWritesSuppressed(false);
+    cache.set("octocat/persisted", { issueCount: 2, prCount: 3 }, "/repo/persisted");
+
+    expect(fs.existsSync(cacheFilePath)).toBe(true);
+    const disk = JSON.parse(fs.readFileSync(cacheFilePath, "utf8")) as {
+      projects: Record<string, unknown>;
+    };
+    expect(disk.projects).toHaveProperty("octocat/persisted");
+    // The earlier set's data was retained in memory, so the post-recovery write
+    // includes it as well.
+    expect(disk.projects).toHaveProperty("octocat/dropped");
   });
 
   it("clear removes cached data from memory and disk", async () => {

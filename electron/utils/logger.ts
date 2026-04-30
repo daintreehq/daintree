@@ -16,6 +16,7 @@ import { logBuffer, type LogEntry } from "../services/LogBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { resilientRenameSync } from "./fs.js";
 import { scrubSecrets } from "./secretScrubber.js";
+import { getWritesSuppressed } from "../services/diskPressureState.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -511,6 +512,7 @@ function safeStringify(value: unknown): string {
 
 function writeToLogFile(level: string, message: string, context?: LogContext): void {
   if (!ENABLE_FILE_LOGGING) return;
+  if (getWritesSuppressed()) return;
 
   try {
     const logFile = getLogFilePath();
