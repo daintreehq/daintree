@@ -176,7 +176,10 @@ export function setupWebviewCSP(): void {
     }
 
     const partitionType = classifyPartition(partition);
-    if (partitionType === "unknown" || partitionType === "portal") {
+    // Browser panels load arbitrary remote sites — overlaying our CSP would
+    // intersect with theirs and break most of the web. Sandbox, deny-all
+    // permissions, and navigation guards remain in place.
+    if (partitionType === "unknown" || partitionType === "portal" || partitionType === "browser") {
       return;
     }
 
@@ -192,8 +195,9 @@ export function setupWebviewCSP(): void {
     configuredPartitions.add(partition);
   };
 
-  // Configure static partitions (browser only - portal excluded)
-  applyCSP("persist:browser");
+  // No static partitions get a CSP overlay — browser hosts arbitrary remote
+  // sites (handled above), portal/unknown are excluded, and dev-preview
+  // partitions are wired dynamically via will-attach-webview below.
 
   // Singleton for the browser partition session — used for identity comparison in navigation handlers.
   const browserSession = session.fromPartition("persist:browser");
