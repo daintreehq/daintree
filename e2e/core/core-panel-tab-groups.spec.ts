@@ -196,6 +196,10 @@ test.describe.serial("Core: Panel Tab Groups", () => {
       const { window } = ctx;
       const panel = getFirstGridPanel(window);
 
+      // Settle after the previous test's menu close so xterm input handlers
+      // are wired before we start typing.
+      await window.waitForTimeout(T_SETTLE);
+
       // Run a marker before restart
       await runTerminalCommand(window, panel, "node -e \"console.log('PRE_RESTART')\"");
       await waitForTerminalText(panel, "PRE_RESTART", T_LONG);
