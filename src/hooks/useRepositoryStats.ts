@@ -3,6 +3,17 @@ import type { GitHubRateLimitKind, RepositoryStats } from "../types";
 import { githubClient, projectClient } from "@/clients";
 import { isTokenRelatedError } from "@/lib/githubErrors";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { buildCacheKey, setCache } from "@/lib/githubResourceCache";
+
+function isValidPagePayload(page: unknown): page is {
+  items: unknown[];
+  endCursor: string | null;
+  hasNextPage: boolean;
+} {
+  if (!page || typeof page !== "object") return false;
+  const p = page as Record<string, unknown>;
+  return Array.isArray(p.items) && (typeof p.endCursor === "string" || p.endCursor === null);
+}
 
 const ACTIVE_POLL_INTERVAL = 30 * 1000;
 const IDLE_POLL_INTERVAL = 5 * 60 * 1000;
@@ -316,6 +327,51 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
     return cleanup;
   }, [fetchStats, scheduleNextPoll]);
+
+  // Subscribe to the combined repo-stats-and-first-page push from the main
+  // process. Whenever a poll completes successfully, main broadcasts the
+  // counts AND the first 20 open issues + open PRs (sorted by created-desc).
+  // Seed the renderer's `githubResourceCache` for the matching default-filter
+  // cache key so the next dropdown click reads from hot cache instantly.
+  useEffect(() => {
+    const cleanup = githubClient.onRepoStatsAndPageUpdated((payload) => {
+      if (!mountedRef.current) return;
+      // Filter by current project. Each `WebContentsView` runs its own
+      // renderer with isolated module state, so the cache writes below are
+      // scoped to this view's project.
+      projectClient
+        .getCurrent()
+        .then((project) => {
+          if (!project || project.path !== payload.projectPath) return;
+          if (!mountedRef.current) return;
+          // Defensive shape guard against future IPC drift — bad payloads
+          // are skipped rather than written to cache where they would crash
+          // consumers using "isDraft" in item or item.number.
+          if (!isValidPagePayload(payload.issues) || !isValidPagePayload(payload.prs)) return;
+
+          const issuesKey = buildCacheKey(payload.projectPath, "issue", "open", "created");
+          const prsKey = buildCacheKey(payload.projectPath, "pr", "open", "created");
+          setCache(issuesKey, {
+            items: payload.issues.items,
+            endCursor: payload.issues.endCursor,
+            hasNextPage: payload.issues.hasNextPage,
+            timestamp: payload.fetchedAt,
+          });
+          setCache(prsKey, {
+            items: payload.prs.items,
+            endCursor: payload.prs.endCursor,
+            hasNextPage: payload.prs.hasNextPage,
+            timestamp: payload.fetchedAt,
+          });
+        })
+        .catch(() => {
+          // Project lookup races during teardown / project switch are
+          // expected and benign — swallow rather than producing an
+          // unhandled rejection.
+        });
+    });
+    return cleanup;
+  }, []);
 
   useEffect(() => {
     const cleanup = githubClient.onRateLimitChanged((payload) => {

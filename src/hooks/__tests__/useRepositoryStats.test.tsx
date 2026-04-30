@@ -3,14 +3,21 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RepositoryStats } from "@/types";
 
-const { getCurrentMock, onSwitchMock, getRepoStatsMock, onRateLimitChangedMock } = vi.hoisted(
-  () => ({
-    getCurrentMock: vi.fn(),
-    onSwitchMock: vi.fn(),
-    getRepoStatsMock: vi.fn(),
-    onRateLimitChangedMock: vi.fn<(cb: (payload: unknown) => void) => () => void>(() => () => {}),
-  })
-);
+const {
+  getCurrentMock,
+  onSwitchMock,
+  getRepoStatsMock,
+  onRateLimitChangedMock,
+  onRepoStatsAndPageUpdatedMock,
+} = vi.hoisted(() => ({
+  getCurrentMock: vi.fn(),
+  onSwitchMock: vi.fn(),
+  getRepoStatsMock: vi.fn(),
+  onRateLimitChangedMock: vi.fn<(cb: (payload: unknown) => void) => () => void>(() => () => {}),
+  onRepoStatsAndPageUpdatedMock: vi.fn<(cb: (payload: unknown) => void) => () => void>(
+    () => () => {}
+  ),
+}));
 
 vi.mock("@/clients", () => ({
   projectClient: {
@@ -20,6 +27,7 @@ vi.mock("@/clients", () => ({
   githubClient: {
     getRepoStats: getRepoStatsMock,
     onRateLimitChanged: onRateLimitChangedMock,
+    onRepoStatsAndPageUpdated: onRepoStatsAndPageUpdatedMock,
   },
 }));
 

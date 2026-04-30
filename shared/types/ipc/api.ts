@@ -100,6 +100,7 @@ import type {
   GitHubTokenValidation,
   GitHubRateLimitPayload,
   GitHubTokenHealthPayload,
+  RepoStatsAndPagePayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -672,6 +673,7 @@ export interface ElectronAPI {
     onIssueNotFound(callback: (data: IssueNotFoundPayload) => void): () => void;
     onRateLimitChanged(callback: (data: GitHubRateLimitPayload) => void): () => void;
     onTokenHealthChanged(callback: (data: GitHubTokenHealthPayload) => void): () => void;
+    onRepoStatsAndPageUpdated(callback: (data: RepoStatsAndPagePayload) => void): () => void;
     getTokenHealth(): Promise<GitHubTokenHealthPayload>;
   };
   connectivity: {

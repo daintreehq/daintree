@@ -49,9 +49,13 @@ export function getDaintreeAppProdCSP(): string {
  * Development CSP for the trusted Daintree renderer.
  *
  * Loaded from the Vite dev server in development. Loosens script-src with
- * `'unsafe-eval'` for HMR + React Refresh, and adds dev-server HTTP/WebSocket
- * origins. The strict floor (object-src 'none', base-uri 'self', form-action
- * 'none') still applies.
+ * `'unsafe-inline' 'unsafe-eval'` — Vite's `@vitejs/plugin-react` injects an
+ * inline `<script type="module">` React Refresh preamble at the top of <head>
+ * (before the CSP meta tag), and the HTTP response header CSP applies before
+ * any parsing, so without `'unsafe-inline'` the preamble is blocked and React
+ * never bootstraps (grey screen). Adds dev-server HTTP/WebSocket origins. The
+ * strict floor (object-src 'none', base-uri 'self', form-action 'none') still
+ * applies.
  */
 export function getDaintreeAppDevCSP(): string {
   const origins = getDevServerOrigins().join(" ");
@@ -59,7 +63,7 @@ export function getDaintreeAppDevCSP(): string {
 
   return [
     `default-src 'self' ${origins} ${wsOrigins}`,
-    `script-src 'self' ${origins} 'unsafe-eval'`,
+    `script-src 'self' ${origins} 'unsafe-inline' 'unsafe-eval'`,
     `style-src 'self' ${origins} 'unsafe-inline'`,
     `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES}`,
     `img-src 'self' ${origins} ${GITHUB_AVATARS} ${FILE_SCHEMES} data: blob:`,

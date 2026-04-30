@@ -102,6 +102,7 @@ import type {
   GitHubTokenValidation,
   GitHubRateLimitPayload,
   GitHubTokenHealthPayload,
+  RepoStatsAndPagePayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -2257,6 +2258,11 @@ export interface IpcEventMap {
 
   // GitHub token health state push (expiry/revocation detection)
   "github:token-health-changed": GitHubTokenHealthPayload;
+
+  // Combined repo stats + first page of open issues + open PRs push, emitted
+  // after every successful poll. Lets renderers prime githubResourceCache
+  // for the (open, created) default-filter cache key with no click-time fetch.
+  "github:repo-stats-and-page-updated": RepoStatsAndPagePayload;
 
   // Per-service connectivity state push
   "connectivity:service-changed": ServiceConnectivityPayload;

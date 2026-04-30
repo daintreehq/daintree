@@ -6,6 +6,7 @@ import type {
   GitHubTokenValidation,
   GitHubRateLimitPayload,
   GitHubTokenHealthPayload,
+  RepoStatsAndPagePayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -105,6 +106,10 @@ export const githubClient = {
 
   onTokenHealthChanged: (callback: (data: GitHubTokenHealthPayload) => void): (() => void) => {
     return window.electron.github.onTokenHealthChanged(callback);
+  },
+
+  onRepoStatsAndPageUpdated: (callback: (data: RepoStatsAndPagePayload) => void): (() => void) => {
+    return window.electron.github.onRepoStatsAndPageUpdated(callback);
   },
 
   getTokenHealth: (): Promise<GitHubTokenHealthPayload> => {

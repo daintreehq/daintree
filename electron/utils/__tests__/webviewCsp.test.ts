@@ -321,6 +321,14 @@ describe("webviewCsp", () => {
         expect(directives["script-src"]).toContain("'unsafe-eval'");
       });
 
+      // Regression guard: @vitejs/plugin-react injects an inline
+      // <script type="module"> React Refresh preamble at the top of <head>,
+      // and the HTTP header CSP applies before parsing — so without
+      // 'unsafe-inline' the preamble is blocked and React never bootstraps.
+      it("includes 'unsafe-inline' in script-src for Vite's React Refresh preamble", () => {
+        expect(directives["script-src"]).toContain("'unsafe-inline'");
+      });
+
       it("adds the dev server HTTP origin to script-src", () => {
         expect(directives["script-src"]).toMatch(/http:\/\/127\.0\.0\.1:\d+/);
         expect(directives["script-src"]).toMatch(/http:\/\/localhost:\d+/);

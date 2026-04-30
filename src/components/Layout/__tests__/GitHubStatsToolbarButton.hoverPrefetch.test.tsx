@@ -442,13 +442,16 @@ describe("GitHubStatsToolbarButton hover prefetch", () => {
     expect(mockListIssues).not.toHaveBeenCalled();
   });
 
-  it("preserves click-time forced refresh as a fallback for touch/keyboard users", async () => {
+  it("does NOT force-refresh on click when stats are within the freshness window", async () => {
+    // Default mock: lastUpdated is Date.now() so the polled stats are fresh.
+    // Click should rely on the hot cache populated by the 30s poll instead
+    // of triggering a full reload.
     const { container } = renderToolbar();
     const button = getIssuesButton(container);
 
     fireEvent.click(button);
 
-    expect(refreshStatsMock).toHaveBeenCalledWith({ force: true });
+    expect(refreshStatsMock).not.toHaveBeenCalled();
   });
 
   it("hover-then-click within the debounce window cancels the pending prefetch", async () => {

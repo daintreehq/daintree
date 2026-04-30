@@ -190,6 +190,12 @@ export function GitHubResourceList({
   const [hasMore, setHasMore] = useState(() => cachedEntry?.hasNextPage ?? false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  // Tracks any in-flight background revalidate (manual refresh button,
+  // mount-time SWR revalidate, focus-revalidate). Distinct from `loading`
+  // because revalidates do NOT clear data or show the row skeleton — they
+  // surface only via the spinning refresh icon in the dropdown header so
+  // the user has visual feedback that a background refresh is in progress.
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(
@@ -245,6 +251,18 @@ export function GitHubResourceList({
   // visibility/focus revalidation effect to throttle repeat refreshes.
   const lastFetchAttemptRef = useRef<number>(0);
 
+  // `githubConfig` flips from `null` → object when the config store finishes
+  // its async `initialize()` call shortly after mount. Reading it directly in
+  // `fetchData`'s `useCallback` deps would re-create the callback on that
+  // flip, re-firing the cache-key-driven mount effect with `isFirstMount =
+  // false` and triggering the cache-miss skeleton flash on every dropdown
+  // open. Routing the read through a ref keeps `fetchData` stable while
+  // still observing the latest config at call time.
+  const githubConfigRef = useRef(githubConfig);
+  useEffect(() => {
+    githubConfigRef.current = githubConfig;
+  }, [githubConfig]);
+
   const fetchData = useCallback(
     async (
       currentCursor: string | null | undefined,
@@ -256,7 +274,8 @@ export function GitHubResourceList({
       // Skip the fetch entirely when no token is configured. The render path
       // shows a dedicated empty state; firing fetches here would just produce
       // a token-error toast for users who haven't set up GitHub yet.
-      if (githubConfig && !githubConfig.hasToken) return;
+      const cfg = githubConfigRef.current;
+      if (cfg && !cfg.hasToken) return;
 
       const isRevalidate = options?.revalidating ?? false;
 
@@ -272,6 +291,10 @@ export function GitHubResourceList({
         setLoading(true);
         setError(null);
         setLoadMoreError(null);
+      } else {
+        // Background revalidate — don't clear rows or show the skeleton,
+        // but DO surface activity via the header refresh icon spin.
+        setRefreshing(true);
       }
 
       if (!append) {
@@ -292,7 +315,14 @@ export function GitHubResourceList({
           search: searchOverride || debouncedSearch || undefined,
           state: filterState as "open" | "closed" | "merged" | "all",
           cursor: currentCursor || undefined,
-          bypassCache: !append,
+          // Append (load-more) always wants the next page from network.
+          // SWR revalidates also bypass cache — that's the whole point of
+          // a revalidate. Cold-mount fetches (no cache, no revalidating
+          // flag) honor the backend's 60s in-memory cache instead of
+          // bypassing — same data either way, but the cached path returns
+          // synchronously and avoids the click-time round-trip the user
+          // sees as "reload".
+          bypassCache: append ? false : isRevalidate ? true : false,
           sortOrder,
         };
 
@@ -372,11 +402,12 @@ export function GitHubResourceList({
       } finally {
         if (!abortSignal?.aborted) {
           setLoading(false);
+          setRefreshing(false);
           setLoadingMore(false);
         }
       }
     },
-    [projectPath, debouncedSearch, filterState, type, sortOrder, numberQuery, githubConfig]
+    [projectPath, debouncedSearch, filterState, type, sortOrder, numberQuery]
   );
 
   useEffect(() => {
@@ -387,13 +418,24 @@ export function GitHubResourceList({
     const abortController = new AbortController();
     loadMoreAbortRef.current?.abort();
     const gen = nextGeneration(cacheKey);
+    const isFirstMount = !mountedRef.current;
 
-    if (!mountedRef.current) {
-      // First mount: check if we have cached data (SWR path)
+    if (isFirstMount) {
       mountedRef.current = true;
+      // Re-check cache on the effect tick — the useState initializer at
+      // mount-render time may have missed a write that lands between render
+      // and the first passive effect (poll push, hover prefetch, etc.).
+      // When that happens, hydrate state from cache here so the SWR path
+      // runs silently instead of the cache-miss path showing a skeleton
+      // flash for data that's already available.
       const cached = getCache(cacheKey);
       if (cached) {
-        // Data already hydrated via useState initializer — background revalidate
+        if (cached.items.length > 0) {
+          setData(cached.items);
+          setCursor(cached.endCursor);
+          setHasMore(cached.hasNextPage);
+          setLastUpdatedAt(cached.timestamp);
+        }
         setError(null);
         fetchData(null, false, abortController.signal, {
           revalidating: true,
@@ -404,12 +446,16 @@ export function GitHubResourceList({
       }
     }
 
-    // Cache miss or filter/sort changed while mounted: fresh fetch with skeleton
-    setCursor(null);
-    setHasMore(false);
-    setExactNumberNotFound(null);
-    setData([]);
-    setLastUpdatedAt(null);
+    // Filter/sort changed while mounted: clear and refetch with skeleton.
+    // First-mount cache miss skips the explicit clear (data is already []
+    // from the useState initializer) so no spurious setState/render churn.
+    if (!isFirstMount) {
+      setCursor(null);
+      setHasMore(false);
+      setExactNumberNotFound(null);
+      setData([]);
+      setLastUpdatedAt(null);
+    }
     fetchData(null, false, abortController.signal, {
       generation: gen,
       cacheKey,
@@ -672,6 +718,23 @@ export function GitHubResourceList({
     }
   };
 
+  // Manual refresh — fires a force-bypass fetch and shows the loading
+  // indicator in the refresh button. Doesn't clear current rows; the SWR
+  // revalidate path keeps them visible while fresh data arrives.
+  const handleManualRefresh = useCallback(() => {
+    if (numberQuery !== null) {
+      setRetryKey((k) => k + 1);
+      return;
+    }
+    setError(null);
+    const gen = nextGeneration(cacheKey);
+    void fetchData(null, false, undefined, {
+      revalidating: true,
+      generation: gen,
+      cacheKey,
+    });
+  }, [numberQuery, cacheKey, fetchData]);
+
   const listId = `github-${type}-list`;
   const maxIndex = data.length - 1 + (hasMore ? 1 : 0);
   const activeItem = activeIndex >= 0 && activeIndex < data.length ? data[activeIndex] : null;
@@ -893,6 +956,26 @@ export function GitHubResourceList({
               </button>
             )}
           </div>
+          <button
+            type="button"
+            onClick={handleManualRefresh}
+            disabled={loading || refreshing}
+            aria-label={`Refresh ${type === "issue" ? "issues" : "pull requests"}`}
+            aria-busy={loading || refreshing}
+            title={
+              refreshing || loading
+                ? "Refreshing…"
+                : `Refresh ${type === "issue" ? "issues" : "pull requests"}`
+            }
+            className={cn(
+              "flex items-center justify-center w-7 h-7 rounded shrink-0",
+              "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
+              "transition-colors disabled:cursor-default",
+              (loading || refreshing) && "text-status-info"
+            )}
+          >
+            <RefreshCw className={cn("w-3.5 h-3.5", (loading || refreshing) && "animate-spin")} />
+          </button>
           <Popover open={sortPopoverOpen} onOpenChange={setSortPopoverOpen}>
             <PopoverTrigger asChild>
               <button

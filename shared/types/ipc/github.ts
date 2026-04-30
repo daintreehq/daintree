@@ -156,3 +156,32 @@ export interface IssueNotFoundPayload {
   issueNumber: number;
   timestamp: number;
 }
+
+/**
+ * Push payload broadcast after every successful repo-stats-and-first-page poll.
+ * Carries both the count badges (matching `RepositoryStats`) and the first page
+ * of open issues + open PRs in the default sort (created-desc), so the renderer
+ * can prime its `githubResourceCache` with no click-time round-trip.
+ */
+export interface RepoStatsAndPagePayload {
+  /** Absolute project path the payload corresponds to. */
+  projectPath: string;
+  /** Combined stats (counts + freshness metadata) — same shape useRepositoryStats already consumes. */
+  stats: RepositoryStats;
+  /** First page of open issues, sorted by created-at desc. */
+  issues: {
+    items: import("../github.js").GitHubIssue[];
+    endCursor: string | null;
+    hasNextPage: boolean;
+    totalCount: number;
+  };
+  /** First page of open pull requests, sorted by created-at desc. */
+  prs: {
+    items: import("../github.js").GitHubPR[];
+    endCursor: string | null;
+    hasNextPage: boolean;
+    totalCount: number;
+  };
+  /** Wall-clock timestamp when the poll completed (ms). */
+  fetchedAt: number;
+}

@@ -40,6 +40,14 @@ import type { RepositoryStats } from "@shared/types";
 const HOVER_PREFETCH_DELAY_MS = 150;
 const PREFETCH_FRESHNESS_MS = 10_000;
 
+// When the user opens the dropdown and the polled stats are older than this,
+// fire a click-time forced refresh — cache may still be valid in the strict
+// TTL sense, but the user opening the dropdown is a strong signal that they
+// want fresh-enough data, and 2 minutes is the threshold beyond which CI
+// status / PR state could be visibly out of date. Within this window, trust
+// the cache and let the existing 30s poll keep things fresh in background.
+const OPEN_FORCE_REFRESH_STALENESS_MS = 2 * 60 * 1000;
+
 function formatRateLimitCountdown(remainingMs: number): string {
   const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
   if (totalSeconds < 60) return `${totalSeconds}s`;
@@ -71,14 +79,24 @@ export function msUntilNextLabelChange(remainingMs: number): number {
   return remainingMs - (60_000 * minutes - 1000);
 }
 
+// Two-tier loading: the toolbar uses lazy()/Suspense for the cold-click case
+// (user clicks before the eager preload finishes), AND eagerly resolves the
+// concrete component reference on toolbar mount so any subsequent click
+// renders the real component without going through a Suspense boundary.
+// Without this, even a fully-cached chunk still flashes the skeleton fallback
+// for one render — React.lazy suspends on the first render of its boundary
+// regardless of whether the import promise has already resolved.
+const importGitHubResourceList = () => import("@/components/GitHub/GitHubResourceList");
+const importCommitList = () => import("@/components/GitHub/CommitList");
+
 const LazyGitHubResourceList = lazy(() =>
-  import("@/components/GitHub/GitHubResourceList").then((m) => ({
-    default: m.GitHubResourceList,
-  }))
+  importGitHubResourceList().then((m) => ({ default: m.GitHubResourceList }))
 );
-const LazyCommitList = lazy(() =>
-  import("@/components/GitHub/CommitList").then((m) => ({ default: m.CommitList }))
-);
+const LazyCommitList = lazy(() => importCommitList().then((m) => ({ default: m.CommitList })));
+
+type GitHubResourceListType =
+  typeof import("@/components/GitHub/GitHubResourceList").GitHubResourceList;
+type CommitListType = typeof import("@/components/GitHub/CommitList").CommitList;
 
 export interface GitHubStatsHandle {
   closeAll: () => void;
@@ -126,6 +144,27 @@ export const GitHubStatsToolbarButton = memo(
     const [statsJustUpdated, setStatsJustUpdated] = useState(false);
     const [rateLimitCountdown, setRateLimitCountdown] = useState<string | null>(null);
     const prevLastUpdatedRef = useRef<number | null>(null);
+
+    // Eagerly resolve the dropdown body components so the click path renders
+    // them concretely without going through Suspense. The toolbar is a
+    // long-lived global UI surface and these dropdowns are commonly used,
+    // so paying the chunk cost shortly after mount is a clear win over the
+    // alternative of flashing a skeleton on every cold click.
+    const [ResourceListComponent, setResourceListComponent] =
+      useState<GitHubResourceListType | null>(null);
+    const [CommitListComponent, setCommitListComponent] = useState<CommitListType | null>(null);
+    useEffect(() => {
+      let cancelled = false;
+      void importGitHubResourceList().then((m) => {
+        if (!cancelled) setResourceListComponent(() => m.GitHubResourceList);
+      });
+      void importCommitList().then((m) => {
+        if (!cancelled) setCommitListComponent(() => m.CommitList);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, []);
 
     useEffect(() => {
       if (
@@ -415,7 +454,17 @@ export const GitHubStatsToolbarButton = memo(
                 const willOpen = !issuesOpen;
                 setIssuesOpen(willOpen);
                 if (!willOpen) setIssueSearchQuery("");
-                if (willOpen) refreshStats({ force: true });
+                // Only force-refresh on open if the polled stats are stale
+                // enough to be visibly out of date. Within the freshness
+                // window, the 30s poll has the cache hot and the dropdown
+                // reads from it instantly with no spinner.
+                if (
+                  willOpen &&
+                  (lastUpdated == null ||
+                    Date.now() - lastUpdated > OPEN_FORCE_REFRESH_STALENESS_MS)
+                ) {
+                  refreshStats({ force: true });
+                }
               }}
               className={cn(
                 "h-full gap-2 rounded-none px-3 text-daintree-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
@@ -463,12 +512,8 @@ export const GitHubStatsToolbarButton = memo(
           className="p-0 w-[450px]"
           persistThroughChildOverlays
         >
-          <Suspense
-            fallback={
-              <GitHubResourceListSkeleton count={stats?.issueCount} immediate type="issue" />
-            }
-          >
-            <LazyGitHubResourceList
+          {ResourceListComponent ? (
+            <ResourceListComponent
               type="issue"
               projectPath={currentProject.path}
               onClose={() => {
@@ -478,7 +523,24 @@ export const GitHubStatsToolbarButton = memo(
               }}
               initialCount={stats?.issueCount}
             />
-          </Suspense>
+          ) : (
+            <Suspense
+              fallback={
+                <GitHubResourceListSkeleton count={stats?.issueCount} immediate type="issue" />
+              }
+            >
+              <LazyGitHubResourceList
+                type="issue"
+                projectPath={currentProject.path}
+                onClose={() => {
+                  setIssuesOpen(false);
+                  setIssueSearchQuery("");
+                  issuesButtonRef.current?.focus();
+                }}
+                initialCount={stats?.issueCount}
+              />
+            </Suspense>
+          )}
         </FixedDropdown>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -505,7 +567,17 @@ export const GitHubStatsToolbarButton = memo(
                 const willOpen = !prsOpen;
                 setPrsOpen(willOpen);
                 if (!willOpen) setPrSearchQuery("");
-                if (willOpen) refreshStats({ force: true });
+                // Only force-refresh on open if the polled stats are stale
+                // enough to be visibly out of date. Within the freshness
+                // window, the 30s poll has the cache hot and the dropdown
+                // reads from it instantly with no spinner.
+                if (
+                  willOpen &&
+                  (lastUpdated == null ||
+                    Date.now() - lastUpdated > OPEN_FORCE_REFRESH_STALENESS_MS)
+                ) {
+                  refreshStats({ force: true });
+                }
               }}
               className={cn(
                 "h-full gap-2 rounded-none px-3 text-daintree-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
@@ -550,10 +622,8 @@ export const GitHubStatsToolbarButton = memo(
           anchorRef={prsButtonRef}
           className="p-0 w-[450px]"
         >
-          <Suspense
-            fallback={<GitHubResourceListSkeleton count={stats?.prCount} immediate type="pr" />}
-          >
-            <LazyGitHubResourceList
+          {ResourceListComponent ? (
+            <ResourceListComponent
               type="pr"
               projectPath={currentProject.path}
               onClose={() => {
@@ -563,7 +633,22 @@ export const GitHubStatsToolbarButton = memo(
               }}
               initialCount={stats?.prCount}
             />
-          </Suspense>
+          ) : (
+            <Suspense
+              fallback={<GitHubResourceListSkeleton count={stats?.prCount} immediate type="pr" />}
+            >
+              <LazyGitHubResourceList
+                type="pr"
+                projectPath={currentProject.path}
+                onClose={() => {
+                  setPrsOpen(false);
+                  setPrSearchQuery("");
+                  prsButtonRef.current?.focus();
+                }}
+                initialCount={stats?.prCount}
+              />
+            </Suspense>
+          )}
         </FixedDropdown>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -603,8 +688,8 @@ export const GitHubStatsToolbarButton = memo(
           anchorRef={commitsButtonRef}
           className="p-0 w-[450px]"
         >
-          <Suspense fallback={<CommitListSkeleton count={stats?.commitCount} immediate />}>
-            <LazyCommitList
+          {CommitListComponent ? (
+            <CommitListComponent
               projectPath={activeWorktree?.path ?? currentProject.path}
               branch={activeWorktree?.branch}
               onClose={() => {
@@ -613,7 +698,19 @@ export const GitHubStatsToolbarButton = memo(
               }}
               initialCount={stats?.commitCount}
             />
-          </Suspense>
+          ) : (
+            <Suspense fallback={<CommitListSkeleton count={stats?.commitCount} immediate />}>
+              <LazyCommitList
+                projectPath={activeWorktree?.path ?? currentProject.path}
+                branch={activeWorktree?.branch}
+                onClose={() => {
+                  setCommitsOpen(false);
+                  commitsButtonRef.current?.focus();
+                }}
+                initialCount={stats?.commitCount}
+              />
+            </Suspense>
+          )}
         </FixedDropdown>
         <GitHubStatusIndicator
           status={getGitHubIndicatorStatus()}
