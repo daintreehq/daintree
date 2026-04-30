@@ -870,8 +870,8 @@ export function NewWorktreeDialog({
         ) : (
           <div className="space-y-4">
             {initialPR ? (
-              <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] bg-daintree-accent/5 border border-daintree-accent/20 text-sm min-w-0">
-                <FolderGit2 className="w-4 h-4 text-daintree-accent shrink-0" aria-hidden="true" />
+              <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-strong text-sm min-w-0">
+                <FolderGit2 className="w-4 h-4 text-daintree-text/60 shrink-0" aria-hidden="true" />
                 <TruncatedTooltip content={`PR #${initialPR.number} — ${initialPR.title}`}>
                   <span className="text-daintree-text/80 min-w-0 truncate">
                     PR <span className="font-medium text-daintree-text">#{initialPR.number}</span> —{" "}
@@ -920,7 +920,7 @@ export function NewWorktreeDialog({
                     className="w-8 h-8 rounded-full shrink-0"
                   />
                 ) : (
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-daintree-accent/10 text-daintree-accent">
+                  <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-overlay-medium text-daintree-text/60">
                     <UserPlus className="w-4 h-4" />
                   </div>
                 )}

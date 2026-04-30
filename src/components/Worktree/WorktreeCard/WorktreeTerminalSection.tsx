@@ -448,7 +448,7 @@ export function WorktreeTerminalSection({
               {marqueeBox && (
                 <div
                   aria-hidden
-                  className="pointer-events-none absolute z-10 rounded border border-daintree-accent/60 bg-daintree-accent/10"
+                  className="pointer-events-none absolute z-10 rounded border border-border-strong bg-overlay-medium"
                   style={{
                     left: marqueeBox.x,
                     top: marqueeBox.y,

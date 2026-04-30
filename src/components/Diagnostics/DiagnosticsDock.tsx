@@ -191,7 +191,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
         className={cn(
           "group h-3 cursor-ns-resize transition-colors flex items-center justify-center",
           "hover:bg-overlay-soft focus-visible:outline-hidden focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
-          isResizing && "bg-daintree-accent/20"
+          isResizing && "bg-overlay-medium"
         )}
         onMouseDown={handleResizeStart}
         onKeyDown={handleKeyDown}
@@ -208,7 +208,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
             "w-10 h-px rounded-full transition-[height] duration-150 delay-100 group-hover:h-0.5",
             "bg-daintree-text/15",
             "group-hover:bg-daintree-text/30 group-focus-visible:bg-daintree-accent",
-            isResizing && "bg-daintree-accent"
+            isResizing && "bg-daintree-text/50"
           )}
         />
       </div>

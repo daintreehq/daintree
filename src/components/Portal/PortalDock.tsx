@@ -403,7 +403,7 @@ export function PortalDock() {
             className={cn(
               "group absolute -left-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-50",
               "hover:bg-overlay-soft transition-colors focus:outline-hidden focus:bg-tint/[0.04] focus:ring-1 focus:ring-daintree-accent/50",
-              isResizing && "bg-daintree-accent/20"
+              isResizing && "bg-overlay-medium"
             )}
             onMouseDown={handleResizeStart}
             onKeyDown={handleKeyDown}
@@ -413,7 +413,7 @@ export function PortalDock() {
                 "w-px h-8 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
                 "bg-daintree-text/20",
                 "group-hover:bg-daintree-text/35 group-focus:bg-daintree-accent",
-                isResizing && "bg-daintree-accent"
+                isResizing && "bg-daintree-text/50"
               )}
             />
           </div>

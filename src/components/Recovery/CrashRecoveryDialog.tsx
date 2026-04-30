@@ -235,8 +235,8 @@ export function CrashRecoveryDialog({
               className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-daintree-border hover:border-daintree-accent hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
               data-testid="restore-button"
             >
-              <div className="mt-0.5 h-5 w-5 rounded-full bg-daintree-accent/20 flex items-center justify-center shrink-0">
-                <div className="h-2 w-2 rounded-full bg-daintree-accent" />
+              <div className="mt-0.5 h-5 w-5 rounded-full bg-overlay-medium flex items-center justify-center shrink-0">
+                <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
               </div>
               <div>
                 <div className="text-sm font-medium text-daintree-text">

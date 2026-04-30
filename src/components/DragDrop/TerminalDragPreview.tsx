@@ -38,7 +38,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
             position: "absolute",
             top: -8,
             right: -8,
-            backgroundColor: "var(--color-daintree-accent)",
+            backgroundColor: "var(--color-daintree-text)",
             color: "var(--color-daintree-bg)",
             borderRadius: "9999px",
             padding: "2px 6px",

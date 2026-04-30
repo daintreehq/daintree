@@ -1228,7 +1228,7 @@ export function BulkCreateWorktreeDialog({
                     className="w-8 h-8 rounded-full shrink-0"
                   />
                 ) : (
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-daintree-accent/10 text-daintree-accent">
+                  <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-overlay-medium text-daintree-text/60">
                     <UserPlus className="w-4 h-4" />
                   </div>
                 )}

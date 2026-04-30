@@ -144,7 +144,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 "bg-overlay-medium text-daintree-text border-border-strong aria-selected:bg-overlay-medium aria-selected:text-daintree-text";
 ```
 
-**Usage:** Combine with `transition-colors` for smooth toggle transitions. The active segment gets a neutral background fill and text emphasis; the border distinguishes it from inactive peers. Accent must NOT appear on any toggle segment. Current implementation in `FleetArmingDialog.tsx` ChipButton (lines 370-390) uses `bg-overlay-subtle`; this recipe prescribes the canonical target (`overlay-medium`).
+**Usage:** Combine with `transition-colors` for smooth toggle transitions. The active segment gets a neutral background fill and text emphasis; the border distinguishes it from inactive peers. Accent must NOT appear on any toggle segment. Current implementation in `FleetArmingDialog.tsx` ChipButton (lines 538-558) uses `bg-overlay-subtle`; this recipe prescribes the canonical target (`overlay-medium`).
 
 ---
 
@@ -227,7 +227,7 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | Worktree Card         | `WorktreeCard.tsx`                       | Card hover with accent-tinged border + elevation |
 | GitHub Settings Tab   | `GitHubSettingsTab.tsx` (line 213)       | Input focus with border-shift (no outline)       |
 | Notification Settings | `NotificationSettingsTab.tsx` (line 217) | Input focus with border-shift (no outline)       |
-| Segmented Toggle      | `FleetArmingDialog.tsx` (line 370)       | Active segment with neutral overlay lift         |
+| Segmented Toggle      | `FleetArmingDialog.tsx` (line 538)       | Active segment with neutral overlay lift         |
 | Settings Switch Row   | `SettingsSwitchCard.tsx`                 | Neutral row, accent only on switch track         |
 | Portal Drag Handle    | `PortalToolbar.tsx` (line 107)           | Drag state with elevation + scale, no accent     |
 | Inline Rename Input   | `TabButton.tsx` (line 274)               | Neutral border with accent focus outline only    |

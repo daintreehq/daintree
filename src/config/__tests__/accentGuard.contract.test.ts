@@ -155,8 +155,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
   "#5984": [
     "src/components/GitHub/BulkCreateWorktreeDialog.tsx",
     "src/components/Worktree/NewWorktreeDialog.tsx",
-    "src/components/DragDrop/DockPlaceholder.tsx",
-    "src/components/DragDrop/GridPlaceholder.tsx",
   ],
 
   // #5985: [panels] Exit Focus badge competes with macro-focus ring
@@ -187,7 +185,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/GitHub/GitHubDropdownSkeletons.tsx",
     "src/components/GitHub/GitHubListItem.tsx",
     "src/components/GitHub/GitHubResourceList.tsx",
-    "src/components/HelpPanel/HelpPanel.tsx",
     "src/components/KeyboardShortcuts/SettingsShortcutCapture.tsx",
     "src/components/LogLevelPalette/LogLevelPalette.tsx",
     "src/components/Notifications/NotificationCenterEntry.tsx",
@@ -273,7 +270,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Worktree/WorktreePalette.tsx",
     "src/hooks/useUpdateListener.tsx",
     "src/components/agents/AgentCard.tsx",
-    "src/components/DragDrop/SortableTerminal.tsx",
     "src/components/GitHub/CommitList.tsx",
     "src/components/Layout/ContentDock.tsx",
     "src/components/Layout/DockedTabGroup.tsx",

@@ -28,7 +28,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
     <div
       className={cn(
         "h-full w-full rounded flex flex-col overflow-hidden",
-        "border border-daintree-accent/40 bg-daintree-accent/5",
+        "border border-border-strong bg-overlay-subtle",
         "animate-in fade-in duration-200",
         className
       )}
@@ -38,13 +38,13 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
       <div
         className={cn(
           "flex items-center gap-2 px-3 h-7 shrink-0 font-mono text-xs",
-          "bg-daintree-accent/10 border-b border-daintree-accent/10"
+          "bg-overlay-medium border-b border-border-strong/30"
         )}
       >
-        <span className="shrink-0 flex items-center justify-center text-daintree-accent/80">
+        <span className="shrink-0 flex items-center justify-center text-daintree-text/50">
           <TerminalIcon kind={kind} chrome={chrome} className="w-3.5 h-3.5" />
         </span>
-        <span className="font-medium text-daintree-accent/80 truncate opacity-80">{title}</span>
+        <span className="font-medium text-daintree-text/60 truncate">{title}</span>
       </div>
 
       {/* Panel-specific placeholder body */}

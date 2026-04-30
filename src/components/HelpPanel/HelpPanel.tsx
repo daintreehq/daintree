@@ -244,8 +244,8 @@ export function HelpPanel() {
         tabIndex={0}
         className={cn(
           "absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10",
-          "hover:bg-daintree-accent/20 active:bg-daintree-accent/30 transition-colors",
-          isResizing && "bg-daintree-accent/30"
+          "hover:bg-overlay-soft active:bg-overlay-medium transition-colors",
+          isResizing && "bg-overlay-medium"
         )}
         onMouseDown={handleResizeStart}
         onKeyDown={handleResizeKeyDown}

@@ -137,7 +137,7 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
             className={cn(
               "group absolute top-0 -right-1.5 w-3 h-full cursor-col-resize flex items-center justify-center z-50",
               "hover:bg-overlay-soft transition-colors focus-visible:outline-hidden focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
-              isResizing && "bg-daintree-accent/20"
+              isResizing && "bg-overlay-medium"
             )}
             onMouseDown={startResizing}
             onKeyDown={handleKeyDown}
@@ -149,7 +149,7 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
                 "w-px h-8 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
                 "bg-daintree-text/20",
                 "group-hover:bg-daintree-text/35 group-focus-visible:bg-daintree-accent",
-                isResizing && "bg-daintree-accent"
+                isResizing && "bg-daintree-text/50"
               )}
             />
           </div>
