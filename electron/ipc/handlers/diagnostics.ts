@@ -165,13 +165,19 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   // event.sender.id (cannot be spoofed by the renderer payload).
   handlers.push(
     typedHandleWithContext(CHANNELS.SYSTEM_REPORT_BLINK_MEMORY, (ctx, payload) => {
-      if (!payload || typeof payload.allocated !== "number") return;
+      // Number.isFinite filters NaN/Infinity that `typeof === "number"` would
+      // otherwise accept; observability data should not be silently corrupted.
+      if (!payload || !Number.isFinite(payload.allocated)) return;
+      // Late IPC reply against an evicted view: don't reinsert into the
+      // sample map (forgetBlinkSample already cleaned it up on cleanupEntry).
+      if (ctx.event.sender.isDestroyed()) return;
+      const optionalKb = (v: unknown): number | undefined =>
+        Number.isFinite(v) ? (v as number) : undefined;
       recordBlinkSample(ctx.webContentsId, {
         allocated: payload.allocated,
-        marked: typeof payload.marked === "number" ? payload.marked : undefined,
-        total: typeof payload.total === "number" ? payload.total : undefined,
-        partitionAlloc:
-          typeof payload.partitionAlloc === "number" ? payload.partitionAlloc : undefined,
+        marked: optionalKb(payload.marked),
+        total: optionalKb(payload.total),
+        partitionAlloc: optionalKb(payload.partitionAlloc),
       });
     })
   );

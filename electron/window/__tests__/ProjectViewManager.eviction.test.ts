@@ -134,6 +134,7 @@ vi.mock("../../services/PtyManager.js", () => ({
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { logInfo } from "../../utils/logger.js";
+import { forgetBlinkSample } from "../../services/ProcessMemoryMonitor.js";
 import { detachRendererConsoleCapture } from "../rendererConsoleCapture.js";
 
 function createMockWindow() {
@@ -480,6 +481,83 @@ describe("ProjectViewManager — eviction safety", () => {
       "projectview.eviction",
       expect.objectContaining({ projectId: "proj-a", memoryKb: 250 * 1024 })
     );
+  });
+
+  it("falls back to LRU when app.getAppMetrics() throws", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+
+    mockGetAppMetrics.mockImplementation(() => {
+      throw new Error("metrics unavailable");
+    });
+
+    // Eviction must still complete without throwing — LRU drives the choice.
+    await expect(managerWithLimit.switchTo("proj-c", "/path/c")).resolves.toBeDefined();
+
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).not.toContain("proj-a");
+    expect(remaining).toContain("proj-b");
+    expect(remaining).toContain("proj-c");
+  });
+
+  it("evicts in descending privateBytes order when limit shrinks past multiple views", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 4,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+    await managerWithLimit.switchTo("proj-d", "/path/d");
+
+    const wcB = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b")?.view
+      .webContents as ReturnType<typeof createMockWebContents>;
+    const wcC = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-c")?.view
+      .webContents as ReturnType<typeof createMockWebContents>;
+
+    // proj-d is active. Among the cached three (a, b, c), expect c (900) to
+    // evict before a (800), with b (100) surviving once limit drops to 2.
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 800 * 1024 } },
+      { pid: wcB.osPid, memory: { privateBytes: 100 * 1024 } },
+      { pid: wcC.osPid, memory: { privateBytes: 900 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    managerWithLimit.setCachedViewLimit(2);
+
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).toContain("proj-b");
+    expect(remaining).toContain("proj-d");
+    expect(remaining).not.toContain("proj-a");
+    expect(remaining).not.toContain("proj-c");
+  });
+
+  it("calls forgetBlinkSample with the evicted webContents id", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    expect(vi.mocked(forgetBlinkSample)).toHaveBeenCalledWith(wcA.id);
   });
 });
 

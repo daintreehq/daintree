@@ -570,7 +570,8 @@ export interface IpcInvokeMap {
   };
   // Renderer reports process.getBlinkMemoryInfo() to ProcessMemoryMonitor.
   // The webContents id is taken from event.sender on the handler side, so
-  // a renderer cannot claim to be a different view.
+  // a renderer cannot claim to be a different view. All numeric fields are
+  // kilobytes (Electron's BlinkMemoryInfo unit, not bytes).
   "system:report-blink-memory": {
     args: [
       payload: {

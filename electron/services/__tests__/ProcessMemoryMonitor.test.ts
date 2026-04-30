@@ -597,24 +597,34 @@ describe("ProcessMemoryMonitor", () => {
       }
     });
 
-    it("recordBlinkSample stores per-webContentsId payload and emits debug log", () => {
+    it("recordBlinkSample stores per-webContentsId payload (values in KB) and emits debug log", () => {
+      // Electron's BlinkMemoryInfo reports kilobytes; 50 MB == 50*1024 KB.
       recordBlinkSample(42, {
-        allocated: 50 * 1024 * 1024,
-        marked: 10 * 1024 * 1024,
-        total: 60 * 1024 * 1024,
-        partitionAlloc: 8 * 1024 * 1024,
+        allocated: 50 * 1024,
+        marked: 10 * 1024,
+        total: 60 * 1024,
+        partitionAlloc: 8 * 1024,
       });
 
       const stored = getBlinkSamples().get(42);
-      expect(stored?.allocated).toBe(50 * 1024 * 1024);
-      expect(stored?.marked).toBe(10 * 1024 * 1024);
-      expect(stored?.total).toBe(60 * 1024 * 1024);
-      expect(stored?.partitionAlloc).toBe(8 * 1024 * 1024);
+      expect(stored?.allocated).toBe(50 * 1024);
+      expect(stored?.marked).toBe(10 * 1024);
+      expect(stored?.total).toBe(60 * 1024);
+      expect(stored?.partitionAlloc).toBe(8 * 1024);
       expect(typeof stored?.timestamp).toBe("number");
 
       expect(logDebug).toHaveBeenCalledWith(
         "blink-memory-sample",
         expect.objectContaining({ webContentsId: 42, allocatedMb: 50, totalMb: 60 })
+      );
+    });
+
+    it("recordBlinkSample log conversion is KB → MB (regression for unit bug)", () => {
+      // 512 MB worth of Blink memory == 512*1024 KB.
+      recordBlinkSample(99, { allocated: 512 * 1024 });
+      expect(logDebug).toHaveBeenCalledWith(
+        "blink-memory-sample",
+        expect.objectContaining({ webContentsId: 99, allocatedMb: 512 })
       );
     });
 

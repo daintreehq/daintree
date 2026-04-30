@@ -36,13 +36,20 @@ interface PidTrendState {
 }
 
 export interface BlinkMemorySample {
-  /** process.getBlinkMemoryInfo().allocated — bytes currently in use by Blink. */
+  /**
+   * process.getBlinkMemoryInfo().allocated — kilobytes currently in use by
+   * Blink. Note: the Electron API reports KB, not bytes (electron.d.ts:
+   * BlinkMemoryInfo).
+   */
   allocated: number;
-  /** Bytes pinned by GC mark phase, when reported. */
+  /** Reserved for future Electron versions; not populated on Electron 41. */
   marked?: number;
-  /** Total reserved (allocated + free), when reported. */
+  /**
+   * process.getBlinkMemoryInfo().total — total reserved kilobytes (allocated
+   * + free) when the renderer reports it.
+   */
   total?: number;
-  /** PartitionAlloc-managed bytes, when reported. */
+  /** Reserved for future Electron versions; not populated on Electron 41. */
   partitionAlloc?: number;
   /** Wall-clock time the sample was recorded. */
   timestamp: number;
@@ -63,8 +70,9 @@ export function recordBlinkSample(
   blinkSamples.set(webContentsId, stored);
   logDebug("blink-memory-sample", {
     webContentsId,
-    allocatedMb: Math.round(sample.allocated / 1024 / 1024),
-    totalMb: typeof sample.total === "number" ? Math.round(sample.total / 1024 / 1024) : undefined,
+    // sample.allocated/total are in kilobytes per Electron's BlinkMemoryInfo.
+    allocatedMb: Math.round(sample.allocated / 1024),
+    totalMb: typeof sample.total === "number" ? Math.round(sample.total / 1024) : undefined,
   });
 }
 
