@@ -80,6 +80,7 @@ import {
   _getPreConsentBufferLength,
   type SentryEvent,
 } from "../TelemetryService.js";
+import { setWritesSuppressed, resetWritesSuppressedForTesting } from "../diskPressureState.js";
 
 function setPrivacy(patch: {
   telemetryLevel?: "off" | "errors" | "full";
@@ -701,6 +702,36 @@ describe("trackEvent", () => {
     for (const call of storeMock.set.mock.calls) {
       expect(call[0]).not.toContain("buffer");
     }
+  });
+});
+
+describe("trackEvent under disk pressure", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    captureEventMock.mockClear();
+    resetWritesSuppressedForTesting();
+    setPrivacy({ telemetryLevel: "off", hasSeenPrompt: false });
+    await setTelemetryEnabled(false);
+  });
+
+  it("does not call Sentry.captureEvent when writes are suppressed at 'full' level", async () => {
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    setPrivacy({ telemetryLevel: "full", hasSeenPrompt: true });
+    await initializeTelemetry();
+    captureEventMock.mockClear();
+
+    setWritesSuppressed(true);
+    trackEvent("onboarding_completed", { totalSteps: 3 });
+
+    expect(captureEventMock).not.toHaveBeenCalled();
+
+    setWritesSuppressed(false);
+    trackEvent("onboarding_completed", { totalSteps: 3 });
+    expect(captureEventMock).toHaveBeenCalledTimes(1);
+
+    resetWritesSuppressedForTesting();
+    process.env.SENTRY_DSN = original;
   });
 });
 

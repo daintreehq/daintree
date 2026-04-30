@@ -6,6 +6,7 @@ import type { ActionBreadcrumb } from "../../shared/types/ipc/crashRecovery.js";
 import type { SanitizedTelemetryEvent } from "../../shared/types/ipc/telemetryPreview.js";
 import { scrubSecrets } from "../utils/secretScrubber.js";
 import { emitTelemetryPreview, isTelemetryPreviewActive } from "./TelemetryPreviewBroadcaster.js";
+import { getWritesSuppressed } from "./diskPressureState.js";
 
 export interface SentryBreadcrumb {
   message?: string;
@@ -201,6 +202,9 @@ export async function initializeTelemetry(): Promise<void> {
         beforeSend: (event) => {
           const sanitized = sanitizeEvent(event as unknown as SentryEvent);
           if (sanitized) capturePreviewFromSanitizedEvent(sanitized);
+          // Drop the SDK send under disk pressure but still mirror to the
+          // preview stream above — preview is in-memory only.
+          if (getWritesSuppressed()) return null;
           return sanitized as unknown as typeof event;
         },
         initialScope: {
@@ -332,9 +336,13 @@ export function trackEvent(event: string, properties: Record<string, unknown> = 
 
   // Only send analytics events at "full" level; "errors" only permits crash reports via Sentry
   if (level === "full" && captureEventFn) {
-    // `beforeSend` will fire the preview tap as part of the capture path.
-    captureEventFn(buildAnalyticsSentryEvent(event, properties, Date.now()));
-    return;
+    // Skip the SDK submission under disk pressure but still mirror to the
+    // preview stream below if a subscriber is active.
+    if (!getWritesSuppressed()) {
+      // `beforeSend` will fire the preview tap as part of the capture path.
+      captureEventFn(buildAnalyticsSentryEvent(event, properties, Date.now()));
+      return;
+    }
   }
 
   // Preview should mirror what *would* be sent even when consent is off or

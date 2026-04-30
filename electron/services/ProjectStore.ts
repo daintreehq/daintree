@@ -33,6 +33,7 @@ import { cleanupQuarantinedProjectFiles } from "./projectQuarantineCleanup.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
 
 import { computeFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
+import { getWritesSuppressed } from "./diskPressureState.js";
 
 export const DEFAULT_PROJECT_EMOJI = "🌲";
 
@@ -164,6 +165,12 @@ export class ProjectStore {
     const existing = await this.getProjectByPath(normalizedPath);
     if (existing) {
       const now = Date.now();
+      // Skip frecency churn under disk pressure — these are non-critical
+      // ranking-signal writes. `lastOpened` is also non-critical here (the
+      // existing project row is unchanged for the user's purposes).
+      if (getWritesSuppressed()) {
+        return existing;
+      }
       const newScore = computeFrecencyScore(
         existing.frecencyScore ?? FRECENCY_COLD_START,
         existing.lastAccessedAt ?? 0,
@@ -504,11 +511,17 @@ export class ProjectStore {
     const db = getSharedDb();
 
     const now = Date.now();
-    const newScore = computeFrecencyScore(
-      project.frecencyScore ?? FRECENCY_COLD_START,
-      project.lastAccessedAt ?? 0,
-      now
-    );
+    // Suppress frecency-signal columns under disk pressure but keep the
+    // critical state updates (currentProjectId pointer + active/background
+    // status) unconditional — those are session state the user depends on.
+    const writesSuppressed = getWritesSuppressed();
+    const newScore = writesSuppressed
+      ? null
+      : computeFrecencyScore(
+          project.frecencyScore ?? FRECENCY_COLD_START,
+          project.lastAccessedAt ?? 0,
+          now
+        );
 
     db.transaction((tx) => {
       if (previousProjectId && previousProjectId !== projectId) {
@@ -522,15 +535,18 @@ export class ProjectStore {
         .values({ key: "currentProjectId", value: projectId })
         .onConflictDoUpdate({ target: appStateTable.key, set: { value: projectId } })
         .run();
-      tx.update(projectsTable)
-        .set({
-          lastOpened: now,
-          status: "active",
-          frecencyScore: newScore,
-          lastAccessedAt: now,
-        })
-        .where(eq(projectsTable.id, projectId))
-        .run();
+      const activeUpdate: {
+        status: "active";
+        lastOpened?: number;
+        frecencyScore?: number;
+        lastAccessedAt?: number;
+      } = { status: "active" };
+      if (!writesSuppressed && newScore !== null) {
+        activeUpdate.lastOpened = now;
+        activeUpdate.frecencyScore = newScore;
+        activeUpdate.lastAccessedAt = now;
+      }
+      tx.update(projectsTable).set(activeUpdate).where(eq(projectsTable.id, projectId)).run();
     });
 
     if (process.env.DAINTREE_VERBOSE) {

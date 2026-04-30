@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { app } from "electron";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
+import { setWritesSuppressed } from "./diskPressureState.js";
 
 export type DiskSpaceStatus = "normal" | "warning" | "critical";
 
@@ -69,6 +70,7 @@ export function startDiskSpaceMonitor(actions: DiskSpaceMonitorActions): () => v
     });
 
     currentStatus = { status, availableMb, writesSuppressed };
+    setWritesSuppressed(writesSuppressed);
 
     if (status !== lastStatus) {
       logInfo("disk-space-status-changed", {

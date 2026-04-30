@@ -20,6 +20,10 @@ import {
   setVerboseLogging,
 } from "../logger.js";
 import { logBuffer } from "../../services/LogBuffer.js";
+import {
+  setWritesSuppressed,
+  resetWritesSuppressedForTesting,
+} from "../../services/diskPressureState.js";
 
 const TEST_LOG_DIR = join(process.cwd(), "test-logs");
 
@@ -42,6 +46,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetLoggerStateForTesting();
+  resetWritesSuppressedForTesting();
   delete process.env.DAINTREE_USER_DATA;
   cleanupTestLogs();
 });
@@ -220,6 +225,42 @@ describe("logger", () => {
       logError("Error log", new Error("Test error"));
 
       expect(getLogFilePath()).toBeTruthy();
+    });
+  });
+
+  describe("disk pressure suppression", () => {
+    it("does not append to the log file when writes are suppressed", () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      logInfo("baseline write before suppression");
+      const beforeSize = existsSync(logFile) ? readFileSync(logFile, "utf8").length : 0;
+      expect(beforeSize).toBeGreaterThan(0);
+
+      setWritesSuppressed(true);
+      logInfo("suppressed entry should not reach disk");
+      logWarn("another suppressed entry");
+
+      const afterSize = readFileSync(logFile, "utf8").length;
+      expect(afterSize).toBe(beforeSize);
+      const content = readFileSync(logFile, "utf8");
+      expect(content).not.toContain("suppressed entry should not reach disk");
+      expect(content).not.toContain("another suppressed entry");
+    });
+
+    it("resumes writing once disk pressure clears", () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      setWritesSuppressed(true);
+      logInfo("dropped during suppression");
+
+      setWritesSuppressed(false);
+      logInfo("written after recovery");
+
+      const content = readFileSync(logFile, "utf8");
+      expect(content).not.toContain("dropped during suppression");
+      expect(content).toContain("written after recovery");
     });
   });
 
