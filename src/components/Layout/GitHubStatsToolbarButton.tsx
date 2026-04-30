@@ -41,6 +41,24 @@ function formatRateLimitCountdown(remainingMs: number): string {
   return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
 }
 
+// Returns the milliseconds until `formatRateLimitCountdown` next produces a
+// different string. Used to schedule the countdown's next tick exactly at the
+// label-change boundary instead of polling every second.
+//
+// In the hours range the label only includes minutes (e.g. "1h 5m"), so the
+// next change happens when `Math.ceil(remainingMs / 1000)` drops below the
+// current minute boundary. In the seconds and minutes ranges the seconds
+// component is part of the label, so cadence stays at 1Hz.
+export function msUntilNextLabelChange(remainingMs: number): number {
+  if (remainingMs <= 0) return 0;
+  const totalSeconds = Math.ceil(remainingMs / 1000);
+  if (totalSeconds < 3600) {
+    return remainingMs % 1000 || 1000;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  return remainingMs - (60_000 * minutes - 1000);
+}
+
 const LazyGitHubResourceList = lazy(() =>
   import("@/components/GitHub/GitHubResourceList").then((m) => ({
     default: m.GitHubResourceList,
@@ -98,31 +116,48 @@ export const GitHubStatsToolbarButton = memo(
     const prevLastUpdatedRef = useRef<number | null>(null);
 
     useEffect(() => {
-      if (rateLimitResetAt === null || rateLimitResetAt <= Date.now()) {
+      if (
+        rateLimitResetAt === null ||
+        !Number.isFinite(rateLimitResetAt) ||
+        rateLimitResetAt <= Date.now()
+      ) {
         setRateLimitCountdown(null);
         return;
       }
-      let intervalId: number | null = null;
+      let timeoutId: number | null = null;
+
       const tick = () => {
+        timeoutId = null;
         const remainingMs = rateLimitResetAt - Date.now();
         if (remainingMs <= 0) {
           setRateLimitCountdown(null);
-          // Stop ticking once we've hit zero — otherwise the 1Hz interval
-          // keeps running uselessly until the component unmounts.
-          if (intervalId !== null) {
-            window.clearInterval(intervalId);
-            intervalId = null;
-          }
           return;
         }
         setRateLimitCountdown(formatRateLimitCountdown(remainingMs));
-      };
-      tick();
-      intervalId = window.setInterval(tick, 1000);
-      return () => {
-        if (intervalId !== null) {
-          window.clearInterval(intervalId);
+        if (!document.hidden) {
+          timeoutId = window.setTimeout(tick, msUntilNextLabelChange(remainingMs));
         }
+      };
+
+      const onVisibility = () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        if (!document.hidden) {
+          tick();
+        }
+      };
+
+      tick();
+      document.addEventListener("visibilitychange", onVisibility);
+
+      return () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        document.removeEventListener("visibilitychange", onVisibility);
       };
     }, [rateLimitResetAt]);
 
