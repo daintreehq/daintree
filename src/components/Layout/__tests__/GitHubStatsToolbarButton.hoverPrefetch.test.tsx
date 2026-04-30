@@ -2,12 +2,13 @@
 /**
  * GitHubStatsToolbarButton — hover-to-prefetch (issue #6282).
  *
- * The Issues and PRs toolbar buttons start the list and stats fetch on
- * pointerenter (mouse only) so the requests are already in flight by the
- * time the user clicks. The 150ms trailing-edge debounce filters mouse
- * traversal across the toolbar; pointerleave cancels a pending prefetch.
- * Cache freshness, token errors, rate limits, and open dropdowns short-
- * circuit the prefetch so it never duplicates work.
+ * The Issues and PRs toolbar buttons silently prime the list cache on
+ * pointerenter (mouse only) so the dropdown opens with no spinner. The
+ * 150ms trailing-edge debounce filters mouse traversal across the toolbar;
+ * pointerleave cancels a pending prefetch. Cache freshness, token errors,
+ * rate limits, and open dropdowns short-circuit the prefetch so it never
+ * duplicates work. Hover never triggers the toolbar status indicator —
+ * only an actual click drives visible loading/success state.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, cleanup, act } from "@testing-library/react";
@@ -227,18 +228,20 @@ describe("GitHubStatsToolbarButton hover prefetch", () => {
     });
   });
 
-  it("calls refreshStats (non-forced) when prefetch fires", async () => {
+  it("does not call refreshStats from the hover path — prefetch must stay silent", async () => {
     const { container } = renderToolbar();
 
     pointerEnter(getIssuesButton(container));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(150);
     });
+    // Let the prefetch promise settle in case a stats refresh were chained.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
 
-    expect(refreshStatsMock).toHaveBeenCalled();
-    // Non-forced: refresh() called with no args (or no force flag).
-    const call = refreshStatsMock.mock.calls[refreshStatsMock.mock.calls.length - 1];
-    expect(call?.[0]?.force).toBeUndefined();
+    expect(refreshStatsMock).not.toHaveBeenCalled();
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
   });
 
   it("writes prefetch result to the cache under the matching key", async () => {

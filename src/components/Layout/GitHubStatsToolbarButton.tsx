@@ -241,11 +241,9 @@ export const GitHubStatsToolbarButton = memo(
         const cached = getCache(cacheKey);
         if (cached && Date.now() - cached.timestamp < PREFETCH_FRESHNESS_MS) return;
 
-        // Stats refresh in parallel — non-forced so the in-flight guard inside
-        // useRepositoryStats coalesces with any subsequent click-time forced
-        // refresh rather than firing two backend requests.
-        void refreshStats();
-
+        // Hover prefetch primes the list cache silently. The count badge stays
+        // fresh via the 30s background poll and the click-time forced refresh
+        // — refreshing stats here would flicker the toolbar status indicator.
         inFlightRef.current = true;
         const fetchOptions = {
           cwd: currentProject.path,
@@ -277,7 +275,7 @@ export const GitHubStatsToolbarButton = memo(
             inFlightRef.current = false;
           });
       },
-      [currentProject, isTokenError, rateLimitActive, refreshStats]
+      [currentProject, isTokenError, rateLimitActive]
     );
 
     const handlePrefetchPointerEnter = useCallback(
