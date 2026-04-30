@@ -992,6 +992,30 @@ export class ProcessDetector {
     // Case B — no tree agent match, but shell is valid with an agent. The
     // title-rewriting CLI and blind-`ps` cases both land here.
     if (shellEvidenceValid && shellIdentity?.agentType) {
+      // Runtime-promoted demote escape hatch. The "shell evidence wins on
+      // empty tree" rule exists for title-rewriting CLIs where the agent is
+      // alive but invisible to `ps`. For runtime-promoted plain terminals
+      // (no launch anchor) AFTER an agent has already been committed, that
+      // anchor becomes too sticky: the user Ctrl+C'd the CLI in a plain
+      // shell and tree absence is now the authoritative lifecycle signal.
+      // Stop overriding tree-empty with stale shell evidence in that case;
+      // let off-streak hysteresis demote. Bootstrap promotion (no commit
+      // yet, `lastDetected === null`) still goes through normally so a
+      // typed `claude` in an empty tree can still commit before the agent
+      // process appears in `ps`.
+      const cacheHealthy = this.cache.getLastError() === null;
+      if (
+        !this.isLaunchAnchored &&
+        this.lastDetected !== null &&
+        !ctx.isBusy &&
+        treeMatch === null &&
+        cacheHealthy
+      ) {
+        return makeNoAgentResult({
+          isBusy: ctx.isBusy,
+          currentCommand: ctx.currentCommand,
+        });
+      }
       return makeAgentResult({
         agentType: shellIdentity.agentType,
         processIconId: shellIdentity.processIconId ?? treeMatch?.processIconId,
