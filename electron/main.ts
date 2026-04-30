@@ -207,6 +207,15 @@ if (!gotTheLock) {
         getWorkspaceClientRef()?.removeDirectPort(wcId);
         getWorktreePortBrokerRef()?.closePortsForView(wcId);
       },
+      onViewCached: (wcId) => {
+        // Same producer cleanup as eviction: a cached view becomes
+        // freeze-eligible once setBackgroundThrottling(true) is applied.
+        // Live worktree/workspace ports would otherwise queue messages
+        // into a frozen renderer (#6273). Reactivation re-brokers a fresh
+        // port via activateProjectView in projectCrud/switch.ts.
+        getWorkspaceClientRef()?.removeDirectPort(wcId);
+        getWorktreePortBrokerRef()?.closePortsForView(wcId);
+      },
       onViewReady: (wc) => {
         // Re-distribute PTY MessagePort on every view load/reload.
         // This ensures terminals work after view creation, crash recovery, or DevTools refresh.

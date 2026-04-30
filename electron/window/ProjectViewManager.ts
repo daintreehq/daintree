@@ -57,6 +57,13 @@ export interface ProjectViewManagerOptions {
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   /** Called when a view is evicted (destroyed) with its webContents.id, for port cleanup */
   onViewEvicted?: (webContentsId: number) => void;
+  /**
+   * Called when a view transitions from active to cached with its webContents.id.
+   * Mirrors onViewEvicted: live producer ports (worktree, workspace direct) must
+   * be closed so messages don't accumulate in a renderer that Chromium may freeze
+   * after backgroundThrottling is enabled. Reactivation re-brokers a fresh port.
+   */
+  onViewCached?: (webContentsId: number) => void;
   /** Called on every did-finish-load for any managed view (initial load and reloads) */
   onViewReady?: (webContents: Electron.WebContents) => void;
   /** Number of project views to keep cached in memory (1–5, default: 1) */
@@ -72,6 +79,7 @@ export class ProjectViewManager {
   private dirname: string;
   private onRecreateWindow?: () => Promise<void>;
   private onViewEvicted?: (webContentsId: number) => void;
+  private onViewCached?: (webContentsId: number) => void;
   private onViewReady?: (webContents: Electron.WebContents) => void;
   private windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
@@ -83,6 +91,7 @@ export class ProjectViewManager {
     this.dirname = opts.dirname;
     this.onRecreateWindow = opts.onRecreateWindow;
     this.onViewEvicted = opts.onViewEvicted;
+    this.onViewCached = opts.onViewCached;
     this.onViewReady = opts.onViewReady;
     this.windowRegistry = opts.windowRegistry;
     if (opts.cachedProjectViews != null) {
@@ -336,6 +345,17 @@ export class ProjectViewManager {
 
     // Throttle background view to reduce CPU and allow Chromium to reclaim memory
     if (!current.view.webContents.isDestroyed()) {
+      const cachedWcId = current.view.webContents.id;
+      // Close live producer ports BEFORE enabling background throttling. Once
+      // throttled, Chromium can freeze the renderer after ~5 min hidden or
+      // under memory pressure; any messages still posted by main/utility
+      // processes accumulate in the frozen renderer's task queue (no native
+      // backpressure). Reactivation re-brokers a fresh port via activateView.
+      try {
+        this.onViewCached?.(cachedWcId);
+      } catch (error) {
+        console.error("[ProjectViewManager] onViewCached threw during deactivate:", error);
+      }
       current.view.webContents.setBackgroundThrottling(true);
 
       // Trigger V8 GC after a short delay to reclaim orphaned heap from
