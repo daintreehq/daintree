@@ -2,6 +2,7 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
+import { resilientAtomicWriteFileSync } from "../utils/fs.js";
 
 const TRASHED_PIDS_FILENAME = "trashed-pids.json";
 
@@ -187,19 +188,9 @@ export class TrashedPidTracker {
   }
 
   private writeEntries(entries: TrashedPidEntry[]): void {
-    const tmpPath = `${this.filePath}.${Date.now()}.tmp`;
     try {
-      fs.writeFileSync(tmpPath, JSON.stringify(entries), {
-        encoding: "utf8",
-        flush: true,
-      } as Parameters<typeof fs.writeFileSync>[2]);
-      fs.renameSync(tmpPath, this.filePath);
+      resilientAtomicWriteFileSync(this.filePath, JSON.stringify(entries), "utf8");
     } catch (err) {
-      try {
-        fs.unlinkSync(tmpPath);
-      } catch {
-        // ignore
-      }
       console.warn("[TrashedPidTracker] Failed to write trashed PIDs:", err);
     }
   }
