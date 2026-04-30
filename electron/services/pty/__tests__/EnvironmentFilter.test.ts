@@ -37,6 +37,21 @@ describe("isSensitiveVar", () => {
     it("blocks JWT_SECRET", () => expect(isSensitiveVar("JWT_SECRET")).toBe(true));
   });
 
+  describe("pattern blocklist — SDK auth vars", () => {
+    it("blocks AWS_BEARER_TOKEN_BEDROCK", () =>
+      expect(isSensitiveVar("AWS_BEARER_TOKEN_BEDROCK")).toBe(true));
+    it("blocks ANTHROPIC_AUTH_TOKEN", () =>
+      expect(isSensitiveVar("ANTHROPIC_AUTH_TOKEN")).toBe(true));
+    it("blocks OPENAI_WEBHOOK_SECRET", () =>
+      expect(isSensitiveVar("OPENAI_WEBHOOK_SECRET")).toBe(true));
+    it("blocks COPILOT_CLI_TOKEN", () => expect(isSensitiveVar("COPILOT_CLI_TOKEN")).toBe(true));
+    it("blocks SRC_ACCESS_TOKEN", () => expect(isSensitiveVar("SRC_ACCESS_TOKEN")).toBe(true));
+    it("blocks GH_ENTERPRISE_TOKEN", () =>
+      expect(isSensitiveVar("GH_ENTERPRISE_TOKEN")).toBe(true));
+    it("blocks GITHUB_ENTERPRISE_TOKEN", () =>
+      expect(isSensitiveVar("GITHUB_ENTERPRISE_TOKEN")).toBe(true));
+  });
+
   describe("safe vars — must NOT be blocked", () => {
     it("allows PATH", () => expect(isSensitiveVar("PATH")).toBe(false));
     it("allows HOME", () => expect(isSensitiveVar("HOME")).toBe(false));
