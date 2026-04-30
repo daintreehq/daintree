@@ -230,6 +230,11 @@ describe("secretScrubber", () => {
         expected: "fetch http://<credentials-redacted>@internal.example.com/path",
       },
       {
+        name: "url-basic-auth-percent-encoded",
+        input: "clone https://oauth2:%24token%2Fvalue@gitlab.com/a/b.git",
+        expected: "clone https://<credentials-redacted>@gitlab.com/a/b.git",
+      },
+      {
         name: "generic-api-key-fallback",
         input: `API_KEY=${"A".repeat(32)} trailing`,
         expected: `${REDACTED} trailing`,
@@ -323,6 +328,15 @@ describe("secretScrubber", () => {
     it("does not flag a URL without basic-auth credentials", () => {
       const url = "https://example.com/path?foo=bar";
       expect(scrubSecrets(url)).toBe(url);
+    });
+
+    it("redacts realistically-sized Atlassian token bodies fully", () => {
+      // Real Atlassian tokens are ~170-200 chars. The {120,512} upper bound
+      // must cover that range plus generous headroom. A 400-char body is well
+      // past typical and must still be fully consumed by the pattern.
+      const realistic = `auth=ATATT3x${"A".repeat(400)}`;
+      const out = scrubSecrets(realistic);
+      expect(out).toBe(`auth=${REDACTED}`);
     });
   });
 

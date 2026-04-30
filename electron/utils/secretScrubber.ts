@@ -126,8 +126,9 @@ export const PATTERNS: readonly SecretPattern[] = [
     name: "atlassian-token",
     // `ATATT3x` (API tokens) and `ATCTT3x` (Connect/access tokens). Body is
     // base64url-ish and frequently ends with `=` padding, so no trailing `\b`
-    // (it would fail to match after a non-word `=` char).
-    regex: /\bAT[AC]TT3x[A-Za-z0-9+/=_-]{120,256}/g,
+    // (it would fail to match after a non-word `=` char). Upper bound 512 so
+    // unusually long tokens don't leave a tail visible.
+    regex: /\bAT[AC]TT3x[A-Za-z0-9+/=_-]{120,512}/g,
     replacement: REDACTED,
   },
   {
