@@ -13,6 +13,12 @@ for (const stream of [process.stdout, process.stderr]) {
   }
 }
 
+import nodeV8 from "node:v8";
+// Auto-dump up to two heap snapshots when this utility process is genuinely
+// close to V8's heap limit. Snapshot path follows the parent's `--diagnostic-dir`
+// execArgv (set in WorkspaceHostProcess).
+nodeV8.setHeapSnapshotNearHeapLimit(2);
+
 import { MessagePort } from "node:worker_threads";
 import { initializeLogger, setLogLevelOverrides } from "./utils/logger.js";
 import { copyTreeService } from "./services/CopyTreeService.js";

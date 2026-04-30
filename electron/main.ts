@@ -3,6 +3,13 @@ import "./setup/environment.js";
 
 import nodeV8 from "node:v8";
 import { app, BrowserWindow, crashReporter, protocol } from "electron";
+
+// Ask V8 to auto-dump a heap snapshot when the main process is genuinely close
+// to its heap limit. Complements the existing dev-only 600 MB RSS heuristic in
+// ProcessMemoryMonitor, but works in packaged builds too. Snapshot files land
+// in the process CWD (or wherever `--diagnostic-dir` points). count=2 caps
+// lifetime auto-dumps so a thrashing process can't fill the disk.
+nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import { startDevDiagnostics } from "./setup/devDiagnostics.js";
 import path from "path";

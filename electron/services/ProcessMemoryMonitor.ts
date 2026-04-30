@@ -35,11 +35,62 @@ interface PidTrendState {
   emaHistory: number[];
 }
 
+export interface BlinkMemorySample {
+  /** process.getBlinkMemoryInfo().allocated — bytes currently in use by Blink. */
+  allocated: number;
+  /** Bytes pinned by GC mark phase, when reported. */
+  marked?: number;
+  /** Total reserved (allocated + free), when reported. */
+  total?: number;
+  /** PartitionAlloc-managed bytes, when reported. */
+  partitionAlloc?: number;
+  /** Wall-clock time the sample was recorded. */
+  timestamp: number;
+}
+
+const blinkSamples = new Map<number, BlinkMemorySample>();
+
+/**
+ * Called by the IPC handler when a renderer reports its Blink memory snapshot.
+ * Keyed by webContents id; cleared on view eviction via `forgetBlinkSample`.
+ * Logs at debug level — issue #6272 is about visibility, not alerting.
+ */
+export function recordBlinkSample(
+  webContentsId: number,
+  sample: Omit<BlinkMemorySample, "timestamp">
+): void {
+  const stored: BlinkMemorySample = { ...sample, timestamp: Date.now() };
+  blinkSamples.set(webContentsId, stored);
+  logDebug("blink-memory-sample", {
+    webContentsId,
+    allocatedMb: Math.round(sample.allocated / 1024 / 1024),
+    totalMb: typeof sample.total === "number" ? Math.round(sample.total / 1024 / 1024) : undefined,
+  });
+}
+
+/** Drop a renderer's last Blink sample (call from ProjectViewManager onViewEvicted). */
+export function forgetBlinkSample(webContentsId: number): void {
+  blinkSamples.delete(webContentsId);
+}
+
+/** Read-only view for diagnostics / tests. */
+export function getBlinkSamples(): ReadonlyMap<number, BlinkMemorySample> {
+  return blinkSamples;
+}
+
 export interface MemoryPressureActions {
   clearCaches: () => Promise<void>;
   destroyHiddenWebviews: (tier: 1 | 2) => Promise<void>;
   hibernateIdleProjects: () => Promise<void>;
   trimPtyHostState?: () => void;
+  /**
+   * Optional Blink memory sampler. If wired, called once per poll BEFORE
+   * pressure evaluation so renderer samples land alongside the metrics
+   * snapshot. Implementations should fan a `window:sample-blink-memory`
+   * push event out to live renderers; renderers reply via the
+   * `system:report-blink-memory` IPC channel which calls `recordBlinkSample`.
+   */
+  sampleBlinkMemory?: () => void;
 }
 
 function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
@@ -57,6 +108,14 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   const timer = setInterval(() => {
     try {
       pollCount++;
+      // Kick off a Blink-memory sample fan-out for this tick. Renderer replies
+      // arrive asynchronously via the SYSTEM_REPORT_BLINK_MEMORY handler and
+      // populate `blinkSamples` for the next poll's diagnostics.
+      try {
+        actions?.sampleBlinkMemory?.();
+      } catch {
+        /* non-critical */
+      }
       const metrics = app.getAppMetrics();
       const activePids = new Set<number>();
       let hasPressure = false;

@@ -417,6 +417,9 @@ export class WorkspaceHostProcess extends EventEmitter {
         serviceName: this.serviceName,
         stdio: "pipe",
         cwd: os.homedir(),
+        // Redirect v8.setHeapSnapshotNearHeapLimit dumps (set in
+        // workspace-host.ts) into the app's logs directory.
+        execArgv: [`--diagnostic-dir=${app.getPath("logs")}`],
         env: {
           ...(process.env as Record<string, string>),
           DAINTREE_USER_DATA: app.getPath("userData"),

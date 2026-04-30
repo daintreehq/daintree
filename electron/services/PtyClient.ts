@@ -459,7 +459,13 @@ export class PtyClient extends EventEmitter {
         serviceName: "daintree-pty-host",
         stdio: "pipe",
         cwd: os.homedir(),
-        execArgv: [`--max-old-space-size=${this.config.memoryLimitMb}`],
+        // `--diagnostic-dir` redirects v8.setHeapSnapshotNearHeapLimit dumps
+        // (set in pty-host.ts) into the app's logs directory instead of the
+        // utility process CWD (homedir).
+        execArgv: [
+          `--max-old-space-size=${this.config.memoryLimitMb}`,
+          `--diagnostic-dir=${app.getPath("logs")}`,
+        ],
         env: {
           ...(process.env as Record<string, string>),
           DAINTREE_USER_DATA: app.getPath("userData"),

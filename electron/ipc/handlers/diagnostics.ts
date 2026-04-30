@@ -18,6 +18,7 @@ import type {
   DiagnosticsBundleSavePayload,
 } from "../../../shared/types/ipc/system.js";
 import type * as DiagnosticsCollectorModule from "../../services/DiagnosticsCollector.js";
+import { recordBlinkSample } from "../../services/ProcessMemoryMonitor.js";
 
 let cachedDiagnosticsCollector: typeof DiagnosticsCollectorModule | null = null;
 async function getDiagnosticsCollector(): Promise<typeof DiagnosticsCollectorModule> {
@@ -33,7 +34,7 @@ import {
   applyReplacements,
   type ReplacementRule,
 } from "../../../shared/utils/diagnosticsTransform.js";
-import { typedHandle } from "../utils.js";
+import { typedHandle, typedHandleWithContext } from "../utils.js";
 
 let eventLoopHistogram: IntervalHistogram | null = null;
 
@@ -159,6 +160,21 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     }
   };
   handlers.push(typedHandle(CHANNELS.DIAGNOSTICS_GET_INFO, handleGetDiagnosticsInfo));
+
+  // Renderer report → ProcessMemoryMonitor. webContents id is taken from
+  // event.sender.id (cannot be spoofed by the renderer payload).
+  handlers.push(
+    typedHandleWithContext(CHANNELS.SYSTEM_REPORT_BLINK_MEMORY, (ctx, payload) => {
+      if (!payload || typeof payload.allocated !== "number") return;
+      recordBlinkSample(ctx.webContentsId, {
+        allocated: payload.allocated,
+        marked: typeof payload.marked === "number" ? payload.marked : undefined,
+        total: typeof payload.total === "number" ? payload.total : undefined,
+        partitionAlloc:
+          typeof payload.partitionAlloc === "number" ? payload.partitionAlloc : undefined,
+      });
+    })
+  );
 
   const handleGetHardwareInfo = (): HardwareInfo => {
     try {

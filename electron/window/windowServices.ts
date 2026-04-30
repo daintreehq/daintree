@@ -544,6 +544,32 @@ export async function setupWindowServices(
           trimPtyHostState: () => {
             ptyClient?.trimState(SCROLLBACK_BACKGROUND);
           },
+          sampleBlinkMemory: () => {
+            if (!windowRegistry) return;
+            const requestId = `blink-${Date.now().toString(36)}`;
+            for (const wCtx of windowRegistry.all()) {
+              const w = wCtx.browserWindow;
+              if (w.isDestroyed()) continue;
+              // Per-window PVM tracks every cached project renderer; falling
+              // back to the app webContents covers windows still on the
+              // bootstrap shell (no PVM yet).
+              const pvm = wCtx.services.projectViewManager;
+              const targets = pvm
+                ? pvm.getAllViews().map((v) => v.view.webContents)
+                : [getAppWebContents(w)];
+              for (const wc of targets) {
+                if (!wc || wc.isDestroyed()) continue;
+                try {
+                  wc.send(CHANNELS.EVENTS_PUSH, {
+                    name: "window:sample-blink-memory",
+                    payload: { requestId },
+                  });
+                } catch {
+                  /* non-critical */
+                }
+              }
+            }
+          },
         });
       },
     });

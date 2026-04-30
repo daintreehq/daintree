@@ -2538,6 +2538,36 @@ _eventBusOn("window:reclaim-memory", () => {
   (globalThis as unknown as { gc?: () => void }).gc?.();
 });
 
+// Private listener: report Blink (DOM/CSS/cross-frame) memory back to
+// ProcessMemoryMonitor. Tracks the tier of memory that V8 heap stats miss.
+// `process.getBlinkMemoryInfo` is an Electron-specific addition on the
+// renderer's `process` global; it works under sandbox: true. Failures here
+// are silent — the sample is best-effort observability, not a recovery path.
+type BlinkMemoryInfo = {
+  allocated: number;
+  marked?: number;
+  total?: number;
+  partitionAlloc?: number;
+};
+_eventBusOn("window:sample-blink-memory", ({ requestId }) => {
+  try {
+    const fn = (process as unknown as { getBlinkMemoryInfo?: () => BlinkMemoryInfo })
+      .getBlinkMemoryInfo;
+    if (typeof fn !== "function") return;
+    const info = fn();
+    if (!info || typeof info.allocated !== "number") return;
+    void ipcRenderer.invoke(CHANNELS.SYSTEM_REPORT_BLINK_MEMORY, {
+      requestId,
+      allocated: info.allocated,
+      marked: info.marked,
+      total: info.total,
+      partitionAlloc: info.partitionAlloc,
+    });
+  } catch {
+    /* observability is best-effort */
+  }
+});
+
 // E2E test bridge: expose renderer-side IPC listener introspection in fault mode.
 // Gated by DAINTREE_E2E_FAULT_MODE to avoid production surface area.
 if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {

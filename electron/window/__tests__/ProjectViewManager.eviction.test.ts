@@ -1,14 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 let nextWebContentsId = 100;
+let nextOsProcessId = 1000;
 
 type Handler = (...args: unknown[]) => void;
 
 function createMockWebContents() {
   const id = nextWebContentsId++;
+  const osPid = nextOsProcessId++;
   const handlers = new Map<string, Handler[]>();
   const wc = {
     id,
+    osPid,
     isDestroyed: vi.fn(() => false),
     setBackgroundThrottling: vi.fn(),
     executeJavaScript: vi.fn(() => Promise.resolve()),
@@ -17,6 +20,7 @@ function createMockWebContents() {
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
+    getOSProcessId: vi.fn(() => osPid),
     on: vi.fn((event: string, handler: Handler) => {
       const list = handlers.get(event) ?? [];
       list.push(handler);
@@ -40,13 +44,19 @@ function createMockWebContents() {
   return wc;
 }
 
+const mockGetAppMetrics = vi.fn<() => Electron.ProcessMetric[]>(() => []);
+
 vi.mock("electron", () => {
   function MockWebContentsView() {
     const wc = createMockWebContents();
     return { webContents: wc, setBounds: vi.fn() };
   }
   return {
-    app: { isPackaged: false, commandLine: { appendSwitch: vi.fn() } },
+    app: {
+      isPackaged: false,
+      commandLine: { appendSwitch: vi.fn() },
+      getAppMetrics: () => mockGetAppMetrics(),
+    },
     BrowserWindow: vi.fn(),
     WebContentsView: MockWebContentsView,
     session: { fromPartition: vi.fn(() => ({ protocol: { handle: vi.fn() } })) },
@@ -54,6 +64,10 @@ vi.mock("electron", () => {
     nativeTheme: { shouldUseDarkColors: true },
   };
 });
+
+vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
+  forgetBlinkSample: vi.fn(),
+}));
 
 vi.mock("../webContentsRegistry.js", () => ({
   registerWebContents: vi.fn(),
@@ -143,9 +157,12 @@ describe("ProjectViewManager — eviction safety", () => {
 
   beforeEach(() => {
     nextWebContentsId = 100;
+    nextOsProcessId = 1000;
     vi.clearAllMocks();
     mockGetAll.mockReset();
     mockGetAll.mockReturnValue([]);
+    mockGetAppMetrics.mockReset();
+    mockGetAppMetrics.mockReturnValue([]);
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -321,6 +338,149 @@ describe("ProjectViewManager — eviction safety", () => {
       expect.objectContaining({ projectId: "proj-b", activeAgent: true })
     );
   });
+
+  // ── Memory-sorted eviction (issue #6272) ──
+
+  it("evicts the largest-privateBytes cached view first, not the LRU one", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+
+    // proj-a (oldest LRU) is small; proj-b is the heaviest cached renderer.
+    // Memory-sorted eviction should target proj-b even though proj-a is older.
+    const wcBEntry = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b");
+    const wcB = wcBEntry?.view.webContents as ReturnType<typeof createMockWebContents>;
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 50 * 1024 } },
+      { pid: wcB.osPid, memory: { privateBytes: 800 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).toContain("proj-a");
+    expect(remaining).toContain("proj-c");
+    expect(remaining).not.toContain("proj-b");
+    expect(wcA.close).not.toHaveBeenCalled();
+    expect(wcB.close).toHaveBeenCalled();
+  });
+
+  it("falls back to LRU when no candidate has measured memory", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+
+    // No metrics returned — LRU should still drive eviction (proj-a evicted).
+    mockGetAppMetrics.mockReturnValue([]);
+
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).not.toContain("proj-a");
+    expect(remaining).toContain("proj-b");
+    expect(remaining).toContain("proj-c");
+    expect(wcA.close).toHaveBeenCalled();
+  });
+
+  it("missing-metric views sort below measured ones (LRU as the deeper fallback)", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+
+    // Only proj-a has a measured pid. proj-b is unmeasured and should sort
+    // *below* proj-a despite being newer; proj-a (the only measured candidate)
+    // wins eviction priority.
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 600 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).not.toContain("proj-a");
+    expect(remaining).toContain("proj-b");
+    expect(remaining).toContain("proj-c");
+  });
+
+  it("active-agent views are still evicted last regardless of memory rank", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+
+    // proj-a is huge but has an active agent — must not be evicted.
+    // proj-b is smaller but evictable.
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 900 * 1024 } },
+      {
+        pid: (
+          managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b")?.view
+            .webContents as ReturnType<typeof createMockWebContents>
+        ).osPid,
+        memory: { privateBytes: 100 * 1024 },
+      },
+    ] as unknown as Electron.ProcessMetric[]);
+    mockGetAll.mockReturnValue([{ projectId: "proj-a", agentState: "working" }]);
+
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).toContain("proj-a");
+    expect(remaining).toContain("proj-c");
+    expect(remaining).not.toContain("proj-b");
+    expect(wcA.close).not.toHaveBeenCalled();
+  });
+
+  it("logs memoryKb in projectview.eviction when measured", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+      "projectview.eviction",
+      expect.objectContaining({ projectId: "proj-a", memoryKb: 250 * 1024 })
+    );
+  });
 });
 
 describe("ProjectViewManager — telemetry", () => {
@@ -328,9 +488,12 @@ describe("ProjectViewManager — telemetry", () => {
 
   beforeEach(() => {
     nextWebContentsId = 100;
+    nextOsProcessId = 1000;
     vi.clearAllMocks();
     mockGetAll.mockReset();
     mockGetAll.mockReturnValue([]);
+    mockGetAppMetrics.mockReset();
+    mockGetAppMetrics.mockReturnValue([]);
     win = createMockWindow();
   });
 
@@ -703,9 +866,12 @@ describe("ProjectViewManager — listener cleanup", () => {
 
   beforeEach(() => {
     nextWebContentsId = 100;
+    nextOsProcessId = 1000;
     vi.clearAllMocks();
     mockGetAll.mockReset();
     mockGetAll.mockReturnValue([]);
+    mockGetAppMetrics.mockReset();
+    mockGetAppMetrics.mockReturnValue([]);
     win = createMockWindow();
   });
 

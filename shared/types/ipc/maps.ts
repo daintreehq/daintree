@@ -568,6 +568,21 @@ export interface IpcInvokeMap {
     args: [];
     result: DiagnosticsInfo;
   };
+  // Renderer reports process.getBlinkMemoryInfo() to ProcessMemoryMonitor.
+  // The webContents id is taken from event.sender on the handler side, so
+  // a renderer cannot claim to be a different view.
+  "system:report-blink-memory": {
+    args: [
+      payload: {
+        requestId: string;
+        allocated: number;
+        marked?: number;
+        total?: number;
+        partitionAlloc?: number;
+      },
+    ];
+    result: void;
+  };
 
   // App state channels
   "app:get-state": {
@@ -2286,6 +2301,10 @@ export interface IpcEventMap {
   "window:fullscreen-change": boolean;
   "window:reclaim-memory": { reason: string };
   "window:destroy-hidden-webviews": { tier: 1 | 2 };
+  // Main asks renderers to report process.getBlinkMemoryInfo() so
+  // ProcessMemoryMonitor can see the Blink (DOM/CSS/inter-frame) memory tier
+  // that V8 heap stats miss. Renderer replies via SYSTEM_REPORT_BLINK_MEMORY.
+  "window:sample-blink-memory": { requestId: string };
   "window:disk-space-status": {
     status: "normal" | "warning" | "critical";
     availableMb: number;
@@ -2457,6 +2476,7 @@ export type IpcEventBusMap = Pick<
   | "window:reclaim-memory"
   | "window:destroy-hidden-webviews"
   | "window:disk-space-status"
+  | "window:sample-blink-memory"
   // System wake (per-webContents)
   | "system:wake"
   // Resource profile (global broadcast)

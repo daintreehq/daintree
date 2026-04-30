@@ -24,6 +24,12 @@ for (const stream of [process.stdout, process.stderr]) {
   }
 }
 
+import nodeV8 from "node:v8";
+// Ask V8 to auto-dump up to two heap snapshots when this utility process is
+// genuinely close to its --max-old-space-size limit. Snapshot path is governed
+// by the parent's `--diagnostic-dir` execArgv (set in PtyClient).
+nodeV8.setHeapSnapshotNearHeapLimit(2);
+
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";

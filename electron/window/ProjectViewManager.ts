@@ -5,7 +5,7 @@
  * Switching projects swaps the visible view (<16ms for cached views).
  */
 
-import { BrowserWindow, WebContentsView, session } from "electron";
+import { app, BrowserWindow, WebContentsView, session } from "electron";
 import path from "path";
 import { performance } from "node:perf_hooks";
 import {
@@ -21,6 +21,7 @@ import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isLocalhostUrl } from "../../shared/utils/urlUtils.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
+import { forgetBlinkSample } from "../services/ProcessMemoryMonitor.js";
 import { getPtyManager } from "../services/PtyManager.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { logInfo, logWarn } from "../utils/logger.js";
@@ -721,6 +722,7 @@ export class ProjectViewManager {
 
     this.webContentsToProject.delete(wcId);
     unregisterProjectView(wcId);
+    forgetBlinkSample(wcId);
 
     // Notify listeners (e.g. WorkspaceClient) so they can clean up direct ports
     this.onViewEvicted?.(wcId);
@@ -747,9 +749,42 @@ export class ProjectViewManager {
     if (this.views.size <= this.maxCachedViews) return;
     if (this.activeProjectId === null) return;
 
+    // Build pid → privateBytes index from the synchronous app.getAppMetrics()
+    // snapshot. Joined per-view via `webContents.getOSProcessId()` so eviction
+    // can prefer the largest renderer first instead of pure LRU. Views without
+    // a measured pid (process not yet spawned, or metrics missing) sort below
+    // measured ones via the 0 fallback, preserving LRU as the final tiebreak.
+    const memoryByPid = new Map<number, number>();
+    try {
+      for (const proc of app.getAppMetrics()) {
+        const kb = proc.memory.privateBytes ?? proc.memory.workingSetSize;
+        if (typeof kb === "number" && kb > 0) {
+          memoryByPid.set(proc.pid, kb);
+        }
+      }
+    } catch {
+      // app.getAppMetrics() throwing is non-fatal — fall back to pure LRU below.
+    }
+    const memoryFor = (entry: ViewEntry): number => {
+      const wc = entry.view.webContents;
+      if (wc.isDestroyed()) return 0;
+      const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
+      if (typeof getPid !== "function") return 0;
+      const pid = getPid.call(wc);
+      if (typeof pid !== "number" || pid <= 0) return 0;
+      return memoryByPid.get(pid) ?? 0;
+    };
+
     const evictable = Array.from(this.views.entries())
       .filter(([id]) => id !== this.activeProjectId)
-      .sort(([, a], [, b]) => a.lastUsed - b.lastUsed);
+      // Largest privateBytes first; LRU (oldest first) as tiebreaker so the
+      // existing limit-change/lru ordering still holds when memory data is
+      // unavailable for both candidates.
+      .sort(([, a], [, b]) => {
+        const memDelta = memoryFor(b) - memoryFor(a);
+        if (memDelta !== 0) return memDelta;
+        return a.lastUsed - b.lastUsed;
+      });
 
     // Partition: evict views without active agents first, only fall back to
     // active-agent views when safe candidates are exhausted. This keeps memory
@@ -771,7 +806,10 @@ export class ProjectViewManager {
     while (this.views.size > this.maxCachedViews && candidates.length > 0) {
       const [projectId, entry, activeAgent] = candidates.shift()!;
       const ageMs = Date.now() - entry.lastUsed;
-      logInfo("projectview.eviction", { projectId, reason, ageMs, activeAgent });
+      const memoryKb = memoryFor(entry);
+      const ctx: Record<string, unknown> = { projectId, reason, ageMs, activeAgent };
+      if (memoryKb > 0) ctx.memoryKb = memoryKb;
+      logInfo("projectview.eviction", ctx);
       this.evictionTimestamps.set(projectId, Date.now());
       this.cleanupEntry(projectId);
     }
