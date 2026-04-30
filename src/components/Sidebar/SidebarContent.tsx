@@ -1115,49 +1115,79 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <ScrollIndicator direction="below" count={hiddenBelow} onClick={scrollToBottom} />
       </div>
 
-      <RecipeEditor
-        recipe={recipeManagerEdit}
-        worktreeId={recipeEditorWorktreeId}
-        initialTerminals={recipeEditorInitialTerminals}
-        defaultScope={recipeEditorDefaultScope}
-        isOpen={isRecipeEditorOpen}
-        onClose={handleCloseRecipeEditor}
-      />
+      <ErrorBoundary
+        variant="component"
+        componentName="RecipeEditor"
+        resetKeys={[Number(isRecipeEditorOpen)]}
+      >
+        <RecipeEditor
+          recipe={recipeManagerEdit}
+          worktreeId={recipeEditorWorktreeId}
+          initialTerminals={recipeEditorInitialTerminals}
+          defaultScope={recipeEditorDefaultScope}
+          isOpen={isRecipeEditorOpen}
+          onClose={handleCloseRecipeEditor}
+        />
+      </ErrorBoundary>
 
-      <RecipeManager
-        isOpen={isRecipeManagerOpen}
-        onClose={handleCloseRecipeManager}
-        onEditRecipe={handleRecipeManagerEdit}
-        onCreateRecipe={handleRecipeManagerCreate}
-      />
+      <ErrorBoundary
+        variant="component"
+        componentName="RecipeManager"
+        resetKeys={[Number(isRecipeManagerOpen)]}
+      >
+        <RecipeManager
+          isOpen={isRecipeManagerOpen}
+          onClose={handleCloseRecipeManager}
+          onEditRecipe={handleRecipeManagerEdit}
+          onCreateRecipe={handleRecipeManagerCreate}
+        />
+      </ErrorBoundary>
 
       {rootPath && (createDialog.isOpen || hasOpenedNewWorktree) && (
-        <Suspense fallback={null}>
-          <LazyNewWorktreeDialog
-            isOpen={createDialog.isOpen}
-            onClose={closeCreateDialog}
-            rootPath={rootPath}
-            onWorktreeCreated={(worktreeId) => {
-              refresh();
-              createDialog.onCreated?.(worktreeId);
-            }}
-            initialIssue={createDialog.initialIssue}
-            initialPR={createDialog.initialPR}
-            initialRecipeId={createDialog.initialRecipeId}
-          />
-        </Suspense>
+        <ErrorBoundary
+          variant="component"
+          componentName="NewWorktreeDialog"
+          resetKeys={[Number(createDialog.isOpen)]}
+        >
+          <Suspense fallback={null}>
+            <LazyNewWorktreeDialog
+              isOpen={createDialog.isOpen}
+              onClose={closeCreateDialog}
+              rootPath={rootPath}
+              onWorktreeCreated={(worktreeId) => {
+                refresh();
+                createDialog.onCreated?.(worktreeId);
+              }}
+              initialIssue={createDialog.initialIssue}
+              initialPR={createDialog.initialPR}
+              initialRecipeId={createDialog.initialRecipeId}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
-      <BulkCreateWorktreeDialog
-        isOpen={bulkCreateDialog.isOpen}
-        onClose={closeBulkCreateDialog}
-        mode={bulkCreateDialog.mode}
-        selectedIssues={bulkCreateDialog.selectedIssues}
-        selectedPRs={bulkCreateDialog.selectedPRs}
-        onComplete={closeBulkCreateDialog}
-      />
+      <ErrorBoundary
+        variant="component"
+        componentName="BulkCreateWorktreeDialog"
+        resetKeys={[Number(bulkCreateDialog.isOpen)]}
+      >
+        <BulkCreateWorktreeDialog
+          isOpen={bulkCreateDialog.isOpen}
+          onClose={closeBulkCreateDialog}
+          mode={bulkCreateDialog.mode}
+          selectedIssues={bulkCreateDialog.selectedIssues}
+          selectedPRs={bulkCreateDialog.selectedPRs}
+          onComplete={closeBulkCreateDialog}
+        />
+      </ErrorBoundary>
 
-      <FleetArmingDialog isOpen={isFleetArmingDialogOpen} onClose={closeFleetArmingDialog} />
+      <ErrorBoundary
+        variant="component"
+        componentName="FleetArmingDialog"
+        resetKeys={[Number(isFleetArmingDialogOpen)]}
+      >
+        <FleetArmingDialog isOpen={isFleetArmingDialogOpen} onClose={closeFleetArmingDialog} />
+      </ErrorBoundary>
     </div>
   );
 }

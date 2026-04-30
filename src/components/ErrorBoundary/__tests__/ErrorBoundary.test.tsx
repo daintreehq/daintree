@@ -184,4 +184,42 @@ describe("ErrorBoundary", () => {
 
     expect(onError).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({}));
   });
+
+  it("resets error state when numeric resetKeys change", () => {
+    let key = 0;
+    let shouldThrow = true;
+
+    function ConditionalNumericThrow({ resetKey }: { resetKey: number }) {
+      if (shouldThrow) throw new Error(`Test error at key ${resetKey}`);
+      return <div>Recovered at key {resetKey}</div>;
+    }
+
+    const { rerender } = render(
+      <ErrorBoundary variant="component" resetKeys={[key]}>
+        <ConditionalNumericThrow resetKey={key} />
+      </ErrorBoundary>
+    );
+
+    // DEV mode shows the actual error message for component variant
+    expect(screen.getByText("Test error at key 0")).toBeTruthy();
+
+    // Same key, still throwing — boundary stays in error state
+    rerender(
+      <ErrorBoundary variant="component" resetKeys={[key]}>
+        <ConditionalNumericThrow resetKey={key} />
+      </ErrorBoundary>
+    );
+    expect(screen.getByText("Test error at key 0")).toBeTruthy();
+
+    // Change key (simulating dialog close → reopen) and stop throwing
+    key = 1;
+    shouldThrow = false;
+    rerender(
+      <ErrorBoundary variant="component" resetKeys={[key]}>
+        <ConditionalNumericThrow resetKey={key} />
+      </ErrorBoundary>
+    );
+
+    expect(screen.getByText("Recovered at key 1")).toBeTruthy();
+  });
 });

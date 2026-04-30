@@ -63,8 +63,8 @@ Central orchestration layer for all UI operations. Provides a unified, typed API
 
 Discriminated union types for type safety:
 
-- `PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData | DevPreviewPanelData` (`shared/types/panel.ts`)
-- Built-in panel kinds: `"terminal"` | `"agent"` | `"browser"` | `"notes"` | `"dev-preview"`
+- `PanelInstance = PtyPanelData | BrowserPanelData | DevPreviewPanelData` (`shared/types/panel.ts`)
+- Built-in panel kinds: `"terminal"` | `"browser"` | `"dev-preview"`
 - `panelKindHasPty(kind)` — Check if panel requires PTY process
 - Panel Kind Registry (`shared/config/panelKindRegistry.ts`) — config/metadata shared between processes
 - Panel Kind Modules (`src/panels/<kind>/`) — per-kind serializer, defaults factory, and component. Unified registry in `src/panels/registry.tsx`

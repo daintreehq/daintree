@@ -49,6 +49,10 @@ const LazyDevPreviewPane = lazy(() =>
   import("@/components/DevPreview/DevPreviewPane").then((m) => ({ default: m.DevPreviewPane }))
 );
 
+// Wrapper providing Suspense fallback for the lazy dynamic import and
+// correct componentName attribution on chunk-load failures. The per-panel
+// boundary in GridPanel catches render errors; this wrapper catches import
+// failures with proper attribution — the two boundaries serve different roles.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function BrowserPaneWrapper(props: any) {
   return (

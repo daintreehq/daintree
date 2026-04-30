@@ -501,35 +501,47 @@ function App() {
                   isHydrated={isStateLoaded}
                   projectSwitcherPalette={projectSwitcherPalette}
                 >
-                  <Profiler id="content-grid" onRender={onContentGridRender}>
-                    <ContentGrid
-                      className="h-full w-full"
-                      agentAvailability={availability}
-                      defaultCwd={defaultTerminalCwd}
-                      emptyContent={
-                        currentProject === null ? (
-                          <WelcomeScreen gettingStarted={gettingStarted} />
-                        ) : undefined
-                      }
-                    />
-                  </Profiler>
+                  <ErrorBoundary
+                    variant="section"
+                    componentName="ContentGrid"
+                    resetKeys={[currentProject?.id].filter((k): k is string => k != null)}
+                  >
+                    <Profiler id="content-grid" onRender={onContentGridRender}>
+                      <ContentGrid
+                        className="h-full w-full"
+                        agentAvailability={availability}
+                        defaultCwd={defaultTerminalCwd}
+                        emptyContent={
+                          currentProject === null ? (
+                            <WelcomeScreen gettingStarted={gettingStarted} />
+                          ) : undefined
+                        }
+                      />
+                    </Profiler>
+                  </ErrorBoundary>
                 </AppLayout>
               </Profiler>
             </DndProvider>
 
-            <QuickSwitcher
-              isOpen={quickSwitcher.isOpen}
-              query={quickSwitcher.query}
-              results={quickSwitcher.results}
-              totalResults={quickSwitcher.totalResults}
-              selectedIndex={quickSwitcher.selectedIndex}
-              close={quickSwitcher.close}
-              setQuery={quickSwitcher.setQuery}
-              selectPrevious={quickSwitcher.selectPrevious}
-              selectNext={quickSwitcher.selectNext}
-              selectItem={quickSwitcher.selectItem}
-              confirmSelection={quickSwitcher.confirmSelection}
-            />
+            <ErrorBoundary
+              variant="component"
+              componentName="QuickSwitcher"
+              resetKeys={[Number(quickSwitcher.isOpen)]}
+            >
+              <QuickSwitcher
+                isOpen={quickSwitcher.isOpen}
+                query={quickSwitcher.query}
+                results={quickSwitcher.results}
+                totalResults={quickSwitcher.totalResults}
+                selectedIndex={quickSwitcher.selectedIndex}
+                close={quickSwitcher.close}
+                setQuery={quickSwitcher.setQuery}
+                selectPrevious={quickSwitcher.selectPrevious}
+                selectNext={quickSwitcher.selectNext}
+                selectItem={quickSwitcher.selectItem}
+                confirmSelection={quickSwitcher.confirmSelection}
+              />
+            </ErrorBoundary>
             <SendToAgentPalette
               isOpen={sendToAgentPalette.isOpen}
               query={sendToAgentPalette.query}
@@ -571,91 +583,97 @@ function App() {
               onClose={worktreePalette.close}
             />
             <QuickCreatePalette palette={quickCreatePalette} />
-            <PanelPalette
-              isOpen={panelPalette.isOpen}
-              query={panelPalette.query}
-              results={panelPalette.results}
-              totalResults={panelPalette.totalResults}
-              selectedIndex={panelPalette.selectedIndex}
-              matchesById={panelPalette.matchesById}
-              onQueryChange={panelPalette.setQuery}
-              onSelectPrevious={panelPalette.selectPrevious}
-              onSelectNext={panelPalette.selectNext}
-              onSelect={(kind) => {
-                const result = panelPalette.handleSelect(kind);
-                if (!result) return;
-                if (result.resumeSession) {
-                  const session = result.resumeSession;
-                  const agentConfig = getEffectiveAgentConfig(session.agentId);
-                  const command = buildResumeCommand(
-                    session.agentId,
-                    session.sessionId,
-                    session.agentLaunchFlags
-                  );
-                  if (command && agentConfig) {
+            <ErrorBoundary
+              variant="component"
+              componentName="PanelPalette"
+              resetKeys={[Number(panelPalette.isOpen)]}
+            >
+              <PanelPalette
+                isOpen={panelPalette.isOpen}
+                query={panelPalette.query}
+                results={panelPalette.results}
+                totalResults={panelPalette.totalResults}
+                selectedIndex={panelPalette.selectedIndex}
+                matchesById={panelPalette.matchesById}
+                onQueryChange={panelPalette.setQuery}
+                onSelectPrevious={panelPalette.selectPrevious}
+                onSelectNext={panelPalette.selectNext}
+                onSelect={(kind) => {
+                  const result = panelPalette.handleSelect(kind);
+                  if (!result) return;
+                  if (result.resumeSession) {
+                    const session = result.resumeSession;
+                    const agentConfig = getEffectiveAgentConfig(session.agentId);
+                    const command = buildResumeCommand(
+                      session.agentId,
+                      session.sessionId,
+                      session.agentLaunchFlags
+                    );
+                    if (command && agentConfig) {
+                      addPanel({
+                        kind: "terminal",
+                        launchAgentId: session.agentId,
+                        title: agentConfig.name,
+                        cwd: defaultTerminalCwd,
+                        worktreeId: activeWorktreeId ?? undefined,
+                        command,
+                        location: "grid",
+                      });
+                    }
+                  } else if (result.id.startsWith("agent:")) {
+                    const agentId = result.id.slice("agent:".length);
+                    if (agentId) {
+                      launchAgent(agentId);
+                    }
+                  } else {
                     addPanel({
-                      kind: "terminal",
-                      launchAgentId: session.agentId,
-                      title: agentConfig.name,
+                      kind: result.id as BuiltInPanelKind,
                       cwd: defaultTerminalCwd,
                       worktreeId: activeWorktreeId ?? undefined,
-                      command,
                       location: "grid",
                     });
                   }
-                } else if (result.id.startsWith("agent:")) {
-                  const agentId = result.id.slice("agent:".length);
-                  if (agentId) {
-                    launchAgent(agentId);
-                  }
-                } else {
-                  addPanel({
-                    kind: result.id as BuiltInPanelKind,
-                    cwd: defaultTerminalCwd,
-                    worktreeId: activeWorktreeId ?? undefined,
-                    location: "grid",
-                  });
-                }
-              }}
-              onConfirm={() => {
-                const selected = panelPalette.confirmSelection();
-                if (!selected) return;
-                if (selected.id === MORE_AGENTS_PANEL_ID) return;
-                if (selected.resumeSession) {
-                  const session = selected.resumeSession;
-                  const agentConfig = getEffectiveAgentConfig(session.agentId);
-                  const command = buildResumeCommand(
-                    session.agentId,
-                    session.sessionId,
-                    session.agentLaunchFlags
-                  );
-                  if (command && agentConfig) {
+                }}
+                onConfirm={() => {
+                  const selected = panelPalette.confirmSelection();
+                  if (!selected) return;
+                  if (selected.id === MORE_AGENTS_PANEL_ID) return;
+                  if (selected.resumeSession) {
+                    const session = selected.resumeSession;
+                    const agentConfig = getEffectiveAgentConfig(session.agentId);
+                    const command = buildResumeCommand(
+                      session.agentId,
+                      session.sessionId,
+                      session.agentLaunchFlags
+                    );
+                    if (command && agentConfig) {
+                      addPanel({
+                        kind: "terminal",
+                        launchAgentId: session.agentId,
+                        title: agentConfig.name,
+                        cwd: defaultTerminalCwd,
+                        worktreeId: activeWorktreeId ?? undefined,
+                        command,
+                        location: "grid",
+                      });
+                    }
+                  } else if (selected.id.startsWith("agent:")) {
+                    const agentId = selected.id.slice("agent:".length);
+                    if (agentId) {
+                      launchAgent(agentId);
+                    }
+                  } else {
                     addPanel({
-                      kind: "terminal",
-                      launchAgentId: session.agentId,
-                      title: agentConfig.name,
+                      kind: selected.id as BuiltInPanelKind,
                       cwd: defaultTerminalCwd,
                       worktreeId: activeWorktreeId ?? undefined,
-                      command,
                       location: "grid",
                     });
                   }
-                } else if (selected.id.startsWith("agent:")) {
-                  const agentId = selected.id.slice("agent:".length);
-                  if (agentId) {
-                    launchAgent(agentId);
-                  }
-                } else {
-                  addPanel({
-                    kind: selected.id as BuiltInPanelKind,
-                    cwd: defaultTerminalCwd,
-                    worktreeId: activeWorktreeId ?? undefined,
-                    location: "grid",
-                  });
-                }
-              }}
-              onClose={panelPalette.close}
-            />
+                }}
+                onClose={panelPalette.close}
+              />
+            </ErrorBoundary>
             <ProjectMruSwitcherOverlay
               isVisible={mruSwitcher.isVisible}
               projects={mruSwitcher.projects}
@@ -705,19 +723,25 @@ function App() {
 
             <LogLevelPalette isOpen={isLogLevelPaletteOpen} onClose={closeLogLevelPalette} />
 
-            <ActionPalette
-              isOpen={actionPalette.isOpen}
-              query={actionPalette.query}
-              results={actionPalette.results}
-              totalResults={actionPalette.totalResults}
-              selectedIndex={actionPalette.selectedIndex}
-              close={actionPalette.close}
-              setQuery={actionPalette.setQuery}
-              selectPrevious={actionPalette.selectPrevious}
-              selectNext={actionPalette.selectNext}
-              executeAction={actionPalette.executeAction}
-              confirmSelection={actionPalette.confirmSelection}
-            />
+            <ErrorBoundary
+              variant="component"
+              componentName="ActionPalette"
+              resetKeys={[Number(actionPalette.isOpen)]}
+            >
+              <ActionPalette
+                isOpen={actionPalette.isOpen}
+                query={actionPalette.query}
+                results={actionPalette.results}
+                totalResults={actionPalette.totalResults}
+                selectedIndex={actionPalette.selectedIndex}
+                close={actionPalette.close}
+                setQuery={actionPalette.setQuery}
+                selectPrevious={actionPalette.selectPrevious}
+                selectNext={actionPalette.selectNext}
+                executeAction={actionPalette.executeAction}
+                confirmSelection={actionPalette.confirmSelection}
+              />
+            </ErrorBoundary>
 
             <WorktreeOverviewModal
               isOpen={isWorktreeOverviewOpen}
