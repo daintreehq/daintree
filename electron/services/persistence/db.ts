@@ -4,6 +4,7 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { app } from "electron";
 import fs from "node:fs";
 import path from "path";
+import { getCurrentDiskSpaceStatus } from "../DiskSpaceMonitor.js";
 import * as schema from "./schema.js";
 
 export type AppDb = ReturnType<typeof drizzle<typeof schema>>;
@@ -80,6 +81,7 @@ export function openDb(
     sqlite.pragma("temp_store = MEMORY");
     sqlite.pragma("mmap_size = 10737418240");
     sqlite.pragma("cache_size = -65536");
+    sqlite.pragma("journal_size_limit = 5242880");
 
     adoptLegacyProjectColumns(sqlite);
 
@@ -183,4 +185,36 @@ export function closeSharedDb(options?: { checkpoint?: boolean }): void {
 
 export function resetSharedInstance(): void {
   sharedInstance = null;
+}
+
+function isDiskFullError(error: unknown): boolean {
+  const code = (error as { code?: string } | null | undefined)?.code;
+  if (!code) return false;
+  return code === "SQLITE_FULL" || code.startsWith("SQLITE_IOERR");
+}
+
+// Run `fn` against the SQLite handle; on SQLITE_FULL / SQLITE_IOERR* try to free
+// space by truncating the WAL and retry once. The retry is gated on disk-space
+// status — when the volume is critical, the WAL truncate would itself need to
+// write and is unlikely to recover, so we skip straight to re-throwing the
+// original error. The recovery checkpoint is wrapped in its own try/catch so a
+// failed checkpoint does not mask the caller's error or trigger a recursive
+// retry; we still attempt the retry afterwards in case the checkpoint freed
+// some pages before failing.
+export function withDiskRecovery<T>(sqlite: Database.Database, fn: () => T): T {
+  try {
+    return fn();
+  } catch (error) {
+    if (!isDiskFullError(error)) throw error;
+    if (getCurrentDiskSpaceStatus().status === "critical") throw error;
+
+    console.warn("[DB] Disk-full error, attempting WAL truncate and retry:", error);
+    try {
+      sqlite.pragma("wal_checkpoint(TRUNCATE)");
+    } catch (checkpointError) {
+      console.warn("[DB] Recovery WAL checkpoint failed:", checkpointError);
+    }
+
+    return fn();
+  }
 }

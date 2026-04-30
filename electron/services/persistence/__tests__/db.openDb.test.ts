@@ -68,6 +68,9 @@ describe("openDb (integration)", () => {
       const tempStore = sqlite.pragma("temp_store", { simple: true });
       // temp_store = MEMORY is enum value 2
       expect(Number(tempStore)).toBe(2);
+
+      const journalSizeLimit = sqlite.pragma("journal_size_limit", { simple: true });
+      expect(Number(journalSizeLimit)).toBe(5_242_880);
     } finally {
       sqlite.close();
     }
