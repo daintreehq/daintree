@@ -1,5 +1,271 @@
 # Changelog
 
+## [0.8.0] - 2026-04-30
+
+### Breaking Changes
+
+- Plugin manifests now use a strict `permissions` enum; manifests with unknown permission values fail to load
+- Notes panel removed entirely; existing notes data is no longer surfaced
+
+### Features
+
+**Fleet — Multi-Agent Broadcasting**
+
+- Fleet Deck dockable tile grid with live terminal mirrors
+- Scoped fleet mode (default) with armed-terminal filtering and grid pinning of the composer
+- Broadcast bar with frosted surface, exit semantics, paste safety, and discoverable selection menu
+- Live per-character broadcast and a dedicated broadcast composer for armed terminals
+- Canary staged broadcast for large fan-outs and auto-exit on idle
+- Fleet quick-action hotkeys (accept, reject, interrupt, restart, kill, trash) and `Cmd+J` arm-focused
+- Saved scopes, action history, dry-run, retry-failed, and quorum confirmation
+- Cluster attention pill for proactive nudges, drafting pill, and per-pane failure tracking
+- Multi-cursor terminal selection with shift+click range select; arming dialog filters by recent terminal output
+- Sidebar “Arm N matching” button via `armMatchingFilter`
+- Broadcast eligibility extended to runtime-detected agents
+
+**New Built-in Agents**
+
+- Aider (#6131)
+- Goose (#6132)
+- Crush
+- Qwen Code (#6134)
+- Open Interpreter
+- Mistral Vibe
+- Kimi Code CLI
+- Sourcegraph Amp
+- Generalised registry schema with per-agent files (#6130)
+
+**Agent System**
+
+- Runtime-detected agent identity becomes a first-class panel field — drives chrome, focus nav, refresh tier, dock fade, trash fallback, orchestrator routing, fleet eligibility
+- `unauthenticated` availability state for installed-but-not-signed-in CLIs (lets the CLI handle first-run auth itself)
+- Capability ID sealed at PTY spawn from launch intent (#5804)
+- Layered probing and `blocked` state for security-software interference (#5134)
+- Decoupled CLI launch from credential sniffing
+- Automatic fallback chain when a preset provider is unavailable
+- Committable shared presets via `.daintree/presets`
+- Per-worktree preset scoping
+- Toolbar agent button: redesigned preset selection and launch menus, active preset surfaced
+- Right-click context menu improvements on the agent button
+
+**Plugin System**
+
+- Manifest with permissions, runtime action registration, and host API/context injection
+- `contributes.views` and `contributes.mcpServers` reserved
+- Per-plugin unregister for contribution registries
+- `engines.daintree` semver gating
+- Scoped `publisher.name` plugin IDs required
+- Read-only worktree state exposed to plugins
+- Placeholder panel rendered when a plugin contributing a panel kind is unavailable
+
+**GitHub**
+
+- Instant dropdown opens via combined prefetch, eager chunk loading, and disk-persisted first-page cache
+- `keepMounted` via React Activity for zero-latency re-opens
+- Hover-prefetch on toolbar button
+- Token-expiry detection with reconnect banner; high-priority notification on expiry
+- Rate-limit-aware backoff using response headers; transient network retry
+- Stale-data timestamp shown in inline error banner
+
+**Performance**
+
+- Optimistic panel commit decouples agent launch from PTY spawn
+- Real cold-start scenario harness with A/B comparison (#5410)
+- Renderer bundle size CI budget gate
+- RAM-tiered cached project view defaults with LRU eviction; eviction telemetry on revival/cold-start
+- FLIP panel motion on column-count changes; breakpoint hysteresis on auto grid columns
+- WebGL context release when terminal goes off-screen
+- Visibility-gated pollers and shared minute ticker for headers
+- Migration-path latency regression gate (PERF-080)
+- xterm `rescaleOverlappingGlyphs` and `reflowCursorLine` enabled
+- Thermal and CPU speed-limit signals fed into ResourceProfileService
+- GPU tile memory cap scaled by system RAM tier
+- Knip dead-code analysis and expiring-TODO lint added to CI
+
+**Settings**
+
+- Radix-based primitives: Checkbox, Switch, native-select replacement
+- Bordered env-var editor with `.env` paste flow and literal-secret warning
+- Preset/default scope unified into a single editor; presets inherit from agent defaults with reset UI
+- Hover preview in app theme picker
+- Validation error indicators on settings tabs
+- Tightened section boundaries on CLI Agents page
+- Settings shortcut capture extracted as primitive
+- Choicebox primitive extracted from DockDensityPicker
+
+**Theme System**
+
+- Theme browser panel with sticky hero and commit bar
+- Semantic info-tone migration off accent token to `status-info`
+- Bondi and Daintree theme tokens refined
+- CSS color and hero-image validation on custom theme import
+- Form-state semantic tokens for settings primitives
+
+**Notifications**
+
+- Quiet hours schedule
+- Mute-from-toast for project notifications (#5401)
+- Persistent banners replace transient toasts for cloud-sync and GitHub-token failures
+- Same-entity toasts collapse instead of FIFO eviction
+- DND state shown on toolbar bell; consolidated DND controls into a Pause popover
+- “Clear all” moved into overflow menu
+
+**Browser & Dev Preview**
+
+- Favicons in URL bar and per-row history deletion
+- Hard-reload action that bypasses HTTP cache
+- Per-project approval for LAN, Docker, and TLD hosts
+- Mobile and tablet viewport presets for dev preview
+- Assigned URL and port registry in `DevPreviewSessionService`
+
+**Onboarding**
+
+- First-run welcome card and agent discovery badge (#5111)
+- Setup wizard demoted to inline banner; visible section structure on its first step
+- “Set Up Agents” footer item in agent tray
+- Random emoji button and Enter-to-save on project onboarding
+
+**Recovery & Resilience**
+
+- Safe-mode banner with restart action and crash detail
+- Crash-page copy varied by reason
+- Diagnostics export and open-logs actions on the recovery screen
+- Diagnostic bundle wrapped as zip with pre-save review step
+- Quarantined project state surfaced via recovery notification
+- Persistent transient errors escalated to user-visible toasts
+
+**Terminal & PTY**
+
+- Explicit PTY lifecycle state machine replacing implicit flags
+- Scrollback repair and degraded-mode banner on runtime agent promotion
+- Capability ID sealing at spawn from launch intent
+- Command-launch pgid hardening and chrome-affinity tightening
+- Linux copy-on-select and middle-click paste
+- Match counter and highlight-all in the terminal find widget
+- Preset args persisted and rehydrated through restart/resume
+- Heartbeat RTT measurement with p50/p95/p99 logging
+
+**Action Palette**
+
+- Frecency-based MRU sorting replaces LRU
+- Context-relevant action boost and keyword scoring
+- Instant filter with origin-scaled entry animation
+- `action.repeatLast` bound to `Cmd+Shift+.`
+- Disabled-action reasons shown inline; toast on disabled-action dispatch
+
+**Worktrees**
+
+- WSL-mounted worktree detection — git routed through `wsl.exe`
+- Linux inotify watch-limit degradation surfaced as a toast (#5229)
+- Stale snapshot detection via heartbeat gap
+- macOS EMFILE handling in the recursive worktree watcher
+- Inline cleanup affordance on merged worktree cards
+- Conditional tooltips for truncated paths and branch names
+- Reviewhub surfaces merge/rebase/cherry-pick/revert conflicts
+- Dubious-ownership git error gets an actionable toast
+
+**Project**
+
+- Fast MRU project switcher on `Cmd+Alt+−/=` (#5143)
+- Auto-discover and offer to import context files
+- Scope indicators on settings widgets
+
+**Logs**
+
+- Structured per-module log levels with named loggers
+- Log rotation and previous-session log preservation
+- Renderer console warnings and errors captured into the main log
+- Log viewer polish — severity, tokens, tail, copy, dedup
+
+**IPC**
+
+- Typed handler migration across six batches; type-branded handler returns to forbid `{ok|success}` keys
+- Typed event pub/sub foundation; channel-drift CI test
+- `safeFireAndForget` wrapper for fire-and-forget IPC
+- `AppError` class; rate limits on `github`, `files:search`, and `project:get-bulk-stats` handlers
+
+**Security**
+
+- CSP added to the `persist:daintree` session
+- Secret scrubber catalog extended with 2026 vendor sigils
+- Free-text secret scrubbing in telemetry and diagnostic bundles
+- Outbound log and IPC error sinks scrubbed; IPC error envelope `userMessage` scrubbed
+- Realpath containment in `daintree-file` protocol; symlinks resolved before containment check
+- Sandboxed env vars and secret scrubbing in agent CLI probes
+
+**Telemetry**
+
+- Activation funnel instrumentation; newsletter checklist item replaced
+- Sentry action breadcrumbs for crash triage
+- Project state save/read latency and size telemetry
+- Project-view eviction, revival, and cold-start events
+- Outbound payload preview during a session
+- `@sentry/electron` native minidump uploads disabled
+
+**Animations**
+
+- Structural micro-animations for spatial continuity across reflows
+- Shared motion timing tiers and named constants in `animationUtils.ts`
+- Component-level reduced-motion handling and continuous-loop dial-back (#5696)
+
+**Accessibility**
+
+- ARIA page landmarks for `F6` pane cycling (#5416)
+- ARIA role corrections across panel layout
+
+**Other Features**
+
+- Empty states across recipes, MCP, GitHub, and agents — first-run, filtered, and cleared variants
+- Reusable `EmptyState` component
+- Held-modifier shortcut reveal in the toolbar
+- Hover-based shortcut hints for unused actions
+- Fuzzy search and chord prefix detection in shortcut reference dialog
+- Inline unbind buttons for keybinding conflicts
+- Per-agent launch keybinding model rethought
+- Theme browser claims an overlay (hides Portal and blocks its toggle)
+- Visual indicator for dangerous agent launch flags
+- Demo runner replaces `capturePage` poll with `getDisplayMedia` + `MediaRecorder`
+- CCR flavor system: shared types, IPC, store, registry merge helpers, picker UI, env-var hardening
+- Persisted-store registry for diagnostics introspection
+- Centralized boot migration pipeline; column probing replaced with drizzle migrations
+- Boot-time WAL journal cap and `SQLITE_FULL` recovery wrapper
+- Per-service connectivity awareness
+- Resilient atomic write consolidation across all state writes
+- Sound design — vary working pulse pitch to slow habituation
+- Custom `BrandMark` icon wrapper for adaptive agent icon theming
+
+### Bug Fixes
+
+735 bug fixes across the categories above. Highlights:
+
+- View-crash recovery: clear queued bytes, scope crash to active project, tear down ports, re-broker producer ports for cached-view reactivation
+- Notify reentrancy guard, mute-confirmation priority, and fallback recovery actions
+- Force-crash renderer instead of reload on unresponsive; clearer force-restart copy
+- Files: `daintree-file` realpath containment; `..`-prefixed filenames allowed; close-error masking and POSIX-root edge cases addressed
+- Crash-guard: state writes use `resilientAtomicWriteFileSync`
+- Persistence: `withDiskRecovery` error matching tightened with coverage
+- Disk-pressure: non-critical writers honour `writesSuppressed`
+- Agent: waiting watchdog recovers from silently-dead subprocesses
+- Workspace-host: scrubs secrets from recipe stdout before agent context injection
+- Portal: `will-frame-navigate` gates subframe navigations; in-page navigations to non-`http(s)` schemes blocked
+- Browser: localhost CSP overlay skipped for browser partition
+- GitHub: clear stale rows when cache holds an empty page on Activity reveal; hover-prefetch race conditions closed; raw rollup fallback when no required checks
+- Theme: hard-coded chromatic utilities replaced with semantic status tokens
+- UI: residual accent uses demoted across dock, drag ghost ring, group badge, and AutomationTab create-recipe link
+- Errors: silent `.catch` swallows replaced with logging and selective notifications
+- Build: `tsc` typecheck output redirected away from esbuild bundle dir
+- Memory: Blink memory unit corrected (KB not bytes); IPC validation hardened
+
+### Other Changes
+
+- Agent registry reordered by popularity; documentation updated to cover all 15 supported CLIs
+- README and docs refreshed; `evaluate-feature` command removed
+- Nightly CI gains an integration-test stage; PR/push CI tightened to Ubuntu-only smoke
+- ESLint warning ratchet introduced for renderer hygiene rules
+- Fix-with-test ratio tracking script added
+
+---
+
 ## [0.7.1] - 2026-04-17
 
 ### Features
