@@ -25,8 +25,20 @@ import {
   CommitListSkeleton,
 } from "@/components/GitHub/GitHubDropdownSkeletons";
 import { GitHubStatusIndicator, type GitHubStatusIndicatorStatus } from "./GitHubStatusIndicator";
+import { githubClient } from "@/clients/githubClient";
+import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
+import { useGitHubConfigStore } from "@/store/githubConfigStore";
 import type { Project } from "@shared/types";
 import type { RepositoryStats } from "@shared/types";
+
+// Hover-to-prefetch tuning. 150ms matches the codebase's Tier 1 state-change
+// timing and is long enough to filter mouse traversal across the toolbar pill
+// while remaining imperceptible to a deliberate hover. The 10s freshness skip
+// dedups against a recent click-time fetch without stacking on the 45s SWR
+// cache TTL — well under either, leaving plenty of headroom for click-time
+// `bypassCache: true` to still see fresh data.
+const HOVER_PREFETCH_DELAY_MS = 150;
+const PREFETCH_FRESHNESS_MS = 10_000;
 
 function formatRateLimitCountdown(remainingMs: number): string {
   const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
@@ -172,6 +184,129 @@ export const GitHubStatsToolbarButton = memo(
     const prsButtonRef = useRef<HTMLButtonElement>(null);
     const commitsButtonRef = useRef<HTMLButtonElement>(null);
 
+    const issuesHoverTimerRef = useRef<number | null>(null);
+    const prsHoverTimerRef = useRef<number | null>(null);
+    const issuesPrefetchInFlightRef = useRef(false);
+    const prsPrefetchInFlightRef = useRef(false);
+
+    // Mirror open state into refs so the trailing-edge timer can re-check at
+    // fire time. The guard inside `handlePrefetchPointerEnter` is evaluated at
+    // schedule time; if the user clicks during the 150ms debounce window the
+    // dropdown opens and the mounted GitHubResourceList starts its own fetch
+    // — without this ref the timer would still fire and race a duplicate
+    // request that could overwrite fresh mount-fetch data in the cache.
+    const issuesOpenRef = useRef(issuesOpen);
+    const prsOpenRef = useRef(prsOpen);
+    useEffect(() => {
+      issuesOpenRef.current = issuesOpen;
+    }, [issuesOpen]);
+    useEffect(() => {
+      prsOpenRef.current = prsOpen;
+    }, [prsOpen]);
+
+    useEffect(() => {
+      return () => {
+        if (issuesHoverTimerRef.current !== null) {
+          window.clearTimeout(issuesHoverTimerRef.current);
+          issuesHoverTimerRef.current = null;
+        }
+        if (prsHoverTimerRef.current !== null) {
+          window.clearTimeout(prsHoverTimerRef.current);
+          prsHoverTimerRef.current = null;
+        }
+      };
+    }, []);
+
+    const prefetchResourceList = useCallback(
+      (type: "issue" | "pr") => {
+        if (!currentProject || isTokenError || rateLimitActive) return;
+        // Mount-time race guard: a click during the debounce window flips the
+        // open state. Re-check here so a queued timer doesn't fire a duplicate
+        // request alongside the dropdown's own mount fetch.
+        const isOpenRef = type === "issue" ? issuesOpenRef : prsOpenRef;
+        if (isOpenRef.current) return;
+        // No-token short-circuit — mirrors GitHubResourceList's own skip path
+        // so we don't fire a list IPC that the dropdown would refuse to make.
+        const config = useGitHubConfigStore.getState().config;
+        if (config && !config.hasToken) return;
+
+        const inFlightRef = type === "issue" ? issuesPrefetchInFlightRef : prsPrefetchInFlightRef;
+        if (inFlightRef.current) return;
+
+        const filterStore = useGitHubFilterStore.getState();
+        const filterState = type === "issue" ? filterStore.issueFilter : filterStore.prFilter;
+        const sortOrder = type === "issue" ? filterStore.issueSortOrder : filterStore.prSortOrder;
+        const cacheKey = buildCacheKey(currentProject.path, type, filterState, sortOrder);
+
+        const cached = getCache(cacheKey);
+        if (cached && Date.now() - cached.timestamp < PREFETCH_FRESHNESS_MS) return;
+
+        // Stats refresh in parallel — non-forced so the in-flight guard inside
+        // useRepositoryStats coalesces with any subsequent click-time forced
+        // refresh rather than firing two backend requests.
+        void refreshStats();
+
+        inFlightRef.current = true;
+        const fetchOptions = {
+          cwd: currentProject.path,
+          state: filterState,
+          bypassCache: true,
+          sortOrder,
+        };
+        const request =
+          type === "issue"
+            ? githubClient.listIssues(fetchOptions as Parameters<typeof githubClient.listIssues>[0])
+            : githubClient.listPullRequests(
+                fetchOptions as Parameters<typeof githubClient.listPullRequests>[0]
+              );
+        void request
+          .then((result) => {
+            setCache(cacheKey, {
+              items: result.items,
+              endCursor: result.pageInfo.endCursor,
+              hasNextPage: result.pageInfo.hasNextPage,
+              timestamp: Date.now(),
+            });
+          })
+          .catch(() => {
+            // Swallow prefetch errors — the click path will retry, surface
+            // errors, and run its own retry policy. A failed prefetch must
+            // not produce visible UI noise.
+          })
+          .finally(() => {
+            inFlightRef.current = false;
+          });
+      },
+      [currentProject, isTokenError, rateLimitActive, refreshStats]
+    );
+
+    const handlePrefetchPointerEnter = useCallback(
+      (type: "issue" | "pr", e: React.PointerEvent) => {
+        if (e.pointerType !== "mouse") return;
+        const isOpen = type === "issue" ? issuesOpen : prsOpen;
+        if (isOpen) return;
+        const timerRef = type === "issue" ? issuesHoverTimerRef : prsHoverTimerRef;
+        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+        timerRef.current = window.setTimeout(() => {
+          timerRef.current = null;
+          prefetchResourceList(type);
+        }, HOVER_PREFETCH_DELAY_MS);
+      },
+      [issuesOpen, prsOpen, prefetchResourceList]
+    );
+
+    const handlePrefetchPointerLeave = useCallback(
+      (type: "issue" | "pr", e: React.PointerEvent) => {
+        if (e.pointerType !== "mouse") return;
+        const timerRef = type === "issue" ? issuesHoverTimerRef : prsHoverTimerRef;
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+      },
+      []
+    );
+
     useEffect(() => {
       if (statsLoading || statsError) {
         setStatsJustUpdated(false);
@@ -263,6 +398,8 @@ export const GitHubStatsToolbarButton = memo(
               ref={issuesButtonRef}
               variant="ghost"
               data-toolbar-item=""
+              onPointerEnter={(e) => handlePrefetchPointerEnter("issue", e)}
+              onPointerLeave={(e) => handlePrefetchPointerLeave("issue", e)}
               onClick={() => {
                 setPrsOpen(false);
                 setPrSearchQuery("");
@@ -351,6 +488,8 @@ export const GitHubStatsToolbarButton = memo(
               ref={prsButtonRef}
               variant="ghost"
               data-toolbar-item=""
+              onPointerEnter={(e) => handlePrefetchPointerEnter("pr", e)}
+              onPointerLeave={(e) => handlePrefetchPointerLeave("pr", e)}
               onClick={() => {
                 setIssuesOpen(false);
                 setIssueSearchQuery("");
