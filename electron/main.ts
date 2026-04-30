@@ -204,8 +204,39 @@ if (!gotTheLock) {
         store.get("terminalConfig")?.cachedProjectViews
       ),
       onViewEvicted: (wcId) => {
-        getWorkspaceClientRef()?.removeDirectPort(wcId);
-        getWorktreePortBrokerRef()?.closePortsForView(wcId);
+        // Each cleanup is isolated: if removeDirectPort throws, the worktree
+        // port must still close. Partial cleanup leaves a live producer
+        // posting into a soon-to-be-destroyed renderer.
+        try {
+          getWorkspaceClientRef()?.removeDirectPort(wcId);
+        } catch (err) {
+          console.error("[main] removeDirectPort failed during eviction:", err);
+        }
+        try {
+          getWorktreePortBrokerRef()?.closePortsForView(wcId);
+        } catch (err) {
+          console.error("[main] closePortsForView failed during eviction:", err);
+        }
+      },
+      onViewCached: (wcId) => {
+        // Same producer cleanup as eviction: a cached view becomes
+        // freeze-eligible once setBackgroundThrottling(true) is applied.
+        // Live worktree/workspace ports would otherwise queue messages
+        // into a frozen renderer (#6273). Reactivation re-brokers a fresh
+        // port via activateProjectView in projectCrud/switch.ts.
+        // Each cleanup is isolated so a throw in one path can't leave the
+        // other producer alive — that's the exact failure mode this PR
+        // exists to prevent.
+        try {
+          getWorkspaceClientRef()?.removeDirectPort(wcId);
+        } catch (err) {
+          console.error("[main] removeDirectPort failed during cache:", err);
+        }
+        try {
+          getWorktreePortBrokerRef()?.closePortsForView(wcId);
+        } catch (err) {
+          console.error("[main] closePortsForView failed during cache:", err);
+        }
       },
       onViewReady: (wc) => {
         // Re-distribute PTY MessagePort on every view load/reload.

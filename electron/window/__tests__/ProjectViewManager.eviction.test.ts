@@ -515,6 +515,180 @@ describe("ProjectViewManager — telemetry", () => {
   });
 });
 
+describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
+  let win: ReturnType<typeof createMockWindow>;
+
+  beforeEach(() => {
+    nextWebContentsId = 100;
+    vi.clearAllMocks();
+    mockGetAll.mockReset();
+    mockGetAll.mockReturnValue([]);
+    win = createMockWindow();
+  });
+
+  it("invokes onViewCached with the previous view's webContentsId on switch (not the newly active view)", async () => {
+    const onViewCached = vi.fn();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      onViewCached,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    expect(onViewCached).not.toHaveBeenCalled();
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(onViewCached).toHaveBeenCalledTimes(1);
+    expect(onViewCached).toHaveBeenCalledWith(wcA.id);
+    // Newly-activated view's wcId must NOT have been passed to onViewCached
+    const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
+    const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
+    expect(onViewCached).not.toHaveBeenCalledWith(wcB.id);
+  });
+
+  it("fires onViewCached BEFORE setBackgroundThrottling(true) so ports close before freeze becomes possible", async () => {
+    const onViewCached = vi.fn();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      onViewCached,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    const cachedOrder = onViewCached.mock.invocationCallOrder[0];
+    const throttleOrder = wcA.setBackgroundThrottling.mock.invocationCallOrder[0];
+    expect(cachedOrder).toBeDefined();
+    expect(throttleOrder).toBeDefined();
+    expect(cachedOrder!).toBeLessThan(throttleOrder);
+    expect(wcA.setBackgroundThrottling).toHaveBeenCalledWith(true);
+  });
+
+  it("invokes onViewCached for each cached view across rapid switches A→B→C (never for the active C)", async () => {
+    const onViewCached = vi.fn();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      onViewCached,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
+    const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    await manager.switchTo("proj-c", "/path/c");
+    const cEntry = manager.getAllViews().find((v) => v.projectId === "proj-c");
+    const wcC = cEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    const calls = onViewCached.mock.calls.map(([id]) => id);
+    expect(calls).toEqual([wcA.id, wcB.id]);
+    expect(calls).not.toContain(wcC.id);
+  });
+
+  it("does not invoke onViewCached when there is no prior active view", () => {
+    const onViewCached = vi.fn();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      onViewCached,
+    });
+
+    // registerInitialView only — no prior active view to deactivate
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    expect(onViewCached).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke onViewCached when switching to the already-active project", async () => {
+    const onViewCached = vi.fn();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      onViewCached,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-a", "/path/a");
+
+    expect(onViewCached).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke onViewCached when the previous view's webContents is destroyed", async () => {
+    const onViewCached = vi.fn();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      onViewCached,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    // Simulate the active view's renderer dying before the switch lands —
+    // deactivateCurrentView reaches the destroyed branch and must skip the
+    // producer-cleanup callback (no live ports to close, no freeze risk).
+    wcA.isDestroyed.mockReturnValue(true);
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(onViewCached).not.toHaveBeenCalled();
+  });
+
+  it("a throwing onViewCached does not break the switch — switching still works and reaches the new view", async () => {
+    const onViewCached = vi.fn(() => {
+      throw new Error("simulated downstream cleanup failure");
+    });
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      onViewCached,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await expect(manager.switchTo("proj-b", "/path/b")).resolves.toMatchObject({ isNew: true });
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(onViewCached).toHaveBeenCalledWith(wcA.id);
+    // Throttling must still happen even if the callback throws — the catch
+    // is around onViewCached only, not the surrounding deactivate flow.
+    expect(wcA.setBackgroundThrottling).toHaveBeenCalledWith(true);
+  });
+
+  it("manager works without onViewCached configured (option is optional)", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await expect(manager.switchTo("proj-b", "/path/b")).resolves.toMatchObject({ isNew: true });
+    expect(wcA.setBackgroundThrottling).toHaveBeenCalledWith(true);
+  });
+});
+
 describe("ProjectViewManager — listener cleanup", () => {
   const PERSISTENT_EVENTS = [
     "will-navigate",

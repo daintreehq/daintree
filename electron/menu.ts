@@ -6,6 +6,12 @@ import type { CliAvailabilityService } from "./services/CliAvailabilityService.j
 import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
 import * as CliInstallService from "./services/CliInstallService.js";
 import { getWindowRegistry, getProjectViewManager } from "./window/windowRef.js";
+import {
+  getPtyClient,
+  getWorkspaceClientRef,
+  getWorktreePortBrokerRef,
+} from "./window/windowServices.js";
+import { distributePortsToView } from "./window/portDistribution.js";
 // Auto-updater is dynamically imported on click to keep it out of the eager
 // graph — the menu is built at startup but "Check for Updates" only fires on
 // user action.
@@ -508,8 +514,41 @@ export async function handleDirectoryOpen(
     // Use ProjectViewManager for multi-view switching when available
     const pvm = getProjectViewManager();
     if (pvm) {
-      await pvm.switchTo(project.id, project.path);
+      const { view } = await pvm.switchTo(project.id, project.path);
       await projectStore.setCurrentProject(project.id);
+
+      // Re-attach producer ports for cached-view reactivation. The IPC switch
+      // handler (projectCrud/switch.ts:activateProjectView) does this in the
+      // primary path; the menu path must mirror it because cached views have
+      // their worktree port + workspace direct port closed on cache to avoid
+      // freeze accumulation (#6273), and the PTY MessagePort is per-window
+      // and was replaced when the user last switched away.
+      if (!view.webContents.isDestroyed()) {
+        const wsClient = getWorkspaceClientRef();
+        const broker = getWorktreePortBrokerRef();
+        if (wsClient) {
+          try {
+            await wsClient.loadProject(project.path, targetWindow.id);
+            wsClient.attachDirectPort(targetWindow.id, view.webContents);
+            const host = wsClient.getHostForProject(project.path);
+            if (host && broker) {
+              broker.brokerPort(host, view.webContents);
+            }
+          } catch (err) {
+            console.error("[menu] Failed to restore worktree ports:", err);
+          }
+        }
+
+        // Distribute fresh PTY MessagePort + notify pty-host of project switch
+        const ptyClient = getPtyClient();
+        if (ptyClient) {
+          ptyClient.onProjectSwitch(targetWindow.id, project.id, project.path);
+        }
+        const ctx = getWindowRegistry()?.getByWindowId(targetWindow.id);
+        if (ctx) {
+          distributePortsToView(targetWindow, ctx, view.webContents, ptyClient ?? null);
+        }
+      }
     } else {
       // Fallback: legacy single-view switch
       const registry = getWindowRegistry();
