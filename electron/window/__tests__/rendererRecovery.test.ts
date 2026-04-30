@@ -180,7 +180,7 @@ function setupUnresponsiveHandling(win: ReturnType<typeof createMockWindow>) {
       title: "Window Not Responding",
       message: "The window is not responding.",
       detail:
-        "You can wait for it to recover, or force-restart the view. Force-restarting will reload the view immediately.",
+        "You can wait for it to recover, or force-restart the view. Force-restarting will immediately terminate and recover the view.",
     })
       .then(({ response }: { response: number }) => {
         if (dialogId !== unresponsiveDialogId) return;
