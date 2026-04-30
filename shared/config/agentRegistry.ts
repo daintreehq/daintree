@@ -433,42 +433,46 @@ export interface AgentConfig {
 }
 
 import { config as claudeConfig } from "./agents/claude.js";
+import { config as opencodeConfig } from "./agents/opencode.js";
+import { config as aiderConfig } from "./agents/aider.js";
 import { config as geminiConfig } from "./agents/gemini.js";
 import { config as codexConfig } from "./agents/codex.js";
-import { config as opencodeConfig } from "./agents/opencode.js";
 import { config as cursorConfig } from "./agents/cursor.js";
-import { config as kiroConfig } from "./agents/kiro.js";
 import { config as copilotConfig } from "./agents/copilot.js";
 import { config as gooseConfig } from "./agents/goose.js";
+import { config as ampConfig } from "./agents/amp.js";
 import { config as crushConfig } from "./agents/crush.js";
 import { config as qwenConfig } from "./agents/qwen.js";
+import { config as kimiConfig } from "./agents/kimi.js";
 import { config as interpreterConfig } from "./agents/interpreter.js";
 import { config as mistralConfig } from "./agents/mistral.js";
-import { config as kimiConfig } from "./agents/kimi.js";
-import { config as ampConfig } from "./agents/amp.js";
-import { config as aiderConfig } from "./agents/aider.js";
+import { config as kiroConfig } from "./agents/kiro.js";
 
 // Built-in agent registry. Per-agent configs live in `./agents/<id>.ts`
 // (mirroring `src/services/actions/definitions/`). When adding a new agent,
 // create the per-agent file, import it here, add the entry below, and add
 // the ID to `BUILT_IN_AGENT_IDS` in `agentIds.ts` — the runtime check after
 // this declaration throws if any built-in is missing.
+//
+// Key order matches `BUILT_IN_AGENT_IDS` (most popular -> least popular).
+// Iteration order does not affect runtime — UI sites iterate
+// `BUILT_IN_AGENT_IDS` directly — but we mirror the order for readability.
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
   claude: claudeConfig,
+  opencode: opencodeConfig,
+  aider: aiderConfig,
   gemini: geminiConfig,
   codex: codexConfig,
-  opencode: opencodeConfig,
   cursor: cursorConfig,
-  kiro: kiroConfig,
   copilot: copilotConfig,
   goose: gooseConfig,
+  amp: ampConfig,
   crush: crushConfig,
   qwen: qwenConfig,
+  kimi: kimiConfig,
   interpreter: interpreterConfig,
   mistral: mistralConfig,
-  kimi: kimiConfig,
-  amp: ampConfig,
-  aider: aiderConfig,
+  kiro: kiroConfig,
 };
 
 import { BUILT_IN_AGENT_IDS } from "./agentIds.js";

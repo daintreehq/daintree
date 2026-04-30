@@ -1,19 +1,23 @@
+// Order: most popular -> least popular among solo / indie developers
+// (April 2026 popularity research). Drives the display order in Agents
+// Setup, the Launch List, the Toolbar agent group, and any UI iterating
+// the registry.
 export const BUILT_IN_AGENT_IDS = [
   "claude",
+  "opencode",
+  "aider",
   "gemini",
   "codex",
-  "opencode",
   "cursor",
-  "kiro",
   "copilot",
   "goose",
+  "amp",
   "crush",
   "qwen",
+  "kimi",
   "interpreter",
   "mistral",
-  "kimi",
-  "amp",
-  "aider",
+  "kiro",
 ] as const;
 
 export type BuiltInAgentId = (typeof BUILT_IN_AGENT_IDS)[number];
