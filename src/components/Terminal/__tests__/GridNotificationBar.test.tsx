@@ -49,10 +49,9 @@ describe("GridNotificationBar animation", () => {
 
     const wrapper = getWrapper(container);
     expect(wrapper).not.toBeNull();
-    // Pre-rAF: collapsed and inert.
+    // Pre-rAF: collapsed.
     expect(wrapper?.className).toContain("h-0");
     expect(wrapper?.className).toContain("opacity-0");
-    expect(wrapper?.hasAttribute("inert")).toBe(true);
 
     act(() => {
       vi.advanceTimersByTime(16);
@@ -61,7 +60,6 @@ describe("GridNotificationBar animation", () => {
     const visible = getWrapper(container);
     expect(visible?.className).toContain("h-auto");
     expect(visible?.className).toContain("opacity-100");
-    expect(visible?.hasAttribute("inert")).toBe(false);
   });
 
   it("uses entry duration and snappy easing while visible", () => {
@@ -89,14 +87,13 @@ describe("GridNotificationBar animation", () => {
       useNotificationStore.getState().reset();
     });
 
-    // Mid-exit: still mounted, collapsed, inert, exit easing applied.
+    // Mid-exit: still mounted, collapsed, exit easing applied.
     const exiting = getWrapper(container) as HTMLElement;
     expect(exiting).not.toBeNull();
     expect(exiting.className).toContain("h-0");
     expect(exiting.className).toContain("opacity-0");
     expect(exiting.className).toContain("ease-[var(--ease-exit)]");
     expect(exiting.style.transitionDuration).toBe(`${BANNER_EXIT_DURATION}ms`);
-    expect(exiting.hasAttribute("inert")).toBe(true);
 
     // After exit window: fully unmounted.
     act(() => {
@@ -140,7 +137,96 @@ describe("GridNotificationBar animation", () => {
     expect(wrapper?.className).toContain("h-auto");
   });
 
-  it("clears pending timers on unmount without warnings", () => {
+  it("cancels a pending entry rAF when the notification is removed pre-rAF", () => {
+    addGridBar({ message: "Quick" });
+    const { container } = render(<GridNotificationBar />);
+
+    // Pre-rAF: collapsed.
+    expect(getWrapper(container)?.className).toContain("h-0");
+
+    // Remove before the entry rAF fires.
+    act(() => {
+      useNotificationStore.getState().reset();
+    });
+
+    // Flush the (cancelled) rAF window. If the rAF weren't cancelled, isVisible
+    // would flip to true here and the bar would briefly reopen.
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+
+    const wrapper = getWrapper(container);
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.className).toContain("h-0");
+    expect(wrapper?.className).not.toContain("h-auto");
+
+    // Exit window completes, content unmounts.
+    act(() => {
+      vi.advanceTimersByTime(BANNER_EXIT_DURATION);
+    });
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("renders aria-live status region on the wrapper for screen readers", () => {
+    addGridBar({ message: "Announce me" });
+    const { container } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+
+    const wrapper = getWrapper(container);
+    expect(wrapper?.getAttribute("role")).toBe("status");
+    expect(wrapper?.getAttribute("aria-live")).toBe("polite");
+    // Wrapper must NOT be inert — that would suppress live-region announcements.
+    expect(wrapper?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("blocks focus and screen readers on action buttons while collapsed", () => {
+    const onClick = vi.fn();
+    addGridBar({
+      message: "Pick one",
+      action: { label: "Confirm", onClick },
+    });
+    const { container } = render(<GridNotificationBar />);
+
+    // Pre-rAF (collapsed): button is non-tabbable and aria-hidden.
+    const earlyBtn = container.querySelector("button");
+    expect(earlyBtn).not.toBeNull();
+    expect(earlyBtn?.getAttribute("tabindex")).toBe("-1");
+    expect(earlyBtn?.getAttribute("aria-hidden")).toBe("true");
+
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+
+    // Visible: focusable and exposed to AT.
+    const liveBtn = container.querySelector("button");
+    expect(liveBtn?.hasAttribute("tabindex")).toBe(false);
+    expect(liveBtn?.hasAttribute("aria-hidden")).toBe(false);
+  });
+
+  it("animates in when a notification is added after mount", () => {
+    const { container, getByText } = render(<GridNotificationBar />);
+    expect(container.firstChild).toBeNull();
+
+    act(() => {
+      addGridBar({ message: "Late arrival" });
+    });
+
+    // Synchronously rendered, but collapsed pending rAF.
+    expect(getByText("Late arrival")).toBeTruthy();
+    expect(getWrapper(container)?.className).toContain("h-0");
+
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(getWrapper(container)?.className).toContain("h-auto");
+  });
+
+  it("clears pending timers on unmount without throwing or warning", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
     addGridBar();
     const { unmount } = render(<GridNotificationBar />);
     act(() => {
@@ -155,5 +241,11 @@ describe("GridNotificationBar animation", () => {
       unmount();
       vi.advanceTimersByTime(BANNER_EXIT_DURATION * 2);
     }).not.toThrow();
+
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });

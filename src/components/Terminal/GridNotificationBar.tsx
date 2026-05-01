@@ -91,8 +91,13 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
       return;
     }
 
-    // Notification cleared: collapse, then unmount content after the exit
-    // window. Guard against re-entry by clearing the timer in cleanup.
+    // Notification cleared: cancel any in-flight entry rAF (would otherwise
+    // re-open the bar mid-collapse), then collapse and unmount content after
+    // the exit window. Guard against re-entry by clearing the timer in cleanup.
+    if (entryFrameRef.current !== null) {
+      cancelAnimationFrame(entryFrameRef.current);
+      entryFrameRef.current = null;
+    }
     setIsVisible(false);
     if (exitTimeoutRef.current !== null) {
       clearTimeout(exitTimeoutRef.current);
@@ -124,27 +129,33 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
   const Icon = config.icon;
   const actions = getActions(displayedNotification);
 
+  // While not visible (entry pre-rAF or mid-exit), the bar is visually
+  // collapsed but still in the DOM. Keep the wrapper out of the accessibility
+  // tree's "imperceptible" state (no `inert`) so the live-region announcement
+  // fires when content lands. Suppress focus/click on action buttons instead.
+  const interactionGuard = isVisible ? {} : { tabIndex: -1, "aria-hidden": true as const };
+  const buttonPointerClass = isVisible ? "" : "pointer-events-none";
+
   return (
     <div
       className={cn(
-        "grid-notification-wrapper overflow-hidden transition-[height,opacity]",
+        "grid-notification-wrapper shrink-0 overflow-hidden transition-[height,opacity]",
         isVisible
           ? "h-auto opacity-100 ease-[var(--ease-snappy)]"
-          : "h-0 opacity-0 ease-[var(--ease-exit)]",
-        className
+          : "h-0 opacity-0 ease-[var(--ease-exit)]"
       )}
       style={{
         transitionDuration: `${isVisible ? BANNER_ENTER_DURATION : BANNER_EXIT_DURATION}ms`,
       }}
-      {...(isVisible ? {} : { inert: true })}
+      role="status"
+      aria-live="polite"
     >
       <div
         className={cn(
           "flex items-center gap-3 rounded-[var(--radius-sm)] border px-3 py-2.5 shadow-[var(--theme-shadow-ambient)]",
-          config.containerClass
+          config.containerClass,
+          className
         )}
-        role="status"
-        aria-live="polite"
       >
         <Icon className={cn("h-4 w-4 shrink-0", config.iconClass)} aria-hidden="true" />
 
@@ -178,8 +189,10 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
                   "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
                   action.variant === "secondary"
                     ? "border border-tint/15 bg-tint/5 text-daintree-text/80 hover:bg-tint/10 hover:text-daintree-text"
-                    : "border border-status-info/30 bg-status-info/15 text-status-info hover:bg-status-info/20"
+                    : "border border-status-info/30 bg-status-info/15 text-status-info hover:bg-status-info/20",
+                  buttonPointerClass
                 )}
+                {...interactionGuard}
               >
                 {action.label}
               </button>
@@ -191,7 +204,11 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
           <button
             type="button"
             onClick={() => removeNotification(displayedNotification.id)}
-            className="h-7 shrink-0 rounded-[var(--radius-sm)] border border-tint/10 bg-tint/5 px-2 text-xs text-daintree-text/60 transition-colors hover:bg-tint/10 hover:text-daintree-text/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60"
+            className={cn(
+              "h-7 shrink-0 rounded-[var(--radius-sm)] border border-tint/10 bg-tint/5 px-2 text-xs text-daintree-text/60 transition-colors hover:bg-tint/10 hover:text-daintree-text/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
+              buttonPointerClass
+            )}
+            {...interactionGuard}
           >
             Dismiss
           </button>
