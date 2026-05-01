@@ -1,4 +1,4 @@
-import { Suspense, lazy, type ComponentType } from "react";
+import { Suspense, lazy, type ComponentProps, type ComponentType } from "react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { PtyPanelData, BrowserPanelData, DevPreviewPanelData } from "@shared/types/panel";
@@ -53,8 +53,7 @@ const LazyDevPreviewPane = lazy(() =>
 // correct componentName attribution on chunk-load failures. The per-panel
 // boundary in GridPanel catches render errors; this wrapper catches import
 // failures with proper attribution — the two boundaries serve different roles.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function BrowserPaneWrapper(props: any) {
+function BrowserPaneWrapper(props: ComponentProps<typeof LazyBrowserPane>) {
   return (
     <ErrorBoundary variant="component" componentName="BrowserPane">
       <Suspense fallback={<BrowserPaneSkeleton />}>
@@ -64,8 +63,7 @@ function BrowserPaneWrapper(props: any) {
   );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function DevPreviewPaneWrapper(props: any) {
+function DevPreviewPaneWrapper(props: ComponentProps<typeof LazyDevPreviewPane>) {
   return (
     <ErrorBoundary variant="component" componentName="DevPreviewPane">
       <Suspense fallback={<BrowserPaneSkeleton label="Loading dev preview panel" />}>
@@ -112,6 +110,11 @@ export function initBuiltInPanelKinds(): void {
     // here — this is the single seam between the typed registry map above and
     // the extension-friendly wide interface. Function parameter contravariance
     // makes this cast necessary; it is intentionally isolated to this function.
+    // Do NOT change PanelKindConfig.serialize / createDefaults to method syntax
+    // (`serialize(panel: …): …`). Method syntax is bivariant under
+    // strictFunctionTypes and would silently accept the unsafe widening this
+    // cast deliberately isolates — the property-syntax form is what makes the
+    // cast meaningful instead of redundant.
     const serialize = hooks.serialize as PanelKindConfig["serialize"];
     const createDefaults = hooks.createDefaults as PanelKindConfig["createDefaults"];
     if (existing.serialize !== serialize || existing.createDefaults !== createDefaults) {
@@ -129,6 +132,9 @@ function requirePanelKindConfig(kind: string): PanelKindConfig {
   return config;
 }
 
+// `Record<string, …>` is intentional: registerPanelKindDefinition mutates this
+// object by dynamic id, which requires the index signature. `satisfies` would
+// strip it from the inferred type and break the mutation site.
 const PANEL_KIND_DEFINITION_REGISTRY: Record<string, PanelKindDefinition> = {
   terminal: { ...requirePanelKindConfig("terminal"), component: TerminalPane },
   browser: { ...requirePanelKindConfig("browser"), component: BrowserPaneWrapper },
