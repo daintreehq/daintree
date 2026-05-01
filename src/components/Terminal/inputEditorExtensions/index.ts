@@ -1,5 +1,6 @@
 export {
   buildInputBarTheme,
+  chipEntranceTheme,
   setInterimRange,
   interimMarkField,
   setPendingAIRanges,

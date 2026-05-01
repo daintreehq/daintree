@@ -51,6 +51,7 @@ import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
 import {
   buildInputBarTheme,
+  chipEntranceTheme,
   createContentAttributes,
   createPlaceholder,
   createSlashChipField,
@@ -1045,6 +1046,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         doc: value,
         extensions: [
           themeCompartmentRef.current.of(buildInputBarTheme(effectiveTheme)),
+          chipEntranceTheme,
           EditorView.lineWrapping,
           drawSelection(),
           createContentAttributes(),

@@ -4,6 +4,7 @@ import { StateField, StateEffect, Prec } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import type { ITheme } from "@xterm/xterm";
 import { resolveInputBarColors } from "@/utils/terminalTheme";
+import { UI_PALETTE_ENTER_DURATION, EASE_OUT_EXPO } from "@/lib/animationUtils";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
 const LINE_HEIGHT_PX = 20;
@@ -76,7 +77,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       },
       ".cm-slash-command-chip": {
         fontWeight: 600,
-        color: c.accent,
+        color: c.chipColor,
         textDecoration: "underline dotted 1px",
         textUnderlineOffset: "2px",
       },
@@ -172,6 +173,32 @@ export function buildInputBarTheme(theme: ITheme): Extension {
     { dark: true }
   );
 }
+
+const CHIP_CLASSES = [
+  ".cm-file-chip",
+  ".cm-slash-command-chip",
+  ".cm-image-chip",
+  ".cm-file-drop-chip",
+  ".cm-diff-chip",
+  ".cm-terminal-chip",
+  ".cm-selection-chip",
+];
+
+const CHIP_ANIMATION = `chip-enter ${UI_PALETTE_ENTER_DURATION}ms ${EASE_OUT_EXPO} both`;
+
+// Lives outside the swappable buildInputBarTheme compartment so terminal
+// color-scheme changes don't re-inject @keyframes and re-trigger the entrance
+// animation on already-rendered chips.
+export const chipEntranceTheme: Extension = EditorView.baseTheme({
+  "@keyframes chip-enter": {
+    from: { opacity: "0", transform: "translateY(2px)" },
+    to: { opacity: "1", transform: "translateY(0)" },
+  },
+  ...Object.fromEntries(CHIP_CLASSES.map((cls) => [cls, { animation: CHIP_ANIMATION }])),
+  "@media (prefers-reduced-motion: reduce)": Object.fromEntries(
+    CHIP_CLASSES.map((cls) => [cls, { animation: "none" }])
+  ),
+});
 
 const interimMark = Decoration.mark({ class: "cm-voice-interim" });
 

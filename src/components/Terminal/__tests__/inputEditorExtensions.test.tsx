@@ -7,6 +7,7 @@ import { EditorView, runScopeHandlers } from "@codemirror/view";
 import type { ITheme } from "@xterm/xterm";
 import {
   buildInputBarTheme,
+  chipEntranceTheme,
   computeAutoSize,
   createAutoSize,
   createCustomKeymap,
@@ -1374,5 +1375,33 @@ describe("buildInputBarTheme", () => {
       extensions: [buildInputBarTheme(theme)],
     });
     expect(state.doc.toString()).toBe("test");
+  });
+
+  it("resolves slash chip color to chipColor (neutral), not accent", () => {
+    const colors = resolveInputBarColors(theme);
+    expect(colors.chipColor).not.toBe(colors.accent);
+    expect(colors.chipColor).toBe("#8be9fd");
+    expect(colors.accent).toBe("#ff79c6");
+  });
+});
+
+describe("chipEntranceTheme", () => {
+  it("is a valid Extension", () => {
+    expect(chipEntranceTheme).toBeDefined();
+    expect(chipEntranceTheme).not.toBeNull();
+  });
+
+  it("can be used to create an EditorState alongside buildInputBarTheme", () => {
+    const theme: ITheme = {
+      background: "#282a36",
+      foreground: "#f8f8f2",
+      cursor: "#ff79c6",
+      cyan: "#8be9fd",
+    };
+    const state = EditorState.create({
+      doc: "hello",
+      extensions: [buildInputBarTheme(theme), chipEntranceTheme],
+    });
+    expect(state.doc.toString()).toBe("hello");
   });
 });
