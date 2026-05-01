@@ -22,6 +22,7 @@ import { TRUSTED_TYPES_POLICY_NAME } from "@shared/config/csp";
 // off `globalThis` instead lets jsdom-based tests (and Node-environment unit
 // tests that transitively import this module) install a stub on globalThis
 // without needing a synthetic `window`.
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 const trustedTypesFactory = (globalThis as { trustedTypes?: TrustedTypePolicyFactory })
   .trustedTypes;
 
