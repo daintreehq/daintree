@@ -1,6 +1,7 @@
 import { app, BrowserWindow, powerMonitor } from "electron";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
+import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import type { ProjectStatsService } from "../services/ProjectStatsService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
@@ -19,6 +20,7 @@ export function clearResumeTimeout(): void {
 export interface PowerMonitorDeps {
   getPtyClient: () => PtyClient | null;
   getWorkspaceClient: () => WorkspaceClient | null;
+  getMainProcessWatchdogClient?: () => MainProcessWatchdogClient | null;
 }
 
 export function setupPowerMonitor(deps: PowerMonitorDeps): void {
@@ -28,6 +30,7 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
     clearResumeTimeout();
     const ptyClient = deps.getPtyClient();
     const workspaceClient = deps.getWorkspaceClient();
+    const watchdog = deps.getMainProcessWatchdogClient?.() ?? null;
     if (ptyClient) {
       ptyClient.pauseHealthCheck();
       ptyClient.pauseAll();
@@ -35,6 +38,12 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
     if (workspaceClient) {
       workspaceClient.pauseHealthCheck();
       workspaceClient.setPollingEnabled(false);
+    }
+    if (watchdog) {
+      // Suppresses kill-on-miss across suspend. Without this, a long sleep
+      // would accumulate enough missed pings for the watchdog to SIGKILL
+      // main on wake — exactly the false-positive we have to avoid.
+      watchdog.pause();
     }
     suspendTime = Date.now();
   });
@@ -50,6 +59,12 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
       try {
         const ptyClient = deps.getPtyClient();
         const workspaceClient = deps.getWorkspaceClient();
+        const watchdog = deps.getMainProcessWatchdogClient?.() ?? null;
+        if (watchdog) {
+          // Resume before pty/workspace so the watchdog is actively armed
+          // by the time the heavier post-wake refresh work begins.
+          watchdog.resume();
+        }
         if (ptyClient) {
           ptyClient.resumeAll();
           ptyClient.resumeHealthCheck();

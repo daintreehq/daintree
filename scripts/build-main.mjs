@@ -105,6 +105,8 @@ async function run() {
       "electron/pty-host-bootstrap.ts",
       "electron/workspace-host.ts",
       "electron/workspace-host-bootstrap.ts",
+      "electron/watchdog-host.ts",
+      "electron/watchdog-host-bootstrap.ts",
     ],
     outdir: "dist-electron/electron",
     format: "esm",

@@ -13,6 +13,7 @@ import { disposeAgentRouter } from "../services/AgentRouter.js";
 import { disposeTaskOrchestrator } from "../services/TaskOrchestrator.js";
 import { disposePtyClient } from "../services/PtyClient.js";
 import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
+import { disposeMainProcessWatchdog } from "../services/MainProcessWatchdogClient.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
@@ -151,6 +152,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
             }
             disposePtyClient();
             disposeWorkspaceClient();
+            disposeMainProcessWatchdog();
             resolve();
           }),
         ])
