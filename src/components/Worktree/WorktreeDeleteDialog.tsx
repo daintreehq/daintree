@@ -259,7 +259,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   aria-label={`Type ${confirmTarget} to confirm deletion`}
                   autoComplete="off"
                   spellCheck={false}
-                  className="w-full px-3 py-2 text-sm font-mono bg-daintree-bg border border-daintree-border rounded focus:outline-none focus:ring-2 focus:ring-status-error"
+                  className="w-full px-3 py-2 text-sm font-mono bg-daintree-bg border border-daintree-border rounded focus:outline-hidden focus:ring-2 focus:ring-status-error"
                   data-testid="delete-worktree-confirm-input"
                 />
                 <span className="sr-only" aria-live="polite">
