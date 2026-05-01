@@ -9,7 +9,109 @@ import {
 } from "../../shared/utils/ipcErrorSerialization.js";
 import { FAULT_MODE_ENABLED, applyInvokeFault, initFaultRegistry } from "../ipc/faultRegistry.js";
 import { markIpcSecurityReady } from "../ipc/ipcGuard.js";
+import { channelToCategory, type IpcChannelCategory } from "../ipc/utils.js";
+import { AppError } from "../utils/errorTypes.js";
 import { scrubSecrets } from "../utils/secretScrubber.js";
+
+/**
+ * Coarse cap on the number of arguments a renderer may pass to a handler in a
+ * single `ipcMain.invoke` call. Every typed channel in this codebase passes a
+ * single structured object; 8 gives ~4x headroom over the realistic max while
+ * still defeating `Array.prototype` poisoning / deep-spread variants that try
+ * to overwhelm the handler with thousands of args.
+ */
+export const MAX_IPC_ARG_COUNT = 8;
+
+/**
+ * Per-category byte budgets enforced after sender-frame validation, before
+ * the listener is invoked. Channels not in {@link channelToCategory} fall back
+ * to {@link DEFAULT_PAYLOAD_BUDGET}. `JSON.stringify` is used to estimate UTF-8
+ * size (cheaper than `v8.serialize` and the established codebase pattern from
+ * `electron/utils/performance.ts`); on failure (circular refs, binary buffers)
+ * the check is skipped and Mojo's 128 MiB ceiling acts as the backstop.
+ */
+export const PAYLOAD_BUDGETS: Record<IpcChannelCategory, number> = {
+  fileOps: 4 * 1024 * 1024,
+  artifactOps: 4 * 1024 * 1024,
+  gitOps: 512 * 1024,
+  // Spawn carries env-var dictionaries that can include base64 cert bundles
+  // (3–8 KiB each) plus accumulated PATH/HOME/PROXY entries; 256 KiB keeps
+  // the budget tight while accommodating realistic project env overrides.
+  terminalSpawn: 256 * 1024,
+};
+
+export const DEFAULT_PAYLOAD_BUDGET = 1 * 1024 * 1024;
+
+/**
+ * Throws an {@link AppError} with a stable {@link AppErrorCode} when the
+ * incoming invoke envelope exceeds the arg-count cap or the per-category byte
+ * budget. Caller is expected to call this inside the wrapper's try/catch so
+ * the existing prod-strip path serialises the error.
+ *
+ * @internal Exported for testing.
+ */
+/**
+ * Detect values whose JSON-stringified size is an unreliable proxy for the
+ * structured-clone wire size, so the byte gate can skip them and defer to
+ * Mojo's 128 MiB ceiling. Catches binary buffers (`{"0":...}` overestimates),
+ * `Map`/`Set` (serialise to `{}`, underestimates), and walks plain objects
+ * and arrays so a buffer nested inside `{ blob: new Uint8Array(...) }` is
+ * still caught. Depth-bounded to keep the check cheap on legitimate payloads.
+ *
+ * @internal Exported for testing.
+ */
+export function containsBinary(value: unknown, depth = 0): boolean {
+  if (depth > 32) return true;
+  if (value === null || typeof value !== "object") return false;
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return true;
+  if (value instanceof Map || value instanceof Set) return true;
+  if (Array.isArray(value)) return value.some((v) => containsBinary(v, depth + 1));
+  for (const key of Object.keys(value)) {
+    if (containsBinary((value as Record<string, unknown>)[key], depth + 1)) return true;
+  }
+  return false;
+}
+
+// JSON.stringify throws on BigInt; coerce to string so a single `1n` slipped
+// into args cannot silently defeat the byte gate.
+function bigintSafeReplacer(_key: string, value: unknown): unknown {
+  return typeof value === "bigint" ? value.toString() : value;
+}
+
+export function validateIpcInvokeEnvelope(channel: string, args: unknown[]): void {
+  if (args.length > MAX_IPC_ARG_COUNT) {
+    throw new AppError({
+      code: "ARG_COUNT_EXCEEDED",
+      message: `IPC argument count exceeded for ${channel}: ${args.length} > ${MAX_IPC_ARG_COUNT}`,
+      userMessage: "Request rejected — too many arguments.",
+      context: { channel, argCount: args.length, maxArgCount: MAX_IPC_ARG_COUNT },
+    });
+  }
+
+  // Binary / Map / Set payloads make `JSON.stringify` an unreliable size
+  // estimator. Skip the byte check and let Mojo's 128 MiB ceiling and the
+  // handler-level caps (clipboard PNG, artifact patch) act as the backstop.
+  if (args.some((arg) => containsBinary(arg))) return;
+
+  const category = channelToCategory[channel];
+  const budget = category !== undefined ? PAYLOAD_BUDGETS[category] : DEFAULT_PAYLOAD_BUDGET;
+
+  let bytes: number;
+  try {
+    bytes = Buffer.byteLength(JSON.stringify(args, bigintSafeReplacer), "utf8");
+  } catch {
+    return;
+  }
+
+  if (bytes > budget) {
+    throw new AppError({
+      code: "PAYLOAD_TOO_LARGE",
+      message: `IPC payload too large for ${channel}: ${bytes} > ${budget} bytes`,
+      userMessage: "Request rejected — payload exceeds the allowed size.",
+      context: { channel, bytes, budget, category: category ?? null },
+    });
+  }
+}
 
 function sanitizePaths(msg: string): string {
   return msg
@@ -50,6 +152,7 @@ export function enforceIpcSenderValidation(): void {
         );
       }
       try {
+        validateIpcInvokeEnvelope(channel, args);
         if (FAULT_MODE_ENABLED) await applyInvokeFault(channel);
         const result = await listener(event, ...args);
         return wrapSuccess(result);
@@ -88,6 +191,7 @@ export function enforceIpcSenderValidation(): void {
           );
         }
         try {
+          validateIpcInvokeEnvelope(channel, args);
           if (FAULT_MODE_ENABLED) await applyInvokeFault(channel);
           const result = await listener(event, ...args);
           return wrapSuccess(result);
@@ -96,6 +200,9 @@ export function enforceIpcSenderValidation(): void {
             console.error(`[IPC] Error on channel ${channel}:`, error);
             const serialized = serializeError(error);
             serialized.message = sanitizeErrorForRenderer(serialized.message);
+            if (typeof serialized.userMessage === "string") {
+              serialized.userMessage = sanitizeErrorForRenderer(serialized.userMessage);
+            }
             serialized.stack = undefined;
             serialized.path = undefined;
             serialized.context = undefined;
