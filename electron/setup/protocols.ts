@@ -213,9 +213,12 @@ function createDaintreeFileProtocolHandler() {
       try {
         const buffer = await fileHandle.readFile();
         const mimeType = getMimeType(realFile);
+        // Content-Length reflects the bytes actually returned. If the file
+        // grew between stat() and readFile(), buffer.length is the truth;
+        // fileStat.size would be stale.
         return new Response(buffer, {
           status: 200,
-          headers: buildDaintreeFileHeaders(mimeType, fileStat.size),
+          headers: buildDaintreeFileHeaders(mimeType, buffer.length),
         });
       } finally {
         // Swallow close errors so they don't mask a preceding readFile failure.

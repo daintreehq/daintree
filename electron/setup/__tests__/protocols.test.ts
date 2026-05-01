@@ -70,11 +70,17 @@ vi.mock("../../utils/appProtocol.js", () => ({
   buildHeaders: vi.fn(),
 }));
 
+// Real-ish flag values matter: the protocol handler passes
+// `O_RDONLY | O_NOFOLLOW` to fs.open, and the test below asserts on the exact
+// bitmask. With both flags mocked as 0, the OR collapses to 0 and the
+// assertion succeeds whether or not O_NOFOLLOW is present in the source —
+// silently disabling the TOCTOU regression guard. Match the values used in
+// the sibling files:read test.
 const fsPromisesMocks = vi.hoisted(() => ({
   realpath: vi.fn(),
   stat: vi.fn(),
   open: vi.fn(),
-  constants: { O_RDONLY: 0, O_NOFOLLOW: 0 },
+  constants: { O_RDONLY: 0, O_NOFOLLOW: 0x100 },
 }));
 
 vi.mock("fs/promises", () => ({
@@ -856,6 +862,24 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     expect(response.headers.get("Cross-Origin-Resource-Policy")).toBe("cross-origin");
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("uses the read buffer length for Content-Length, not the pre-read stat.size", async () => {
+    // If the file changes between stat() and readFile(), Content-Length must
+    // reflect what was actually returned in the body — using stat.size would
+    // declare a stale length that mismatches the response body.
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 4 } as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle("hello world") as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/src/index.ts", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe(String("hello world".length));
   });
 
   it("rejects oversize files with 413 before opening the file (size cap parity with files:read)", async () => {
