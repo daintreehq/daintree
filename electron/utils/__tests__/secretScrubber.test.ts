@@ -74,6 +74,16 @@ describe("secretScrubber", () => {
         expected: `OPENAI_API_KEY=${REDACTED}`,
       },
       {
+        name: "openai-admin-key",
+        input: `OPENAI_API_KEY=sk-admin-${"A".repeat(155)}`,
+        expected: `OPENAI_API_KEY=${REDACTED}`,
+      },
+      {
+        name: "openrouter-api-key",
+        input: `OPENROUTER_API_KEY=sk-or-v1-${"a".repeat(64)}`,
+        expected: `OPENROUTER_API_KEY=${REDACTED}`,
+      },
+      {
         name: "openai-api-key",
         input: `OPENAI_API_KEY=sk-${"A".repeat(48)}`,
         expected: `OPENAI_API_KEY=${REDACTED}`,
@@ -104,6 +114,26 @@ describe("secretScrubber", () => {
         expected: REDACTED,
       },
       {
+        name: "slack-app-token",
+        input: `token=xapp-${"A".repeat(100)} end`,
+        expected: `token=${REDACTED} end`,
+      },
+      {
+        name: "slack-access-token-xoxb",
+        input: `token=xoxe.xoxb-${"A".repeat(170)} end`,
+        expected: `token=${REDACTED} end`,
+      },
+      {
+        name: "slack-access-token-xoxp",
+        input: `token=xoxe.xoxp-${"0".repeat(175)}`,
+        expected: `token=${REDACTED}`,
+      },
+      {
+        name: "slack-refresh-token",
+        input: `token=xoxe-${"A".repeat(145)} end`,
+        expected: `token=${REDACTED} end`,
+      },
+      {
         name: "google-api-key",
         input: `url=AIza${"A".repeat(35)}/path`,
         expected: `url=${REDACTED}/path`,
@@ -112,6 +142,16 @@ describe("secretScrubber", () => {
         name: "aws-access-key",
         input: "aws_access_key=AKIAIOSFODNN7EXAMPLE trailing",
         expected: `aws_access_key=${REDACTED} trailing`,
+      },
+      {
+        name: "aws-sts-access-key",
+        input: "aws_access_key=ASIAIOSFODNN7EXAMPLE trailing",
+        expected: `aws_access_key=${REDACTED} trailing`,
+      },
+      {
+        name: "aws-sts-variant-key",
+        input: "aws_access_key=ABIAIOSFODNN7EXAMPLE",
+        expected: `aws_access_key=${REDACTED}`,
       },
       {
         name: "aws-secret-access-key-credentials-file",
@@ -184,6 +224,36 @@ describe("secretScrubber", () => {
         expected: `SUPABASE_KEY=${REDACTED} next`,
       },
       {
+        name: "replicate-api-token",
+        input: `REPLICATE_API_TOKEN=r8_${"A".repeat(37)}`,
+        expected: `REPLICATE_API_TOKEN=${REDACTED}`,
+      },
+      {
+        name: "huggingface-api-token",
+        input: `HF_TOKEN=hf_${"a".repeat(34)} end`,
+        expected: `HF_TOKEN=${REDACTED} end`,
+      },
+      {
+        name: "groq-api-key",
+        input: `GROQ_API_KEY=gsk_${"z".repeat(50)} end`,
+        expected: `GROQ_API_KEY=${REDACTED} end`,
+      },
+      {
+        name: "linear-api-key",
+        input: `LINEAR_API_KEY=lin_api_${"A".repeat(40)}`,
+        expected: `LINEAR_API_KEY=${REDACTED}`,
+      },
+      {
+        name: "notion-api-key",
+        input: `NOTION_API_KEY=ntn_${"a".repeat(47)} end`,
+        expected: `NOTION_API_KEY=${REDACTED} end`,
+      },
+      {
+        name: "sendgrid-api-key",
+        input: `SENDGRID_API_KEY=SG.${"A".repeat(22)}.${"z".repeat(43)} end`,
+        expected: `SENDGRID_API_KEY=${REDACTED} end`,
+      },
+      {
         name: "azure-connection-string",
         input: `conn=DefaultEndpointsProtocol=https;AccountName=myacct;AccountKey=${"A".repeat(86)}== end`,
         expected: `conn=${REDACTED} end`,
@@ -243,6 +313,11 @@ describe("secretScrubber", () => {
         name: "generic-client-secret-fallback",
         input: `client_secret = ${"x".repeat(40)}`,
         expected: REDACTED,
+      },
+      {
+        name: "slack-signing-secret-fallback",
+        input: `SLACK_SIGNING_SECRET=${"a".repeat(32)} end`,
+        expected: `${REDACTED} end`,
       },
     ];
 
@@ -328,6 +403,95 @@ describe("secretScrubber", () => {
     it("does not flag a URL without basic-auth credentials", () => {
       const url = "https://example.com/path?foo=bar";
       expect(scrubSecrets(url)).toBe(url);
+    });
+
+    it("does not flag sk-or-v1- with uppercase hex body", () => {
+      const upperHex = `sk-or-v1-${"A".repeat(64)}`;
+      expect(scrubSecrets(upperHex)).toBe(upperHex);
+    });
+
+    it("does not flag a too-short openrouter key", () => {
+      const tooShort = `sk-or-v1-${"a".repeat(54)}`;
+      expect(scrubSecrets(tooShort)).toBe(tooShort);
+    });
+
+    it("does not flag bare 32-char hex without slack_signing_secret context", () => {
+      const bareHex = `${"a".repeat(32)}`;
+      expect(scrubSecrets(bareHex)).toBe(bareHex);
+    });
+
+    it("does not flag a too-short xapp token", () => {
+      const tooShort = `xapp-${"A".repeat(89)}`;
+      expect(scrubSecrets(tooShort)).toBe(tooShort);
+    });
+
+    it("does not flag xoxe- with too-short body", () => {
+      const tooShort = `xoxe-${"A".repeat(139)}`;
+      expect(scrubSecrets(tooShort)).toBe(tooShort);
+    });
+
+    it("partially redacts xoxe.xoxb- with too-short body via slack-token fallback", () => {
+      // 159-char body is below the {160,180} access-token floor, but the
+      // `xoxb-` portion still matches the existing slack-token pattern.
+      const tooShort = `xoxe.xoxb-${"A".repeat(159)}`;
+      expect(scrubSecrets(tooShort)).toBe(`xoxe.${REDACTED}`);
+    });
+
+    it("does not flag ACIA as an AWS key (wrong prefix)", () => {
+      const wrongPrefix = "ACIAIOSFODNN7EXAMPLE";
+      expect(scrubSecrets(wrongPrefix)).toBe(wrongPrefix);
+    });
+
+    it("does not flag too-short r8_ token", () => {
+      const tooShort = `r8_${"A".repeat(29)}`;
+      expect(scrubSecrets(tooShort)).toBe(tooShort);
+    });
+
+    it("does not flag too-short hf_ token", () => {
+      const tooShort = `hf_${"a".repeat(24)}`;
+      expect(scrubSecrets(tooShort)).toBe(tooShort);
+    });
+
+    it("does not flag too-short gsk_ token", () => {
+      const tooShort = `gsk_${"z".repeat(44)}`;
+      expect(scrubSecrets(tooShort)).toBe(tooShort);
+    });
+
+    it("does not flag too-short lin_api_ token", () => {
+      const tooShort = `lin_api_${"A".repeat(34)}`;
+      expect(scrubSecrets(tooShort)).toBe(tooShort);
+    });
+
+    it("does not flag too-short ntn_ token", () => {
+      const tooShort = `ntn_${"a".repeat(39)}`;
+      expect(scrubSecrets(tooShort)).toBe(tooShort);
+    });
+
+    it("does not flag sendgrid with wrong segment count (2 segments)", () => {
+      const malformed = `SG.${"A".repeat(22)}`;
+      expect(scrubSecrets(malformed)).toBe(malformed);
+    });
+
+    it("scrubs valid-key portion of sendgrid-like string with trailing segment", () => {
+      // The first three segments form a valid key shape; the regex scrubs them
+      // and the trailing `.extra` is preserved as non-secret context.
+      const withExtra = `SG.${"A".repeat(22)}.${"b".repeat(43)}.extra`;
+      expect(scrubSecrets(withExtra)).toBe(`${REDACTED}.extra`);
+    });
+
+    it("does not flag sendgrid with wrong segment lengths", () => {
+      const malformed = `SG.${"A".repeat(21)}.${"b".repeat(42)}`;
+      expect(scrubSecrets(malformed)).toBe(malformed);
+    });
+
+    it("does not flag r8_ as substring in ordinary text", () => {
+      const ordinary = "The car8_example text here is not a secret key at all";
+      expect(scrubSecrets(ordinary)).toBe(ordinary);
+    });
+
+    it("does not flag hf_ as substring in ordinary text", () => {
+      const ordinary = "The chef_example text here is not a secret key at all";
+      expect(scrubSecrets(ordinary)).toBe(ordinary);
     });
 
     it("redacts realistically-sized Atlassian token bodies fully", () => {
@@ -443,6 +607,24 @@ describe("secretScrubber", () => {
     it("Bearer token at upper bound (4000 chars) is scrubbed", () => {
       const input = `Authorization: Bearer ${"A".repeat(4000)}`;
       expect(scrubSecrets(input)).toBe(`Authorization: Bearer ${REDACTED}`);
+    });
+  });
+
+  describe("ordering regression", () => {
+    it("xoxe.xoxb- access token is fully scrubbed (not partially by xoxe-)", () => {
+      const token = `xoxe.xoxb-${"A".repeat(170)}`;
+      const out = scrubSecrets(token);
+      expect(out).toBe(REDACTED);
+      // If the broader `xoxe-` pattern matched first, we'd see `xoxb-` remnants.
+      expect(out).not.toContain("xoxb");
+      expect(out).not.toContain("xoxe");
+    });
+
+    it("sk-or-v1- token fully scrubbed (not partially by sk-{48})", () => {
+      const token = `sk-or-v1-${"a".repeat(64)}`;
+      const out = scrubSecrets(token);
+      expect(out).toBe(REDACTED);
+      expect(out).not.toContain("or-v1");
     });
   });
 
