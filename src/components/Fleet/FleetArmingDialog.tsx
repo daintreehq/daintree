@@ -812,7 +812,11 @@ function WorktreeGroupSection({
   }, [groupIds, selectedIds]);
 
   return (
-    <section className="mb-1">
+    // role="group" satisfies WAI-ARIA listbox structural rules — children of
+    // role="listbox" must be option or group elements. The header controls
+    // (group-toggle checkbox + name button) live inside the group; AT will
+    // announce them as buttons within the group.
+    <section className="mb-1" role="group" aria-label={group.worktreeName}>
       {!hideHeader && (
         <header
           className="flex items-center gap-2 px-2 py-1.5 sticky top-0 bg-surface-panel z-[1]"

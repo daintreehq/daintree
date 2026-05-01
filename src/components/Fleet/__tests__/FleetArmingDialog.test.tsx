@@ -1106,6 +1106,28 @@ describe("FleetArmingDialog", () => {
       expect(screen.getByText("Arm 3 selected")).toBeTruthy();
     });
 
+    it("Shift+Arrow is additive — direction reversal does not contract the range", () => {
+      // Documents the additive-only contract per WAI-APG and VS Code QuickPick
+      // canSelectMany: anchor never moves on Shift+Arrow, and reversing
+      // direction grows (does not shrink) the selection.
+      seedTerminals([
+        makeTerminal("a", { title: "alpha" }),
+        makeTerminal("b", { title: "beta" }),
+        makeTerminal("c", { title: "gamma" }),
+      ]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+      fireEvent.click(screen.getByLabelText("Select alpha"));
+      const list = screen.getByTestId("fleet-arming-dialog-list");
+      // Shift+Down twice → anchor=a, focus=c, range a..c (3 selected).
+      fireEvent.keyDown(list, { key: "ArrowDown", shiftKey: true });
+      fireEvent.keyDown(list, { key: "ArrowDown", shiftKey: true });
+      expect(screen.getByText("Arm 3 selected")).toBeTruthy();
+      // Shift+Up reverses direction → focus=b, but range is still
+      // additive (anchor a..b adds nothing new since b was already in).
+      fireEvent.keyDown(list, { key: "ArrowUp", shiftKey: true });
+      expect(screen.getByText("Arm 3 selected")).toBeTruthy();
+    });
+
     it("Shift+ArrowUp extends selection from anchor upward", () => {
       seedTerminals([
         makeTerminal("a", { title: "alpha" }),
