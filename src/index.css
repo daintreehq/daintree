@@ -1094,6 +1094,40 @@ body,
   will-change: opacity;
 }
 
+/* Opt-in shimmer sweep for skeleton bones. Layered on top of the opacity pulse;
+ * the ::after pseudo-element rides a translateX so the work stays on the
+ * compositor (transform > background-position for GPU cost — see #4738).
+ * Bundles position: relative + overflow: hidden so callers don't need to add
+ * them separately.
+ */
+@keyframes skeleton-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.animate-skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklab, var(--color-daintree-text) 8%, transparent) 50%,
+    transparent 100%
+  );
+  animation: skeleton-shimmer 1.8s ease-in-out infinite;
+  will-change: transform;
+}
+
 /* Agent status working state - pulsing gradient animation */
 @keyframes status-pulse {
   0%,
@@ -1349,6 +1383,7 @@ body,
   .animate-spin-slow,
   .animate-pulse-delayed,
   .animate-pulse-immediate,
+  .animate-skeleton-shimmer,
   .status-working,
   .animate-badge-bump,
   .animate-activity-blip,
@@ -1359,6 +1394,14 @@ body,
     animation: none;
     opacity: 1;
     transform: none;
+    will-change: auto;
+  }
+
+  /* Hide the shimmer sweep entirely — `animation: none` alone leaves a static
+   * gradient stripe visible. WCAG 2.3.3: remove motion, don't freeze it.
+   */
+  .animate-skeleton-shimmer::after {
+    display: none;
     will-change: auto;
   }
 
@@ -1438,6 +1481,7 @@ body[data-reduce-animations="true"]
     .animate-spin-slow,
     .animate-pulse-delayed,
     .animate-pulse-immediate,
+    .animate-skeleton-shimmer,
     .status-working,
     .animate-badge-bump,
     .animate-activity-blip,
@@ -1449,6 +1493,11 @@ body[data-reduce-animations="true"]
   animation: none;
   opacity: 1;
   transform: none;
+  will-change: auto;
+}
+
+body[data-reduce-animations="true"] .animate-skeleton-shimmer::after {
+  display: none;
   will-change: auto;
 }
 
@@ -2154,6 +2203,13 @@ body[data-performance-mode="true"] *::after {
 body[data-performance-mode="true"] .animate-pulse-delayed,
 body[data-performance-mode="true"] .animate-pulse-immediate {
   opacity: 1 !important;
+}
+
+/* The global wildcard above kills the shimmer animation but the ::after
+ * pseudo-element still paints its static gradient stripe — hide it.
+ */
+body[data-performance-mode="true"] .animate-skeleton-shimmer::after {
+  display: none !important;
 }
 
 /* Disable backdrop effects in performance mode */
