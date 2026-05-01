@@ -755,6 +755,7 @@ function App() {
                 results={actionPalette.results}
                 totalResults={actionPalette.totalResults}
                 selectedIndex={actionPalette.selectedIndex}
+                isShowingRecentlyUsed={actionPalette.isShowingRecentlyUsed}
                 close={actionPalette.close}
                 setQuery={actionPalette.setQuery}
                 setSelectedIndex={actionPalette.setSelectedIndex}

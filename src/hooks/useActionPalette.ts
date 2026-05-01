@@ -32,6 +32,7 @@ export interface UseActionPaletteReturn {
   results: ActionPaletteItem[];
   totalResults: number;
   selectedIndex: number;
+  isShowingRecentlyUsed: boolean;
   open: () => void;
   close: () => void;
   toggle: () => void;
@@ -44,6 +45,7 @@ export interface UseActionPaletteReturn {
 }
 
 const MAX_RESULTS = 20;
+const MAX_MRU_RESULTS = 10;
 
 function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
   const title =
@@ -92,15 +94,18 @@ export function useActionPalette(): UseActionPaletteReturn {
       const actionMruList = getSortedActionMruList().map(({ id }) => id);
 
       if (!query.trim()) {
-        const mruIndexMap = new Map<string, number>();
-        actionMruList.forEach((id, index) => mruIndexMap.set(id, index));
-        return [...items].sort((a, b) => {
-          if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
-          const aIndex = mruIndexMap.get(a.id) ?? Infinity;
-          const bIndex = mruIndexMap.get(b.id) ?? Infinity;
-          if (aIndex !== bIndex) return aIndex - bIndex;
-          return a.title.localeCompare(b.title, "en", { sensitivity: "base" });
-        });
+        if (actionMruList.length === 0) return [];
+
+        const itemById = new Map(items.map((item) => [item.id, item]));
+        const enabled: ActionPaletteItem[] = [];
+        const disabled: ActionPaletteItem[] = [];
+        for (const id of actionMruList) {
+          const item = itemById.get(id);
+          if (!item) continue;
+          if (item.enabled) enabled.push(item);
+          else disabled.push(item);
+        }
+        return [...enabled, ...disabled].slice(0, MAX_MRU_RESULTS);
       }
 
       const context = actionService.getContext();
@@ -176,12 +181,15 @@ export function useActionPalette(): UseActionPaletteReturn {
     }
   }, [results, selectedIndex, executeAction]);
 
+  const isShowingRecentlyUsed = query.trim() === "" && results.length > 0;
+
   return {
     isOpen,
     query,
     results,
     totalResults,
     selectedIndex,
+    isShowingRecentlyUsed,
     open,
     close,
     toggle,
