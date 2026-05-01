@@ -113,6 +113,9 @@ const DURABLE_ALLOWLIST = new Set([
   // Current worktree card left-edge accent bar (single primary anchor per view)
   "src/components/Worktree/WorktreeCard.tsx",
 
+  // PanelPalette selected-row left-edge accent stripe (single primary anchor per view)
+  "src/components/PanelPalette/PanelPalette.tsx",
+
   // Setup wizard step indicators, accent icon, telemetry toggle (one-time setup flow)
   "src/components/Setup/AgentSetupWizard.tsx",
 
@@ -187,7 +190,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/KeyboardShortcuts/SettingsShortcutCapture.tsx",
     "src/components/LogLevelPalette/LogLevelPalette.tsx",
     "src/components/Notifications/NotificationCenterEntry.tsx",
-    "src/components/PanelPalette/PanelPalette.tsx",
     "src/components/Portal/PortalDock.tsx",
     "src/components/Portal/PortalToolbar.tsx",
     "src/components/Project/AutomationTab.tsx",
@@ -220,7 +222,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Settings/ResourceEnvironmentsSection.tsx",
     "src/components/Settings/SettingsDialog.tsx",
     "src/components/Settings/SettingsInput.tsx",
-    "src/components/Settings/settingsSearchUtils.tsx",
     "src/components/Settings/SettingsSelect.tsx",
     "src/components/Settings/SettingsSubtabBar.tsx",
     "src/components/Settings/SettingsTextarea.tsx",
