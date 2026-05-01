@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 const TEXT_LINE_WIDTHS = ["w-full", "w-3/4", "w-1/2"] as const;
 const MAX_TEXT_LINES = 100;
@@ -156,6 +158,111 @@ export function SkeletonText({
           )}
         />
       ))}
+    </div>
+  );
+}
+
+const DEFAULT_FIRST_THRESHOLD_MS = 5_000;
+const DEFAULT_SECOND_THRESHOLD_MS = 10_000;
+const DEFAULT_ACTION_THRESHOLD_MS = 15_000;
+
+const FIRST_HINT_COPY = "Still working…";
+const SECOND_HINT_COPY = "Taking longer than usual…";
+const CANCEL_LABEL = "Cancel";
+const RETRY_LABEL = "Retry";
+
+type HintPhase = "hidden" | "first" | "second" | "action";
+
+function safeThreshold(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isFinite(value) || value < 0) return fallback;
+  return value;
+}
+
+function hintCopy(phase: HintPhase): string {
+  if (phase === "first") return FIRST_HINT_COPY;
+  if (phase === "second" || phase === "action") return SECOND_HINT_COPY;
+  return "";
+}
+
+export interface SkeletonHintProps extends Omit<
+  HTMLAttributes<HTMLDivElement>,
+  "role" | "aria-live" | "children"
+> {
+  /** Delay before "Still working…" appears. Default 5000ms. */
+  firstThreshold?: number;
+  /** Delay before copy escalates to "Taking longer than usual…". Default 10000ms. */
+  secondThreshold?: number;
+  /** Delay before Cancel/Retry buttons surface (only when handlers are passed). Default 15000ms. */
+  actionThreshold?: number;
+  /** When provided, a Cancel button appears at actionThreshold and fires this handler. */
+  onCancel?: () => void;
+  /** When provided, a Retry button appears at actionThreshold and fires this handler. */
+  onRetry?: () => void;
+}
+
+/**
+ * Companion to `<Skeleton>` for long-tail loads (>5s). Stays invisible until the
+ * first threshold, then fades in escalating copy and surfaces a Cancel/Retry
+ * affordance at the action threshold. Place as a sibling to the `<Skeleton>`
+ * wrapper — never nested inside, because the wrapper's `aria-busy="true"`
+ * silences mutations within its subtree on modern screen readers.
+ *
+ * The sr-only span is always rendered so screen readers register the live
+ * region up front; only its text content updates on phase change.
+ */
+export function SkeletonHint({
+  firstThreshold,
+  secondThreshold,
+  actionThreshold,
+  onCancel,
+  onRetry,
+  className,
+  ...rest
+}: SkeletonHintProps) {
+  const [phase, setPhase] = useState<HintPhase>("hidden");
+
+  const first = safeThreshold(firstThreshold, DEFAULT_FIRST_THRESHOLD_MS);
+  const second = safeThreshold(secondThreshold, DEFAULT_SECOND_THRESHOLD_MS);
+  const action = safeThreshold(actionThreshold, DEFAULT_ACTION_THRESHOLD_MS);
+
+  useEffect(() => {
+    const ids: ReturnType<typeof setTimeout>[] = [
+      setTimeout(() => setPhase("first"), first),
+      setTimeout(() => setPhase("second"), second),
+      setTimeout(() => setPhase("action"), action),
+    ];
+    return () => {
+      for (const id of ids) clearTimeout(id);
+    };
+  }, [first, second, action]);
+
+  const visibleCopy = hintCopy(phase);
+  const showActions = phase === "action" && (onCancel !== undefined || onRetry !== undefined);
+
+  return (
+    <div {...rest} className={className}>
+      <span className="sr-only" aria-live="polite" aria-atomic="true">
+        {visibleCopy}
+      </span>
+      {phase !== "hidden" && (
+        <div
+          key={phase}
+          className="animate-hint-fade-in flex items-center gap-2 text-text-secondary text-xs"
+        >
+          <span aria-hidden="true">{visibleCopy}</span>
+          {showActions && onCancel !== undefined && (
+            <Button variant="ghost" size="sm" onClick={onCancel} type="button">
+              {CANCEL_LABEL}
+            </Button>
+          )}
+          {showActions && onRetry !== undefined && (
+            <Button variant="ghost" size="sm" onClick={onRetry} type="button">
+              {RETRY_LABEL}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

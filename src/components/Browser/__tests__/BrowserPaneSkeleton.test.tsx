@@ -44,4 +44,14 @@ describe("BrowserPaneSkeleton", () => {
     // header row + toolbar row = 2
     expect(hiddenRows.length).toBe(2);
   });
+
+  it("includes a SkeletonHint sibling outside the role=status element", () => {
+    const { container } = render(<BrowserPaneSkeleton />);
+    // SkeletonHint always renders an aria-live="polite" sr-only region; that
+    // region must NOT live inside the role="status" subtree, otherwise
+    // aria-busy="true" will silence the escalating copy on modern AT.
+    const live = container.querySelector('[aria-live="polite"]');
+    expect(live).toBeTruthy();
+    expect(live!.closest('[role="status"]')).toBeNull();
+  });
 });
