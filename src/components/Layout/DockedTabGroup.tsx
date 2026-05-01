@@ -51,6 +51,8 @@ import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplication
 import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { usePreferencesStore } from "@/store";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 
 interface DockedTabGroupProps {
   group: TabGroup;
@@ -232,9 +234,10 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     [group.id, setActiveTab, setFocused, openDockTerminal]
   );
 
-  const handleTabClose = useCallback(
+  const [pendingCloseTabId, setPendingCloseTabId] = useState<string | null>(null);
+
+  const doCloseTab = useCallback(
     (tabId: string) => {
-      // If closing the active tab, switch to another tab first
       if (tabId === activeTabId) {
         const currentIndex = panels.findIndex((p) => p.id === tabId);
         const nextPanel = panels[currentIndex + 1] ?? panels[currentIndex - 1];
@@ -243,11 +246,37 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           setFocused(nextPanel.id);
         }
       }
-      // Trash the terminal (store auto-removes from group)
       trashPanel(tabId);
     },
     [activeTabId, panels, group.id, setActiveTab, setFocused, trashPanel]
   );
+
+  // Confirm before closing a tab whose agent is mid-task. The dock popover
+  // collapses when the body-portalled ConfirmDialog appears (via Radix's
+  // onInteractOutside), so close it explicitly first to keep state transitions
+  // clean — otherwise cancel would leave the user with no popover to return to.
+  const handleTabClose = useCallback(
+    (tabId: string) => {
+      const panel = panels.find((p) => p.id === tabId);
+      if (panel?.agentState && ACTIVE_AGENT_STATES.has(panel.agentState)) {
+        closeDockTerminal();
+        setPendingCloseTabId(tabId);
+        return;
+      }
+      doCloseTab(tabId);
+    },
+    [panels, closeDockTerminal, doCloseTab]
+  );
+
+  const handleConfirmClose = useCallback(() => {
+    const tabId = pendingCloseTabId;
+    setPendingCloseTabId(null);
+    if (tabId) doCloseTab(tabId);
+  }, [pendingCloseTabId, doCloseTab]);
+
+  const handleCancelClose = useCallback(() => {
+    setPendingCloseTabId(null);
+  }, []);
 
   // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
   const tabSensors = useSensors(
@@ -411,194 +440,211 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     : null;
 
   return (
-    <Popover open={isOpen} onOpenChange={handleOpenChange}>
-      <TerminalContextMenu terminalId={activePanel.id} forceLocation="dock">
-        <PopoverTrigger asChild>
-          <button
-            className={cn(
-              "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
-              "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-daintree-text/70",
-              "hover:text-daintree-text hover:bg-[var(--dock-item-bg-hover)]",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
-              "cursor-grab active:cursor-grabbing",
-              isOpen &&
-                "bg-[var(--dock-item-bg-active)] text-daintree-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30",
-              !isOpen &&
-                showDockAgentHighlights &&
-                blockedState === "waiting" &&
-                "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
-              isDeprioritized && "opacity-50"
-            )}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (e.detail >= 2) return;
-              if (isOpen) {
-                closeDockTerminal();
-              } else {
-                openDockTerminal(activeTabId);
-              }
-            }}
-            onDoubleClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const moved = moveTerminalToGrid(activePanel.id);
-              if (moved) closeDockTerminal();
-            }}
-            aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
-          >
-            <div className="flex items-center justify-center shrink-0">
-              <TerminalIcon kind={activePanel.kind} chrome={activeChrome} className="w-3.5 h-3.5" />
-            </div>
-            <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
-              {displayTitle}
-            </span>
+    <>
+      <Popover open={isOpen} onOpenChange={handleOpenChange}>
+        <TerminalContextMenu terminalId={activePanel.id} forceLocation="dock">
+          <PopoverTrigger asChild>
+            <button
+              className={cn(
+                "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
+                "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-daintree-text/70",
+                "hover:text-daintree-text hover:bg-[var(--dock-item-bg-hover)]",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                "cursor-grab active:cursor-grabbing",
+                isOpen &&
+                  "bg-[var(--dock-item-bg-active)] text-daintree-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30",
+                !isOpen &&
+                  showDockAgentHighlights &&
+                  blockedState === "waiting" &&
+                  "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
+                isDeprioritized && "opacity-50"
+              )}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.detail >= 2) return;
+                if (isOpen) {
+                  closeDockTerminal();
+                } else {
+                  openDockTerminal(activeTabId);
+                }
+              }}
+              onDoubleClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const moved = moveTerminalToGrid(activePanel.id);
+                if (moved) closeDockTerminal();
+              }}
+              aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
+            >
+              <div className="flex items-center justify-center shrink-0">
+                <TerminalIcon
+                  kind={activePanel.kind}
+                  chrome={activeChrome}
+                  className="w-3.5 h-3.5"
+                />
+              </div>
+              <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
+                {displayTitle}
+              </span>
 
-            {/* Tab count indicator */}
-            <span className="text-[10px] text-daintree-text/40 tabular-nums shrink-0">
-              ({panels.length})
-            </span>
+              {/* Tab count indicator */}
+              <span className="text-[10px] text-daintree-text/40 tabular-nums shrink-0">
+                ({panels.length})
+              </span>
 
-            {isActive && commandText && (
-              <>
-                <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
-                      {commandText}
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{commandText}</TooltipContent>
-                </Tooltip>
-              </>
-            )}
-
-            {showStateIcon && StateIcon && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div
-                    className={cn(
-                      "flex items-center shrink-0",
-                      getEffectiveStateColor(agentState, activePanel.waitingReason)
-                    )}
-                  >
-                    <StateIcon
-                      className={cn(
-                        "w-3.5 h-3.5",
-                        agentState === "working" && "animate-spin-slow",
-                        "motion-reduce:animate-none"
-                      )}
-                      aria-hidden="true"
-                    />
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
-              </Tooltip>
-            )}
-          </button>
-        </PopoverTrigger>
-      </TerminalContextMenu>
-
-      <PopoverContent
-        className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
-        side="top"
-        align="start"
-        sideOffset={10}
-        collisionPadding={collisionPadding}
-        onInteractOutside={(e) => handleDockInteractOutside(e, portalContainer)}
-        onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainer)}
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          const focusTarget = getTerminalFocusTarget({
-            hasHybridInputSurface: activeChrome.isAgent,
-            isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
-            hybridInputEnabled,
-            hybridInputAutoFocus,
-          });
-
-          if (focusTarget === "hybridInput") {
-            return;
-          }
-
-          setTimeout(() => terminalInstanceService.focus(activePanel.id), 50);
-        }}
-      >
-        {/* Tab bar at top of popover */}
-        <DndContext
-          sensors={tabSensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleTabDragEnd}
-          modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
-        >
-          <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
-            <LazyMotion features={domMax}>
-              <LayoutGroup id={`dock-tabs-${group.id}`}>
-                <div
-                  ref={tabListRef}
-                  className="flex items-center border-b border-divider bg-daintree-sidebar shrink-0"
-                  role="tablist"
-                  aria-label="Dock panel tabs"
-                  onKeyDown={handleTabListKeyDown}
-                >
-                  {panels.map((panel) => {
-                    const tabChrome = deriveTerminalChrome({
-                      kind: panel.kind,
-                      launchAgentId: panel.launchAgentId,
-                      runtimeIdentity: panel.runtimeIdentity,
-                      detectedAgentId: panel.detectedAgentId,
-                      detectedProcessId: panel.detectedProcessId,
-                      agentState: panel.agentState,
-                      runtimeStatus: panel.runtimeStatus,
-                      exitCode: panel.exitCode,
-                      presetColor: panelPresetColors.get(panel.id),
-                    });
-                    return (
-                      <SortableTabButton
-                        key={panel.id}
-                        id={panel.id}
-                        title={getBaseTitle(panel.title)}
-                        chrome={tabChrome}
-                        kind={panel.kind ?? "terminal"}
-                        agentState={tabChrome.isAgent ? getDockDisplayAgentState(panel) : undefined}
-                        isActive={panel.id === activeTabId}
-                        presetColor={panelPresetColors.get(panel.id)}
-                        isUsingFallback={panel.isUsingFallback}
-                        onClick={() => handleTabClick(panel.id)}
-                        onClose={() => handleTabClose(panel.id)}
-                        onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
-                      />
-                    );
-                  })}
+              {isActive && commandText && (
+                <>
+                  <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleAddTab();
-                        }}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                        aria-label="Duplicate panel as new tab"
-                        type="button"
-                      >
-                        <Plus className="w-3 h-3" aria-hidden="true" />
-                      </button>
+                      <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
+                        {commandText}
+                      </span>
                     </TooltipTrigger>
-                    <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                    <TooltipContent side="bottom">{commandText}</TooltipContent>
                   </Tooltip>
-                </div>
-              </LayoutGroup>
-            </LazyMotion>
-          </SortableContext>
-        </DndContext>
+                </>
+              )}
 
-        {/* Portal target - content is rendered in DockPanelOffscreenContainer and portaled here */}
-        <div
-          ref={portalContainerRef}
-          className="flex-1 min-h-0 flex flex-col"
-          data-dock-portal-target={activePanel.id}
-        />
-      </PopoverContent>
-    </Popover>
+              {showStateIcon && StateIcon && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div
+                      className={cn(
+                        "flex items-center shrink-0",
+                        getEffectiveStateColor(agentState, activePanel.waitingReason)
+                      )}
+                    >
+                      <StateIcon
+                        className={cn(
+                          "w-3.5 h-3.5",
+                          agentState === "working" && "animate-spin-slow",
+                          "motion-reduce:animate-none"
+                        )}
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
+                </Tooltip>
+              )}
+            </button>
+          </PopoverTrigger>
+        </TerminalContextMenu>
+
+        <PopoverContent
+          className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+          side="top"
+          align="start"
+          sideOffset={10}
+          collisionPadding={collisionPadding}
+          onInteractOutside={(e) => handleDockInteractOutside(e, portalContainer)}
+          onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainer)}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            const focusTarget = getTerminalFocusTarget({
+              hasHybridInputSurface: activeChrome.isAgent,
+              isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
+              hybridInputEnabled,
+              hybridInputAutoFocus,
+            });
+
+            if (focusTarget === "hybridInput") {
+              return;
+            }
+
+            setTimeout(() => terminalInstanceService.focus(activePanel.id), 50);
+          }}
+        >
+          {/* Tab bar at top of popover */}
+          <DndContext
+            sensors={tabSensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleTabDragEnd}
+            modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
+          >
+            <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
+              <LazyMotion features={domMax}>
+                <LayoutGroup id={`dock-tabs-${group.id}`}>
+                  <div
+                    ref={tabListRef}
+                    className="flex items-center border-b border-divider bg-daintree-sidebar shrink-0"
+                    role="tablist"
+                    aria-label="Dock panel tabs"
+                    onKeyDown={handleTabListKeyDown}
+                  >
+                    {panels.map((panel) => {
+                      const tabChrome = deriveTerminalChrome({
+                        kind: panel.kind,
+                        launchAgentId: panel.launchAgentId,
+                        runtimeIdentity: panel.runtimeIdentity,
+                        detectedAgentId: panel.detectedAgentId,
+                        detectedProcessId: panel.detectedProcessId,
+                        agentState: panel.agentState,
+                        runtimeStatus: panel.runtimeStatus,
+                        exitCode: panel.exitCode,
+                        presetColor: panelPresetColors.get(panel.id),
+                      });
+                      return (
+                        <SortableTabButton
+                          key={panel.id}
+                          id={panel.id}
+                          title={getBaseTitle(panel.title)}
+                          chrome={tabChrome}
+                          kind={panel.kind ?? "terminal"}
+                          agentState={
+                            tabChrome.isAgent ? getDockDisplayAgentState(panel) : undefined
+                          }
+                          isActive={panel.id === activeTabId}
+                          presetColor={panelPresetColors.get(panel.id)}
+                          isUsingFallback={panel.isUsingFallback}
+                          onClick={() => handleTabClick(panel.id)}
+                          onClose={() => handleTabClose(panel.id)}
+                          onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
+                        />
+                      );
+                    })}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAddTab();
+                          }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                          aria-label="Duplicate panel as new tab"
+                          type="button"
+                        >
+                          <Plus className="w-3 h-3" aria-hidden="true" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                    </Tooltip>
+                  </div>
+                </LayoutGroup>
+              </LazyMotion>
+            </SortableContext>
+          </DndContext>
+
+          {/* Portal target - content is rendered in DockPanelOffscreenContainer and portaled here */}
+          <div
+            ref={portalContainerRef}
+            className="flex-1 min-h-0 flex flex-col"
+            data-dock-portal-target={activePanel.id}
+          />
+        </PopoverContent>
+      </Popover>
+      <ConfirmDialog
+        isOpen={pendingCloseTabId !== null}
+        onClose={handleCancelClose}
+        title="Stop this agent?"
+        description="The agent is currently working. Closing this tab will stop it."
+        confirmLabel="Stop and close"
+        onConfirm={handleConfirmClose}
+        variant="destructive"
+      />
+    </>
   );
 }
