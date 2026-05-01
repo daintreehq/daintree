@@ -300,6 +300,30 @@ describe("SkeletonHint", () => {
     expect(live.textContent).toBe("Taking longer than usual…");
   });
 
+  it("appends an action affordance announcement to the live region at the action phase", () => {
+    const { container } = render(<SkeletonHint onCancel={() => {}} onRetry={() => {}} />);
+    const live = container.querySelector('[aria-live="polite"]')!;
+    advance(15_000);
+    expect(live.textContent).toBe("Taking longer than usual… Cancel and retry options available.");
+  });
+
+  it("scopes the action affordance announcement to the handlers actually passed", () => {
+    const { container, rerender } = render(<SkeletonHint onCancel={() => {}} />);
+    const live = container.querySelector('[aria-live="polite"]')!;
+    advance(15_000);
+    expect(live.textContent).toBe("Taking longer than usual… Cancel option available.");
+    rerender(<SkeletonHint onRetry={() => {}} />);
+    advance(15_000);
+    expect(live.textContent).toBe("Taking longer than usual… Retry option available.");
+  });
+
+  it("does not append an action affordance announcement when no handlers are passed", () => {
+    const { container } = render(<SkeletonHint />);
+    const live = container.querySelector('[aria-live="polite"]')!;
+    advance(15_000);
+    expect(live.textContent).toBe("Taking longer than usual…");
+  });
+
   it("does not show action buttons at 15000ms when no handlers are passed", () => {
     render(<SkeletonHint />);
     advance(15_000);
@@ -354,6 +378,27 @@ describe("SkeletonHint", () => {
     expect(screen.getAllByText("Taking longer than usual…").length).toBeGreaterThan(0);
   });
 
+  it("clamps out-of-order thresholds to monotonic ascending so phase can't regress", () => {
+    // actionThreshold is intentionally smaller than secondThreshold's default —
+    // without clamping, buttons would flash at 6s then disappear at 10s when
+    // setPhase("second") fires. With clamping, action is held to >= second.
+    render(<SkeletonHint actionThreshold={6_000} onCancel={() => {}} />);
+    advance(6_000);
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    advance(4_000);
+    // At 10s the clamped action threshold finally fires alongside second.
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+
+  it("clamps secondThreshold below firstThreshold to firstThreshold (no backward jump)", () => {
+    render(<SkeletonHint firstThreshold={5_000} secondThreshold={2_000} />);
+    advance(5_000);
+    // Both first and second clamped to fire together at 5s — second wins on
+    // tick order, so the displayed copy is the second-phase copy.
+    expect(screen.getAllByText("Taking longer than usual…").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Still working…")).toBeNull();
+  });
+
   it("falls back to defaults for non-finite or negative thresholds", () => {
     render(
       <SkeletonHint
@@ -366,6 +411,18 @@ describe("SkeletonHint", () => {
     expect(screen.queryByText("Still working…")).toBeNull();
     advance(1);
     expect(screen.getAllByText("Still working…").length).toBeGreaterThan(0);
+  });
+
+  it("marks the visible copy span as aria-hidden so AT only hears the live region", () => {
+    const { container } = render(<SkeletonHint />);
+    advance(5_000);
+    const visible = container.querySelector(".animate-hint-fade-in > span[aria-hidden='true']");
+    expect(visible).toBeTruthy();
+    expect(visible?.textContent).toBe("Still working…");
+    // Live region is sr-only; the visible span must NOT carry aria-live.
+    const liveRegions = container.querySelectorAll('[aria-live="polite"]');
+    expect(liveRegions.length).toBe(1);
+    expect(liveRegions[0]?.classList.contains("sr-only")).toBe(true);
   });
 
   it("the hint root is not nested inside any role=status element", () => {
@@ -381,7 +438,7 @@ describe("SkeletonHint", () => {
     expect(hint.closest('[role="status"]')).toBeNull();
   });
 
-  it("re-keys the visible row on phase change so the fade-in re-fires", () => {
+  it("re-keys the visible row when copy escalates so the fade-in re-fires", () => {
     const { container } = render(<SkeletonHint />);
     advance(5_000);
     const first = container.querySelector(".animate-hint-fade-in");
@@ -389,9 +446,33 @@ describe("SkeletonHint", () => {
     advance(5_000);
     const second = container.querySelector(".animate-hint-fade-in");
     expect(second).toBeTruthy();
-    // React replaces the keyed node on phase change; the new element is a
-    // different DOM reference, so the animation restarts.
+    // Copy changed ("Still working…" → "Taking longer than usual…"), so the
+    // keyed node is replaced and the animation restarts.
     expect(second).not.toBe(first);
+  });
+
+  it("preserves the visible node at action phase when no handlers are passed (no spurious re-fade)", () => {
+    const { container } = render(<SkeletonHint />);
+    advance(10_000);
+    const before = container.querySelector(".animate-hint-fade-in");
+    expect(before).toBeTruthy();
+    // Crossing the action threshold with no handlers must NOT remount the node:
+    // visible content is identical, key is stable, fade-in does not re-fire.
+    advance(5_000);
+    const after = container.querySelector(".animate-hint-fade-in");
+    expect(after).toBe(before);
+  });
+
+  it("re-keys at action phase when handlers appear so the fade-in re-fires", () => {
+    const { container } = render(<SkeletonHint onCancel={() => {}} />);
+    advance(10_000);
+    const before = container.querySelector(".animate-hint-fade-in");
+    expect(before).toBeTruthy();
+    advance(5_000);
+    const after = container.querySelector(".animate-hint-fade-in");
+    expect(after).toBeTruthy();
+    // Buttons appearing is a meaningful visual change — re-fade is desired.
+    expect(after).not.toBe(before);
   });
 
   it("does not use transition-all", () => {
