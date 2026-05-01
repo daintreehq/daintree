@@ -30,7 +30,7 @@ import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopove
 import { usePreferencesStore } from "@/store";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
-import { createTooltipWithShortcut } from "@/lib/platform";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 
 interface DockedTerminalItemProps {
   terminal: TerminalInstance;
@@ -370,7 +370,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             </PopoverTrigger>
           </TooltipTrigger>
           <TooltipContent side="top">
-            {createTooltipWithShortcut("Preview terminal", dockShortcut)}
+            {createTooltipContent("Preview terminal", dockShortcut)}
           </TooltipContent>
         </Tooltip>
       </TerminalContextMenu>

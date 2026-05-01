@@ -40,7 +40,8 @@ import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modi
 import { LayoutGroup } from "framer-motion";
 import type { PanelKind } from "@/types";
 import { cn, getBaseTitle } from "@/lib/utils";
-import { formatShortcutForTooltip, createTooltipWithShortcut } from "@/lib/platform";
+import { formatShortcutForTooltip } from "@/lib/platform";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -598,10 +599,7 @@ function PanelHeaderComponent({
                             </button>
                           </TooltipTrigger>
                           <TooltipContent side="bottom">
-                            {createTooltipWithShortcut(
-                              "Duplicate panel as new tab",
-                              duplicateShortcut
-                            )}
+                            {createTooltipContent("Duplicate panel as new tab", duplicateShortcut)}
                           </TooltipContent>
                         </Tooltip>
                       )}
@@ -660,7 +658,7 @@ function PanelHeaderComponent({
                         </button>
                       </TooltipTrigger>
                       <TooltipContent side="bottom">
-                        {createTooltipWithShortcut("Duplicate panel as new tab", duplicateShortcut)}
+                        {createTooltipContent("Duplicate panel as new tab", duplicateShortcut)}
                       </TooltipContent>
                     </Tooltip>
                   )}
@@ -786,7 +784,7 @@ function PanelHeaderComponent({
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Duplicate panel as new tab", duplicateShortcut)}
+                {createTooltipContent("Duplicate panel as new tab", duplicateShortcut)}
               </TooltipContent>
             </Tooltip>
           )}
@@ -997,7 +995,7 @@ function PanelHeaderComponent({
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {createTooltipWithShortcut("Move to Dock", moveToDockShortcut)}
+              {createTooltipContent("Move to Dock", moveToDockShortcut)}
             </TooltipContent>
           </Tooltip>
         )}
@@ -1020,7 +1018,7 @@ function PanelHeaderComponent({
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {createTooltipWithShortcut("Collapse to Dock", toggleDockShortcut)}
+              {createTooltipContent("Collapse to Dock", toggleDockShortcut)}
             </TooltipContent>
           </Tooltip>
         ) : onToggleMaximize && isMaximized ? (
@@ -1041,7 +1039,7 @@ function PanelHeaderComponent({
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {createTooltipWithShortcut("Restore Grid View", maximizeShortcut)}
+              {createTooltipContent("Restore Grid View", maximizeShortcut)}
             </TooltipContent>
           </Tooltip>
         ) : (
@@ -1062,7 +1060,7 @@ function PanelHeaderComponent({
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Maximize", maximizeShortcut)}
+                {createTooltipContent("Maximize", maximizeShortcut)}
               </TooltipContent>
             </Tooltip>
           )
@@ -1094,9 +1092,12 @@ function PanelHeaderComponent({
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {createTooltipWithShortcut("Close Session", closeShortcut) +
-              " · " +
-              formatShortcutForTooltip("Alt+Click to force close")}
+            <div className="flex flex-col gap-1">
+              {createTooltipContent("Close Session", closeShortcut)}
+              <span className="text-daintree-text/50 text-[11px]">
+                {formatShortcutForTooltip("Alt+Click to force close")}
+              </span>
+            </div>
           </TooltipContent>
         </Tooltip>
 

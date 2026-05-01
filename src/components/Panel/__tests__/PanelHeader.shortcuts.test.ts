@@ -38,37 +38,55 @@ describe("PanelHeader shortcut tooltips — issue #3819", () => {
       expect(source).not.toMatch(/formatShortcutForTooltip\("Ctrl\+Shift\+F"\)/);
     });
 
-    it("does not hardcode shortcut strings in createTooltipWithShortcut calls", () => {
-      expect(source).not.toMatch(/createTooltipWithShortcut\([^)]*"Cmd\+/);
-      expect(source).not.toMatch(/createTooltipWithShortcut\([^)]*"Ctrl\+Shift\+F"/);
+    it("does not hardcode shortcut strings in createTooltipContent calls", () => {
+      expect(source).not.toMatch(/createTooltipContent\([^)]*"Cmd\+/);
+      expect(source).not.toMatch(/createTooltipContent\([^)]*"Ctrl\+Shift\+F"/);
     });
   });
 
-  describe("createTooltipWithShortcut usage", () => {
-    it("uses createTooltipWithShortcut for duplicate tooltip", () => {
+  describe("createTooltipContent usage", () => {
+    it("uses createTooltipContent for duplicate tooltip", () => {
       expect(source).toContain(
-        'createTooltipWithShortcut("Duplicate panel as new tab", duplicateShortcut)'
+        'createTooltipContent("Duplicate panel as new tab", duplicateShortcut)'
       );
     });
 
-    it("uses createTooltipWithShortcut for Move to Dock tooltip", () => {
-      expect(source).toContain('createTooltipWithShortcut("Move to Dock", moveToDockShortcut)');
+    it("uses createTooltipContent for Move to Dock tooltip", () => {
+      expect(source).toContain('createTooltipContent("Move to Dock", moveToDockShortcut)');
     });
 
-    it("uses createTooltipWithShortcut for Collapse to Dock tooltip", () => {
-      expect(source).toContain('createTooltipWithShortcut("Collapse to Dock", toggleDockShortcut)');
+    it("uses createTooltipContent for Collapse to Dock tooltip", () => {
+      expect(source).toContain('createTooltipContent("Collapse to Dock", toggleDockShortcut)');
     });
 
-    it("uses createTooltipWithShortcut for Maximize tooltip", () => {
-      expect(source).toContain('createTooltipWithShortcut("Maximize", maximizeShortcut)');
+    it("uses createTooltipContent for Maximize tooltip", () => {
+      expect(source).toContain('createTooltipContent("Maximize", maximizeShortcut)');
     });
 
-    it("uses createTooltipWithShortcut for Restore Grid View tooltip", () => {
-      expect(source).toContain('createTooltipWithShortcut("Restore Grid View", maximizeShortcut)');
+    it("uses createTooltipContent for Restore Grid View tooltip", () => {
+      expect(source).toContain('createTooltipContent("Restore Grid View", maximizeShortcut)');
     });
 
-    it("uses createTooltipWithShortcut for Close Session tooltip", () => {
-      expect(source).toContain('createTooltipWithShortcut("Close Session", closeShortcut)');
+    it("uses createTooltipContent for Close Session tooltip", () => {
+      expect(source).toContain('createTooltipContent("Close Session", closeShortcut)');
+    });
+
+    it("includes Alt+Click force close hint in close tooltip", () => {
+      expect(source).toContain('formatShortcutForTooltip("Alt+Click to force close")');
+    });
+
+    it("wraps close tooltip content in flex-col layout", () => {
+      expect(source).toContain('className="flex flex-col gap-1"');
+    });
+  });
+
+  describe("imports", () => {
+    it("imports createTooltipContent from tooltipShortcut lib", () => {
+      expect(source).toContain('import { createTooltipContent } from "@/lib/tooltipShortcut"');
+    });
+
+    it("no longer imports createTooltipWithShortcut", () => {
+      expect(source).not.toContain("createTooltipWithShortcut");
     });
   });
 });
