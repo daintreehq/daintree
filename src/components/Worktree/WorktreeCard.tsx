@@ -680,12 +680,10 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         <div
           ref={droppableRef}
           className={cn(
-            "sidebar-worktree-card group/card relative transition duration-150",
+            "sidebar-worktree-card group/card relative isolate transition duration-150",
             variant === "sidebar" && "border-b border-border-default",
             variant === "grid" && "rounded-lg border border-divider bg-overlay-subtle",
-            isActive &&
-              variant !== "sidebar" &&
-              "bg-surface-panel-elevated shadow-[var(--theme-shadow-ambient)]",
+            isActive && variant !== "sidebar" && "bg-surface-panel-elevated",
             !isActive &&
               variant === "grid" &&
               "hover:bg-overlay-subtle hover:shadow-[var(--theme-shadow-ambient)]",
@@ -711,7 +709,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
           <button
             type="button"
             className={cn(
-              "absolute inset-0 z-0 outline-hidden",
+              "absolute inset-0 z-0 outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-daintree-accent",
               variant === "grid" && "rounded-lg",
               (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
             )}
@@ -730,7 +728,8 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               key={flashKey}
               className={cn(
                 "absolute inset-0 z-20 pointer-events-none border border-overlay animate-border-flash",
-                variant === "grid" && "rounded-lg"
+                variant === "grid" && "rounded-lg",
+                isActive && "mix-blend-screen dark:mix-blend-plus-lighter"
               )}
               aria-hidden="true"
             />

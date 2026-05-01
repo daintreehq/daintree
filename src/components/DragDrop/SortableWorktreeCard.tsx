@@ -89,6 +89,7 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
+    isolation: isDragging ? "auto" : "isolate",
     ...(!isDragging && {
       contentVisibility: "auto",
       containIntrinsicSize: "auto 180px",

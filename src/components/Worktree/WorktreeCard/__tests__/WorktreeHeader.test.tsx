@@ -96,15 +96,15 @@ function getWrapper() {
 }
 
 describe("WorktreeHeader menu button", () => {
-  it("has pointer-events-none and hover/focus reveal classes when inactive", () => {
+  it("starts dimmed and reveals on hover, focus, or open menu when inactive", () => {
     renderHeader({ isActive: false });
     const wrapper = getWrapper();
-    expect(wrapper.className).toContain("pointer-events-none");
-    expect(wrapper.className).toContain("opacity-0");
-    expect(wrapper.className).toContain("group-hover/card:pointer-events-auto");
+    expect(wrapper.className).not.toContain("pointer-events-none");
+    expect(wrapper.className).not.toContain("opacity-0");
+    expect(wrapper.className).toContain("opacity-50");
     expect(wrapper.className).toContain("group-hover/card:opacity-100");
-    expect(wrapper.className).toContain("group-focus-within/card:pointer-events-auto");
     expect(wrapper.className).toContain("group-focus-within/card:opacity-100");
+    expect(wrapper.className).toContain("group-has-[[data-state=open]]/card:opacity-100");
   });
 
   it("does not have pointer-events-none when active", () => {
@@ -839,15 +839,17 @@ describe("WorktreeHeader cleanup button", () => {
     expect(wrapper.contains(button)).toBe(true);
   });
 
-  it("hides the cleanup button alongside other actions on inactive, non-collapsed cards", () => {
+  it("dims the cleanup button alongside other actions on inactive, non-collapsed cards", () => {
     renderHeader({ onCleanupWorktree: vi.fn(), isActive: false, isCollapsed: false });
     const button = screen.getByTestId("worktree-cleanup-button");
     const wrapper = screen.getByTestId("worktree-actions-wrapper");
-    // The hover-gated wrapper hides on inactive cards and reveals on group hover/focus.
-    expect(wrapper.className).toContain("opacity-0");
-    expect(wrapper.className).toContain("pointer-events-none");
+    // The wrapper persists at reduced opacity so keyboard and touch users can reach it,
+    // and reveals fully on group hover/focus or when a contained menu opens.
+    expect(wrapper.className).toContain("opacity-50");
+    expect(wrapper.className).not.toContain("pointer-events-none");
     expect(wrapper.className).toContain("group-hover/card:opacity-100");
     expect(wrapper.className).toContain("group-focus-within/card:opacity-100");
+    expect(wrapper.className).toContain("group-has-[[data-state=open]]/card:opacity-100");
     // The cleanup button inherits visibility through the wrapper, not its own classes.
     expect(wrapper.contains(button)).toBe(true);
   });
