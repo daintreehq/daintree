@@ -2,17 +2,20 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { forwardRef, type ReactNode } from "react";
-import { FileViewerModal } from "../FileViewerModal";
-
 // jsdom does not implement Trusted Types. Mock the renderer policy module
-// with a pass-through so the modal renders sanitized SVG inline without
-// needing a `window.trustedTypes` shim. See #6392.
+// with pass-through spies so the modal renders sanitized SVG inline AND we
+// can assert the policy is exercised on the SVG path. See #6392.
+const { mockCreateTrustedHTML } = vi.hoisted(() => ({
+  mockCreateTrustedHTML: vi.fn((s: string) => s),
+}));
 vi.mock("@/lib/trustedTypesPolicy", () => ({
-  createTrustedHTML: (s: string) => s,
+  createTrustedHTML: mockCreateTrustedHTML,
   setTrustedInnerHTML: (el: Element, html: string) => {
     el.innerHTML = html;
   },
 }));
+
+import { FileViewerModal } from "../FileViewerModal";
 
 vi.mock("@/components/ui/AppDialog", () => {
   interface MockProps {
@@ -152,6 +155,7 @@ describe("FileViewerModal", () => {
       expect(container.querySelector("svg")).toBeTruthy();
     });
     expect(container.innerHTML).toContain('<circle r="10">');
+    expect(mockCreateTrustedHTML).toHaveBeenCalledWith(svg);
     expect(screen.getByText("Open in Image Viewer")).toBeTruthy();
     expect(screen.queryByText("Open in Editor")).toBeNull();
   });

@@ -2,6 +2,17 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi } from "vitest";
+
+// jsdom does not implement Trusted Types — mock the renderer policy module
+// with a pass-through so chip widgets that call setTrustedInnerHTML in
+// toDOM() can render under jsdom. See #6392.
+vi.mock("@/lib/trustedTypesPolicy", () => ({
+  createTrustedHTML: (s: string) => s,
+  setTrustedInnerHTML: (el: Element, html: string) => {
+    el.innerHTML = html;
+  },
+}));
+
 import { EditorState } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";

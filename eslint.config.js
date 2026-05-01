@@ -187,9 +187,11 @@ export default tseslint.config(
         {
           // why: Trusted Types CSP (`require-trusted-types-for 'script'`)
           // means `dangerouslySetInnerHTML.__html` must be a `TrustedHTML`
-          // produced by the `daintree-svg` policy, not a raw string. Allow
-          // the attribute only when its `__html` value is a CallExpression
-          // (e.g. `createTrustedHTML(...)` or another wrapper). See #6392.
+          // produced by the `daintree-svg` policy, not a raw string. The
+          // selector requires SOME CallExpression in the value (lint-level
+          // ratchet — the runtime CSP is the actual security boundary, and
+          // a stricter `callee.name='createTrustedHTML'` check breaks under
+          // re-exports / aliasing). See #6392.
           selector:
             "JSXAttribute[name.name='dangerouslySetInnerHTML'] > JSXExpressionContainer > ObjectExpression > Property[key.name='__html']:not(:has(CallExpression))",
           message:
