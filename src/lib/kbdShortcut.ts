@@ -120,3 +120,72 @@ export function parseChord(shortcut: string, isMac: boolean): string[][] {
 
   return steps.map((tokens) => tokens.map((token) => mapToken(token, isMac)));
 }
+
+// ── Search utilities ──────────────────────────────────────────────────────
+// Reverse-lookup map: display symbols/text → canonical modifier IDs.
+// The inverse of MODIFIER_GLYPH_MAP / MODIFIER_TEXT_MAP, used by chord-prefix
+// search to normalize user queries into the canonical token space.
+
+export const MODIFIER_SEARCH_MAP: Record<string, string> = {
+  cmd: "cmd",
+  command: "cmd",
+  meta: "cmd",
+  ctrl: "ctrl",
+  control: "ctrl",
+  alt: "alt",
+  option: "alt",
+  shift: "shift",
+  "⌘": "cmd",
+  "⌃": "ctrl",
+  "⌥": "alt",
+  "⇧": "shift",
+};
+
+export const VALID_KEY_PATTERN = /^[a-z0-9`~!@#$%^&*()_\-=[\]{}\\|;:'",.<>/?]$/i;
+
+export function isChordPrefix(query: string): boolean {
+  const trimmed = query.toLowerCase().trim();
+  if (!trimmed) return false;
+
+  const hasModifierSymbol = /[⌘⌥⌃⇧]/.test(trimmed);
+  const hasModifierText = /^(cmd|command|meta|ctrl|control|alt|option|shift)[+\s]/i.test(trimmed);
+
+  if (!hasModifierSymbol && !hasModifierText) return false;
+
+  let normalized = trimmed.replace(/\s*\+\s*/g, "+").replace(/\s+/g, "+");
+
+  for (const [symbol, text] of Object.entries(MODIFIER_SEARCH_MAP)) {
+    if (symbol !== text) {
+      normalized = normalized.replace(new RegExp(symbol, "g"), text);
+    }
+  }
+
+  const modifierMatch = Object.values(MODIFIER_SEARCH_MAP).find((m) => normalized.startsWith(m));
+  if (!modifierMatch) return false;
+
+  if (normalized.length <= modifierMatch.length) return false;
+
+  const parts = normalized.split("+").filter(Boolean);
+  if (parts.length >= 2) {
+    return parts.every((p) => {
+      if (Object.values(MODIFIER_SEARCH_MAP).includes(p)) return true;
+      return p.length > 0 && VALID_KEY_PATTERN.test(p);
+    });
+  }
+
+  const remaining = normalized.slice(modifierMatch.length);
+  return remaining.length > 0 && VALID_KEY_PATTERN.test(remaining);
+}
+
+export function normalizeQuery(query: string): string {
+  let normalized = query.toLowerCase().trim();
+  normalized = normalized.replace(/\s*\+\s*/g, "+").replace(/\s+/g, "+");
+
+  for (const [symbol, text] of Object.entries(MODIFIER_SEARCH_MAP)) {
+    if (symbol !== text) {
+      normalized = normalized.replace(new RegExp(symbol, "g"), text);
+    }
+  }
+
+  return normalized;
+}

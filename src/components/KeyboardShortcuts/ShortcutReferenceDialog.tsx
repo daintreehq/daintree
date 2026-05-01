@@ -2,6 +2,8 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { useOverlayState } from "@/hooks";
+import { KbdChord } from "@/components/ui/Kbd";
+import { MODIFIER_SEARCH_MAP, isChordPrefix, normalizeQuery } from "@/lib/kbdShortcut";
 import { keybindingService } from "../../services/KeybindingService";
 import type { KeybindingConfig } from "../../services/KeybindingService";
 
@@ -15,82 +17,6 @@ interface ShortcutSearchItem extends KeybindingConfig {
   displayCombo: string;
   normalizedCombo: string;
   keywords?: string[];
-}
-
-const MODIFIER_MAP: Record<string, string> = {
-  cmd: "cmd",
-  command: "cmd",
-  meta: "cmd",
-  ctrl: "ctrl",
-  control: "ctrl",
-  alt: "alt",
-  option: "alt",
-  shift: "shift",
-  "⌘": "cmd",
-  "⌃": "ctrl",
-  "⌥": "alt",
-  "⇧": "shift",
-};
-
-// Valid key characters for chord detection (letters, digits, punctuation keys)
-const VALID_KEY_PATTERN = /^[a-z0-9`~!@#$%^&*()_\-=[\]{}\\|;:'",.<>/?]$/i;
-
-function isChordPrefix(query: string): boolean {
-  const trimmed = query.toLowerCase().trim();
-  if (!trimmed) return false;
-
-  // Look for modifier symbols (⌘, ⌥, ⌃, ⇧) or modifier text with separator
-  const hasModifierSymbol = /[⌘⌥⌃⇧]/.test(trimmed);
-  const hasModifierText = /^(cmd|command|meta|ctrl|control|alt|option|shift)[+\s]/i.test(trimmed);
-
-  if (!hasModifierSymbol && !hasModifierText) return false;
-
-  // Normalize for validation
-  let normalized = trimmed.replace(/\s*\+\s*/g, "+").replace(/\s+/g, "+");
-
-  // Replace unicode symbols with text equivalents
-  for (const [symbol, text] of Object.entries(MODIFIER_MAP)) {
-    if (symbol !== text) {
-      normalized = normalized.replace(new RegExp(symbol, "g"), text);
-    }
-  }
-
-  // Find the modifier at the start
-  const modifierMatch = Object.values(MODIFIER_MAP).find((m) => normalized.startsWith(m));
-  if (!modifierMatch) return false;
-
-  // Must have more than just the modifier
-  if (normalized.length <= modifierMatch.length) return false;
-
-  // Split by + and check we have at least 2 parts
-  const parts = normalized.split("+").filter(Boolean);
-  if (parts.length >= 2) {
-    // All parts should be valid: either a modifier or a valid key
-    return parts.every((p) => {
-      if (Object.values(MODIFIER_MAP).includes(p)) return true;
-      // Check it's a valid key character, not just empty or another modifier word
-      return p.length > 0 && VALID_KEY_PATTERN.test(p);
-    });
-  }
-
-  // Handle cases without separator (e.g., "cmdk" or "⌘k")
-  const remaining = normalized.slice(modifierMatch.length);
-  // The remaining part must be a valid key, not empty or modifier-like
-  return remaining.length > 0 && VALID_KEY_PATTERN.test(remaining);
-}
-
-function normalizeQuery(query: string): string {
-  let normalized = query.toLowerCase().trim();
-  normalized = normalized.replace(/\s*\+\s*/g, "+").replace(/\s+/g, "+");
-
-  // Replace unicode symbols with text equivalents
-  for (const [symbol, text] of Object.entries(MODIFIER_MAP)) {
-    if (symbol !== text) {
-      normalized = normalized.replace(new RegExp(symbol, "g"), text);
-    }
-  }
-
-  return normalized;
 }
 
 export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDialogProps) {
@@ -115,7 +41,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
     return allBindings.map((binding) => {
       const displayCombo = keybindingService.getDisplayCombo(binding.actionId);
       let normalizedCombo = displayCombo.toLowerCase().replace(/[\s+]+/g, "");
-      for (const [symbol, text] of Object.entries(MODIFIER_MAP)) {
+      for (const [symbol, text] of Object.entries(MODIFIER_SEARCH_MAP)) {
         normalizedCombo = normalizedCombo.replace(new RegExp(symbol, "g"), text);
       }
       return {
@@ -251,9 +177,9 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
                         )}
                       </div>
                       <div className="ml-4">
-                        <kbd className="px-3 py-1.5 bg-daintree-bg border border-daintree-border rounded text-sm font-mono text-daintree-text shadow-[var(--theme-shadow-ambient)]">
-                          {binding.displayCombo}
-                        </kbd>
+                        {binding.effectiveCombo ? (
+                          <KbdChord shortcut={binding.effectiveCombo} />
+                        ) : null}
                       </div>
                     </div>
                   ))}

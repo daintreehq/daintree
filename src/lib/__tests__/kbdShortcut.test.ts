@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { parseChord } from "../kbdShortcut";
+import {
+  parseChord,
+  MODIFIER_SEARCH_MAP,
+  VALID_KEY_PATTERN,
+  isChordPrefix,
+  normalizeQuery,
+} from "../kbdShortcut";
 
 describe("parseChord — macOS glyphs", () => {
   it("maps Cmd/Option/Shift/Ctrl to glyphs", () => {
@@ -139,5 +145,117 @@ describe("parseChord — edge cases", () => {
   it("preserves casing of unknown multi-char tokens (PageUp)", () => {
     expect(parseChord("PageUp", false)).toEqual([["PageUp"]]);
     expect(parseChord("Cmd+NumpadEnter", true)).toEqual([["⌘", "NumpadEnter"]]);
+  });
+});
+
+describe("MODIFIER_SEARCH_MAP", () => {
+  it("maps text aliases to canonical IDs", () => {
+    expect(MODIFIER_SEARCH_MAP["cmd"]).toBe("cmd");
+    expect(MODIFIER_SEARCH_MAP["command"]).toBe("cmd");
+    expect(MODIFIER_SEARCH_MAP["meta"]).toBe("cmd");
+    expect(MODIFIER_SEARCH_MAP["ctrl"]).toBe("ctrl");
+    expect(MODIFIER_SEARCH_MAP["control"]).toBe("ctrl");
+    expect(MODIFIER_SEARCH_MAP["alt"]).toBe("alt");
+    expect(MODIFIER_SEARCH_MAP["option"]).toBe("alt");
+    expect(MODIFIER_SEARCH_MAP["shift"]).toBe("shift");
+  });
+
+  it("maps unicode symbols to canonical IDs", () => {
+    expect(MODIFIER_SEARCH_MAP["⌘"]).toBe("cmd");
+    expect(MODIFIER_SEARCH_MAP["⌃"]).toBe("ctrl");
+    expect(MODIFIER_SEARCH_MAP["⌥"]).toBe("alt");
+    expect(MODIFIER_SEARCH_MAP["⇧"]).toBe("shift");
+  });
+});
+
+describe("VALID_KEY_PATTERN", () => {
+  it("matches single letters, digits, and punctuation", () => {
+    expect(VALID_KEY_PATTERN.test("a")).toBe(true);
+    expect(VALID_KEY_PATTERN.test("Z")).toBe(true);
+    expect(VALID_KEY_PATTERN.test("0")).toBe(true);
+    expect(VALID_KEY_PATTERN.test("`")).toBe(true);
+    expect(VALID_KEY_PATTERN.test(",")).toBe(true);
+    expect(VALID_KEY_PATTERN.test("/")).toBe(true);
+  });
+
+  it("rejects multi-character tokens", () => {
+    expect(VALID_KEY_PATTERN.test("ab")).toBe(false);
+    expect(VALID_KEY_PATTERN.test("F1")).toBe(false);
+  });
+
+  it("rejects empty string", () => {
+    expect(VALID_KEY_PATTERN.test("")).toBe(false);
+  });
+});
+
+describe("isChordPrefix", () => {
+  it("returns true for text modifier + key (cmd+k)", () => {
+    expect(isChordPrefix("cmd+k")).toBe(true);
+  });
+
+  it("returns true for unicode symbol + key (⌘k)", () => {
+    expect(isChordPrefix("⌘k")).toBe(true);
+  });
+
+  it("returns true for multiple modifiers (cmd+shift+p)", () => {
+    expect(isChordPrefix("cmd+shift+p")).toBe(true);
+  });
+
+  it("returns false for unicode multiple modifiers without separator (⌘⇧p)", () => {
+    // Falls back to fuzzy search — separators are required for multi-modifier detection
+    expect(isChordPrefix("⌘⇧p")).toBe(false);
+  });
+
+  it("returns true for space-separated chord (cmd k)", () => {
+    expect(isChordPrefix("cmd k")).toBe(true);
+  });
+
+  it("returns false for bare modifier (cmd)", () => {
+    expect(isChordPrefix("cmd")).toBe(false);
+  });
+
+  it("returns false for bare unicode modifier (⌘)", () => {
+    expect(isChordPrefix("⌘")).toBe(false);
+  });
+
+  it("returns false for empty string", () => {
+    expect(isChordPrefix("")).toBe(false);
+  });
+
+  it("returns false for non-modifier word (toggle)", () => {
+    expect(isChordPrefix("toggle")).toBe(false);
+  });
+
+  it("returns false for modifier-like word without separator (commander)", () => {
+    expect(isChordPrefix("commander")).toBe(false);
+  });
+
+  it("returns false for trailing separator without key (cmd+)", () => {
+    expect(isChordPrefix("cmd+")).toBe(false);
+  });
+
+  it("is case insensitive (CMD+K)", () => {
+    expect(isChordPrefix("CMD+K")).toBe(true);
+  });
+});
+
+describe("normalizeQuery", () => {
+  it("replaces unicode symbols with text equivalents", () => {
+    expect(normalizeQuery("⌘k")).toBe("cmdk");
+    expect(normalizeQuery("⌘+k")).toBe("cmd+k");
+    expect(normalizeQuery("⌘⇧p")).toBe("cmdshiftp");
+  });
+
+  it("collapses whitespace and normalizes separators", () => {
+    expect(normalizeQuery("cmd + k")).toBe("cmd+k");
+    expect(normalizeQuery("cmd   k")).toBe("cmd+k");
+  });
+
+  it("returns already-canonical input unchanged", () => {
+    expect(normalizeQuery("cmd+shift+p")).toBe("cmd+shift+p");
+  });
+
+  it("lowercases input", () => {
+    expect(normalizeQuery("CMD+K")).toBe("cmd+k");
   });
 });
