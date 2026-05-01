@@ -96,22 +96,31 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
     }),
   };
 
-  const { role: _role, "aria-roledescription": _ariaRoleDesc, ...filteredAttributes } = attributes;
+  const {
+    role: _role,
+    "aria-roledescription": _ariaRoleDesc,
+    tabIndex: _tabIndex,
+    ...filteredAttributes
+  } = attributes;
 
   return (
     <div
       ref={setNodeRef}
       style={style}
       className={cn(isDragging && "opacity-40")}
-      role="listitem"
+      role="row"
       aria-roledescription="sortable worktree"
+      data-worktree-row={worktreeId}
+      tabIndex={-1}
       {...filteredAttributes}
     >
-      {children({
-        isDraggingSort: isDragging,
-        dragHandleListeners: listeners,
-        dragHandleActivatorRef: setActivatorNodeRef,
-      })}
+      <div role="gridcell">
+        {children({
+          isDraggingSort: isDragging,
+          dragHandleListeners: listeners,
+          dragHandleActivatorRef: setActivatorNodeRef,
+        })}
+      </div>
     </div>
   );
 }, sortableWorktreeCardPropsAreEqual);

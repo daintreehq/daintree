@@ -641,6 +641,9 @@ export function WorktreeHeader({
 
         <div
           data-testid="worktree-actions-wrapper"
+          data-worktree-row-toolbar=""
+          role="toolbar"
+          aria-label="Worktree actions"
           className={cn(
             "flex items-center gap-0.5 shrink-0 transition-opacity duration-150",
             isCollapsed

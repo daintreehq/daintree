@@ -67,6 +67,7 @@ import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
 import { RecipeManager } from "@/components/TerminalRecipe/RecipeManager";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { logError } from "@/utils/logger";
+import { useWorktreeGridRovingFocus } from "./useWorktreeGridRovingFocus";
 
 export function preloadNewWorktreeDialog() {
   return import("@/components/Worktree/NewWorktreeDialog");
@@ -306,29 +307,33 @@ const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
   if (!worktree) return null;
 
   return (
-    <ErrorBoundary
-      variant="component"
-      componentName="WorktreeCard"
-      fallback={WorktreeCardErrorFallback}
-      resetKeys={[worktreeId]}
-      context={{ worktreeId }}
-    >
-      <WorktreeCard
-        worktree={worktree}
-        isActive={worktreeId === activeWorktreeId}
-        isFocused={worktreeId === focusedWorktreeId}
-        isSingleWorktree={totalWorktreeCount === 1}
-        aggregateCounts={aggregateCounts}
-        onSelect={onSelect}
-        onCopyTree={onCopyTree}
-        onOpenEditor={onOpenEditor}
-        onSaveLayout={onSaveLayout}
-        onLaunchAgent={onLaunchAgent}
-        agentAvailability={availability}
-        agentSettings={agentSettings}
-        homeDir={homeDir}
-      />
-    </ErrorBoundary>
+    <div role="row" data-worktree-row={worktreeId} tabIndex={-1}>
+      <div role="gridcell">
+        <ErrorBoundary
+          variant="component"
+          componentName="WorktreeCard"
+          fallback={WorktreeCardErrorFallback}
+          resetKeys={[worktreeId]}
+          context={{ worktreeId }}
+        >
+          <WorktreeCard
+            worktree={worktree}
+            isActive={worktreeId === activeWorktreeId}
+            isFocused={worktreeId === focusedWorktreeId}
+            isSingleWorktree={totalWorktreeCount === 1}
+            aggregateCounts={aggregateCounts}
+            onSelect={onSelect}
+            onCopyTree={onCopyTree}
+            onOpenEditor={onOpenEditor}
+            onSaveLayout={onSaveLayout}
+            onLaunchAgent={onLaunchAgent}
+            agentAvailability={availability}
+            agentSettings={agentSettings}
+            homeDir={homeDir}
+          />
+        </ErrorBoundary>
+      </div>
+    </div>
   );
 });
 
@@ -341,6 +346,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const armFocusedShortcut = useKeybindingDisplay("fleet.armFocused");
   const refreshShortcut = useKeybindingDisplay("worktree.refresh");
   const createWorktreeShortcut = useKeybindingDisplay("worktree.createDialog.open");
+  const { gridRef, handleGridKeyDown, handleGridFocusCapture } = useWorktreeGridRovingFocus();
   const { worktrees, isLoading, isReconnecting, error, refresh } = useWorktrees();
   const deferredWorktrees = useDeferredValue(worktrees);
   const [isRefreshing, startRefreshTransition] = useTransition();
@@ -1140,135 +1146,145 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         </div>
       )}
 
-      {/* Main worktree — visible unless excluded by text search */}
-      {mainMatchesQuery && (
-        <div
-          className="shrink-0"
-          style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
-        >
-          <StaticWorktreeRow
-            key={mainWorktree.id}
-            worktreeId={mainWorktree.id}
-            activeWorktreeId={activeWorktreeId}
-            focusedWorktreeId={focusedWorktreeId}
-            totalWorktreeCount={deferredWorktrees.length}
-            selectWorktree={selectWorktree}
-            worktreeActions={worktreeActions}
-            availability={availability}
-            agentSettings={agentSettings}
-            homeDir={homeDir}
-            aggregateCounts={mainWorktreeAggregateCounts}
-          />
-        </div>
-      )}
-
-      {/* Integration branch (develop/trunk/next) — pinned below main, subject to text search */}
-      {integrationMatchesQuery && (
-        <div
-          className="shrink-0"
-          style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
-        >
-          {renderWorktreeCard(integrationWorktree)}
-        </div>
-      )}
-
-      {/* Strong divider between pinned worktrees and scrollable list */}
-      {hasNonMainWorktrees && <div className="shrink-0 border-b border-border-default" />}
-
-      {/* Non-main worktree list */}
-      <div className="relative flex-1 min-h-0">
-        <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-none">
-          <div ref={scrollContentRef}>
-            {hasNonMainWorktrees && (
-              <QuickStateFilterBar
-                value={quickStateFilter}
-                onChange={setQuickStateFilter}
-                counts={quickStateCounts}
-              />
-            )}
-            {showQuickStateEmptyState ? (
-              <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
-                <FilterX className="w-10 h-10 text-daintree-text/40 mb-3" />
-                <p className="text-sm text-daintree-text/80 mb-1">
-                  No {quickStateFilter} worktrees
-                </p>
-                <p className="text-xs text-daintree-text/50 mb-3">
-                  {hasPopoverFilters
-                    ? "Try a different state, or clear your other filters"
-                    : "Try a different state to see the rest"}
-                </p>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={clearQuickStateFilter}
-                    className="text-xs px-3 py-1.5 text-accent-primary hover:bg-overlay-soft rounded transition-colors font-medium"
-                  >
-                    Show all states
-                  </button>
-                  {hasPopoverFilters ? (
-                    <button
-                      onClick={clearAllFilters}
-                      className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
-                    >
-                      Clear all filters
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            ) : filteredWorktrees.length === 0 && hasFilters && hasNonMainWorktrees ? (
-              <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
-                <FilterX className="w-10 h-10 text-daintree-text/40 mb-3" />
-                <p className="text-sm text-daintree-text/60 mb-3">
-                  No worktrees match your filters
-                </p>
-                <button
-                  onClick={clearAllFilters}
-                  className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
-                >
-                  Clear filters
-                </button>
-              </div>
-            ) : groupedSections ? (
-              <div className="flex flex-col">
-                {groupedSections.map((section) => (
-                  <div key={section.type}>
-                    <div className="sticky top-0 z-10 px-4 py-2 text-[10px] font-medium text-daintree-text/50 uppercase tracking-wide bg-daintree-sidebar border-b border-divider">
-                      {section.displayName} ({section.worktrees.length})
-                    </div>
-                    {section.worktrees.map(renderWorktreeCard)}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-                <div className="flex flex-col">
-                  {filteredWorktrees.map((worktree, idx) => {
-                    const isPinned = pinnedWorktrees.includes(worktree.id);
-                    return (
-                      <SidebarWorktreeRow
-                        key={worktree.id}
-                        worktreeId={worktree.id}
-                        activeWorktreeId={activeWorktreeId}
-                        focusedWorktreeId={focusedWorktreeId}
-                        totalWorktreeCount={deferredWorktrees.length}
-                        selectWorktree={selectWorktree}
-                        worktreeActions={worktreeActions}
-                        availability={availability}
-                        agentSettings={agentSettings}
-                        homeDir={homeDir}
-                        dragStartOrder={dragStartOrder}
-                        isSortDisabled={isSortDisabled}
-                        isPinned={isPinned}
-                        rowIndex={idx}
-                      />
-                    );
-                  })}
-                </div>
-              </SortableContext>
-            )}
+      {/* Worktree list — single role="grid" with roving tab stop spans pinned + scrollable rows */}
+      <div
+        ref={gridRef}
+        role="grid"
+        aria-label="Worktrees"
+        onKeyDown={handleGridKeyDown}
+        onFocusCapture={handleGridFocusCapture}
+        className="flex flex-col flex-1 min-h-0"
+      >
+        {/* Main worktree — visible unless excluded by text search */}
+        {mainMatchesQuery && (
+          <div
+            className="shrink-0"
+            style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
+          >
+            <StaticWorktreeRow
+              key={mainWorktree.id}
+              worktreeId={mainWorktree.id}
+              activeWorktreeId={activeWorktreeId}
+              focusedWorktreeId={focusedWorktreeId}
+              totalWorktreeCount={deferredWorktrees.length}
+              selectWorktree={selectWorktree}
+              worktreeActions={worktreeActions}
+              availability={availability}
+              agentSettings={agentSettings}
+              homeDir={homeDir}
+              aggregateCounts={mainWorktreeAggregateCounts}
+            />
           </div>
+        )}
+
+        {/* Integration branch (develop/trunk/next) — pinned below main, subject to text search */}
+        {integrationMatchesQuery && (
+          <div
+            className="shrink-0"
+            style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
+          >
+            {renderWorktreeCard(integrationWorktree)}
+          </div>
+        )}
+
+        {/* Strong divider between pinned worktrees and scrollable list */}
+        {hasNonMainWorktrees && <div className="shrink-0 border-b border-border-default" />}
+
+        {/* Non-main worktree list */}
+        <div className="relative flex-1 min-h-0">
+          <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-none">
+            <div ref={scrollContentRef}>
+              {hasNonMainWorktrees && (
+                <QuickStateFilterBar
+                  value={quickStateFilter}
+                  onChange={setQuickStateFilter}
+                  counts={quickStateCounts}
+                />
+              )}
+              {showQuickStateEmptyState ? (
+                <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                  <FilterX className="w-10 h-10 text-daintree-text/40 mb-3" />
+                  <p className="text-sm text-daintree-text/80 mb-1">
+                    No {quickStateFilter} worktrees
+                  </p>
+                  <p className="text-xs text-daintree-text/50 mb-3">
+                    {hasPopoverFilters
+                      ? "Try a different state, or clear your other filters"
+                      : "Try a different state to see the rest"}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={clearQuickStateFilter}
+                      className="text-xs px-3 py-1.5 text-accent-primary hover:bg-overlay-soft rounded transition-colors font-medium"
+                    >
+                      Show all states
+                    </button>
+                    {hasPopoverFilters ? (
+                      <button
+                        onClick={clearAllFilters}
+                        className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
+                      >
+                        Clear all filters
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : filteredWorktrees.length === 0 && hasFilters && hasNonMainWorktrees ? (
+                <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                  <FilterX className="w-10 h-10 text-daintree-text/40 mb-3" />
+                  <p className="text-sm text-daintree-text/60 mb-3">
+                    No worktrees match your filters
+                  </p>
+                  <button
+                    onClick={clearAllFilters}
+                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              ) : groupedSections ? (
+                <div className="flex flex-col">
+                  {groupedSections.map((section) => (
+                    <div key={section.type}>
+                      <div className="sticky top-0 z-10 px-4 py-2 text-[10px] font-medium text-daintree-text/50 uppercase tracking-wide bg-daintree-sidebar border-b border-divider">
+                        {section.displayName} ({section.worktrees.length})
+                      </div>
+                      {section.worktrees.map(renderWorktreeCard)}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+                  <div className="flex flex-col">
+                    {filteredWorktrees.map((worktree, idx) => {
+                      const isPinned = pinnedWorktrees.includes(worktree.id);
+                      return (
+                        <SidebarWorktreeRow
+                          key={worktree.id}
+                          worktreeId={worktree.id}
+                          activeWorktreeId={activeWorktreeId}
+                          focusedWorktreeId={focusedWorktreeId}
+                          totalWorktreeCount={deferredWorktrees.length}
+                          selectWorktree={selectWorktree}
+                          worktreeActions={worktreeActions}
+                          availability={availability}
+                          agentSettings={agentSettings}
+                          homeDir={homeDir}
+                          dragStartOrder={dragStartOrder}
+                          isSortDisabled={isSortDisabled}
+                          isPinned={isPinned}
+                          rowIndex={idx}
+                        />
+                      );
+                    })}
+                  </div>
+                </SortableContext>
+              )}
+            </div>
+          </div>
+          <ScrollIndicator direction="above" count={hiddenAbove} onClick={scrollToTop} />
+          <ScrollIndicator direction="below" count={hiddenBelow} onClick={scrollToBottom} />
         </div>
-        <ScrollIndicator direction="above" count={hiddenAbove} onClick={scrollToTop} />
-        <ScrollIndicator direction="below" count={hiddenBelow} onClick={scrollToBottom} />
       </div>
 
       <ErrorBoundary

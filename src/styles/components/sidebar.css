@@ -29,6 +29,40 @@
     inset 0 0 0 2px var(--sidebar-ring);
 }
 
+/* Roving-tabindex grid: when the row wrapper itself is keyboard-focused,
+   surface the same focus ring on the embedded card so the user can see
+   which row owns the tab stop. */
+[data-worktree-row]:focus-visible {
+  outline: none;
+}
+
+[data-worktree-row]:focus-visible .sidebar-worktree-card {
+  box-shadow: inset 0 0 0 2px var(--sidebar-ring);
+}
+
+[data-worktree-row]:focus-visible .sidebar-worktree-card[data-active="true"] {
+  box-shadow:
+    inset 2px 0 0 var(--theme-overlay-selected),
+    inset 0 0 0 2px var(--sidebar-ring);
+}
+
+/* Reveal the per-row action toolbar whenever the row is focused (or any
+   descendant has focus). The card-internal `group-focus-within/card`
+   reveal only fires when focus lands inside the card; this rule handles
+   focus on the row wrapper itself. */
+[data-worktree-row]:focus [data-worktree-row-toolbar],
+[data-worktree-row]:focus-within [data-worktree-row-toolbar] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (forced-colors: active) {
+  [data-worktree-row]:focus-visible .sidebar-worktree-card {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
 .sidebar-action-button:hover {
   background: var(--sidebar-action-hover-bg, var(--theme-overlay-hover));
 }
