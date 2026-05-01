@@ -19,6 +19,7 @@ export function fireWatchNotification(
       correlationId: panelId,
       action: {
         label: "Go to terminal",
+        successLabel: "Opened",
         onClick: () => {
           usePanelStore.getState().setFocused(panelId, true);
         },
@@ -39,6 +40,7 @@ export function fireWatchNotification(
       correlationId: panelId,
       action: {
         label: "Go to terminal",
+        successLabel: "Opened",
         onClick: () => {
           usePanelStore.getState().setFocused(panelId, true);
         },
@@ -58,6 +60,7 @@ export function fireWatchNotification(
     correlationId: panelId,
     action: {
       label: "Go to terminal",
+      successLabel: "Opened",
       onClick: () => {
         usePanelStore.getState().setFocused(panelId, true);
       },

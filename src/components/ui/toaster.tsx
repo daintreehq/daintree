@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useState, useCallback, useRef } from "react
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
   Info,
   type LucideIcon,
@@ -12,12 +13,14 @@ import {
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import {
+  DURATION_150,
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
   UI_ENTER_EASING,
   UI_EXIT_EASING,
   getUiTransitionDuration,
 } from "@/lib/animationUtils";
+import { Spinner } from "@/components/ui/Spinner";
 import { useNotificationStore, type Notification } from "@/store/notificationStore";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -66,6 +69,22 @@ function Toast({ notification }: { notification: Notification }) {
   const toastRef = useRef<HTMLDivElement>(null);
   const prevFocusRef = useRef<Element | null>(null);
 
+  type ActionStatus = "idle" | "loading" | "success";
+  const [actionStatus, setActionStatus] = useState<ActionStatus>("idle");
+  const [activeActionIndex, setActiveActionIndex] = useState<number | null>(null);
+  const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
+      if (dwellTimerRef.current) clearTimeout(dwellTimerRef.current);
+    };
+  }, []);
+
   useLayoutEffect(() => {
     prevFocusRef.current = document.activeElement;
   }, []);
@@ -98,6 +117,14 @@ function Toast({ notification }: { notification: Notification }) {
     // exit fade after an eviction (or a double-click race). Skip the
     // user-dismiss callback so eviction/reentrancy don't fire onDismiss.
     if (notification.dismissed) return;
+    if (dwellTimerRef.current) {
+      clearTimeout(dwellTimerRef.current);
+      dwellTimerRef.current = null;
+    }
+    if (spinnerTimerRef.current) {
+      clearTimeout(spinnerTimerRef.current);
+      spinnerTimerRef.current = null;
+    }
     restoreFocus();
     // Fire onDismiss exactly once, before marking dismissed, so callers see
     // a clean user-driven signal distinct from MAX_VISIBLE_TOASTS eviction.
@@ -221,27 +248,113 @@ function Toast({ notification }: { notification: Notification }) {
             ...(notification.action ? [notification.action] : []),
           ];
           if (actions.length === 0) return null;
+
+          const handleActionClick = (action: (typeof actions)[number], index: number) => {
+            if (activeActionIndex !== null) return;
+
+            const result = action.onClick();
+
+            if (!action.successLabel) {
+              handleDismiss();
+              return;
+            }
+
+            setActiveActionIndex(index);
+
+            if (result instanceof Promise) {
+              let settled = false;
+              spinnerTimerRef.current = setTimeout(() => {
+                if (!settled && mountedRef.current) {
+                  setActionStatus("loading");
+                }
+              }, DURATION_150);
+
+              result
+                .then(() => {
+                  settled = true;
+                  if (spinnerTimerRef.current) {
+                    clearTimeout(spinnerTimerRef.current);
+                    spinnerTimerRef.current = null;
+                  }
+                  if (!mountedRef.current) return;
+                  setActionStatus("success");
+                  const announcementText = notification.title
+                    ? `${notification.title}: ${action.successLabel}`
+                    : action.successLabel!;
+                  useAnnouncerStore.getState().announce(announcementText, "polite");
+                  dwellTimerRef.current = setTimeout(() => {
+                    if (mountedRef.current) dismissRef.current();
+                  }, 500);
+                })
+                .catch(() => {
+                  settled = true;
+                  if (spinnerTimerRef.current) {
+                    clearTimeout(spinnerTimerRef.current);
+                    spinnerTimerRef.current = null;
+                  }
+                  if (!mountedRef.current) return;
+                  setActionStatus("idle");
+                  setActiveActionIndex(null);
+                });
+            } else {
+              setActionStatus("success");
+              const announcementText = notification.title
+                ? `${notification.title}: ${action.successLabel}`
+                : action.successLabel!;
+              useAnnouncerStore.getState().announce(announcementText, "polite");
+              dwellTimerRef.current = setTimeout(() => {
+                if (mountedRef.current) dismissRef.current();
+              }, 500);
+            }
+          };
+
+          const isSuccess = actionStatus === "success";
+          const showLoading = actionStatus === "loading" && activeActionIndex !== null;
+
           return (
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {actions.map((action) => (
-                <button
-                  key={action.label}
-                  type="button"
-                  onClick={() => {
-                    action.onClick();
-                    handleDismiss();
-                  }}
-                  className={cn(
-                    "px-2.5 py-1 rounded-[var(--radius-xs)]",
-                    "text-xs font-medium",
-                    "bg-status-info/10 text-status-info",
-                    "hover:bg-status-info/20 transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-                  )}
-                >
-                  {action.label}
-                </button>
-              ))}
+            <div
+              className={cn(
+                "mt-1.5 flex flex-wrap gap-1.5",
+                isSuccess && "scale-[1.02]",
+                "transition-transform duration-[75ms]",
+                "motion-reduce:scale-100 motion-reduce:transition-none"
+              )}
+            >
+              {actions.map((action, index) => {
+                const isActive = activeActionIndex === index;
+                const isDimmed = activeActionIndex !== null && !isActive;
+
+                return (
+                  <button
+                    key={action.label}
+                    type="button"
+                    onClick={() => handleActionClick(action, index)}
+                    className={cn(
+                      "px-2.5 py-1 rounded-[var(--radius-xs)]",
+                      "text-xs font-medium",
+                      "bg-status-info/10 text-status-info",
+                      "hover:bg-status-info/20 transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                      isDimmed && "opacity-50 pointer-events-none"
+                    )}
+                    disabled={activeActionIndex !== null}
+                  >
+                    {isActive && showLoading ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <Spinner size="xs" />
+                        {action.label}
+                      </span>
+                    ) : isActive && isSuccess ? (
+                      <span className="inline-flex items-center gap-1">
+                        <Check className="h-3 w-3" />
+                        {action.successLabel}
+                      </span>
+                    ) : (
+                      action.label
+                    )}
+                  </button>
+                );
+              })}
             </div>
           );
         })()}

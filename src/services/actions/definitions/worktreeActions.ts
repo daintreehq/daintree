@@ -21,6 +21,7 @@ function notifyWorktreeResourceError(err: unknown, title: string, fallbackMessag
     message,
     action: {
       label: "Copy details",
+      successLabel: "Copied",
       onClick: async () => {
         try {
           await navigator.clipboard.writeText(message);

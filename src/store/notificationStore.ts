@@ -16,6 +16,8 @@ export interface NotificationAction {
   variant?: NotificationActionVariant;
   actionId?: ActionId;
   actionArgs?: Record<string, unknown>;
+  /** Past-tense label shown during the success-flash confirmation. When absent, the action dismisses the toast immediately on click (current behavior). */
+  successLabel?: string;
 }
 
 export interface Notification {
