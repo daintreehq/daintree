@@ -2,22 +2,32 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-const lastSearchablePaletteProps: { current: Record<string, unknown> | null } = { current: null };
+interface MockSearchablePaletteProps {
+  query?: string;
+  results?: unknown[];
+  beforeList?: React.ReactNode;
+  emptyContent?: React.ReactNode;
+  [key: string]: unknown;
+}
+
+const lastSearchablePaletteProps: { current: MockSearchablePaletteProps | null } = {
+  current: null,
+};
 
 // Capture the props passed to SearchablePalette and mirror its empty-state
 // gating (only render `emptyContent` when the user hasn't typed a query, same
 // as AppPaletteDialog.Empty's zero-data branch). Avoids dragging the full
 // dialog/animation stack into a renderer-only unit test.
 vi.mock("@/components/ui/SearchablePalette", () => ({
-  SearchablePalette: (props: Record<string, unknown>) => {
+  SearchablePalette: (props: MockSearchablePaletteProps) => {
     lastSearchablePaletteProps.current = props;
-    const query = (props.query as string) ?? "";
-    const results = (props.results as unknown[]) ?? [];
+    const query = props.query ?? "";
+    const results = props.results ?? [];
     const showEmptyContent = results.length === 0 && query.trim() === "";
     return (
       <div data-testid="searchable-palette">
-        {(props.beforeList as React.ReactNode) ?? null}
-        {showEmptyContent ? ((props.emptyContent as React.ReactNode) ?? null) : null}
+        {props.beforeList ?? null}
+        {showEmptyContent ? (props.emptyContent ?? null) : null}
       </div>
     );
   },
