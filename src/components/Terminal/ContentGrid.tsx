@@ -5,7 +5,7 @@ import { useDroppable } from "@dnd-kit/core";
 import {
   AnimatePresence,
   LayoutGroup,
-  motion,
+  m,
   type TransformProperties,
   type Transition,
 } from "framer-motion";
@@ -1225,7 +1225,7 @@ export function ContentGrid({
                           }
                         }
                         return (
-                          <motion.div
+                          <m.div
                             key={terminal.id}
                             layout="position"
                             transition={layoutTransition}
@@ -1240,7 +1240,7 @@ export function ContentGrid({
                               isFleetScope
                               titleOverride={titleOverride}
                             />
-                          </motion.div>
+                          </m.div>
                         );
                       })}
                     </AnimatePresence>

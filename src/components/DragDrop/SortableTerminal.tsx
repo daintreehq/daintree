@@ -1,6 +1,6 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { motion, type TransformProperties, type Transition } from "framer-motion";
+import { m, type TransformProperties, type Transition } from "framer-motion";
 import { cn } from "@/lib/utils";
 import type { TerminalInstance } from "@/store";
 import type { DragData } from "./DndProvider";
@@ -74,7 +74,7 @@ export function SortableTerminal({
   void _tabIndex;
 
   return (
-    <motion.div
+    <m.div
       layout="position"
       transition={layoutTransition}
       transformTemplate={pixelSnapTransform}
@@ -93,6 +93,6 @@ export function SortableTerminal({
       >
         <DragHandleProvider value={{ listeners }}>{children}</DragHandleProvider>
       </div>
-    </motion.div>
+    </m.div>
   );
 }

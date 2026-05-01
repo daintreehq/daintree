@@ -12,7 +12,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
-import { LayoutGroup, LazyMotion, domMax } from "framer-motion";
+import { LayoutGroup } from "framer-motion";
 import { ChevronDown, Plus } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -579,128 +579,126 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
           >
             <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
-              <LazyMotion features={domMax}>
-                <LayoutGroup id={`dock-tabs-${group.id}`}>
-                  <div className="flex items-stretch border-b border-divider bg-daintree-sidebar shrink-0">
-                    <div
-                      ref={setTabListEl}
-                      className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
-                      role="tablist"
-                      aria-label="Dock panel tabs"
-                      onKeyDown={handleTabListKeyDown}
-                    >
-                      {panels.map((panel) => {
-                        const tabChrome = deriveTerminalChrome({
-                          kind: panel.kind,
-                          launchAgentId: panel.launchAgentId,
-                          runtimeIdentity: panel.runtimeIdentity,
-                          detectedAgentId: panel.detectedAgentId,
-                          detectedProcessId: panel.detectedProcessId,
-                          agentState: panel.agentState,
-                          runtimeStatus: panel.runtimeStatus,
-                          exitCode: panel.exitCode,
-                          presetColor: panelPresetColors.get(panel.id),
-                        });
-                        return (
-                          <SortableTabButton
-                            key={panel.id}
-                            id={panel.id}
-                            title={getBaseTitle(panel.title)}
-                            chrome={tabChrome}
-                            kind={panel.kind ?? "terminal"}
-                            agentState={
-                              tabChrome.isAgent ? getDockDisplayAgentState(panel) : undefined
-                            }
-                            isActive={panel.id === activeTabId}
-                            presetColor={panelPresetColors.get(panel.id)}
-                            isUsingFallback={panel.isUsingFallback}
-                            onClick={() => handleTabClick(panel.id)}
-                            onClose={() => handleTabClose(panel.id)}
-                            onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
-                          />
-                        );
-                      })}
+              <LayoutGroup id={`dock-tabs-${group.id}`}>
+                <div className="flex items-stretch border-b border-divider bg-daintree-sidebar shrink-0">
+                  <div
+                    ref={setTabListEl}
+                    className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
+                    role="tablist"
+                    aria-label="Dock panel tabs"
+                    onKeyDown={handleTabListKeyDown}
+                  >
+                    {panels.map((panel) => {
+                      const tabChrome = deriveTerminalChrome({
+                        kind: panel.kind,
+                        launchAgentId: panel.launchAgentId,
+                        runtimeIdentity: panel.runtimeIdentity,
+                        detectedAgentId: panel.detectedAgentId,
+                        detectedProcessId: panel.detectedProcessId,
+                        agentState: panel.agentState,
+                        runtimeStatus: panel.runtimeStatus,
+                        exitCode: panel.exitCode,
+                        presetColor: panelPresetColors.get(panel.id),
+                      });
+                      return (
+                        <SortableTabButton
+                          key={panel.id}
+                          id={panel.id}
+                          title={getBaseTitle(panel.title)}
+                          chrome={tabChrome}
+                          kind={panel.kind ?? "terminal"}
+                          agentState={
+                            tabChrome.isAgent ? getDockDisplayAgentState(panel) : undefined
+                          }
+                          isActive={panel.id === activeTabId}
+                          presetColor={panelPresetColors.get(panel.id)}
+                          isUsingFallback={panel.isUsingFallback}
+                          onClick={() => handleTabClick(panel.id)}
+                          onClose={() => handleTabClose(panel.id)}
+                          onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
+                        />
+                      );
+                    })}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAddTab();
+                          }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                          aria-label="Duplicate panel as new tab"
+                          type="button"
+                        >
+                          <Plus className="w-3 h-3" aria-hidden="true" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                    </Tooltip>
+                  </div>
+                  {hiddenTabIds.size > 0 && (
+                    <DropdownMenu>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleAddTab();
-                            }}
-                            onPointerDown={(e) => e.stopPropagation()}
-                            className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                            aria-label="Duplicate panel as new tab"
-                            type="button"
-                          >
-                            <Plus className="w-3 h-3" aria-hidden="true" />
-                          </button>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              onPointerDown={(e) => e.stopPropagation()}
+                              className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                              aria-label="Show hidden tabs"
+                              aria-haspopup="menu"
+                              data-testid="dock-tabs-overflow"
+                            >
+                              <ChevronDown className="w-3 h-3" aria-hidden="true" />
+                              <span className="sr-only"> ({hiddenTabIds.size} hidden)</span>
+                            </button>
+                          </DropdownMenuTrigger>
                         </TooltipTrigger>
-                        <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                        <TooltipContent side="bottom">Show hidden tabs</TooltipContent>
                       </Tooltip>
-                    </div>
-                    {hiddenTabIds.size > 0 && (
-                      <DropdownMenu>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <DropdownMenuTrigger asChild>
-                              <button
-                                type="button"
-                                onPointerDown={(e) => e.stopPropagation()}
-                                className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                                aria-label="Show hidden tabs"
-                                aria-haspopup="menu"
-                                data-testid="dock-tabs-overflow"
+                      <DropdownMenuContent
+                        align="end"
+                        className="min-w-[200px] max-w-[320px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+                      >
+                        {panels
+                          .filter((p) => hiddenTabIds.has(p.id))
+                          .map((panel) => {
+                            const tabChrome = deriveTerminalChrome({
+                              kind: panel.kind,
+                              launchAgentId: panel.launchAgentId,
+                              runtimeIdentity: panel.runtimeIdentity,
+                              detectedAgentId: panel.detectedAgentId,
+                              detectedProcessId: panel.detectedProcessId,
+                              agentState: panel.agentState,
+                              runtimeStatus: panel.runtimeStatus,
+                              exitCode: panel.exitCode,
+                              presetColor: panelPresetColors.get(panel.id),
+                            });
+                            const isActive = panel.id === activeTabId;
+                            return (
+                              <DropdownMenuItem
+                                key={panel.id}
+                                onSelect={() => handleTabClick(panel.id)}
+                                aria-current={isActive ? "true" : undefined}
+                                className={cn(isActive && "font-medium")}
                               >
-                                <ChevronDown className="w-3 h-3" aria-hidden="true" />
-                                <span className="sr-only"> ({hiddenTabIds.size} hidden)</span>
-                              </button>
-                            </DropdownMenuTrigger>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">Show hidden tabs</TooltipContent>
-                        </Tooltip>
-                        <DropdownMenuContent
-                          align="end"
-                          className="min-w-[200px] max-w-[320px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
-                        >
-                          {panels
-                            .filter((p) => hiddenTabIds.has(p.id))
-                            .map((panel) => {
-                              const tabChrome = deriveTerminalChrome({
-                                kind: panel.kind,
-                                launchAgentId: panel.launchAgentId,
-                                runtimeIdentity: panel.runtimeIdentity,
-                                detectedAgentId: panel.detectedAgentId,
-                                detectedProcessId: panel.detectedProcessId,
-                                agentState: panel.agentState,
-                                runtimeStatus: panel.runtimeStatus,
-                                exitCode: panel.exitCode,
-                                presetColor: panelPresetColors.get(panel.id),
-                              });
-                              const isActive = panel.id === activeTabId;
-                              return (
-                                <DropdownMenuItem
-                                  key={panel.id}
-                                  onSelect={() => handleTabClick(panel.id)}
-                                  aria-current={isActive ? "true" : undefined}
-                                  className={cn(isActive && "font-medium")}
-                                >
-                                  <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
-                                    <TerminalIcon
-                                      kind={panel.kind ?? "terminal"}
-                                      chrome={tabChrome}
-                                      className="w-3.5 h-3.5"
-                                    />
-                                  </span>
-                                  <span className="truncate">{getBaseTitle(panel.title)}</span>
-                                </DropdownMenuItem>
-                              );
-                            })}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    )}
-                  </div>
-                </LayoutGroup>
-              </LazyMotion>
+                                <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
+                                  <TerminalIcon
+                                    kind={panel.kind ?? "terminal"}
+                                    chrome={tabChrome}
+                                    className="w-3.5 h-3.5"
+                                  />
+                                </span>
+                                <span className="truncate">{getBaseTitle(panel.title)}</span>
+                              </DropdownMenuItem>
+                            );
+                          })}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
+              </LayoutGroup>
             </SortableContext>
           </DndContext>
 

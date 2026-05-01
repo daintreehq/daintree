@@ -37,7 +37,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
-import { LayoutGroup, LazyMotion, domMax } from "framer-motion";
+import { LayoutGroup } from "framer-motion";
 import type { PanelKind } from "@/types";
 import { cn, getBaseTitle } from "@/lib/utils";
 import { formatShortcutForTooltip, createTooltipWithShortcut } from "@/lib/platform";
@@ -559,56 +559,54 @@ function PanelHeaderComponent({
                   aria-label="Panel tabs"
                   onKeyDown={handleTabListKeyDown}
                 >
-                  <LazyMotion features={domMax}>
-                    <LayoutGroup id={`panel-tabs-${id}`}>
-                      <div className="flex items-center">
-                        {tabs.map((tab) => (
-                          <SortableTabButton
-                            key={tab.id}
-                            id={tab.id}
-                            title={getBaseTitle(tab.title)}
-                            chrome={tab.chrome}
-                            kind={tab.kind}
-                            agentState={tab.agentState}
-                            isActive={tab.isActive}
-                            presetColor={tab.presetColor}
-                            isUsingFallback={tab.isUsingFallback}
-                            fallbackTooltip={tab.fallbackTooltip}
-                            hasDangerousFlags={tab.hasDangerousFlags}
-                            onClick={() => onTabClick?.(tab.id)}
-                            onClose={() => onTabClose?.(tab.id)}
-                            onRename={
-                              onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined
-                            }
-                          />
-                        ))}
-                        {onAddTab && (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onAddTab();
-                                }}
-                                onPointerDown={(e) => e.stopPropagation()}
-                                className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                                aria-label="Duplicate panel as new tab"
-                                type="button"
-                              >
-                                <Plus className="w-3 h-3" aria-hidden="true" />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">
-                              {createTooltipWithShortcut(
-                                "Duplicate panel as new tab",
-                                duplicateShortcut
-                              )}
-                            </TooltipContent>
-                          </Tooltip>
-                        )}
-                      </div>
-                    </LayoutGroup>
-                  </LazyMotion>
+                  <LayoutGroup id={`panel-tabs-${id}`}>
+                    <div className="flex items-center">
+                      {tabs.map((tab) => (
+                        <SortableTabButton
+                          key={tab.id}
+                          id={tab.id}
+                          title={getBaseTitle(tab.title)}
+                          chrome={tab.chrome}
+                          kind={tab.kind}
+                          agentState={tab.agentState}
+                          isActive={tab.isActive}
+                          presetColor={tab.presetColor}
+                          isUsingFallback={tab.isUsingFallback}
+                          fallbackTooltip={tab.fallbackTooltip}
+                          hasDangerousFlags={tab.hasDangerousFlags}
+                          onClick={() => onTabClick?.(tab.id)}
+                          onClose={() => onTabClose?.(tab.id)}
+                          onRename={
+                            onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined
+                          }
+                        />
+                      ))}
+                      {onAddTab && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onAddTab();
+                              }}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                              aria-label="Duplicate panel as new tab"
+                              type="button"
+                            >
+                              <Plus className="w-3 h-3" aria-hidden="true" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">
+                            {createTooltipWithShortcut(
+                              "Duplicate panel as new tab",
+                              duplicateShortcut
+                            )}
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+                    </div>
+                  </LayoutGroup>
                 </div>
                 {overflowTrigger}
               </div>
@@ -623,56 +621,51 @@ function PanelHeaderComponent({
               aria-label="Panel tabs"
               onKeyDown={handleTabListKeyDown}
             >
-              <LazyMotion features={domMax}>
-                <LayoutGroup id={`panel-tabs-${id}`}>
-                  <div className="flex items-center">
-                    {tabs.map((tab) => (
-                      <TabButton
-                        key={tab.id}
-                        id={tab.id}
-                        title={getBaseTitle(tab.title)}
-                        chrome={tab.chrome}
-                        kind={tab.kind}
-                        agentState={tab.agentState}
-                        isActive={tab.isActive}
-                        presetColor={tab.presetColor}
-                        isUsingFallback={tab.isUsingFallback}
-                        fallbackTooltip={tab.fallbackTooltip}
-                        hasDangerousFlags={tab.hasDangerousFlags}
-                        onClick={() => onTabClick?.(tab.id)}
-                        onClose={() => onTabClose?.(tab.id)}
-                        onRename={
-                          onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined
-                        }
-                      />
-                    ))}
-                    {onAddTab && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onAddTab();
-                            }}
-                            onPointerDown={(e) => e.stopPropagation()}
-                            className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                            aria-label="Duplicate panel as new tab"
-                            type="button"
-                          >
-                            <Plus className="w-3 h-3" aria-hidden="true" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">
-                          {createTooltipWithShortcut(
-                            "Duplicate panel as new tab",
-                            duplicateShortcut
-                          )}
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
-                  </div>
-                </LayoutGroup>
-              </LazyMotion>
+              <LayoutGroup id={`panel-tabs-${id}`}>
+                <div className="flex items-center">
+                  {tabs.map((tab) => (
+                    <TabButton
+                      key={tab.id}
+                      id={tab.id}
+                      title={getBaseTitle(tab.title)}
+                      chrome={tab.chrome}
+                      kind={tab.kind}
+                      agentState={tab.agentState}
+                      isActive={tab.isActive}
+                      presetColor={tab.presetColor}
+                      isUsingFallback={tab.isUsingFallback}
+                      fallbackTooltip={tab.fallbackTooltip}
+                      hasDangerousFlags={tab.hasDangerousFlags}
+                      onClick={() => onTabClick?.(tab.id)}
+                      onClose={() => onTabClose?.(tab.id)}
+                      onRename={
+                        onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined
+                      }
+                    />
+                  ))}
+                  {onAddTab && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAddTab();
+                          }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                          aria-label="Duplicate panel as new tab"
+                          type="button"
+                        >
+                          <Plus className="w-3 h-3" aria-hidden="true" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {createTooltipWithShortcut("Duplicate panel as new tab", duplicateShortcut)}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+              </LayoutGroup>
             </div>
             {overflowTrigger}
           </div>
