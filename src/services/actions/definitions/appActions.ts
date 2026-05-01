@@ -70,6 +70,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["preferences", "options", "config", "prefs"],
     nonRepeatable: true,
     run: async () => {
       callbacks.onOpenSettings();
@@ -137,6 +138,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["appearance", "colors", "scheme", "palette"],
     nonRepeatable: true,
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:open-theme-palette"));
@@ -151,6 +153,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["appearance", "colors", "scheme", "browse"],
     nonRepeatable: true,
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:open-theme-browser"));
@@ -165,6 +168,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["appearance", "mode", "dark", "light"],
     run: async () => {
       const {
         selectedSchemeId,

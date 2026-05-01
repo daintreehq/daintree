@@ -17,6 +17,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["trash", "hide", "dismiss", "remove"],
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
@@ -58,6 +59,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["hide", "minimize", "stash", "park"],
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
@@ -82,6 +84,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["terminate", "stop", "remove", "delete"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
@@ -101,6 +104,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["relaunch", "reset", "rerun", "process"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
@@ -120,6 +124,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["refresh", "render", "repair", "display"],
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
@@ -140,6 +145,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["title", "label", "name", "edit"],
     argsSchema: z.object({
       terminalId: z.string().optional(),
       name: z
@@ -170,6 +176,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["details", "metadata", "inspect", "status"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
@@ -190,6 +197,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["details", "metadata", "inspect", "status"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
@@ -229,6 +237,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["readonly", "typing", "disable", "keyboard"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
@@ -248,6 +257,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["wake", "unstick", "unpause", "stuck"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
@@ -266,6 +276,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["trash", "hide", "clear", "cleanup"],
     run: async () => {
       const state = usePanelStore.getState();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
@@ -289,6 +300,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["terminate", "stop", "remove", "delete"],
     run: async () => {
       usePanelStore.getState().bulkCloseAll();
     },
@@ -302,6 +314,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["relaunch", "reset", "rerun", "processes"],
     run: async () => {
       usePanelStore.getState().bulkRestartAll();
     },
@@ -315,6 +328,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["pty", "backend", "recover", "host"],
     isEnabled: () => usePanelStore.getState().backendStatus === "disconnected",
     run: async () => {
       await terminalClient.restartService();

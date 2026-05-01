@@ -117,6 +117,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["maximize", "presentation", "immersive", "expand"],
     run: async () => {
       await window.electron.window.toggleFullscreen();
     },
@@ -130,6 +131,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["refresh", "restart", "renderer", "soft"],
     run: async () => {
       await window.electron.window.reload();
     },
@@ -143,6 +145,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["refresh", "cache", "hard", "renderer"],
     run: async () => {
       await window.electron.window.forceReload();
     },
@@ -156,6 +159,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["developer", "inspect", "console", "debug"],
     run: async () => {
       await window.electron.window.toggleDevTools();
     },
@@ -169,6 +173,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["larger", "increase", "scale", "magnify"],
     run: async () => {
       await window.electron.window.zoomIn();
     },
@@ -182,6 +187,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["smaller", "decrease", "scale", "shrink"],
     run: async () => {
       await window.electron.window.zoomOut();
     },
@@ -195,6 +201,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["default", "normal", "scale", "restore"],
     run: async () => {
       await window.electron.window.zoomReset();
     },
@@ -208,6 +215,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["dismiss", "shut", "exit", "hide"],
     run: async () => {
       await window.electron.window.close();
     },
@@ -325,6 +333,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["defaults", "restore", "clear", "agents"],
     argsSchema: z
       .object({
         agentId: z.string().optional(),
@@ -397,6 +406,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["shortcuts", "hotkeys", "defaults", "restore"],
     run: async () => {
       await keybindingService.resetAllOverrides();
       return keybindingService.getOverridesSnapshot();
@@ -644,6 +654,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["hotkeys", "keys", "reference", "bindings"],
     run: async () => {
       callbacks.onOpenShortcuts();
     },
@@ -657,6 +668,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["hotkeys", "keys", "reference", "bindings"],
     run: async () => {
       callbacks.onOpenShortcuts();
     },
@@ -670,6 +682,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["assistant", "support", "docs", "guide"],
     argsSchema: z.object({ agentId: AgentIdSchema.optional() }).optional(),
     run: async (args?: unknown) => {
       const folderPath = await window.electron.help.getFolderPath();
@@ -734,6 +747,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["docs", "support", "guide", "assistant"],
     run: async () => {
       useHelpPanelStore.getState().toggle();
     },
@@ -747,6 +761,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["dismiss", "escape", "dialog", "overlay"],
     nonRepeatable: true,
     run: async () => {
       dispatchEscape();
@@ -761,6 +776,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["exit", "close", "shutdown", "leave"],
     run: async () => {
       await appClient.quit();
     },
@@ -774,6 +790,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    keywords: ["exit", "kill", "shutdown", "terminate"],
     run: async () => {
       await appClient.forceQuit();
     },

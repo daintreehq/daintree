@@ -107,6 +107,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["sync", "reload", "update", "sidebar"],
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
       await Promise.allSettled([
@@ -124,6 +125,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["pr", "github", "fetch", "sync"],
     run: async () => {
       await worktreeClient.refreshPullRequests();
     },
@@ -138,6 +140,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["workspace", "backend", "recover", "host"],
     isEnabled: () => {
       const store = getCurrentViewStoreOrNull();
       return store !== null && store.getState().error !== null;
@@ -171,6 +174,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["new", "branch", "checkout", "recipe"],
     run: async () => {
       useWorktreeSelectionStore.getState().openQuickCreate();
     },
@@ -184,6 +188,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["create", "branch", "checkout", "add"],
     run: async () => {
       useWorktreeSelectionStore.getState().openCreateDialog();
     },
@@ -310,6 +315,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      keywords: ["choose", "activate", "focus", "switch"],
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
       nonRepeatable: true,
       run: async (args, ctx: ActionContext) => {
@@ -331,6 +337,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["cycle", "forward", "advance", "switch"],
     nonRepeatable: true,
     run: async () => {
       const activeWorktreeId = callbacks.getActiveWorktreeId();
@@ -352,6 +359,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["cycle", "back", "switch", "last"],
     nonRepeatable: true,
     run: async () => {
       const activeWorktreeId = callbacks.getActiveWorktreeId();
@@ -546,6 +554,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["switcher", "chooser", "list", "picker"],
     nonRepeatable: true,
     run: async () => {
       callbacks.onOpenWorktreePalette();
@@ -560,6 +569,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["dashboard", "grid", "summary", "modal"],
     nonRepeatable: true,
     run: async () => {
       callbacks.onToggleWorktreeOverview();
@@ -574,6 +584,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["dashboard", "grid", "summary", "modal"],
     nonRepeatable: true,
     run: async () => {
       callbacks.onOpenWorktreeOverview();
@@ -588,6 +599,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["dismiss", "hide", "exit", "escape"],
     nonRepeatable: true,
     run: async () => {
       callbacks.onCloseWorktreeOverview();
@@ -602,6 +614,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["sidebar", "switcher", "chooser", "picker"],
     nonRepeatable: true,
     run: async () => {
       callbacks.onOpenWorktreePalette();
