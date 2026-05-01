@@ -12,6 +12,7 @@ import {
   type SessionFilter,
   type ActivityFilter,
 } from "@/store/worktreeFilterStore";
+import type { ChipCounts } from "@/lib/worktreeFilters";
 
 interface FilterSectionProps {
   title: string;
@@ -50,9 +51,12 @@ interface FilterChipProps {
   label: string;
   isActive: boolean;
   onClick: () => void;
+  count?: number;
 }
 
-function FilterChip({ label, isActive, onClick }: FilterChipProps) {
+function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
+  const showCount = count !== undefined && (count > 0 || isActive);
+  const isDimmed = count === 0 && !isActive;
   return (
     <button
       type="button"
@@ -62,10 +66,12 @@ function FilterChip({ label, isActive, onClick }: FilterChipProps) {
         "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full border transition-colors",
         isActive
           ? "bg-tint/[0.08] border-daintree-border text-daintree-text"
-          : "bg-daintree-bg border-daintree-border text-daintree-text/60 hover:bg-overlay-medium hover:text-daintree-text/80"
+          : isDimmed
+            ? "bg-daintree-bg border-daintree-border text-daintree-text/30 hover:bg-overlay-soft hover:text-daintree-text/50"
+            : "bg-daintree-bg border-daintree-border text-daintree-text/60 hover:bg-overlay-medium hover:text-daintree-text/80"
       )}
     >
-      {label}
+      {showCount ? `${label} (${count})` : label}
     </button>
   );
 }
@@ -127,9 +133,13 @@ const ORDER_OPTIONS: { value: OrderBy; label: string }[] = [
 
 interface WorktreeFilterPopoverProps {
   hideSearchInput?: boolean;
+  chipCounts?: ChipCounts;
 }
 
-export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilterPopoverProps) {
+export function WorktreeFilterPopover({
+  hideSearchInput = false,
+  chipCounts,
+}: WorktreeFilterPopoverProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [localQuery, setLocalQuery] = useState("");
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -322,6 +332,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                   label={option.label}
                   isActive={statusFilters.has(option.value)}
                   onClick={() => toggleStatusFilter(option.value)}
+                  count={chipCounts?.status[option.value]}
                 />
               ))}
             </div>
@@ -335,6 +346,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                   label={option.label}
                   isActive={typeFilters.has(option.value)}
                   onClick={() => toggleTypeFilter(option.value)}
+                  count={chipCounts?.branchType[option.value]}
                 />
               ))}
             </div>
@@ -348,6 +360,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                   label={option.label}
                   isActive={githubFilters.has(option.value)}
                   onClick={() => toggleGitHubFilter(option.value)}
+                  count={chipCounts?.github[option.value]}
                 />
               ))}
             </div>
@@ -361,6 +374,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                   label={option.label}
                   isActive={sessionFilters.has(option.value)}
                   onClick={() => toggleSessionFilter(option.value)}
+                  count={chipCounts?.sessions[option.value]}
                 />
               ))}
             </div>
@@ -374,6 +388,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                   label={option.label}
                   isActive={activityFilters.has(option.value)}
                   onClick={() => toggleActivityFilter(option.value)}
+                  count={chipCounts?.activity[option.value]}
                 />
               ))}
             </div>

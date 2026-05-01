@@ -12,6 +12,8 @@ import {
   hasAnyFilters,
   findIntegrationWorktree,
   filterTriageWorktrees,
+  computeChipCounts,
+  emptyChipCounts,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "../worktreeFilters";
@@ -1258,5 +1260,158 @@ describe("matchesQuickStateFilter", () => {
   it('"finished" does NOT match chipState "waiting"', () => {
     const meta = { ...createEmptyMeta(), chipState: "waiting" as const };
     expect(matchesQuickStateFilter("finished", meta)).toBe(false);
+  });
+});
+
+describe("computeChipCounts", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-01T12:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns all-zero counts for an empty worktree list", () => {
+    const counts = computeChipCounts([], new Map(), null);
+    expect(counts).toEqual(emptyChipCounts());
+  });
+
+  it("counts branch types independently", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", branch: "feature/a" }),
+      createMockWorktree({ id: "2", branch: "feature/b" }),
+      createMockWorktree({ id: "3", branch: "bugfix/c" }),
+    ];
+    const counts = computeChipCounts(worktrees, new Map(), null);
+    expect(counts.branchType.feature).toBe(2);
+    expect(counts.branchType.bugfix).toBe(1);
+    expect(counts.branchType.refactor).toBe(0);
+  });
+
+  it("counts GitHub chips by issue and PR state", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", issueNumber: 100, prNumber: 200, prState: "open" }),
+      createMockWorktree({ id: "2", issueNumber: 101 }),
+      createMockWorktree({ id: "3", prNumber: 202, prState: "merged" }),
+      createMockWorktree({ id: "4", prNumber: 203, prState: "closed" }),
+    ];
+    const counts = computeChipCounts(worktrees, new Map(), null);
+    expect(counts.github.hasIssue).toBe(2);
+    expect(counts.github.hasPR).toBe(3);
+    expect(counts.github.prOpen).toBe(1);
+    expect(counts.github.prMerged).toBe(1);
+    expect(counts.github.prClosed).toBe(1);
+  });
+
+  it("counts status chips and respects activeWorktreeId for the 'active' chip", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", branch: "feature/a", mood: "stale" }),
+      createMockWorktree({
+        id: "2",
+        branch: "feature/b",
+        worktreeChanges: {
+          worktreeId: "2",
+          rootPath: "/x",
+          changedFileCount: 3,
+          changes: [],
+        },
+      }),
+      createMockWorktree({ id: "3", branch: "feature/c" }),
+    ];
+    const counts = computeChipCounts(worktrees, new Map(), "3");
+    expect(counts.status.active).toBe(1);
+    expect(counts.status.dirty).toBe(1);
+    expect(counts.status.stale).toBe(1);
+    // id 2 is dirty (not idle); id 3 is active-only -> idle; id 1 is stale (not idle)
+    expect(counts.status.idle).toBe(1);
+  });
+
+  it("counts session chips from derivedMetaMap", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1" }),
+      createMockWorktree({ id: "2" }),
+      createMockWorktree({ id: "3" }),
+    ];
+    const map = new Map<string, DerivedWorktreeMeta>([
+      [
+        "1",
+        {
+          ...createEmptyMeta(),
+          terminalCount: 2,
+          hasWorkingAgent: true,
+        },
+      ],
+      [
+        "2",
+        {
+          ...createEmptyMeta(),
+          terminalCount: 1,
+          hasWaitingAgent: true,
+        },
+      ],
+      [
+        "3",
+        {
+          ...createEmptyMeta(),
+          hasCompletedAgent: true,
+          hasExitedAgent: true,
+        },
+      ],
+    ]);
+    const counts = computeChipCounts(worktrees, map, null);
+    expect(counts.sessions.hasTerminals).toBe(2);
+    expect(counts.sessions.working).toBe(1);
+    expect(counts.sessions.waiting).toBe(1);
+    expect(counts.sessions.completed).toBe(1);
+    expect(counts.sessions.exited).toBe(1);
+  });
+
+  it("counts activity chips against current time windows (cumulative)", () => {
+    const now = Date.now();
+    const worktrees = [
+      createMockWorktree({ id: "1", lastActivityTimestamp: now - 5 * 60 * 1000 }), // 5m
+      createMockWorktree({ id: "2", lastActivityTimestamp: now - 30 * 60 * 1000 }), // 30m
+      createMockWorktree({ id: "3", lastActivityTimestamp: now - 5 * 60 * 60 * 1000 }), // 5h
+      createMockWorktree({ id: "4", lastActivityTimestamp: now - 3 * 24 * 60 * 60 * 1000 }), // 3d
+      createMockWorktree({ id: "5", lastActivityTimestamp: now - 30 * 24 * 60 * 60 * 1000 }), // 30d
+    ];
+    const counts = computeChipCounts(worktrees, new Map(), null);
+    expect(counts.activity.last15m).toBe(1);
+    expect(counts.activity.last1h).toBe(2);
+    expect(counts.activity.last24h).toBe(3);
+    expect(counts.activity.last7d).toBe(4);
+  });
+
+  it("ignores worktrees with no lastActivityTimestamp for activity chips", () => {
+    const worktrees = [createMockWorktree({ id: "1" })];
+    const counts = computeChipCounts(worktrees, new Map(), null);
+    expect(counts.activity.last15m).toBe(0);
+    expect(counts.activity.last7d).toBe(0);
+  });
+
+  it("treats lastActivityTimestamp === 0 the same as missing", () => {
+    const worktrees = [createMockWorktree({ id: "1", lastActivityTimestamp: 0 })];
+    const counts = computeChipCounts(worktrees, new Map(), null);
+    expect(counts.activity.last15m).toBe(0);
+    expect(counts.activity.last7d).toBe(0);
+  });
+
+  it("excludes worktrees at the exact window boundary (strict less-than)", () => {
+    const now = Date.now();
+    const worktrees = [
+      createMockWorktree({ id: "1", lastActivityTimestamp: now - 15 * 60 * 1000 }),
+    ];
+    const counts = computeChipCounts(worktrees, new Map(), null);
+    expect(counts.activity.last15m).toBe(0);
+    expect(counts.activity.last1h).toBe(1);
+  });
+
+  it("does not crash when derivedMetaMap is missing entries", () => {
+    const worktrees = [createMockWorktree({ id: "1", branch: "feature/a" })];
+    const counts = computeChipCounts(worktrees, new Map(), null);
+    expect(counts.branchType.feature).toBe(1);
+    expect(counts.sessions.working).toBe(0);
   });
 });
