@@ -7,6 +7,12 @@ import type {
 import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
 
 export const MAX_PACKET_PAYLOAD = 65535;
+// Caps are in bytes, not chars: they bound the memory consumed by in-flight
+// Uint8Array payloads on the MessagePort between pty-host and renderer.
+// MessagePort transfers the underlying ArrayBuffer byte-for-byte, so byte
+// count is the exact memory footprint. VS Code uses char-based flow control
+// because its IPC routes through string-based JSON-RPC; copying that
+// approach here would misrepresent the actual resource being protected.
 export const MAX_PENDING_BYTES_PER_TERMINAL = 4 * 1024 * 1024;
 export const MAX_TOTAL_PENDING_BYTES = 16 * 1024 * 1024;
 export const BACKPRESSURE_SAFETY_TIMEOUT_MS = 10000;
