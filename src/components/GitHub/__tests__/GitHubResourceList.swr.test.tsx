@@ -657,6 +657,113 @@ describe("GitHubResourceList no-token empty state", () => {
   });
 });
 
+describe("GitHubResourceList empty state branching", () => {
+  it("renders zero-data variant (no Clear filters button) when no filters are active and the list is empty", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No issues found")).toBeTruthy();
+    });
+    expect(screen.queryByRole("button", { name: /clear filters/i })).toBeNull();
+  });
+
+  it("renders filtered-empty with a Clear filters action when a search query is active", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setIssueSearchQuery("nonexistent");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No issues match "nonexistent"/)).toBeTruthy();
+    });
+    expect(screen.getByRole("button", { name: /clear filters/i })).toBeTruthy();
+  });
+
+  it("renders filtered-empty when a non-default state filter is active", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setIssueFilter("closed");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No issues in this view")).toBeTruthy();
+    });
+    expect(screen.getByRole("button", { name: /clear filters/i })).toBeTruthy();
+  });
+
+  it("Clear filters action resets search and state filter to defaults", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setIssueSearchQuery("foo");
+    useGitHubFilterStore.getState().setIssueFilter("closed");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    const clearButton = await screen.findByRole("button", { name: /clear filters/i });
+    act(() => {
+      clearButton.click();
+    });
+
+    const filterStore = useGitHubFilterStore.getState();
+    expect(filterStore.issueSearchQuery).toBe("");
+    expect(filterStore.issueFilter).toBe("open");
+  });
+
+  it("renders filtered-empty for an exact number not found", async () => {
+    mockGetIssueByNumber.mockResolvedValue(null);
+    useGitHubFilterStore.getState().setIssueSearchQuery("#999");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Issue #999 not found/)).toBeTruthy();
+    });
+    expect(screen.getByRole("button", { name: /clear filters/i })).toBeTruthy();
+  });
+
+  it("renders filtered-empty for PRs with the right resource label", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setPrSearchQuery("nonexistent");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No pull requests match "nonexistent"/)).toBeTruthy();
+    });
+  });
+
+  it("renders zero-data for PRs when no filters are active and the list is empty", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No pull requests found")).toBeTruthy();
+    });
+    expect(screen.queryByRole("button", { name: /clear filters/i })).toBeNull();
+  });
+
+  it("Clear filters action on PR view resets PR-specific store slice, not issue slice", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setPrSearchQuery("foo");
+    useGitHubFilterStore.getState().setPrFilter("merged");
+    useGitHubFilterStore.getState().setIssueSearchQuery("untouched-issue-query");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    const clearButton = await screen.findByRole("button", { name: /clear filters/i });
+    act(() => {
+      clearButton.click();
+    });
+
+    const filterStore = useGitHubFilterStore.getState();
+    expect(filterStore.prSearchQuery).toBe("");
+    expect(filterStore.prFilter).toBe("open");
+    expect(filterStore.issueSearchQuery).toBe("untouched-issue-query");
+  });
+});
+
 describe("GitHubResourceList retry behavior", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
