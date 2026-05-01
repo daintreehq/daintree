@@ -32,11 +32,19 @@
   box-shadow: var(--_hover-shadow);
 }
 
-.toolbar-icon-button:focus-visible,
-.toolbar-agent-button:focus-visible {
+.toolbar-icon-button:focus-visible {
   outline: 2px solid var(--theme-accent-primary);
   outline-offset: 2px;
   background: var(--toolbar-control-hover-bg, var(--theme-overlay-elevated));
+}
+
+.toolbar-agent-button:focus-visible {
+  outline: 2px solid var(--theme-accent-primary);
+  outline-offset: 2px;
+  background: var(
+    --toolbar-agent-hover-bg,
+    var(--toolbar-control-hover-bg, var(--theme-overlay-elevated))
+  );
 }
 
 .toolbar-icon-button[aria-pressed="true"],
