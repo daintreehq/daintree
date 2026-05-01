@@ -28,9 +28,9 @@ export function BulkActionBar({
 
   const handleOpenDialog = useCallback(() => {
     if (mode === "pr") {
-      openBulkCreateDialogForPRs(selectedPRs);
+      openBulkCreateDialogForPRs(selectedPRs, onClear);
     } else {
-      openBulkCreateDialog(selectedIssues);
+      openBulkCreateDialog(selectedIssues, onClear);
     }
     onCloseDropdown?.();
   }, [
@@ -40,6 +40,7 @@ export function BulkActionBar({
     openBulkCreateDialog,
     openBulkCreateDialogForPRs,
     onCloseDropdown,
+    onClear,
   ]);
 
   return (

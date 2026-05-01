@@ -126,12 +126,16 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 
 const mockSetPendingWorktree = vi.fn();
 const mockSelectWorktree = vi.fn();
+const mockBulkCreateDialog: { onComplete: (() => void) | undefined } = {
+  onComplete: undefined,
+};
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: {
     getState: () => ({
       activeWorktreeId: "source-wt",
       setPendingWorktree: mockSetPendingWorktree,
       selectWorktree: mockSelectWorktree,
+      bulkCreateDialog: mockBulkCreateDialog,
     }),
   },
 }));
@@ -262,6 +266,7 @@ beforeEach(() => {
   setupWorktreeCreateMocks();
   mockTerminals = [];
   mockSelectedRecipeId = null;
+  mockBulkCreateDialog.onComplete = undefined;
   mockAddPanel.mockResolvedValue("clone-terminal-id");
   mockAgentSettingsGet.mockResolvedValue({ agents: {} });
   mockSystemGetTmpDir.mockResolvedValue("/tmp");
@@ -1270,6 +1275,39 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
     expect(onComplete).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("invokes stored bulkCreateDialog.onComplete when Done is clicked", async () => {
+    const storedOnComplete = vi.fn();
+    mockBulkCreateDialog.onComplete = storedOnComplete;
+
+    render(<BulkCreateWorktreeDialog {...defaultProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-done-button").click();
+    });
+
+    expect(storedOnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not invoke stored bulkCreateDialog.onComplete when dialog is cancelled", async () => {
+    const storedOnComplete = vi.fn();
+    mockBulkCreateDialog.onComplete = storedOnComplete;
+
+    render(<BulkCreateWorktreeDialog {...defaultProps} />);
+
+    // Cancel from idle state via Cancel button (handleClose path)
+    await act(async () => {
+      screen.getByText("Cancel").click();
+    });
+
+    expect(storedOnComplete).not.toHaveBeenCalled();
   });
 
   it("clone layout generates command for agent panels and preserves plain terminal commands", async () => {

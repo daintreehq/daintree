@@ -46,6 +46,7 @@ interface BulkCreateDialogState {
   mode: "issue" | "pr";
   selectedIssues: GitHubIssue[];
   selectedPRs: GitHubPR[];
+  onComplete?: () => void;
 }
 
 interface CrossDiffDialogState {
@@ -84,8 +85,8 @@ interface WorktreeSelectionState {
   ) => void;
   openCreateDialogForPR: (pr: GitHubPR) => void;
   closeCreateDialog: () => void;
-  openBulkCreateDialog: (selectedIssues: GitHubIssue[]) => void;
-  openBulkCreateDialogForPRs: (selectedPRs: GitHubPR[]) => void;
+  openBulkCreateDialog: (selectedIssues: GitHubIssue[], onComplete?: () => void) => void;
+  openBulkCreateDialogForPRs: (selectedPRs: GitHubPR[], onComplete?: () => void) => void;
   closeBulkCreateDialog: () => void;
   openQuickCreate: (context?: { issue?: GitHubIssue | null; pr?: GitHubPR | null }) => void;
   closeQuickCreate: () => void;
@@ -262,7 +263,13 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     initialRecipeId: null,
     onCreated: undefined,
   },
-  bulkCreateDialog: { isOpen: false, mode: "issue", selectedIssues: [], selectedPRs: [] },
+  bulkCreateDialog: {
+    isOpen: false,
+    mode: "issue",
+    selectedIssues: [],
+    selectedPRs: [],
+    onComplete: undefined,
+  },
   quickCreate: { isOpen: false, issue: null, pr: null },
   crossDiffDialog: { isOpen: false, initialWorktreeId: null },
   _policyGeneration: 0,
@@ -482,22 +489,40 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       },
     }),
 
-  openBulkCreateDialog: (selectedIssues) => {
+  openBulkCreateDialog: (selectedIssues, onComplete) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
       window.dispatchEvent(new Event("daintree:toggle-focus-mode"));
     }
-    set({ bulkCreateDialog: { isOpen: true, mode: "issue", selectedIssues, selectedPRs: [] } });
+    set({
+      bulkCreateDialog: {
+        isOpen: true,
+        mode: "issue",
+        selectedIssues,
+        selectedPRs: [],
+        onComplete,
+      },
+    });
   },
 
-  openBulkCreateDialogForPRs: (selectedPRs) => {
+  openBulkCreateDialogForPRs: (selectedPRs, onComplete) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
       window.dispatchEvent(new Event("daintree:toggle-focus-mode"));
     }
-    set({ bulkCreateDialog: { isOpen: true, mode: "pr", selectedIssues: [], selectedPRs } });
+    set({
+      bulkCreateDialog: {
+        isOpen: true,
+        mode: "pr",
+        selectedIssues: [],
+        selectedPRs,
+        onComplete,
+      },
+    });
   },
 
   closeBulkCreateDialog: () =>
-    set((s) => ({ bulkCreateDialog: { ...s.bulkCreateDialog, isOpen: false } })),
+    set((s) => ({
+      bulkCreateDialog: { ...s.bulkCreateDialog, isOpen: false, onComplete: undefined },
+    })),
 
   openQuickCreate: (context) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
@@ -647,7 +672,13 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialRecipeId: null,
         onCreated: undefined,
       },
-      bulkCreateDialog: { isOpen: false, mode: "issue", selectedIssues: [], selectedPRs: [] },
+      bulkCreateDialog: {
+        isOpen: false,
+        mode: "issue",
+        selectedIssues: [],
+        selectedPRs: [],
+        onComplete: undefined,
+      },
       quickCreate: { isOpen: false, issue: null, pr: null },
       crossDiffDialog: { isOpen: false, initialWorktreeId: null },
       lastFocusedTerminalByWorktree: new Map<string, string>(),

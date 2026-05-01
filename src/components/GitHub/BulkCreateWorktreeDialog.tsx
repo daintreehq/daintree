@@ -1151,6 +1151,7 @@ export function BulkCreateWorktreeDialog({
   const handleDone = useCallback(() => {
     onComplete();
     onClose();
+    useWorktreeSelectionStore.getState().bulkCreateDialog.onComplete?.();
   }, [onComplete, onClose]);
 
   const handleRecipeSelect = useCallback(
