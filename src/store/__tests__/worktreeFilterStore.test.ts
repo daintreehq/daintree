@@ -166,6 +166,11 @@ describe("worktreeFilterStore", () => {
     store.setQuery("alpha");
     store.toggleStatusFilter("active");
     store.toggleTypeFilter("feature");
+    store.toggleGitHubFilter("hasPR");
+    store.toggleSessionFilter("working");
+    store.toggleActivityFilter("last1h");
+    store.pinWorktree("wt-1");
+    store.setManualOrder(["wt-2", "wt-3"]);
     store.setQuickStateFilter("working");
 
     store.clearQuickStateFilter();
@@ -175,6 +180,11 @@ describe("worktreeFilterStore", () => {
     expect(next.query).toBe("alpha");
     expect(next.statusFilters.has("active")).toBe(true);
     expect(next.typeFilters.has("feature")).toBe(true);
+    expect(next.githubFilters.has("hasPR")).toBe(true);
+    expect(next.sessionFilters.has("working")).toBe(true);
+    expect(next.activityFilters.has("last1h")).toBe(true);
+    expect(next.pinnedWorktrees).toEqual(["wt-1"]);
+    expect(next.manualOrder).toEqual(["wt-2", "wt-3"]);
   });
 
   it("clearQuickStateFilter is a no-op when already 'all'", () => {
