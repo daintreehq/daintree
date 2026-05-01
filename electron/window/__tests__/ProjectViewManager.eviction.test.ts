@@ -20,7 +20,7 @@ function createMockWebContents() {
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
-    session: { flushStorageData: vi.fn(() => Promise.resolve()) },
+    session: { flushStorageData: vi.fn() },
     navigationHistory: { clear: vi.fn() },
     getOSProcessId: vi.fn(() => osPid),
     on: vi.fn((event: string, handler: Handler) => {

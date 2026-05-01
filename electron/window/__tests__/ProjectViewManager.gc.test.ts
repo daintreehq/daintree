@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 
 let nextWebContentsId = 100;
 
@@ -14,7 +14,7 @@ function createMockWebContents() {
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
-    session: { flushStorageData: vi.fn(() => Promise.resolve()) },
+    session: { flushStorageData: vi.fn() },
     navigationHistory: { clear: vi.fn() },
     on: vi.fn((_event: string, _handler: (...args: unknown[]) => void) => {}),
     once: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
@@ -169,12 +169,14 @@ describe("ProjectViewManager — GC on deactivate", () => {
     expect(initialWc.session.flushStorageData).toHaveBeenCalledOnce();
   });
 
-  it("does not throw when flushStorageData rejects", async () => {
-    initialWc.session.flushStorageData.mockRejectedValue(new Error("session gone"));
+  it("does not throw when flushStorageData throws", async () => {
+    initialWc.session.flushStorageData.mockImplementation(() => {
+      throw new Error("session gone");
+    });
 
     await expect(manager.switchTo("proj-b", "/path/b")).resolves.toBeDefined();
     expect(initialWc.session.flushStorageData).toHaveBeenCalledOnce();
-    // navigationHistory.clear should still fire despite flushStorageData rejection
+    // navigationHistory.clear should still fire despite flushStorageData throwing
     expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
   });
 

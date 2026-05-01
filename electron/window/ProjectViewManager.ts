@@ -362,9 +362,13 @@ export class ProjectViewManager {
       }
       current.view.webContents.setBackgroundThrottling(true);
 
-      // Flush pending DOMStorage writes (fire-and-forget — view stays alive in
+      // Flush pending DOMStorage writes (synchronous — view stays alive in
       // cache, so data loss is not a concern)
-      current.view.webContents.session.flushStorageData().catch(() => {});
+      try {
+        current.view.webContents.session.flushStorageData();
+      } catch {
+        // Renderer may have torn down between the isDestroyed check and this call
+      }
 
       // Release back-forward history entries to free associated DOM/JS state
       try {

@@ -41,7 +41,7 @@ function createMockWebContents(options?: { autoFinishLoad?: boolean }): MockWebC
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
-    session: { flushStorageData: vi.fn(() => Promise.resolve()) },
+    session: { flushStorageData: vi.fn() },
     navigationHistory: { clear: vi.fn() },
     on: vi.fn((_event: string, _handler: Handler) => undefined),
     once: vi.fn((event: string, handler: Handler) => {
