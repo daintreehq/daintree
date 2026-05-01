@@ -45,6 +45,9 @@ import { tryFleetBroadcastFromEditor } from "@/components/Fleet/fleetEnterBroadc
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { Archive, Loader2 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
@@ -180,6 +183,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return s.stashedEditorStates.has(key);
     });
+    const popStashShortcut = useKeybindingDisplay("terminal.popStash");
     const [value, setValue] = useState(() => getDraftInput(terminalId, projectId));
     const submitAfterCompositionRef = useRef(false);
     const isComposingRef = useRef(false);
@@ -1392,15 +1396,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             </div>
             <div className="flex items-center pr-1.5">
               {hasStash && (
-                <button
-                  type="button"
-                  onClick={handlePopStash}
-                  className="flex items-center justify-center h-5 w-5 rounded-sm text-daintree-accent/55 hover:text-daintree-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
-                  aria-label="Restore stashed input"
-                  title="Restore stashed input (⌘⇧X)"
-                >
-                  <Archive className="h-3.5 w-3.5" />
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={handlePopStash}
+                      className="flex items-center justify-center h-5 w-5 rounded-sm text-daintree-accent/55 hover:text-daintree-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
+                      aria-label="Restore stashed input"
+                    >
+                      <Archive className="h-3.5 w-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {createTooltipContent("Restore stashed input", popStashShortcut)}
+                  </TooltipContent>
+                </Tooltip>
               )}
               <VoiceInputButton
                 panelId={terminalId}

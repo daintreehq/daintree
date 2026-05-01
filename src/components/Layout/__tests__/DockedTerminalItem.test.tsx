@@ -6,9 +6,9 @@ import { resolve } from "path";
 describe("DockedTerminalItem", () => {
   const content = readFileSync(resolve(__dirname, "../DockedTerminalItem.tsx"), "utf-8");
 
-  it("imports useKeybindingDisplay and createTooltipWithShortcut", () => {
+  it("imports useKeybindingDisplay and createTooltipContent", () => {
     expect(content).toContain('import { useKeybindingDisplay } from "@/hooks/useKeybinding"');
-    expect(content).toContain('import { createTooltipWithShortcut } from "@/lib/platform"');
+    expect(content).toContain('import { createTooltipContent } from "@/lib/tooltipShortcut"');
   });
 
   it("calls useKeybindingDisplay with terminal.focusDock", () => {
@@ -17,7 +17,7 @@ describe("DockedTerminalItem", () => {
 
   it("wraps the trigger in a Tooltip with Preview terminal text", () => {
     expect(content).toContain("<Tooltip>");
-    expect(content).toContain('createTooltipWithShortcut("Preview terminal", dockShortcut)');
+    expect(content).toContain('createTooltipContent("Preview terminal", dockShortcut)');
     expect(content).toContain('<TooltipContent side="top">');
   });
 
