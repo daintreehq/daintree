@@ -9,7 +9,6 @@ import {
   type RecordedTransition,
   type ReplayCastOpts,
 } from "./replay/castReplayHarness.js";
-import type { ProcessStateValidator } from "../ActivityMonitor.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_DIR = path.join(__dirname, "fixtures", "activity-monitor");
@@ -119,37 +118,6 @@ describe("ActivityMonitor replay harness", () => {
     // changed in a way that affects the dispose contract.
     const completedCount = recorded.filter((r) => r.state === "completed").length;
     expect(completedCount, formatRecorded(recorded)).toBe(0);
-  });
-
-  it("CPU-high blocks idle until CPU drops past the natural-idle threshold", async () => {
-    // The cast's natural idle (prompt fast-path) would fire at ~4850ms when
-    // quietForMs >= PROMPT_FAST_PATH_MIN_QUIET_MS=3000 and workingHoldUntil
-    // has elapsed. We hold CPU high until 5500ms — past the natural idle —
-    // so any idle before 5500ms proves the CPU gate is working. With the
-    // gate, idle should fire on the first polling cycle after the drop.
-    const cpuSwitchAtMs = 5500;
-    const validator: ProcessStateValidator = {
-      hasActiveChildren: () => true,
-      getDescendantsCpuUsage: () => (Date.now() < cpuSwitchAtMs ? 50 : 0),
-    };
-    const { cast, expected } = fixture("cpu-high-blocks-idle");
-    const expectedFile = loadExpected(expected);
-    const recorded = await replayCast(cast, {
-      agentId: expectedFile.agentId ?? "claude",
-      settleMs: expectedFile.settleMs,
-      pollingMaxBootMs: expectedFile.pollingMaxBootMs,
-      maxWorkingSilenceMs: expectedFile.maxWorkingSilenceMs,
-      idleDebounceMs: expectedFile.idleDebounceMs,
-      processStateValidator: validator,
-    });
-    // No idle event allowed before the CPU drop — proves causation, not coincidence.
-    const earlyIdle = recorded.find((r) => r.state === "idle" && r.replayMs < cpuSwitchAtMs);
-    expect(earlyIdle, formatRecorded(recorded)).toBeUndefined();
-    // After the drop, idle must fire on the next polling cycle.
-    const failures = matchTransitions(recorded, expectedFile.transitions, {
-      toleranceMs: expectedFile.toleranceMs ?? 250,
-    });
-    expect(failures, formatFailures(failures, recorded)).toHaveLength(0);
   });
 
   it("input cast events drive monitor.onInput and trigger busy", async () => {

@@ -73,8 +73,6 @@ function createMockProcessTreeCache(): ProcessTreeCache {
     getChildren: vi.fn().mockReturnValue([]),
     getProcess: vi.fn(),
     hasChildren: vi.fn().mockReturnValue(false),
-    getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
-    hasActiveDescendants: vi.fn().mockReturnValue(false),
     start: vi.fn(),
     stop: vi.fn(),
     onRefresh: vi.fn().mockReturnValue(() => {}),

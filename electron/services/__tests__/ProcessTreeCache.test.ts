@@ -46,34 +46,6 @@ describe("ProcessTreeCache", () => {
     expect(processTree.getChildPids(1)).toEqual([2, 3]);
   });
 
-  it("does not mutate descendant structure when computing cpu usage", () => {
-    const processTree = createSeededCache();
-
-    expect(processTree.getDescendantsCpuUsage(1)).toBeCloseTo(1.8, 6);
-    expect(processTree.getChildPids(1)).toEqual([2, 3]);
-    expect(processTree.getChildPids(2)).toEqual([4]);
-
-    // Repeat call should be stable and return the same value.
-    expect(processTree.getDescendantsCpuUsage(1)).toBeCloseTo(1.8, 6);
-    expect(processTree.getChildPids(1)).toEqual([2, 3]);
-  });
-
-  it("does not mutate child map when checking active descendants", () => {
-    const processTree = createSeededCache();
-
-    expect(processTree.hasActiveDescendants(1, 1.0)).toBe(true);
-    expect(processTree.getChildPids(1)).toEqual([2, 3]);
-    expect(processTree.getChildPids(2)).toEqual([4]);
-
-    expect(processTree.hasActiveDescendants(1, 1.0)).toBe(true);
-  });
-
-  it("returns false for active descendants when none exceed threshold", () => {
-    const processTree = createSeededCache();
-
-    expect(processTree.hasActiveDescendants(1, 2.0)).toBe(false);
-  });
-
   it("returns descendant pids in post-order (deepest first)", () => {
     const processTree = createSeededCache();
     // Tree: 1 -> [2, 3], 2 -> [4]

@@ -84,7 +84,6 @@ const DEFAULT_FRAGMENT_MAX_SPLITS = 4;
 
 const NULL_PROCESS_STATE_VALIDATOR: ProcessStateValidator = {
   hasActiveChildren: () => false,
-  getDescendantsCpuUsage: () => 0,
 };
 
 export function parseCast(filePath: string): ParsedCast {

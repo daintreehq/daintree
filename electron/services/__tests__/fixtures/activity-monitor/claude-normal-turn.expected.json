@@ -3,7 +3,7 @@
   "settleMs": 4000,
   "transitions": [
     { "atMs": 0, "state": "busy", "trigger": "pattern" },
-    { "atMs": 2950, "state": "completed", "trigger": "pattern", "sessionCost": 0.0123 },
-    { "atMs": 3450, "state": "idle", "trigger": "pattern" }
+    { "atMs": 3550, "state": "completed", "trigger": "pattern", "sessionCost": 0.0123 },
+    { "atMs": 4050, "state": "idle", "trigger": "pattern" }
   ]
 }

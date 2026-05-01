@@ -1,9 +1,0 @@
-{"version":2,"width":120,"height":10,"timestamp":1700000000,"title":"cpu-high-blocks-idle"}
-[0.05,"o","Claude Code v2.1.79 (Sonnet 4.6)\r\n"]
-[0.10,"o","> "]
-[0.30,"o","✽ Deliberating… (1s · esc to interrupt)"]
-[0.75,"o","\r✽ Deliberating… (2s · esc to interrupt)"]
-[1.20,"o","\r✽ Deliberating… (3s · esc to interrupt)"]
-[1.65,"o","\r\u001b[2K"]
-[1.70,"o","Reflecting silently — no PTY output for a while.\r\n"]
-[1.85,"o","\r\n> "]

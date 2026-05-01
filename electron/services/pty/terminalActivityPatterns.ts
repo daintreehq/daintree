@@ -135,16 +135,11 @@ export function createProcessStateValidator(
     return undefined;
   }
 
-  const CPU_ACTIVITY_THRESHOLD = 0.5;
   const shellHelperProcesses = new Set(["gitstatus", "gitstatusd", "async", "zsh-async"]);
   const shellProcesses = new Set(["zsh", "bash", "sh", "fish", "powershell", "pwsh", "cmd"]);
 
   return {
     hasActiveChildren: () => {
-      if (processTreeCache.hasActiveDescendants(ptyPid, CPU_ACTIVITY_THRESHOLD)) {
-        return true;
-      }
-
       const children = processTreeCache.getChildren(ptyPid);
       if (children.length === 0) {
         return false;
@@ -158,7 +153,6 @@ export function createProcessStateValidator(
 
       return significantChildren.length > 0;
     },
-    getDescendantsCpuUsage: () => processTreeCache.getDescendantsCpuUsage(ptyPid),
   };
 }
 

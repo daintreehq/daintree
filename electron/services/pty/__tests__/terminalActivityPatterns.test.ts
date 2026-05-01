@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ProcessInfo } from "../../ProcessTreeCache.js";
 import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
 import type { AgentDetectionConfig } from "../../../../shared/config/agentRegistry.js";
@@ -9,17 +9,12 @@ import {
   UNIVERSAL_APPROVAL_HINT_PATTERNS,
 } from "../terminalActivityPatterns.js";
 
-function createMockProcessTreeCache(
-  childrenByPid: Map<number, ProcessInfo[]>,
-  activeDescendants: boolean = false
-): ProcessTreeCache {
+function createMockProcessTreeCache(childrenByPid: Map<number, ProcessInfo[]>): ProcessTreeCache {
   return {
     getChildren: (ppid: number) => childrenByPid.get(ppid) ?? [],
     getChildPids: (ppid: number) => (childrenByPid.get(ppid) ?? []).map((c) => c.pid),
-    hasActiveDescendants: vi.fn(() => activeDescendants),
     getProcess: () => undefined,
     hasChildren: (ppid: number) => (childrenByPid.get(ppid) ?? []).length > 0,
-    getDescendantsCpuUsage: () => 0,
     getLastRefreshTime: () => Date.now(),
     getLastError: () => null,
     getCacheSize: () => 0,
@@ -36,14 +31,7 @@ describe("createProcessStateValidator", () => {
     expect(createProcessStateValidator(1, null)).toBeUndefined();
   });
 
-  it("returns true when hasActiveDescendants reports activity", () => {
-    const cache = createMockProcessTreeCache(new Map(), true);
-    const validator = createProcessStateValidator(42, cache)!;
-    expect(validator.hasActiveChildren()).toBe(true);
-    expect(cache.hasActiveDescendants).toHaveBeenCalledWith(42, 0.5);
-  });
-
-  it("returns false when no children exist and no CPU activity", () => {
+  it("returns false when no children exist", () => {
     const cache = createMockProcessTreeCache(new Map([[1, []]]));
     const validator = createProcessStateValidator(1, cache)!;
     expect(validator.hasActiveChildren()).toBe(false);
