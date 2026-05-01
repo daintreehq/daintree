@@ -69,3 +69,29 @@ export function detectUnresolvedVariables(text: string, context: RecipeContext):
 export function getAvailableVariables(): { name: string; description: string }[] {
   return [...VARIABLE_DEFINITIONS];
 }
+
+const KNOWN_VARIABLE_NAMES = VARIABLE_DEFINITIONS.map((d) => d.name);
+const KNOWN_VARIABLE_PATTERN = new RegExp(`\\{\\{(${KNOWN_VARIABLE_NAMES.join("|")})\\}\\}`, "gi");
+
+export function hasRecipeVariables(text: string): boolean {
+  KNOWN_VARIABLE_PATTERN.lastIndex = 0;
+  return KNOWN_VARIABLE_PATTERN.test(text);
+}
+
+export function splitByRecipeVariables(text: string): Array<{ text: string; isVar: boolean }> {
+  const parts: Array<{ text: string; isVar: boolean }> = [];
+  const pattern = new RegExp(KNOWN_VARIABLE_PATTERN.source, KNOWN_VARIABLE_PATTERN.flags);
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ text: text.slice(lastIndex, match.index), isVar: false });
+    }
+    parts.push({ text: match[0], isVar: true });
+    lastIndex = pattern.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    parts.push({ text: text.slice(lastIndex), isVar: false });
+  }
+  return parts;
+}

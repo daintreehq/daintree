@@ -42,6 +42,7 @@ import { usePanelStore, useVoiceRecordingStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { tryFleetBroadcastFromEditor } from "@/components/Fleet/fleetEnterBroadcast";
+import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { Archive, Loader2 } from "lucide-react";
@@ -377,6 +378,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (otherId === terminalId) continue;
         setDraft(otherId, value, projectId);
       }
+      useFleetResolutionPreviewStore.getState().setDraft(value);
     }, [isFleetPrimary, value, armedIds, terminalId, projectId]);
 
     // Follower ← primary: when our own draft slot is updated externally
@@ -401,6 +403,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         });
       }
     }, [externalDraft, isFleetFollower, value]);
+
+    useEffect(() => {
+      if (!isFleetPrimary || disabled) {
+        useFleetResolutionPreviewStore.getState().clear();
+      }
+    }, [isFleetPrimary, disabled]);
 
     const placeholder = useMemo(() => {
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;

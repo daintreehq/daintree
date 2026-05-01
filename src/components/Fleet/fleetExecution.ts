@@ -45,9 +45,9 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
     const panel: any = panelsById[id];
 
     if (isTerminalFleetEligible(panel)) {
-      const ctx = buildFleetBroadcastRecipeContext(id);
-      const resolved = ctx ? replaceRecipeVariables(draft, ctx) : draft;
-      const unresolvedVars = ctx ? detectUnresolved(draft, ctx) : [];
+      const ctx = buildFleetBroadcastRecipeContext(id) ?? {};
+      const resolved = replaceRecipeVariables(draft, ctx);
+      const unresolvedVars = detectUnresolved(draft, ctx);
 
       previews.push({
         terminalId: id,
