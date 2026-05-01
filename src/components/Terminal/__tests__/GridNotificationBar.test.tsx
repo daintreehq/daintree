@@ -5,11 +5,13 @@ import { useNotificationStore } from "@/store/notificationStore";
 import { BANNER_ENTER_DURATION, BANNER_EXIT_DURATION } from "@/lib/animationUtils";
 import { GridNotificationBar } from "../GridNotificationBar";
 
-vi.stubGlobal(
-  "requestAnimationFrame",
-  (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number
+vi.stubGlobal("requestAnimationFrame", ((cb: FrameRequestCallback): number => {
+  const timeoutId = setTimeout(() => cb(0), 0);
+  return timeoutId as unknown as number;
+}) satisfies typeof requestAnimationFrame);
+vi.stubGlobal("cancelAnimationFrame", (id: number) =>
+  clearTimeout(id as unknown as NodeJS.Timeout)
 );
-vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
 
 function addGridBar(overrides: Record<string, unknown> = {}): string {
   return useNotificationStore.getState().addNotification({
@@ -68,9 +70,11 @@ describe("GridNotificationBar animation", () => {
       vi.advanceTimersByTime(16);
     });
 
-    const wrapper = getWrapper(container) as HTMLElement;
-    expect(wrapper.style.transitionDuration).toBe(`${BANNER_ENTER_DURATION}ms`);
-    expect(wrapper.className).toContain("ease-[var(--ease-snappy)]");
+    const wrapper = getWrapper(container);
+    expect(wrapper).not.toBeNull();
+    const wrapperEl = wrapper!;
+    expect(wrapperEl.style.transitionDuration).toBe(`${BANNER_ENTER_DURATION}ms`);
+    expect(wrapperEl.className).toContain("ease-[var(--ease-snappy)]");
   });
 
   it("collapses and unmounts content after the exit window", () => {
@@ -87,12 +91,13 @@ describe("GridNotificationBar animation", () => {
     });
 
     // Mid-exit: still mounted, collapsed, exit easing applied.
-    const exiting = getWrapper(container) as HTMLElement;
+    const exiting = getWrapper(container);
     expect(exiting).not.toBeNull();
-    expect(exiting.className).toContain("h-0");
-    expect(exiting.className).toContain("opacity-0");
-    expect(exiting.className).toContain("ease-[var(--ease-exit)]");
-    expect(exiting.style.transitionDuration).toBe(`${BANNER_EXIT_DURATION}ms`);
+    const exitingEl = exiting!;
+    expect(exitingEl.className).toContain("h-0");
+    expect(exitingEl.className).toContain("opacity-0");
+    expect(exitingEl.className).toContain("ease-[var(--ease-exit)]");
+    expect(exitingEl.style.transitionDuration).toBe(`${BANNER_EXIT_DURATION}ms`);
 
     // After exit window: fully unmounted.
     act(() => {
