@@ -11,6 +11,10 @@
  *   4. Main-process emergency crash log (`emergencyLogMainFatal`)
  *   5. Pty-host emergency crash log (`emergencyLogFatal`)
  *   6. IPC error envelope (`sanitizeErrorForRenderer` in setup/security.ts)
+ *   7. WorktreeLifecycleService tail-output scrub before renderer
+ *   8. AgentInstallService progress stdout/stderr scrubbing
+ *   9. AgentHelpService command output scrubbing
+ *  10. AgentVersionService error-message scrubbing
  *
  * All patterns use bounded quantifiers for ReDoS safety. See the
  * `secretScrubber.test.ts` sibling for the `safe-regex2` assertion that
@@ -67,7 +71,14 @@ export const PATTERNS: readonly SecretPattern[] = [
     name: "openai-project-key",
     // MUST precede `openai-api-key` so the shorter `sk-` prefix doesn't
     // greedily consume `sk-proj-`/`sk-svcacct-` and leave the body unredacted.
-    regex: /\bsk-(?:proj|svcacct)-[A-Za-z0-9_-]{100,256}\b/g,
+    regex: /\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{100,256}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "openrouter-api-key",
+    // MUST precede `openai-api-key` so the generic `sk-` prefix doesn't
+    // greedily consume `sk-or-v1-` and leave the body unredacted.
+    regex: /\bsk-or-v1-[0-9a-f]{55,70}\b/g,
     replacement: REDACTED,
   },
   {
@@ -86,8 +97,27 @@ export const PATTERNS: readonly SecretPattern[] = [
     replacement: REDACTED,
   },
   {
+    name: "slack-access-token",
+    // MUST precede `slack-refresh-token` (more-specific `xoxe.xox[bp]-`
+    // before broader `xoxe-`) AND `slack-token` (`xox[abprs]-` would
+    // greedily consume `xox[bp]-` from `xoxe.xox[bp]-` tokens).
+    regex: /\bxoxe\.xox[bp]-[A-Za-z0-9-]{160,180}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "slack-refresh-token",
+    regex: /\bxoxe-[A-Z0-9-]{140,150}\b/g,
+    replacement: REDACTED,
+  },
+  {
     name: "slack-token",
     regex: /\bxox[abprs]-[A-Za-z0-9-]{10,255}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "slack-app-token",
+    // `xapp-` covers Socket Mode and Audit Logs API tokens (post-Dec-2020).
+    regex: /\bxapp-[A-Za-z0-9-]{90,140}\b/g,
     replacement: REDACTED,
   },
   {
@@ -97,7 +127,8 @@ export const PATTERNS: readonly SecretPattern[] = [
   },
   {
     name: "aws-access-key-id",
-    regex: /\bAKIA[0-9A-Z]{16}\b/g,
+    // Covers AKIA (IAM long-term), ASIA (STS short-term), and ABIA (STS variant).
+    regex: /\bA[SKB]IA[0-9A-Z]{16}\b/g,
     replacement: REDACTED,
   },
   {
@@ -141,6 +172,38 @@ export const PATTERNS: readonly SecretPattern[] = [
   {
     name: "supabase-key",
     regex: /\bsb_(?:publishable|secret)_[A-Za-z0-9_]{32,64}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "replicate-api-token",
+    regex: /\br8_[A-Za-z0-9]{35,40}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "huggingface-api-token",
+    regex: /\bhf_[A-Za-z0-9]{25,40}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "groq-api-key",
+    regex: /\bgsk_[A-Za-z0-9]{40,64}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "linear-api-key",
+    regex: /\blin_api_[A-Za-z0-9]{35,45}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "notion-api-key",
+    regex: /\bntn_[A-Za-z0-9]{40,55}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "sendgrid-api-key",
+    // Three-segment format: `SG.{22-char ID}.{43-char secret}`. No trailing
+    // `\b` because the final segment can end with `-` (non-word char).
+    regex: /\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}/g,
     replacement: REDACTED,
   },
   {
@@ -208,7 +271,7 @@ export const PATTERNS: readonly SecretPattern[] = [
     // and the listed key names exclude `MAX_TOKENS` / `TOTAL_TOKENS` / request-id
     // shapes by construction.
     regex:
-      /\b(?:api_key|api_secret|access_key|secret_key|private_key|auth_token|auth_secret|client_secret|app_secret|app_key)[ \t]{0,4}=[ \t]{0,4}[A-Za-z0-9/+_-]{16,512}/gi,
+      /\b(?:api_key|api_secret|access_key|secret_key|private_key|auth_token|auth_secret|client_secret|app_secret|app_key|slack_signing_secret)[ \t]{0,4}=[ \t]{0,4}[A-Za-z0-9/+_-]{16,512}/gi,
     replacement: REDACTED,
   },
 ];
