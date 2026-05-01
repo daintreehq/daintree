@@ -16,6 +16,12 @@ export interface SerializedError {
    * recovery UI without relying on substring-matching the message.
    */
   gitReason?: GitOperationReason;
+  /**
+   * Correlation ID linking this error across main-process logs, Sentry, and
+   * the renderer error envelope. Set post-hoc in `security.ts` after
+   * serialization so the field survives the packaged-build strip.
+   */
+  correlationId?: string;
   errno?: number;
   syscall?: string;
   path?: string;

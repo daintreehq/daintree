@@ -283,6 +283,25 @@ describe("round-trip serialization", () => {
     expect(restored.code).toBe("BINARY_FILE");
     expect(restored.userMessage).toBe("This file can't be displayed.");
   });
+
+  it("round-trips a post-hoc correlationId via serialize -> structuredClone -> deserialize", () => {
+    // Simulates the security.ts injection path: serializeError() runs first,
+    // then correlationId is set post-hoc on the serialized object. The field
+    // is NOT a property of the original error — it's added by main-process
+    // code after serialization.
+    const original = new Error("something failed");
+    const serialized = serializeError(original);
+    expect(serialized.correlationId).toBeUndefined();
+
+    // Post-hoc injection (as security.ts does)
+    serialized.correlationId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
+    const cloned = structuredClone(serialized);
+    const restored = deserializeError(cloned) as Error & { correlationId: string };
+
+    expect(restored.message).toBe("something failed");
+    expect(restored.correlationId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+  });
 });
 
 describe("wrapSuccess", () => {

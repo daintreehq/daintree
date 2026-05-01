@@ -76,6 +76,10 @@ vi.mock("../../../shared/utils/trustedRenderer.js", () => ({
   isTrustedRendererUrl: vi.fn(() => true),
 }));
 
+vi.mock("../../services/TelemetryService.js", () => ({
+  getCurrentCorrelationId: vi.fn(() => "test-correlation-id"),
+}));
+
 import {
   setupPermissionLockdown,
   enforceIpcSenderValidation,
@@ -569,6 +573,148 @@ describe("enforceIpcSenderValidation", () => {
     expect(envelope.error.message).not.toContain(githubPat);
     expect(envelope.error.userMessage).toContain("[REDACTED]");
     expect(envelope.error.userMessage).not.toContain(anthropicKey);
+
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it("injects correlationId into packaged-build handle error envelope", async () => {
+    appMock.isPackaged = true;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const originalHandle = ipcMainMock.handle;
+    enforceIpcSenderValidation();
+
+    const failingHandler = () => {
+      throw new Error("oops");
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ipcMainMock.handle("test:channel", failingHandler as any);
+
+    const lastCall = originalHandle.mock.calls[originalHandle.mock.calls.length - 1];
+    const wrappedListener = lastCall[1] as (event: unknown, ...args: unknown[]) => Promise<unknown>;
+    const fakeEvent = { senderFrame: { url: "http://localhost:3000" } };
+    const envelope = (await wrappedListener(fakeEvent)) as {
+      ok: false;
+      error: { message: string; correlationId?: string };
+    };
+
+    expect(envelope.ok).toBe(false);
+    expect(envelope.error.correlationId).toBe("test-correlation-id");
+
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it("injects correlationId into packaged-build handleOnce error envelope", async () => {
+    appMock.isPackaged = true;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const originalHandleOnce = ipcMainMock.handleOnce;
+    enforceIpcSenderValidation();
+
+    const failingHandler = () => {
+      throw new Error("one-shot error");
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ipcMainMock.handleOnce("test:once-channel", failingHandler as any);
+
+    const lastCall = originalHandleOnce.mock.calls[originalHandleOnce.mock.calls.length - 1];
+    const wrappedListener = lastCall[1] as (event: unknown, ...args: unknown[]) => Promise<unknown>;
+    const fakeEvent = { senderFrame: { url: "http://localhost:3000" } };
+    const envelope = (await wrappedListener(fakeEvent)) as {
+      ok: false;
+      error: { message: string; correlationId?: string };
+    };
+
+    expect(envelope.ok).toBe(false);
+    expect(envelope.error.correlationId).toBe("test-correlation-id");
+
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it("omits correlationId when getCurrentCorrelationId returns undefined", async () => {
+    appMock.isPackaged = true;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // Arrange: simulate dev / unconfigured — getCurrentCorrelationId returns undefined
+    const { getCurrentCorrelationId } = await import("../../services/TelemetryService.js");
+    (getCurrentCorrelationId as ReturnType<typeof vi.fn>).mockReturnValueOnce(undefined);
+
+    const originalHandle = ipcMainMock.handle;
+    enforceIpcSenderValidation();
+
+    const failingHandler = () => {
+      throw new Error("oops");
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ipcMainMock.handle("test:channel", failingHandler as any);
+
+    const lastCall = originalHandle.mock.calls[originalHandle.mock.calls.length - 1];
+    const wrappedListener = lastCall[1] as (event: unknown, ...args: unknown[]) => Promise<unknown>;
+    const fakeEvent = { senderFrame: { url: "http://localhost:3000" } };
+    const envelope = (await wrappedListener(fakeEvent)) as {
+      ok: false;
+      error: { message: string; correlationId?: string };
+    };
+
+    expect(envelope.ok).toBe(false);
+    expect(envelope.error.correlationId).toBeUndefined();
+
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it("strips sensitive fields while preserving correlationId in packaged builds", async () => {
+    appMock.isPackaged = true;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const originalHandle = ipcMainMock.handle;
+    enforceIpcSenderValidation();
+
+    const failingHandler = () => {
+      const err = Object.assign(new Error("sensitive"), {
+        path: "/Users/alice/secrets/keys.env",
+        context: { secret: "value" },
+        cause: new Error("nested secret"),
+        stack: "Error: sensitive\n    at sensitive.ts:1:1",
+        customProperty: "should be stripped",
+      });
+      throw err;
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ipcMainMock.handle("test:channel", failingHandler as any);
+
+    const lastCall = originalHandle.mock.calls[originalHandle.mock.calls.length - 1];
+    const wrappedListener = lastCall[1] as (event: unknown, ...args: unknown[]) => Promise<unknown>;
+    const fakeEvent = { senderFrame: { url: "http://localhost:3000" } };
+    const envelope = (await wrappedListener(fakeEvent)) as {
+      ok: false;
+      error: {
+        message: string;
+        correlationId?: string;
+        stack?: string;
+        path?: string;
+        context?: Record<string, unknown>;
+        cause?: unknown;
+        properties?: Record<string, unknown>;
+      };
+    };
+
+    expect(envelope.ok).toBe(false);
+    // correlationId survives
+    expect(envelope.error.correlationId).toBe("test-correlation-id");
+    // sensitive fields stripped
+    expect(envelope.error.stack).toBeUndefined();
+    expect(envelope.error.path).toBeUndefined();
+    expect(envelope.error.context).toBeUndefined();
+    expect(envelope.error.cause).toBeUndefined();
+    expect(envelope.error.properties).toBeUndefined();
 
     logSpy.mockRestore();
     errSpy.mockRestore();

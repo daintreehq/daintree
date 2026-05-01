@@ -12,6 +12,7 @@ import { markIpcSecurityReady } from "../ipc/ipcGuard.js";
 import { channelToCategory, type IpcChannelCategory } from "../ipc/utils.js";
 import { AppError } from "../utils/errorTypes.js";
 import { scrubSecrets } from "../utils/secretScrubber.js";
+import { getCurrentCorrelationId } from "../services/TelemetryService.js";
 
 /**
  * Coarse cap on the number of arguments a renderer may pass to a handler in a
@@ -158,8 +159,12 @@ export function enforceIpcSenderValidation(): void {
         return wrapSuccess(result);
       } catch (error) {
         if (app.isPackaged) {
-          console.error(`[IPC] Error on channel ${channel}:`, error);
+          const correlationId = getCurrentCorrelationId();
+          console.error(`[IPC] Error on channel ${channel} [${correlationId}]:`, error);
           const serialized = serializeError(error);
+          if (correlationId !== undefined) {
+            serialized.correlationId = correlationId;
+          }
           serialized.message = sanitizeErrorForRenderer(serialized.message);
           if (typeof serialized.userMessage === "string") {
             serialized.userMessage = sanitizeErrorForRenderer(serialized.userMessage);
@@ -197,8 +202,12 @@ export function enforceIpcSenderValidation(): void {
           return wrapSuccess(result);
         } catch (error) {
           if (app.isPackaged) {
-            console.error(`[IPC] Error on channel ${channel}:`, error);
+            const correlationId = getCurrentCorrelationId();
+            console.error(`[IPC] Error on channel ${channel} [${correlationId}]:`, error);
             const serialized = serializeError(error);
+            if (correlationId !== undefined) {
+              serialized.correlationId = correlationId;
+            }
             serialized.message = sanitizeErrorForRenderer(serialized.message);
             if (typeof serialized.userMessage === "string") {
               serialized.userMessage = sanitizeErrorForRenderer(serialized.userMessage);

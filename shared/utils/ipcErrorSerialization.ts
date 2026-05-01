@@ -83,6 +83,9 @@ export function deserializeError(serialized: SerializedError): Error {
   if (serialized.gitReason !== undefined) {
     (error as unknown as Record<string, unknown>).gitReason = serialized.gitReason;
   }
+  if (serialized.correlationId !== undefined) {
+    (error as unknown as Record<string, unknown>).correlationId = serialized.correlationId;
+  }
   if (serialized.errno !== undefined) (error as NodeJS.ErrnoException).errno = serialized.errno;
   if (serialized.syscall !== undefined)
     (error as NodeJS.ErrnoException).syscall = serialized.syscall;

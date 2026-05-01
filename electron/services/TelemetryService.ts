@@ -240,6 +240,17 @@ export function isTelemetryEnabled(): boolean {
   return getTelemetryLevel() !== "off";
 }
 
+/**
+ * Returns a UUID for correlating main-process errors with renderer error
+ * envelopes. Only emits in packaged builds where Sentry has been initialized
+ * — in dev or when the Sentry module was never loaded, returns `undefined`
+ * so no orphan UUID ends up on the wire.
+ */
+export function getCurrentCorrelationId(): string | undefined {
+  if (!app.isPackaged || sentryModule === null) return undefined;
+  return randomUUID();
+}
+
 export async function setTelemetryLevel(level: TelemetryLevel): Promise<void> {
   store.set("privacy.telemetryLevel", level);
 
