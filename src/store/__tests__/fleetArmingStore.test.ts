@@ -336,14 +336,47 @@ describe("fleetArmingStore", () => {
       expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
     });
 
-    it("replaces the existing armed set rather than merging", () => {
+    it("replaces the existing armed set when armed set is empty", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
+        makeAgentTerminal("a2", { worktreeId: "wt-2" }),
+      ]);
+      // Armed set starts empty — armMatchingFilter replaces it with matches
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
+    });
+
+    it("unions with existing armed set when non-empty", () => {
       seedPanels([
         makeAgentTerminal("a1", { worktreeId: "wt-1" }),
         makeAgentTerminal("a2", { worktreeId: "wt-2" }),
       ]);
       useFleetArmingStore.getState().armIds(["a2"]);
+      // Non-empty armed set → armMatchingFilter adds matches without removing existing
       useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
-      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
+      const s = useFleetArmingStore.getState();
+      expect([...s.armedIds].sort()).toEqual(["a1", "a2"]);
+      // Existing armed entries keep their position; new ones are appended
+      expect(s.armOrder).toEqual(["a2", "a1"]);
+    });
+
+    it("no-op when all filter matches are already armed (additive path)", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
+        makeAgentTerminal("a2", { worktreeId: "wt-1" }),
+        makeAgentTerminal("a3", { worktreeId: "wt-2" }),
+      ]);
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
+      // Add a3 from wt-2 — additive since a1,a2 are already armed
+      useFleetArmingStore.getState().armMatchingFilter(["wt-2"]);
+      // Now a1,a2,a3 are all armed. Call armMatchingFilter with wt-1 — a1 and a2
+      // are already armed, so the additive path should be a no-op.
+      const preState = useFleetArmingStore.getState();
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
+      const postState = useFleetArmingStore.getState();
+      expect(postState.armOrder).toEqual(preState.armOrder);
+      expect(postState.armOrderById).toEqual(preState.armOrderById);
+      expect(postState.lastArmedId).toBe(preState.lastArmedId);
     });
 
     it("preserves panel iteration order, not worktreeIds input order", () => {

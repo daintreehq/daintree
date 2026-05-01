@@ -234,7 +234,29 @@ export const useFleetArmingStore = create<FleetArmingState>()((set, get) => ({
     // worktrees match the filter; clicking it must not destroy the user's
     // prior selection when the filtered subset has no arm-eligible terminals.
     if (ids.length === 0) return;
-    get().armIds(ids);
+    if (get().armedIds.size === 0) {
+      get().armIds(ids);
+    } else {
+      set((s) => {
+        const nextArmed = new Set(s.armedIds);
+        const nextOrder = [...s.armOrder];
+        let lastAdded: string | null = null;
+        for (const id of ids) {
+          if (!nextArmed.has(id)) {
+            nextArmed.add(id);
+            nextOrder.push(id);
+            lastAdded = id;
+          }
+        }
+        if (lastAdded === null) return {};
+        return {
+          armedIds: nextArmed,
+          armOrder: nextOrder,
+          armOrderById: rebuildOrderById(nextOrder),
+          lastArmedId: lastAdded,
+        };
+      });
+    }
   },
 
   clear: () =>

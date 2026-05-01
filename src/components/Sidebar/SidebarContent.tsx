@@ -39,6 +39,7 @@ import {
 } from "@/components/DragDrop/SortableWorktreeCard";
 import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useShallow } from "zustand/react/shallow";
 import type { RecipeTerminal } from "@/types";
 import { systemClient } from "@/clients";
@@ -381,6 +382,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const [isFleetArmingDialogOpen, setIsFleetArmingDialogOpen] = useState(false);
   const openFleetArmingDialog = useCallback(() => setIsFleetArmingDialogOpen(true), []);
   const closeFleetArmingDialog = useCallback(() => setIsFleetArmingDialogOpen(false), []);
+  const armedSize = useFleetArmingStore((s) => s.armedIds.size);
 
   // Filter/sort state - destructured for stable memoization
   const {
@@ -1133,14 +1135,22 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   )
                 }
                 className="w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1 text-text-secondary hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
-                aria-label={`Arm ${filteredWorktrees.length} matching worktrees`}
+                aria-label={
+                  armedSize > 0
+                    ? `Arm ${filteredWorktrees.length} more matching worktrees`
+                    : `Arm ${filteredWorktrees.length} matching worktrees`
+                }
               >
                 <Zap className="w-3 h-3" />
-                Arm {filteredWorktrees.length} matching
+                {armedSize > 0
+                  ? `Arm ${filteredWorktrees.length} more matching`
+                  : `Arm ${filteredWorktrees.length} matching`}
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              Arm all eligible terminals in the {filteredWorktrees.length} worktrees visible below
+              {armedSize > 0
+                ? `Add eligible terminals in the ${filteredWorktrees.length} worktrees visible below to the existing armed selection`
+                : `Arm all eligible terminals in the ${filteredWorktrees.length} worktrees visible below`}
             </TooltipContent>
           </Tooltip>
         </div>
