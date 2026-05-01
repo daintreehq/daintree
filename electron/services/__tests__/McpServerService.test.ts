@@ -231,10 +231,16 @@ async function connectClient(
   port: number,
   headers?: Record<string, string>
 ): Promise<{ client: Client; transport: SSEClientTransport }> {
+  const apiKey = storeState.mcpServer.apiKey;
+  const mergedHeaders: Record<string, string> = {
+    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+    ...(headers ?? {}),
+  };
+  const hasHeaders = Object.keys(mergedHeaders).length > 0;
   const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
   const transport = new SSEClientTransport(new URL(`http://127.0.0.1:${port}/sse`), {
-    eventSourceInit: headers ? ({ headers } as never) : undefined,
-    requestInit: headers ? { headers } : undefined,
+    eventSourceInit: hasHeaders ? ({ headers: mergedHeaders } as never) : undefined,
+    requestInit: hasHeaders ? { headers: mergedHeaders } : undefined,
   });
   await client.connect(transport);
   return { client, transport };
@@ -520,14 +526,19 @@ describe("McpServerService", () => {
     const initial = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
       mcpServers: Record<string, { headers?: { Authorization: string } }>;
     };
-    expect(initial.mcpServers.daintree.headers).toBeUndefined();
+    const initialKey = storeState.mcpServer.apiKey;
+    expect(initialKey).toMatch(/^daintree_[a-f0-9]+$/);
+    expect(initial.mcpServers.daintree.headers).toEqual({
+      Authorization: `Bearer ${initialKey}`,
+    });
 
-    const generatedKey = await service.generateApiKey();
-    const generated = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
+    const rotatedKey = await service.generateApiKey();
+    expect(rotatedKey).not.toBe(initialKey);
+    const rotated = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
       mcpServers: Record<string, { headers?: { Authorization: string } }>;
     };
-    expect(generated.mcpServers.daintree.headers).toEqual({
-      Authorization: `Bearer ${generatedKey}`,
+    expect(rotated.mcpServers.daintree.headers).toEqual({
+      Authorization: `Bearer ${rotatedKey}`,
     });
 
     await service.setApiKey("");
@@ -535,6 +546,194 @@ describe("McpServerService", () => {
       mcpServers: Record<string, { headers?: { Authorization: string } }>;
     };
     expect(cleared.mcpServers.daintree.headers).toBeUndefined();
+  });
+
+  it("auto-generates a bearer token on first start and persists it across restarts", async () => {
+    const { window } = createMockWindow();
+
+    expect(storeState.mcpServer.apiKey).toBe("");
+
+    await service.start(window);
+    const generatedKey = storeState.mcpServer.apiKey;
+    expect(generatedKey).toMatch(/^daintree_[a-f0-9]+$/);
+
+    await service.stop();
+
+    await service.start(window);
+    expect(storeState.mcpServer.apiKey).toBe(generatedKey);
+  });
+
+  it("rejects requests with a non-loopback Origin header", async () => {
+    const { window } = createMockWindow();
+    await service.start(window);
+
+    const evil = await requestSse(service.currentPort!, {
+      Authorization: `Bearer ${storeState.mcpServer.apiKey}`,
+      Origin: "https://evil.example",
+    });
+    expect(evil.status).toBe(403);
+    expect(evil.body).toBe("Forbidden");
+  });
+
+  it("accepts absent and loopback Origin headers on the SSE GET", async () => {
+    const { window } = createMockWindow();
+    await service.start(window);
+
+    const port = service.currentPort!;
+    const auth = `Bearer ${storeState.mcpServer.apiKey}`;
+
+    // Helper that aborts the SSE GET as soon as the response status is known.
+    const peekStatus = async (extraHeaders: Record<string, string>): Promise<number> =>
+      new Promise((resolve, reject) => {
+        const req = http.request(
+          {
+            host: "127.0.0.1",
+            port,
+            path: "/sse",
+            method: "GET",
+            headers: { Authorization: auth, ...extraHeaders },
+          },
+          (res) => {
+            const status = res.statusCode ?? 0;
+            req.destroy();
+            resolve(status);
+          }
+        );
+        req.on("error", (err: NodeJS.ErrnoException) => {
+          if (err.code === "ECONNRESET") return;
+          reject(err);
+        });
+        req.end();
+      });
+
+    expect(await peekStatus({})).toBe(200);
+    expect(await peekStatus({ Origin: `http://127.0.0.1:${port}` })).toBe(200);
+    expect(await peekStatus({ Origin: `http://localhost:${port}` })).toBe(200);
+  });
+
+  it("uses constant-time comparison that does not short-circuit on length mismatch", async () => {
+    storeState.mcpServer.apiKey = "secret";
+    const { window } = createMockWindow();
+    await service.start(window);
+
+    const wrongShort = await requestSse(service.currentPort!, {
+      Authorization: "Bearer x",
+    });
+    const wrongLong = await requestSse(service.currentPort!, {
+      Authorization: `Bearer ${"x".repeat(1024)}`,
+    });
+    const correct = await requestSse(service.currentPort!, {
+      Authorization: "Bearer wrong-but-same-length-ish",
+    });
+
+    expect(wrongShort.status).toBe(401);
+    expect(wrongLong.status).toBe(401);
+    expect(correct.status).toBe(401);
+  });
+
+  it("sets POSIX 0700/0600 mode on the discovery directory and file", async () => {
+    if (process.platform === "win32") return;
+
+    const chmodSpy = vi.spyOn(fs, "chmod");
+    const { window } = createMockWindow();
+    const discoveryDir = path.join(testHomeDir, ".daintree");
+    const discoveryFile = path.join(discoveryDir, "mcp.json");
+
+    await service.start(window);
+
+    expect(chmodSpy).toHaveBeenCalledWith(discoveryDir, 0o700);
+    expect(chmodSpy).toHaveBeenCalledWith(discoveryFile, 0o600);
+
+    const dirStat = await fs.stat(discoveryDir);
+    const fileStat = await fs.stat(discoveryFile);
+    expect(dirStat.mode & 0o777).toBe(0o700);
+    expect(fileStat.mode & 0o777).toBe(0o600);
+
+    chmodSpy.mockRestore();
+  });
+
+  it("closes idle SSE sessions after the application-level timeout", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { window } = createMockWindow();
+      await service.start(window);
+
+      const sessions = (
+        service as unknown as {
+          sessions: Map<string, { transport: { close: () => Promise<void> } }>;
+        }
+      ).sessions;
+
+      const transport = {
+        sessionId: "test-session",
+        close: vi.fn(async () => {}),
+      };
+      const createIdleTimer = (
+        service as unknown as {
+          createIdleTimer: (sessionId: string) => ReturnType<typeof setTimeout>;
+        }
+      ).createIdleTimer.bind(service);
+
+      const idleTimer = createIdleTimer("test-session");
+      sessions.set("test-session", { transport, idleTimer } as never);
+
+      expect(sessions.has("test-session")).toBe(true);
+
+      vi.advanceTimersByTime(30 * 60 * 1000 + 1);
+
+      expect(sessions.has("test-session")).toBe(false);
+      expect(transport.close).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets the idle timer on incoming POST traffic", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { window } = createMockWindow();
+      await service.start(window);
+
+      const sessions = (
+        service as unknown as {
+          sessions: Map<string, { transport: { close: () => Promise<void> } }>;
+        }
+      ).sessions;
+
+      const transport = {
+        sessionId: "active-session",
+        close: vi.fn(async () => {}),
+      };
+      const createIdleTimer = (
+        service as unknown as {
+          createIdleTimer: (sessionId: string) => ReturnType<typeof setTimeout>;
+        }
+      ).createIdleTimer.bind(service);
+      const resetIdleTimer = (
+        service as unknown as { resetIdleTimer: (sessionId: string) => void }
+      ).resetIdleTimer.bind(service);
+
+      sessions.set("active-session", {
+        transport,
+        idleTimer: createIdleTimer("active-session"),
+      } as never);
+
+      // Just before timeout: keep alive via a POST.
+      vi.advanceTimersByTime(29 * 60 * 1000);
+      resetIdleTimer("active-session");
+
+      // After original timeout would have fired — session should still exist.
+      vi.advanceTimersByTime(2 * 60 * 1000);
+      expect(sessions.has("active-session")).toBe(true);
+      expect(transport.close).not.toHaveBeenCalled();
+
+      // Now let the new timer expire.
+      vi.advanceTimersByTime(30 * 60 * 1000);
+      expect(sessions.has("active-session")).toBe(false);
+      expect(transport.close).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects unauthorized requests and invalid host headers", async () => {

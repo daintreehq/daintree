@@ -2,7 +2,7 @@ import { ipcMain } from "electron";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import http from "node:http";
 import net from "node:net";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -22,6 +22,7 @@ const MCP_SERVER_KEY = "daintree";
 
 const DEFAULT_PORT = 45454;
 const MAX_PORT_RETRIES = 10;
+const MCP_SSE_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 const OPEN_WORLD_CATEGORIES: ReadonlySet<string> = new Set([
   "browser",
@@ -116,6 +117,11 @@ interface PendingRequest<T> {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface McpSseSession {
+  transport: SSEServerTransport;
+  idleTimer: ReturnType<typeof setTimeout>;
+}
+
 function safeSerializeToolResult(value: unknown): string {
   const seen = new WeakSet<object>();
 
@@ -168,7 +174,7 @@ export class McpServerService {
   private httpServer: http.Server | null = null;
   private port: number | null = null;
   private registry: WindowRegistry | null = null;
-  private sessions = new Map<string, SSEServerTransport>();
+  private sessions = new Map<string, McpSseSession>();
   private pendingManifests = new Map<string, PendingRequest<ActionManifestEntry[]>>();
   private pendingDispatches = new Map<string, PendingRequest<ActionDispatchResult>>();
   private cleanupListeners: Array<() => void> = [];
@@ -259,6 +265,10 @@ export class McpServerService {
       return;
     }
 
+    if (!this.getConfig().apiKey) {
+      await this.generateApiKey();
+    }
+
     this.setupIpcListeners();
 
     const server = http.createServer((req, res) => {
@@ -292,9 +302,10 @@ export class McpServerService {
   }
 
   async stop(): Promise<void> {
-    for (const transport of this.sessions.values()) {
+    for (const session of this.sessions.values()) {
+      clearTimeout(session.idleTimer);
       try {
-        await transport.close();
+        await session.transport.close();
       } catch {
         // ignore close errors during shutdown
       }
@@ -583,7 +594,16 @@ export class McpServerService {
     const apiKey = this.getConfig().apiKey;
     if (!apiKey) return true;
     const auth = req.headers.authorization ?? "";
-    return auth === `Bearer ${apiKey}`;
+    const expected = `Bearer ${apiKey}`;
+    const actualHash = createHash("sha256").update(auth).digest();
+    const expectedHash = createHash("sha256").update(expected).digest();
+    return timingSafeEqual(actualHash, expectedHash);
+  }
+
+  private isValidOrigin(req: http.IncomingMessage): boolean {
+    const origin = req.headers.origin;
+    if (origin === undefined) return true;
+    return origin === `http://127.0.0.1:${this.port}` || origin === `http://localhost:${this.port}`;
   }
 
   private shouldExposeTool(entry: ActionManifestEntry): boolean {
@@ -718,6 +738,12 @@ export class McpServerService {
       return;
     }
 
+    if (!this.isValidOrigin(req)) {
+      res.writeHead(403, { "Content-Type": "text/plain" });
+      res.end("Forbidden");
+      return;
+    }
+
     if (!this.isAuthorized(req)) {
       res.writeHead(401, { "Content-Type": "text/plain" });
       res.end("Unauthorized");
@@ -727,22 +753,34 @@ export class McpServerService {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
 
     if (req.method === "GET" && url.pathname === "/sse") {
-      const transport = new SSEServerTransport("/messages", res);
+      const allowedHosts = [`127.0.0.1:${this.port}`, `localhost:${this.port}`];
+      const allowedOrigins = [`http://127.0.0.1:${this.port}`, `http://localhost:${this.port}`];
+      const transport = new SSEServerTransport("/messages", res, {
+        enableDnsRebindingProtection: true,
+        allowedHosts,
+        allowedOrigins,
+      });
       const server = this.createSessionServer();
       const sessionId = transport.sessionId;
 
-      this.sessions.set(sessionId, transport);
+      const idleTimer = this.createIdleTimer(sessionId);
+      this.sessions.set(sessionId, { transport, idleTimer });
       transport.onclose = () => {
-        this.sessions.delete(sessionId);
+        const session = this.sessions.get(sessionId);
+        if (session) {
+          clearTimeout(session.idleTimer);
+          this.sessions.delete(sessionId);
+        }
       };
 
       await server.connect(transport);
     } else if (req.method === "POST" && url.pathname === "/messages") {
       const sessionId = url.searchParams.get("sessionId") ?? "";
-      const transport = this.sessions.get(sessionId);
+      const session = this.sessions.get(sessionId);
 
-      if (transport) {
-        await transport.handlePostMessage(req, res);
+      if (session) {
+        this.resetIdleTimer(sessionId);
+        await session.transport.handlePostMessage(req, res);
       } else {
         res.writeHead(404, { "Content-Type": "text/plain" });
         res.end("Session not found");
@@ -753,10 +791,35 @@ export class McpServerService {
     }
   }
 
+  private createIdleTimer(sessionId: string): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(() => {
+      const session = this.sessions.get(sessionId);
+      if (!session) return;
+      this.sessions.delete(sessionId);
+      session.transport.close().catch(() => {
+        // ignore close errors during idle timeout cleanup
+      });
+    }, MCP_SSE_IDLE_TIMEOUT_MS);
+    timer.unref?.();
+    return timer;
+  }
+
+  private resetIdleTimer(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    clearTimeout(session.idleTimer);
+    session.idleTimer = this.createIdleTimer(sessionId);
+  }
+
   private async writeDiscoveryFile(): Promise<void> {
     if (!this.port) return;
     try {
       await fs.mkdir(DISCOVERY_DIR, { recursive: true });
+      if (process.platform !== "win32") {
+        await fs.chmod(DISCOVERY_DIR, 0o700).catch((err) => {
+          console.error("[MCP] Failed to chmod discovery directory:", err);
+        });
+      }
 
       let existing: Record<string, unknown> = {};
       try {
@@ -782,6 +845,11 @@ export class McpServerService {
         JSON.stringify({ ...existing, mcpServers }, null, 2) + "\n",
         "utf-8"
       );
+      if (process.platform !== "win32") {
+        await fs.chmod(DISCOVERY_FILE, 0o600).catch((err) => {
+          console.error("[MCP] Failed to chmod discovery file:", err);
+        });
+      }
     } catch (err) {
       console.error("[MCP] Failed to write discovery file:", err);
     }
