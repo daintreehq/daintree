@@ -66,6 +66,18 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         return;
       }
 
+      // Backspace pops the last key off the pending chord. The current chord buffer
+      // holds a single token, so a pop empties it. During IME composition, bail
+      // out entirely — otherwise the resolveKeybinding fallthrough below would
+      // silently clear the chord while the user is mid-composition.
+      if (e.key === "Backspace" && pendingChord) {
+        if (e.isComposing) return;
+        e.preventDefault();
+        e.stopPropagation();
+        keybindingService.popPendingChord();
+        return;
+      }
+
       // For editable contexts without modifiers, let native behavior happen
       // Exception: allow chord completion even without modifiers, and F6 for region cycling
       const hasModifier = e.metaKey || e.ctrlKey;

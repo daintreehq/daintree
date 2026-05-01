@@ -9,6 +9,8 @@ export const DURATION_200 = 200;
 export const DURATION_250 = 250;
 export const DURATION_300 = 300;
 
+export const CHORD_SHOW_DELAY_MS = DURATION_200;
+
 export const EASE_SNAPPY = "cubic-bezier(0.2, 0, 0, 1)";
 export const EASE_SPRING_CRITICAL =
   "linear(0, 0.007, 0.029 2.2%, 0.118 4.7%, 0.625 14.4%, 0.826 19%, 0.902 24%, 0.962 29.8%, 0.984 33.3%, 1.004 37.8%, 1.01 42.4%, 1.011 52.2%, 1.001)";
