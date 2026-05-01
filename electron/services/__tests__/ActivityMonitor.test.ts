@@ -3464,21 +3464,31 @@ describe("ActivityMonitor", () => {
         hasActiveChildren: vi.fn().mockReturnValue(false),
       };
       const getVisibleLines = vi.fn(() => ["$ "]);
-      // Stub detectPrompt to avoid importing the full module
       const monitor = new ActivityMonitor("test-wd-9", 100, onStateChange, {
         processStateValidator,
         onWaitingTimeout,
         maxWaitingSilenceMs: 100,
         getVisibleLines,
+        getCursorLine: () => "$ ",
+        promptPatterns: [/^\$\s*$/],
         pollingIntervalMs: 20,
+        pollingMaxBootMs: 0,
         idleDebounceMs: 50,
       });
 
       monitor.startPolling();
 
-      // Polling starts in busy boot phase — watchdog won't fire yet
-      vi.advanceTimersByTime(200);
+      // Polling starts in boot phase — watchdog suppressed while state is busy
+      vi.advanceTimersByTime(50);
       expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      // Advance past WORKING_HOLD_MS (1500ms) + idleDebounceMs + maxWaitingSilenceMs.
+      // Polling cycle fires checkWaitingWatchdog every poll; once idle + dead
+      // children + watchdog interval elapsed, onWaitingTimeout fires.
+      vi.advanceTimersByTime(2000);
+      expect(monitor.getState()).toBe("idle");
+      expect(onWaitingTimeout).toHaveBeenCalledTimes(1);
+      expect(onWaitingTimeout).toHaveBeenCalledWith("test-wd-9", 100);
 
       monitor.dispose();
     });
