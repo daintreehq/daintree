@@ -210,23 +210,39 @@ describe("FleetArmingRibbon", () => {
     expect(screen.queryByTestId("fleet-exited-count")).toBeNull();
   });
 
-  it("renders per-row health badges for working/waiting/exited and skips idle/completed", () => {
+  it("renders per-row health badges for working/waiting/exited and skips idle/completed/directing", () => {
     seed([
       { ...makeAgent("t1", "working"), title: "alpha" } as TerminalInstance,
       { ...makeAgent("t2", "waiting"), title: "beta" } as TerminalInstance,
       { ...makeAgent("t3", "exited"), title: "gamma" } as TerminalInstance,
       { ...makeAgent("t4", "idle"), title: "delta" } as TerminalInstance,
       { ...makeAgent("t5", "completed"), title: "epsilon" } as TerminalInstance,
+      { ...makeAgent("t6", "directing"), title: "zeta" } as TerminalInstance,
     ]);
-    useFleetArmingStore.getState().armIds(["t1", "t2", "t3", "t4", "t5"]);
+    useFleetArmingStore.getState().armIds(["t1", "t2", "t3", "t4", "t5", "t6"]);
     render(<FleetArmingRibbon />);
     fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
-    expect(screen.getByTestId("fleet-pane-state-working").textContent).toBe("Working");
-    expect(screen.getByTestId("fleet-pane-state-waiting").textContent).toBe("Waiting");
-    expect(screen.getByTestId("fleet-pane-state-exited").textContent).toBe("Exited");
-    // idle / completed render no badge — verify by absence
-    expect(screen.queryByTestId("fleet-pane-state-idle")).toBeNull();
-    expect(screen.queryByTestId("fleet-pane-state-completed")).toBeNull();
+    expect(screen.getByTestId("fleet-pane-state-t1-working").textContent).toBe("Working");
+    expect(screen.getByTestId("fleet-pane-state-t2-waiting").textContent).toBe("Waiting");
+    expect(screen.getByTestId("fleet-pane-state-t3-exited").textContent).toBe("Exited");
+    // idle / completed / directing render no badge — verify by absence
+    expect(screen.queryByTestId("fleet-pane-state-t4-idle")).toBeNull();
+    expect(screen.queryByTestId("fleet-pane-state-t5-completed")).toBeNull();
+    expect(screen.queryByTestId("fleet-pane-state-t6-directing")).toBeNull();
+  });
+
+  it("renders one badge per pane when multiple panes share the same state", () => {
+    seed([
+      { ...makeAgent("t1", "exited"), title: "alpha" } as TerminalInstance,
+      { ...makeAgent("t2", "exited"), title: "beta" } as TerminalInstance,
+    ]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    render(<FleetArmingRibbon />);
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+    const exitedBadges = screen.getAllByText("Exited");
+    expect(exitedBadges.length).toBe(2);
+    expect(screen.getByTestId("fleet-pane-state-t1-exited")).toBeTruthy();
+    expect(screen.getByTestId("fleet-pane-state-t2-exited")).toBeTruthy();
   });
 
   it("renders 'Exit' label and ⌘Esc/Ctrl+Esc kbd on the exit chip", () => {

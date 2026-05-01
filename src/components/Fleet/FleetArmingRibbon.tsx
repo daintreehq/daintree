@@ -887,7 +887,7 @@ function FleetCountChip({ armedCount, open, onOpenChange }: FleetCountChipProps)
                   >
                     {title}
                   </button>
-                  {renderPaneStateBadge(agentStatesByPane[id])}
+                  {renderPaneStateBadge(id, agentStatesByPane[id])}
                   <button
                     type="button"
                     onClick={() => disarmId(id)}
@@ -979,7 +979,7 @@ function useFleetWorktreeScope(): FleetWorktreeScope {
 // communicate fleet-relevant signal: working/waiting (active) and exited
 // (terminal unhealthy). idle/completed/directing are noise here — completed
 // is a healthy resting state, directing is transient, idle is background.
-function renderPaneStateBadge(state: AgentState | undefined): ReactElement | null {
+function renderPaneStateBadge(paneId: string, state: AgentState | undefined): ReactElement | null {
   if (state !== "working" && state !== "waiting" && state !== "exited") return null;
   const labels: Record<"working" | "waiting" | "exited", string> = {
     working: "Working",
@@ -996,7 +996,8 @@ function renderPaneStateBadge(state: AgentState | undefined): ReactElement | nul
         "inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-medium",
         tone
       )}
-      data-testid={`fleet-pane-state-${state}`}
+      data-testid={`fleet-pane-state-${paneId}-${state}`}
+      data-state={state}
     >
       {labels[state]}
     </span>
