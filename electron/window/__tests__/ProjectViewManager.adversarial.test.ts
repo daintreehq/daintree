@@ -14,6 +14,8 @@ interface MockWebContents {
   close: ReturnType<typeof vi.fn>;
   reload: ReturnType<typeof vi.fn>;
   send: ReturnType<typeof vi.fn>;
+  session: { flushStorageData: ReturnType<typeof vi.fn> };
+  navigationHistory: { clear: ReturnType<typeof vi.fn> };
   on: ReturnType<typeof vi.fn>;
   once: ReturnType<typeof vi.fn>;
   removeListener: ReturnType<typeof vi.fn>;
@@ -39,6 +41,8 @@ function createMockWebContents(options?: { autoFinishLoad?: boolean }): MockWebC
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
+    session: { flushStorageData: vi.fn(() => Promise.resolve()) },
+    navigationHistory: { clear: vi.fn() },
     on: vi.fn((_event: string, _handler: Handler) => undefined),
     once: vi.fn((event: string, handler: Handler) => {
       const list = handlers.get(event) ?? [];
@@ -148,13 +152,12 @@ function createMockWindow() {
 
 describe("ProjectViewManager adversarial", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
     nextWebContentsId = 300;
     wcQueue.length = 0;
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    wcQueue.length = 0;
   });
 
   it("serializes rapid A→B→A→B switches within one tick without duplicating views", async () => {
@@ -188,7 +191,7 @@ describe("ProjectViewManager adversarial", () => {
     ).toEqual(["proj-a", "proj-b"]);
   });
 
-  it("skips deferred GC when a cached view is evicted by a subsequent switch before the timer fires", async () => {
+  it("requests GC immediately on deactivation, even when the view is evicted by a later switch", async () => {
     const win = createMockWindow();
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -204,13 +207,19 @@ describe("ProjectViewManager adversarial", () => {
 
     wcQueue.push(createMockWebContents(), createMockWebContents());
 
+    // Switch to B — deactivates A, GC requested immediately
     await manager.switchTo("proj-b", "/b");
+    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
+    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(
+      expect.stringContaining("requestIdleCallback")
+    );
+
+    // Switch to C — evicts A (LRU, cache limit 2)
     await manager.switchTo("proj-c", "/c");
 
-    vi.advanceTimersByTime(100);
-
     expect(initialWc.close).toHaveBeenCalledTimes(1);
-    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
+    // executeJavaScript was already called during deactivation — not called again on eviction
+    expect(initialWc.executeJavaScript).toHaveBeenCalledTimes(1);
     expect(manager.getActiveProjectId()).toBe("proj-c");
   });
 

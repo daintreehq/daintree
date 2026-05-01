@@ -33,7 +33,6 @@ import {
 } from "./rendererConsoleCapture.js";
 import { ACTIVE_AGENT_STATES } from "../../shared/types/agent.js";
 
-const GC_DELAY_MS = 100;
 const LOAD_TIMEOUT_MS = 10_000;
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
@@ -363,25 +362,35 @@ export class ProjectViewManager {
       }
       current.view.webContents.setBackgroundThrottling(true);
 
-      // Trigger V8 GC after a short delay to reclaim orphaned heap from
-      // unmounted React components, stale closures, and detached DOM.
-      // The delay lets React's unmount microtasks flush before collection.
+      // Flush pending DOMStorage writes (fire-and-forget — view stays alive in
+      // cache, so data loss is not a concern)
+      current.view.webContents.session.flushStorageData().catch(() => {});
+
+      // Release back-forward history entries to free associated DOM/JS state
+      try {
+        current.view.webContents.navigationHistory.clear();
+      } catch {
+        // Renderer may have torn down between the isDestroyed check and this call
+      }
+
+      // Trigger V8 GC during idle callbacks so the call doesn't synchronously
+      // block the renderer. The timeout (1s) guarantees it runs even under
+      // background throttling.
       const capturedProjectId = current.projectId;
       const { view, webContents } = { view: current.view, webContents: current.view.webContents };
-      setTimeout(() => {
-        const liveEntry = this.views.get(capturedProjectId);
-        if (
-          liveEntry &&
-          liveEntry.view === view &&
-          liveEntry.state === "cached" &&
-          !webContents.isDestroyed()
-        ) {
-          webContents.executeJavaScript("window.gc && window.gc()").catch(() => {
-            // Intentional: V8 GC is best-effort — failure (no --js-flags=--expose-gc,
-            // destroyed context) is harmless and noisy if logged.
-          });
-        }
-      }, GC_DELAY_MS);
+      const liveEntry = this.views.get(capturedProjectId);
+      if (
+        liveEntry &&
+        liveEntry.view === view &&
+        liveEntry.state === "cached" &&
+        !webContents.isDestroyed()
+      ) {
+        webContents
+          .executeJavaScript(
+            "requestIdleCallback(() => { if (window.gc) window.gc(); }, { timeout: 1000 })"
+          )
+          .catch(() => {});
+      }
     }
   }
 

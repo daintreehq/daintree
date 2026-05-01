@@ -94,10 +94,9 @@ test.describe.serial("Nightly: Evicted project view leak detection", () => {
       pvm?.setCachedViewLimit(1);
     });
 
-    // Poll until eviction completes. GC_DELAY_MS in ProjectViewManager is
-    // 100ms but webContents.close() can be slower on loaded CI runners — a
-    // fixed sleep races there. Re-read state until the evicted view is gone
-    // or we hit a meaningful timeout.
+    // Poll until eviction completes. webContents.close() can be slower on
+    // loaded CI runners — a fixed sleep races there. Re-read state until the
+    // evicted view is gone or we hit a meaningful timeout.
     const readEvictionState = () =>
       app.evaluate(({ webContents }, wcId) => {
         const g = globalThis as Record<string, unknown>;

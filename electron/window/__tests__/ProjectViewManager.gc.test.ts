@@ -14,6 +14,8 @@ function createMockWebContents() {
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
+    session: { flushStorageData: vi.fn(() => Promise.resolve()) },
+    navigationHistory: { clear: vi.fn() },
     on: vi.fn((_event: string, _handler: (...args: unknown[]) => void) => {}),
     once: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       if (event === "did-finish-load") {
@@ -107,7 +109,6 @@ describe("ProjectViewManager — GC on deactivate", () => {
   let initialWc: ReturnType<typeof createMockWebContents>;
 
   beforeEach(() => {
-    vi.useFakeTimers();
     nextWebContentsId = 100;
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, { dirname: "/test", cachedProjectViews: 2 });
@@ -118,51 +119,39 @@ describe("ProjectViewManager — GC on deactivate", () => {
     manager.registerInitialView(initialView as never, "proj-a", "/path/a");
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("does not trigger GC before 100ms, triggers exactly at 100ms", async () => {
+  it("triggers GC via requestIdleCallback immediately on deactivation", async () => {
     await manager.switchTo("proj-b", "/path/b");
 
-    vi.advanceTimersByTime(99);
-    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(1);
     expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
-    expect(initialWc.executeJavaScript).toHaveBeenCalledWith("window.gc && window.gc()");
+    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(
+      expect.stringContaining("requestIdleCallback")
+    );
+    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("window.gc"));
+    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(
+      expect.stringContaining("timeout: 1000")
+    );
   });
 
-  it("skips GC if webContents is destroyed when timer fires", async () => {
-    await manager.switchTo("proj-b", "/path/b");
-
+  it("skips GC when webContents is destroyed at the outer guard", async () => {
     initialWc.isDestroyed.mockReturnValue(true);
-    vi.advanceTimersByTime(100);
+    await manager.switchTo("proj-b", "/path/b");
 
     expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
   });
 
-  it("skips GC if view was reactivated (state no longer cached)", async () => {
-    // Deactivate proj-a by switching to proj-b
+  it("requests GC, flushStorageData, and navigationHistory.clear in order on deactivation", async () => {
     await manager.switchTo("proj-b", "/path/b");
 
-    // Reactivate proj-a before the 100ms GC delay
-    await manager.switchTo("proj-a", "/path/a");
+    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
+    expect(initialWc.session.flushStorageData).toHaveBeenCalledOnce();
+    expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
 
-    vi.advanceTimersByTime(100);
+    const flushOrder = initialWc.session.flushStorageData.mock.invocationCallOrder[0];
+    const clearOrder = initialWc.navigationHistory.clear.mock.invocationCallOrder[0];
+    const gcOrder = initialWc.executeJavaScript.mock.invocationCallOrder[0];
 
-    // GC should NOT have fired — view was reactivated (state is "active", not "cached")
-    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
-  });
-
-  it("skips GC if view entry was evicted from the map", async () => {
-    await manager.switchTo("proj-b", "/path/b");
-
-    manager.destroyView("proj-a");
-
-    vi.advanceTimersByTime(100);
-
-    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
+    expect(flushOrder).toBeLessThan(gcOrder);
+    expect(clearOrder).toBeLessThan(gcOrder);
   });
 
   it("suppresses executeJavaScript rejection without unhandled promise", async () => {
@@ -170,10 +159,48 @@ describe("ProjectViewManager — GC on deactivate", () => {
 
     await manager.switchTo("proj-b", "/path/b");
 
-    vi.advanceTimersByTime(100);
-    await vi.runAllTimersAsync();
-
     // Should have been called (and rejected silently)
     expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
+  });
+
+  it("calls session.flushStorageData on deactivation", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(initialWc.session.flushStorageData).toHaveBeenCalledOnce();
+  });
+
+  it("does not throw when flushStorageData rejects", async () => {
+    initialWc.session.flushStorageData.mockRejectedValue(new Error("session gone"));
+
+    await expect(manager.switchTo("proj-b", "/path/b")).resolves.toBeDefined();
+    expect(initialWc.session.flushStorageData).toHaveBeenCalledOnce();
+    // navigationHistory.clear should still fire despite flushStorageData rejection
+    expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
+  });
+
+  it("calls navigationHistory.clear on deactivation", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
+  });
+
+  it("does not throw when navigationHistory.clear throws (TOCTOU renderer crash)", async () => {
+    initialWc.navigationHistory.clear.mockImplementation(() => {
+      throw new Error("renderer gone");
+    });
+
+    await expect(manager.switchTo("proj-b", "/path/b")).resolves.toBeDefined();
+    expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
+    // executeJavaScript should still fire despite clear() throwing
+    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
+  });
+
+  it("skips flushStorageData, clearHistory, and GC when webContents is destroyed at outer guard", async () => {
+    initialWc.isDestroyed.mockReturnValue(true);
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(initialWc.session.flushStorageData).not.toHaveBeenCalled();
+    expect(initialWc.navigationHistory.clear).not.toHaveBeenCalled();
+    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
   });
 });

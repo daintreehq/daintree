@@ -20,6 +20,8 @@ function createMockWebContents() {
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
+    session: { flushStorageData: vi.fn(() => Promise.resolve()) },
+    navigationHistory: { clear: vi.fn() },
     getOSProcessId: vi.fn(() => osPid),
     on: vi.fn((event: string, handler: Handler) => {
       const list = handlers.get(event) ?? [];
