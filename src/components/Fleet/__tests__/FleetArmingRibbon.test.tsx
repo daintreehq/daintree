@@ -66,6 +66,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
 import { useFleetBroadcastConfirmStore } from "@/store/fleetBroadcastConfirmStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
+import { useFleetPickerSessionStore } from "@/store/fleetPickerSessionStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -863,6 +864,168 @@ describe("FleetArmingRibbon", () => {
       });
       rerender(<FleetArmingRibbon />);
       expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
+    });
+  });
+
+  describe("count chip popover — picker mode (+ Add panes…)", () => {
+    beforeEach(() => {
+      // Reset the single-active picker session between cases — leaks across
+      // would silently make `acquired` flip in mid-test and mask real bugs.
+      useFleetPickerSessionStore.setState({ activeOwner: null });
+      Object.assign(window, {
+        electron: {
+          terminal: {
+            searchSemanticBuffers: vi.fn().mockResolvedValue([]),
+          },
+        },
+      });
+    });
+
+    it("renders an `+ Add panes…` row in the armed list popover", () => {
+      seed([makeAgent("t1"), makeAgent("t2")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+      expect(screen.getByTestId("fleet-armed-list-add-panes").textContent).toContain("Add panes");
+    });
+
+    it("clicking `+ Add panes…` swaps popover to picker mode", async () => {
+      seed([makeAgent("t1"), makeAgent("t2"), makeAgent("t3")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-armed-list-add-panes"));
+      });
+      expect(screen.getByTestId("fleet-picker-add-root")).toBeTruthy();
+      expect(screen.getByTestId("fleet-picker-back")).toBeTruthy();
+    });
+
+    it("picker mode hides already-armed panes and shows only addable ones", async () => {
+      seed([makeAgent("t1"), makeAgent("t2"), makeAgent("t3")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-armed-list-add-panes"));
+      });
+      expect(screen.queryByTestId("fleet-picker-add-row-t1")).toBeNull();
+      expect(screen.queryByTestId("fleet-picker-add-row-t2")).toBeNull();
+      expect(screen.getByTestId("fleet-picker-add-row-t3")).toBeTruthy();
+    });
+
+    it("commit appends new ids via addToFleet (preserves existing armOrder)", async () => {
+      seed([makeAgent("t1"), makeAgent("t2"), makeAgent("t3")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-armed-list-add-panes"));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-add-row-t3"));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-add-confirm"));
+      });
+      const s = useFleetArmingStore.getState();
+      expect(s.armOrder).toEqual(["t1", "t2", "t3"]);
+      expect(s.lastArmedId).toBe("t3");
+    });
+
+    it("returns to list mode after commit", async () => {
+      seed([makeAgent("t1"), makeAgent("t2"), makeAgent("t3")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-armed-list-add-panes"));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-add-row-t3"));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-add-confirm"));
+      });
+      // After commit, the list view is back: armed-list-add-panes is visible
+      // again; the picker root is gone.
+      expect(screen.queryByTestId("fleet-picker-add-root")).toBeNull();
+      expect(screen.getByTestId("fleet-armed-list-add-panes")).toBeTruthy();
+    });
+
+    it("Back button returns to list mode without committing", async () => {
+      seed([makeAgent("t1"), makeAgent("t2"), makeAgent("t3")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-armed-list-add-panes"));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-add-row-t3"));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-back"));
+      });
+      // Back to list, t3 NOT armed.
+      expect(useFleetArmingStore.getState().armOrder).toEqual(["t1", "t2"]);
+      expect(screen.queryByTestId("fleet-picker-add-root")).toBeNull();
+    });
+
+    it("confirm button is disabled when nothing is selected", async () => {
+      seed([makeAgent("t1"), makeAgent("t2"), makeAgent("t3")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-armed-list-add-panes"));
+      });
+      const confirm = screen.getByTestId("fleet-picker-add-confirm") as HTMLButtonElement;
+      expect(confirm.disabled).toBe(true);
+    });
+
+    it("popover-mode resets to list when popover closes (Esc twice on empty query)", async () => {
+      seed([makeAgent("t1"), makeAgent("t2"), makeAgent("t3")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-armed-list-add-panes"));
+      });
+      // 1st Esc: query is empty so the search-clear handler is not registered
+      // — this Esc fires the picker→list handler.
+      await act(async () => {
+        dispatchEscape();
+      });
+      expect(screen.queryByTestId("fleet-picker-add-root")).toBeNull();
+      expect(screen.getByTestId("fleet-armed-list-add-panes")).toBeTruthy();
+    });
+
+    it("Esc clears non-empty search query before exiting picker mode", async () => {
+      seed([makeAgent("t1"), makeAgent("t2"), makeAgent("t3")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-armed-list-add-panes"));
+      });
+      const search = screen.getByTestId("fleet-picker-add-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "hello" } });
+      });
+      await act(async () => {});
+      // 1st Esc clears search; picker mode still active.
+      await act(async () => {
+        dispatchEscape();
+      });
+      await act(async () => {});
+      expect(screen.getByTestId("fleet-picker-add-root")).toBeTruthy();
+      expect((screen.getByTestId("fleet-picker-add-search") as HTMLInputElement).value).toBe("");
+      // 2nd Esc backs out of picker.
+      await act(async () => {
+        dispatchEscape();
+      });
+      expect(screen.queryByTestId("fleet-picker-add-root")).toBeNull();
     });
   });
 });

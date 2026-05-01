@@ -1,4 +1,5 @@
 import {
+  use,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -7,14 +8,23 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
+import { createWorktreeStore } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerSessionStore, type FleetPickerOwner } from "@/store/fleetPickerSessionStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { SemanticSearchMatch, TerminalInstance } from "@shared/types";
+
+// Fallback empty worktree store for hosts that mount the picker without a
+// `WorktreeStoreContext.Provider` (e.g. legacy ribbon tests, places where the
+// picker mounts before the per-project view tree is ready). Worktree names
+// are display-only — `groupedVisible` falls back to the worktreeId when a
+// name is missing — so an empty store is harmless.
+const fallbackWorktreeStore = createWorktreeStore();
 
 export const FALLBACK_GROUP_ID = "__no_worktree__";
 export const FALLBACK_GROUP_NAME = "Unassigned";
@@ -131,7 +141,11 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   const { panelIds, panelsById } = usePanelStore(
     useShallow((s) => ({ panelIds: s.panelIds, panelsById: s.panelsById }))
   );
-  const worktreeNames = useWorktreeStore(
+  // Tolerate hosts that mount the picker without a worktree-store provider —
+  // names are display-only and `groupedVisible` falls back to the worktreeId.
+  const worktreeStore = use(WorktreeStoreContext) ?? fallbackWorktreeStore;
+  const worktreeNames = useStore(
+    worktreeStore,
     useShallow((s) => {
       const out: Record<string, string> = {};
       s.worktrees.forEach((wt, id) => {
