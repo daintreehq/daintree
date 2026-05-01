@@ -372,6 +372,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const collapsedWorktrees = useWorktreeFilterStore((state) => state.collapsedWorktrees);
   const expandWorktree = useWorktreeFilterStore((state) => state.expandWorktree);
   const setQuickStateFilter = useWorktreeFilterStore((state) => state.setQuickStateFilter);
+  const clearQuickStateFilter = useWorktreeFilterStore((state) => state.clearQuickStateFilter);
 
   // Terminal store for derived metadata
   const panelsById = usePanelStore(useShallow((state) => state.panelsById));
@@ -541,7 +542,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     };
   }, [deferredWorktrees.length, integrationWorktree, quickStateCounts]);
 
-  const { filteredWorktrees, groupedSections } = useMemo(() => {
+  const { filteredWorktrees, groupedSections, hasResultsWithoutQuickState } = useMemo(() => {
     const filters: FilterState = {
       query,
       statusFilters,
@@ -555,6 +556,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const nonMain = deferredWorktrees.filter(
       (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
     );
+    let withoutQuickStateMatch = false;
     const filtered = nonMain.filter((worktree) => {
       const derived = derivedMetaMap.get(worktree.id) ?? {
         terminalCount: 0,
@@ -567,6 +569,21 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       };
       const isActive = worktree.id === activeWorktreeId;
       const hasActiveQuery = query.trim().length > 0;
+
+      // Counterfactual: would this worktree be visible if the quick state
+      // filter were "all"? Mirrors the same precedence below (active /
+      // waiting bypasses → matchesFilters), with quickStateFilter forced
+      // to "all". Short-circuit once we find any match — only the boolean
+      // matters for the empty-state branch.
+      if (!withoutQuickStateMatch && quickStateFilter !== "all") {
+        if (alwaysShowActive && isActive && !hasActiveQuery) {
+          withoutQuickStateMatch = true;
+        } else if (alwaysShowWaiting && derived.hasWaitingAgent && !hasActiveQuery) {
+          withoutQuickStateMatch = true;
+        } else if (matchesFilters(worktree, filters, derived, isActive)) {
+          withoutQuickStateMatch = true;
+        }
+      }
 
       if (alwaysShowActive && isActive && !hasActiveQuery && quickStateFilter === "all") {
         return true;
@@ -600,10 +617,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       return {
         filteredWorktrees: sorted,
         groupedSections: groupByType(sorted, orderBy, validPinnedWorktrees),
+        hasResultsWithoutQuickState: withoutQuickStateMatch,
       };
     }
 
-    return { filteredWorktrees: sorted, groupedSections: null };
+    return {
+      filteredWorktrees: sorted,
+      groupedSections: null,
+      hasResultsWithoutQuickState: withoutQuickStateMatch,
+    };
   }, [
     deferredWorktrees,
     query,
@@ -867,6 +889,18 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const rootPath = currentProject?.path ?? "";
   const hasNonMainWorktrees = deferredWorktrees.length > 1;
   const hasFilters = hasActiveFilters();
+  const hasPopoverFilters =
+    query.trim().length > 0 ||
+    statusFilters.size > 0 ||
+    typeFilters.size > 0 ||
+    githubFilters.size > 0 ||
+    sessionFilters.size > 0 ||
+    activityFilters.size > 0;
+  const showQuickStateEmptyState =
+    filteredWorktrees.length === 0 &&
+    quickStateFilter !== "all" &&
+    hasResultsWithoutQuickState &&
+    hasNonMainWorktrees;
   const worktreeMatchesQuery = (w: WorktreeState) => {
     if (!query) return true;
     const exactNum = parseExactNumber(query);
@@ -1059,7 +1093,35 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 counts={quickStateCounts}
               />
             )}
-            {filteredWorktrees.length === 0 && hasFilters && hasNonMainWorktrees ? (
+            {showQuickStateEmptyState ? (
+              <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                <FilterX className="w-10 h-10 text-daintree-text/40 mb-3" />
+                <p className="text-sm text-daintree-text/80 mb-1">
+                  No {quickStateFilter} worktrees
+                </p>
+                <p className="text-xs text-daintree-text/50 mb-3">
+                  {hasPopoverFilters
+                    ? "Try a different state, or clear your other filters"
+                    : "Try a different state to see the rest"}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={clearQuickStateFilter}
+                    className="text-xs px-3 py-1.5 text-accent-primary hover:bg-overlay-soft rounded transition-colors font-medium"
+                  >
+                    Show all states
+                  </button>
+                  {hasPopoverFilters ? (
+                    <button
+                      onClick={clearAllFilters}
+                      className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
+                    >
+                      Clear all filters
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : filteredWorktrees.length === 0 && hasFilters && hasNonMainWorktrees ? (
               <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
                 <FilterX className="w-10 h-10 text-daintree-text/40 mb-3" />
                 <p className="text-sm text-daintree-text/60 mb-3">

@@ -160,6 +160,32 @@ describe("worktreeFilterStore", () => {
 
     expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
   });
+
+  it('clearQuickStateFilter resets only quickStateFilter to "all"', () => {
+    const store = useWorktreeFilterStore.getState();
+    store.setQuery("alpha");
+    store.toggleStatusFilter("active");
+    store.toggleTypeFilter("feature");
+    store.setQuickStateFilter("working");
+
+    store.clearQuickStateFilter();
+
+    const next = useWorktreeFilterStore.getState();
+    expect(next.quickStateFilter).toBe("all");
+    expect(next.query).toBe("alpha");
+    expect(next.statusFilters.has("active")).toBe(true);
+    expect(next.typeFilters.has("feature")).toBe(true);
+  });
+
+  it("clearQuickStateFilter is a no-op when already 'all'", () => {
+    const store = useWorktreeFilterStore.getState();
+    store.toggleStatusFilter("active");
+    store.clearQuickStateFilter();
+
+    const next = useWorktreeFilterStore.getState();
+    expect(next.quickStateFilter).toBe("all");
+    expect(next.statusFilters.has("active")).toBe(true);
+  });
 });
 
 describe("worktreeFilterStore persistence scoping", () => {

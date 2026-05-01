@@ -71,6 +71,7 @@ interface WorktreeFilterActions {
   isWorktreeCollapsed: (id: string) => boolean;
   setManualOrder: (order: string[]) => void;
   setQuickStateFilter: (filter: QuickStateFilter) => void;
+  clearQuickStateFilter: () => void;
   clearAll: () => void;
   getActiveFilterCount: () => number;
   hasActiveFilters: () => boolean;
@@ -454,6 +455,9 @@ const _actions: WorktreeFilterActions = {
   },
   setQuickStateFilter: (quickStateFilter) => {
     _projectStore.setState({ quickStateFilter });
+  },
+  clearQuickStateFilter: () => {
+    _projectStore.setState({ quickStateFilter: "all" });
   },
   clearAll: () => {
     _projectStore.setState({
