@@ -358,6 +358,65 @@ describe("McpServerService", () => {
       },
       additionalProperties: false,
     });
+
+    // Annotations — query tool
+    expect(safeTool?.annotations).toEqual({
+      title: "List Actions",
+      readOnlyHint: true,
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    });
+
+    // Annotations — destructive tool
+    expect(dangerousTool?.annotations).toEqual({
+      title: "Delete Worktree",
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
+    });
+  });
+
+  it("sets openWorldHint true for network-bound categories and false for local ones", async () => {
+    const { window } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "github.listPRs" as ActionId,
+          title: "List PRs",
+          description: "List pull requests",
+          category: "github",
+          kind: "query",
+        }),
+        createManifestEntry({
+          id: "browser.navigate" as ActionId,
+          title: "Navigate",
+          description: "Navigate the browser",
+          category: "browser",
+          kind: "command",
+        }),
+        createManifestEntry({
+          id: "worktree.create" as ActionId,
+          title: "Create Worktree",
+          description: "Create a new worktree",
+          category: "worktree",
+          kind: "command",
+        }),
+      ],
+    });
+
+    await service.start(window);
+    const { client, transport } = await connectClient(service.currentPort!);
+    transports.push(transport);
+
+    const result = await client.listTools();
+    const ghTool = result.tools.find((t) => t.name === "github.listPRs");
+    const browserTool = result.tools.find((t) => t.name === "browser.navigate");
+    const wtTool = result.tools.find((t) => t.name === "worktree.create");
+
+    expect(ghTool?.annotations?.openWorldHint).toBe(true);
+    expect(browserTool?.annotations?.openWorldHint).toBe(true);
+    expect(wtTool?.annotations?.openWorldHint).toBe(false);
   });
 
   it("requires explicit MCP confirmation before dispatching destructive actions", async () => {

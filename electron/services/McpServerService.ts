@@ -10,6 +10,7 @@ import type { AddressInfo } from "node:net";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import type { ActionManifestEntry, ActionDispatchResult } from "../../shared/types/actions.js";
 import { store } from "../store.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
@@ -21,6 +22,15 @@ const MCP_SERVER_KEY = "daintree";
 
 const DEFAULT_PORT = 45454;
 const MAX_PORT_RETRIES = 10;
+
+const OPEN_WORLD_CATEGORIES: ReadonlySet<string> = new Set([
+  "browser",
+  "devServer",
+  "github",
+  "portal",
+  "voice",
+  "system",
+]);
 
 interface PendingRequest<T> {
   resolve: (value: T) => void;
@@ -429,6 +439,7 @@ export class McpServerService {
             name: entry.id,
             description: this.buildToolDescription(entry),
             inputSchema: this.buildToolInputSchema(entry),
+            annotations: this.buildAnnotations(entry),
           })),
       };
     });
@@ -543,6 +554,16 @@ export class McpServerService {
     return {
       ...baseSchema,
       properties,
+    };
+  }
+
+  private buildAnnotations(entry: ActionManifestEntry): ToolAnnotations {
+    return {
+      title: entry.title,
+      readOnlyHint: entry.kind === "query",
+      idempotentHint: entry.kind === "query",
+      destructiveHint: entry.danger === "confirm",
+      openWorldHint: OPEN_WORLD_CATEGORIES.has(entry.category),
     };
   }
 
