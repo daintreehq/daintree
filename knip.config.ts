@@ -80,6 +80,9 @@ const config: KnipConfig = {
   //     via fix-path.
   //   - glob, @babel/core: imported in scripts/find-critical-compiler-errors.mjs;
   //     transitive via babel-plugin-react-compiler and related toolchain.
+  //   - @types/trusted-types: provides the ambient `TrustedHTML` /
+  //     `TrustedTypePolicyFactory` globals used in src/lib/trustedTypesPolicy.ts.
+  //     Knip walks `import` edges and never sees ambient type references.
   ignoreDependencies: [
     "tailwindcss",
     "@tailwindcss/typography",
@@ -91,6 +94,7 @@ const config: KnipConfig = {
     "shell-env",
     "glob",
     "@babel/core",
+    "@types/trusted-types",
   ],
 
   // why: the repo pre-dates knip and carries a ~150-entry backlog of unused
