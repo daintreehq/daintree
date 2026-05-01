@@ -138,8 +138,6 @@ import { isAgentLaunchable } from "../shared/utils/agentAvailability";
 import { isAgentPinned } from "../shared/utils/agentPinned";
 import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
-
-const loadMotionFeatures = () => import("./lib/motionFeatures").then((mod) => mod.default);
 import { useMacroFocusStore } from "./store/macroFocusStore";
 import { useSafeModeStore } from "./store/safeModeStore";
 import type { BuiltInPanelKind } from "./types";
@@ -148,6 +146,8 @@ import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
 
 import { SidebarContent, preloadNewWorktreeDialog, E2EFaultInjector } from "./components/Sidebar";
+
+const loadMotionFeatures = () => import("./lib/motionFeatures").then((mod) => mod.default);
 
 function App() {
   useErrors();

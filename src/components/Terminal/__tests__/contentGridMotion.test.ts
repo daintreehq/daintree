@@ -18,7 +18,8 @@ describe("ContentGrid panel motion (issue #6162)", () => {
     expect(content).toContain('from "framer-motion"');
     expect(content).toContain("AnimatePresence");
     expect(content).toContain("LayoutGroup");
-    expect(content).toContain("motion");
+    expect(content).toContain("<m.div");
+    expect(content).not.toMatch(/<motion\./);
   });
 
   it("scopes FLIP coordination per grid via LayoutGroup", async () => {
