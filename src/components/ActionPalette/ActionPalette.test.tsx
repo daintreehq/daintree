@@ -4,16 +4,20 @@ import { describe, expect, it, vi } from "vitest";
 
 const lastSearchablePaletteProps: { current: Record<string, unknown> | null } = { current: null };
 
-// Capture the props passed to SearchablePalette so we can assert the wiring
-// (beforeList, emptyContent) without bringing the full AppPaletteDialog stack
-// into a renderer-only unit test.
+// Capture the props passed to SearchablePalette and mirror its empty-state
+// gating (only render `emptyContent` when the user hasn't typed a query, same
+// as AppPaletteDialog.Empty's zero-data branch). Avoids dragging the full
+// dialog/animation stack into a renderer-only unit test.
 vi.mock("@/components/ui/SearchablePalette", () => ({
   SearchablePalette: (props: Record<string, unknown>) => {
     lastSearchablePaletteProps.current = props;
+    const query = (props.query as string) ?? "";
+    const results = (props.results as unknown[]) ?? [];
+    const showEmptyContent = results.length === 0 && query.trim() === "";
     return (
       <div data-testid="searchable-palette">
         {(props.beforeList as React.ReactNode) ?? null}
-        {(props.emptyContent as React.ReactNode) ?? null}
+        {showEmptyContent ? ((props.emptyContent as React.ReactNode) ?? null) : null}
       </div>
     );
   },
@@ -81,6 +85,32 @@ describe("ActionPalette", () => {
     );
 
     expect(screen.queryByText("Recently used")).toBeNull();
+  });
+
+  it("renders neither the header nor the hint when a typed query has zero matches", () => {
+    render(
+      <ActionPalette
+        isOpen
+        query="zzzz"
+        results={[]}
+        totalResults={0}
+        selectedIndex={0}
+        isShowingRecentlyUsed={false}
+        close={noop}
+        setQuery={noop}
+        selectPrevious={noop}
+        selectNext={noop}
+        executeAction={noop}
+        confirmSelection={noop}
+      />
+    );
+
+    expect(screen.queryByText("Recently used")).toBeNull();
+    // The static hint must stay parked behind the recently-used flag — it's not
+    // a generic palette decoration and shouldn't leak into the no-match state.
+    expect(
+      screen.queryByText("Actions depend on the focused panel and current context.")
+    ).toBeNull();
   });
 
   it("provides the static hint as emptyContent for SearchablePalette to render when no MRU exists", () => {

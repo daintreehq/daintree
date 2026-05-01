@@ -74,7 +74,7 @@ export function ActionPalette({
       searchAriaLabel="Search actions"
       listId="action-palette-list"
       itemIdPrefix="action-option"
-      emptyMessage="No actions available"
+      emptyMessage="No recently used actions"
       noMatchMessage={`No actions match "${query}"`}
       totalResults={totalResults}
       beforeList={

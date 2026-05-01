@@ -201,6 +201,60 @@ describe("useActionPalette", () => {
     expect(result.current.isShowingRecentlyUsed).toBe(true);
   });
 
+  it("does not let disabled MRU entries crowd out enabled ones at the cap boundary", async () => {
+    const disabled = Array.from({ length: 8 }, (_, i) =>
+      makeEntry(`disabled.${i}`, `Disabled ${i}`, false)
+    );
+    const enabled = Array.from({ length: 7 }, (_, i) =>
+      makeEntry(`enabled.${i}`, `Enabled ${i}`, true)
+    );
+    listMock.mockReturnValue([...disabled, ...enabled]);
+
+    // Order disabled first in MRU so the partition has to do real work to put
+    // enabled items above them within the 10-slot cap.
+    useActionMruStore
+      .getState()
+      .hydrateActionMru([...disabled.map((e) => e.id), ...enabled.map((e) => e.id)]);
+
+    const { result } = renderHook(() => useActionPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => {
+      expect(result.current.results.length).toBe(10);
+    });
+
+    // All 7 enabled entries must appear (no disabled item displaces them),
+    // followed by the first 3 disabled by MRU order.
+    const ids = result.current.results.map((r) => r.id);
+    expect(ids.slice(0, 7)).toEqual(enabled.map((e) => e.id));
+    expect(ids.slice(7)).toEqual(disabled.slice(0, 3).map((e) => e.id));
+  });
+
+  it("treats whitespace-only query as the recently-used branch", async () => {
+    listMock.mockReturnValue([makeEntry("a.action", "Alpha"), makeEntry("b.action", "Bravo")]);
+    useActionMruStore.getState().hydrateActionMru(["b.action", "a.action"]);
+
+    const { result } = renderHook(() => useActionPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    act(() => {
+      result.current.setQuery("   ");
+    });
+
+    await waitFor(() => {
+      expect(result.current.results.length).toBe(2);
+    });
+
+    expect(result.current.results.map((r) => r.id)).toEqual(["b.action", "a.action"]);
+    expect(result.current.isShowingRecentlyUsed).toBe(true);
+  });
+
   it("clears the recently-used flag once the user starts typing", async () => {
     listMock.mockReturnValue([makeEntry("a.action", "Alpha"), makeEntry("b.action", "Bravo")]);
     useActionMruStore.getState().hydrateActionMru(["a.action"]);
