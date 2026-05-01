@@ -1,6 +1,7 @@
 import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
 import { StateField } from "@codemirror/state";
 import { getAllAtDiffTokens, type AtDiffToken, type DiffContextType } from "../hybridInputParsing";
+import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
 
 const DIFF_LABELS: Record<DiffContextType, string> = {
   unstaged: "Working tree diff",
@@ -11,36 +12,28 @@ const DIFF_LABELS: Record<DiffContextType, string> = {
 const GIT_BRANCH_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`;
 
 interface DiffChipState {
-  decorations: ReturnType<typeof Decoration.set>;
   tokens: AtDiffToken[];
 }
 
 function buildDiffChipState(text: string): DiffChipState {
-  const tokens = getAllAtDiffTokens(text);
-  if (tokens.length === 0) {
-    return { decorations: Decoration.none, tokens: [] };
-  }
-
-  const decorations = tokens.map((token) =>
-    Decoration.replace({
-      widget: new DiffChipWidget(token.diffType),
-    }).range(token.start, token.end)
-  );
-  return { decorations: Decoration.set(decorations), tokens };
+  return { tokens: getAllAtDiffTokens(text) };
 }
 
 class DiffChipWidget extends WidgetType {
-  constructor(readonly diffType: DiffContextType) {
+  constructor(
+    readonly diffType: DiffContextType,
+    readonly isSelected: boolean
+  ) {
     super();
   }
 
   eq(other: DiffChipWidget) {
-    return this.diffType === other.diffType;
+    return this.diffType === other.diffType && this.isSelected === other.isSelected;
   }
 
   toDOM() {
     const span = document.createElement("span");
-    span.className = "cm-diff-chip";
+    span.className = this.isSelected ? "cm-diff-chip cm-chip-pending-delete" : "cm-diff-chip";
     span.setAttribute("role", "img");
     span.setAttribute("aria-label", `Diff: ${DIFF_LABELS[this.diffType]}`);
 
@@ -72,7 +65,18 @@ export const diffChipField = StateField.define<DiffChipState>({
     return buildDiffChipState(tr.state.doc.toString());
   },
   provide: (f) => [
-    EditorView.decorations.from(f, (state) => state.decorations),
+    EditorView.decorations.of((view) => {
+      const chipState = view.state.field(f, false);
+      if (!chipState || chipState.tokens.length === 0) return Decoration.none;
+      const pending = view.state.field(chipPendingDeleteField, false) ?? null;
+      const ranges = chipState.tokens.map((token) => {
+        const selected = isChipSelected(pending, token.start, token.end);
+        return Decoration.replace({
+          widget: new DiffChipWidget(token.diffType, selected),
+        }).range(token.start, token.end);
+      });
+      return Decoration.set(ranges, true);
+    }),
     EditorView.atomicRanges.of((view) => {
       const chipState = view.state.field(f, false);
       if (!chipState || chipState.tokens.length === 0) return Decoration.none;

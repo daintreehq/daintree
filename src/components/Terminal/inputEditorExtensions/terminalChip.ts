@@ -2,34 +2,30 @@ import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/vi
 import { StateField } from "@codemirror/state";
 import { getAllAtTerminalTokens, type AtTerminalToken } from "../hybridInputParsing";
 import { TERMINAL_ICON_SVG } from "./base";
+import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
 
 interface TerminalChipState {
-  decorations: ReturnType<typeof Decoration.set>;
   tokens: AtTerminalToken[];
 }
 
 function buildTerminalChipState(text: string): TerminalChipState {
-  const tokens = getAllAtTerminalTokens(text);
-  if (tokens.length === 0) {
-    return { decorations: Decoration.none, tokens: [] };
-  }
-
-  const decorations = tokens.map((token) =>
-    Decoration.replace({
-      widget: new TerminalBufferChipWidget(),
-    }).range(token.start, token.end)
-  );
-  return { decorations: Decoration.set(decorations), tokens };
+  return { tokens: getAllAtTerminalTokens(text) };
 }
 
 class TerminalBufferChipWidget extends WidgetType {
-  eq() {
-    return true;
+  constructor(readonly isSelected: boolean) {
+    super();
+  }
+
+  eq(other: TerminalBufferChipWidget) {
+    return this.isSelected === other.isSelected;
   }
 
   toDOM() {
     const span = document.createElement("span");
-    span.className = "cm-terminal-chip";
+    span.className = this.isSelected
+      ? "cm-terminal-chip cm-chip-pending-delete"
+      : "cm-terminal-chip";
     span.setAttribute("role", "img");
     span.setAttribute("aria-label", "Terminal output");
 
@@ -61,7 +57,18 @@ export const terminalChipField = StateField.define<TerminalChipState>({
     return buildTerminalChipState(tr.state.doc.toString());
   },
   provide: (f) => [
-    EditorView.decorations.from(f, (state) => state.decorations),
+    EditorView.decorations.of((view) => {
+      const chipState = view.state.field(f, false);
+      if (!chipState || chipState.tokens.length === 0) return Decoration.none;
+      const pending = view.state.field(chipPendingDeleteField, false) ?? null;
+      const ranges = chipState.tokens.map((token) => {
+        const selected = isChipSelected(pending, token.start, token.end);
+        return Decoration.replace({
+          widget: new TerminalBufferChipWidget(selected),
+        }).range(token.start, token.end);
+      });
+      return Decoration.set(ranges, true);
+    }),
     EditorView.atomicRanges.of((view) => {
       const chipState = view.state.field(f, false);
       if (!chipState || chipState.tokens.length === 0) return Decoration.none;

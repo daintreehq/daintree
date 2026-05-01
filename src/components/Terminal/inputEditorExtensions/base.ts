@@ -160,6 +160,11 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         ...chipStyle,
       },
       ".cm-selection-chip svg": CHIP_SVG_SIZE,
+      ".cm-chip-pending-delete": {
+        background: `color-mix(in oklab, ${c.foreground} 14%, transparent)`,
+        outline: `1px solid color-mix(in oklab, ${c.foreground} 28%, transparent)`,
+        outlineOffset: "0px",
+      },
       ".cm-voice-interim": {
         opacity: "0.55",
         fontStyle: "italic",
