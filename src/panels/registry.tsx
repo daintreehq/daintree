@@ -11,6 +11,7 @@ import type { PanelSnapshot } from "@shared/types/project";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
+import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 
 import { serializePtyPanel } from "./terminal/serializer";
 import { createTerminalDefaults } from "./terminal/defaults";
@@ -57,7 +58,9 @@ function BrowserPaneWrapper(props: ComponentProps<typeof LazyBrowserPane>) {
   return (
     <ErrorBoundary variant="component" componentName="BrowserPane">
       <Suspense fallback={<BrowserPaneSkeleton />}>
-        <LazyBrowserPane {...props} />
+        <ContentFadeIn className="flex flex-col h-full w-full">
+          <LazyBrowserPane {...props} />
+        </ContentFadeIn>
       </Suspense>
     </ErrorBoundary>
   );
@@ -67,7 +70,9 @@ function DevPreviewPaneWrapper(props: ComponentProps<typeof LazyDevPreviewPane>)
   return (
     <ErrorBoundary variant="component" componentName="DevPreviewPane">
       <Suspense fallback={<BrowserPaneSkeleton label="Loading dev preview panel" />}>
-        <LazyDevPreviewPane {...props} />
+        <ContentFadeIn className="flex flex-col h-full w-full">
+          <LazyDevPreviewPane {...props} />
+        </ContentFadeIn>
       </Suspense>
     </ErrorBoundary>
   );

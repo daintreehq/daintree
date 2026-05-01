@@ -1512,6 +1512,11 @@ body[data-reduce-animations="true"] .animate-skeleton-shimmer::after {
   will-change: auto;
 }
 
+body[data-reduce-animations="true"] .content-fade-in {
+  animation: none;
+  opacity: 1;
+}
+
 body[data-reduce-animations="true"] .animate-fleet-bar-refocus-pulse::before,
 body[data-reduce-animations="true"] .animate-fleet-bar-commit-flash::before {
   animation: none;
