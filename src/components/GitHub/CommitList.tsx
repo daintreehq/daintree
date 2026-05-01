@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, type KeyboardEvent } from "re
 import { useDebounce } from "@/hooks/useDebounce";
 import { Search, RefreshCw, AlertCircle, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 import { cn } from "@/lib/utils";
 import { CommitListItem } from "./CommitListItem";
 import type { GitCommit, GitCommitListResponse } from "@shared/types/github";
@@ -237,7 +238,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
             <CommitListSkeleton count={initialCount} />
           )
         ) : data.length > 0 ? (
-          <>
+          <ContentFadeIn>
             {error && renderError()}
             <div
               ref={listRef}
@@ -291,7 +292,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
                 </Button>
               </div>
             )}
-          </>
+          </ContentFadeIn>
         ) : error ? (
           <div className="p-8 text-center text-muted-foreground">
             <AlertCircle className="h-5 w-5 mx-auto mb-2 opacity-50" />

@@ -21,6 +21,7 @@ import {
 } from "@/lib/githubResourceCache";
 import { isTokenRelatedError, isTransientNetworkError } from "@/lib/githubErrors";
 import { Button } from "@/components/ui/button";
+import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -1198,7 +1199,7 @@ export function GitHubResourceList({
             />
           </div>
         ) : data.length > 0 ? (
-          <>
+          <ContentFadeIn className="flex-1 min-h-0 flex flex-col">
             {error && (
               <div className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-muted-foreground bg-overlay-soft shrink-0">
                 <WifiOff className="h-3.5 w-3.5 shrink-0" />
@@ -1265,7 +1266,7 @@ export function GitHubResourceList({
                 )}
               />
             </div>
-          </>
+          </ContentFadeIn>
         ) : error ? (
           <div className="p-8 text-center text-muted-foreground">
             <WifiOff className="h-5 w-5 mx-auto mb-2 opacity-50" />
