@@ -69,6 +69,7 @@ vi.mock("electron", () => {
 
 vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
   forgetBlinkSample: vi.fn(),
+  forgetEluSample: vi.fn(),
 }));
 
 vi.mock("../webContentsRegistry.js", () => ({
@@ -136,7 +137,7 @@ vi.mock("../../services/PtyManager.js", () => ({
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { logInfo } from "../../utils/logger.js";
-import { forgetBlinkSample } from "../../services/ProcessMemoryMonitor.js";
+import { forgetBlinkSample, forgetEluSample } from "../../services/ProcessMemoryMonitor.js";
 import { detachRendererConsoleCapture } from "../rendererConsoleCapture.js";
 
 function createMockWindow() {
@@ -560,6 +561,22 @@ describe("ProjectViewManager — eviction safety", () => {
     await managerWithLimit.switchTo("proj-c", "/path/c");
 
     expect(vi.mocked(forgetBlinkSample)).toHaveBeenCalledWith(wcA.id);
+  });
+
+  it("calls forgetEluSample with the evicted webContents id", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    expect(vi.mocked(forgetEluSample)).toHaveBeenCalledWith(wcA.id);
   });
 });
 

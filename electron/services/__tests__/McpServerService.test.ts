@@ -385,18 +385,18 @@ describe("McpServerService", () => {
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
-          id: "github.listPRs" as ActionId,
+          id: "github.listPullRequests" as ActionId,
           title: "List PRs",
           description: "List pull requests",
           category: "github",
           kind: "query",
         }),
         createManifestEntry({
-          id: "browser.navigate" as ActionId,
-          title: "Navigate",
-          description: "Navigate the browser",
-          category: "browser",
-          kind: "command",
+          id: "system.checkCommand" as ActionId,
+          title: "Check Command",
+          description: "Check if a command exists",
+          category: "system",
+          kind: "query",
         }),
         createManifestEntry({
           id: "worktree.create" as ActionId,
@@ -413,12 +413,12 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     const result = await client.listTools();
-    const ghTool = result.tools.find((t) => t.name === "github.listPRs");
-    const browserTool = result.tools.find((t) => t.name === "browser.navigate");
+    const ghTool = result.tools.find((t) => t.name === "github.listPullRequests");
+    const systemTool = result.tools.find((t) => t.name === "system.checkCommand");
     const wtTool = result.tools.find((t) => t.name === "worktree.create");
 
     expect(ghTool?.annotations?.openWorldHint).toBe(true);
-    expect(browserTool?.annotations?.openWorldHint).toBe(true);
+    expect(systemTool?.annotations?.openWorldHint).toBe(true);
     expect(wtTool?.annotations?.openWorldHint).toBe(false);
   });
 

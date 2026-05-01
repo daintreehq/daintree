@@ -37,6 +37,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "window:destroy-hidden-webviews": "external",
   "window:disk-space-status": "external",
   "window:sample-blink-memory": "external",
+  "window:sample-renderer-elu": "external",
   "system:wake": "external",
   "app-agent:dispatch-action-request": "external",
   "app-agent:confirmation-request": "external",

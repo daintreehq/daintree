@@ -35,6 +35,12 @@ import {
   recordBlinkSample,
   forgetBlinkSample,
   getBlinkSamples,
+  recordEluSample,
+  forgetEluSample,
+  getEluSamples,
+  getEluHighStreaks,
+  RENDERER_ELU_HIGH_RATIO,
+  RENDERER_ELU_HIGH_SAMPLE_COUNT,
   type MemoryPressureActions,
 } from "../ProcessMemoryMonitor.js";
 
@@ -696,6 +702,202 @@ describe("ProcessMemoryMonitor", () => {
       stop = startAppMetricsMonitor(actions);
 
       // Should not throw — sampleBlinkMemory is optional.
+      expect(() => vi.advanceTimersByTime(30_000)).not.toThrow();
+    });
+  });
+
+  describe("renderer ELU sampling (issue #6276)", () => {
+    beforeEach(() => {
+      for (const wcId of Array.from(getEluSamples().keys())) {
+        forgetEluSample(wcId);
+      }
+    });
+
+    it("recordEluSample stores ratio derived from blocking and window", () => {
+      recordEluSample(42, { blockingDurationMs: 1500, sampleWindowMs: 3000 });
+      const stored = getEluSamples().get(42);
+      expect(stored?.blockingDurationMs).toBe(1500);
+      expect(stored?.sampleWindowMs).toBe(3000);
+      expect(stored?.ratio).toBeCloseTo(0.5, 5);
+      expect(typeof stored?.timestamp).toBe("number");
+    });
+
+    it("ignores samples with non-positive sampleWindowMs", () => {
+      recordEluSample(42, { blockingDurationMs: 1500, sampleWindowMs: 0 });
+      expect(getEluSamples().has(42)).toBe(false);
+    });
+
+    it("clamps ratio to [0, 1]", () => {
+      recordEluSample(1, { blockingDurationMs: -100, sampleWindowMs: 1000 });
+      expect(getEluSamples().get(1)?.ratio).toBe(0);
+
+      recordEluSample(2, { blockingDurationMs: 5000, sampleWindowMs: 1000 });
+      expect(getEluSamples().get(2)?.ratio).toBe(1);
+    });
+
+    it("emits debug log with rounded ratio for every sample", () => {
+      recordEluSample(7, { blockingDurationMs: 250, sampleWindowMs: 1000 });
+      expect(logDebug).toHaveBeenCalledWith(
+        "renderer-elu-sample",
+        expect.objectContaining({ webContentsId: 7, ratio: 0.25 })
+      );
+    });
+
+    it("does NOT log sustained-high warning while below threshold", () => {
+      for (let i = 0; i < RENDERER_ELU_HIGH_SAMPLE_COUNT * 2; i++) {
+        recordEluSample(42, { blockingDurationMs: 100, sampleWindowMs: 1000 });
+      }
+      expect(logWarn).not.toHaveBeenCalledWith("renderer-elu-sustained-high", expect.anything());
+    });
+
+    it("logs sustained-high warning exactly once when streak hits threshold", () => {
+      const blocking = Math.ceil(RENDERER_ELU_HIGH_RATIO * 1000) + 1;
+      for (let i = 0; i < RENDERER_ELU_HIGH_SAMPLE_COUNT; i++) {
+        recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+      }
+      const highCalls = vi
+        .mocked(logWarn)
+        .mock.calls.filter((c) => c[0] === "renderer-elu-sustained-high");
+      expect(highCalls).toHaveLength(1);
+      expect(highCalls[0]![1]).toMatchObject({
+        webContentsId: 42,
+        consecutiveSamples: RENDERER_ELU_HIGH_SAMPLE_COUNT,
+      });
+
+      // Subsequent saturated samples should not emit additional warnings.
+      recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+      const stillOne = vi
+        .mocked(logWarn)
+        .mock.calls.filter((c) => c[0] === "renderer-elu-sustained-high");
+      expect(stillOne).toHaveLength(1);
+    });
+
+    it("a single below-threshold sample resets the streak", () => {
+      const blocking = Math.ceil(RENDERER_ELU_HIGH_RATIO * 1000) + 1;
+      for (let i = 0; i < RENDERER_ELU_HIGH_SAMPLE_COUNT - 1; i++) {
+        recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+      }
+      // One quiet sample: streak resets.
+      recordEluSample(42, { blockingDurationMs: 50, sampleWindowMs: 1000 });
+      expect(getEluHighStreaks().has(42)).toBe(false);
+
+      // Now we need a fresh full streak before the warning fires.
+      for (let i = 0; i < RENDERER_ELU_HIGH_SAMPLE_COUNT - 1; i++) {
+        recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+      }
+      const noHighYet = vi
+        .mocked(logWarn)
+        .mock.calls.filter((c) => c[0] === "renderer-elu-sustained-high");
+      expect(noHighYet).toHaveLength(0);
+
+      recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+      const highNow = vi
+        .mocked(logWarn)
+        .mock.calls.filter((c) => c[0] === "renderer-elu-sustained-high");
+      expect(highNow).toHaveLength(1);
+    });
+
+    it("streaks are tracked independently per webContentsId", () => {
+      const blocking = Math.ceil(RENDERER_ELU_HIGH_RATIO * 1000) + 1;
+      for (let i = 0; i < RENDERER_ELU_HIGH_SAMPLE_COUNT - 1; i++) {
+        recordEluSample(1, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+        recordEluSample(2, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+      }
+      // Reset only view 1.
+      recordEluSample(1, { blockingDurationMs: 0, sampleWindowMs: 1000 });
+      // Push view 2 over the edge.
+      recordEluSample(2, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+
+      const highCalls = vi
+        .mocked(logWarn)
+        .mock.calls.filter((c) => c[0] === "renderer-elu-sustained-high");
+      expect(highCalls).toHaveLength(1);
+      expect(highCalls[0]![1]).toMatchObject({ webContentsId: 2 });
+    });
+
+    it("forgetEluSample clears both the sample and the streak", () => {
+      const blocking = Math.ceil(RENDERER_ELU_HIGH_RATIO * 1000) + 1;
+      recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+      expect(getEluSamples().has(42)).toBe(true);
+      expect(getEluHighStreaks().has(42)).toBe(true);
+
+      forgetEluSample(42);
+      expect(getEluSamples().has(42)).toBe(false);
+      expect(getEluHighStreaks().has(42)).toBe(false);
+    });
+
+    // Documents current behavior: a view that goes "active" → "cached" →
+    // "active" without an intervening below-threshold sample retains its
+    // streak. The fan-out filter skips cached views, so no samples arrive
+    // during the cached phase. If the streak was at N-1 before caching and
+    // the next active sample is high, the warning fires immediately. This is
+    // bounded — view eviction always calls forgetEluSample — but the logged
+    // `windowMs` may overstate the contiguous observation period. Acceptable
+    // for telemetry-only signal; if upgraded to a proactive trigger, the
+    // streak should become gap-aware.
+    it("(known limitation) streak survives caching gaps", () => {
+      const blocking = Math.ceil(RENDERER_ELU_HIGH_RATIO * 1000) + 1;
+      // Build streak to N-1 while view is active.
+      for (let i = 0; i < RENDERER_ELU_HIGH_SAMPLE_COUNT - 1; i++) {
+        recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+      }
+      // No samples arrive while the view is cached (fan-out skips it).
+      // Then the view is reactivated and the next sample is also high.
+      recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+
+      const highCalls = vi
+        .mocked(logWarn)
+        .mock.calls.filter((c) => c[0] === "renderer-elu-sustained-high");
+      expect(highCalls).toHaveLength(1);
+    });
+
+    it("startAppMetricsMonitor invokes actions.sampleRendererElu once per poll", () => {
+      const sampleRendererElu = vi.fn();
+      const actions: MemoryPressureActions = {
+        clearCaches: vi.fn().mockResolvedValue(undefined),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+        sampleRendererElu,
+      };
+
+      stop = startAppMetricsMonitor(actions);
+
+      vi.advanceTimersByTime(30_000);
+      expect(sampleRendererElu).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(30_000 * 2);
+      expect(sampleRendererElu).toHaveBeenCalledTimes(3);
+    });
+
+    it("sampleRendererElu throwing does not break the poll loop", () => {
+      const sampleRendererElu = vi.fn().mockImplementation(() => {
+        throw new Error("renderer port closed");
+      });
+      const actions: MemoryPressureActions = {
+        clearCaches: vi.fn().mockResolvedValue(undefined),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+        sampleRendererElu,
+      };
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
+      stop = startAppMetricsMonitor(actions);
+
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+
+      expect(sampleRendererElu).toHaveBeenCalledTimes(2);
+      expect(logDebug).toHaveBeenCalledWith("process-memory-sample", expect.any(Object));
+    });
+
+    it("works without sampleRendererElu (optional, backwards compat)", () => {
+      const actions: MemoryPressureActions = {
+        clearCaches: vi.fn().mockResolvedValue(undefined),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+      };
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
+      stop = startAppMetricsMonitor(actions);
       expect(() => vi.advanceTimersByTime(30_000)).not.toThrow();
     });
   });

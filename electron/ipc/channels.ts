@@ -118,6 +118,7 @@ export const CHANNELS = {
   DIAGNOSTICS_GET_HEAP_STATS: "diagnostics:get-heap-stats",
   DIAGNOSTICS_GET_INFO: "diagnostics:get-info",
   SYSTEM_REPORT_BLINK_MEMORY: "system:report-blink-memory",
+  SYSTEM_REPORT_RENDERER_ELU: "system:report-renderer-elu",
 
   PR_DETECTED: "pr:detected",
   PR_CLEARED: "pr:cleared",

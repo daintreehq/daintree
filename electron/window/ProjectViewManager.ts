@@ -21,7 +21,7 @@ import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isLocalhostUrl } from "../../shared/utils/urlUtils.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
-import { forgetBlinkSample } from "../services/ProcessMemoryMonitor.js";
+import { forgetBlinkSample, forgetEluSample } from "../services/ProcessMemoryMonitor.js";
 import { getPtyManager } from "../services/PtyManager.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { logInfo, logWarn } from "../utils/logger.js";
@@ -736,6 +736,7 @@ export class ProjectViewManager {
     this.webContentsToProject.delete(wcId);
     unregisterProjectView(wcId);
     forgetBlinkSample(wcId);
+    forgetEluSample(wcId);
 
     // Notify listeners (e.g. WorkspaceClient) so they can clean up direct ports
     this.onViewEvicted?.(wcId);

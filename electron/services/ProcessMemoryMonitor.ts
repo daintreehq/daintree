@@ -86,6 +86,93 @@ export function getBlinkSamples(): ReadonlyMap<number, BlinkMemorySample> {
   return blinkSamples;
 }
 
+/** Ratio (blocking / sample window) considered "saturated" for a single sample. */
+export const RENDERER_ELU_HIGH_RATIO = 0.85;
+
+/**
+ * Number of consecutive saturated samples required before logging a
+ * sustained-high warning. POLL_INTERVAL_MS is 30s, so 6 samples = 3 minutes
+ * of continuous saturation. A single sub-threshold sample resets the streak.
+ */
+export const RENDERER_ELU_HIGH_SAMPLE_COUNT = 6;
+
+export interface RendererEluSample {
+  /** Total LoAF blockingDuration accumulated by the preload over the window, in ms. */
+  blockingDurationMs: number;
+  /** Wall-clock width of the sample window the preload measured against, in ms. */
+  sampleWindowMs: number;
+  /** Derived ratio = blockingDurationMs / sampleWindowMs, clamped to [0, 1]. */
+  ratio: number;
+  /** Wall-clock time the sample was recorded. */
+  timestamp: number;
+}
+
+const eluSamples = new Map<number, RendererEluSample>();
+const eluHighStreak = new Map<number, number>();
+
+/**
+ * Called by the IPC handler when a renderer reports its accumulated long-
+ * animation-frame blocking time. Keyed by webContents id; cleared on view
+ * eviction via `forgetEluSample`. Logs at debug level for every sample;
+ * emits exactly one `renderer-elu-sustained-high` warn when the per-view
+ * streak first hits {@link RENDERER_ELU_HIGH_SAMPLE_COUNT}. The streak
+ * continues incrementing past the threshold, but only the boundary crossing
+ * is logged to avoid flooding.
+ */
+export function recordEluSample(
+  webContentsId: number,
+  payload: { blockingDurationMs: number; sampleWindowMs: number }
+): void {
+  const { blockingDurationMs, sampleWindowMs } = payload;
+  if (sampleWindowMs <= 0) return;
+  const rawRatio = blockingDurationMs / sampleWindowMs;
+  const ratio = rawRatio < 0 ? 0 : rawRatio > 1 ? 1 : rawRatio;
+  const stored: RendererEluSample = {
+    blockingDurationMs,
+    sampleWindowMs,
+    ratio,
+    timestamp: Date.now(),
+  };
+  eluSamples.set(webContentsId, stored);
+  logDebug("renderer-elu-sample", {
+    webContentsId,
+    ratio: Math.round(ratio * 100) / 100,
+    blockingDurationMs: Math.round(blockingDurationMs),
+    sampleWindowMs,
+  });
+
+  if (ratio >= RENDERER_ELU_HIGH_RATIO) {
+    const next = (eluHighStreak.get(webContentsId) ?? 0) + 1;
+    eluHighStreak.set(webContentsId, next);
+    if (next === RENDERER_ELU_HIGH_SAMPLE_COUNT) {
+      logWarn("renderer-elu-sustained-high", {
+        webContentsId,
+        ratio: Math.round(ratio * 100) / 100,
+        consecutiveSamples: next,
+        windowMs: sampleWindowMs * next,
+      });
+    }
+  } else {
+    eluHighStreak.delete(webContentsId);
+  }
+}
+
+/** Drop a renderer's last ELU sample and streak (call from view eviction). */
+export function forgetEluSample(webContentsId: number): void {
+  eluSamples.delete(webContentsId);
+  eluHighStreak.delete(webContentsId);
+}
+
+/** Read-only view for diagnostics / tests. */
+export function getEluSamples(): ReadonlyMap<number, RendererEluSample> {
+  return eluSamples;
+}
+
+/** Read-only view of per-view consecutive saturated-sample counts (tests). */
+export function getEluHighStreaks(): ReadonlyMap<number, number> {
+  return eluHighStreak;
+}
+
 export interface MemoryPressureActions {
   clearCaches: () => Promise<void>;
   destroyHiddenWebviews: (tier: 1 | 2) => Promise<void>;
@@ -99,6 +186,14 @@ export interface MemoryPressureActions {
    * `system:report-blink-memory` IPC channel which calls `recordBlinkSample`.
    */
   sampleBlinkMemory?: () => void;
+  /**
+   * Optional renderer event-loop utilization sampler. If wired, fans a
+   * `window:sample-renderer-elu` push event to every active renderer (cached
+   * views are skipped — JS timer throttling makes their samples meaningless).
+   * Renderers reply via `system:report-renderer-elu` which calls
+   * `recordEluSample`. Failures are non-critical observability.
+   */
+  sampleRendererElu?: () => void;
 }
 
 function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
@@ -121,6 +216,13 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       // populate `blinkSamples` for the next poll's diagnostics.
       try {
         actions?.sampleBlinkMemory?.();
+      } catch {
+        /* non-critical */
+      }
+      // Kick off a renderer-ELU sample fan-out alongside Blink-memory. Replies
+      // arrive via SYSTEM_REPORT_RENDERER_ELU and populate `eluSamples`.
+      try {
+        actions?.sampleRendererElu?.();
       } catch {
         /* non-critical */
       }
