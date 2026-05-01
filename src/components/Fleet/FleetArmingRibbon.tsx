@@ -5,6 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { useEscapeStack, useWorktreeColorMap } from "@/hooks";
+import type { AgentState } from "@/types";
 import "./fleetRawInputBroadcast";
 import {
   useFleetArmingStore,
@@ -660,6 +661,17 @@ export function FleetArmingRibbon(): ReactElement | null {
           data-testid="fleet-arming-ribbon"
           {...ribbonMotionProps}
         >
+          {!isBroadcastConfirmActive ? (
+            <button
+              type="button"
+              onClick={exitFleet}
+              aria-label="Exit fleet mode"
+              data-testid="fleet-leading-exit"
+              className="rounded p-1 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
           <FleetCountChip
             armedCount={armedCount}
             open={popoverOpen}
@@ -745,12 +757,25 @@ interface FleetCountChipProps {
 function FleetCountChip({ armedCount, open, onOpenChange }: FleetCountChipProps): ReactElement {
   const armOrder = useFleetArmingStore((s) => s.armOrder);
   const disarmId = useFleetArmingStore((s) => s.disarmId);
-  const panelsById = usePanelStore(
+  // Two separate primitive-valued selectors keeps useShallow happy. A single
+  // selector returning Record<string, {title, agentState}> would create new
+  // inner object identities per call and trigger an infinite re-render loop
+  // because useShallow only compares one level deep.
+  const titlesByPane = usePanelStore(
     useShallow((state) => {
       const out: Record<string, string> = {};
       for (const id of armOrder) {
         const t = state.panelsById[id];
         if (t) out[id] = t.title;
+      }
+      return out;
+    })
+  );
+  const agentStatesByPane = usePanelStore(
+    useShallow((state) => {
+      const out: Record<string, AgentState | undefined> = {};
+      for (const id of armOrder) {
+        out[id] = state.panelsById[id]?.agentState;
       }
       return out;
     })
@@ -801,8 +826,9 @@ function FleetCountChip({ armedCount, open, onOpenChange }: FleetCountChipProps)
   );
 
   const scope = useFleetWorktreeScope();
-  const scopeAriaLabel = scope.worktreeCount > 1 ? ` across ${scope.worktreeCount} worktrees` : "";
-  const label = `${armedCount} in fleet${scopeAriaLabel}`;
+  const worktreeScopeText = scope.worktreeCount > 1 ? ` · ${scope.worktreeCount} worktrees` : "";
+  const exitedAriaText = scope.exitedCount > 0 ? `, ${scope.exitedCount} exited` : "";
+  const label = `${armedCount} in fleet${worktreeScopeText}${exitedAriaText}`;
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
@@ -824,7 +850,15 @@ function FleetCountChip({ armedCount, open, onOpenChange }: FleetCountChipProps)
             label={String(armedCount)}
             textClassName="font-semibold tabular-nums text-daintree-text"
           />
-          <span className="text-daintree-text/70">in fleet</span>
+          <span className="text-daintree-text/70">
+            in fleet
+            {scope.worktreeCount > 1 ? ` · ${scope.worktreeCount} worktrees` : ""}
+          </span>
+          {scope.exitedCount > 0 ? (
+            <span className="text-daintree-text/40 tabular-nums" data-testid="fleet-exited-count">
+              · {scope.exitedCount} exited
+            </span>
+          ) : null}
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -841,26 +875,30 @@ function FleetCountChip({ armedCount, open, onOpenChange }: FleetCountChipProps)
           {armOrder.length === 0 ? (
             <li className="px-2 py-1 text-[12px] text-daintree-text/60">None</li>
           ) : (
-            armOrder.map((id) => (
-              <li key={id} className="flex items-center gap-2 rounded hover:bg-tint/[0.08]">
-                <button
-                  type="button"
-                  onClick={() => focusArmedPane(id)}
-                  aria-label={`Focus ${panelsById[id] ?? id}`}
-                  className="flex-1 truncate px-2 py-1 text-left text-[12px] text-daintree-text"
-                >
-                  {panelsById[id] ?? id}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => disarmId(id)}
-                  aria-label={`Unarm ${panelsById[id] ?? id}`}
-                  className="inline-flex shrink-0 items-center rounded p-0.5 mr-1 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </li>
-            ))
+            armOrder.map((id) => {
+              const title = titlesByPane[id] ?? id;
+              return (
+                <li key={id} className="flex items-center gap-2 rounded hover:bg-tint/[0.08]">
+                  <button
+                    type="button"
+                    onClick={() => focusArmedPane(id)}
+                    aria-label={`Focus ${title}`}
+                    className="flex-1 truncate px-2 py-1 text-left text-[12px] text-daintree-text"
+                  >
+                    {title}
+                  </button>
+                  {renderPaneStateBadge(agentStatesByPane[id])}
+                  <button
+                    type="button"
+                    onClick={() => disarmId(id)}
+                    aria-label={`Unarm ${title}`}
+                    className="inline-flex shrink-0 items-center rounded p-0.5 mr-1 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </li>
+              );
+            })
           )}
         </ul>
       </PopoverContent>
@@ -871,10 +909,13 @@ function FleetCountChip({ armedCount, open, onOpenChange }: FleetCountChipProps)
 interface FleetWorktreeScope {
   worktreeCount: number;
   colors: string[];
+  exitedCount: number;
 }
 
 /**
- * Computes the fleet's worktree scope (count + deduped identity colors).
+ * Computes the fleet's worktree scope (count + deduped identity colors) and
+ * a per-pane health rollup. exitedCount is computed independently of the
+ * color map so single-worktree projects still surface unhealthy panes.
  *
  * Stable-sorted by worktreeId so the color strip doesn't re-order every time
  * a pane joins or leaves the fleet — peripheral jitter on the left edge of
@@ -886,6 +927,9 @@ interface FleetWorktreeScope {
 function useFleetWorktreeScope(): FleetWorktreeScope {
   const armOrder = useFleetArmingStore((s) => s.armOrder);
   const colorMap = useWorktreeColorMap();
+  // Two primitive-valued selectors instead of one nested-object selector so
+  // useShallow's one-level equality check stays effective and we don't trigger
+  // an infinite re-render loop on every store tick.
   const worktreeIdsByPane = usePanelStore(
     useShallow((state) => {
       const out: Record<string, string | undefined> = {};
@@ -895,14 +939,29 @@ function useFleetWorktreeScope(): FleetWorktreeScope {
       return out;
     })
   );
+  const agentStatesByPane = usePanelStore(
+    useShallow((state) => {
+      const out: Record<string, AgentState | undefined> = {};
+      for (const id of armOrder) {
+        out[id] = state.panelsById[id]?.agentState;
+      }
+      return out;
+    })
+  );
 
   return useMemo<FleetWorktreeScope>(() => {
-    if (!colorMap) return { worktreeCount: 0, colors: [] };
+    let exitedCount = 0;
     const uniqueWorktreeIds = new Set<string>();
     for (const paneId of armOrder) {
+      if (agentStatesByPane[paneId] === "exited") exitedCount += 1;
       const wtId = worktreeIdsByPane[paneId];
       if (wtId) uniqueWorktreeIds.add(wtId);
     }
+
+    if (!colorMap) {
+      return { worktreeCount: uniqueWorktreeIds.size, colors: [], exitedCount };
+    }
+
     const sortedIds = Array.from(uniqueWorktreeIds).sort();
     const seenColors = new Set<string>();
     const colors: string[] = [];
@@ -912,8 +971,36 @@ function useFleetWorktreeScope(): FleetWorktreeScope {
       seenColors.add(color);
       colors.push(color);
     }
-    return { worktreeCount: uniqueWorktreeIds.size, colors };
-  }, [armOrder, worktreeIdsByPane, colorMap]);
+    return { worktreeCount: uniqueWorktreeIds.size, colors, exitedCount };
+  }, [armOrder, worktreeIdsByPane, agentStatesByPane, colorMap]);
+}
+
+// Compact health badge for popover rows. Limited to the three states that
+// communicate fleet-relevant signal: working/waiting (active) and exited
+// (terminal unhealthy). idle/completed/directing are noise here — completed
+// is a healthy resting state, directing is transient, idle is background.
+function renderPaneStateBadge(state: AgentState | undefined): ReactElement | null {
+  if (state !== "working" && state !== "waiting" && state !== "exited") return null;
+  const labels: Record<"working" | "waiting" | "exited", string> = {
+    working: "Working",
+    waiting: "Waiting",
+    exited: "Exited",
+  };
+  const tone =
+    state === "exited"
+      ? "bg-tint/[0.08] text-daintree-text/40"
+      : "bg-tint/[0.08] text-daintree-text/70";
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-medium",
+        tone
+      )}
+      data-testid={`fleet-pane-state-${state}`}
+    >
+      {labels[state]}
+    </span>
+  );
 }
 
 /**

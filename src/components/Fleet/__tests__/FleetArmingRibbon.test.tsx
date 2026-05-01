@@ -150,6 +150,85 @@ describe("FleetArmingRibbon", () => {
     expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
   });
 
+  it("renders a leading × exit affordance that disarms on click", () => {
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    render(<FleetArmingRibbon />);
+    const lead = screen.getByTestId("fleet-leading-exit");
+    expect(lead.getAttribute("aria-label")).toBe("Exit fleet mode");
+    fireEvent.click(lead);
+    expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+  });
+
+  it("hides the leading × during a pending broadcast confirm", () => {
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    useFleetBroadcastConfirmStore.setState({
+      pending: {
+        text: "rm -rf /",
+        warningReasons: ["destructive"],
+        onConfirm: async () => {},
+      },
+    });
+    render(<FleetArmingRibbon />);
+    expect(screen.queryByTestId("fleet-leading-exit")).toBeNull();
+  });
+
+  it("surfaces the cross-worktree count in the chip's visible label", () => {
+    seed([
+      { ...makeAgent("t1"), worktreeId: "wt-a" } as TerminalInstance,
+      { ...makeAgent("t2"), worktreeId: "wt-b" } as TerminalInstance,
+    ]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    render(<FleetArmingRibbon />);
+    const chip = screen.getByTestId("fleet-armed-count-chip");
+    expect(chip.textContent).toContain("2 worktrees");
+    expect(chip.getAttribute("aria-label")).toContain("2 worktrees");
+  });
+
+  it("does not surface the worktree count when all panes share one worktree", () => {
+    seed([makeAgent("t1"), makeAgent("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    render(<FleetArmingRibbon />);
+    const chip = screen.getByTestId("fleet-armed-count-chip");
+    expect(chip.textContent).not.toContain("worktrees");
+  });
+
+  it("surfaces an exited count when any armed pane has agentState=exited", () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "exited"), makeAgent("t3", "exited")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2", "t3"]);
+    render(<FleetArmingRibbon />);
+    const exited = screen.getByTestId("fleet-exited-count");
+    expect(exited.textContent).toContain("2 exited");
+    expect(screen.getByTestId("fleet-armed-count-chip").getAttribute("aria-label")).toContain(
+      "2 exited"
+    );
+  });
+
+  it("omits the exited count when no armed pane is exited", () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "waiting")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    render(<FleetArmingRibbon />);
+    expect(screen.queryByTestId("fleet-exited-count")).toBeNull();
+  });
+
+  it("renders per-row health badges for working/waiting/exited and skips idle/completed", () => {
+    seed([
+      { ...makeAgent("t1", "working"), title: "alpha" } as TerminalInstance,
+      { ...makeAgent("t2", "waiting"), title: "beta" } as TerminalInstance,
+      { ...makeAgent("t3", "exited"), title: "gamma" } as TerminalInstance,
+      { ...makeAgent("t4", "idle"), title: "delta" } as TerminalInstance,
+      { ...makeAgent("t5", "completed"), title: "epsilon" } as TerminalInstance,
+    ]);
+    useFleetArmingStore.getState().armIds(["t1", "t2", "t3", "t4", "t5"]);
+    render(<FleetArmingRibbon />);
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+    expect(screen.getByTestId("fleet-pane-state-working").textContent).toBe("Working");
+    expect(screen.getByTestId("fleet-pane-state-waiting").textContent).toBe("Waiting");
+    expect(screen.getByTestId("fleet-pane-state-exited").textContent).toBe("Exited");
+    // idle / completed render no badge — verify by absence
+    expect(screen.queryByTestId("fleet-pane-state-idle")).toBeNull();
+    expect(screen.queryByTestId("fleet-pane-state-completed")).toBeNull();
+  });
+
   it("renders 'Exit' label and ⌘Esc/Ctrl+Esc kbd on the exit chip", () => {
     useFleetArmingStore.getState().armIds(["a", "b"]);
     render(<FleetArmingRibbon />);
