@@ -57,7 +57,7 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(8);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(9);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:toolbar-buttons", expect.any(Function));
@@ -72,6 +72,7 @@ describe("registerPluginHandlers", () => {
       "plugin:actions-unregister",
       expect.any(Function)
     );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:panel-kinds-get", expect.any(Function));
   });
 
   it("throws before registering any handler when invoked before enforceIpcSenderValidation", () => {
@@ -93,6 +94,7 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-get");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-register");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-unregister");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:panel-kinds-get");
   });
 
   it("PLUGIN_LIST handler delegates to pluginService.listPlugins", async () => {

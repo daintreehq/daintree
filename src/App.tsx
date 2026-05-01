@@ -26,6 +26,7 @@ import { useDiskSpaceWarnings } from "./hooks/useDiskSpaceWarnings";
 import { useGitHubTokenHealth } from "./hooks/useGitHubTokenHealth";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { usePluginActions } from "./hooks/usePluginActions";
+import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
 import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
 
@@ -434,6 +435,7 @@ function App() {
   });
 
   usePluginActions();
+  usePluginPanelKinds();
 
   useMenuActions({
     onOpenSettings: handleSettings,

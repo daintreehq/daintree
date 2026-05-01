@@ -1,7 +1,12 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { usePanelStore, type TerminalInstance } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { getPanelKindDefinition, type PanelComponentProps } from "@/registry";
+import {
+  getPanelKindDefinition,
+  getPanelKindDefinitionsSnapshot,
+  subscribeToPanelKindDefinitions,
+  type PanelComponentProps,
+} from "@/registry";
 import { ContentPanel, PluginMissingPanel, triggerPanelTransition } from "@/components/Panel";
 import { usePanelLifecycle } from "@/hooks/usePanelLifecycle";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
@@ -63,6 +68,9 @@ export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelP
   const isFocused = focusedId === terminal.id;
 
   const kind = terminal.kind ?? "terminal";
+  // Subscribe to definition registry mutations so a plugin re-registering its
+  // panel kind hot-swaps the PluginMissingPanel placeholder without a reload.
+  useSyncExternalStore(subscribeToPanelKindDefinitions, getPanelKindDefinitionsSnapshot);
   const definition = getPanelKindDefinition(kind);
 
   const panelProps: PanelComponentProps = useMemo(

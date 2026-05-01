@@ -1357,6 +1357,10 @@ export interface IpcInvokeMap {
     args: [pluginId: string, actionId: string];
     result: void;
   };
+  "plugin:panel-kinds-get": {
+    args: [];
+    result: import("../../config/panelKindRegistry.js").PanelKindConfig[];
+  };
 
   // Dev Preview channels
   "dev-preview:ensure": {
@@ -2431,6 +2435,11 @@ export interface IpcEventMap {
     actions: import("../plugin.js").PluginActionDescriptor[];
   };
 
+  // Plugin panel kind registry events (main → renderer)
+  "plugin:panel-kinds-changed": {
+    kinds: import("../../config/panelKindRegistry.js").PanelKindConfig[];
+  };
+
   // Resource profile change (main → renderer)
   "resource:profile-changed": import("../resourceProfile.js").ResourceProfilePayload;
 
@@ -2500,6 +2509,8 @@ export type IpcEventBusMap = Pick<
   | "app-agent:confirmation-request"
   // Plugin action registry (global broadcast)
   | "plugin:actions-changed"
+  // Plugin panel kind registry (global broadcast)
+  | "plugin:panel-kinds-changed"
   // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready
   | "terminal:exit"
   | "terminal:backend-crashed"

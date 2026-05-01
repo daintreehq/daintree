@@ -18,6 +18,9 @@ vi.mock("../../ipc/utils.js", () => ({
 vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
   registerPanelKind: vi.fn(),
   unregisterPluginPanelKinds: vi.fn(),
+  onPanelKindRegistered: vi.fn(() => () => {}),
+  onPanelKindUnregistered: vi.fn(() => () => {}),
+  getPluginPanelKinds: vi.fn(() => []),
 }));
 vi.mock("../../../shared/config/toolbarButtonRegistry.js", () => ({
   registerToolbarButton: vi.fn(),

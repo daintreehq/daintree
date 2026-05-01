@@ -5,6 +5,10 @@ import {
   getPluginToolbarButtonIds,
   getToolbarButtonConfig,
 } from "../../../shared/config/toolbarButtonRegistry.js";
+import {
+  getPluginPanelKinds,
+  type PanelKindConfig,
+} from "../../../shared/config/panelKindRegistry.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { isTrustedRendererUrl } from "../../../shared/utils/trustedRenderer.js";
 import type {
@@ -90,6 +94,10 @@ export function registerPluginHandlers(): () => void {
     pluginService.unregisterPluginAction(pluginId, actionId);
   };
 
+  const handlePanelKindsGet = async (): Promise<PanelKindConfig[]> => {
+    return getPluginPanelKinds();
+  };
+
   handlers.push(typedHandle(CHANNELS.PLUGIN_LIST, handleList));
 
   // plugin:invoke intentionally stays on raw ipcMain.handle: its variadic
@@ -121,6 +129,7 @@ export function registerPluginHandlers(): () => void {
   handlers.push(typedHandle(CHANNELS.PLUGIN_ACTIONS_GET, handleActionsGet));
   handlers.push(typedHandle(CHANNELS.PLUGIN_ACTIONS_REGISTER, handleActionsRegister));
   handlers.push(typedHandle(CHANNELS.PLUGIN_ACTIONS_UNREGISTER, handleActionsUnregister));
+  handlers.push(typedHandle(CHANNELS.PLUGIN_PANEL_KINDS_GET, handlePanelKindsGet));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

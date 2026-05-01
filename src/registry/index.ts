@@ -8,7 +8,10 @@
 export {
   getPanelKindDefinition,
   getPanelKindDefinitions,
+  getPanelKindDefinitionsSnapshot,
   registerPanelKindDefinition,
+  subscribeToPanelKindDefinitions,
+  unregisterPanelKindDefinition,
   type PanelKindDefinition,
   type PanelComponentProps,
 } from "./panelKindRegistry";

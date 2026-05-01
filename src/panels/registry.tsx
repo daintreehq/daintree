@@ -135,6 +135,50 @@ const PANEL_KIND_DEFINITION_REGISTRY: Record<string, PanelKindDefinition> = {
   "dev-preview": { ...requirePanelKindConfig("dev-preview"), component: DevPreviewPaneWrapper },
 };
 
+/**
+ * Reactive snapshot for `useSyncExternalStore`. Replaced (not mutated) on
+ * every registry change so React's `Object.is` identity check schedules a
+ * rerender — components observing this snapshot then re-evaluate
+ * `getPanelKindDefinition(kind)` and pick up newly-registered plugin panels
+ * without needing a window reload.
+ */
+let definitionsSnapshot: Readonly<Record<string, PanelKindDefinition>> = {
+  ...PANEL_KIND_DEFINITION_REGISTRY,
+};
+const definitionListeners = new Set<() => void>();
+
+function notifyDefinitionListeners(): void {
+  definitionsSnapshot = { ...PANEL_KIND_DEFINITION_REGISTRY };
+  for (const listener of definitionListeners) {
+    try {
+      listener();
+    } catch (err) {
+      console.error("[panelKindRegistry] definition listener threw:", err);
+    }
+  }
+}
+
+/**
+ * Subscribe to panel kind definition registry changes. Stable function
+ * reference (module-scope) so `useSyncExternalStore` doesn't re-subscribe
+ * on every render.
+ */
+export function subscribeToPanelKindDefinitions(listener: () => void): () => void {
+  definitionListeners.add(listener);
+  return () => {
+    definitionListeners.delete(listener);
+  };
+}
+
+/**
+ * Snapshot for `useSyncExternalStore`. Returns the same reference until a
+ * registration changes the registry; React uses identity comparison to
+ * detect changes.
+ */
+export function getPanelKindDefinitionsSnapshot(): Readonly<Record<string, PanelKindDefinition>> {
+  return definitionsSnapshot;
+}
+
 export function getPanelKindDefinition(kind: string): PanelKindDefinition | undefined {
   return PANEL_KIND_DEFINITION_REGISTRY[kind];
 }
@@ -169,4 +213,26 @@ export function registerPanelKindDefinition(
     console.warn(`Panel kind definition "${definition.id}" already registered, overwriting`);
   }
   PANEL_KIND_DEFINITION_REGISTRY[definition.id] = definition;
+  notifyDefinitionListeners();
+}
+
+/**
+ * Remove a panel kind definition. Used when a plugin unregisters a kind so
+ * `getPanelKindDefinition` falls back to `undefined` and panel components
+ * render their `PluginMissingPanel` placeholder again.
+ *
+ * Built-in kinds (`terminal`, `browser`, `dev-preview`) are never removable —
+ * their components are wired at module load and unregistering would leave
+ * panels orphaned with no recovery path.
+ */
+export function unregisterPanelKindDefinition(kindId: string): boolean {
+  if (kindId === "terminal" || kindId === "browser" || kindId === "dev-preview") {
+    return false;
+  }
+  if (!(kindId in PANEL_KIND_DEFINITION_REGISTRY)) {
+    return false;
+  }
+  delete PANEL_KIND_DEFINITION_REGISTRY[kindId];
+  notifyDefinitionListeners();
+  return true;
 }

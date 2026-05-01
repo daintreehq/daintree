@@ -1320,6 +1320,14 @@ export interface ElectronAPI {
     onActionsChanged(
       callback: (payload: { actions: import("../plugin.js").PluginActionDescriptor[] }) => void
     ): () => void;
+    /** Pull the current set of plugin-contributed panel kinds. */
+    getPanelKinds(): Promise<import("../../config/panelKindRegistry.js").PanelKindConfig[]>;
+    /** Subscribe to plugin panel kind registry changes. Returns a cleanup. */
+    onPanelKindsChanged(
+      callback: (payload: {
+        kinds: import("../../config/panelKindRegistry.js").PanelKindConfig[];
+      }) => void
+    ): () => void;
   };
   crashRecovery: {
     getPending(): Promise<import("./crashRecovery.js").PendingCrash | null>;

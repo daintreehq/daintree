@@ -1,8 +1,11 @@
-import { afterEach, describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import {
   getPanelKindConfig,
   getExtensionFallbackDefaults,
   getPanelKindIds,
+  getPluginPanelKinds,
+  onPanelKindRegistered,
+  onPanelKindUnregistered,
   panelKindUsesTerminalUi,
   registerPanelKind,
   unregisterPluginPanelKinds,
@@ -179,5 +182,144 @@ describe("clearPanelKindRegistry", () => {
     for (const kind of getBuiltInPanelKinds()) {
       expect(getPanelKindConfig(kind)).toBeDefined();
     }
+  });
+});
+
+describe("getPluginPanelKinds", () => {
+  afterEach(() => {
+    clearPanelKindRegistry();
+  });
+
+  it("returns only entries with an extensionId", () => {
+    expect(getPluginPanelKinds()).toEqual([]);
+
+    registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
+    registerPanelKind(makeExtensionConfig("ext-b.viewer", "ext-b"));
+
+    const kinds = getPluginPanelKinds();
+    expect(kinds.map((k) => k.id).sort()).toEqual(["ext-a.viewer", "ext-b.viewer"]);
+    for (const kind of kinds) {
+      expect(kind.extensionId).toBeDefined();
+    }
+  });
+
+  it("never returns built-in kinds even when no plugins are registered", () => {
+    expect(getPluginPanelKinds()).toEqual([]);
+    for (const builtIn of BUILT_IN_KINDS) {
+      expect(getPluginPanelKinds().some((k) => k.id === builtIn)).toBe(false);
+    }
+  });
+});
+
+describe("registry event listeners", () => {
+  let unsubscribers: Array<() => void> = [];
+
+  beforeEach(() => {
+    unsubscribers = [];
+  });
+
+  afterEach(() => {
+    for (const off of unsubscribers) off();
+    unsubscribers = [];
+    clearPanelKindRegistry();
+  });
+
+  it("onPanelKindRegistered fires for plugin kinds", () => {
+    const listener = vi.fn();
+    unsubscribers.push(onPanelKindRegistered(listener));
+
+    const config = makeExtensionConfig("ext-a.viewer", "ext-a");
+    registerPanelKind(config);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(config);
+  });
+
+  it("onPanelKindRegistered does NOT fire for re-registering a built-in", () => {
+    const listener = vi.fn();
+    unsubscribers.push(onPanelKindRegistered(listener));
+
+    // Re-register the terminal built-in (no extensionId) — must not emit
+    registerPanelKind({
+      id: "terminal",
+      name: "Terminal",
+      iconId: "terminal",
+      color: "#fff",
+      hasPty: true,
+      canRestart: true,
+      canConvert: true,
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("onPanelKindUnregistered fires once per removed kind", () => {
+    const listener = vi.fn();
+    unsubscribers.push(onPanelKindUnregistered(listener));
+
+    registerPanelKind(makeExtensionConfig("ext-a.one", "ext-a"));
+    registerPanelKind(makeExtensionConfig("ext-a.two", "ext-a"));
+    registerPanelKind(makeExtensionConfig("ext-b.three", "ext-b"));
+
+    unregisterPluginPanelKinds("ext-a");
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    const calledIds = listener.mock.calls.map((call) => call[0]).sort();
+    expect(calledIds).toEqual(["ext-a.one", "ext-a.two"]);
+  });
+
+  it("onPanelKindUnregistered does not fire when no kinds are removed", () => {
+    const listener = vi.fn();
+    unsubscribers.push(onPanelKindUnregistered(listener));
+
+    unregisterPluginPanelKinds("never-loaded");
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("unsubscribe stops further notifications", () => {
+    const listener = vi.fn();
+    const unsubscribe = onPanelKindRegistered(listener);
+    unsubscribe();
+
+    registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("double-unsubscribe is safe", () => {
+    const listener = vi.fn();
+    const unsubscribe = onPanelKindRegistered(listener);
+    unsubscribe();
+    expect(() => unsubscribe()).not.toThrow();
+  });
+
+  it("clearPanelKindRegistry fires unregister listeners for removed plugin kinds", () => {
+    const listener = vi.fn();
+    unsubscribers.push(onPanelKindUnregistered(listener));
+
+    registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
+    registerPanelKind(makeExtensionConfig("ext-b.viewer", "ext-b"));
+
+    clearPanelKindRegistry();
+
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("a listener that throws does not block other listeners", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const throwingListener = vi.fn(() => {
+      throw new Error("boom");
+    });
+    const goodListener = vi.fn();
+    unsubscribers.push(onPanelKindRegistered(throwingListener));
+    unsubscribers.push(onPanelKindRegistered(goodListener));
+
+    registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
+
+    expect(throwingListener).toHaveBeenCalledTimes(1);
+    expect(goodListener).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

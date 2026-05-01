@@ -98,6 +98,7 @@ import type {
 import type { ShowContextMenuPayload } from "../shared/types/menu.js";
 import type { ResourceProfilePayload } from "../shared/types/resourceProfile.js";
 import type { PluginActionDescriptor } from "../shared/types/plugin.js";
+import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 
 export type { ElectronAPI };
 
@@ -2394,6 +2395,9 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.PLUGIN_ACTIONS_UNREGISTER, pluginId, actionId),
     onActionsChanged: (callback: (payload: { actions: PluginActionDescriptor[] }) => void) =>
       _eventBusOn("plugin:actions-changed", callback),
+    getPanelKinds: () => _unwrappingInvoke(CHANNELS.PLUGIN_PANEL_KINDS_GET),
+    onPanelKindsChanged: (callback: (payload: { kinds: PanelKindConfig[] }) => void) =>
+      _eventBusOn("plugin:panel-kinds-changed", callback),
   },
 
   crashRecovery: {
