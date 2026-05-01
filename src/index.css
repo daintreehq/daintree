@@ -2140,6 +2140,9 @@ body[data-performance-mode="true"] .github-status-error {
   background: var(--color-daintree-sidebar);
   color: var(--color-state-idle);
   padding: 0 8px;
+  /* width acts as a hint under table-layout:auto; min-width keeps it from
+     shrinking under content-heavy code columns. */
+  width: 50px;
   min-width: 50px;
   text-align: right;
   user-select: none;
