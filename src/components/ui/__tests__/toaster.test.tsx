@@ -6,6 +6,7 @@ import { useNotificationStore } from "@/store/notificationStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { useUIStore } from "@/store/uiStore";
 import { notify } from "@/lib/notify";
 import { Toaster } from "../toaster";
 
@@ -868,5 +869,92 @@ describe("Toast severity-based dismissal (issue #5859)", () => {
       expect(toasterGuardCall).toBeUndefined();
       consoleSpy.mockRestore();
     });
+  });
+});
+
+// Issue #6424 — when MAX_VISIBLE_TOASTS evicts a toast into the inbox, surface
+// a "+N more" pill below the visible stack so users can discover that
+// notifications were silently moved instead of disappearing.
+describe("Toast overflow pill (issue #6424)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useNotificationStore.getState().reset();
+    useNotificationHistoryStore.setState({
+      entries: [],
+      unreadCount: 0,
+      evictedToInboxCount: 0,
+    });
+    useUIStore.setState({ notificationCenterOpen: false });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("does not render the pill when nothing has been evicted", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast();
+      vi.advanceTimersByTime(16);
+    });
+    expect(screen.queryByTestId("toast-overflow-pill")).toBeNull();
+  });
+
+  it("renders +1 more after a single eviction", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      useNotificationHistoryStore.setState({ evictedToInboxCount: 1 });
+    });
+    const pill = screen.getByTestId("toast-overflow-pill");
+    expect(pill.textContent).toBe("+1 more");
+    expect(pill.getAttribute("aria-live")).toBe("polite");
+    expect(pill.getAttribute("aria-label")).toBe("1 more in notification center");
+  });
+
+  it("renders the cumulative count for multiple evictions", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      useNotificationHistoryStore.setState({ evictedToInboxCount: 4 });
+    });
+    expect(screen.getByTestId("toast-overflow-pill").textContent).toBe("+4 more");
+  });
+
+  it("opens the notification center and clears the count when clicked", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      useNotificationHistoryStore.setState({ evictedToInboxCount: 2 });
+    });
+
+    const pill = screen.getByTestId("toast-overflow-pill");
+    await act(async () => {
+      fireEvent.click(pill);
+    });
+
+    expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+    expect(useNotificationHistoryStore.getState().evictedToInboxCount).toBe(0);
+    expect(screen.queryByTestId("toast-overflow-pill")).toBeNull();
+  });
+
+  it("uses neutral surface tokens and does not paint the accent colour", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      useNotificationHistoryStore.setState({ evictedToInboxCount: 1 });
+    });
+    const pill = screen.getByTestId("toast-overflow-pill");
+    expect(pill.className).toContain("bg-surface-panel");
+    expect(pill.className).not.toContain("bg-daintree-accent");
+    expect(pill.className).not.toContain("text-accent-primary");
+  });
+
+  it("renders even when no toasts are visible (e.g. priority:'low' direct-to-inbox)", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      useNotificationHistoryStore.setState({ evictedToInboxCount: 1 });
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("toast-overflow-pill")).toBeTruthy();
   });
 });

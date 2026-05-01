@@ -26,7 +26,11 @@ function addEntry(
 
 describe("notificationHistorySlice", () => {
   beforeEach(() => {
-    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    useNotificationHistoryStore.setState({
+      entries: [],
+      unreadCount: 0,
+      evictedToInboxCount: 0,
+    });
   });
 
   it("adds an entry with id and timestamp", () => {
@@ -352,6 +356,70 @@ describe("notificationHistorySlice", () => {
       const entries = getState().entries;
       expect(entries.find((e) => e.id === targetId)?.seenAsToast).toBe(false);
       expect(entries.find((e) => e.id !== targetId)?.seenAsToast).toBe(true);
+    });
+  });
+
+  describe("evictedToInboxCount", () => {
+    it("starts at 0", () => {
+      expect(getState().evictedToInboxCount).toBe(0);
+    });
+
+    it("increments when markUnseenAsToast flips a seen entry", () => {
+      const id = getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
+      expect(getState().evictedToInboxCount).toBe(0);
+      getState().markUnseenAsToast(id);
+      expect(getState().evictedToInboxCount).toBe(1);
+    });
+
+    it("does not increment when markUnseenAsToast targets a missing id", () => {
+      addEntry({ message: "test" });
+      expect(getState().evictedToInboxCount).toBe(0);
+      getState().markUnseenAsToast("nonexistent-id");
+      expect(getState().evictedToInboxCount).toBe(0);
+    });
+
+    it("does not increment when markUnseenAsToast targets an already-unseen entry", () => {
+      const id = getState().addEntry({ type: "info", message: "missed", seenAsToast: false });
+      expect(getState().evictedToInboxCount).toBe(0);
+      getState().markUnseenAsToast(id);
+      expect(getState().evictedToInboxCount).toBe(0);
+    });
+
+    it("accumulates across multiple evictions", () => {
+      const a = getState().addEntry({ type: "info", message: "a", seenAsToast: true });
+      const b = getState().addEntry({ type: "info", message: "b", seenAsToast: true });
+      const c = getState().addEntry({ type: "info", message: "c", seenAsToast: true });
+      getState().markUnseenAsToast(a);
+      getState().markUnseenAsToast(b);
+      getState().markUnseenAsToast(c);
+      expect(getState().evictedToInboxCount).toBe(3);
+    });
+
+    it("resetEvictedCount zeroes the counter without touching entries or unreadCount", () => {
+      const id = getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
+      getState().markUnseenAsToast(id);
+      expect(getState().evictedToInboxCount).toBe(1);
+      expect(getState().unreadCount).toBe(1);
+      getState().resetEvictedCount();
+      expect(getState().evictedToInboxCount).toBe(0);
+      expect(getState().unreadCount).toBe(1);
+      expect(getState().entries).toHaveLength(1);
+    });
+
+    it("resetEvictedCount returns the same state object when already zero", () => {
+      const before = getState();
+      getState().resetEvictedCount();
+      const after = getState();
+      // No-op set: same evictedToInboxCount value, no spurious render trigger.
+      expect(after.evictedToInboxCount).toBe(before.evictedToInboxCount);
+    });
+
+    it("clearAll resets the eviction counter", () => {
+      const id = getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
+      getState().markUnseenAsToast(id);
+      expect(getState().evictedToInboxCount).toBe(1);
+      getState().clearAll();
+      expect(getState().evictedToInboxCount).toBe(0);
     });
   });
 

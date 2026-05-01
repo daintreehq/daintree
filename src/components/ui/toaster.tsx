@@ -22,7 +22,9 @@ import {
 } from "@/lib/animationUtils";
 import { Spinner } from "@/components/ui/Spinner";
 import { useNotificationStore, type Notification } from "@/store/notificationStore";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { useUIStore } from "@/store/uiStore";
 import { useShallow } from "zustand/react/shallow";
 import {
   DropdownMenu,
@@ -412,8 +414,36 @@ function Toast({ notification }: { notification: Notification }) {
   );
 }
 
+function OverflowPill({ count }: { count: number }) {
+  const openNotificationCenter = useUIStore((s) => s.openNotificationCenter);
+  const label = `${count} more in notification center`;
+  return (
+    <button
+      type="button"
+      onClick={openNotificationCenter}
+      aria-live="polite"
+      aria-label={label}
+      data-testid="toast-overflow-pill"
+      className={cn(
+        "pointer-events-auto self-end",
+        "inline-flex items-center gap-1 rounded-full",
+        "bg-surface-panel/85 backdrop-blur-xl",
+        "border border-tint/[0.08] ring-1 ring-inset ring-tint/[0.05]",
+        "px-2.5 py-1 text-[11px] font-medium leading-none tabular-nums",
+        "text-daintree-text/70 hover:text-daintree-text",
+        "shadow-[var(--theme-shadow-floating)]",
+        "transition-colors",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+      )}
+    >
+      +{count} more
+    </button>
+  );
+}
+
 export function Toaster() {
   const notifications = useNotificationStore((state) => state.notifications);
+  const evictedToInboxCount = useNotificationHistoryStore((s) => s.evictedToInboxCount);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -424,7 +454,7 @@ export function Toaster() {
     (notification) => notification.placement !== "grid-bar"
   );
 
-  if (!mounted || toastNotifications.length === 0) return null;
+  if (!mounted || (toastNotifications.length === 0 && evictedToInboxCount === 0)) return null;
 
   return createPortal(
     <div
@@ -434,6 +464,7 @@ export function Toaster() {
       {[...toastNotifications].reverse().map((notification) => (
         <Toast key={notification.id} notification={notification} />
       ))}
+      {evictedToInboxCount > 0 && <OverflowPill count={evictedToInboxCount} />}
     </div>,
     document.body
   );

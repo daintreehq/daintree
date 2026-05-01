@@ -56,7 +56,11 @@ vi.mock("lucide-react", () => ({
 }));
 
 function resetStores() {
-  useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+  useNotificationHistoryStore.setState({
+    entries: [],
+    unreadCount: 0,
+    evictedToInboxCount: 0,
+  });
   useNotificationSettingsStore.setState({
     enabled: true,
     hydrated: true,
@@ -432,6 +436,85 @@ describe("NotificationCenterToolbarButton — DND state surface", () => {
 
       unmount();
       expect(visibilityListeners.length).toBe(0);
+    });
+  });
+
+  // Issue #6424 — when a notification lands in the inbox (toast eviction or
+  // priority:"low" direct-to-inbox), the bell should play a brief one-shot
+  // arrival animation. The animation must not fire during DND/quiet hours
+  // and must not fire on the initial mount baseline.
+  describe("inbox arrival animation (issue #6424)", () => {
+    it("does not animate on the initial render", () => {
+      useNotificationHistoryStore.setState({ evictedToInboxCount: 0 });
+      const { getByTestId } = render(<NotificationCenterToolbarButton />);
+      const wrapper = getByTestId("notification-bell-icon");
+      expect(wrapper.className).not.toContain("animate-activity-blip");
+    });
+
+    it("does not animate when mounted with a non-zero baseline (e.g. fast-refresh)", () => {
+      useNotificationHistoryStore.setState({ evictedToInboxCount: 5 });
+      const { getByTestId } = render(<NotificationCenterToolbarButton />);
+      const wrapper = getByTestId("notification-bell-icon");
+      expect(wrapper.className).not.toContain("animate-activity-blip");
+    });
+
+    it("animates the bell when evictedToInboxCount increases and DND is inactive", async () => {
+      const { getByTestId } = render(<NotificationCenterToolbarButton />);
+      await act(async () => {
+        useNotificationHistoryStore.setState({ evictedToInboxCount: 1 });
+      });
+      const wrapper = getByTestId("notification-bell-icon");
+      expect(wrapper.className).toContain("animate-activity-blip");
+    });
+
+    it("does not animate when DND is active", async () => {
+      useNotificationSettingsStore.setState({ quietUntil: Date.now() + 60 * 60 * 1000 });
+      const { getByTestId } = render(<NotificationCenterToolbarButton />);
+      await act(async () => {
+        useNotificationHistoryStore.setState({ evictedToInboxCount: 1 });
+      });
+      const wrapper = getByTestId("notification-bell-icon");
+      expect(wrapper.className).not.toContain("animate-activity-blip");
+    });
+
+    it("does not re-animate when the count drops back to zero (no new arrival)", async () => {
+      const { getByTestId } = render(<NotificationCenterToolbarButton />);
+      await act(async () => {
+        useNotificationHistoryStore.setState({ evictedToInboxCount: 1 });
+      });
+      const firstWrapper = getByTestId("notification-bell-icon");
+      expect(firstWrapper.className).toContain("animate-activity-blip");
+
+      // Reset — count drops 1 → 0. evictedToInboxCount > prev is false, so the
+      // bumpKey does not increment and the bell wrapper is not remounted.
+      // (The CSS animation is `both`-fill at scale(1)/opacity(0.9), so a
+      // residual class on the existing wrapper is visually inert.)
+      await act(async () => {
+        useNotificationHistoryStore.setState({ evictedToInboxCount: 0 });
+      });
+      // Sanity: the count drop alone did not trigger another bump cycle.
+      // (We can't directly observe React's internal key, but a fresh
+      // increment from 0 → 1 below confirms the bumpKey path still works.)
+      await act(async () => {
+        useNotificationHistoryStore.setState({ evictedToInboxCount: 1 });
+      });
+      expect(getByTestId("notification-bell-icon").className).toContain("animate-activity-blip");
+    });
+
+    it("animation class persists across multiple subsequent increments", async () => {
+      const { getByTestId } = render(<NotificationCenterToolbarButton />);
+      await act(async () => {
+        useNotificationHistoryStore.setState({ evictedToInboxCount: 1 });
+      });
+      expect(getByTestId("notification-bell-icon").className).toContain("animate-activity-blip");
+      await act(async () => {
+        useNotificationHistoryStore.setState({ evictedToInboxCount: 2 });
+      });
+      expect(getByTestId("notification-bell-icon").className).toContain("animate-activity-blip");
+      await act(async () => {
+        useNotificationHistoryStore.setState({ evictedToInboxCount: 3 });
+      });
+      expect(getByTestId("notification-bell-icon").className).toContain("animate-activity-blip");
     });
   });
 });

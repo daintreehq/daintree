@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 
 interface UIState {
   overlayClaims: Set<string>;
@@ -36,8 +37,19 @@ export const useUIStore = create<UIState>((set, get) => ({
   hasOpenOverlays: () => get().overlayClaims.size > 0,
 
   notificationCenterOpen: false,
-  openNotificationCenter: () => set({ notificationCenterOpen: true }),
+  openNotificationCenter: () => {
+    useNotificationHistoryStore.getState().resetEvictedCount();
+    set({ notificationCenterOpen: true });
+  },
   closeNotificationCenter: () => set({ notificationCenterOpen: false }),
   toggleNotificationCenter: () =>
-    set((state) => ({ notificationCenterOpen: !state.notificationCenterOpen })),
+    set((state) => {
+      const next = !state.notificationCenterOpen;
+      // Reset only on the closed → open transition; closing the center
+      // should not silently zero an unread arrival counter.
+      if (next) {
+        useNotificationHistoryStore.getState().resetEvictedCount();
+      }
+      return { notificationCenterOpen: next };
+    }),
 }));

@@ -31,6 +31,7 @@ export const NotificationCenterToolbarButton = memo(function NotificationCenterT
   );
   const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
+  const evictedToInboxCount = useNotificationHistoryStore((s) => s.evictedToInboxCount);
   const {
     enabled: notificationsEnabled,
     quietUntil,
@@ -124,6 +125,21 @@ export const NotificationCenterToolbarButton = memo(function NotificationCenterT
     if (!notificationsEnabled && notificationCenterOpen) closeNotificationCenter();
   }, [notificationsEnabled, notificationCenterOpen, closeNotificationCenter]);
 
+  // Bump the bell key whenever a new notification lands in the inbox while
+  // DND is inactive. Remounting the wrapped <Icon /> (Pattern A from
+  // WorktreeDetailsSection) restarts the CSS `animate-activity-blip`
+  // animation cleanly without an imperative classList reflow. A ref-tracked
+  // baseline avoids firing on the first render or on resets to zero.
+  const prevEvictedRef = useRef(evictedToInboxCount);
+  const [bellBumpKey, setBellBumpKey] = useState(0);
+  useEffect(() => {
+    const prev = prevEvictedRef.current;
+    prevEvictedRef.current = evictedToInboxCount;
+    if (evictedToInboxCount > prev && !isDndActive) {
+      setBellBumpKey((k) => k + 1);
+    }
+  }, [evictedToInboxCount, isDndActive]);
+
   if (!notificationsEnabled) return null;
 
   const label = (() => {
@@ -154,7 +170,13 @@ export const NotificationCenterToolbarButton = memo(function NotificationCenterT
             aria-expanded={notificationCenterOpen}
             aria-haspopup="dialog"
           >
-            <Icon />
+            <span
+              key={bellBumpKey}
+              data-testid="notification-bell-icon"
+              className={bellBumpKey > 0 ? "inline-flex animate-activity-blip" : "inline-flex"}
+            >
+              <Icon />
+            </span>
             {notificationUnreadCount > 0 && (
               <span
                 data-testid="notification-unread-dot"
