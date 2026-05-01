@@ -188,6 +188,7 @@ export interface StoreSchema {
     enabled: boolean;
     port: number | null;
     apiKey: string;
+    fullToolSurface: boolean;
   };
   pendingErrors: ErrorRecord[];
   gpu: {
@@ -325,6 +326,7 @@ const storeOptions = {
       enabled: false,
       port: 45454,
       apiKey: "",
+      fullToolSurface: false,
     },
     pendingErrors: [],
     gpu: {

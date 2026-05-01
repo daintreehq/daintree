@@ -32,6 +32,84 @@ const OPEN_WORLD_CATEGORIES: ReadonlySet<string> = new Set([
   "system",
 ]);
 
+// Curated set of action IDs advertised over MCP by default. Keeps the tool
+// surface small enough for `tool_choice: "auto"` reliability and bounded
+// token cost while still covering the agent-facing introspection,
+// query, and command actions. Power users opt into the full surface via
+// `mcpServer.fullToolSurface = true`. Dispatch is not gated by this list —
+// callers that already know an ID can still invoke it.
+const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
+  "actions.list",
+  "actions.getContext",
+
+  "agent.launch",
+  "agent.terminal",
+  "agent.focusNextWaiting",
+  "agent.focusNextWorking",
+
+  "git.getProjectPulse",
+  "git.getFileDiff",
+  "git.listCommits",
+  "git.getStagingStatus",
+  "git.stageFile",
+  "git.unstageFile",
+  "git.stageAll",
+  "git.unstageAll",
+  "git.commit",
+  "git.push",
+  "git.snapshotGet",
+  "git.snapshotList",
+
+  "github.checkCli",
+  "github.getRepoStats",
+  "github.listIssues",
+  "github.listPullRequests",
+  "github.openIssue",
+  "github.openPR",
+
+  "terminal.list",
+  "terminal.getOutput",
+  "terminal.sendCommand",
+  "terminal.bulkCommand",
+  "terminal.inject",
+  "terminal.new",
+
+  "worktree.list",
+  "worktree.getCurrent",
+  "worktree.refresh",
+  "worktree.create",
+  "worktree.createWithRecipe",
+  "worktree.listBranches",
+  "worktree.getDefaultPath",
+  "worktree.getAvailableBranch",
+  "worktree.delete",
+  "worktree.setActive",
+  "worktree.resource.status",
+
+  "files.search",
+  "file.view",
+  "file.openInEditor",
+
+  "copyTree.isAvailable",
+  "copyTree.generate",
+  "copyTree.generateAndCopyFile",
+  "copyTree.injectToTerminal",
+
+  "slashCommands.list",
+
+  "project.getAll",
+  "project.getCurrent",
+  "project.getSettings",
+  "project.getStats",
+  "project.detectRunners",
+
+  "recipe.list",
+  "recipe.run",
+
+  "system.checkCommand",
+  "system.checkDirectory",
+]);
+
 interface PendingRequest<T> {
   resolve: (value: T) => void;
   reject: (err: Error) => void;
@@ -434,7 +512,7 @@ export class McpServerService {
       const manifest = await this.requestManifest();
       return {
         tools: manifest
-          .filter((entry) => entry.danger !== "restricted")
+          .filter((entry) => this.shouldExposeTool(entry))
           .map((entry) => ({
             name: entry.id,
             description: this.buildToolDescription(entry),
@@ -506,6 +584,16 @@ export class McpServerService {
     if (!apiKey) return true;
     const auth = req.headers.authorization ?? "";
     return auth === `Bearer ${apiKey}`;
+  }
+
+  private shouldExposeTool(entry: ActionManifestEntry): boolean {
+    if (entry.danger === "restricted") {
+      return false;
+    }
+    if (this.getConfig().fullToolSurface ?? false) {
+      return true;
+    }
+    return MCP_TOOL_ALLOWLIST.has(entry.id);
   }
 
   private buildToolDescription(entry: ActionManifestEntry): string {

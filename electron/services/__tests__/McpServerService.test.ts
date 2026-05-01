@@ -65,6 +65,7 @@ const storeState = vi.hoisted(() => ({
     enabled: true,
     port: 0,
     apiKey: "",
+    fullToolSurface: false,
   },
 }));
 
@@ -283,6 +284,7 @@ describe("McpServerService", () => {
       enabled: true,
       port: 0,
       apiKey: "",
+      fullToolSurface: false,
     };
     storeMocks.get.mockClear();
     storeMocks.set.mockClear();
@@ -571,6 +573,111 @@ describe("McpServerService", () => {
       "MCP renderer bridge unavailable"
     );
     expect(webContents.send).not.toHaveBeenCalled();
+  });
+
+  it("hides non-allowlisted tools by default (curated MCP surface)", async () => {
+    const { window } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "actions.list" as ActionId,
+          title: "List Actions",
+          description: "Read the action registry",
+          kind: "query",
+        }),
+        createManifestEntry({
+          id: "panel.gridLayout.setStrategy" as ActionId,
+          title: "Set grid layout",
+          description: "UI plumbing — should not appear in curated surface",
+        }),
+      ],
+    });
+
+    await service.start(window);
+    const { client, transport } = await connectClient(service.currentPort!);
+    transports.push(transport);
+
+    const result = await client.listTools();
+    const ids = result.tools.map((tool) => tool.name);
+
+    expect(ids).toContain("actions.list");
+    expect(ids).not.toContain("panel.gridLayout.setStrategy");
+  });
+
+  it("exposes the full non-restricted surface when fullToolSurface is enabled", async () => {
+    storeState.mcpServer.fullToolSurface = true;
+    const { window } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "actions.list" as ActionId,
+          title: "List Actions",
+          description: "Read the action registry",
+          kind: "query",
+        }),
+        createManifestEntry({
+          id: "panel.gridLayout.setStrategy" as ActionId,
+          title: "Set grid layout",
+          description: "Power-user UI plumbing",
+        }),
+        createManifestEntry({
+          id: "internal.dangerous" as ActionId,
+          title: "Restricted",
+          description: "Should never be advertised",
+          danger: "restricted",
+        }),
+      ],
+    });
+
+    await service.start(window);
+    const { client, transport } = await connectClient(service.currentPort!);
+    transports.push(transport);
+
+    const result = await client.listTools();
+    const ids = result.tools.map((tool) => tool.name);
+
+    expect(ids).toContain("actions.list");
+    expect(ids).toContain("panel.gridLayout.setStrategy");
+    expect(ids).not.toContain("internal.dangerous");
+  });
+
+  it("dispatches non-allowlisted actions even in curated mode", async () => {
+    const dispatchMock = vi.fn(
+      (payload: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result: { dispatched: payload.actionId },
+      })
+    );
+
+    const { window } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "actions.list" as ActionId,
+          title: "List Actions",
+          description: "Read the action registry",
+          kind: "query",
+        }),
+      ],
+      dispatchAction: dispatchMock,
+    });
+
+    await service.start(window);
+    const { client, transport } = await connectClient(service.currentPort!);
+    transports.push(transport);
+
+    const ids = (await client.listTools()).tools.map((tool) => tool.name);
+    expect(ids).not.toContain("panel.gridLayout.setStrategy");
+
+    const result = getTextResult(
+      await client.callTool({
+        name: "panel.gridLayout.setStrategy",
+        arguments: { strategy: "automatic" },
+      })
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.content[0].text).toContain('"dispatched": "panel.gridLayout.setStrategy"');
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ actionId: "panel.gridLayout.setStrategy" })
+    );
   });
 
   it("returns safe text output for circular tool results", async () => {
