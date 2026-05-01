@@ -9,7 +9,86 @@ import {
 } from "../../shared/utils/ipcErrorSerialization.js";
 import { FAULT_MODE_ENABLED, applyInvokeFault, initFaultRegistry } from "../ipc/faultRegistry.js";
 import { markIpcSecurityReady } from "../ipc/ipcGuard.js";
+import { channelToCategory, type IpcChannelCategory } from "../ipc/utils.js";
+import { AppError } from "../utils/errorTypes.js";
 import { scrubSecrets } from "../utils/secretScrubber.js";
+
+/**
+ * Coarse cap on the number of arguments a renderer may pass to a handler in a
+ * single `ipcMain.invoke` call. Every typed channel in this codebase passes a
+ * single structured object; 8 gives ~4x headroom over the realistic max while
+ * still defeating `Array.prototype` poisoning / deep-spread variants that try
+ * to overwhelm the handler with thousands of args.
+ */
+export const MAX_IPC_ARG_COUNT = 8;
+
+/**
+ * Per-category byte budgets enforced after sender-frame validation, before
+ * the listener is invoked. Channels not in {@link channelToCategory} fall back
+ * to {@link DEFAULT_PAYLOAD_BUDGET}. `JSON.stringify` is used to estimate UTF-8
+ * size (cheaper than `v8.serialize` and the established codebase pattern from
+ * `electron/utils/performance.ts`); on failure (circular refs, binary buffers)
+ * the check is skipped and Mojo's 128 MiB ceiling acts as the backstop.
+ */
+export const PAYLOAD_BUDGETS: Record<IpcChannelCategory, number> = {
+  fileOps: 4 * 1024 * 1024,
+  artifactOps: 4 * 1024 * 1024,
+  gitOps: 512 * 1024,
+  terminalSpawn: 64 * 1024,
+};
+
+export const DEFAULT_PAYLOAD_BUDGET = 1 * 1024 * 1024;
+
+/**
+ * Throws an {@link AppError} with a stable {@link AppErrorCode} when the
+ * incoming invoke envelope exceeds the arg-count cap or the per-category byte
+ * budget. Caller is expected to call this inside the wrapper's try/catch so
+ * the existing prod-strip path serialises the error.
+ *
+ * @internal Exported for testing.
+ */
+function containsBinary(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return true;
+  if (Array.isArray(value)) return value.some(containsBinary);
+  return false;
+}
+
+export function validateIpcInvokeEnvelope(channel: string, args: unknown[]): void {
+  if (args.length > MAX_IPC_ARG_COUNT) {
+    throw new AppError({
+      code: "ARG_COUNT_EXCEEDED",
+      message: `IPC argument count exceeded for ${channel}: ${args.length} > ${MAX_IPC_ARG_COUNT}`,
+      userMessage: "Request rejected — too many arguments.",
+      context: { channel, argCount: args.length, maxArgCount: MAX_IPC_ARG_COUNT },
+    });
+  }
+
+  // Binary args (Uint8Array, ArrayBuffer) JSON-stringify to giant `{"0":...}`
+  // shapes that wildly overestimate the wire size. Skip the byte check for
+  // these and trust Mojo's 128 MiB ceiling as the backstop — handler-level
+  // caps (e.g. clipboard PNG, artifact patch) provide the precise limit.
+  if (args.some(containsBinary)) return;
+
+  const category = channelToCategory[channel];
+  const budget = category !== undefined ? PAYLOAD_BUDGETS[category] : DEFAULT_PAYLOAD_BUDGET;
+
+  let bytes: number;
+  try {
+    bytes = Buffer.byteLength(JSON.stringify(args), "utf8");
+  } catch {
+    return;
+  }
+
+  if (bytes > budget) {
+    throw new AppError({
+      code: "PAYLOAD_TOO_LARGE",
+      message: `IPC payload too large for ${channel}: ${bytes} > ${budget} bytes`,
+      userMessage: "Request rejected — payload exceeds the allowed size.",
+      context: { channel, bytes, budget, category: category ?? null },
+    });
+  }
+}
 
 function sanitizePaths(msg: string): string {
   return msg
@@ -50,6 +129,7 @@ export function enforceIpcSenderValidation(): void {
         );
       }
       try {
+        validateIpcInvokeEnvelope(channel, args);
         if (FAULT_MODE_ENABLED) await applyInvokeFault(channel);
         const result = await listener(event, ...args);
         return wrapSuccess(result);
@@ -88,6 +168,7 @@ export function enforceIpcSenderValidation(): void {
           );
         }
         try {
+          validateIpcInvokeEnvelope(channel, args);
           if (FAULT_MODE_ENABLED) await applyInvokeFault(channel);
           const result = await listener(event, ...args);
           return wrapSuccess(result);

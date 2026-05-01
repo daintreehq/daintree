@@ -44,14 +44,16 @@ function parseIpcPayload<S extends z.ZodTypeAny>(
 
 const rateLimitTimestamps = new Map<string, number[]>();
 
-type RateLimitCategory = "fileOps" | "gitOps" | "terminalSpawn";
+export type IpcChannelCategory = "fileOps" | "artifactOps" | "gitOps" | "terminalSpawn";
 
-const channelToCategory: Record<string, RateLimitCategory> = {
+export const channelToCategory: Record<string, IpcChannelCategory> = {
   "copytree:generate": "fileOps",
   "copytree:generate-and-copy-file": "fileOps",
   "copytree:inject": "fileOps",
   "copytree:get-file-tree": "fileOps",
   "copytree:test-config": "fileOps",
+  "artifact:apply-patch": "artifactOps",
+  "artifact:save-to-file": "artifactOps",
   "worktree:create": "gitOps",
   "worktree:delete": "gitOps",
   "worktree:create-for-task": "gitOps",

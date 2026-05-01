@@ -80,9 +80,14 @@ import {
   setupPermissionLockdown,
   enforceIpcSenderValidation,
   sanitizeErrorForRenderer,
+  validateIpcInvokeEnvelope,
+  MAX_IPC_ARG_COUNT,
+  PAYLOAD_BUDGETS,
+  DEFAULT_PAYLOAD_BUDGET,
   _resetPermissionLockdownForTesting,
 } from "../security.js";
 import { assertIpcSecurityReady, _resetIpcGuardForTesting } from "../../ipc/ipcGuard.js";
+import { AppError } from "../../utils/errorTypes.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockWebContents = {} as any;
@@ -540,6 +545,171 @@ describe("enforceIpcSenderValidation", () => {
     expect(envelope.error.userMessage).toBe("Please try again later");
 
     logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+});
+
+describe("validateIpcInvokeEnvelope", () => {
+  it("throws ARG_COUNT_EXCEEDED when args exceed MAX_IPC_ARG_COUNT", () => {
+    const tooMany = Array.from({ length: MAX_IPC_ARG_COUNT + 1 }, (_, i) => i);
+    let caught: unknown;
+    try {
+      validateIpcInvokeEnvelope("any:channel", tooMany);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(AppError);
+    expect((caught as AppError).code).toBe("ARG_COUNT_EXCEEDED");
+    expect((caught as AppError).context).toMatchObject({
+      channel: "any:channel",
+      argCount: MAX_IPC_ARG_COUNT + 1,
+      maxArgCount: MAX_IPC_ARG_COUNT,
+    });
+  });
+
+  it("accepts arg counts at the cap", () => {
+    const atCap = Array.from({ length: MAX_IPC_ARG_COUNT }, (_, i) => i);
+    expect(() => validateIpcInvokeEnvelope("any:channel", atCap)).not.toThrow();
+  });
+
+  it("throws PAYLOAD_TOO_LARGE on uncategorized channel above DEFAULT_PAYLOAD_BUDGET", () => {
+    const oversize = "x".repeat(DEFAULT_PAYLOAD_BUDGET + 1024);
+    let caught: unknown;
+    try {
+      validateIpcInvokeEnvelope("uncategorized:channel", [oversize]);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(AppError);
+    expect((caught as AppError).code).toBe("PAYLOAD_TOO_LARGE");
+    const ctx = (caught as AppError).context as { category: string | null; budget: number };
+    expect(ctx.category).toBeNull();
+    expect(ctx.budget).toBe(DEFAULT_PAYLOAD_BUDGET);
+  });
+
+  it("applies tighter budget on terminalSpawn category", () => {
+    const oversize = "x".repeat(PAYLOAD_BUDGETS.terminalSpawn + 1024);
+    let caught: unknown;
+    try {
+      validateIpcInvokeEnvelope("terminal:spawn", [oversize]);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(AppError);
+    expect((caught as AppError).code).toBe("PAYLOAD_TOO_LARGE");
+    const ctx = (caught as AppError).context as { category: string; budget: number };
+    expect(ctx.category).toBe("terminalSpawn");
+    expect(ctx.budget).toBe(PAYLOAD_BUDGETS.terminalSpawn);
+  });
+
+  it("allows large payloads on fileOps category up to the 4 MB budget", () => {
+    const justUnderFileOpsBudget = "x".repeat(PAYLOAD_BUDGETS.fileOps - 1024);
+    expect(() =>
+      validateIpcInvokeEnvelope("copytree:get-file-tree", [justUnderFileOpsBudget])
+    ).not.toThrow();
+  });
+
+  it("falls through silently when JSON.stringify cannot serialize args", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(() => validateIpcInvokeEnvelope("any:channel", [circular])).not.toThrow();
+  });
+
+  it("falls through silently for non-JSON-serializable payloads (typed arrays)", () => {
+    const buf = new Uint8Array(DEFAULT_PAYLOAD_BUDGET + 1024);
+    expect(() => validateIpcInvokeEnvelope("any:channel", [buf])).not.toThrow();
+  });
+
+  it("accepts an empty arg list", () => {
+    expect(() => validateIpcInvokeEnvelope("any:channel", [])).not.toThrow();
+  });
+});
+
+describe("enforceIpcSenderValidation envelope guards", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetIpcGuardForTesting();
+    appMock.isPackaged = false;
+    ipcMainMock.handle = vi.fn();
+    ipcMainMock.handleOnce = vi.fn();
+    ipcMainMock.on = vi.fn();
+    ipcMainMock.removeListener = vi.fn();
+    ipcMainMock.removeAllListeners = vi.fn();
+    ipcMainMock.off = vi.fn();
+  });
+
+  async function invokeWrappedHandle(
+    register: "handle" | "handleOnce",
+    channel: string,
+    listener: (...args: unknown[]) => unknown,
+    invokeArgs: unknown[]
+  ): Promise<{ ok: boolean; error?: { code?: string } }> {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const original = register === "handle" ? ipcMainMock.handle : ipcMainMock.handleOnce;
+      enforceIpcSenderValidation();
+      const wrapper = register === "handle" ? ipcMainMock.handle : ipcMainMock.handleOnce;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      wrapper(channel, listener as any);
+      const lastCall = original.mock.calls[original.mock.calls.length - 1];
+      const wrappedListener = lastCall[1] as (
+        event: unknown,
+        ...args: unknown[]
+      ) => Promise<unknown>;
+      const fakeEvent = { senderFrame: { url: "http://localhost:3000" } };
+      return (await wrappedListener(fakeEvent, ...invokeArgs)) as {
+        ok: boolean;
+        error?: { code?: string };
+      };
+    } finally {
+      logSpy.mockRestore();
+    }
+  }
+
+  it("rejects ipcMain.handle calls that exceed the arg-count cap", async () => {
+    const handler = vi.fn();
+    const tooMany = Array.from({ length: MAX_IPC_ARG_COUNT + 1 }, (_, i) => i);
+    const envelope = await invokeWrappedHandle("handle", "test:channel", handler, tooMany);
+    expect(envelope.ok).toBe(false);
+    expect(envelope.error?.code).toBe("ARG_COUNT_EXCEEDED");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized payloads on uncategorized channels", async () => {
+    const handler = vi.fn();
+    const oversize = "x".repeat(DEFAULT_PAYLOAD_BUDGET + 1024);
+    const envelope = await invokeWrappedHandle("handle", "uncategorized:channel", handler, [
+      oversize,
+    ]);
+    expect(envelope.ok).toBe(false);
+    expect(envelope.error?.code).toBe("PAYLOAD_TOO_LARGE");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("invokes the listener for valid envelopes", async () => {
+    const handler = vi.fn().mockReturnValue("ok");
+    const envelope = await invokeWrappedHandle("handle", "test:channel", handler, [{ a: 1 }]);
+    expect(envelope.ok).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies the same guards to ipcMain.handleOnce", async () => {
+    const handler = vi.fn();
+    const tooMany = Array.from({ length: MAX_IPC_ARG_COUNT + 1 }, (_, i) => i);
+    const envelope = await invokeWrappedHandle("handleOnce", "once:channel", handler, tooMany);
+    expect(envelope.ok).toBe(false);
+    expect(envelope.error?.code).toBe("ARG_COUNT_EXCEEDED");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("preserves the rejection code through the packaged-build prod-strip path", async () => {
+    appMock.isPackaged = true;
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const handler = vi.fn();
+    const tooMany = Array.from({ length: MAX_IPC_ARG_COUNT + 1 }, (_, i) => i);
+    const envelope = await invokeWrappedHandle("handle", "test:channel", handler, tooMany);
+    expect(envelope.ok).toBe(false);
+    expect(envelope.error?.code).toBe("ARG_COUNT_EXCEEDED");
     errSpy.mockRestore();
   });
 });

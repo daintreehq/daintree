@@ -18,4 +18,6 @@ export type AppErrorCode =
   | "RATE_LIMITED"
   | "VALIDATION"
   | "PERMISSION"
+  | "ARG_COUNT_EXCEEDED"
+  | "PAYLOAD_TOO_LARGE"
   | "INTERNAL";
