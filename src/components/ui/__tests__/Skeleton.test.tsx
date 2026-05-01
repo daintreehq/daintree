@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -40,15 +42,19 @@ describe("Skeleton", () => {
       expect(status.querySelector(".sr-only")?.textContent).toBe("Loading commits");
     });
 
-    it("hides the bone container from assistive tech", () => {
+    it("hides each bone from assistive tech via aria-hidden", () => {
       const { container } = render(
         <Skeleton>
           <SkeletonBone data-testid="bone" />
         </Skeleton>
       );
-      const hidden = container.querySelector('[aria-hidden="true"]');
-      expect(hidden).toBeTruthy();
-      expect(hidden?.querySelector('[data-testid="bone"]')).toBeTruthy();
+      const bone = container.querySelector('[data-testid="bone"]');
+      expect(bone?.getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("is queryable by accessible name", () => {
+      render(<Skeleton label="Loading commits" />);
+      expect(screen.getByRole("status", { name: "Loading commits" })).toBeTruthy();
     });
   });
 
@@ -119,6 +125,31 @@ describe("SkeletonBone", () => {
     expect((container.firstElementChild as HTMLElement).style.height).toBe("68px");
   });
 
+  it("heightPx wins over an explicit style.height", () => {
+    const { container } = render(<SkeletonBone heightPx={68} style={{ height: "40px" }} />);
+    expect((container.firstElementChild as HTMLElement).style.height).toBe("68px");
+  });
+
+  it("ignores NaN heightPx", () => {
+    const { container } = render(<SkeletonBone heightPx={Number.NaN} />);
+    expect((container.firstElementChild as HTMLElement).style.height).toBe("");
+  });
+
+  it("ignores negative heightPx", () => {
+    const { container } = render(<SkeletonBone heightPx={-20} />);
+    expect((container.firstElementChild as HTMLElement).style.height).toBe("");
+  });
+
+  it("ignores Infinity heightPx", () => {
+    const { container } = render(<SkeletonBone heightPx={Number.POSITIVE_INFINITY} />);
+    expect((container.firstElementChild as HTMLElement).style.height).toBe("");
+  });
+
+  it("forces aria-hidden true even if a caller passes aria-hidden={false}", () => {
+    const { container } = render(<SkeletonBone aria-hidden={false} />);
+    expect((container.firstElementChild as HTMLElement).getAttribute("aria-hidden")).toBe("true");
+  });
+
   it("merges custom className", () => {
     const { container } = render(<SkeletonBone className="w-12 h-4" />);
     const cls = (container.firstElementChild as HTMLElement).className;
@@ -151,6 +182,13 @@ describe("SkeletonText", () => {
   it("floors fractional line counts", () => {
     const { container } = render(<SkeletonText lines={3.9} />);
     expect(container.firstElementChild?.children.length).toBe(3);
+  });
+
+  it("clamps absurdly large line counts to a sane ceiling", () => {
+    const { container } = render(<SkeletonText lines={1_000_000} />);
+    const rendered = container.firstElementChild?.children.length ?? 0;
+    expect(rendered).toBeLessThanOrEqual(100);
+    expect(rendered).toBeGreaterThan(0);
   });
 
   it("cycles widths through [w-full, w-3/4, w-1/2]", () => {
@@ -201,5 +239,37 @@ describe("SkeletonText", () => {
   it("does not use transition-all", () => {
     const { container } = render(<SkeletonText lines={3} />);
     expect(container.innerHTML).not.toContain("transition-all");
+  });
+});
+
+describe("animate-skeleton-shimmer CSS contract", () => {
+  // Read the source CSS once. Build pipeline transforms (Tailwind, autoprefixer)
+  // shouldn't matter — we're asserting authored intent in src/index.css.
+  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+
+  it("declares the skeleton-shimmer keyframe", () => {
+    expect(css).toMatch(/@keyframes\s+skeleton-shimmer\b/);
+  });
+
+  it("declares the .animate-skeleton-shimmer utility class", () => {
+    expect(css).toMatch(/\.animate-skeleton-shimmer\s*\{/);
+  });
+
+  it("hides the ::after sweep under prefers-reduced-motion", () => {
+    const block = css.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\n\}/)?.[0];
+    expect(block).toBeTruthy();
+    expect(block).toMatch(/\.animate-skeleton-shimmer::after\s*\{[^}]*display:\s*none/);
+  });
+
+  it("hides the ::after sweep under body[data-reduce-animations]", () => {
+    expect(css).toMatch(
+      /body\[data-reduce-animations="true"\]\s+\.animate-skeleton-shimmer::after\s*\{[^}]*display:\s*none/
+    );
+  });
+
+  it("hides the ::after sweep under body[data-performance-mode]", () => {
+    expect(css).toMatch(
+      /body\[data-performance-mode="true"\]\s+\.animate-skeleton-shimmer::after\s*\{[^}]*display:\s*none/
+    );
   });
 });

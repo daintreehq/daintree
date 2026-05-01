@@ -2,6 +2,7 @@ import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 const TEXT_LINE_WIDTHS = ["w-full", "w-3/4", "w-1/2"] as const;
+const MAX_TEXT_LINES = 100;
 
 function pulseClass(immediate: boolean): string {
   return immediate ? "animate-pulse-immediate" : "animate-pulse-delayed";
@@ -9,13 +10,26 @@ function pulseClass(immediate: boolean): string {
 
 function clampLines(lines: number): number {
   if (!Number.isFinite(lines)) return 0;
-  return Math.max(0, Math.floor(lines));
+  return Math.min(Math.max(0, Math.floor(lines)), MAX_TEXT_LINES);
 }
 
-export interface SkeletonProps extends Omit<HTMLAttributes<HTMLDivElement>, "role"> {
+function safeHeightPx(value: number | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value) || value < 0) return undefined;
+  return `${value}px`;
+}
+
+export interface SkeletonProps extends Omit<
+  HTMLAttributes<HTMLDivElement>,
+  "role" | "aria-live" | "aria-busy"
+> {
   /** Accessible label announced to assistive tech. Defaults to "Loading". */
   label?: string;
-  /** Children compose the bones; each bone should be `aria-hidden`. */
+  /**
+   * Children compose the bones. Each bone should be `aria-hidden` — `<SkeletonBone>`
+   * and `<SkeletonText>` already are. Apply layout classes (`flex`, `grid`, `space-y-*`)
+   * on `className` here; the wrapper is the only DOM element.
+   */
   children?: ReactNode;
   /** Hide the wrapper from AT (e.g., when nested in another `role="status"`). */
   inert?: boolean;
@@ -23,10 +37,9 @@ export interface SkeletonProps extends Omit<HTMLAttributes<HTMLDivElement>, "rol
 
 /**
  * ARIA status wrapper for loading skeletons. Owns `role="status"`, `aria-live="polite"`,
- * `aria-busy="true"`, and an sr-only label. Compose bones as children with `aria-hidden`
- * and one of the pulse / shimmer animation classes (`animate-pulse-delayed`,
- * `animate-pulse-immediate`, `animate-skeleton-shimmer`). Or use `<SkeletonText>` /
- * `<SkeletonBone>` for the common cases.
+ * `aria-busy="true"`, and an sr-only label. The sr-only span is absolutely positioned
+ * and takes no layout space, so flex/grid classes on `className` apply directly to the
+ * bone children.
  */
 export function Skeleton({
   label = "Loading",
@@ -37,7 +50,7 @@ export function Skeleton({
 }: SkeletonProps) {
   if (inert) {
     return (
-      <div aria-hidden="true" className={className} {...rest}>
+      <div {...rest} aria-hidden="true" className={className}>
         {children}
       </div>
     );
@@ -45,20 +58,20 @@ export function Skeleton({
 
   return (
     <div
+      {...rest}
       role="status"
       aria-live="polite"
       aria-busy="true"
       aria-label={label}
       className={className}
-      {...rest}
     >
       <span className="sr-only">{label}</span>
-      <div aria-hidden="true">{children}</div>
+      {children}
     </div>
   );
 }
 
-export interface SkeletonBoneProps extends HTMLAttributes<HTMLDivElement> {
+export interface SkeletonBoneProps extends Omit<HTMLAttributes<HTMLDivElement>, "aria-hidden"> {
   /** Skip the 400ms anti-flicker delay; bone is visible immediately. */
   immediate?: boolean;
   /** Layer a transform-based shimmer sweep on top of the opacity pulse. */
@@ -70,6 +83,7 @@ export interface SkeletonBoneProps extends HTMLAttributes<HTMLDivElement> {
 /**
  * Single skeleton bone. `aria-hidden` and class-merged so callers can size it freely.
  * Default animation is the 400ms-delayed opacity pulse; `shimmer` adds a sweep.
+ * `heightPx` wins over an explicit `style.height` to keep the layout-shift contract.
  */
 export function SkeletonBone({
   immediate = false,
@@ -79,11 +93,12 @@ export function SkeletonBone({
   style,
   ...rest
 }: SkeletonBoneProps) {
-  const merged: CSSProperties | undefined =
-    heightPx !== undefined ? { height: `${heightPx}px`, ...style } : style;
+  const height = safeHeightPx(heightPx);
+  const merged: CSSProperties | undefined = height !== undefined ? { ...style, height } : style;
 
   return (
     <div
+      {...rest}
       aria-hidden="true"
       className={cn(
         "bg-muted rounded",
@@ -92,13 +107,15 @@ export function SkeletonBone({
         className
       )}
       style={merged}
-      {...rest}
     />
   );
 }
 
-export interface SkeletonTextProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
-  /** Number of text lines. Clamped to >= 0; defaults to 3. */
+export interface SkeletonTextProps extends Omit<
+  HTMLAttributes<HTMLDivElement>,
+  "children" | "aria-hidden"
+> {
+  /** Number of text lines. Clamped to [0, 100]; defaults to 3. */
   lines?: number;
   /** Skip the 400ms anti-flicker delay. */
   immediate?: boolean;
@@ -126,7 +143,7 @@ export function SkeletonText({
   const count = clampLines(lines);
 
   return (
-    <div aria-hidden="true" className={cn(gapClassName, className)} {...rest}>
+    <div {...rest} aria-hidden="true" className={cn(gapClassName, className)}>
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}
