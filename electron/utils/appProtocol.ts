@@ -1,10 +1,12 @@
 import path from "node:path";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { DAINTREE_APP_PERMISSIONS_POLICY } from "../../shared/config/permissionsPolicy.js";
 
 export interface AppProtocolHeaders extends Record<string, string> {
   "Content-Type": string;
   "Cross-Origin-Opener-Policy": string;
   "Cross-Origin-Embedder-Policy": string;
+  "Permissions-Policy": string;
   "X-Content-Type-Options": string;
   "Cross-Origin-Resource-Policy": string;
 }
@@ -42,6 +44,7 @@ export function buildHeaders(mimeType: string): AppProtocolHeaders {
     "Content-Type": mimeType,
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Embedder-Policy": "credentialless",
+    "Permissions-Policy": DAINTREE_APP_PERMISSIONS_POLICY,
     "X-Content-Type-Options": "nosniff",
     "Cross-Origin-Resource-Policy": "same-origin",
   };

@@ -980,15 +980,6 @@
       </div>
     </div>
     <script src="/skeleton-heatmap.js"></script>
-    <script>
-      // Safety: clean up aria state if skeleton fades via CSS timeout
-      setTimeout(function () {
-        var s = document.getElementById("startup-skeleton");
-        if (s && !s.classList.contains("fade-out")) {
-          s.setAttribute("aria-busy", "false");
-        }
-      }, 10000);
-    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

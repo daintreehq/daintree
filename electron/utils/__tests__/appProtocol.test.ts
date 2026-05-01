@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { resolveAppUrlToDistPath, getMimeType, buildHeaders } from "../appProtocol.js";
+import { DAINTREE_APP_PERMISSIONS_POLICY } from "../../../shared/config/permissionsPolicy.js";
 
 describe("appProtocol utilities", () => {
   describe("getMimeType", () => {
@@ -34,6 +35,18 @@ describe("appProtocol utilities", () => {
       expect(headers["Content-Type"]).toBe("text/html");
       expect(headers["Cross-Origin-Opener-Policy"]).toBe("same-origin");
       expect(headers["Cross-Origin-Embedder-Policy"]).toBe("credentialless");
+      expect(headers["Permissions-Policy"]).toBe(DAINTREE_APP_PERMISSIONS_POLICY);
+      expect(headers["Permissions-Policy"]).toContain("microphone=(self)");
+      expect(headers["Permissions-Policy"]).toContain("camera=()");
+      expect(headers["Permissions-Policy"]).toContain("geolocation=()");
+    });
+
+    it("should include Permissions-Policy header on all MIME types", () => {
+      const mimeTypes = ["text/html", "text/javascript", "text/css", "application/json"];
+      for (const mime of mimeTypes) {
+        const headers = buildHeaders(mime);
+        expect(headers["Permissions-Policy"]).toBe(DAINTREE_APP_PERMISSIONS_POLICY);
+      }
     });
 
     it("should accept any MIME type", () => {

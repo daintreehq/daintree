@@ -333,25 +333,79 @@ describe("setupPermissionLockdown", () => {
       expect(dynamicDaintreeSession.setPermissionCheckHandler).not.toHaveBeenCalled();
     });
 
-    it("handles sessions with missing partition property", () => {
+    it("default-locks sessions with missing partition property", () => {
       setupPermissionLockdown();
       const noPartitionSession = createMockSession();
 
       sessionCreatedListeners[0](noPartitionSession);
 
-      expect(noPartitionSession.setPermissionRequestHandler).not.toHaveBeenCalled();
-      expect(noPartitionSession.setPermissionCheckHandler).not.toHaveBeenCalled();
+      expect(noPartitionSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
+      expect(noPartitionSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
     });
 
-    it("does not lock down unknown partitions", () => {
+    it("default-locks spied [SECURITY] log for missing partition", () => {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      setupPermissionLockdown();
+      const noPartitionSession = createMockSession();
+      sessionCreatedListeners[0](noPartitionSession);
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[SECURITY] Default-locked new session partition: (none)")
+      );
+      logSpy.mockRestore();
+    });
+
+    it("default-locks unknown partitions", () => {
       setupPermissionLockdown();
       const unknownSession = createMockSession();
       Object.defineProperty(unknownSession, "partition", { value: "persist:custom" });
 
       sessionCreatedListeners[0](unknownSession);
 
-      expect(unknownSession.setPermissionRequestHandler).not.toHaveBeenCalled();
-      expect(unknownSession.setPermissionCheckHandler).not.toHaveBeenCalled();
+      expect(unknownSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
+      expect(unknownSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
+    });
+
+    it("logs [SECURITY] for default-locked unknown partitions", () => {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      setupPermissionLockdown();
+      const unknownSession = createMockSession();
+      Object.defineProperty(unknownSession, "partition", { value: "persist:plugin-foo" });
+
+      sessionCreatedListeners[0](unknownSession);
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "[SECURITY] Default-locked new session partition: persist:plugin-foo"
+        )
+      );
+      logSpy.mockRestore();
+    });
+
+    it("skips project partitions in session-created", () => {
+      setupPermissionLockdown();
+      const projectSession = createMockSession();
+      Object.defineProperty(projectSession, "partition", {
+        value: "persist:project-myfeature",
+      });
+
+      sessionCreatedListeners[0](projectSession);
+
+      expect(projectSession.setPermissionRequestHandler).not.toHaveBeenCalled();
+      expect(projectSession.setPermissionCheckHandler).not.toHaveBeenCalled();
+    });
+
+    it("skips portal partition in session-created", () => {
+      setupPermissionLockdown();
+      const portalSession = createMockSession();
+      Object.defineProperty(portalSession, "partition", {
+        value: "persist:portal",
+      });
+
+      sessionCreatedListeners[0](portalSession);
+
+      expect(portalSession.setPermissionRequestHandler).not.toHaveBeenCalled();
+      expect(portalSession.setPermissionCheckHandler).not.toHaveBeenCalled();
     });
   });
 

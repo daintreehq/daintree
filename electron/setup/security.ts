@@ -261,9 +261,11 @@ export function setupPermissionLockdown(): void {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Electron typing gap: Session.partition is not exposed
       const partition: string = (ses as any).partition ?? "";
       const type = classifyPartition(partition);
-      if (type === "dev-preview" || type === "browser") {
-        lockdownUntrustedPermissions(ses, partition);
+      if (type === "project" || type === "portal") {
+        return; // already statically locked down above
       }
+      lockdownUntrustedPermissions(ses, partition);
+      console.log(`[SECURITY] Default-locked new session partition: ${partition || "(none)"}`);
     });
   }
 }
