@@ -33,7 +33,8 @@ describe("SortableWorktreeCard", () => {
         {() => <div data-testid="child" />}
       </SortableWorktreeCard>
     );
-    const wrapper = container.firstChild as HTMLElement;
+    const wrapper = container.firstChild;
+    if (!(wrapper instanceof HTMLElement)) throw new Error("Expected wrapper to be an HTMLElement");
     expect(wrapper.style.isolation).toBe("isolate");
     expect(wrapper.style.contentVisibility).toBe("auto");
   });
@@ -45,7 +46,8 @@ describe("SortableWorktreeCard", () => {
         {() => <div data-testid="child" />}
       </SortableWorktreeCard>
     );
-    const wrapper = container.firstChild as HTMLElement;
+    const wrapper = container.firstChild;
+    if (!(wrapper instanceof HTMLElement)) throw new Error("Expected wrapper to be an HTMLElement");
     expect(wrapper.style.isolation).toBe("auto");
     expect(wrapper.style.contentVisibility).toBe("");
   });
