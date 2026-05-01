@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useRef } from "react";
 import { useTabOverflow } from "../useTabOverflow";
 
 type IOEntry = { target: HTMLElement; isIntersecting: boolean };
@@ -84,19 +83,13 @@ function emit(entries: { id: string; visible: boolean }[]) {
 describe("useTabOverflow", () => {
   it("returns an empty set when no tabs are clipped", () => {
     const container = setupContainer(["a", "b"]);
-    const { result } = renderHook(() => {
-      const ref = useRef<HTMLElement | null>(container);
-      return useTabOverflow(ref, ["a", "b"]);
-    });
+    const { result } = renderHook(() => useTabOverflow(container, ["a", "b"]));
     expect(result.current.size).toBe(0);
   });
 
   it("adds tab ids reported as not intersecting and removes them when they re-intersect", () => {
     const container = setupContainer(["a", "b", "c"]);
-    const { result } = renderHook(() => {
-      const ref = useRef<HTMLElement | null>(container);
-      return useTabOverflow(ref, ["a", "b", "c"]);
-    });
+    const { result } = renderHook(() => useTabOverflow(container, ["a", "b", "c"]));
 
     emit([
       { id: "a", visible: true },
@@ -111,28 +104,19 @@ describe("useTabOverflow", () => {
 
   it("observes every child with a data-tab-id attribute", () => {
     const container = setupContainer(["a", "b", "c"]);
-    renderHook(() => {
-      const ref = useRef<HTMLElement | null>(container);
-      return useTabOverflow(ref, ["a", "b", "c"]);
-    });
+    renderHook(() => useTabOverflow(container, ["a", "b", "c"]));
     expect(lastIO?.observed.size).toBe(3);
   });
 
   it("uses threshold 0.98 (Chromium subpixel rounding gotcha)", () => {
     const container = setupContainer(["a"]);
-    renderHook(() => {
-      const ref = useRef<HTMLElement | null>(container);
-      return useTabOverflow(ref, ["a"]);
-    });
+    renderHook(() => useTabOverflow(container, ["a"]));
     expect(lastIO?.options?.threshold).toBe(0.98);
   });
 
   it("scopes the observer root to the container", () => {
     const container = setupContainer(["a"]);
-    renderHook(() => {
-      const ref = useRef<HTMLElement | null>(container);
-      return useTabOverflow(ref, ["a"]);
-    });
+    renderHook(() => useTabOverflow(container, ["a"]));
     expect(lastIO?.options?.root).toBe(container);
   });
 
@@ -140,10 +124,59 @@ describe("useTabOverflow", () => {
     // @ts-expect-error - intentionally removing mock
     delete globalThis.IntersectionObserver;
     const container = setupContainer(["a", "b"]);
-    const { result } = renderHook(() => {
-      const ref = useRef<HTMLElement | null>(container);
-      return useTabOverflow(ref, ["a", "b"]);
-    });
+    const { result } = renderHook(() => useTabOverflow(container, ["a", "b"]));
     expect(result.current.size).toBe(0);
+  });
+
+  it("does not throw when container is null and creates no observer", () => {
+    const { result } = renderHook(() => useTabOverflow(null, ["a", "b"]));
+    expect(result.current.size).toBe(0);
+    expect(lastIO).toBeNull();
+  });
+
+  it("rebuilds the observer when the container element first becomes available", () => {
+    const container = setupContainer(["a", "b"]);
+    const { rerender } = renderHook(
+      ({ el }: { el: HTMLElement | null }) => useTabOverflow(el, ["a", "b"]),
+      { initialProps: { el: null as HTMLElement | null } }
+    );
+    expect(lastIO).toBeNull();
+    rerender({ el: container });
+    expect(lastIO).not.toBeNull();
+    expect(lastIO?.observed.size).toBe(2);
+  });
+
+  it("does not recreate the observer when tab ids array reference changes but contents do not", () => {
+    const container = setupContainer(["a", "b"]);
+    const { rerender } = renderHook(
+      ({ ids }: { ids: string[] }) => useTabOverflow(container, ids),
+      { initialProps: { ids: ["a", "b"] } }
+    );
+    const initialIO = lastIO;
+    expect(initialIO).not.toBeNull();
+
+    rerender({ ids: ["a", "b"] });
+    expect(lastIO).toBe(initialIO);
+  });
+
+  it("drops removed tab ids from hiddenIds when the tab list shrinks", () => {
+    const container = setupContainer(["a", "b", "c"]);
+    const { result, rerender } = renderHook(
+      ({ ids }: { ids: string[] }) => useTabOverflow(container, ids),
+      { initialProps: { ids: ["a", "b", "c"] } }
+    );
+
+    emit([
+      { id: "a", visible: true },
+      { id: "b", visible: false },
+      { id: "c", visible: false },
+    ]);
+    expect(Array.from(result.current).sort()).toEqual(["b", "c"]);
+
+    // Remove "c" from the tab list (and from the DOM container).
+    container.querySelector('[data-tab-id="c"]')?.remove();
+    rerender({ ids: ["a", "b"] });
+
+    expect(result.current.has("c")).toBe(false);
   });
 });

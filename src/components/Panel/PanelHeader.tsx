@@ -362,33 +362,32 @@ function PanelHeaderComponent({
   };
 
   const hasTabs = tabs && tabs.length > 1;
-  const tabListRef = useRef<HTMLDivElement>(null);
+  const [tabListEl, setTabListEl] = useState<HTMLDivElement | null>(null);
   const canReorderTabs = hasTabs && !!onTabReorder && !!groupId;
   const tabIds = tabs?.map((t) => t.id) ?? [];
 
-  const hiddenTabIds = useTabOverflow(tabListRef, tabIds);
+  const hiddenTabIds = useTabOverflow(tabListEl, tabIds);
   const hiddenTabs = tabs?.filter((t) => hiddenTabIds.has(t.id)) ?? [];
 
   const activeTabId = tabs?.find((t) => t.isActive)?.id ?? null;
 
   useLayoutEffect(() => {
-    const container = tabListRef.current;
-    if (!container || !activeTabId || isDragging) return;
+    if (!tabListEl || !activeTabId || isDragging) return;
 
-    const tabEl = container.querySelector(`[data-tab-id="${activeTabId}"]`) as HTMLElement | null;
+    const tabEl = tabListEl.querySelector(`[data-tab-id="${activeTabId}"]`) as HTMLElement | null;
     if (!tabEl) return;
 
-    const containerLeft = container.scrollLeft;
-    const containerRight = containerLeft + container.clientWidth;
+    const containerLeft = tabListEl.scrollLeft;
+    const containerRight = containerLeft + tabListEl.clientWidth;
     const tabLeft = tabEl.offsetLeft;
     const tabRight = tabLeft + tabEl.offsetWidth;
 
     if (tabLeft < containerLeft) {
-      container.scrollTo({ left: tabLeft, behavior: "smooth" });
+      tabListEl.scrollTo({ left: tabLeft, behavior: "smooth" });
     } else if (tabRight > containerRight) {
-      container.scrollTo({ left: tabRight - container.clientWidth, behavior: "smooth" });
+      tabListEl.scrollTo({ left: tabRight - tabListEl.clientWidth, behavior: "smooth" });
     }
-  }, [activeTabId, isDragging]);
+  }, [activeTabId, isDragging, tabListEl]);
 
   // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
   const tabSensors = useSensors(
@@ -451,13 +450,13 @@ function PanelHeaderComponent({
       if (nextTab) {
         onTabClick(nextTab.id);
         // Focus the new tab button
-        const tabButton = tabListRef.current?.querySelector(
+        const tabButton = tabListEl?.querySelector(
           `[data-tab-id="${nextTab.id}"]`
         ) as HTMLElement | null;
         tabButton?.focus();
       }
     },
-    [tabs, onTabClick]
+    [tabs, onTabClick, tabListEl]
   );
 
   const overflowTrigger = hiddenTabs.length > 0 && (
@@ -554,7 +553,7 @@ function PanelHeaderComponent({
             <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
               <div className="relative min-w-0 flex-1 flex">
                 <div
-                  ref={tabListRef}
+                  ref={setTabListEl}
                   className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
                   role="tablist"
                   aria-label="Panel tabs"
@@ -618,7 +617,7 @@ function PanelHeaderComponent({
         ) : (
           <div className="relative min-w-0 flex-1 flex">
             <div
-              ref={tabListRef}
+              ref={setTabListEl}
               className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
               role="tablist"
               aria-label="Panel tabs"

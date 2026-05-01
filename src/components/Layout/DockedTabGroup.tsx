@@ -106,7 +106,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // Track when popover was just programmatically opened
   const wasJustOpenedRef = useRef(false);
   const prevIsOpenRef = useRef(isOpen);
-  const tabListRef = useRef<HTMLDivElement>(null);
+  const [tabListEl, setTabListEl] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
     prevIsOpenRef.current = isOpen;
@@ -303,7 +303,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // Tab IDs for sortable context
   const tabIds = useMemo(() => panels.map((p) => p.id), [panels]);
 
-  const hiddenTabIds = useTabOverflow(tabListRef, tabIds);
+  const hiddenTabIds = useTabOverflow(tabListEl, tabIds);
 
   // Handle tab reorder drag end
   const handleTabDragEnd = useCallback(
@@ -363,13 +363,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
       if (nextPanel) {
         handleTabClick(nextPanel.id);
         // Focus the new tab button
-        const tabButton = tabListRef.current?.querySelector(
+        const tabButton = tabListEl?.querySelector(
           `[data-tab-id="${nextPanel.id}"]`
         ) as HTMLElement | null;
         tabButton?.focus();
       }
     },
-    [panels, activeTabId, handleTabClick]
+    [panels, activeTabId, handleTabClick, tabListEl]
   );
 
   // Handle add tab - duplicate the current panel as a new tab
@@ -583,7 +583,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 <LayoutGroup id={`dock-tabs-${group.id}`}>
                   <div className="flex items-stretch border-b border-divider bg-daintree-sidebar shrink-0">
                     <div
-                      ref={tabListRef}
+                      ref={setTabListEl}
                       className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
                       role="tablist"
                       aria-label="Dock panel tabs"

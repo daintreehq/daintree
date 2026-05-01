@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useState } from "react";
 
 // Chromium 130+ subpixel rounding can land fully-visible elements at
 // intersectionRatio ≈ 0.9999 instead of 1.0 on high-DPI displays — observe at
@@ -6,28 +6,30 @@ import { useEffect, useState, type RefObject } from "react";
 const VISIBILITY_THRESHOLD = 0.98;
 
 /**
- * Tracks which descendants of `containerRef` are clipped by horizontal
- * overflow. Children must carry `data-tab-id="<id>"` — the hook queries for
- * those nodes inside the container, observes their intersection with the
- * container's viewport, and returns the set of ids that are currently hidden.
+ * Tracks which descendants of `container` are clipped by horizontal overflow.
+ * Children must carry `data-tab-id="<id>"` — the hook queries for those nodes
+ * inside the container, observes their intersection with the container's
+ * viewport, and returns the set of ids that are currently hidden.
  *
- * Re-observes whenever the `tabIds` array changes so newly-added or reordered
+ * Pass the element itself (typically held in `useState`, not `useRef`) so that
+ * mounting/unmounting the container — e.g. inside a Radix popover that
+ * unmounts on close — re-runs the effect and rebuilds the observer.
+ *
+ * Re-observes whenever the joined tab ids change so newly-added or reordered
  * tabs participate in the next visibility check.
  */
 export function useTabOverflow(
-  containerRef: RefObject<HTMLElement | null>,
+  container: HTMLElement | null,
   tabIds: readonly string[]
 ): ReadonlySet<string> {
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(() => new Set<string>());
 
-  // Memoize the dependency by joining ids — useEffect uses referential equality
-  // and a new array each render would re-run the effect every render.
+  // Stable string dep — a new array reference each render would otherwise
+  // tear down and recreate the observer on every parent re-render.
   const tabIdsKey = tabIds.join("|");
 
   useEffect(() => {
-    const container = containerRef.current;
     if (!container) return;
-
     if (typeof IntersectionObserver === "undefined") return;
 
     const observer = new IntersectionObserver(
@@ -56,7 +58,7 @@ export function useTabOverflow(
 
     // Reconcile to only currently-known tab ids — drops any stale entries from
     // tabs that have been removed since the previous run.
-    const known = new Set(tabIds);
+    const known = new Set(tabIdsKey ? tabIdsKey.split("|") : []);
     setHiddenIds((prev) => {
       let changed = false;
       const next = new Set<string>();
@@ -68,7 +70,7 @@ export function useTabOverflow(
     });
 
     return () => observer.disconnect();
-  }, [containerRef, tabIdsKey, tabIds]);
+  }, [container, tabIdsKey]);
 
   return hiddenIds;
 }
