@@ -38,3 +38,10 @@ export {
 export { diffChipField, createDiffChipTooltip } from "./diffChip";
 export { terminalChipField, createTerminalChipTooltip } from "./terminalChip";
 export { selectionChipField, createSelectionChipTooltip } from "./selectionChip";
+export {
+  chipPendingDeleteField,
+  setChipPendingDelete,
+  createChipBackspaceKeymap,
+  isChipSelected,
+} from "./chipBackspace";
+export type { ChipPendingDelete } from "./chipBackspace";

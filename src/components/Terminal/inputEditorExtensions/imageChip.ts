@@ -2,6 +2,7 @@ import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/vi
 import type { Extension } from "@codemirror/state";
 import { StateField, StateEffect } from "@codemirror/state";
 import { formatChipLabel, removeChipRange } from "./base";
+import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
 
 interface ImageChipEntry {
   from: number;
@@ -13,18 +14,19 @@ interface ImageChipEntry {
 class ImageChipWidget extends WidgetType {
   constructor(
     readonly filePath: string,
-    readonly thumbnailUrl: string
+    readonly thumbnailUrl: string,
+    readonly isSelected: boolean
   ) {
     super();
   }
 
   eq(other: ImageChipWidget) {
-    return this.filePath === other.filePath;
+    return this.filePath === other.filePath && this.isSelected === other.isSelected;
   }
 
   toDOM(view: EditorView) {
     const span = document.createElement("span");
-    span.className = "cm-image-chip";
+    span.className = this.isSelected ? "cm-image-chip cm-chip-pending-delete" : "cm-image-chip";
     span.setAttribute("role", "img");
     span.setAttribute("aria-label", `Image: ${this.filePath}`);
 
@@ -91,14 +93,16 @@ export const imageChipField = StateField.define<ImageChipEntry[]>({
     return entries;
   },
   provide: (f) => [
-    EditorView.decorations.from(f, (entries) => {
-      if (entries.length === 0) return Decoration.none;
-      const ranges = entries.map((e) =>
-        Decoration.replace({ widget: new ImageChipWidget(e.filePath, e.thumbnailUrl) }).range(
-          e.from,
-          e.to
-        )
-      );
+    EditorView.decorations.of((view) => {
+      const entries = view.state.field(f, false);
+      if (!entries || entries.length === 0) return Decoration.none;
+      const pending = view.state.field(chipPendingDeleteField, false) ?? null;
+      const ranges = entries.map((e) => {
+        const selected = isChipSelected(pending, e.from, e.to);
+        return Decoration.replace({
+          widget: new ImageChipWidget(e.filePath, e.thumbnailUrl, selected),
+        }).range(e.from, e.to);
+      });
       return Decoration.set(ranges, true);
     }),
     EditorView.atomicRanges.of((view) => {

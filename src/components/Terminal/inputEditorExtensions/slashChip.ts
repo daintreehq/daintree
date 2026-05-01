@@ -1,35 +1,61 @@
-import { EditorView, Decoration, hoverTooltip } from "@codemirror/view";
+import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
 import { StateField, Compartment } from "@codemirror/state";
 import type { SlashCommand } from "@shared/types";
 import { getAllSlashCommandTokens, type SlashCommandToken } from "../hybridInputParsing";
-
-const slashChipMark = Decoration.mark({ class: "cm-slash-command-chip" });
-const invalidChipMark = Decoration.mark({
-  class: "cm-slash-command-chip cm-slash-command-chip-invalid",
-});
+import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
 
 interface SlashChipFieldConfig {
   commandMap: Map<string, SlashCommand>;
 }
 
+interface SlashChipToken extends SlashCommandToken {
+  isValid: boolean;
+}
+
 interface SlashChipState {
-  decorations: ReturnType<typeof Decoration.set>;
-  tokens: SlashCommandToken[];
+  tokens: SlashChipToken[];
+}
+
+class SlashChipWidget extends WidgetType {
+  constructor(
+    readonly command: string,
+    readonly isValid: boolean,
+    readonly isSelected: boolean
+  ) {
+    super();
+  }
+
+  eq(other: SlashChipWidget) {
+    return (
+      this.command === other.command &&
+      this.isValid === other.isValid &&
+      this.isSelected === other.isSelected
+    );
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    const classes = ["cm-slash-command-chip"];
+    if (!this.isValid) classes.push("cm-slash-command-chip-invalid");
+    if (this.isSelected) classes.push("cm-chip-pending-delete");
+    span.className = classes.join(" ");
+    span.setAttribute("role", "img");
+    span.setAttribute("aria-label", `Slash command: ${this.command}`);
+    span.textContent = this.command;
+    return span;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
 }
 
 function buildSlashChipState(text: string, config: SlashChipFieldConfig): SlashChipState {
-  const tokens = getAllSlashCommandTokens(text);
-  if (tokens.length === 0) {
-    return { decorations: Decoration.none, tokens: [] };
-  }
-
-  const ranges = tokens.map((token) => {
-    const isValid = config.commandMap.has(token.command);
-    const mark = isValid ? slashChipMark : invalidChipMark;
-    return mark.range(token.start, token.end);
-  });
-
-  return { decorations: Decoration.set(ranges), tokens };
+  const tokens = getAllSlashCommandTokens(text).map((token) => ({
+    ...token,
+    isValid: config.commandMap.has(token.command),
+  }));
+  return { tokens };
 }
 
 export function createSlashChipField(config: SlashChipFieldConfig) {
@@ -41,7 +67,26 @@ export function createSlashChipField(config: SlashChipFieldConfig) {
       if (!tr.docChanged) return value;
       return buildSlashChipState(tr.state.doc.toString(), config);
     },
-    provide: (f) => EditorView.decorations.from(f, (state) => state.decorations),
+    provide: (f) => [
+      EditorView.decorations.of((view) => {
+        const fieldValue = view.state.field(f, false);
+        if (!fieldValue || fieldValue.tokens.length === 0) return Decoration.none;
+        const pending = view.state.field(chipPendingDeleteField, false) ?? null;
+        const ranges = fieldValue.tokens.map((token) => {
+          const selected = isChipSelected(pending, token.start, token.end);
+          return Decoration.replace({
+            widget: new SlashChipWidget(token.command, token.isValid, selected),
+          }).range(token.start, token.end);
+        });
+        return Decoration.set(ranges, true);
+      }),
+      EditorView.atomicRanges.of((view) => {
+        const fieldValue = view.state.field(f, false);
+        if (!fieldValue || fieldValue.tokens.length === 0) return Decoration.none;
+        const ranges = fieldValue.tokens.map((t) => Decoration.mark({}).range(t.start, t.end));
+        return Decoration.set(ranges, true);
+      }),
+    ],
   });
 }
 

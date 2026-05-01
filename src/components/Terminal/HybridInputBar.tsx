@@ -77,6 +77,8 @@ import {
   createSelectionChipTooltip,
   createAutoSize,
   createCustomKeymap,
+  chipPendingDeleteField,
+  createChipBackspaceKeymap,
 } from "./inputEditorExtensions";
 import { AppDialog } from "@/components/ui/AppDialog";
 import {
@@ -1048,6 +1050,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const state = EditorState.create({
         doc: value,
         extensions: [
+          chipPendingDeleteField,
+          createChipBackspaceKeymap(),
           themeCompartmentRef.current.of(buildInputBarTheme(effectiveTheme)),
           chipEntranceTheme,
           EditorView.lineWrapping,
