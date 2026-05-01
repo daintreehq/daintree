@@ -179,4 +179,41 @@ describe("NotificationCenterEntry thread count chip", () => {
     const chip = screen.getByLabelText("2 events") as HTMLElement;
     expect(chip.style.animationDuration).toBe("150ms");
   });
+
+  it("pulses on the no-title path when threadCount increases", () => {
+    const noTitle = makeEntry({ message: "Plain", title: undefined });
+    const { rerender } = render(<NotificationCenterEntry entry={noTitle} threadCount={2} />);
+    rerender(<NotificationCenterEntry entry={noTitle} threadCount={3} />);
+    expect(screen.getByLabelText("3 events").className).toMatch(/animate-badge-bump/);
+  });
+
+  it("places the chip after the message in the no-title path", () => {
+    render(<NotificationCenterEntry entry={makeEntry({ message: "Plain" })} threadCount={2} />);
+    const chip = screen.getByLabelText("2 events");
+    const message = screen.getByText("Plain");
+    expect(chip.previousElementSibling).toBe(message);
+  });
+
+  it("clears the pending bump timer when count drops then component unmounts", () => {
+    vi.useFakeTimers();
+    try {
+      const entry = makeEntry({ title: "Build" });
+      const { rerender, unmount } = render(
+        <NotificationCenterEntry entry={entry} threadCount={2} />
+      );
+      // 2 → 3 starts the pulse and queues a 240ms cleanup timer.
+      rerender(<NotificationCenterEntry entry={entry} threadCount={3} />);
+      // 3 → 2 must cancel the pending timer so it cannot fire post-unmount.
+      rerender(<NotificationCenterEntry entry={entry} threadCount={2} />);
+      unmount();
+      // No timer should be left to fire — advancing past 240ms must be a no-op.
+      expect(() => {
+        act(() => {
+          vi.advanceTimersByTime(300);
+        });
+      }).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

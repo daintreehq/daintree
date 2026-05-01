@@ -57,12 +57,13 @@ export function NotificationCenterEntry({
     if (next === lastCountRef.current) return;
     const isIncrease = next > lastCountRef.current;
     lastCountRef.current = next;
+    if (bumpClearRef.current !== null) {
+      window.clearTimeout(bumpClearRef.current);
+      bumpClearRef.current = null;
+    }
     if (!isIncrease) return;
     const node = chipRef.current;
     if (!node) return;
-    if (bumpClearRef.current !== null) {
-      window.clearTimeout(bumpClearRef.current);
-    }
     node.classList.remove("animate-badge-bump");
     void node.offsetWidth;
     node.classList.add("animate-badge-bump");
