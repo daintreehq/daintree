@@ -250,6 +250,33 @@ describe("deriveHighestPriorityCluster", () => {
       expect(cluster).toBeNull();
     });
 
+    it("excludes terminals whose runtimeStatus is exited or error (post-exit liveness guard)", () => {
+      // `runtimeStatus` is the renderer's authoritative liveness signal — a
+      // pane preserved after PTY exit can still expose `hasPty=true` from a
+      // stale snapshot, so the cluster must defer to runtimeStatus when set.
+      const exited = derive([
+        makeAgent("a", {
+          agentState: "waiting",
+          waitingReason: "prompt",
+          lastStateChange: NOW,
+          runtimeStatus: "exited",
+        }),
+        makeAgent("b", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
+      ]);
+      expect(exited).toBeNull();
+
+      const errored = derive([
+        makeAgent("a", {
+          agentState: "waiting",
+          waitingReason: "prompt",
+          lastStateChange: NOW,
+          runtimeStatus: "error",
+        }),
+        makeAgent("b", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
+      ]);
+      expect(errored).toBeNull();
+    });
+
     it("respects the isInTrash predicate", () => {
       const { panelsById, panelIds } = build([
         makeAgent("a", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
