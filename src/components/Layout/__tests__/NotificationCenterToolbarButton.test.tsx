@@ -12,7 +12,7 @@
  *  - aria-label / tooltip describes the muted state with a time-of-day when known
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { render, act, fireEvent } from "@testing-library/react";
+import { render, act } from "@testing-library/react";
 import { NotificationCenterToolbarButton } from "../NotificationCenterToolbarButton";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
@@ -558,9 +558,9 @@ describe("NotificationCenterToolbarButton — DND state surface", () => {
       });
       expect(getByTestId("notification-bell-icon").className).toContain("animate-activity-blip");
 
-      // Advance past the 320ms cleanup timer (260ms blip + buffer).
+      // Advance past the BELL_BLIP_CLEANUP_MS timer (260ms blip + buffer).
       await act(async () => {
-        vi.advanceTimersByTime(320);
+        vi.advanceTimersByTime(400);
       });
 
       // After cleanup, the wrapper falls back to the no-animation className —
