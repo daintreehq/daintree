@@ -12,6 +12,8 @@ const config: KnipConfig = {
     "electron/pty-host-bootstrap.ts",
     "electron/workspace-host.ts",
     "electron/workspace-host-bootstrap.ts",
+    "electron/watchdog-host.ts",
+    "electron/watchdog-host-bootstrap.ts",
     "electron/preload.cts",
 
     // Web workers instantiated via `new Worker(new URL(...))`. Static analysis

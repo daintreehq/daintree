@@ -57,6 +57,7 @@ import {
   setStopAppMetricsMonitor,
   getStopDiskSpaceMonitor,
   setStopDiskSpaceMonitor,
+  getMainProcessWatchdogClientRef,
 } from "./window/windowServices.js";
 import {
   setupPowerMonitor,
@@ -321,6 +322,7 @@ if (!gotTheLock) {
       setupPowerMonitor({
         getPtyClient,
         getWorkspaceClient: getWorkspaceClientRef,
+        getMainProcessWatchdogClient: getMainProcessWatchdogClientRef,
       });
       setupWindowFocusThrottle({
         getPtyClient,

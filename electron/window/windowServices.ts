@@ -7,6 +7,11 @@ import { distributePortsToView } from "./portDistribution.js";
 import { registerErrorHandlers, flushPendingErrors } from "../ipc/errorHandlers.js";
 import { PtyClient, disposePtyClient } from "../services/PtyClient.js";
 import {
+  MainProcessWatchdogClient,
+  getMainProcessWatchdogClient,
+  disposeMainProcessWatchdog,
+} from "../services/MainProcessWatchdogClient.js";
+import {
   getWorkspaceClient,
   disposeWorkspaceClient,
   WorkspaceClient,
@@ -101,6 +106,7 @@ let processArgvCliHandled = false;
 
 // ── Global service refs (shared across all windows) ──
 let ptyClient: PtyClient | null = null;
+let mainProcessWatchdogClient: MainProcessWatchdogClient | null = null;
 let workspaceClient: WorkspaceClient | null = null;
 let cliAvailabilityService: CliAvailabilityService | null = null;
 let agentVersionService: AgentVersionService | null = null;
@@ -134,6 +140,9 @@ export function getPtyClient(): PtyClient | null {
 }
 export function setPtyClientRef(v: PtyClient | null): void {
   ptyClient = v;
+}
+export function getMainProcessWatchdogClientRef(): MainProcessWatchdogClient | null {
+  return mainProcessWatchdogClient;
 }
 export function getWorkspaceClientRef(): WorkspaceClient | null {
   return workspaceClient;
@@ -705,6 +714,21 @@ export async function setupWindowServices(
   // Critical services (global, first window only)
   if (!ptyClient) {
     console.log("[MAIN] Starting critical services...");
+
+    // Start the external main-process watchdog before PtyClient so a deadlock
+    // during PTY host fork (worst case: a synchronous spawn that hangs) is
+    // still recoverable. The watchdog is fail-open: if its own fork throws,
+    // PtyClient still starts normally.
+    if (!mainProcessWatchdogClient) {
+      try {
+        // Use the singleton accessor so `disposeMainProcessWatchdog()` in
+        // shutdown.ts reaches the running instance instead of a no-op.
+        mainProcessWatchdogClient = getMainProcessWatchdogClient();
+      } catch (err) {
+        console.error("[MAIN] Failed to start main-process watchdog:", err);
+        mainProcessWatchdogClient = null;
+      }
+    }
 
     ptyClient = new PtyClient({
       maxRestartAttempts: 3,
@@ -1304,6 +1328,10 @@ export async function setupWindowServices(
     if (ptyClient) ptyClient.dispose();
     ptyClient = null;
     disposePtyClient();
+
+    if (mainProcessWatchdogClient) mainProcessWatchdogClient.dispose();
+    mainProcessWatchdogClient = null;
+    disposeMainProcessWatchdog();
 
     // Clean up IPC handlers and reset guards so next window re-registers fresh
     if (cleanupIpcHandlers) {
