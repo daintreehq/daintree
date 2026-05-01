@@ -10,7 +10,12 @@ export function HighlightedText({ text, indices }: HighlightedTextProps) {
   const sorted = [...indices].sort((a, b) => a[0] - b[0]);
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-  sorted.forEach(([start, end], i) => {
+  sorted.forEach(([rawStart, rawEnd], i) => {
+    // Clamp overlapping ranges — Fuse can emit unsorted/overlapping indices
+    // when a query is split across BitapSearch chunks.
+    const start = Math.max(rawStart, lastIndex);
+    const end = Math.max(rawEnd, lastIndex - 1);
+    if (start > end) return;
     if (start > lastIndex) parts.push(text.substring(lastIndex, start));
     parts.push(
       <span key={i} className="text-search-highlight-text font-semibold">
