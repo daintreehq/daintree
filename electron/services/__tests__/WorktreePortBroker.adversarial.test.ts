@@ -153,6 +153,129 @@ describe("WorktreePortBroker adversarial", () => {
     expect(broker.hasPort(secondView.id)).toBe(false);
   });
 
+  it("closes the port on cross-document main-frame navigation", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+
+    expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents))).toBe(true);
+    const channel = createdChannels[0];
+
+    webContents.emit(
+      "did-start-navigation",
+      {},
+      {
+        url: "https://example.com/new-page",
+        isSameDocument: false,
+        isMainFrame: true,
+        frame: null,
+      }
+    );
+
+    expect(channel.port1.close).toHaveBeenCalledTimes(1);
+    expect(broker.hasPort(webContents.id)).toBe(false);
+  });
+
+  it("does not close the port on same-document main-frame navigation", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+
+    expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents))).toBe(true);
+    const channel = createdChannels[0];
+
+    webContents.emit(
+      "did-start-navigation",
+      {},
+      {
+        url: "https://example.com/#section",
+        isSameDocument: true,
+        isMainFrame: true,
+        frame: null,
+      }
+    );
+
+    expect(channel.port1.close).not.toHaveBeenCalled();
+    expect(broker.hasPort(webContents.id)).toBe(true);
+  });
+
+  it("does not close the port on sub-frame navigation", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+
+    expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents))).toBe(true);
+    const channel = createdChannels[0];
+
+    webContents.emit(
+      "did-start-navigation",
+      {},
+      {
+        url: "https://example.com/iframe-content",
+        isSameDocument: false,
+        isMainFrame: false,
+        frame: null,
+      }
+    );
+
+    expect(channel.port1.close).not.toHaveBeenCalled();
+    expect(broker.hasPort(webContents.id)).toBe(true);
+  });
+
+  it("handles navigation after webContents is destroyed without throwing", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+
+    expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents))).toBe(true);
+
+    webContents.setDestroyed(true);
+    webContents.emit("destroyed");
+
+    expect(() => {
+      webContents.emit(
+        "did-start-navigation",
+        {},
+        {
+          url: "https://example.com/late-navigation",
+          isSameDocument: false,
+          isMainFrame: true,
+          frame: null,
+        }
+      );
+    }).not.toThrow();
+  });
+
+  it("does not close view B port when view A navigates cross-document", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost("/tmp/shared-project");
+    const viewA = createWebContents();
+    const viewB = createWebContents();
+
+    expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(viewA))).toBe(true);
+    expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(viewB))).toBe(true);
+
+    const channelA = createdChannels[0];
+    const channelB = createdChannels[1];
+
+    viewA.emit(
+      "did-start-navigation",
+      {},
+      {
+        url: "https://example.com/new-page",
+        isSameDocument: false,
+        isMainFrame: true,
+        frame: null,
+      }
+    );
+
+    expect(channelA.port1.close).toHaveBeenCalledTimes(1);
+    expect(broker.hasPort(viewA.id)).toBe(false);
+
+    expect(channelB.port1.close).not.toHaveBeenCalled();
+    expect(broker.hasPort(viewB.id)).toBe(true);
+  });
+
   it("cleans up the active port when a renderer crashes after brokering", () => {
     const broker = new WorktreePortBroker();
     const host = createHost();

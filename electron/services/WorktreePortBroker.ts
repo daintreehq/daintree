@@ -68,13 +68,9 @@ export class WorktreePortBroker {
     };
     const onNavigation = (
       _event: Electron.Event,
-      _url: string,
-      isInPlace: boolean,
-      isMainFrame: boolean
+      details: Electron.WebContentsDidStartNavigationEventParams
     ) => {
-      // Only handle top-level navigations, not in-place (hash) changes
-      if (isMainFrame && !isInPlace && !webContents.isDestroyed()) {
-        // Close old port — the new page load will trigger a re-broker via onViewReady
+      if (details.isMainFrame && !details.isSameDocument && !webContents.isDestroyed()) {
         this.closePortsForView(wcId);
       }
     };
