@@ -95,6 +95,7 @@ function routeError(error: ErrorRecord): void {
             component: "useErrors",
             details: { errorId, action: stored.retryAction, args: stored.retryArgs },
           });
+          throw err;
         } finally {
           state.clearRetryProgress(errorId);
         }
