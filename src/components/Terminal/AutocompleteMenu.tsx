@@ -25,12 +25,27 @@ export interface AutocompleteMenuProps {
   style?: React.CSSProperties;
   title?: string;
   ariaLabel?: string;
+  emptyMessage: string;
 }
 
 export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps>(
-  ({ isOpen, items, selectedIndex, isLoading = false, onSelect, style, title, ariaLabel }, ref) => {
+  (
+    {
+      isOpen,
+      items,
+      selectedIndex,
+      isLoading = false,
+      onSelect,
+      style,
+      title,
+      ariaLabel,
+      emptyMessage,
+    },
+    ref
+  ) => {
     if (!isOpen) return null;
-    if (!isLoading && items.length === 0) return null;
+
+    const isEmpty = !isLoading && items.length === 0;
 
     return (
       <div
@@ -40,7 +55,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
           "z-50"
         )}
         style={style}
-        role="listbox"
+        role={isEmpty ? undefined : "listbox"}
         aria-label={ariaLabel ?? title ?? "Autocomplete"}
       >
         {title && (
@@ -51,6 +66,17 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         <ScrollShadow className="max-h-64" scrollClassName="p-1">
           {isLoading && items.length === 0 && (
             <div className="px-2 py-2 text-xs font-mono text-daintree-text/40">Searching…</div>
+          )}
+
+          {isEmpty && (
+            <div
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="px-2 py-2 text-xs font-mono text-daintree-text/40"
+            >
+              {emptyMessage}
+            </div>
           )}
 
           {items.map((item, idx) => {

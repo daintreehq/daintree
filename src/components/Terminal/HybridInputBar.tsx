@@ -1315,6 +1315,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         ? "Diff autocomplete"
                         : "File autocomplete"
               }
+              emptyMessage={
+                activeMode === "command"
+                  ? "No commands match"
+                  : activeMode === "file"
+                    ? "No files match"
+                    : activeMode === "terminal"
+                      ? "No terminals match"
+                      : "No matches"
+              }
             />
             {isDragOverFiles && (
               <div className="absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-daintree-bg/80 pointer-events-none">
