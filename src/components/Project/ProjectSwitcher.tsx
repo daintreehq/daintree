@@ -5,6 +5,7 @@ import { getProjectGradient } from "@/lib/colorUtils";
 import { useProjectStore } from "@/store/projectStore";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useProjectSwitcherPalette } from "@/hooks";
@@ -182,7 +183,11 @@ export function ProjectSwitcher() {
               onClick={() => projectSwitcher.open("dropdown")}
             >
               <span>Select Project...</span>
-              <ChevronsUpDown className="opacity-50" />
+              {isLoading ? (
+                <Spinner size="md" className="shrink-0" />
+              ) : (
+                <ChevronsUpDown className="opacity-50" />
+              )}
             </Button>
           </ProjectSwitcherPalette>
         </>
@@ -261,7 +266,11 @@ export function ProjectSwitcher() {
                   </span>
                 </div>
               </div>
-              <ChevronsUpDown className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary" />
+              {isLoading ? (
+                <Spinner size="md" className="shrink-0 text-text-muted" />
+              ) : (
+                <ChevronsUpDown className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary" />
+              )}
               {badgeStatus && (
                 <span
                   role="status"
