@@ -19,6 +19,16 @@
   background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.015));
 }
 
+.sidebar-worktree-card:has(> button:focus-visible) {
+  box-shadow: inset 0 0 0 2px var(--sidebar-ring);
+}
+
+.sidebar-worktree-card[data-active="true"]:has(> button:focus-visible) {
+  box-shadow:
+    inset 2px 0 0 var(--theme-overlay-selected),
+    inset 0 0 0 2px var(--sidebar-ring);
+}
+
 .sidebar-action-button:hover {
   background: var(--sidebar-action-hover-bg, var(--theme-overlay-hover));
 }

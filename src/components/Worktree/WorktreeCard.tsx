@@ -711,9 +711,8 @@ export const WorktreeCard = React.memo(function WorktreeCard({
           <button
             type="button"
             className={cn(
-              "absolute inset-0 z-0",
+              "absolute inset-0 z-0 outline-hidden",
               variant === "grid" && "rounded-lg",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
               (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
             )}
             aria-label={`Select worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}`}

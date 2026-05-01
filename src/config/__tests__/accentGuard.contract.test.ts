@@ -110,7 +110,7 @@ const DURABLE_ALLOWLIST = new Set([
   // HealthChip accent tone routing + color-mix CSS custom property usage
   "src/components/Pulse/ProjectPulseCard.tsx",
 
-  // Focused worktree card left-edge accent bar (single primary anchor per view)
+  // Current worktree card left-edge accent bar (single primary anchor per view)
   "src/components/Worktree/WorktreeCard.tsx",
 
   // Setup wizard step indicators, accent icon, telemetry toggle (one-time setup flow)
