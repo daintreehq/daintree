@@ -1,6 +1,6 @@
 import { forwardRef } from "react";
 import { cn } from "@/lib/utils";
-import { createTooltipWithShortcut } from "@/lib/platform";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { SquareTerminal } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -35,7 +35,7 @@ export const CommandPickerButton = forwardRef<HTMLButtonElement, CommandPickerBu
           </button>
         </TooltipTrigger>
         <TooltipContent side="bottom">
-          {createTooltipWithShortcut("Open command picker", "Cmd+K")}
+          {createTooltipContent("Open command picker", "Cmd+K")}
         </TooltipContent>
       </Tooltip>
     );
