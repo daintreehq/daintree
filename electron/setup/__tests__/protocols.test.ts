@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { pathToFileURL } from "url";
 import path from "path";
 
 type WebContentsCreatedListener = (event: unknown, contents: MockWebContents) => void;
@@ -71,8 +70,16 @@ vi.mock("../../utils/appProtocol.js", () => ({
   buildHeaders: vi.fn(),
 }));
 
-vi.mock("fs/promises", () => ({
+const fsPromisesMocks = vi.hoisted(() => ({
   realpath: vi.fn(),
+  stat: vi.fn(),
+  open: vi.fn(),
+  constants: { O_RDONLY: 0, O_NOFOLLOW: 0 },
+}));
+
+vi.mock("fs/promises", () => ({
+  default: fsPromisesMocks,
+  ...fsPromisesMocks,
 }));
 
 const mockSend = vi.fn();
@@ -792,17 +799,26 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     return new Request(url.toString()) as GlobalRequest;
   }
 
+  function makeFileHandle(content: string | Buffer = "data") {
+    const buffer = typeof content === "string" ? Buffer.from(content) : content;
+    return {
+      readFile: vi.fn().mockResolvedValue(buffer),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
   beforeEach(async () => {
     vi.clearAllMocks();
-    const electron = await import("electron");
-    vi.mocked(electron.net.fetch).mockResolvedValue(
-      new Response(new ArrayBuffer(4), { status: 200 })
+    const fs = await import("fs/promises");
+    vi.mocked(fs.stat).mockResolvedValue({ size: 4 } as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
     );
     const appProtocol = await import("../../utils/appProtocol.js");
     vi.mocked(appProtocol.getMimeType).mockReturnValue("text/plain");
   });
 
-  it("serves a normal file inside root using the realpath-resolved path", async () => {
+  it("serves a normal file inside root and opens the user-supplied path with O_NOFOLLOW", async () => {
     const fs = await import("fs/promises");
     const realpath = vi.mocked(fs.realpath);
     realpath.mockImplementation((p) => Promise.resolve(p as string));
@@ -811,10 +827,121 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     const response = await handler(makeRequest("/project/src/index.ts", "/project"));
 
     expect(response.status).toBe(200);
-    const electron = await import("electron");
-    expect(electron.net.fetch).toHaveBeenCalledTimes(1);
-    const fetchUrl = vi.mocked(electron.net.fetch).mock.calls[0][0] as string;
-    expect(fetchUrl).toBe(pathToFileURL("/project/src/index.ts").toString());
+    // Stat is performed on the realpath-resolved file for accurate size.
+    expect(fs.stat).toHaveBeenCalledWith("/project/src/index.ts");
+    // open() must be called on the user-supplied (normalized) path with O_NOFOLLOW
+    // — this is the TOCTOU defense that net.fetch did not provide.
+    expect(fs.open).toHaveBeenCalledTimes(1);
+    const openArgs = vi.mocked(fs.open).mock.calls[0];
+    expect(openArgs[0]).toBe("/project/src/index.ts");
+    expect(openArgs[1]).toBe(fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  });
+
+  it("emits the hardened response header set on success", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 7 } as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle("hello\n!") as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/src/index.ts", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("text/plain");
+    expect(response.headers.get("Content-Length")).toBe("7");
+    expect(response.headers.get("Content-Security-Policy")).toBe("sandbox; default-src 'none'");
+    // Must be cross-origin: app:// renderer and daintree-file:// are different schemes/sites.
+    expect(response.headers.get("Cross-Origin-Resource-Policy")).toBe("cross-origin");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("rejects oversize files with 413 before opening the file (size cap parity with files:read)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 512 * 1024 + 1 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/big.bin", "/project"));
+
+    expect(response.status).toBe(413);
+    expect(fs.open).not.toHaveBeenCalled();
+    // Error responses still carry the security header set.
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("serves a file at exactly the size limit (cap is exclusive)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 512 * 1024 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/edge.bin", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(fs.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 404 when O_NOFOLLOW rejects a final-component symlink with ELOOP (TOCTOU)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    const eloop = Object.assign(new Error("ELOOP"), { code: "ELOOP" });
+    vi.mocked(fs.open).mockRejectedValue(eloop);
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/sneaky", "/project"));
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 404 when the file vanishes between realpath and open (ENOENT)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    vi.mocked(fs.open).mockRejectedValue(enoent);
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/missing", "/project"));
+
+    expect(response.status).toBe(404);
+  });
+
+  it("closes the file handle even when readFile fails", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    const handle = {
+      readFile: vi.fn().mockRejectedValue(new Error("EIO")),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/broken", "/project"));
+
+    expect(response.status).toBe(500);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 200 when close() rejects after a successful read (close errors are swallowed)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    const handle = {
+      readFile: vi.fn().mockResolvedValue(Buffer.from("ok")),
+      close: vi.fn().mockRejectedValue(new Error("EBADF")),
+    };
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/ok", "/project"));
+
+    expect(response.status).toBe(200);
   });
 
   it("blocks a symlink whose path is inside root but whose target is outside root", async () => {
@@ -830,8 +957,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     const response = await handler(makeRequest("/project/escape", "/project"));
 
     expect(response.status).toBe(404);
-    const electron = await import("electron");
-    expect(electron.net.fetch).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   it("returns 404 for a dangling symlink (ENOENT)", async () => {
@@ -847,8 +973,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     const response = await handler(makeRequest("/project/dangling", "/project"));
 
     expect(response.status).toBe(404);
-    const electron = await import("electron");
-    expect(electron.net.fetch).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   it("returns 404 for a symlink loop (ELOOP)", async () => {
@@ -864,8 +989,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     const response = await handler(makeRequest("/project/loop", "/project"));
 
     expect(response.status).toBe(404);
-    const electron = await import("electron");
-    expect(electron.net.fetch).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   it("returns 404 when the root itself fails to resolve (EACCES)", async () => {
@@ -880,8 +1004,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     const response = await handler(makeRequest("/project/file.txt", "/project"));
 
     expect(response.status).toBe(404);
-    const electron = await import("electron");
-    expect(electron.net.fetch).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   it("blocks a Windows cross-drive escape where path.relative returns an absolute path", async () => {
@@ -900,8 +1023,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     const response = await handler(makeRequest("/project/winlink", "/project"));
 
     expect(response.status).toBe(404);
-    const electron = await import("electron");
-    expect(electron.net.fetch).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   it("permits a symlink whose resolved target stays inside root", async () => {
@@ -917,11 +1039,10 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     const response = await handler(makeRequest("/project/link", "/project"));
 
     expect(response.status).toBe(200);
-    const electron = await import("electron");
-    expect(electron.net.fetch).toHaveBeenCalledTimes(1);
-    const fetchUrl = vi.mocked(electron.net.fetch).mock.calls[0][0] as string;
-    // The fetch URL should be the resolved real path, not the symlink path.
-    expect(fetchUrl).toBe(pathToFileURL("/project/real/file.txt").toString());
+    // stat reads the resolved real path (for accurate size); open uses the
+    // user-supplied normalized path so O_NOFOLLOW catches a final-component swap.
+    expect(fs.stat).toHaveBeenCalledWith("/project/real/file.txt");
+    expect(vi.mocked(fs.open).mock.calls[0][0]).toBe("/project/link");
   });
 
   it("returns 400 (not 404) for missing parameters — input validation precedes realpath", async () => {
@@ -930,6 +1051,23 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     const response = await handler(new Request(url.toString()) as GlobalRequest);
 
     expect(response.status).toBe(400);
+    // 4xx error responses still carry the security headers.
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("returns 405 with security headers for non-GET/HEAD methods", async () => {
+    const handler = await captureHandler("daintree-file");
+    const url = new URL("daintree-file://serve");
+    url.searchParams.set("path", "/project/x");
+    url.searchParams.set("root", "/project");
+    const response = await handler(
+      new Request(url.toString(), { method: "POST" }) as GlobalRequest
+    );
+
+    expect(response.status).toBe(405);
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Content-Security-Policy")).toBe("sandbox; default-src 'none'");
   });
 
   it("permits files whose name starts with '..' but isn't parent traversal", async () => {
@@ -943,8 +1081,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     const response = await handler(makeRequest("/project/..hidden/file.txt", "/project"));
 
     expect(response.status).toBe(200);
-    const electron = await import("electron");
-    expect(electron.net.fetch).toHaveBeenCalledTimes(1);
+    expect(fs.open).toHaveBeenCalledTimes(1);
   });
 
   it("blocks a prefix-sibling escape (root=/tmp/project, target=/tmp/project-evil/...)", async () => {
@@ -956,8 +1093,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     const response = await handler(makeRequest("/tmp/project-evil/secret.env", "/tmp/project"));
 
     expect(response.status).toBe(404);
-    const electron = await import("electron");
-    expect(electron.net.fetch).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   it("blocks via the path.isAbsolute(rel) branch (Windows cross-drive simulation)", async () => {
@@ -974,8 +1110,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
       const response = await handler(makeRequest("/project/file.txt", "/project"));
 
       expect(response.status).toBe(404);
-      const electron = await import("electron");
-      expect(electron.net.fetch).not.toHaveBeenCalled();
+      expect(fs.open).not.toHaveBeenCalled();
     } finally {
       relativeSpy.mockRestore();
     }

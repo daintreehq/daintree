@@ -1,7 +1,7 @@
 import { app, protocol, net, session } from "electron";
 import { getWindowForWebContents, getAppWebContents } from "../window/webContentsRegistry.js";
 import path from "path";
-import { realpath } from "fs/promises";
+import fs from "fs/promises";
 import { pathToFileURL } from "url";
 import { resolveAppUrlToDistPath, getMimeType, buildHeaders } from "../utils/appProtocol.js";
 import {
@@ -74,13 +74,49 @@ function createAppProtocolHandler(distPath: string) {
   };
 }
 
+// Parity with the files:read IPC handler (electron/ipc/handlers/files.ts).
+// Files larger than this are rejected with 413 before any read, preventing
+// renderer OOM via a malicious or accidental large-file URL.
+const DAINTREE_FILE_MAX_BYTES = 512 * 1024;
+
+// Hardened response headers for daintree-file:// (and the canopy-file:// alias).
+// CORP must be cross-origin: the app:// renderer and daintree-file:// are
+// different schemes (and therefore different origins/sites), and same-origin
+// would block legitimate sub-resource loads. CSP sandbox neutralizes polyglot
+// HTML/SVG payloads regardless of declared MIME. nosniff hardens against
+// MIME-confusion. no-store reflects that disk files can change at any time
+// and the handler has no ETag/Last-Modified infrastructure.
+function buildDaintreeFileHeaders(mimeType: string, contentLength: number): Record<string, string> {
+  return {
+    "Content-Type": mimeType,
+    "Content-Length": String(contentLength),
+    "Content-Security-Policy": "sandbox; default-src 'none'",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+  };
+}
+
+function buildDaintreeFileErrorHeaders(): Record<string, string> {
+  return {
+    "Content-Type": "text/plain",
+    "Content-Security-Policy": "sandbox; default-src 'none'",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+  };
+}
+
 /**
  * Create the daintree-file:// protocol handler function.
  */
 function createDaintreeFileProtocolHandler() {
   return async (request: GlobalRequest) => {
     if (request.method !== "GET" && request.method !== "HEAD") {
-      return new Response("Method Not Allowed", { status: 405 });
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
     }
 
     try {
@@ -89,15 +125,24 @@ function createDaintreeFileProtocolHandler() {
       const rootPath = url.searchParams.get("root");
 
       if (!filePath || !rootPath) {
-        return new Response("Missing path or root parameter", { status: 400 });
+        return new Response("Missing path or root parameter", {
+          status: 400,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
       }
 
       if (filePath.includes("\0") || rootPath.includes("\0")) {
-        return new Response("Invalid path", { status: 400 });
+        return new Response("Invalid path", {
+          status: 400,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
       }
 
       if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
-        return new Response("Paths must be absolute", { status: 400 });
+        return new Response("Paths must be absolute", {
+          status: 400,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
       }
 
       const normalizedFile = path.normalize(filePath);
@@ -107,34 +152,81 @@ function createDaintreeFileProtocolHandler() {
       let realRoot: string;
       let realFile: string;
       try {
-        realRoot = await realpath(normalizedRoot);
-        realFile = await realpath(normalizedFile);
+        realRoot = await fs.realpath(normalizedRoot);
+        realFile = await fs.realpath(normalizedFile);
       } catch {
-        return new Response("Not Found", { status: 404 });
+        return new Response("Not Found", {
+          status: 404,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
       }
 
       const rel = path.relative(realRoot, realFile);
       // Match exact ".." and "../*" — bare startsWith("..") would reject legitimate files like "..hidden/x". isAbsolute catches Windows cross-drive escapes.
       if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
-        return new Response("Not Found", { status: 404 });
+        return new Response("Not Found", {
+          status: 404,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
       }
 
-      const mimeType = getMimeType(realFile);
-      const fileUrl = pathToFileURL(realFile).toString();
-      const response = await net.fetch(fileUrl);
-
-      if (!response.ok) {
-        return new Response("Not Found", { status: 404 });
+      // Stat the realpath-resolved path for an accurate size before any read.
+      let fileStat: Awaited<ReturnType<typeof fs.stat>>;
+      try {
+        fileStat = await fs.stat(realFile);
+      } catch {
+        return new Response("Not Found", {
+          status: 404,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
       }
 
-      const buffer = await response.arrayBuffer();
-      return new Response(buffer, {
-        status: 200,
-        headers: { "Content-Type": mimeType },
-      });
+      if (fileStat.size > DAINTREE_FILE_MAX_BYTES) {
+        return new Response("Payload Too Large", {
+          status: 413,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
+      }
+
+      // Open the user-supplied normalized path (not realFile) with O_NOFOLLOW
+      // so a final-component symlink injected after the realpath check is
+      // rejected with ELOOP. Closes the TOCTOU gap between realpath and the
+      // actual read. On Windows O_NOFOLLOW is 0 (no-op); realpath containment
+      // still applies. Mirrors the files:read IPC handler.
+      let fileHandle: Awaited<ReturnType<typeof fs.open>>;
+      try {
+        fileHandle = await fs.open(
+          normalizedFile,
+          fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
+        );
+      } catch (err) {
+        const errCode = (err as NodeJS.ErrnoException).code;
+        if (errCode === "ELOOP" || errCode === "ENOENT") {
+          return new Response("Not Found", {
+            status: 404,
+            headers: buildDaintreeFileErrorHeaders(),
+          });
+        }
+        throw err;
+      }
+
+      try {
+        const buffer = await fileHandle.readFile();
+        const mimeType = getMimeType(realFile);
+        return new Response(buffer, {
+          status: 200,
+          headers: buildDaintreeFileHeaders(mimeType, fileStat.size),
+        });
+      } finally {
+        // Swallow close errors so they don't mask a preceding readFile failure.
+        await fileHandle.close().catch(() => {});
+      }
     } catch (err) {
       console.error("[MAIN] daintree-file protocol error:", err);
-      return new Response("Internal Server Error", { status: 500 });
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
     }
   };
 }
