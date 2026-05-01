@@ -63,6 +63,11 @@ const TYPE_ICON_CONFIG: Record<string, IconConfig> = {
 const MAX_VISIBLE_DURATION_MS = 15000;
 const VISIBLE_DURATION_MULTIPLIER = 3;
 
+// How long the success state dwells visible before the toast auto-dismisses.
+// Long enough for sighted users to notice the swap; short enough not to feel
+// stuck. Mirrors the announcer's polite cadence.
+const ACTION_SUCCESS_DWELL_MS = 500;
+
 function Toast({ notification }: { notification: Notification }) {
   const { dismissNotification, removeNotification } = useNotificationStore(
     useShallow((state) => ({
@@ -136,7 +141,8 @@ function Toast({ notification }: { notification: Notification }) {
 
   const restoreFocus = useCallback(() => {
     if (toastRef.current?.contains(document.activeElement)) {
-      (prevFocusRef.current as HTMLElement | null)?.focus?.();
+      const prev = prevFocusRef.current;
+      if (prev instanceof HTMLElement) prev.focus();
     }
   }, []);
 
@@ -337,7 +343,7 @@ function Toast({ notification }: { notification: Notification }) {
               useAnnouncerStore.getState().announce(announcementText, "polite");
               dwellTimerRef.current = setTimeout(() => {
                 if (mountedRef.current) dismissRef.current();
-              }, 500);
+              }, ACTION_SUCCESS_DWELL_MS);
             }
           };
 

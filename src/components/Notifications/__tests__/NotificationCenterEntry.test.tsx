@@ -89,10 +89,13 @@ describe("NotificationCenterEntry unread signal", () => {
 
   it("does not apply legacy unread row treatments (border or background tint)", () => {
     const { container } = render(<NotificationCenterEntry entry={makeEntry()} isNew />);
-    const row = container.firstElementChild as HTMLElement;
-    expect(row.className).not.toMatch(/border-l-2/);
-    expect(row.className).not.toMatch(/border-daintree-accent/);
-    expect(row.className).not.toMatch(/bg-daintree-accent\/\[0\.04\]/);
+    const row = container.firstElementChild;
+    expect(row).not.toBeNull();
+    if (row instanceof HTMLElement) {
+      expect(row.className).not.toMatch(/border-l-2/);
+      expect(row.className).not.toMatch(/border-daintree-accent/);
+      expect(row.className).not.toMatch(/bg-daintree-accent\/\[0\.04\]/);
+    }
   });
 });
 
@@ -205,26 +208,35 @@ describe("NotificationCenterEntry thread count chip", () => {
       // First increment after mount: animation eligible (lastBumpTime starts at 0).
       nowSpy.mockReturnValue(1010);
       rerender(<NotificationCenterEntry entry={entry} threadCount={3} />);
-      const firstBump = container.querySelector('[aria-label="3 events"]') as HTMLElement;
-      expect(firstBump.className).toMatch(/animate-badge-bump/);
+      const firstBump = container.querySelector('[aria-label="3 events"]');
+      expect(firstBump).not.toBeNull();
+      if (firstBump instanceof HTMLElement) {
+        expect(firstBump.className).toMatch(/animate-badge-bump/);
 
-      // Second increment 100ms later: throttle gate suppresses the new animation.
-      // The chip's React `key` should NOT increment, so the same node persists
-      // (no remount) and no fresh animation fires.
-      nowSpy.mockReturnValue(1110);
-      rerender(<NotificationCenterEntry entry={entry} threadCount={4} />);
-      const stillSameNode = container.querySelector('[aria-label="4 events"]') as HTMLElement;
-      // Same node identity = key did not change = animation was throttled.
-      expect(stillSameNode).toBe(firstBump);
-      // Visible count must update immediately even when animation is gated.
-      expect(stillSameNode.textContent).toBe("4");
+        // Second increment 100ms later: throttle gate suppresses the new animation.
+        // The chip's React `key` should NOT increment, so the same node persists
+        // (no remount) and no fresh animation fires.
+        nowSpy.mockReturnValue(1110);
+        rerender(<NotificationCenterEntry entry={entry} threadCount={4} />);
+        const stillSameNode = container.querySelector('[aria-label="4 events"]');
+        expect(stillSameNode).not.toBeNull();
+        if (stillSameNode instanceof HTMLElement) {
+          // Same node identity = key did not change = animation was throttled.
+          expect(stillSameNode).toBe(firstBump);
+          // Visible count must update immediately even when animation is gated.
+          expect(stillSameNode.textContent).toBe("4");
+        }
 
-      // After the 250ms window elapses, the next increment fires again.
-      nowSpy.mockReturnValue(1500);
-      rerender(<NotificationCenterEntry entry={entry} threadCount={5} />);
-      const secondBump = container.querySelector('[aria-label="5 events"]') as HTMLElement;
-      expect(secondBump).not.toBe(firstBump);
-      expect(secondBump.className).toMatch(/animate-badge-bump/);
+        // After the 250ms window elapses, the next increment fires again.
+        nowSpy.mockReturnValue(1500);
+        rerender(<NotificationCenterEntry entry={entry} threadCount={5} />);
+        const secondBump = container.querySelector('[aria-label="5 events"]');
+        expect(secondBump).not.toBeNull();
+        if (secondBump instanceof HTMLElement) {
+          expect(secondBump).not.toBe(firstBump);
+          expect(secondBump.className).toMatch(/animate-badge-bump/);
+        }
+      }
     } finally {
       nowSpy.mockRestore();
     }
