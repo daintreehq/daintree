@@ -600,7 +600,7 @@ describe("useErrors — retry action on toast", () => {
     unmount();
   });
 
-  it("retry onClick does not throw when errorsClient.retry rejects", async () => {
+  it("retry onClick rejects when errorsClient.retry rejects", async () => {
     retryMock.mockRejectedValue(new Error("retry failed"));
     const { useErrors } = await import("../useErrors");
     const { unmount } = renderHook(() => useErrors());
@@ -613,7 +613,7 @@ describe("useErrors — retry action on toast", () => {
     act(() => capturedOnError(error));
 
     const payload = notifyMock.mock.calls.at(-1)?.[0] ?? {};
-    await expect(payload.action.onClick()).resolves.toBeUndefined();
+    await expect(payload.action.onClick()).rejects.toThrow("retry failed");
     unmount();
   });
 
@@ -698,7 +698,7 @@ describe("useErrors — retry action on toast", () => {
     act(() => capturedOnError(error));
 
     const payload = notifyMock.mock.calls.at(-1)?.[0] ?? {};
-    await payload.action.onClick();
+    await expect(payload.action.onClick()).rejects.toThrow("retry failed");
 
     const remaining = useErrorStore.getState().errors;
     expect(remaining).toHaveLength(1);
