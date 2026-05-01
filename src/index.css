@@ -1129,6 +1129,26 @@ body,
   will-change: transform;
 }
 
+/* Companion to long-running skeletons. SkeletonHint renders this class on its
+ * visible row when the hint phase escalates so the new copy crossfades in
+ * rather than snapping. Opacity-only — no spatial motion — so reduced-motion
+ * bypasses just need to skip past the entry frame to opacity: 1.
+ */
+@keyframes hint-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-hint-fade-in {
+  opacity: 0;
+  animation: hint-fade-in 500ms ease-out forwards;
+  will-change: opacity;
+}
+
 /* Agent status working state - pulsing gradient animation */
 @keyframes status-pulse {
   0%,
@@ -1385,6 +1405,7 @@ body,
   .animate-pulse-delayed,
   .animate-pulse-immediate,
   .animate-skeleton-shimmer,
+  .animate-hint-fade-in,
   .status-working,
   .animate-badge-bump,
   .animate-activity-blip,
@@ -1493,6 +1514,7 @@ body[data-reduce-animations="true"]
     .animate-pulse-delayed,
     .animate-pulse-immediate,
     .animate-skeleton-shimmer,
+    .animate-hint-fade-in,
     .status-working,
     .animate-badge-bump,
     .animate-activity-blip,
@@ -2261,7 +2283,8 @@ body[data-performance-mode="true"] *::after {
 
 /* Ensure delayed skeletons don't stay invisible when animations are disabled */
 body[data-performance-mode="true"] .animate-pulse-delayed,
-body[data-performance-mode="true"] .animate-pulse-immediate {
+body[data-performance-mode="true"] .animate-pulse-immediate,
+body[data-performance-mode="true"] .animate-hint-fade-in {
   opacity: 1 !important;
 }
 
