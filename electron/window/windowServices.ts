@@ -586,6 +586,37 @@ export async function setupWindowServices(
               }
             }
           },
+          sampleRendererElu: () => {
+            if (!windowRegistry) return;
+            const requestId = `elu-${Date.now().toString(36)}`;
+            for (const wCtx of windowRegistry.all()) {
+              const w = wCtx.browserWindow;
+              if (w.isDestroyed()) continue;
+              // Cached/loading views have setBackgroundThrottling(true) which
+              // throttles JS timers and the LoAF observer, producing burst
+              // signal that doesn't reflect user-visible lag. Only sample
+              // active views; fall back to the app webContents for windows
+              // still on the bootstrap shell (no PVM yet).
+              const pvm = wCtx.services.projectViewManager;
+              const targets = pvm
+                ? pvm
+                    .getAllViews()
+                    .filter((v) => v.state === "active")
+                    .map((v) => v.view.webContents)
+                : [getAppWebContents(w)];
+              for (const wc of targets) {
+                if (!wc || wc.isDestroyed()) continue;
+                try {
+                  wc.send(CHANNELS.EVENTS_PUSH, {
+                    name: "window:sample-renderer-elu",
+                    payload: { requestId },
+                  });
+                } catch {
+                  /* non-critical */
+                }
+              }
+            }
+          },
         });
       },
     });

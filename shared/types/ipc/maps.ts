@@ -586,6 +586,23 @@ export interface IpcInvokeMap {
     ];
     result: void;
   };
+  // Renderer reports event-loop utilization (LoAF blockingDuration accumulated
+  // since the prior sample) to ProcessMemoryMonitor. The webContents id is
+  // taken from event.sender on the handler side. `suppressed` is set when the
+  // sample falls inside the preload's startup-suppression window — main skips
+  // recording. `blockingDurationMs` is sub-window blocking time (>=50ms LoAF
+  // events only); main derives the ratio against `sampleWindowMs`.
+  "system:report-renderer-elu": {
+    args: [
+      payload: {
+        requestId: string;
+        blockingDurationMs: number;
+        sampleWindowMs: number;
+        suppressed?: boolean;
+      },
+    ];
+    result: void;
+  };
 
   // App state channels
   "app:get-state": {
@@ -2321,6 +2338,10 @@ export interface IpcEventMap {
   // ProcessMemoryMonitor can see the Blink (DOM/CSS/inter-frame) memory tier
   // that V8 heap stats miss. Renderer replies via SYSTEM_REPORT_BLINK_MEMORY.
   "window:sample-blink-memory": { requestId: string };
+  // Main asks active renderers to report accumulated long-animation-frame
+  // blocking time so ProcessMemoryMonitor can see sustained event-loop
+  // saturation. Renderer replies via SYSTEM_REPORT_RENDERER_ELU.
+  "window:sample-renderer-elu": { requestId: string };
   "window:disk-space-status": {
     status: "normal" | "warning" | "critical";
     availableMb: number;
@@ -2498,6 +2519,7 @@ export type IpcEventBusMap = Pick<
   | "window:destroy-hidden-webviews"
   | "window:disk-space-status"
   | "window:sample-blink-memory"
+  | "window:sample-renderer-elu"
   // System wake (per-webContents)
   | "system:wake"
   // Resource profile (global broadcast)

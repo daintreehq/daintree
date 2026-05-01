@@ -2579,6 +2579,67 @@ _eventBusOn("window:sample-blink-memory", ({ requestId }) => {
   }
 });
 
+// Renderer event-loop utilization sampler. The Node ELU API
+// (performance.eventLoopUtilization) is unavailable under sandbox: true, so we
+// observe the Web `long-animation-frame` PerformanceObserver and accumulate
+// `blockingDuration` between sample events. The preload runs on the same
+// renderer main thread as the page, so LoAF entries reflect the user-visible
+// JS thread saturation. blockingDuration is 0 for entries < 50ms by spec —
+// that's the intended noise floor for "long task" detection.
+//
+// Startup window is suppressed because LoAF buffered:true may replay early
+// entries from page boot, and ProcessMemoryMonitor's main-side warmup does
+// not gate per-renderer startup.
+const RENDERER_ELU_STARTUP_SUPPRESSION_MS = 5_000;
+type LoAFEntry = PerformanceEntry & { blockingDuration?: number };
+let eluAccumulatedBlockingMs = 0;
+let eluWindowStartMs = 0;
+const eluObserverStartMs =
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : 0;
+try {
+  if (typeof PerformanceObserver === "function") {
+    eluWindowStartMs = eluObserverStartMs;
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as LoAFEntry[]) {
+        const blocking = entry.blockingDuration;
+        if (typeof blocking === "number" && blocking > 0) {
+          eluAccumulatedBlockingMs += blocking;
+        }
+      }
+    });
+    // long-animation-frame is in Chromium 123+. Older runtimes throw on
+    // observe() — caught and ignored; the handler will report 0 blocking.
+    // The observer is intentionally not stored — it lives for the renderer's
+    // lifetime and never needs to be disconnected.
+    observer.observe({ type: "long-animation-frame", buffered: true });
+  }
+} catch {
+  /* observer unavailable — sampler reports 0/window */
+}
+_eventBusOn("window:sample-renderer-elu", ({ requestId }) => {
+  try {
+    const now =
+      typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+    const sampleWindowMs = Math.max(0, Math.round(now - eluWindowStartMs));
+    const blockingDurationMs = Math.max(0, Math.round(eluAccumulatedBlockingMs));
+    const suppressed = now - eluObserverStartMs < RENDERER_ELU_STARTUP_SUPPRESSION_MS;
+    eluAccumulatedBlockingMs = 0;
+    eluWindowStartMs = now;
+    void ipcRenderer.invoke(CHANNELS.SYSTEM_REPORT_RENDERER_ELU, {
+      requestId,
+      blockingDurationMs,
+      sampleWindowMs,
+      suppressed,
+    });
+  } catch {
+    /* observability is best-effort */
+  }
+});
+
 // E2E test bridge: expose renderer-side IPC listener introspection in fault mode.
 // Gated by DAINTREE_E2E_FAULT_MODE to avoid production surface area.
 if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {

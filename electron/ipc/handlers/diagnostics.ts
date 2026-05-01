@@ -18,7 +18,7 @@ import type {
   DiagnosticsBundleSavePayload,
 } from "../../../shared/types/ipc/system.js";
 import type * as DiagnosticsCollectorModule from "../../services/DiagnosticsCollector.js";
-import { recordBlinkSample } from "../../services/ProcessMemoryMonitor.js";
+import { recordBlinkSample, recordEluSample } from "../../services/ProcessMemoryMonitor.js";
 
 let cachedDiagnosticsCollector: typeof DiagnosticsCollectorModule | null = null;
 async function getDiagnosticsCollector(): Promise<typeof DiagnosticsCollectorModule> {
@@ -178,6 +178,29 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
         marked: optionalKb(payload.marked),
         total: optionalKb(payload.total),
         partitionAlloc: optionalKb(payload.partitionAlloc),
+      });
+    })
+  );
+
+  // Renderer ELU report. webContents id is taken from event.sender.id.
+  // Suppressed samples (fired during the preload's startup-suppression window)
+  // are dropped here so the streak counter can't latch on cold-start noise.
+  handlers.push(
+    typedHandleWithContext(CHANNELS.SYSTEM_REPORT_RENDERER_ELU, (ctx, payload) => {
+      if (!payload) return;
+      if (payload.suppressed === true) return;
+      if (
+        !Number.isFinite(payload.blockingDurationMs) ||
+        !Number.isFinite(payload.sampleWindowMs) ||
+        payload.blockingDurationMs < 0 ||
+        payload.sampleWindowMs <= 0
+      ) {
+        return;
+      }
+      if (ctx.event.sender.isDestroyed()) return;
+      recordEluSample(ctx.webContentsId, {
+        blockingDurationMs: payload.blockingDurationMs,
+        sampleWindowMs: payload.sampleWindowMs,
       });
     })
   );

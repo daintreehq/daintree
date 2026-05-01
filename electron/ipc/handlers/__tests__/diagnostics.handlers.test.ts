@@ -68,6 +68,14 @@ vi.mock("../../../services/DiagnosticsCollector.js", () => ({
   collectDiagnostics: vi.fn(() => Promise.resolve({})),
 }));
 
+const recordBlinkSampleMock = vi.hoisted(() => vi.fn());
+const recordEluSampleMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../services/ProcessMemoryMonitor.js", () => ({
+  recordBlinkSample: recordBlinkSampleMock,
+  recordEluSample: recordEluSampleMock,
+}));
+
 import { registerDiagnosticsHandlers } from "../diagnostics.js";
 
 function getHandlerFn(channelName: string): (...args: unknown[]) => unknown {
@@ -92,6 +100,8 @@ describe("registerDiagnosticsHandlers", () => {
     expect(channels).toContain("diagnostics:get-heap-stats");
     expect(channels).toContain("diagnostics:get-info");
     expect(channels).toContain("system:download-diagnostics");
+    expect(channels).toContain("system:report-blink-memory");
+    expect(channels).toContain("system:report-renderer-elu");
     cleanup();
   });
 
@@ -172,6 +182,64 @@ describe("registerDiagnosticsHandlers", () => {
 
       expect(result.uptimeSeconds).toBeGreaterThanOrEqual(0);
       expect(result.eventLoopP99Ms).toBe(12);
+    });
+  });
+
+  describe("handleReportRendererElu", () => {
+    function makeEvent(senderId = 42, destroyed = false) {
+      return {
+        sender: { id: senderId, isDestroyed: () => destroyed },
+      };
+    }
+
+    it("records ELU samples for live senders, taking webContentsId from event.sender", () => {
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:report-renderer-elu");
+      handler(makeEvent(42), { requestId: "elu-1", blockingDurationMs: 800, sampleWindowMs: 1000 });
+
+      expect(recordEluSampleMock).toHaveBeenCalledWith(42, {
+        blockingDurationMs: 800,
+        sampleWindowMs: 1000,
+      });
+    });
+
+    it("ignores suppressed samples (preload startup window)", () => {
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:report-renderer-elu");
+      handler(makeEvent(42), {
+        requestId: "elu-1",
+        blockingDurationMs: 0,
+        sampleWindowMs: 1000,
+        suppressed: true,
+      });
+      expect(recordEluSampleMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects malformed payloads (NaN, missing fields, non-positive window)", () => {
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:report-renderer-elu");
+
+      handler(makeEvent(42), {
+        requestId: "x",
+        blockingDurationMs: Number.NaN,
+        sampleWindowMs: 1000,
+      });
+      handler(makeEvent(42), { requestId: "x", blockingDurationMs: 0, sampleWindowMs: 0 });
+      handler(makeEvent(42), { requestId: "x", blockingDurationMs: -1, sampleWindowMs: 1000 });
+      handler(makeEvent(42), null);
+
+      expect(recordEluSampleMock).not.toHaveBeenCalled();
+    });
+
+    it("drops late replies from destroyed senders", () => {
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:report-renderer-elu");
+      handler(makeEvent(42, true), {
+        requestId: "elu-1",
+        blockingDurationMs: 500,
+        sampleWindowMs: 1000,
+      });
+      expect(recordEluSampleMock).not.toHaveBeenCalled();
     });
   });
 });
