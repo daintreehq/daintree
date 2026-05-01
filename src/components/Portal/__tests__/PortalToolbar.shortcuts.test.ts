@@ -21,13 +21,13 @@ describe("PortalToolbar shortcut tooltips — issue #3819", () => {
     });
   });
 
-  describe("createTooltipWithShortcut usage", () => {
-    it("uses createTooltipWithShortcut for Close portal tooltip", () => {
-      expect(source).toContain('createTooltipWithShortcut("Close portal", closePortalShortcut)');
+  describe("createTooltipContent usage", () => {
+    it("uses createTooltipContent for Close portal tooltip", () => {
+      expect(source).toContain('createTooltipContent("Close portal", closePortalShortcut)');
     });
 
-    it("uses createTooltipWithShortcut for New Tab tooltip", () => {
-      expect(source).toContain('createTooltipWithShortcut("New Tab", newTabShortcut)');
+    it("uses createTooltipContent for New Tab tooltip", () => {
+      expect(source).toContain('createTooltipContent("New Tab", newTabShortcut)');
     });
   });
 

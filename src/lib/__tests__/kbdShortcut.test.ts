@@ -270,3 +270,25 @@ describe("normalizeQuery", () => {
     expect(normalizeQuery("command palette")).toBe("cmd+palette");
   });
 });
+
+describe("parseChord — pre-glyphed input (formatComboForDisplay → KbdChord pipeline)", () => {
+  it("splits pre-glyphed single-modifier on + separator (⌘+B)", () => {
+    expect(parseChord("⌘+B", true)).toEqual([["⌘", "B"]]);
+  });
+
+  it("splits pre-glyphed multi-modifier on + separator (⌘+⇧+B)", () => {
+    expect(parseChord("⌘+⇧+B", true)).toEqual([["⌘", "⇧", "B"]]);
+  });
+
+  it("splits pre-glyphed combo with Option (⌘+⌥+T)", () => {
+    expect(parseChord("⌘+⌥+T", true)).toEqual([["⌘", "⌥", "T"]]);
+  });
+
+  it("splits pre-glyphed combo with Ctrl (⌃+⌘+F)", () => {
+    expect(parseChord("⌃+⌘+F", true)).toEqual([["⌃", "⌘", "F"]]);
+  });
+
+  it("preserves unknown glyphed tokens as-is", () => {
+    expect(parseChord("⌘+X", true)).toEqual([["⌘", "X"]]);
+  });
+});

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { PanelRightOpen, PanelRightClose } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
-import { createTooltipWithShortcut } from "@/lib/platform";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { usePortalStore } from "@/store";
 
@@ -41,7 +41,7 @@ export const ToolbarPortalButton = memo(function ToolbarPortalButton({
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">
-        {createTooltipWithShortcut(
+        {createTooltipContent(
           portalOpen ? "Close Context Portal" : "Open Context Portal",
           portalShortcut
         )}

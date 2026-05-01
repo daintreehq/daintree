@@ -23,7 +23,8 @@ import { Spinner } from "@/components/ui/Spinner";
 import { Folders, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
-import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
+import { isMac, isLinux } from "@/lib/platform";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
 import { AgentTrayButton } from "./AgentTrayButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -223,6 +224,7 @@ export function Toolbar({
   const { handleCopyTree } = useWorktreeActions();
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
   const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
+  const devServerShortcut = useKeybindingDisplay("devServer.start");
 
   const sidebarHintHover = useShortcutHintHover("nav.toggleSidebar");
   const devServerHintHover = useShortcutHintHover("devServer.start");
@@ -402,10 +404,7 @@ export function Toolbar({
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {createTooltipWithShortcut(
-                isFocusMode ? "Show Sidebar" : "Hide Sidebar",
-                sidebarShortcut
-              )}
+              {createTooltipContent(isFocusMode ? "Show Sidebar" : "Hide Sidebar", sidebarShortcut)}
             </TooltipContent>
           </Tooltip>
         ),
@@ -479,7 +478,9 @@ export function Toolbar({
                 <MonitorPlay />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Open Dev Preview</TooltipContent>
+            <TooltipContent side="bottom">
+              {createTooltipContent("Open Dev Preview", devServerShortcut)}
+            </TooltipContent>
           </Tooltip>
         ),
         isAvailable: !!currentProject,
@@ -540,7 +541,7 @@ export function Toolbar({
                   {copyFeedback}
                 </span>
               ) : (
-                createTooltipWithShortcut("Copy Context", copyTreeShortcut)
+                createTooltipContent("Copy Context", copyTreeShortcut)
               )}
             </TooltipContent>
           </Tooltip>
@@ -611,6 +612,7 @@ export function Toolbar({
       notificationsEnabled,
       pluginButtonIds,
       pluginConfigs,
+      devServerShortcut,
     ]
   );
 

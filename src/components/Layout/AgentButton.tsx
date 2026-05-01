@@ -17,6 +17,7 @@ import { getBrandColorHex } from "@/lib/colorUtils";
 import { BrandMark } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { useKeybindingDisplay } from "@/hooks";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { actionService } from "@/services/ActionService";
 import {
@@ -252,7 +253,6 @@ export function AgentButton({
   const hasMultiplePresetGroups = presetGroupCount > 1;
 
   const tooltipDetails = config.tooltip ? ` — ${config.tooltip}` : "";
-  const shortcut = displayCombo ? ` (${displayCombo})` : "";
   const isLoading = availability === undefined;
   const isLaunchable = isAgentLaunchable(availability);
   // `installed` now only fires for WSL-capped binaries (launch not wired
@@ -266,15 +266,16 @@ export function AgentButton({
   const signInUnconfirmed = isAgentUnauthenticated(availability);
 
   const presetSegment = activePresetName ? ` · ${activePresetName}` : "";
-  const tooltip = isLoading
+  const tooltipLabel = isLoading
     ? `Checking ${config.name} CLI availability...`
     : isLaunchable
       ? signInUnconfirmed
-        ? `Start ${config.name}${presetSegment} — sign-in not detected${shortcut}`
-        : `Start ${config.name}${presetSegment}${tooltipDetails}${shortcut}`
+        ? `Start ${config.name}${presetSegment} — sign-in not detected`
+        : `Start ${config.name}${presetSegment}${tooltipDetails}`
       : needsSetup
         ? `${config.name} needs setup. Click to configure.`
         : `${config.name} CLI not found. Click to install.`;
+  const tooltipShortcut = isLaunchable ? displayCombo : undefined;
   const chevronTooltip = `Set ${config.name} preset`;
 
   const ariaLabel = isLoading
@@ -362,7 +363,9 @@ export function AgentButton({
                 </Button>
               </span>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{tooltip}</TooltipContent>
+            <TooltipContent side="bottom">
+              {createTooltipContent(tooltipLabel, tooltipShortcut)}
+            </TooltipContent>
           </Tooltip>
         </ContextMenuTrigger>
         <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
@@ -455,7 +458,9 @@ export function AgentButton({
                 <ShortcutRevealChip actionId={`agent.${type}`} />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{tooltip}</TooltipContent>
+            <TooltipContent side="bottom">
+              {createTooltipContent(tooltipLabel, tooltipShortcut)}
+            </TooltipContent>
           </Tooltip>
           <DropdownMenu
             onOpenChange={(open) => {

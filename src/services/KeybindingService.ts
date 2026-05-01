@@ -405,10 +405,10 @@ class KeybindingService {
 
     let display = combo;
     if (mac) {
-      display = display.replace(/Cmd\+/gi, "⌘");
-      display = display.replace(/Ctrl\+/gi, "⌃");
-      display = display.replace(/Shift\+/gi, "⇧");
-      display = display.replace(/Alt\+/gi, "⌥");
+      display = display.replace(/Cmd\+/gi, "⌘+");
+      display = display.replace(/Ctrl\+/gi, "⌃+");
+      display = display.replace(/Shift\+/gi, "⇧+");
+      display = display.replace(/Alt\+/gi, "⌥+");
     } else {
       display = display.replace(/Cmd\+/gi, "Ctrl+");
     }
