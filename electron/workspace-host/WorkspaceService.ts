@@ -98,6 +98,41 @@ export function probeGitLfsAvailable(): Promise<boolean> {
   });
 }
 
+function escapeBranchRegex(name: string): string {
+  return name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseCheckedOutBranches(porcelainOutput: string): Set<string> {
+  const branches = new Set<string>();
+  for (const line of porcelainOutput.split("\n")) {
+    if (line.startsWith("branch ")) {
+      const ref = line.replace("branch ", "").replace("refs/heads/", "").trim();
+      if (ref) {
+        branches.add(ref);
+      }
+    }
+  }
+  return branches;
+}
+
+function nextAvailableBranchName(baseName: string, existing: Set<string>): string {
+  if (!existing.has(baseName)) {
+    return baseName;
+  }
+  const pattern = new RegExp(`^${escapeBranchRegex(baseName)}-(\\d+)$`);
+  let maxSuffix = 1;
+  for (const name of existing) {
+    const match = name.match(pattern);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (n > maxSuffix) {
+        maxSuffix = n;
+      }
+    }
+  }
+  return `${baseName}-${maxSuffix + 1}`;
+}
+
 async function ensureNoteFile(worktreePath: string): Promise<void> {
   const gitDir = getGitDir(worktreePath);
   if (!gitDir) {
@@ -866,13 +901,59 @@ export class WorkspaceService {
   ): Promise<void> {
     try {
       const git = createHardenedGit(rootPath);
-      const {
-        baseBranch,
-        newBranch,
-        path,
-        fromRemote = false,
-        useExistingBranch = false,
-      } = options;
+      const { baseBranch, path } = options;
+      let { newBranch } = options;
+      let { fromRemote = false, useExistingBranch = false } = options;
+
+      // #6463: when not explicitly reusing a branch, guard against a stale
+      // local branch with the same name. Without this, `git worktree add -b`
+      // hits "fatal: a branch named '...' already exists" whenever a previous
+      // worktree was deleted but its branch was kept. Two recoveries:
+      // (a) branch exists but is not checked out anywhere → reuse it (drop
+      //     -b, switch to the useExistingBranch arg form);
+      // (b) branch is live in another worktree → suffix -2/-3/... and create
+      //     a fresh branch.
+      // Inlined (not behind a helper) so the happy-path microtask timing
+      // matches the pre-fix behavior — the next await is still the worktree
+      // add, not a wrapper-promise resolution.
+      if (!useExistingBranch) {
+        let localBranches: string[] = [];
+        try {
+          localBranches = (await git.branchLocal()).all;
+        } catch {
+          // Best-effort: if branch listing fails, fall through and let the
+          // actual worktree command surface its own error.
+        }
+
+        if (localBranches.includes(newBranch)) {
+          let checkedOut = new Set<string>();
+          let listFailed = false;
+          try {
+            const output = await git.raw(["worktree", "list", "--porcelain"]);
+            checkedOut = parseCheckedOutBranches(output);
+          } catch {
+            // We can't tell if the branch is live elsewhere; fall through to
+            // the suffix path rather than risk reusing a checked-out branch.
+            listFailed = true;
+          }
+
+          // For fromRemote (PR mode) we never reuse a stale local branch:
+          // the local ref is at the previous tip, and dropping --track would
+          // strip @{u} that ahead/behind badges depend on. Suffix instead so
+          // a fresh tracking branch is created.
+          const canReuse = !listFailed && !fromRemote && !checkedOut.has(newBranch);
+
+          if (canReuse) {
+            useExistingBranch = true;
+            // The -b path tracks baseBranch; reuse drops that. Stale local
+            // branches typically retain their original config, so this is
+            // the right tradeoff vs. failing the user-visible create.
+            fromRemote = false;
+          } else {
+            newBranch = nextAvailableBranchName(newBranch, new Set(localBranches));
+          }
+        }
+      }
 
       if (useExistingBranch) {
         await git.raw(["worktree", "add", path, newBranch]);

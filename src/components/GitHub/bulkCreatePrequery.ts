@@ -57,23 +57,6 @@ function applyUniqueSuffix(branch: string, assignedBranches: Set<string>): strin
   return uniqueBranch;
 }
 
-function resolveBranchUniqueness(
-  candidateBranches: Map<number, string>,
-  inputOrder: number[]
-): Map<number, string> {
-  const assignedBranches = new Set<string>();
-  const uniqueBranches = new Map<number, string>();
-
-  for (const itemNumber of inputOrder) {
-    const candidate = candidateBranches.get(itemNumber);
-    if (candidate !== undefined) {
-      uniqueBranches.set(itemNumber, applyUniqueSuffix(candidate, assignedBranches));
-    }
-  }
-
-  return uniqueBranches;
-}
-
 async function resolveIssuePrequeries({
   rootPath,
   items,
@@ -91,33 +74,32 @@ async function resolveIssuePrequeries({
   }
 
   const results = new Map<number, PrequeryResult>();
-  const branchQueue = new PQueue({ concurrency: PREQUERY_CONCURRENCY });
-  const candidateBranches = new Map<number, string>();
+  const uniqueBranches = new Map<number, string>();
   const branchErrors = new Array<{ number: number; error: Error }>();
 
-  const branchPromises = issueItems.map((planned) =>
-    branchQueue.add(async () => {
-      if (isStaleRun()) return;
-      try {
-        const branch = await withTimeout(
-          getAvailableBranch(rootPath, planned.branchName),
-          PREQUERY_TIMEOUT_MS,
-          `Prequery timeout for branch lookup on issue #${planned.item.number}`
-        );
-        candidateBranches.set(planned.item.number, branch);
-      } catch (err) {
-        branchErrors.push({
-          number: planned.item.number,
-          error: err instanceof Error ? err : new Error(String(err)),
-        });
-      }
-    })
-  );
-
-  await Promise.all(branchPromises);
+  // #6463: resolve branch names sequentially so each item sees the names
+  // already claimed in this batch. Parallel resolution let two siblings both
+  // see "name-X is free in git" and both claim it — when the actual worktree
+  // create ran, the second one collided. Threading the assigned-set through a
+  // sequential loop closes that gap without a mutex.
+  const assignedBranches = new Set<string>();
+  for (const planned of issueItems) {
+    if (isStaleRun()) break;
+    try {
+      const branch = await withTimeout(
+        getAvailableBranch(rootPath, planned.branchName),
+        PREQUERY_TIMEOUT_MS,
+        `Prequery timeout for branch lookup on issue #${planned.item.number}`
+      );
+      uniqueBranches.set(planned.item.number, applyUniqueSuffix(branch, assignedBranches));
+    } catch (err) {
+      branchErrors.push({
+        number: planned.item.number,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+    }
+  }
   if (isStaleRun()) return { results, failedItems: branchErrors };
-
-  const uniqueBranches = resolveBranchUniqueness(candidateBranches, inputOrder);
 
   const pathQueue = new PQueue({ concurrency: PREQUERY_CONCURRENCY });
   const pathErrors = new Array<{ number: number; error: Error }>();
