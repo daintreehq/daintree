@@ -100,7 +100,7 @@ export function FleetSmartArmBar(): ReactElement | null {
                   className={cn(
                     "pointer-events-auto inline-flex items-center gap-2 rounded-full px-4 py-2 text-[12px] text-daintree-text",
                     "bg-overlay-subtle shadow-[var(--theme-shadow-floating)] ring-1 ring-border-default",
-                    "transition-colors hover:bg-overlay-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-border-strong"
+                    "transition-colors hover:bg-overlay-medium focus:outline-hidden focus-visible:ring-2 focus-visible:ring-border-strong"
                   )}
                 >
                   <AnimatedLabel
