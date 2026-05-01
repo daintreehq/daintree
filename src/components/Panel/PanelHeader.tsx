@@ -16,8 +16,7 @@ import {
   Plus,
   Bell,
   BellOff,
-  ChevronLeft,
-  ChevronRight,
+  ChevronDown,
   CopyPlus,
   Ellipsis,
   Lock,
@@ -47,11 +46,7 @@ import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { BellDot, FolderGit2 } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
-import {
-  useBackgroundPanelStats,
-  useHorizontalScrollControls,
-  useKeybindingDisplay,
-} from "@/hooks";
+import { useBackgroundPanelStats, useKeybindingDisplay, useTabOverflow } from "@/hooks";
 import { usePanelStore } from "@/store/panelStore";
 import {
   DropdownMenu,
@@ -371,12 +366,8 @@ function PanelHeaderComponent({
   const canReorderTabs = hasTabs && !!onTabReorder && !!groupId;
   const tabIds = tabs?.map((t) => t.id) ?? [];
 
-  const {
-    canScrollLeft: tabsCanScrollLeft,
-    canScrollRight: tabsCanScrollRight,
-    scrollLeft: tabsScrollLeft,
-    scrollRight: tabsScrollRight,
-  } = useHorizontalScrollControls(tabListRef);
+  const hiddenTabIds = useTabOverflow(tabListRef, tabIds);
+  const hiddenTabs = tabs?.filter((t) => hiddenTabIds.has(t.id)) ?? [];
 
   const activeTabId = tabs?.find((t) => t.isActive)?.id ?? null;
 
@@ -469,13 +460,51 @@ function PanelHeaderComponent({
     [tabs, onTabClick]
   );
 
-  const tabFadeFrom = isMaximized
-    ? "from-daintree-sidebar"
-    : location === "dock"
-      ? "from-surface"
-      : isFocused
-        ? "from-overlay-subtle"
-        : "from-surface";
+  const overflowTrigger = hiddenTabs.length > 0 && (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+              aria-label="Show hidden tabs"
+              aria-haspopup="menu"
+              data-testid="panel-tabs-overflow"
+            >
+              <ChevronDown className="w-3 h-3" aria-hidden="true" />
+              <span className="sr-only"> ({hiddenTabs.length} hidden)</span>
+            </button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Show hidden tabs</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent
+        align="end"
+        className="min-w-[200px] max-w-[320px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+      >
+        {hiddenTabs.map((tab) => (
+          <DropdownMenuItem
+            key={tab.id}
+            onSelect={() => onTabClick?.(tab.id)}
+            aria-current={tab.isActive ? "true" : undefined}
+            className={cn(tab.isActive && "font-medium")}
+          >
+            <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
+              <TerminalIcon
+                kind={tab.kind}
+                chrome={tab.chrome}
+                className="w-3.5 h-3.5"
+                brandColor={tab.presetColor ?? tab.chrome.color}
+              />
+            </span>
+            <span className="truncate">{getBaseTitle(tab.title)}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   return (
     <div
@@ -524,24 +553,6 @@ function PanelHeaderComponent({
           >
             <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
               <div className="relative min-w-0 flex-1 flex">
-                {tabsCanScrollLeft && (
-                  <div
-                    className={cn(
-                      "absolute left-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-r to-transparent flex items-center",
-                      tabFadeFrom
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={tabsScrollLeft}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      className="pointer-events-auto p-1 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                      aria-label="Scroll left"
-                    >
-                      <ChevronLeft className="w-3 h-3" aria-hidden="true" />
-                    </button>
-                  </div>
-                )}
                 <div
                   ref={tabListRef}
                   className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
@@ -600,47 +611,12 @@ function PanelHeaderComponent({
                     </LayoutGroup>
                   </LazyMotion>
                 </div>
-                {tabsCanScrollRight && (
-                  <div
-                    className={cn(
-                      "absolute right-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-l to-transparent flex items-center justify-end",
-                      tabFadeFrom
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={tabsScrollRight}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      className="pointer-events-auto p-1 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                      aria-label="Scroll right"
-                    >
-                      <ChevronRight className="w-3 h-3" aria-hidden="true" />
-                    </button>
-                  </div>
-                )}
+                {overflowTrigger}
               </div>
             </SortableContext>
           </DndContext>
         ) : (
           <div className="relative min-w-0 flex-1 flex">
-            {tabsCanScrollLeft && (
-              <div
-                className={cn(
-                  "absolute left-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-r to-transparent flex items-center",
-                  tabFadeFrom
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={tabsScrollLeft}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className="pointer-events-auto p-1 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                  aria-label="Scroll left"
-                >
-                  <ChevronLeft className="w-3 h-3" aria-hidden="true" />
-                </button>
-              </div>
-            )}
             <div
               ref={tabListRef}
               className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
@@ -699,24 +675,7 @@ function PanelHeaderComponent({
                 </LayoutGroup>
               </LazyMotion>
             </div>
-            {tabsCanScrollRight && (
-              <div
-                className={cn(
-                  "absolute right-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-l to-transparent flex items-center justify-end",
-                  tabFadeFrom
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={tabsScrollRight}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className="pointer-events-auto p-1 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                  aria-label="Scroll right"
-                >
-                  <ChevronRight className="w-3 h-3" aria-hidden="true" />
-                </button>
-              </div>
-            )}
+            {overflowTrigger}
           </div>
         )
       ) : (

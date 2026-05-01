@@ -72,6 +72,8 @@ export type { UseMenuActionsOptions } from "./useMenuActions";
 export { useHorizontalScrollControls } from "./useHorizontalScrollControls";
 export type { UseHorizontalScrollControlsReturn } from "./useHorizontalScrollControls";
 
+export { useTabOverflow } from "./useTabOverflow";
+
 export { useVerticalScrollShadows } from "./useVerticalScrollShadows";
 export type { UseVerticalScrollShadowsReturn } from "./useVerticalScrollShadows";
 

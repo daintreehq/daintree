@@ -37,19 +37,11 @@ vi.mock("framer-motion", () => {
   };
 });
 
-const mockScrollLeft = vi.fn();
-const mockScrollRight = vi.fn();
-let mockScrollControls = {
-  isOverflowing: false,
-  canScrollLeft: false,
-  canScrollRight: false,
-  scrollLeft: mockScrollLeft,
-  scrollRight: mockScrollRight,
-};
+let mockHiddenTabIds: ReadonlySet<string> = new Set();
 
 vi.mock("@/hooks", () => ({
   useBackgroundPanelStats: () => ({ activeCount: 0, workingCount: 0 }),
-  useHorizontalScrollControls: () => mockScrollControls,
+  useTabOverflow: () => mockHiddenTabIds,
   useKeybindingDisplay: () => "",
 }));
 
@@ -124,8 +116,17 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     onOpenChange?: (open: boolean) => void;
   }) => <div>{children}</div>,
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="overflow-menu">{children}</div>
+  DropdownMenuContent: ({
+    children,
+    className,
+  }: {
+    children: React.ReactNode;
+    className?: string;
+    align?: string;
+  }) => (
+    <div data-testid="overflow-menu" className={className}>
+      {children}
+    </div>
   ),
   DropdownMenuItem: ({
     children,
@@ -180,13 +181,7 @@ describe("PanelHeader", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockHasPty = false;
-    mockScrollControls = {
-      isOverflowing: false,
-      canScrollLeft: false,
-      canScrollRight: false,
-      scrollLeft: mockScrollLeft,
-      scrollRight: mockScrollRight,
-    };
+    mockHiddenTabIds = new Set();
     mockStoreState = {
       watchedPanels: new Set<string>(),
       watchPanel: mockWatchPanel,
@@ -456,8 +451,8 @@ describe("PanelHeader", () => {
     });
   });
 
-  describe("tab scroll arrows", () => {
-    const twoTabs = [
+  describe("tab overflow menu (#6429)", () => {
+    const threeTabs = [
       {
         id: "t1",
         title: "Tab 1",
@@ -472,47 +467,75 @@ describe("PanelHeader", () => {
         chrome: deriveTerminalChrome(),
         isActive: false,
       },
+      {
+        id: "t3",
+        title: "Tab 3",
+        kind: "terminal" as const,
+        chrome: deriveTerminalChrome(),
+        isActive: false,
+      },
     ];
 
-    it("renders scroll arrows when tabs overflow", () => {
-      mockScrollControls = {
-        ...mockScrollControls,
-        canScrollLeft: true,
-        canScrollRight: true,
-      };
-      render(<PanelHeader {...makeProps({ tabs: twoTabs, onTabClick: vi.fn() })} />);
-      expect(screen.getByLabelText("Scroll left")).toBeDefined();
-      expect(screen.getByLabelText("Scroll right")).toBeDefined();
+    it("does not render the overflow trigger when no tabs are hidden", () => {
+      render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+      expect(screen.queryByLabelText("Show hidden tabs")).toBeNull();
+      expect(screen.queryByTestId("panel-tabs-overflow")).toBeNull();
     });
 
-    it("does not render scroll arrows when tabs do not overflow", () => {
-      render(<PanelHeader {...makeProps({ tabs: twoTabs, onTabClick: vi.fn() })} />);
-      expect(screen.queryByLabelText("Scroll left")).toBeNull();
-      expect(screen.queryByLabelText("Scroll right")).toBeNull();
+    it("renders the overflow trigger when one or more tabs are hidden", () => {
+      mockHiddenTabIds = new Set(["t2", "t3"]);
+      render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+      const trigger = screen.getByLabelText("Show hidden tabs");
+      expect(trigger).toBeDefined();
+      expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
     });
 
-    it("calls scrollLeft/scrollRight when arrows are clicked", () => {
-      mockScrollControls = {
-        ...mockScrollControls,
-        canScrollLeft: true,
-        canScrollRight: true,
-      };
-      render(<PanelHeader {...makeProps({ tabs: twoTabs, onTabClick: vi.fn() })} />);
-      screen.getByLabelText("Scroll left").click();
-      expect(mockScrollLeft).toHaveBeenCalledTimes(1);
-      screen.getByLabelText("Scroll right").click();
-      expect(mockScrollRight).toHaveBeenCalledTimes(1);
+    it("lists hidden tabs by full title in the dropdown", () => {
+      mockHiddenTabIds = new Set(["t2", "t3"]);
+      render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+      const menus = screen.getAllByTestId("overflow-menu");
+      const tabsMenu = menus.find((m) => m.textContent?.includes("Tab 2"));
+      expect(tabsMenu).toBeDefined();
+      expect(tabsMenu!.textContent).toContain("Tab 2");
+      expect(tabsMenu!.textContent).toContain("Tab 3");
+      expect(tabsMenu!.textContent).not.toContain("Tab 1");
     });
 
-    it("renders only the right arrow when scrolled to the start", () => {
-      mockScrollControls = {
-        ...mockScrollControls,
-        canScrollLeft: false,
-        canScrollRight: true,
-      };
-      render(<PanelHeader {...makeProps({ tabs: twoTabs, onTabClick: vi.fn() })} />);
-      expect(screen.queryByLabelText("Scroll left")).toBeNull();
-      expect(screen.getByLabelText("Scroll right")).toBeDefined();
+    it("calls onTabClick with the hidden tab id when a menu item is selected", () => {
+      mockHiddenTabIds = new Set(["t2", "t3"]);
+      const onTabClick = vi.fn();
+      render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick })} />);
+      const menus = screen.getAllByTestId("overflow-menu");
+      const tabsMenu = menus.find((m) => m.textContent?.includes("Tab 2"))!;
+      const tab2Item = Array.from(tabsMenu.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Tab 2")
+      );
+      tab2Item?.click();
+      expect(onTabClick).toHaveBeenCalledWith("t2");
+    });
+
+    it("marks an active hidden tab with aria-current and font-medium", () => {
+      mockHiddenTabIds = new Set(["t1", "t2"]);
+      render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+      const menus = screen.getAllByTestId("overflow-menu");
+      const tabsMenu = menus.find((m) => m.textContent?.includes("Tab 1"))!;
+      const items = Array.from(tabsMenu.querySelectorAll("button"));
+      const activeItem = items.find((b) => b.textContent?.includes("Tab 1"));
+      expect(activeItem?.getAttribute("aria-current")).toBe("true");
+      expect(activeItem?.className).toContain("font-medium");
+      const inactiveItem = items.find((b) => b.textContent?.includes("Tab 2"));
+      expect(inactiveItem?.getAttribute("aria-current")).toBeNull();
+    });
+
+    it("constrains the dropdown content height to available viewport (#4402)", () => {
+      mockHiddenTabIds = new Set(["t2"]);
+      render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+      const menus = screen.getAllByTestId("overflow-menu");
+      const tabsMenu = menus.find((m) => m.textContent?.includes("Tab 2"))!;
+      expect(tabsMenu.className).toContain(
+        "max-h-[var(--radix-dropdown-menu-content-available-height)]"
+      );
+      expect(tabsMenu.className).toContain("overflow-y-auto");
     });
   });
 
