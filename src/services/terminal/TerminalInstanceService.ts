@@ -369,6 +369,12 @@ class TerminalInstanceService {
     // stamping lastReflowAt here would throttle away the next legitimate
     // reflow once it's reattached.
     if (!element.isConnected) return;
+    // xterm 6 buffers row refreshes and renders them atomically at ESU when
+    // DEC mode 2026 (Synchronized Output) is active. Forcing an
+    // IntersectionObserver jitter mid-block would interleave a paint with
+    // the buffered range. Skip without stamping the throttle so we reflow
+    // on the next tick after ESU.
+    if (managed.terminal.modes?.synchronizedOutputMode === true) return;
 
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     if (now - (managed.lastReflowAt ?? 0) < REFLOW_THROTTLE_MS) return;
@@ -1669,6 +1675,22 @@ class TerminalInstanceService {
   getAltBufferState(id: string): boolean {
     const managed = this.instances.get(id);
     return managed?.isAltBuffer ?? false;
+  }
+
+  /**
+   * Returns whether DEC private mode 2026 (Synchronized Output / BSU+ESU) is
+   * currently open on the terminal. Returns `null` when the terminal is
+   * unknown or its xterm instance hasn't surfaced the mode (e.g. test mocks).
+   *
+   * Diagnostic-only — the value lags `terminal.write()` by one parser tick
+   * because xterm processes writes asynchronously, so it should not be used
+   * to gate writes synchronously.
+   */
+  getSynchronizedOutputMode(id: string): boolean | null {
+    const managed = this.instances.get(id);
+    if (!managed) return null;
+    const mode = managed.terminal.modes?.synchronizedOutputMode;
+    return typeof mode === "boolean" ? mode : null;
   }
 
   getAgentState(id: string): AgentState | undefined {

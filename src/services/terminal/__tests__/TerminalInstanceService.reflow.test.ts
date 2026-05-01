@@ -52,6 +52,7 @@ type ReflowTestService = {
   maybeReflowTerminal: (managed: ManagedTerminal) => void;
   resetRenderer: (id: string) => void;
   resizeController: { fit: (id: string) => unknown };
+  getSynchronizedOutputMode: (id: string) => boolean | null;
 };
 
 function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
@@ -81,7 +82,10 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
     paddingTopHistory;
 
   const managed = {
-    terminal: { element: termEl } as unknown as ManagedTerminal["terminal"],
+    terminal: {
+      element: termEl,
+      modes: { synchronizedOutputMode: false },
+    } as unknown as ManagedTerminal["terminal"],
     type: "terminal",
     kind: "terminal",
     hostElement,
@@ -130,6 +134,22 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
 function paddingHistory(managed: ManagedTerminal): string[] {
   const el = managed.terminal.element as unknown as { __paddingTopHistory: string[] };
   return el.__paddingTopHistory;
+}
+
+// Test-fixture mutation helpers. The terminal mock isn't a full xterm Terminal,
+// so these consolidate the partial-shape casts in one place.
+type MutableModes = { modes?: { synchronizedOutputMode: boolean } | undefined };
+
+function setSyncMode(managed: ManagedTerminal, value: boolean): void {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const term = managed.terminal as unknown as MutableModes;
+  term.modes = { synchronizedOutputMode: value };
+}
+
+function clearSyncModes(managed: ManagedTerminal): void {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const term = managed.terminal as unknown as MutableModes;
+  term.modes = undefined;
 }
 
 describe("TerminalInstanceService maybeReflowTerminal", () => {
@@ -235,6 +255,42 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(paddingHistory(managed).length).toBe(0);
   });
 
+  it("skips — and does not stamp throttle — when synchronized output mode is active", () => {
+    const managed = makeManaged();
+    setSyncMode(managed, true);
+
+    service.maybeReflowTerminal(managed);
+    // BSU is open — refreshing now would interleave with xterm's buffered
+    // range. Throttle must not stamp so we reflow on the next tick after ESU.
+    expect(managed.lastReflowAt).toBe(0);
+    expect(paddingHistory(managed).length).toBe(0);
+  });
+
+  it("reflows when synchronized output mode is false", () => {
+    const managed = makeManaged();
+    setSyncMode(managed, false);
+
+    service.maybeReflowTerminal(managed);
+    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(managed.lastReflowAt).toBeGreaterThan(0);
+  });
+
+  it("does not throttle the post-ESU reflow after a BSU skip", () => {
+    const managed = makeManaged();
+    setSyncMode(managed, true);
+    service.maybeReflowTerminal(managed);
+    expect(paddingHistory(managed).length).toBe(0);
+    expect(managed.lastReflowAt).toBe(0);
+
+    // ESU closes — the next reflow must fire immediately, not be eaten by
+    // the 250ms throttle. This is the invariant that justifies the
+    // no-stamp branch in the guard.
+    setSyncMode(managed, false);
+    service.maybeReflowTerminal(managed);
+    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(managed.lastReflowAt).toBeGreaterThan(0);
+  });
+
   it("resetRenderer calls forceXtermReflow and clears the throttle", () => {
     const managed = makeManaged({ lastReflowAt: 99999 });
     Object.defineProperty(managed.hostElement, "clientWidth", { value: 200, configurable: true });
@@ -283,6 +339,51 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     // The escape hatch — forceXtermReflow — must still run even if fit throws.
     expect(paddingHistory(managed)).toContain("0.01px");
     expect(managed.lastReflowAt).toBe(0);
+  });
+});
+
+describe("TerminalInstanceService getSynchronizedOutputMode", () => {
+  let service: ReflowTestService;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    const mod = await import("../TerminalInstanceService");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    service = (mod as unknown as { terminalInstanceService: ReflowTestService })
+      .terminalInstanceService;
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    service.instances.clear();
+    document.body.innerHTML = "";
+  });
+
+  it("returns true when xterm reports an open synchronized output block", () => {
+    const managed = makeManaged();
+    setSyncMode(managed, true);
+    service.instances.set("t1", managed);
+
+    expect(service.getSynchronizedOutputMode("t1")).toBe(true);
+  });
+
+  it("returns false when xterm reports no synchronized output block", () => {
+    const managed = makeManaged();
+    service.instances.set("t1", managed);
+
+    expect(service.getSynchronizedOutputMode("t1")).toBe(false);
+  });
+
+  it("returns null for an unknown terminal id", () => {
+    expect(service.getSynchronizedOutputMode("missing")).toBeNull();
+  });
+
+  it("returns null when xterm did not surface modes (defensive)", () => {
+    const managed = makeManaged();
+    clearSyncModes(managed);
+    service.instances.set("t1", managed);
+
+    expect(service.getSynchronizedOutputMode("t1")).toBeNull();
   });
 });
 
@@ -336,6 +437,18 @@ describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
     vi.advanceTimersByTime(3000);
     expect(paddingHistory(managed)).toContain("0.01px");
     expect(managed.lastReflowAt).toBeGreaterThan(0);
+  });
+
+  it("heartbeat does not reflow or stamp throttle while sync block is open", () => {
+    const managed = makeManaged();
+    setSyncMode(managed, true);
+    service.instances.set("t1", managed);
+
+    vi.advanceTimersByTime(3000);
+    // Heartbeat tick fired but the sync-mode guard skipped without
+    // stamping — so the next post-ESU heartbeat will reflow immediately.
+    expect(paddingHistory(managed).length).toBe(0);
+    expect(managed.lastReflowAt).toBe(0);
   });
 
   it("resumes reflows when visibility transitions hidden → visible", () => {

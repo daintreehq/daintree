@@ -6,7 +6,15 @@ import { logError } from "@/utils/logger";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalInfoPayload } from "@/types/electron";
 import { actionService } from "@/services/ActionService";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+
+const SYNC_MODE_POLL_MS = 250;
+
+function formatSyncMode(value: boolean | null): string {
+  if (value === null) return "Unavailable";
+  return value ? "On" : "Off";
+}
 
 interface TerminalInfoDialogProps {
   isOpen: boolean;
@@ -121,12 +129,14 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   const [info, setInfo] = useState<TerminalInfoPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [syncMode, setSyncMode] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
       setInfo(null);
       setError(null);
       setLoading(false);
+      setSyncMode(null);
       return;
     }
 
@@ -163,6 +173,21 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
 
     return () => {
       isMounted = false;
+    };
+  }, [isOpen, terminalId]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    // xterm 6 mutates terminal.modes asynchronously as the parser consumes
+    // BSU/ESU sequences, and there is no change event. Poll at the same
+    // cadence as REFLOW_THROTTLE_MS (250ms) — enough resolution to catch
+    // most BSU blocks while the dialog is open.
+    setSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId));
+    const intervalId = window.setInterval(() => {
+      setSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId));
+    }, SYNC_MODE_POLL_MS);
+    return () => {
+      window.clearInterval(intervalId);
     };
   }, [isOpen, terminalId]);
 
@@ -251,6 +276,7 @@ Activity Metrics:
 Performance & Diagnostics:
   Output Buffer Size: ${info.outputBufferSize} lines
   Semantic Buffer: ${info.semanticBufferLines} lines
+  Synchronized Output (DEC 2026): ${formatSyncMode(syncMode)}
 `;
 
     try {
@@ -365,6 +391,7 @@ Performance & Diagnostics:
             <InfoSection title="Performance & Diagnostics">
               <InfoRow label="Output Buffer Size" value={`${info.outputBufferSize} lines`} />
               <InfoRow label="Semantic Buffer" value={`${info.semanticBufferLines} lines`} />
+              <InfoRow label="Synchronized Output (DEC 2026)" value={formatSyncMode(syncMode)} />
             </InfoSection>
           </div>
         )}
