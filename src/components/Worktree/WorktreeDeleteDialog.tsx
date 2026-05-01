@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { AlertTriangle, Trash2 } from "lucide-react";
@@ -15,7 +15,6 @@ interface WorktreeDeleteDialogProps {
   worktree: WorktreeState;
 }
 
-const ARMED_TIMEOUT_MS = 4000;
 const PROTECTED_BRANCHES = ["main", "master", "develop", "development"];
 
 export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDeleteDialogProps) {
@@ -23,9 +22,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const [force, setForce] = useState(false);
   const [closeTerminals, setCloseTerminals] = useState(true);
   const [deleteBranch, setDeleteBranch] = useState(false);
-  const [isArmed, setIsArmed] = useState(false);
+  const [confirmInput, setConfirmInput] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const armedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deleteInFlightRef = useRef(false);
 
   const { counts: terminalCounts } = useWorktreeTerminals(worktree.id);
   const bulkCloseByWorktree = usePanelStore((state) => state.bulkCloseByWorktree);
@@ -37,61 +36,46 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const hasTerminals = terminalCounts.total > 0;
 
   const isProtectedBranch =
-    worktree.branch && PROTECTED_BRANCHES.includes(worktree.branch.toLowerCase());
+    !!worktree.branch && PROTECTED_BRANCHES.includes(worktree.branch.toLowerCase());
   const isDetachedHead = !worktree.branch;
   const canDeleteBranch =
     !isProtectedBranch && !isDetachedHead && worktree.isMainWorktree === false;
 
-  const clearArmedTimer = useCallback(() => {
-    if (armedTimerRef.current) {
-      clearTimeout(armedTimerRef.current);
-      armedTimerRef.current = null;
-    }
-  }, []);
-
-  const disarm = useCallback(() => {
-    clearArmedTimer();
-    setIsArmed(false);
-  }, [clearArmedTimer]);
+  const confirmTarget = worktree.branch ?? worktree.name;
+  const isHighTier = force && (isProtectedBranch || worktree.isMainWorktree === true);
+  const isConfirmMatched = confirmInput === confirmTarget;
+  const canSubmit = !isDeleting && (!isHighTier || isConfirmMatched);
 
   useEffect(() => {
     if (isOpen) {
       setForce(false);
       setDeleteBranch(false);
+      setConfirmInput("");
       setError(null);
-      disarm();
     }
-    return () => clearArmedTimer();
-  }, [isOpen, worktree.id, disarm, clearArmedTimer]);
+  }, [isOpen, worktree.id]);
 
   useEffect(() => {
-    if (!deleteBranch && isArmed) {
-      disarm();
+    if (!force) {
+      setConfirmInput("");
     }
-  }, [deleteBranch, isArmed, disarm]);
+  }, [force]);
 
   useEffect(() => {
-    if (!canDeleteBranch && (deleteBranch || isArmed)) {
+    if (!canDeleteBranch && deleteBranch) {
       setDeleteBranch(false);
-      disarm();
     }
-  }, [canDeleteBranch, deleteBranch, isArmed, disarm]);
+  }, [canDeleteBranch, deleteBranch]);
 
   const handleDelete = async () => {
-    const effectiveDeleteBranch = deleteBranch && canDeleteBranch;
+    if (deleteInFlightRef.current) return;
+    if (isHighTier && !isConfirmMatched) return;
 
-    if (effectiveDeleteBranch && !isArmed) {
-      setIsArmed(true);
-      clearArmedTimer();
-      armedTimerRef.current = setTimeout(() => {
-        setIsArmed(false);
-      }, ARMED_TIMEOUT_MS);
-      return;
-    }
-
+    deleteInFlightRef.current = true;
     setIsDeleting(true);
     setError(null);
-    disarm();
+
+    const effectiveDeleteBranch = deleteBranch && canDeleteBranch;
 
     try {
       if (closeTerminals && hasTerminals) {
@@ -111,14 +95,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       setError(msg);
     } finally {
       setIsDeleting(false);
+      deleteInFlightRef.current = false;
     }
   };
 
-  const getDeleteButtonText = () => {
-    if (isDeleting) return "Deleting...";
-    if (deleteBranch && canDeleteBranch && isArmed) return "Click again to confirm";
-    return "Delete worktree";
-  };
+  const deleteButtonLabel = isHighTier ? `Delete '${confirmTarget}'` : "Delete worktree";
 
   return (
     <AppDialog
@@ -134,116 +115,161 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           <div className="p-2 bg-status-error/10 rounded-full">
             <Trash2 className="w-6 h-6" />
           </div>
-          <AppDialog.Title>Delete '{worktree.branch ?? worktree.name}'?</AppDialog.Title>
+          <AppDialog.Title>Delete '{confirmTarget}'?</AppDialog.Title>
         </div>
 
-        <div className="space-y-4">
-          <p className="text-sm text-daintree-text/80">
-            This will permanently delete the worktree directory
-            {deleteBranch && worktree.branch && (
-              <>
-                {" "}
-                and branch{" "}
-                <span className="font-mono font-medium text-daintree-text">{worktree.branch}</span>
-              </>
-            )}
-            .{closeTerminals && hasTerminals && " All associated terminals will be closed."}
-            {hasChanges &&
-              " Uncommitted changes will be lost unless the worktree is first restored from git."}
-          </p>
-
-          <div className="text-xs text-daintree-text/60 bg-daintree-bg/50 p-3 rounded border border-daintree-border font-mono break-all">
-            {worktree.path}
+        {isDeleting ? (
+          <div
+            role="status"
+            aria-busy="true"
+            aria-live="polite"
+            className="space-y-4"
+            data-testid="delete-worktree-skeleton"
+          >
+            <span className="sr-only">Deleting worktree…</span>
+            <div className="animate-pulse-delayed h-4 w-3/4 bg-muted rounded" />
+            <div className="animate-pulse-delayed h-4 w-full bg-muted rounded" />
+            <div className="animate-pulse-delayed h-8 w-full bg-muted rounded" />
           </div>
+        ) : (
+          <div className="space-y-4">
+            <p className="text-sm text-daintree-text/80">
+              This will permanently delete the worktree directory
+              {deleteBranch && worktree.branch && (
+                <>
+                  {" "}
+                  and branch{" "}
+                  <span className="font-mono font-medium text-daintree-text">
+                    {worktree.branch}
+                  </span>
+                </>
+              )}
+              .{closeTerminals && hasTerminals && " All associated terminals will be closed."}
+              {hasChanges &&
+                " Uncommitted changes will be lost unless the worktree is first restored from git."}
+              {" This cannot be undone."}
+            </p>
 
-          {hasChanges && !force && (
-            <div className="flex items-start gap-2 p-3 bg-status-warning/10 border border-status-warning/20 rounded text-status-warning text-xs">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <p>
-                This worktree has{" "}
-                {hasTrackedChanges && hasUntrackedFiles
-                  ? "uncommitted changes and untracked files"
-                  : hasTrackedChanges
-                    ? "uncommitted changes"
-                    : "untracked files"}
-                . Standard deletion will fail.
-              </p>
+            <div className="text-xs text-daintree-text/60 bg-daintree-bg/50 p-3 rounded border border-daintree-border font-mono break-all">
+              {worktree.path}
             </div>
-          )}
 
-          {error && (
-            <div
-              role="alert"
-              aria-live="assertive"
-              className="p-3 bg-status-error/10 border border-status-error/20 rounded text-status-error text-xs"
-            >
-              {error}
-            </div>
-          )}
+            {hasChanges && !force && (
+              <div className="flex items-start gap-2 p-3 bg-status-warning/10 border border-status-warning/20 rounded text-status-warning text-xs">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <p>
+                  This worktree has{" "}
+                  {hasTrackedChanges && hasUntrackedFiles
+                    ? "uncommitted changes and untracked files"
+                    : hasTrackedChanges
+                      ? "uncommitted changes"
+                      : "untracked files"}
+                  . Standard deletion will fail.
+                </p>
+              </div>
+            )}
 
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={force}
-              onChange={(e) => {
-                setForce(e.target.checked);
-                setError(null);
-              }}
-              className="rounded border-daintree-border bg-daintree-bg text-status-error focus:ring-status-error"
-            />
-            <span className="text-sm text-daintree-text">
-              {hasTrackedChanges && hasUntrackedFiles
-                ? "Force delete (lose uncommitted changes and untracked files)"
-                : hasUntrackedFiles
-                  ? "Force delete (remove untracked files)"
-                  : "Force delete (lose uncommitted changes)"}
-            </span>
-          </label>
+            {error && (
+              <div
+                role="alert"
+                aria-live="assertive"
+                className="p-3 bg-status-error/10 border border-status-error/20 rounded text-status-error text-xs"
+              >
+                {error}
+              </div>
+            )}
 
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={closeTerminals}
-              onChange={(e) => setCloseTerminals(e.target.checked)}
-              className="rounded border-daintree-border bg-daintree-bg text-daintree-accent focus:ring-daintree-accent"
-            />
-            <span className="text-sm text-daintree-text">
-              Close all terminals{hasTerminals ? ` (${terminalCounts.total})` : ""}
-            </span>
-          </label>
-
-          {canDeleteBranch && (
-            <label className="flex items-start gap-2 cursor-pointer">
+            <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={deleteBranch}
+                checked={force}
                 onChange={(e) => {
-                  setDeleteBranch(e.target.checked);
-                  if (!e.target.checked) {
-                    disarm();
-                  }
+                  setForce(e.target.checked);
+                  setError(null);
                 }}
-                className="mt-0.5 rounded border-daintree-border bg-daintree-bg text-status-error focus:ring-status-error"
+                className="rounded border-daintree-border bg-daintree-bg text-status-error focus:ring-status-error"
               />
               <span className="text-sm text-daintree-text">
-                <span className="flex items-center gap-1.5">
-                  <FolderGit2 className="w-3.5 h-3.5" />
-                  Delete branch{" "}
-                  <code className="text-xs bg-daintree-bg/50 px-1.5 py-0.5 rounded border border-daintree-border">
-                    {worktree.branch}
-                  </code>
-                </span>
-                {deleteBranch && (
-                  <span className="block text-xs text-daintree-text/60 mt-1">
-                    {force
-                      ? "Branch will be force-deleted (git branch -D)"
-                      : "Safe delete - fails if branch has unmerged changes"}
-                  </span>
-                )}
+                {hasTrackedChanges && hasUntrackedFiles
+                  ? "Force delete (lose uncommitted changes and untracked files)"
+                  : hasUntrackedFiles
+                    ? "Force delete (remove untracked files)"
+                    : "Force delete (lose uncommitted changes)"}
               </span>
             </label>
-          )}
-        </div>
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={closeTerminals}
+                onChange={(e) => setCloseTerminals(e.target.checked)}
+                className="rounded border-daintree-border bg-daintree-bg text-daintree-accent focus:ring-daintree-accent"
+              />
+              <span className="text-sm text-daintree-text">
+                Close all terminals{hasTerminals ? ` (${terminalCounts.total})` : ""}
+              </span>
+            </label>
+
+            {canDeleteBranch && (
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deleteBranch}
+                  onChange={(e) => setDeleteBranch(e.target.checked)}
+                  className="mt-0.5 rounded border-daintree-border bg-daintree-bg text-status-error focus:ring-status-error"
+                />
+                <span className="text-sm text-daintree-text">
+                  <span className="flex items-center gap-1.5">
+                    <FolderGit2 className="w-3.5 h-3.5" />
+                    Delete branch{" "}
+                    <code className="text-xs bg-daintree-bg/50 px-1.5 py-0.5 rounded border border-daintree-border">
+                      {worktree.branch}
+                    </code>
+                  </span>
+                  {deleteBranch && (
+                    <span className="block text-xs text-daintree-text/60 mt-1">
+                      {force
+                        ? "Branch will be force-deleted (git branch -D)"
+                        : "Safe delete - fails if branch has unmerged changes"}
+                    </span>
+                  )}
+                </span>
+              </label>
+            )}
+
+            {isHighTier && (
+              <div className="space-y-2 p-3 bg-status-error/5 border border-status-error/20 rounded">
+                <p id="worktree-delete-confirm-instructions" className="text-sm text-daintree-text">
+                  Force-deleting this protected worktree is irreversible. Type{" "}
+                  <code className="font-mono text-xs bg-daintree-bg/50 px-1.5 py-0.5 rounded border border-daintree-border">
+                    {confirmTarget}
+                  </code>{" "}
+                  to confirm.
+                </p>
+                <input
+                  type="text"
+                  value={confirmInput}
+                  onChange={(e) => setConfirmInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && isConfirmMatched) {
+                      e.preventDefault();
+                      void handleDelete();
+                    }
+                  }}
+                  aria-describedby="worktree-delete-confirm-instructions"
+                  aria-label={`Type ${confirmTarget} to confirm deletion`}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="w-full px-3 py-2 text-sm font-mono bg-daintree-bg border border-daintree-border rounded focus:outline-none focus:ring-2 focus:ring-status-error"
+                  data-testid="delete-worktree-confirm-input"
+                />
+                <span className="sr-only" aria-live="polite">
+                  {isConfirmMatched ? "Name confirmed. You may now delete." : ""}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </AppDialog.Body>
 
       <AppDialog.Footer>
@@ -253,11 +279,10 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         <Button
           variant="destructive"
           onClick={handleDelete}
-          disabled={isDeleting}
-          className={isArmed ? "animate-pulse ring-2 ring-status-error" : ""}
+          disabled={!canSubmit}
           data-testid="delete-worktree-confirm"
         >
-          {getDeleteButtonText()}
+          {isDeleting ? "Deleting…" : deleteButtonLabel}
         </Button>
       </AppDialog.Footer>
     </AppDialog>
