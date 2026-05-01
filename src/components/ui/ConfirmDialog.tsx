@@ -1,6 +1,9 @@
 import type React from "react";
 import { AppDialog, type DialogZIndex } from "@/components/ui/AppDialog";
 
+const DESTRUCTIVE_CONFIRM_LABEL_RE =
+  /^\s*(delete|remove|destroy|erase|wipe|purge|abort|reset|revoke|terminate|uninstall)\b/i;
+
 export interface ConfirmDialogProps {
   isOpen: boolean;
   onClose?: () => void;
@@ -29,6 +32,17 @@ export function ConfirmDialog({
   zIndex,
 }: ConfirmDialogProps) {
   const handleClose = onClose ?? (() => {});
+
+  if (
+    import.meta.env.DEV &&
+    variant !== "destructive" &&
+    DESTRUCTIVE_CONFIRM_LABEL_RE.test(confirmLabel)
+  ) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[ConfirmDialog] Destructive confirmLabel "${confirmLabel}" rendered with variant="${variant}". Use variant="destructive" so the primary button gets the destructive styling.`
+    );
+  }
 
   return (
     <AppDialog isOpen={isOpen} onClose={handleClose} size="sm" variant={variant} zIndex={zIndex}>

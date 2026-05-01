@@ -21,6 +21,9 @@ import {
 export const KBD_CLASS =
   "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60";
 
+const TABBABLE_SELECTOR =
+  'a[href], area[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), audio[controls], video[controls], [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex^="-"])';
+
 export interface AppPaletteDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -41,12 +44,18 @@ export function AppPaletteDialog({
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   const restoreFocus = useCallback(() => {
-    if (previousFocusRef.current) {
-      if (!usePaletteStore.getState().activePaletteId) {
-        previousFocusRef.current.focus();
-      }
-      previousFocusRef.current = null;
+    const el = previousFocusRef.current;
+    previousFocusRef.current = null;
+    if (!el) return;
+    // Palette-to-palette handoff: the next palette will install its
+    // own focus, so skip restore entirely.
+    if (usePaletteStore.getState().activePaletteId) return;
+    if (document.contains(el)) {
+      el.focus();
+      return;
     }
+    const root = document.getElementById("root");
+    root?.querySelector<HTMLElement>(TABBABLE_SELECTOR)?.focus();
   }, []);
 
   const { isVisible, shouldRender } = useAnimatedPresence({

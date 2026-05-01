@@ -86,10 +86,19 @@ export function AppDialog({
   const portalOffset = portalOpen ? portalWidth : 0;
 
   const restoreFocus = useCallback(() => {
-    if (previousActiveElement.current) {
-      previousActiveElement.current.focus();
-      previousActiveElement.current = null;
+    const el = previousActiveElement.current;
+    previousActiveElement.current = null;
+    if (!el) return;
+    if (document.contains(el)) {
+      el.focus();
+      return;
     }
+    // Trigger was unmounted before close (e.g., the row that opened
+    // a destructive confirm dialog was removed by the action itself).
+    // Hand focus to the first tabbable child of the app shell rather
+    // than letting it silently fall to <body>.
+    const root = document.getElementById("root");
+    root?.querySelector<HTMLElement>(TABBABLE_SELECTOR)?.focus();
   }, []);
 
   const { isVisible, shouldRender } = useAnimatedPresence({
