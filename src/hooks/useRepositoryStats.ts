@@ -422,30 +422,48 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           // consumers using "isDraft" in item or item.number.
           if (!isValidPagePayload(payload.issues) || !isValidPagePayload(payload.prs)) return;
 
-          // Freshness guard: skip a push older than what's already applied.
-          // IPC channels are FIFO per-window, but the comparison is also a
-          // safety net for races between the periodic broadcast and a fresh
-          // `fetchStats` whose `lastUpdated` is more recent than the push.
-          if (lastUpdatedRef.current !== null && payload.fetchedAt <= lastUpdatedRef.current) {
-            return;
-          }
+          // Stats freshness guard: compare the broadcast's `stats.lastUpdated`
+          // (the actual GitHub API fetch time) to whatever we last applied.
+          // Same units on both sides since the helper writes
+          // `lastUpdatedRef.current = repoStats.lastUpdated`. Using `fetchedAt`
+          // here would be over-permissive — `fetchedAt` is set later in the
+          // broadcast call chain than `stats.lastUpdated` and would let an
+          // older fetch's payload through if a long commit-count lookup
+          // delayed the broadcast.
+          const pushedLastUpdated = payload.stats.lastUpdated ?? null;
+          const skipStats =
+            pushedLastUpdated !== null &&
+            lastUpdatedRef.current !== null &&
+            pushedLastUpdated <= lastUpdatedRef.current;
 
+          // Cache freshness guard: the renderer cache may have been written by
+          // a more-recent SWR revalidation in `GitHubResourceList` whose
+          // timestamp is independent of `lastUpdatedRef`. Don't downgrade a
+          // fresher entry — same pattern as the disk-hydration block above.
           const issuesKey = buildCacheKey(payload.projectPath, "issue", "open", "created");
           const prsKey = buildCacheKey(payload.projectPath, "pr", "open", "created");
-          setCache(issuesKey, {
-            items: payload.issues.items,
-            endCursor: payload.issues.endCursor,
-            hasNextPage: payload.issues.hasNextPage,
-            timestamp: payload.fetchedAt,
-          });
-          setCache(prsKey, {
-            items: payload.prs.items,
-            endCursor: payload.prs.endCursor,
-            hasNextPage: payload.prs.hasNextPage,
-            timestamp: payload.fetchedAt,
-          });
+          const existingIssues = getCache(issuesKey);
+          const existingPRs = getCache(prsKey);
+          if (!existingIssues || existingIssues.timestamp < payload.fetchedAt) {
+            setCache(issuesKey, {
+              items: payload.issues.items,
+              endCursor: payload.issues.endCursor,
+              hasNextPage: payload.issues.hasNextPage,
+              timestamp: payload.fetchedAt,
+            });
+          }
+          if (!existingPRs || existingPRs.timestamp < payload.fetchedAt) {
+            setCache(prsKey, {
+              items: payload.prs.items,
+              endCursor: payload.prs.endCursor,
+              hasNextPage: payload.prs.hasNextPage,
+              timestamp: payload.fetchedAt,
+            });
+          }
 
-          applyStatsResult(payload.stats, { projectPath: payload.projectPath });
+          if (!skipStats) {
+            applyStatsResult(payload.stats, { projectPath: payload.projectPath });
+          }
         })
         .catch(() => {
           // Project lookup races during teardown / project switch are
