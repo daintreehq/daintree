@@ -347,7 +347,6 @@ describe("TerminalInstanceService getSynchronizedOutputMode", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     ({ terminalInstanceService: service } =
       (await import("../TerminalInstanceService")) as unknown as {
         terminalInstanceService: ReflowTestService;
