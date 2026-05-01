@@ -57,6 +57,12 @@ export interface SearchablePaletteProps<T> {
   renderBody?: () => React.ReactNode;
   /** Total number of results before truncation, for overflow indicator */
   totalResults?: number;
+  /**
+   * When true, an indeterminate loading bar appears beneath the search input
+   * after a short grace period. Use when the underlying data source is still
+   * populating and the user might otherwise see an empty list.
+   */
+  isLoading?: boolean;
 }
 
 export function SearchablePalette<T>({
@@ -89,6 +95,7 @@ export function SearchablePalette<T>({
   headerClassName,
   renderBody,
   totalResults,
+  isLoading = false,
 }: SearchablePaletteProps<T>) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -160,7 +167,12 @@ export function SearchablePalette<T>({
 
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel={ariaLabel}>
-      <AppPaletteDialog.Header label={label} keyHint={keyHint} className={headerClassName}>
+      <AppPaletteDialog.Header
+        label={label}
+        keyHint={keyHint}
+        className={headerClassName}
+        isLoading={isLoading}
+      >
         <AppPaletteDialog.Input
           inputRef={inputRef}
           value={query}

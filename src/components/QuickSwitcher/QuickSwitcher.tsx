@@ -14,6 +14,7 @@ type QuickSwitcherProps = Pick<
   | "results"
   | "totalResults"
   | "selectedIndex"
+  | "isLoading"
   | "close"
   | "setQuery"
   | "selectPrevious"
@@ -28,6 +29,7 @@ export function QuickSwitcher({
   results,
   totalResults,
   selectedIndex,
+  isLoading,
   close,
   setQuery,
   selectPrevious,
@@ -67,6 +69,7 @@ export function QuickSwitcher({
       label="Quick switch"
       keyHint="⌘P"
       ariaLabel="Quick switcher"
+      isLoading={isLoading}
       searchPlaceholder="Search terminals, agents, worktrees..."
       searchAriaLabel="Search terminals, agents, and worktrees"
       listId="quick-switcher-list"

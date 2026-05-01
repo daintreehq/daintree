@@ -553,6 +553,7 @@ function App() {
                 results={quickSwitcher.results}
                 totalResults={quickSwitcher.totalResults}
                 selectedIndex={quickSwitcher.selectedIndex}
+                isLoading={quickSwitcher.isLoading}
                 close={quickSwitcher.close}
                 setQuery={quickSwitcher.setQuery}
                 selectPrevious={quickSwitcher.selectPrevious}

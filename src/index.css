@@ -1904,6 +1904,43 @@ body[data-reduce-animations="true"] .terminal-pane {
   will-change: transform;
 }
 
+/* Palette indeterminate loading bar — sits inside AppPaletteDialog.Header */
+@keyframes palette-loading-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.palette-loading-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--color-daintree-accent) 18%, transparent);
+  pointer-events: none;
+}
+
+.palette-loading-bar__sweep {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 25%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--color-daintree-accent) 85%, transparent),
+    transparent
+  );
+  animation: palette-loading-sweep 1.5s ease-in-out infinite;
+  will-change: transform;
+}
+
 /* Success fade - scale in then fade out */
 @keyframes github-status-success-fade {
   0% {
@@ -1964,6 +2001,12 @@ body[data-reduce-animations="true"] .terminal-pane {
     animation: none;
     opacity: 1;
   }
+
+  .palette-loading-bar__sweep {
+    animation: none;
+    width: 100%;
+    background: color-mix(in oklab, var(--color-daintree-accent) 50%, transparent);
+  }
 }
 
 /* Disable in performance mode */
@@ -1973,6 +2016,12 @@ body[data-performance-mode="true"] .github-status-loading::after {
 
 body[data-performance-mode="true"] .github-status-loading {
   background: color-mix(in oklab, var(--color-daintree-accent) 60%, transparent) !important;
+}
+
+body[data-performance-mode="true"] .palette-loading-bar__sweep {
+  animation: none !important;
+  width: 100% !important;
+  background: color-mix(in oklab, var(--color-daintree-accent) 50%, transparent) !important;
 }
 
 body[data-performance-mode="true"] .github-status-success {

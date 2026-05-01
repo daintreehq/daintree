@@ -166,6 +166,12 @@ interface AppPaletteHeaderProps {
   keyHint?: string;
   children: React.ReactNode;
   className?: string;
+  /**
+   * Show an indeterminate loading bar pinned to the bottom of the header.
+   * The bar fades in after a short grace period (UI_PALETTE_ENTER_DURATION),
+   * so fast loads never flash a sweep.
+   */
+  isLoading?: boolean;
 }
 
 AppPaletteDialog.Header = function AppPaletteHeader({
@@ -173,14 +179,34 @@ AppPaletteDialog.Header = function AppPaletteHeader({
   keyHint,
   children,
   className,
+  isLoading = false,
 }: AppPaletteHeaderProps) {
   return (
-    <div className={cn("px-3 pt-2 pb-1 border-b border-daintree-border", className)}>
+    <div
+      className={cn(
+        "relative overflow-hidden px-3 pt-2 pb-1 border-b border-daintree-border",
+        className
+      )}
+    >
       <div className="flex justify-between items-center mb-1.5 text-[11px] text-daintree-text/50">
         <span>{label}</span>
         {keyHint && <span className="font-mono">{keyHint}</span>}
       </div>
       {children}
+      <div
+        aria-hidden="true"
+        className="palette-loading-bar transition-opacity motion-reduce:transition-none"
+        data-loading={isLoading ? "true" : "false"}
+        style={{
+          opacity: isLoading ? 1 : 0,
+          transitionDuration: isLoading
+            ? `${UI_PALETTE_ENTER_DURATION}ms`
+            : `${UI_PALETTE_EXIT_DURATION}ms`,
+          transitionDelay: isLoading ? `${UI_PALETTE_ENTER_DURATION}ms` : "0ms",
+        }}
+      >
+        <div className="palette-loading-bar__sweep" />
+      </div>
     </div>
   );
 };
