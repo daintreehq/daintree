@@ -84,6 +84,14 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
   // `beforeSend` must never throw — a throw causes Sentry to drop the event
   // silently. Fail closed on unexpected input rather than leaking unscrubbed
   // data by returning the event as-is.
+  //
+  // Deliberately skips deep-walking event.tags / event.user / event.contexts.
+  // This is safe only while: zero Sentry.setUser() calls exist in the codebase;
+  // the sole setTag() call (setOnboardingCompleteTag) passes fixed "true"/"false"
+  // strings; initial-scope tags are process-controlled (platform, arch, node);
+  // and @sentry/electron's MainContext integration does not capture process.argv
+  // into app_arguments. Adding user-populated data to any of these fields would
+  // silently bypass scrubbing with no warning at the call site.
   try {
     if (Array.isArray(event.exception?.values)) {
       for (const ex of event.exception.values) {
@@ -194,6 +202,14 @@ export async function initializeTelemetry(): Promise<void> {
         // crash time, and JS-level beforeSend cannot scrub binary data. JS
         // crashes remain captured via globalErrorHandlers.ts / main-crash.log.
         integrations: (defaults) => defaults.filter((i) => i.name !== "SentryMinidump"),
+        // Sentry normalizes events (default depth 3) *before* beforeSend fires,
+        // replacing nested objects/arrays past the cap with the literal strings
+        // "[Object]"/"[Array]". Raise to match MAX_DEEP_SANITIZE_DEPTH so the
+        // deep-walk scrubber inspects real data, not already-flattened stubs.
+        // Freeze normalizeMaxBreadth at its current SDK default to insulate
+        // against a future change silently narrowing the breadth limit.
+        normalizeDepth: MAX_DEEP_SANITIZE_DEPTH,
+        normalizeMaxBreadth: 1000,
         // Do not set `sampleRate` — it defaults to 1.0 (100% error capture). If
         // performance tracing is ever added, use `tracesSampleRate` instead.
         // The local `SentryEvent` interface is a narrower projection of the

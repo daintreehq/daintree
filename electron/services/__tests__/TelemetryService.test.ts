@@ -625,6 +625,13 @@ describe("initializeTelemetry", () => {
     // capture) and any value < 1 silently drops that fraction of crash
     // reports. Fail closed so reintroduction at any value is caught. See #5255.
     expect(options).not.toHaveProperty("sampleRate");
+    // normalizeDepth must match MAX_DEEP_SANITIZE_DEPTH so the deep-walk
+    // scrubber inspects real data, not already-flattened [Object]/[Array] stubs
+    // produced by Sentry's default depth-3 normalization.
+    expect(options.normalizeDepth).toBe(10);
+    // normalizeMaxBreadth is frozen at the current SDK default to insulate
+    // against a future SDK change silently narrowing the breadth limit.
+    expect(options.normalizeMaxBreadth).toBe(1000);
     process.env.SENTRY_DSN = original;
   });
 
