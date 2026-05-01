@@ -42,7 +42,7 @@ function getErrorDescription(error: SpawnError, cwd?: string): string {
     case "ENOTDIR":
       return `The working directory isn't valid: ${cwd || "(unknown)"}`;
     case "EIO":
-      return "Couldn't allocate a pseudo-terminal. The system may be running low on resources.";
+      return "Couldn't allocate a terminal session. The system may be running low on resources.";
     case "DISCONNECTED":
       return "The terminal process is no longer running.";
     default:
