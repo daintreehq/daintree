@@ -38,7 +38,9 @@ export function useTabOverflow(
           const next = new Set(prev);
           let changed = false;
           for (const entry of entries) {
-            const id = (entry.target as HTMLElement).dataset.tabId;
+            const target = entry.target;
+            if (!(target instanceof HTMLElement)) continue;
+            const id = target.dataset.tabId;
             if (!id) continue;
             if (entry.isIntersecting) {
               if (next.delete(id)) changed = true;
