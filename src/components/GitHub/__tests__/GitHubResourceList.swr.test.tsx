@@ -732,6 +732,36 @@ describe("GitHubResourceList empty state branching", () => {
       expect(screen.getByText(/No pull requests match "nonexistent"/)).toBeTruthy();
     });
   });
+
+  it("renders zero-data for PRs when no filters are active and the list is empty", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No pull requests found")).toBeTruthy();
+    });
+    expect(screen.queryByRole("button", { name: /clear filters/i })).toBeNull();
+  });
+
+  it("Clear filters action on PR view resets PR-specific store slice, not issue slice", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setPrSearchQuery("foo");
+    useGitHubFilterStore.getState().setPrFilter("merged");
+    useGitHubFilterStore.getState().setIssueSearchQuery("untouched-issue-query");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    const clearButton = await screen.findByRole("button", { name: /clear filters/i });
+    act(() => {
+      clearButton.click();
+    });
+
+    const filterStore = useGitHubFilterStore.getState();
+    expect(filterStore.prSearchQuery).toBe("");
+    expect(filterStore.prFilter).toBe("open");
+    expect(filterStore.issueSearchQuery).toBe("untouched-issue-query");
+  });
 });
 
 describe("GitHubResourceList retry behavior", () => {
