@@ -213,7 +213,7 @@ describe("AutoUpdaterService", () => {
         CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.objectContaining({
           type: "info",
-          title: "No Updates Available",
+          title: "No updates available",
         })
       );
     });
@@ -235,7 +235,7 @@ describe("AutoUpdaterService", () => {
         CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.objectContaining({
           type: "error",
-          title: "Update Failed",
+          title: "Update failed",
           action: expect.objectContaining({
             label: "Retry",
             ipcChannel: CHANNELS.UPDATE_CHECK_FOR_UPDATES,

@@ -185,7 +185,7 @@ export class ActionService {
       if (reasonText) {
         notify({
           type: "warning",
-          title: "Action disabled",
+          title: `'${definition.title}' disabled`,
           message: reasonText,
         });
       }

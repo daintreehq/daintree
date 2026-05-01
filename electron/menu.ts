@@ -363,7 +363,7 @@ export function createApplicationMenu(
                 if (!wc.isDestroyed()) {
                   wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
                     type: "success",
-                    title: "CLI Installed",
+                    title: "CLI installed",
                     message: `The \`${PRODUCT_NAME.toLowerCase() === "canopy" ? "canopy-app" : "daintree"}\` command is now available at ${status.path}`,
                   });
                 }
@@ -376,7 +376,7 @@ export function createApplicationMenu(
                 if (!wc.isDestroyed()) {
                   wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
                     type: "error",
-                    title: "CLI Installation Failed",
+                    title: "CLI installation failed",
                     message,
                   });
                 }

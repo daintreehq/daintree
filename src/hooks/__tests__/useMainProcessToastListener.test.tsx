@@ -57,14 +57,14 @@ describe("useMainProcessToastListener", () => {
     act(() => {
       capturedCallback!({
         type: "success",
-        title: "CLI Installed",
+        title: "CLI installed",
         message: "The daintree command is now available",
       });
     });
 
     expect(notifyMock).toHaveBeenCalledWith({
       type: "success",
-      title: "CLI Installed",
+      title: "CLI installed",
       message: "The daintree command is now available",
       action: undefined,
     });
@@ -82,7 +82,7 @@ describe("useMainProcessToastListener", () => {
     act(() => {
       capturedCallback!({
         type: "error",
-        title: "Update Failed",
+        title: "Update failed",
         message: "Network error",
         action: { label: "Retry", ipcChannel: "update:check-for-updates" },
       });
@@ -91,7 +91,7 @@ describe("useMainProcessToastListener", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "error",
-        title: "Update Failed",
+        title: "Update failed",
         action: expect.objectContaining({ label: "Retry" }),
       })
     );
