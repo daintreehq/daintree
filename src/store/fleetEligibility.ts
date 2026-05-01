@@ -19,6 +19,23 @@ export function isTerminalFleetEligible(t: TerminalInstance | undefined): t is T
 }
 
 /**
+ * Cluster-error predicate: the terminal is in a valid location and not
+ * snapshot-stale, but post-exit `runtimeStatus` is *expected* — these are the
+ * terminals the error cluster is meant to surface. Used by the agent-cluster
+ * hook in place of `isTerminalFleetEligible` for the "exited with errors"
+ * bucket only; `prompt` and `completion` buckets keep the full eligibility
+ * gate because their downstream actions assume a live PTY.
+ */
+export function isTerminalErrorClusterEligible(
+  t: TerminalInstance | undefined
+): t is TerminalInstance {
+  if (!t) return false;
+  if (t.location === "trash" || t.location === "background" || t.location === "dock") return false;
+  if (t.hasPty === false) return false;
+  return true;
+}
+
+/**
  * Agent capability for agent-specific Fleet actions.
  *
  * Broadcast can target any live terminal. Accept/reject/interrupt/restart

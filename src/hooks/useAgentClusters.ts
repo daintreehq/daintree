@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 import { isFleetArmEligible } from "@/store/fleetArmingStore";
+import { isTerminalErrorClusterEligible } from "@/store/fleetEligibility";
 import { isTerminalVisible, useWorktreeIds } from "@/hooks/useTerminalSelectors";
 
 export type ClusterType = "prompt" | "error" | "completion";
@@ -81,7 +82,6 @@ export function deriveHighestPriorityCluster(params: DeriveParams): ClusterGroup
   for (const id of panelIds) {
     const t = panelsById[id];
     if (!t) continue;
-    if (!isFleetArmEligible(t)) continue;
     if (!isTerminalVisible(t, isInTrash, worktreeIds)) continue;
 
     const lsc =
@@ -89,12 +89,20 @@ export function deriveHighestPriorityCluster(params: DeriveParams): ClusterGroup
         ? t.lastStateChange
         : 0;
 
-    if (t.agentState === "waiting" && t.waitingReason === "prompt") {
+    // Per-bucket eligibility: prompt and completion need a live PTY (their
+    // downstream fleet actions assume one), but the error bucket is for
+    // post-exit terminals — the very state `isFleetArmEligible` rejects.
+    if (t.agentState === "waiting" && t.waitingReason === "prompt" && isFleetArmEligible(t)) {
       buckets.prompt.push({ id, lastStateChange: lsc });
       continue;
     }
 
-    if (t.agentState === "exited" && typeof t.exitCode === "number" && t.exitCode !== 0) {
+    if (
+      t.agentState === "exited" &&
+      typeof t.exitCode === "number" &&
+      t.exitCode !== 0 &&
+      isTerminalErrorClusterEligible(t)
+    ) {
       buckets.error.push({ id, lastStateChange: lsc });
       continue;
     }
@@ -103,7 +111,8 @@ export function deriveHighestPriorityCluster(params: DeriveParams): ClusterGroup
       t.agentState === "completed" &&
       typeof t.lastStateChange === "number" &&
       !Number.isNaN(t.lastStateChange) &&
-      t.lastStateChange >= now - COMPLETION_WINDOW_MS
+      t.lastStateChange >= now - COMPLETION_WINDOW_MS &&
+      isFleetArmEligible(t)
     ) {
       buckets.completion.push({ id, lastStateChange: lsc });
       continue;
