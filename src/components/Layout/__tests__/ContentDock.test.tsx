@@ -47,4 +47,12 @@ describe("ContentDock regression test", () => {
     expect(launchIdx).toBeLessThan(trashIdx);
     expect(launchIdx).toBeLessThan(helpIdx);
   });
+
+  // Issue #6428 — accent ring on isOver was a restraint violation; replace with neutral.
+  it("uses a neutral ring on dock isOver state (no accent)", () => {
+    const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+    expect(content).not.toContain("ring-daintree-accent");
+    expect(content).toMatch(/isOver\s*&&\s*[^]*?ring-border-default/);
+  });
 });

@@ -48,6 +48,9 @@ import type { WorktreeSnapshot } from "@shared/types";
 // Placeholder ID used when dragging from dock to grid
 export const GRID_PLACEHOLDER_ID = "__grid-placeholder__";
 
+// Droppable ID for the trash pill — drop a panel here to trash it
+export const TRASH_DROPPABLE_ID = "__trash-droppable__";
+
 // Context to share placeholder state with ContentGrid
 interface DndPlaceholderContextValue {
   placeholderIndex: number | null;
@@ -512,6 +515,12 @@ export function DndProvider({ children }: DndProviderProps) {
       useLayoutUndoStore.getState().pushLayoutSnapshot();
 
       const overId = over.id as string;
+
+      // Drag-to-trash: drop on the trash pill trashes the panel and skips reorder logic.
+      if (overId === TRASH_DROPPABLE_ID) {
+        usePanelStore.getState().trashPanel(draggedId);
+        return;
+      }
 
       const overData = over.data.current as
         | {

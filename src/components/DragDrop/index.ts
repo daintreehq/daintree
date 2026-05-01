@@ -6,6 +6,7 @@ export {
   useIsDragging,
   useIsWorktreeSortDragging,
   GRID_PLACEHOLDER_ID,
+  TRASH_DROPPABLE_ID,
 } from "./DndProvider";
 export { SortableTerminal } from "./SortableTerminal";
 export { SortableDockItem } from "./SortableDockItem";

@@ -6,6 +6,11 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { TerminalInstance } from "@/store";
 import type { TrashedTerminal } from "@/store/slices";
 
+const dndMocks = vi.hoisted(() => ({
+  isDragging: false,
+  isOver: false,
+}));
+
 vi.mock("@/hooks/useWorktrees", () => ({
   useWorktrees: () => ({ worktreeMap: new Map() }),
 }));
@@ -32,6 +37,15 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+vi.mock("@dnd-kit/core", () => ({
+  useDroppable: () => ({ setNodeRef: () => {}, isOver: dndMocks.isOver }),
+}));
+
+vi.mock("@/components/DragDrop", () => ({
+  useIsDragging: () => dndMocks.isDragging,
+  TRASH_DROPPABLE_ID: "__trash-droppable__",
+}));
+
 function makeTrashedItem(id: string): {
   terminal: TerminalInstance;
   trashedInfo: TrashedTerminal;
@@ -50,15 +64,55 @@ describe("TrashContainer", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     useAnnouncerStore.setState({ polite: null, assertive: null });
+    dndMocks.isDragging = false;
+    dndMocks.isOver = false;
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("does not render when trashedTerminals is empty", () => {
+  it("does not render when trashedTerminals is empty and not dragging", () => {
     const { container } = render(<TrashContainer trashedTerminals={[]} />);
     expect(container.innerHTML).toBe("");
+  });
+
+  it("renders ghosted drop pill when empty and a drag is active", () => {
+    dndMocks.isDragging = true;
+    const { getByTestId } = render(<TrashContainer trashedTerminals={[]} />);
+    const ghost = getByTestId("trash-container-ghost");
+    expect(ghost).not.toBeNull();
+    expect(ghost.textContent).toContain("Trash (drop to delete)");
+    expect(ghost.getAttribute("aria-hidden")).toBe("true");
+    expect(ghost.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("does not render ghost pill in compact mode label, but still mounts the icon", () => {
+    dndMocks.isDragging = true;
+    const { getByTestId } = render(<TrashContainer trashedTerminals={[]} compact />);
+    const ghost = getByTestId("trash-container-ghost");
+    expect(ghost).not.toBeNull();
+    expect(ghost.textContent).not.toContain("Trash (drop to delete)");
+  });
+
+  it("applies armed isOver classes on ghost pill, not accent", () => {
+    dndMocks.isDragging = true;
+    dndMocks.isOver = true;
+    const { getByTestId } = render(<TrashContainer trashedTerminals={[]} />);
+    const ghost = getByTestId("trash-container-ghost");
+    expect(ghost.className).toContain("bg-overlay-soft");
+    expect(ghost.className).toContain("ring-border-default");
+    expect(ghost.className).not.toContain("daintree-accent");
+  });
+
+  it("applies armed isOver classes on the real pill when dragged onto", () => {
+    dndMocks.isDragging = true;
+    dndMocks.isOver = true;
+    const { getByTestId } = render(<TrashContainer trashedTerminals={[makeTrashedItem("1")]} />);
+    const pill = getByTestId("trash-container");
+    expect(pill.className).toContain("bg-overlay-soft");
+    expect(pill.className).toContain("ring-border-default");
+    expect(pill.className).not.toContain("daintree-accent");
   });
 
   it("does not pulse on initial mount", () => {
