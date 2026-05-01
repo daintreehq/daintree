@@ -46,3 +46,10 @@
 body[data-reduce-animations="true"] .sidebar-worktree-card {
   transition: none;
 }
+
+@media (forced-colors: active) {
+  .sidebar-worktree-card:has(> button:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
