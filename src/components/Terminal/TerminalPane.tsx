@@ -1071,14 +1071,9 @@ function TerminalPaneComponent({
               )}
             </div>
 
-            {showHybridInputBar && (
+            {isFleetPrimary && (
               <div className="relative h-0 shrink-0 z-10 pointer-events-none">
-                <div
-                  className={cn(
-                    "absolute right-3.5 bottom-2 pointer-events-auto transition-opacity duration-150 ease-out",
-                    isFleetPrimary ? "opacity-100 visible" : "opacity-0 invisible"
-                  )}
-                >
+                <div className="absolute right-3.5 bottom-2 pointer-events-auto">
                   <FleetDraftingPill />
                 </div>
               </div>
