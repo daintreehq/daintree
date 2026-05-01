@@ -2,12 +2,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
-vi.mock("@xterm/addon-canvas", () => ({
-  CanvasAddon: class {
-    dispose() {}
-  },
-}));
-
 vi.mock("@xterm/addon-webgl", () => ({
   WebglAddon: vi.fn().mockImplementation(() => ({
     dispose: vi.fn(),
