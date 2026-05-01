@@ -39,6 +39,9 @@ import {
   isGpuDisabledByFlag,
   writeGpuDisabledFlag,
   clearGpuDisabledFlag,
+  isGpuAngleFallbackByFlag,
+  writeGpuAngleFallbackFlag,
+  clearGpuAngleFallbackFlag,
 } from "../GpuCrashMonitorService.js";
 
 describe("GpuCrashMonitorService", () => {
@@ -83,6 +86,36 @@ describe("GpuCrashMonitorService", () => {
     it("clearGpuDisabledFlag is safe when no flag exists", () => {
       expect(() => clearGpuDisabledFlag(tmpDir)).not.toThrow();
     });
+
+    it("isGpuAngleFallbackByFlag returns false when no flag exists", () => {
+      expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
+    });
+
+    it("writeGpuAngleFallbackFlag creates the flag file", () => {
+      writeGpuAngleFallbackFlag(tmpDir);
+      expect(fs.existsSync(path.join(tmpDir, "gpu-angle-fallback.flag"))).toBe(true);
+      expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(true);
+    });
+
+    it("clearGpuAngleFallbackFlag removes the flag file", () => {
+      writeGpuAngleFallbackFlag(tmpDir);
+      clearGpuAngleFallbackFlag(tmpDir);
+      expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
+    });
+
+    it("clearGpuAngleFallbackFlag is safe when no flag exists", () => {
+      expect(() => clearGpuAngleFallbackFlag(tmpDir)).not.toThrow();
+    });
+
+    it("disable and angle fallback flags coexist independently", () => {
+      writeGpuDisabledFlag(tmpDir);
+      writeGpuAngleFallbackFlag(tmpDir);
+      expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
+      expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(true);
+      clearGpuAngleFallbackFlag(tmpDir);
+      expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
+      expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
+    });
   });
 
   describe("crash monitoring", () => {
@@ -112,26 +145,61 @@ describe("GpuCrashMonitorService", () => {
       expect(appMock.on).toHaveBeenCalledWith("child-process-gone", expect.any(Function));
     });
 
-    it("does not relaunch on fewer than 3 GPU crashes", async () => {
+    it("first GPU crash writes ANGLE fallback flag and relaunches without disabling acceleration", async () => {
       await loadAndInit();
       emitGpuCrash();
-      emitGpuCrash();
-      expect(appMock.relaunch).not.toHaveBeenCalled();
-      expect(appMock.exit).not.toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+      expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+      expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(true);
+      expect(isGpuDisabledByFlag(tmpDir)).toBe(false);
+      expect(storeMock.set).not.toHaveBeenCalled();
     });
 
-    it("relaunches after 3 GPU crashes", async () => {
+    it("does not enter the nuclear path on the first crash (soft fallback first)", async () => {
+      await loadAndInit();
+      emitGpuCrash();
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+      // No disable flag, no store update — only the soft ANGLE fallback.
+      expect(isGpuDisabledByFlag(tmpDir)).toBe(false);
+      expect(storeMock.set).not.toHaveBeenCalledWith(
+        "gpu",
+        expect.objectContaining({ hardwareAccelerationDisabled: true })
+      );
+    });
+
+    it("does NOT trigger first-crash relaunch when ANGLE fallback flag already exists (loop guard)", async () => {
+      writeGpuAngleFallbackFlag(tmpDir);
+      await loadAndInit();
+      emitGpuCrash();
+      emitGpuCrash();
+      // Two crashes is below the nuclear threshold; with the angle flag
+      // already present, the first-crash path is suppressed too.
+      expect(appMock.relaunch).not.toHaveBeenCalled();
+      expect(appMock.exit).not.toHaveBeenCalled();
+      expect(isGpuDisabledByFlag(tmpDir)).toBe(false);
+    });
+
+    it("escalates to nuclear disable at threshold when ANGLE fallback already active", async () => {
+      writeGpuAngleFallbackFlag(tmpDir);
       await loadAndInit();
       emitGpuCrash();
       emitGpuCrash();
       emitGpuCrash();
-      // Let the async crash handler flush — relaunch is sync, but exit is awaited
-      // after closeTelemetry.
       await vi.waitFor(() => {
         expect(appMock.exit).toHaveBeenCalledWith(0);
       });
       expect(appMock.relaunch).toHaveBeenCalledTimes(1);
       expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
+      // The angle flag is cleared so the next launch goes straight to the
+      // disabled-acceleration path without redundant ANGLE switches.
+      expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
+      expect(storeMock.set).toHaveBeenCalledWith("gpu", {
+        hardwareAccelerationDisabled: true,
+      });
     });
 
     it("ignores clean-exit and killed reasons", async () => {
@@ -170,7 +238,7 @@ describe("GpuCrashMonitorService", () => {
       );
     });
 
-    it("does not relaunch if flag already exists (already disabled)", async () => {
+    it("does not relaunch if disable flag already exists (already disabled)", async () => {
       writeGpuDisabledFlag(tmpDir);
       await loadAndInit();
       emitGpuCrash();
@@ -181,28 +249,17 @@ describe("GpuCrashMonitorService", () => {
       expect(storeMock.set).not.toHaveBeenCalled();
     });
 
-    it("counts oom, launch-failed, and abnormal-exit as crashes", async () => {
+    it("counts oom, launch-failed, and abnormal-exit as crashes (first crash → soft fallback)", async () => {
       await loadAndInit();
       emitGpuCrash("oom");
-      emitGpuCrash("launch-failed");
-      emitGpuCrash("abnormal-exit");
       await vi.waitFor(() => {
         expect(appMock.exit).toHaveBeenCalledWith(0);
       });
       expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+      expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(true);
     });
 
-    it("persists store state on relaunch", async () => {
-      await loadAndInit();
-      emitGpuCrash();
-      emitGpuCrash();
-      emitGpuCrash();
-      expect(storeMock.set).toHaveBeenCalledWith("gpu", {
-        hardwareAccelerationDisabled: true,
-      });
-    });
-
-    it("only relaunches once even with additional crashes after threshold", async () => {
+    it("only relaunches once even with additional crashes after the first soft fallback", async () => {
       await loadAndInit();
       emitGpuCrash();
       emitGpuCrash();
@@ -213,9 +270,55 @@ describe("GpuCrashMonitorService", () => {
         expect(appMock.exit).toHaveBeenCalledTimes(1);
       });
       expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+      // Only the soft fallback path ran — disable flag must not be written
+      // when crash count was reset by an unmodelled relaunch.
+      expect(isGpuDisabledByFlag(tmpDir)).toBe(false);
     });
 
-    it("waits for closeTelemetry to resolve before app.exit(0) on relaunch", async () => {
+    it("does NOT relaunch when ANGLE flag write fails (prevents per-session loop)", async () => {
+      const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
+        throw new Error("EROFS: read-only filesystem");
+      });
+      try {
+        await loadAndInit();
+        emitGpuCrash();
+        await new Promise((r) => setImmediate(r));
+        expect(appMock.relaunch).not.toHaveBeenCalled();
+        expect(appMock.exit).not.toHaveBeenCalled();
+        expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
+        expect(console.error).toHaveBeenCalledWith(
+          expect.stringContaining("Failed to write ANGLE fallback flag"),
+          expect.any(Error)
+        );
+      } finally {
+        writeSpy.mockRestore();
+      }
+    });
+
+    it("does NOT relaunch when nuclear disable flag write fails", async () => {
+      writeGpuAngleFallbackFlag(tmpDir);
+      const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
+        throw new Error("EROFS: read-only filesystem");
+      });
+      try {
+        await loadAndInit();
+        emitGpuCrash();
+        emitGpuCrash();
+        emitGpuCrash();
+        await new Promise((r) => setImmediate(r));
+        expect(appMock.relaunch).not.toHaveBeenCalled();
+        expect(appMock.exit).not.toHaveBeenCalled();
+        expect(isGpuDisabledByFlag(tmpDir)).toBe(false);
+        expect(console.error).toHaveBeenCalledWith(
+          expect.stringContaining("Failed to persist disable flag"),
+          expect.any(Error)
+        );
+      } finally {
+        writeSpy.mockRestore();
+      }
+    });
+
+    it("waits for closeTelemetry to resolve before app.exit(0) on first-crash relaunch", async () => {
       let resolveClose!: () => void;
       const deferred = new Promise<void>((r) => {
         resolveClose = r;
@@ -223,8 +326,6 @@ describe("GpuCrashMonitorService", () => {
       telemetryServiceMock.closeTelemetry.mockReturnValueOnce(deferred);
 
       await loadAndInit();
-      emitGpuCrash();
-      emitGpuCrash();
       emitGpuCrash();
 
       await vi.waitFor(() => {

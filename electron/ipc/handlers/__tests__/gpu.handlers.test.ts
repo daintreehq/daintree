@@ -35,6 +35,7 @@ const gpuMonitorMock = vi.hoisted(() => ({
   isGpuDisabledByFlag: vi.fn(() => false),
   writeGpuDisabledFlag: vi.fn(),
   clearGpuDisabledFlag: vi.fn(),
+  clearGpuAngleFallbackFlag: vi.fn(),
 }));
 
 vi.mock("../../../services/GpuCrashMonitorService.js", () => gpuMonitorMock);
@@ -95,6 +96,7 @@ describe("GPU_SET_HARDWARE_ACCELERATION handler", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(gpuMonitorMock.clearGpuDisabledFlag).toHaveBeenCalled();
+    expect(gpuMonitorMock.clearGpuAngleFallbackFlag).toHaveBeenCalled();
     expect(storeMock.set).toHaveBeenCalledWith("gpu", { hardwareAccelerationDisabled: false });
     expect(appMock.relaunch).toHaveBeenCalled();
     expect(telemetryServiceMock.closeTelemetry).toHaveBeenCalled();

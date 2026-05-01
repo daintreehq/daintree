@@ -5,6 +5,7 @@ import {
   isGpuDisabledByFlag,
   writeGpuDisabledFlag,
   clearGpuDisabledFlag,
+  clearGpuAngleFallbackFlag,
 } from "../../../services/GpuCrashMonitorService.js";
 import { closeTelemetry } from "../../../services/TelemetryService.js";
 import { typedHandle } from "../../utils.js";
@@ -24,6 +25,7 @@ export function registerGpuHandlers(): () => void {
     const userDataPath = app.getPath("userData");
     if (enabled) {
       clearGpuDisabledFlag(userDataPath);
+      clearGpuAngleFallbackFlag(userDataPath);
       store.set("gpu", { hardwareAccelerationDisabled: false });
     } else {
       writeGpuDisabledFlag(userDataPath);

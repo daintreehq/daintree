@@ -31,6 +31,10 @@ const osMock = vi.hoisted(() => ({
   totalmem: vi.fn<() => number>(),
 }));
 
+const gpuDetectionMock = vi.hoisted(() => ({
+  isLinuxWaylandHybridGpu: vi.fn<() => boolean>(() => false),
+}));
+
 vi.mock("fs", () => ({
   default: {
     existsSync: fsMock.existsSync,
@@ -68,6 +72,10 @@ vi.mock("os", () => ({
   totalmem: osMock.totalmem,
 }));
 
+vi.mock("../../utils/gpuDetection.js", () => ({
+  isLinuxWaylandHybridGpu: gpuDetectionMock.isLinuxWaylandHybridGpu,
+}));
+
 const originalPlatform = process.platform;
 const originalArgv = [...process.argv];
 
@@ -77,6 +85,7 @@ function getCandidatePaths(): string[] {
     .filter(
       (p) =>
         !p.includes("gpu-disabled.flag") &&
+        !p.includes("gpu-angle-fallback.flag") &&
         !p.includes("canopy-app-dev") &&
         !p.includes("daintree-dev")
     );
@@ -519,6 +528,136 @@ describe("Chromium feature flags", () => {
     expect(enableCalls[0][1]).toBe("PartitionAllocMemoryReclaimer");
     const imeCalls = calls.filter(([key]) => key === "enable-wayland-ime");
     expect(imeCalls).toHaveLength(0);
+  });
+});
+
+describe("Linux Wayland multi-GPU fallback", () => {
+  function flagAwareExists(flags: { disabled?: boolean; angle?: boolean }) {
+    return (p: string) => {
+      if (p.includes("gpu-disabled.flag")) return flags.disabled === true;
+      if (p.includes("gpu-angle-fallback.flag")) return flags.angle === true;
+      return false;
+    };
+  }
+
+  function getAngleSwitchCalls() {
+    const calls = vi.mocked(electronMock.app.commandLine.appendSwitch).mock.calls;
+    return {
+      useAngle: calls.filter(([k]) => k === "use-angle"),
+      useCmdDecoder: calls.filter(([k]) => k === "use-cmd-decoder"),
+      ignoreBlocklist: calls.filter(([k]) => k === "ignore-gpu-blocklist"),
+    };
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    process.argv = ["electron", "main.js"];
+    process.env.XDG_SESSION_TYPE = "wayland";
+    gpuDetectionMock.isLinuxWaylandHybridGpu.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+    delete process.env.XDG_SESSION_TYPE;
+  });
+
+  it("appends ANGLE/Vulkan switches when hybrid GPU is detected on Wayland", async () => {
+    fsMock.existsSync.mockImplementation(flagAwareExists({}));
+    gpuDetectionMock.isLinuxWaylandHybridGpu.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const angle = getAngleSwitchCalls();
+    expect(angle.useAngle).toEqual([["use-angle", "vulkan"]]);
+    expect(angle.useCmdDecoder).toEqual([["use-cmd-decoder", "passthrough"]]);
+    expect(angle.ignoreBlocklist).toHaveLength(1);
+    expect(angle.ignoreBlocklist[0][0]).toBe("ignore-gpu-blocklist");
+  });
+
+  it("appends ANGLE/Vulkan switches when crash-fallback flag is present (even without hybrid)", async () => {
+    fsMock.existsSync.mockImplementation(flagAwareExists({ angle: true }));
+    gpuDetectionMock.isLinuxWaylandHybridGpu.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    const angle = getAngleSwitchCalls();
+    expect(angle.useAngle).toEqual([["use-angle", "vulkan"]]);
+    expect(angle.useCmdDecoder).toEqual([["use-cmd-decoder", "passthrough"]]);
+    expect(angle.ignoreBlocklist).toHaveLength(1);
+    // Hybrid detection should NOT have run when the crash flag short-circuits.
+    expect(gpuDetectionMock.isLinuxWaylandHybridGpu).not.toHaveBeenCalled();
+  });
+
+  it("does NOT append ANGLE switches on Wayland when neither hybrid nor crash flag", async () => {
+    fsMock.existsSync.mockImplementation(flagAwareExists({}));
+    gpuDetectionMock.isLinuxWaylandHybridGpu.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    const angle = getAngleSwitchCalls();
+    expect(angle.useAngle).toEqual([]);
+    expect(angle.useCmdDecoder).toEqual([]);
+    expect(angle.ignoreBlocklist).toEqual([]);
+  });
+
+  it("does NOT append ANGLE switches on Linux X11 even with hybrid + crash flag", async () => {
+    process.env.XDG_SESSION_TYPE = "x11";
+    fsMock.existsSync.mockImplementation(flagAwareExists({ angle: true }));
+    gpuDetectionMock.isLinuxWaylandHybridGpu.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const angle = getAngleSwitchCalls();
+    expect(angle.useAngle).toEqual([]);
+    expect(angle.useCmdDecoder).toEqual([]);
+    expect(angle.ignoreBlocklist).toEqual([]);
+    // Detection should not be called when XDG_SESSION_TYPE is not wayland.
+    expect(gpuDetectionMock.isLinuxWaylandHybridGpu).not.toHaveBeenCalled();
+  });
+
+  it("does NOT append ANGLE switches when hardware acceleration is already disabled", async () => {
+    fsMock.existsSync.mockImplementation(flagAwareExists({ disabled: true, angle: true }));
+    gpuDetectionMock.isLinuxWaylandHybridGpu.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const angle = getAngleSwitchCalls();
+    expect(angle.useAngle).toEqual([]);
+    expect(angle.useCmdDecoder).toEqual([]);
+    expect(angle.ignoreBlocklist).toEqual([]);
+    expect(electronMock.app.disableHardwareAcceleration).toHaveBeenCalled();
+    // Once the nuclear path is taken, hybrid detection is irrelevant.
+    expect(gpuDetectionMock.isLinuxWaylandHybridGpu).not.toHaveBeenCalled();
+  });
+
+  it("does NOT append ANGLE switches on macOS even with the crash flag present", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    fsMock.existsSync.mockImplementation(flagAwareExists({ angle: true }));
+    gpuDetectionMock.isLinuxWaylandHybridGpu.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const angle = getAngleSwitchCalls();
+    expect(angle.useAngle).toEqual([]);
+    expect(angle.useCmdDecoder).toEqual([]);
+    expect(angle.ignoreBlocklist).toEqual([]);
+  });
+
+  it("exports gpuAngleFallbackActive=true when the flag exists", async () => {
+    fsMock.existsSync.mockImplementation(flagAwareExists({ angle: true }));
+
+    const mod = await import("../environment.js");
+    expect(mod.gpuAngleFallbackActive).toBe(true);
+  });
+
+  it("exports gpuAngleFallbackActive=false when the flag is absent", async () => {
+    fsMock.existsSync.mockImplementation(flagAwareExists({}));
+
+    const mod = await import("../environment.js");
+    expect(mod.gpuAngleFallbackActive).toBe(false);
   });
 });
 
