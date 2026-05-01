@@ -46,12 +46,13 @@ export function useWorktreePalette({
     });
   }, []);
 
-  const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<WorktreeState>({
-    items: sortedWorktrees,
-    filterFn: filterWorktrees,
-    maxResults: 20,
-    paletteId: "worktree",
-  });
+  const { results, selectedIndex, isStale, close, ...paletteRest } =
+    useSearchablePalette<WorktreeState>({
+      items: sortedWorktrees,
+      filterFn: filterWorktrees,
+      maxResults: 20,
+      paletteId: "worktree",
+    });
 
   const handleSelect = useCallback(
     (worktree: WorktreeState) => {
@@ -62,16 +63,20 @@ export function useWorktreePalette({
   );
 
   const confirmSelection = useCallback(() => {
+    // Avoid confirming against lagging deferred results during the stale
+    // window — the user's repeat Enter will land on the up-to-date row.
+    if (isStale) return;
     if (results.length > 0 && selectedIndex >= 0) {
       handleSelect(results[selectedIndex]!);
     } else {
       close();
     }
-  }, [results, selectedIndex, close, handleSelect]);
+  }, [isStale, results, selectedIndex, close, handleSelect]);
 
   return {
     results,
     selectedIndex,
+    isStale,
     close,
     ...paletteRest,
     activeWorktreeId,

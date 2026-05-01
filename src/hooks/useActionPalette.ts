@@ -178,10 +178,15 @@ export function useActionPalette(): UseActionPaletteReturn {
   );
 
   const confirmSelection = useCallback(() => {
+    // While the deferred filter is catching up, `results` reflects the previous
+    // query — firing on Enter would dispatch an action that doesn't match the
+    // text in the input. Wait for the next render; the user's repeat Enter
+    // (typically <32ms later) will land on the up-to-date selection.
+    if (isStale) return;
     if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
       executeAction(results[selectedIndex]!);
     }
-  }, [results, selectedIndex, executeAction]);
+  }, [isStale, results, selectedIndex, executeAction]);
 
   const isShowingRecentlyUsed = query.trim() === "" && results.length > 0;
 

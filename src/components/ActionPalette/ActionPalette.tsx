@@ -6,9 +6,8 @@ import type {
   UseActionPaletteReturn,
 } from "@/hooks/useActionPalette";
 
-// Module-level so the reference stays stable across renders. An inline arrow
-// here would re-trigger the `useSearchablePalette` results effect each render
-// and clobber arrow-key navigation (lesson #5010).
+// Module-level so SearchablePalette receives a stable reference and skips
+// re-renders driven only by a freshly-created callback identity.
 const getActionItemId = (item: ActionPaletteItemType): string => item.id;
 
 type ActionPaletteProps = Pick<
