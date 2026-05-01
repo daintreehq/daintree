@@ -101,7 +101,7 @@ export const PATTERNS: readonly SecretPattern[] = [
     // MUST precede `slack-refresh-token` (more-specific `xoxe.xox[bp]-`
     // before broader `xoxe-`) AND `slack-token` (`xox[abprs]-` would
     // greedily consume `xox[bp]-` from `xoxe.xox[bp]-` tokens).
-    regex: /\bxoxe\.xox[bp]-[A-Z0-9-]{160,180}\b/g,
+    regex: /\bxoxe\.xox[bp]-[A-Za-z0-9-]{160,180}\b/g,
     replacement: REDACTED,
   },
   {
@@ -128,7 +128,7 @@ export const PATTERNS: readonly SecretPattern[] = [
   {
     name: "aws-access-key-id",
     // Covers AKIA (IAM long-term), ASIA (STS short-term), and ABIA (STS variant).
-    regex: /\bA[SKBI]IA[0-9A-Z]{16}\b/g,
+    regex: /\bA[SKB]IA[0-9A-Z]{16}\b/g,
     replacement: REDACTED,
   },
   {
@@ -176,7 +176,7 @@ export const PATTERNS: readonly SecretPattern[] = [
   },
   {
     name: "replicate-api-token",
-    regex: /\br8_[A-Za-z0-9]{30,40}\b/g,
+    regex: /\br8_[A-Za-z0-9]{35,40}\b/g,
     replacement: REDACTED,
   },
   {
@@ -186,7 +186,7 @@ export const PATTERNS: readonly SecretPattern[] = [
   },
   {
     name: "groq-api-key",
-    regex: /\bgsk_[A-Za-z0-9]{45,60}\b/g,
+    regex: /\bgsk_[A-Za-z0-9]{40,64}\b/g,
     replacement: REDACTED,
   },
   {

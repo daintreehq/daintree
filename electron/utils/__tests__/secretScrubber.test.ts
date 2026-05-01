@@ -443,7 +443,7 @@ describe("secretScrubber", () => {
     });
 
     it("does not flag too-short r8_ token", () => {
-      const tooShort = `r8_${"A".repeat(29)}`;
+      const tooShort = `r8_${"A".repeat(34)}`;
       expect(scrubSecrets(tooShort)).toBe(tooShort);
     });
 
@@ -453,8 +453,13 @@ describe("secretScrubber", () => {
     });
 
     it("does not flag too-short gsk_ token", () => {
-      const tooShort = `gsk_${"z".repeat(44)}`;
+      const tooShort = `gsk_${"z".repeat(39)}`;
       expect(scrubSecrets(tooShort)).toBe(tooShort);
+    });
+
+    it("does not flag AIIA as an AWS key (invalid prefix)", () => {
+      const invalid = "AIIAIOSFODNN7EXAMPLE";
+      expect(scrubSecrets(invalid)).toBe(invalid);
     });
 
     it("does not flag too-short lin_api_ token", () => {
@@ -625,6 +630,24 @@ describe("secretScrubber", () => {
       const out = scrubSecrets(token);
       expect(out).toBe(REDACTED);
       expect(out).not.toContain("or-v1");
+    });
+
+    it("all four sk- variants redact independently in one string", () => {
+      const input = [
+        `sk-proj-${"A".repeat(120)}`,
+        `sk-svcacct-${"B".repeat(130)}`,
+        `sk-admin-${"C".repeat(155)}`,
+        `sk-or-v1-${"a".repeat(64)}`,
+        `sk-${"D".repeat(48)}`,
+      ].join(" | ");
+      const out = scrubSecrets(input);
+      expect(out).not.toContain("sk-proj");
+      expect(out).not.toContain("sk-svcacct");
+      expect(out).not.toContain("sk-admin");
+      expect(out).not.toContain("sk-or-v1");
+      expect(out).not.toContain("sk-D");
+      const redactionCount = (out.match(/\[REDACTED\]/g) ?? []).length;
+      expect(redactionCount).toBe(5);
     });
   });
 
