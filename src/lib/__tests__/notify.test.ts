@@ -5,7 +5,6 @@ import {
   notify,
   TOAST_DURATION,
   _resetCoalesceMap,
-  _resetComboMap,
   _resetEscalationTrackers,
   shouldEscalateTransientError,
   consumeEscalation,
@@ -49,7 +48,6 @@ describe("notify()", () => {
       quietHoursWeekdays: [],
     });
     _resetCoalesceMap();
-    _resetComboMap();
     _setQuietUntil(0);
     mockShowNative.mockClear();
   });
@@ -1255,187 +1253,7 @@ describe("notify()", () => {
     });
   });
 
-  describe("combo — escalating messages on rapid repeats", () => {
-    const comboPayload = (message = "Agent spawned") => ({
-      type: "success" as const,
-      message,
-      priority: "high" as const,
-      countable: false,
-      combo: {
-        key: "agent:spawn",
-        tiers: ["Agent spawned", "Double agent", "Triple agent", "Sleeper cell activated"],
-        windowMs: 2000,
-      },
-    });
-
-    it("first call uses tier 0 message", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      notify(comboPayload());
-      const n = useNotificationStore.getState().notifications[0];
-      expect(n!.message).toBe("Agent spawned");
-    });
-
-    it("second call within window uses tier 1", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      notify(comboPayload());
-      notify(comboPayload());
-      const notifications = useNotificationStore.getState().notifications;
-      expect(notifications).toHaveLength(2);
-      expect(notifications[1]!.message).toBe("Double agent");
-    });
-
-    it("third call within window uses tier 2", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      notify(comboPayload());
-      notify(comboPayload());
-      notify(comboPayload());
-      const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[2]!.message).toBe("Triple agent");
-    });
-
-    it("calls beyond last tier loop on final tier", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      for (let i = 0; i < 6; i++) notify(comboPayload());
-      const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[3]!.message).toBe("Sleeper cell activated");
-      expect(notifications[4]!.message).toBe("Sleeper cell activated");
-      expect(notifications[5]!.message).toBe("Sleeper cell activated");
-    });
-
-    it("resets to tier 0 after window expires", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      const realDateNow = Date.now;
-
-      let now = 1000;
-      Date.now = () => now;
-
-      notify(comboPayload());
-      notify(comboPayload());
-
-      now = 4000; // 3s later, past 2s window
-      notify(comboPayload());
-
-      const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[1]!.message).toBe("Double agent");
-      expect(notifications[2]!.message).toBe("Agent spawned"); // reset
-
-      Date.now = realDateNow;
-    });
-
-    it("does not increment during quiet period", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      const realDateNow = Date.now;
-      Date.now = () => 1000;
-      _setQuietUntil(6000);
-
-      notify(comboPayload());
-      notify(comboPayload());
-
-      expect(useNotificationStore.getState().notifications).toHaveLength(0);
-
-      Date.now = () => 7000;
-      notify(comboPayload());
-
-      const notifications = useNotificationStore.getState().notifications;
-      expect(notifications).toHaveLength(1);
-      expect(notifications[0]!.message).toBe("Agent spawned"); // tier 0, not escalated
-
-      Date.now = realDateNow;
-    });
-
-    it("does not increment when notifications are disabled", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      useNotificationSettingsStore.setState({ enabled: false });
-
-      notify(comboPayload());
-      notify(comboPayload());
-
-      useNotificationSettingsStore.setState({ enabled: true });
-      notify(comboPayload());
-
-      const notifications = useNotificationStore.getState().notifications;
-      expect(notifications).toHaveLength(1);
-      expect(notifications[0]!.message).toBe("Agent spawned"); // tier 0
-    });
-
-    it("does not increment when blurred + high (shouldToast false)", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(false);
-
-      notify(comboPayload());
-      notify(comboPayload());
-
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      notify(comboPayload());
-
-      const notifications = useNotificationStore.getState().notifications;
-      expect(notifications).toHaveLength(1);
-      expect(notifications[0]!.message).toBe("Agent spawned"); // tier 0
-    });
-
-    it("each combo call creates a separate toast (not coalesced)", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      const id1 = notify(comboPayload());
-      const id2 = notify(comboPayload());
-
-      expect(id1).not.toBe(id2);
-      expect(useNotificationStore.getState().notifications).toHaveLength(2);
-    });
-
-    it("history retains original message while toast escalates", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      notify(comboPayload());
-      notify(comboPayload());
-
-      const entries = useNotificationHistoryStore.getState().entries;
-      expect(entries).toHaveLength(2);
-      expect(entries[0]!.message).toBe("Agent spawned");
-      expect(entries[1]!.message).toBe("Agent spawned");
-
-      const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[1]!.message).toBe("Double agent");
-    });
-
-    it("works with watch priority and fires native notification", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(false);
-      notify({
-        ...comboPayload(),
-        priority: "watch",
-      });
-      notify({
-        ...comboPayload(),
-        priority: "watch",
-      });
-
-      const notifications = useNotificationStore.getState().notifications;
-      expect(notifications).toHaveLength(2);
-      expect(notifications[0]!.message).toBe("Agent spawned");
-      expect(notifications[1]!.message).toBe("Double agent");
-      expect(mockShowNative).toHaveBeenCalledTimes(2);
-    });
-
-    it("independent combo keys track separately", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-
-      notify(comboPayload());
-      notify(comboPayload());
-
-      notify({
-        type: "success",
-        message: "Worktree created",
-        priority: "high",
-        combo: {
-          key: "worktree:create",
-          tiers: ["Worktree created", "Branching out", "It's a tree farm"],
-        },
-      });
-
-      const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[1]!.message).toBe("Double agent");
-      expect(notifications[2]!.message).toBe("Worktree created"); // tier 0 for different key
-    });
-  });
-
-  describe("quiet hours schedule — suppresses toasts during configured window", () => {
+  describe("quiet hours schedule", () => {
     it("isScheduledQuietHours returns false when disabled", () => {
       useNotificationSettingsStore.setState({
         quietHoursEnabled: false,

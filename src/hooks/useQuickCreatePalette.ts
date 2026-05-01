@@ -1,4 +1,4 @@
-import { useState, useCallback, useTransition, useEffect } from "react";
+import { useState, useCallback, useTransition, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { TerminalRecipe } from "@/types";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -39,6 +39,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
   );
   const [isPending, startTransition] = useTransition();
   const [assignToSelf, setAssignToSelf] = useState(true);
+  const comboCountRef = useRef(0);
 
   const hasRecipes = recipes.length > 0;
   const items: QuickCreateItem[] = hasRecipes
@@ -165,16 +166,20 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               wasAssigned && issueNumber ? ` · assigned #${issueNumber} to you` : "";
 
             const worktreeMsg = `${branch}${assignMsg}`;
+            const tiers = [worktreeMsg, "Branching out", "It's a tree farm"];
+            if (typeof document !== "undefined" && document.hasFocus()) {
+              comboCountRef.current += 1;
+            }
+            const tierIndex = Math.min(comboCountRef.current - 1, tiers.length - 1);
+            const tieredMessage = tiers[tierIndex];
+
             notify({
               type: "success",
               title: "Worktree created",
-              message: worktreeMsg,
+              message: tieredMessage,
+              inboxMessage: worktreeMsg,
               priority: "high",
               countable: false,
-              combo: {
-                key: "worktree:create",
-                tiers: [worktreeMsg, "Branching out", "It's a tree farm"],
-              },
               action: {
                 label: "Undo",
                 onClick: () => {},
