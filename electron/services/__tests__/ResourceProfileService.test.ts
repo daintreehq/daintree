@@ -27,6 +27,20 @@ vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
 }));
 
+// Neutral perf_hooks stub: returns zero lag and zero utilization, so the new
+// 5s lag-monitor timer fires harmlessly inside fake-timer windows.
+vi.mock("node:perf_hooks", () => ({
+  monitorEventLoopDelay: () => ({
+    enable: vi.fn(),
+    disable: vi.fn(),
+    percentile: () => 0,
+    reset: vi.fn(),
+  }),
+  performance: {
+    eventLoopUtilization: () => ({ idle: 0, active: 0, utilization: 0 }),
+  },
+}));
+
 import os from "os";
 import { app, powerMonitor } from "electron";
 import { broadcastToRenderer } from "../../ipc/utils.js";

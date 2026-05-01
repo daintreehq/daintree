@@ -1,5 +1,11 @@
 import os from "os";
 import { app, powerMonitor } from "electron";
+import {
+  monitorEventLoopDelay,
+  performance,
+  type EventLoopUtilization,
+  type IntervalHistogram,
+} from "node:perf_hooks";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logInfo } from "../utils/logger.js";
@@ -17,6 +23,24 @@ const EVAL_INTERVAL_MS = 30_000;
 const DOWNGRADE_HOLD_MS = 30_000;
 const UPGRADE_HOLD_MS = 60_000;
 const WARMUP_TICKS = 2;
+
+// Active event-loop-lag mitigation. The diagnostics handler reads a separate
+// lifetime histogram for IPC; this service owns its own histogram and resets
+// it after each tumbling window so percentile() reflects only the recent slice.
+// p99 is biased low by monitorEventLoopDelay (a long block records as a single
+// large sample, not many) — thresholds are conservative to compensate.
+// AND-gating with eventLoopUtilization rejects GC-pause false positives: a
+// genuine sustained-saturation event has both high tail latency AND high loop
+// occupancy. ELU alone doesn't catch periodic long sync work; p99 alone trips
+// on isolated GC stalls.
+const LAG_SAMPLE_INTERVAL_MS = 5_000;
+const LAG_HISTOGRAM_RESOLUTION_MS = 10;
+const LAG_ENTRY_P99_MS = 250;
+const LAG_ENTRY_ELU = 0.7;
+const LAG_ESCALATE_P99_MS = 500;
+const LAG_EXIT_P99_MS = 150;
+const LAG_ENTER_TICKS_REQUIRED = 2; // 10s sustained
+const LAG_EXIT_TICKS_REQUIRED = 6; // 30s clean
 
 // Memory-pressure thresholds scale with device RAM so machines with very
 // different physical memory behave sensibly. On an 8 GB machine these
@@ -47,6 +71,13 @@ export class ResourceProfileService {
   private speedLimit = 100;
   private readonly memoryThresholdHighMb: number;
   private readonly memoryThresholdLowMb: number;
+  private lagInterval: NodeJS.Timeout | null = null;
+  private lagHistogram: IntervalHistogram | null = null;
+  private lagPreviousElu: EventLoopUtilization | null = null;
+  private lagPressureActive = false;
+  private lagEscalatedActive = false;
+  private lagEnterTicks = 0;
+  private lagExitTicks = 0;
 
   constructor(private deps: ResourceProfileDeps) {
     const totalRamMb = os.totalmem() / 1024 / 1024;
@@ -98,10 +129,121 @@ export class ResourceProfileService {
       this.evaluate();
     }, EVAL_INTERVAL_MS);
     this.interval.unref();
+
+    this.startLagMonitor();
+  }
+
+  private startLagMonitor(): void {
+    if (this.lagInterval) return;
+    try {
+      this.lagHistogram = monitorEventLoopDelay({
+        resolution: LAG_HISTOGRAM_RESOLUTION_MS,
+      });
+      this.lagHistogram.enable();
+    } catch {
+      // perf_hooks may be unavailable in some embedded contexts; skip silently
+      this.lagHistogram = null;
+      this.lagPreviousElu = null;
+      return;
+    }
+    try {
+      this.lagPreviousElu = performance.eventLoopUtilization();
+    } catch {
+      // ELU unavailable: tear the histogram down so it isn't orphaned in the
+      // native layer accumulating samples no one will ever read.
+      try {
+        this.lagHistogram.disable();
+      } catch {
+        // non-critical
+      }
+      this.lagHistogram = null;
+      this.lagPreviousElu = null;
+      return;
+    }
+    this.lagInterval = setInterval(() => {
+      this.sampleLag();
+    }, LAG_SAMPLE_INTERVAL_MS);
+    this.lagInterval.unref();
+  }
+
+  private sampleLag(): void {
+    if (this.disposed || !this.lagHistogram) return;
+
+    let p99Ms = 0;
+    try {
+      const raw = this.lagHistogram.percentile(99) / 1_000_000;
+      if (Number.isFinite(raw)) p99Ms = raw;
+    } catch {
+      // Read failure: histogram still needs reset below so the window stays bounded.
+    }
+    try {
+      this.lagHistogram.reset();
+    } catch {
+      // non-critical
+    }
+
+    let utilization = 0;
+    try {
+      const current = performance.eventLoopUtilization();
+      const delta = this.lagPreviousElu
+        ? performance.eventLoopUtilization(current, this.lagPreviousElu)
+        : current;
+      this.lagPreviousElu = current;
+      if (Number.isFinite(delta.utilization)) utilization = delta.utilization;
+    } catch {
+      utilization = 0;
+    }
+
+    // Exit path runs first: a window that drops below 150ms while degraded
+    // counts toward recovery even if it would also satisfy the entry condition
+    // on a separate cycle.
+    if (this.lagPressureActive) {
+      if (p99Ms < LAG_EXIT_P99_MS) {
+        this.lagExitTicks += 1;
+        if (this.lagExitTicks >= LAG_EXIT_TICKS_REQUIRED) {
+          this.lagPressureActive = false;
+          this.lagEscalatedActive = false;
+          this.lagEnterTicks = 0;
+          this.lagExitTicks = 0;
+          logInfo("event-loop-lag-cleared", { p99Ms: Math.round(p99Ms) });
+        }
+        return;
+      }
+      this.lagExitTicks = 0;
+
+      if (p99Ms > LAG_ESCALATE_P99_MS && !this.lagEscalatedActive) {
+        this.lagEscalatedActive = true;
+        logInfo("event-loop-lag-escalated", {
+          p99Ms: Math.round(p99Ms),
+          utilization: Math.round(utilization * 100) / 100,
+        });
+      }
+      return;
+    }
+
+    if (p99Ms > LAG_ENTRY_P99_MS && utilization > LAG_ENTRY_ELU) {
+      this.lagEnterTicks += 1;
+      if (this.lagEnterTicks >= LAG_ENTER_TICKS_REQUIRED) {
+        this.lagPressureActive = true;
+        this.lagEnterTicks = 0;
+        logInfo("event-loop-lag-detected", {
+          p99Ms: Math.round(p99Ms),
+          utilization: Math.round(utilization * 100) / 100,
+        });
+        if (this.currentProfile !== "efficiency") {
+          this.applyProfile("efficiency");
+        }
+      }
+    } else {
+      this.lagEnterTicks = 0;
+    }
   }
 
   private refreshWorktreeCount(): void {
     if (this.disposed) return;
+    // Under sustained event-loop saturation, skip the only optional async work
+    // in this service. Cached count is used until pressure clears.
+    if (this.lagEscalatedActive) return;
     const workspaceClient = this.deps.getWorkspaceClient();
     if (!workspaceClient) return;
     workspaceClient
@@ -123,6 +265,23 @@ export class ResourceProfileService {
       clearInterval(this.interval);
       this.interval = null;
     }
+    if (this.lagInterval) {
+      clearInterval(this.lagInterval);
+      this.lagInterval = null;
+    }
+    if (this.lagHistogram) {
+      try {
+        this.lagHistogram.disable();
+      } catch {
+        // non-critical
+      }
+      this.lagHistogram = null;
+    }
+    this.lagPreviousElu = null;
+    this.lagPressureActive = false;
+    this.lagEscalatedActive = false;
+    this.lagEnterTicks = 0;
+    this.lagExitTicks = 0;
     this.disposed = true;
     logInfo("resource-profile-service-stopped");
   }
@@ -131,6 +290,15 @@ export class ResourceProfileService {
     this.tickCount++;
 
     if (this.tickCount <= WARMUP_TICKS) return;
+
+    // While the lag monitor holds the floor at efficiency, don't let memory or
+    // worktree-count signals upgrade out of it. Recovery is gated by the lag
+    // exit path which clears the flag and re-enables normal scoring.
+    if (this.lagPressureActive && this.currentProfile === "efficiency") {
+      this.candidateProfile = null;
+      this.candidateFirstSeenAt = null;
+      return;
+    }
 
     const target = this.computeTargetProfile();
 
