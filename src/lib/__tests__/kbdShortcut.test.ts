@@ -127,4 +127,17 @@ describe("parseChord — edge cases", () => {
   it("trims whitespace around + separators", () => {
     expect(parseChord(" Cmd + Shift + P ", true)).toEqual([["⌘", "⇧", "P"]]);
   });
+
+  it("treats a bare + as a literal + key", () => {
+    expect(parseChord("+", false)).toEqual([["+"]]);
+  });
+
+  it("ignores a single trailing + (Ctrl+ alone) as malformed", () => {
+    expect(parseChord("Ctrl+", false)).toEqual([["Ctrl"]]);
+  });
+
+  it("preserves casing of unknown multi-char tokens (PageUp)", () => {
+    expect(parseChord("PageUp", false)).toEqual([["PageUp"]]);
+    expect(parseChord("Cmd+NumpadEnter", true)).toEqual([["⌘", "NumpadEnter"]]);
+  });
 });

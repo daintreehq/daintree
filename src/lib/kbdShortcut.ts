@@ -64,11 +64,6 @@ const ARROW_GLYPHS: Record<string, string> = {
 export const MODIFIER_GLYPH_MAP = MAC_GLYPHS;
 export const MODIFIER_TEXT_MAP = WIN_LABELS;
 
-function capitalize(token: string): string {
-  if (!token) return token;
-  return token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
-}
-
 function mapToken(rawToken: string, isMac: boolean): string {
   const lower = rawToken.toLowerCase();
   const arrow = ARROW_GLYPHS[lower];
@@ -76,23 +71,30 @@ function mapToken(rawToken: string, isMac: boolean): string {
   const table = isMac ? MAC_GLYPHS : WIN_LABELS;
   const mapped = table[lower];
   if (mapped) return mapped;
-  return capitalize(rawToken);
+  // Single-char keys are uppercased ("p" → "P"). Multi-char unknowns keep
+  // their original casing so labels like "PageUp" or "NumpadEnter" don't
+  // get mangled to "Pageup".
+  if (rawToken.length === 1) return rawToken.toUpperCase();
+  return rawToken;
 }
 
 function splitStepKeys(step: string): string[] {
-  // `Ctrl++` means Control + literal `+` key. Splitting on `+` naively
-  // produces empty strings; preserve the trailing `+` as a literal token.
   const trimmed = step.trim();
   if (!trimmed) return [];
 
-  const trailingPlus = /\+$/.test(trimmed) && trimmed.length > 1;
-  const body = trailingPlus ? trimmed.slice(0, -1) : trimmed;
+  // A bare `+` step or a `++` suffix means a literal `+` key (e.g. `Ctrl++`
+  // for zoom). A single trailing `+` (e.g. `Ctrl+`) is malformed and
+  // ignored — only `++` promotes the trailing plus to a literal.
+  if (trimmed === "+") return ["+"];
+
+  const literalPlus = trimmed.endsWith("++");
+  const body = literalPlus ? trimmed.slice(0, -1) : trimmed;
   const parts = body
     .split("+")
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
 
-  if (trailingPlus) parts.push("+");
+  if (literalPlus) parts.push("+");
   return parts;
 }
 
