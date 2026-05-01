@@ -33,6 +33,7 @@ vi.mock("@/store/paletteStore", () => ({
 
 vi.mock("@/hooks/useKeybinding", () => ({
   useKeybindingDisplay: () => "",
+  useEffectiveCombo: () => undefined,
 }));
 
 vi.mock("@/components/Terminal/TerminalIcon", () => ({

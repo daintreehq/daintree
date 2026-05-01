@@ -33,6 +33,7 @@ vi.mock("@/lib/colorUtils", () => ({
 
 vi.mock("@/hooks/useKeybinding", () => ({
   useKeybindingDisplay: () => "⌘P",
+  useEffectiveCombo: () => undefined,
 }));
 
 vi.mock("@/hooks", () => ({
