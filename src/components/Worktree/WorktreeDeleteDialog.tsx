@@ -49,6 +49,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   useEffect(() => {
     if (isOpen) {
       setForce(false);
+      setCloseTerminals(true);
       setDeleteBranch(false);
       setConfirmInput("");
       setError(null);
@@ -78,9 +79,6 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     const effectiveDeleteBranch = deleteBranch && canDeleteBranch;
 
     try {
-      if (closeTerminals && hasTerminals) {
-        bulkCloseByWorktree(worktree.id);
-      }
       const result = await actionService.dispatch(
         "worktree.delete",
         { worktreeId: worktree.id, force, deleteBranch: effectiveDeleteBranch },
@@ -88,6 +86,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       );
       if (!result.ok) {
         throw new Error(result.error.message);
+      }
+      if (closeTerminals && hasTerminals) {
+        bulkCloseByWorktree(worktree.id);
       }
       onClose();
     } catch (err) {
@@ -228,9 +229,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   </span>
                   {deleteBranch && (
                     <span className="block text-xs text-daintree-text/60 mt-1">
-                      {force
-                        ? "Branch will be force-deleted (git branch -D)"
-                        : "Safe delete - fails if branch has unmerged changes"}
+                      Safe delete — fails if branch has unmerged changes
                     </span>
                   )}
                 </span>

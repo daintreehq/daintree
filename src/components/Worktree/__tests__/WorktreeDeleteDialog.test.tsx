@@ -437,6 +437,66 @@ describe("WorktreeDeleteDialog — in-flight skeleton", () => {
   });
 });
 
+describe("WorktreeDeleteDialog — state reset", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    dispatchMock.mockResolvedValue({ ok: true });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("resets closeTerminals to true when the dialog re-opens", () => {
+    const worktree = makeWorktree(makeChanges([]));
+    const { rerender } = render(
+      <WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />
+    );
+
+    const closeTerminalsCheckbox = screen.getByRole("checkbox", {
+      name: /close all terminals/i,
+    }) as HTMLInputElement;
+    expect(closeTerminalsCheckbox.checked).toBe(true);
+    fireEvent.click(closeTerminalsCheckbox);
+    expect(closeTerminalsCheckbox.checked).toBe(false);
+
+    rerender(<WorktreeDeleteDialog isOpen={false} onClose={vi.fn()} worktree={worktree} />);
+    rerender(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    const reopened = screen.getByRole("checkbox", {
+      name: /close all terminals/i,
+    }) as HTMLInputElement;
+    expect(reopened.checked).toBe(true);
+  });
+});
+
+describe("WorktreeDeleteDialog — error handling", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders error message and re-enables controls when dispatch fails", async () => {
+    dispatchMock.mockResolvedValueOnce({ ok: false, error: { message: "git error" } });
+    const onClose = vi.fn();
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={onClose} worktree={worktree} />);
+
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toContain("git error");
+    });
+    expect(screen.queryByTestId("delete-worktree-skeleton")).toBeNull();
+    const button = screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
 describe("WorktreeDeleteDialog — reentrancy", () => {
   beforeEach(() => {
     vi.clearAllMocks();
