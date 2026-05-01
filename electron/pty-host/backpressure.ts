@@ -7,6 +7,12 @@ import type {
 import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
 
 export const MAX_PACKET_PAYLOAD = 65535;
+// Caps are in bytes, not chars: they bound the memory consumed by in-flight
+// Uint8Array payloads queued for the SharedArrayBuffer ring buffer path.
+// The Uint8Array byte length closely approximates the actual memory footprint
+// of these payloads. VS Code uses char-based flow control because its IPC
+// routes through string-based JSON-RPC; copying that approach here would
+// misrepresent the resource being protected.
 export const MAX_PENDING_BYTES_PER_TERMINAL = 4 * 1024 * 1024;
 export const MAX_TOTAL_PENDING_BYTES = 16 * 1024 * 1024;
 export const BACKPRESSURE_SAFETY_TIMEOUT_MS = 10000;
