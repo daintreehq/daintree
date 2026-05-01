@@ -95,6 +95,13 @@ export interface SearchablePaletteProps<T> {
    * populating and the user might otherwise see an empty list.
    */
   isLoading?: boolean;
+  /**
+   * True while a deferred filter pass is catching up to the latest query.
+   * Drives a stale-dim on the listbox (via `palette-results-stale`) gated by a
+   * 400ms transition-delay so sub-frame work never flickers. Reduced-motion
+   * and performance-mode CSS bypasses keep the listbox at full opacity.
+   */
+  isFiltering?: boolean;
 }
 
 export function SearchablePalette<T>({
@@ -131,6 +138,7 @@ export function SearchablePalette<T>({
   renderBody,
   totalResults,
   isLoading = false,
+  isFiltering = false,
 }: SearchablePaletteProps<T>) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -243,7 +251,14 @@ export function SearchablePalette<T>({
                 {emptyContent}
               </AppPaletteDialog.Empty>
             ) : (
-              <div ref={listRef} id={listId} role="listbox" aria-label={label}>
+              <div
+                ref={listRef}
+                id={listId}
+                role="listbox"
+                aria-label={label}
+                className={isFiltering ? "palette-results-stale" : undefined}
+                data-stale={isFiltering ? "true" : undefined}
+              >
                 {results.map((item, index) =>
                   renderItem(
                     item,

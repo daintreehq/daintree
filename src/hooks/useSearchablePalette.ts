@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef, useDeferredValue } from "react";
 import Fuse, { type IFuseOptions, type FuseResultMatch } from "fuse.js";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 
@@ -28,6 +28,12 @@ export interface UseSearchablePaletteReturn<T> {
   totalResults: number;
   selectedIndex: number;
   matchesById: Map<string, readonly FuseResultMatch[]>;
+  /**
+   * True while the deferred filter pass is catching up to the latest input.
+   * Consumers can pass this to `SearchablePalette.isFiltering` to dim the
+   * listbox after the Doherty 400ms threshold so sub-frame work never flashes.
+   */
+  isStale: boolean;
   open: () => void;
   close: () => void;
   toggle: () => void;
@@ -63,6 +69,11 @@ export function useSearchablePalette<T>(
   const isOpen = paletteId != null ? storeIsOpen : localIsOpen;
 
   const [query, setQuery] = useState("");
+  // Lag the filtering work behind the input so keystrokes stay responsive.
+  // The expensive Fuse/filterFn pass runs in a deferred render that yields to
+  // input events; the input itself binds to the urgent `query` state.
+  const deferredQuery = useDeferredValue(query);
+  const isStale = query !== deferredQuery;
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const effectiveFuseOptions = useMemo(() => {
@@ -81,11 +92,11 @@ export function useSearchablePalette<T>(
     const matches = new Map<string, readonly FuseResultMatch[]>();
 
     if (filterFn) {
-      filtered = filterFn(items, query);
-    } else if (!query.trim()) {
+      filtered = filterFn(items, deferredQuery);
+    } else if (!deferredQuery.trim()) {
       filtered = items;
     } else if (fuse) {
-      const fuseResults = fuse.search(query);
+      const fuseResults = fuse.search(deferredQuery);
       filtered = fuseResults.map((r) => r.item);
       if (includeMatches) {
         for (const r of fuseResults) {
@@ -103,7 +114,7 @@ export function useSearchablePalette<T>(
       totalResults: filtered.length,
       matchesById: matches,
     };
-  }, [query, items, fuse, filterFn, maxResults, includeMatches, getItemId]);
+  }, [deferredQuery, items, fuse, filterFn, maxResults, includeMatches, getItemId]);
 
   const findNavigable = useCallback(
     (startIndex: number, direction: 1 | -1): number => {
@@ -210,6 +221,7 @@ export function useSearchablePalette<T>(
     totalResults,
     selectedIndex,
     matchesById,
+    isStale,
     open,
     close,
     toggle,

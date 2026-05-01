@@ -6,6 +6,11 @@ import type {
   UseActionPaletteReturn,
 } from "@/hooks/useActionPalette";
 
+// Module-level so the reference stays stable across renders. An inline arrow
+// here would re-trigger the `useSearchablePalette` results effect each render
+// and clobber arrow-key navigation (lesson #5010).
+const getActionItemId = (item: ActionPaletteItemType): string => item.id;
+
 type ActionPaletteProps = Pick<
   UseActionPaletteReturn,
   | "isOpen"
@@ -14,6 +19,7 @@ type ActionPaletteProps = Pick<
   | "totalResults"
   | "selectedIndex"
   | "isShowingRecentlyUsed"
+  | "isStale"
   | "close"
   | "setQuery"
   | "setSelectedIndex"
@@ -30,6 +36,7 @@ export function ActionPalette({
   totalResults,
   selectedIndex,
   isShowingRecentlyUsed,
+  isStale,
   close,
   setQuery,
   setSelectedIndex,
@@ -57,7 +64,8 @@ export function ActionPalette({
       onConfirm={confirmSelection}
       onClose={close}
       onHoverIndex={setSelectedIndex}
-      getItemId={(item) => item.id}
+      getItemId={getActionItemId}
+      isFiltering={isStale}
       renderItem={(item, index, isSelected, onHoverIndex) => (
         <ActionPaletteItem
           key={item.id}

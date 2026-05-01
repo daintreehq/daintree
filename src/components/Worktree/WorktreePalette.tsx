@@ -61,6 +61,7 @@ export interface WorktreePaletteProps {
   totalResults: number;
   activeWorktreeId: string | null;
   selectedIndex: number;
+  isStale?: boolean;
   onQueryChange: (query: string) => void;
   onSelectPrevious: () => void;
   onSelectNext: () => void;
@@ -76,6 +77,7 @@ export function WorktreePalette({
   totalResults,
   activeWorktreeId,
   selectedIndex,
+  isStale = false,
   onQueryChange,
   onSelectPrevious,
   onSelectNext,
@@ -97,6 +99,7 @@ export function WorktreePalette({
       onConfirm={onConfirm}
       onClose={onClose}
       getItemId={(worktree) => worktree.id}
+      isFiltering={isStale}
       renderItem={(worktree, _index, isSelected) => (
         <WorktreeListItem
           key={worktree.id}

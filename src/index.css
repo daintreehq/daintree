@@ -1095,6 +1095,17 @@ body,
   will-change: opacity;
 }
 
+/* Stale-dim for palette listboxes during a deferred filter pass.
+ * Driven by `useSearchablePalette`'s `isStale` flag (query !== deferredQuery).
+ * The 400ms transition-delay matches the Doherty anti-flicker gate: if the
+ * deferred render resolves in under one frame (typical for ~258 actions on
+ * fast hardware), the dim never starts. On a genuinely overloaded render the
+ * listbox fades to half opacity as a "still filtering" cue. */
+.palette-results-stale {
+  opacity: 0.5;
+  transition: opacity 150ms ease-out 400ms;
+}
+
 /* Opt-in shimmer sweep for skeleton bones. Layered on top of the opacity pulse;
  * the ::after pseudo-element rides a translateX so the work stays on the
  * compositor (transform > background-position for GPU cost — see #4738).
@@ -1419,6 +1430,14 @@ body,
     will-change: auto;
   }
 
+  /* The global `transition: none` rules below would strip the 400ms delay,
+   * letting any sub-frame stale flip flash the listbox to half opacity. Keep
+   * the listbox at full opacity instead. WCAG 2.3.3. */
+  .palette-results-stale {
+    opacity: 1 !important;
+    transition: none !important;
+  }
+
   /* Hide the shimmer sweep entirely — `animation: none` alone leaves a static
    * gradient stripe visible. WCAG 2.3.3: remove motion, don't freeze it.
    */
@@ -1537,6 +1556,11 @@ body[data-reduce-animations="true"] .animate-skeleton-shimmer::after {
 body[data-reduce-animations="true"] .content-fade-in {
   animation: none;
   opacity: 1;
+}
+
+body[data-reduce-animations="true"] .palette-results-stale {
+  opacity: 1 !important;
+  transition: none !important;
 }
 
 body[data-reduce-animations="true"] .animate-fleet-bar-refocus-pulse::before,
@@ -2290,6 +2314,13 @@ body[data-performance-mode="true"] *::after {
 body[data-performance-mode="true"] .animate-pulse-delayed,
 body[data-performance-mode="true"] .animate-pulse-immediate,
 body[data-performance-mode="true"] .animate-hint-fade-in {
+  opacity: 1 !important;
+}
+
+/* The global wildcard above strips the 400ms transition-delay; without an
+ * explicit opacity reset the listbox would stay at 0.5 if it was mid-stale
+ * when performance mode kicked in. */
+body[data-performance-mode="true"] .palette-results-stale {
   opacity: 1 !important;
 }
 

@@ -64,6 +64,7 @@ describe("ActionPalette", () => {
         totalResults={2}
         selectedIndex={0}
         isShowingRecentlyUsed
+        isStale={false}
         close={noop}
         setQuery={noop}
         setSelectedIndex={noop}
@@ -86,6 +87,7 @@ describe("ActionPalette", () => {
         totalResults={1}
         selectedIndex={0}
         isShowingRecentlyUsed={false}
+        isStale={false}
         close={noop}
         setQuery={noop}
         setSelectedIndex={noop}
@@ -108,6 +110,7 @@ describe("ActionPalette", () => {
         totalResults={0}
         selectedIndex={0}
         isShowingRecentlyUsed={false}
+        isStale={false}
         close={noop}
         setQuery={noop}
         setSelectedIndex={noop}
@@ -135,6 +138,7 @@ describe("ActionPalette", () => {
         totalResults={0}
         selectedIndex={0}
         isShowingRecentlyUsed={false}
+        isStale={false}
         close={noop}
         setQuery={noop}
         setSelectedIndex={noop}
@@ -149,5 +153,28 @@ describe("ActionPalette", () => {
     expect(
       screen.getByText("Actions depend on the focused panel and current context.")
     ).toBeTruthy();
+  });
+
+  it("forwards isStale to SearchablePalette as isFiltering", () => {
+    render(
+      <ActionPalette
+        isOpen
+        query="al"
+        results={[makeItem("a.action", "Alpha")]}
+        totalResults={1}
+        selectedIndex={0}
+        isShowingRecentlyUsed={false}
+        isStale
+        close={noop}
+        setQuery={noop}
+        setSelectedIndex={noop}
+        selectPrevious={noop}
+        selectNext={noop}
+        executeAction={noop}
+        confirmSelection={noop}
+      />
+    );
+
+    expect(lastSearchablePaletteProps.current?.isFiltering).toBe(true);
   });
 });

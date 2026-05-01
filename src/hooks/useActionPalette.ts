@@ -33,6 +33,7 @@ export interface UseActionPaletteReturn {
   totalResults: number;
   selectedIndex: number;
   isShowingRecentlyUsed: boolean;
+  isStale: boolean;
   open: () => void;
   close: () => void;
   toggle: () => void;
@@ -124,6 +125,7 @@ export function useActionPalette(): UseActionPaletteReturn {
     results,
     totalResults,
     selectedIndex,
+    isStale,
     open,
     close,
     toggle,
@@ -190,6 +192,7 @@ export function useActionPalette(): UseActionPaletteReturn {
     totalResults,
     selectedIndex,
     isShowingRecentlyUsed,
+    isStale,
     open,
     close,
     toggle,

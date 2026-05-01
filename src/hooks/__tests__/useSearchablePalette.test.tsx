@@ -150,6 +150,48 @@ describe("useSearchablePalette", () => {
     });
   });
 
+  describe("isStale (deferred filter)", () => {
+    it("exposes isStale on the return object", () => {
+      const { result } = renderHook(() =>
+        useSearchablePalette<PaletteItem>({
+          items: [{ id: "a", name: "A" }],
+        })
+      );
+
+      // JSDOM resolves useDeferredValue synchronously inside act(), so the
+      // observable steady-state value is always false. The contract we're
+      // asserting here is structural: the field exists and is a boolean.
+      expect(typeof result.current.isStale).toBe("boolean");
+      expect(result.current.isStale).toBe(false);
+    });
+
+    it("filters by the deferred query (results stay consistent post-set)", () => {
+      const items: PaletteItem[] = [
+        { id: "alpha", name: "Alpha" },
+        { id: "beta", name: "Beta" },
+      ];
+
+      const { result } = renderHook(() =>
+        useSearchablePalette<PaletteItem>({
+          items,
+          filterFn: (allItems, query) => {
+            if (!query) return allItems;
+            return allItems.filter((item) => item.name.toLowerCase().includes(query.toLowerCase()));
+          },
+        })
+      );
+
+      act(() => {
+        result.current.setQuery("alp");
+      });
+
+      // After the act() flush, the deferred render has caught up to the urgent
+      // state — results reflect the typed query and isStale settles to false.
+      expect(result.current.results.map((i) => i.id)).toEqual(["alpha"]);
+      expect(result.current.isStale).toBe(false);
+    });
+  });
+
   describe("mutual exclusion via paletteId", () => {
     const items: PaletteItem[] = [{ id: "a", name: "A" }];
 

@@ -596,6 +596,7 @@ function App() {
               totalResults={worktreePalette.totalResults}
               activeWorktreeId={worktreePalette.activeWorktreeId}
               selectedIndex={worktreePalette.selectedIndex}
+              isStale={worktreePalette.isStale}
               onQueryChange={worktreePalette.setQuery}
               onSelectPrevious={worktreePalette.selectPrevious}
               onSelectNext={worktreePalette.selectNext}
