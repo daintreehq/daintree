@@ -360,6 +360,22 @@ describe("fleetArmingStore", () => {
       expect(s.armOrder).toEqual(["a2", "a1"]);
     });
 
+    it("preserves existing armOrder and appends new matches in panel order", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
+        makeAgentTerminal("a2", { worktreeId: "wt-2" }),
+        makeAgentTerminal("a3", { worktreeId: "wt-1" }),
+      ]);
+      useFleetArmingStore.getState().armIds(["a2"]);
+      // a2 already armed. a1 and a3 match the filter — both are new.
+      // a1 appears before a3 in panel order, so a2,a1,a3 is the expected result.
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
+      const s = useFleetArmingStore.getState();
+      expect(s.armOrder).toEqual(["a2", "a1", "a3"]);
+      expect(s.armOrderById).toEqual({ a2: 1, a1: 2, a3: 3 });
+      expect(s.lastArmedId).toBe("a3");
+    });
+
     it("no-op when all filter matches are already armed (additive path)", () => {
       seedPanels([
         makeAgentTerminal("a1", { worktreeId: "wt-1" }),
