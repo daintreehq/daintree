@@ -52,7 +52,7 @@ function createAppProtocolHandler(distPath: string) {
       if (!response.ok) {
         return new Response("Not Found", {
           status: 404,
-          headers: { "Content-Type": "text/plain" },
+          headers: buildHeaders("text/plain"),
         });
       }
 
@@ -68,7 +68,7 @@ function createAppProtocolHandler(distPath: string) {
       console.error("[MAIN] Error serving file:", filePath, err);
       return new Response("Internal Server Error", {
         status: 500,
-        headers: { "Content-Type": "text/plain" },
+        headers: buildHeaders("text/plain"),
       });
     }
   };

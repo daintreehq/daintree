@@ -35,6 +35,8 @@ describe("appProtocol utilities", () => {
       expect(headers["Content-Type"]).toBe("text/html");
       expect(headers["Cross-Origin-Opener-Policy"]).toBe("same-origin");
       expect(headers["Cross-Origin-Embedder-Policy"]).toBe("credentialless");
+      expect(headers["X-Content-Type-Options"]).toBe("nosniff");
+      expect(headers["Cross-Origin-Resource-Policy"]).toBe("same-origin");
       expect(headers["Permissions-Policy"]).toBe(DAINTREE_APP_PERMISSIONS_POLICY);
       expect(headers["Permissions-Policy"]).toContain("microphone=(self)");
       expect(headers["Permissions-Policy"]).toContain("camera=()");
