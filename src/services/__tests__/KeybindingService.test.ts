@@ -391,6 +391,88 @@ describe("KeybindingService", () => {
     });
   });
 
+  describe("popPendingChord", () => {
+    it("is a no-op when no chord is pending", () => {
+      const service = new KeybindingService();
+      const listener = vi.fn();
+      service.subscribe(listener);
+
+      service.popPendingChord();
+
+      expect(service.getPendingChord()).toBeNull();
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("clears the pending chord and notifies listeners", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const cmdK = createKeyboardEvent({
+        key: "k",
+        code: "KeyK",
+        metaKey: true,
+      });
+      service.resolveKeybinding(cmdK);
+      expect(service.getPendingChord()).not.toBeNull();
+
+      const listener = vi.fn();
+      service.subscribe(listener);
+
+      service.popPendingChord();
+
+      expect(service.getPendingChord()).toBeNull();
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it("is idempotent — repeated calls do not re-notify", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const cmdK = createKeyboardEvent({
+        key: "k",
+        code: "KeyK",
+        metaKey: true,
+      });
+      service.resolveKeybinding(cmdK);
+
+      const listener = vi.fn();
+      service.subscribe(listener);
+
+      service.popPendingChord();
+      service.popPendingChord();
+
+      expect(service.getPendingChord()).toBeNull();
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it("cancels the chord auto-clear timeout", () => {
+      vi.useFakeTimers();
+      try {
+        setPlatform("MacIntel");
+        const service = new KeybindingService();
+        const cmdK = createKeyboardEvent({
+          key: "k",
+          code: "KeyK",
+          metaKey: true,
+        });
+        service.resolveKeybinding(cmdK);
+        expect(service.getPendingChord()).not.toBeNull();
+
+        service.popPendingChord();
+        expect(service.getPendingChord()).toBeNull();
+
+        const listener = vi.fn();
+        service.subscribe(listener);
+
+        // The original 1000ms timeout would have fired here and re-notified
+        // listeners. After pop, no further notification should occur.
+        vi.advanceTimersByTime(2000);
+
+        expect(listener).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("registerBinding collision detection", () => {
     it("warns and keeps incumbent when a different actionId tries to claim an existing combo", () => {
       const service = new KeybindingService();

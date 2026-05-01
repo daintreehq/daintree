@@ -4,8 +4,7 @@ import { cn } from "@/lib/utils";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { usePendingChord } from "@/hooks/useGlobalKeybindings";
 import { keybindingService } from "@/services/KeybindingService";
-
-const SHOW_DELAY_MS = 200;
+import { CHORD_SHOW_DELAY_MS } from "@/lib/animationUtils";
 
 export function ChordIndicator() {
   const pendingChord = usePendingChord();
@@ -34,7 +33,7 @@ export function ChordIndicator() {
       if (!showOverlay) {
         timerRef.current = setTimeout(() => {
           setShowOverlay(true);
-        }, SHOW_DELAY_MS);
+        }, CHORD_SHOW_DELAY_MS);
       }
     } else {
       setShowOverlay(false);
@@ -91,7 +90,7 @@ export function ChordIndicator() {
             {displayChord}
           </kbd>
           <span className="text-daintree-text/40">&mdash;</span>
-          <span className="text-xs text-daintree-text/50">Esc to cancel</span>
+          <span className="text-xs text-daintree-text/50">Backspace or Esc to cancel</span>
         </div>
 
         {completions.length > 0 && (

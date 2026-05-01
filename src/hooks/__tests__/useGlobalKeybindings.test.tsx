@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     resolveKeybinding: vi.fn(),
     getPendingChord: vi.fn(() => null),
     clearPendingChord: vi.fn(),
+    popPendingChord: vi.fn(),
     getEffectiveCombo: vi.fn(() => undefined),
     subscribe: vi.fn(() => () => {}),
   },
@@ -134,5 +135,63 @@ describe("useGlobalKeybindings — Cmd+W escape stack guard", () => {
       undefined,
       expect.objectContaining({ source: "keybinding" })
     );
+  });
+});
+
+describe("useGlobalKeybindings — Backspace pops pending chord", () => {
+  function pressBackspace(eventInit: KeyboardEventInit = {}) {
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Backspace",
+          bubbles: true,
+          cancelable: true,
+          ...eventInit,
+        })
+      );
+    });
+  }
+
+  it("pops the pending chord and consumes the event when Backspace is pressed during a chord", () => {
+    mocks.keybindingService.getPendingChord.mockReturnValue("Cmd+K");
+
+    render(<Host />);
+    pressBackspace();
+
+    expect(mocks.keybindingService.popPendingChord).toHaveBeenCalledTimes(1);
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+  });
+
+  it("does not pop or consume Backspace when no chord is pending", () => {
+    mocks.keybindingService.getPendingChord.mockReturnValue(null);
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+
+    render(<Host />);
+    pressBackspace();
+
+    expect(mocks.keybindingService.popPendingChord).not.toHaveBeenCalled();
+  });
+
+  it("does not pop the chord while an IME composition is in flight", () => {
+    mocks.keybindingService.getPendingChord.mockReturnValue("Cmd+K");
+
+    render(<Host />);
+    // jsdom doesn't honor isComposing in the constructor init dict, so dispatch
+    // a custom event with the property forced on.
+    const event = new KeyboardEvent("keydown", {
+      key: "Backspace",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(event, "isComposing", { value: true, configurable: true });
+    act(() => {
+      document.body.dispatchEvent(event);
+    });
+
+    expect(mocks.keybindingService.popPendingChord).not.toHaveBeenCalled();
   });
 });

@@ -225,6 +225,10 @@ class KeybindingService {
     }
   }
 
+  popPendingChord(): void {
+    this.clearPendingChord();
+  }
+
   normalizeKeyForBinding(event: KeyboardEvent): string {
     return normalizeKeyForBinding(event);
   }
