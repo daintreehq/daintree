@@ -65,6 +65,7 @@ import { FleetArmingRibbon } from "../FleetArmingRibbon";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
 import { useFleetBroadcastConfirmStore } from "@/store/fleetBroadcastConfirmStore";
+import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -674,6 +675,99 @@ describe("FleetArmingRibbon", () => {
       fireEvent.click(findMenuItem(/All working — this worktree/));
       const armed = useFleetArmingStore.getState().armedIds;
       expect([...armed].sort()).toEqual(["t1", "t2"]);
+    });
+  });
+
+  describe("broadcast progress counter", () => {
+    beforeEach(() => {
+      useFleetBroadcastProgressStore.setState({
+        completed: 0,
+        total: 0,
+        failed: 0,
+        isActive: false,
+      });
+    });
+
+    it("does not render when isActive is false", () => {
+      useFleetBroadcastProgressStore.setState({ total: 15, isActive: false });
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+      render(<FleetArmingRibbon />);
+      expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
+    });
+
+    it("does not render when total is below the visibility threshold", () => {
+      useFleetBroadcastProgressStore.setState({ total: 5, isActive: true });
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+      render(<FleetArmingRibbon />);
+      expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
+    });
+
+    it("renders when isActive and total >= 10", () => {
+      useFleetBroadcastProgressStore.setState({
+        completed: 5,
+        total: 15,
+        isActive: true,
+      });
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+      render(<FleetArmingRibbon />);
+      const el = screen.getByTestId("fleet-broadcast-progress");
+      expect(el.textContent).toContain("5/15");
+    });
+
+    it("shows failure count when failed > 0", () => {
+      useFleetBroadcastProgressStore.setState({
+        completed: 8,
+        total: 12,
+        failed: 2,
+        isActive: true,
+      });
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+      render(<FleetArmingRibbon />);
+      const el = screen.getByTestId("fleet-broadcast-progress");
+      expect(el.textContent).toContain("8/12");
+      expect(el.textContent).toContain("2 failed");
+    });
+
+    it("does not show failure count when failed is 0", () => {
+      useFleetBroadcastProgressStore.setState({
+        completed: 8,
+        total: 12,
+        failed: 0,
+        isActive: true,
+      });
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+      render(<FleetArmingRibbon />);
+      const el = screen.getByTestId("fleet-broadcast-progress");
+      expect(el.textContent).toContain("8/12");
+      expect(el.textContent).not.toContain("failed");
+    });
+
+    it("renders at exact threshold boundary (total = 10)", () => {
+      useFleetBroadcastProgressStore.setState({
+        completed: 3,
+        total: 10,
+        isActive: true,
+      });
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+      render(<FleetArmingRibbon />);
+      expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
+    });
+
+    it("disappears when isActive becomes false mid-broadcast", () => {
+      useFleetBroadcastProgressStore.setState({
+        completed: 10,
+        total: 12,
+        isActive: true,
+      });
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+      const { rerender } = render(<FleetArmingRibbon />);
+      expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
+
+      act(() => {
+        useFleetBroadcastProgressStore.setState({ isActive: false });
+      });
+      rerender(<FleetArmingRibbon />);
+      expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
     });
   });
 });

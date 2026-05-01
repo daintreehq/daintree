@@ -5,6 +5,7 @@ import { FLEET_LARGE_PASTE_BATCH_SIZE } from "../fleetBroadcast";
 import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import type { TerminalInstance } from "@shared/types";
 
 const submitMock = vi.fn<(id: string, text: string) => Promise<void>>();
@@ -231,5 +232,72 @@ describe("executeFleetBroadcast", () => {
     // batching should still engage because the gate reads resolved bytes.
     await executeFleetBroadcast("small", ids, { t3: "x".repeat(150_000) });
     expect(maxInFlight).toBeLessThanOrEqual(FLEET_LARGE_PASTE_BATCH_SIZE);
+  });
+
+  describe("progress instrumentation", () => {
+    beforeEach(() => {
+      useFleetBroadcastProgressStore.setState({
+        completed: 0,
+        total: 0,
+        failed: 0,
+        isActive: false,
+      });
+      reset();
+    });
+
+    it("sets total to target count and calls finish (isActive becomes false)", async () => {
+      seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c")]);
+      await executeFleetBroadcast("hello", ["a", "b", "c"]);
+      const s = useFleetBroadcastProgressStore.getState();
+      expect(s.total).toBe(3);
+      expect(s.completed).toBe(3);
+      expect(s.isActive).toBe(false);
+    });
+
+    it("accumulates completed across batches and lands at total", async () => {
+      const ids = Array.from({ length: 12 }, (_, i) => `t${i}`);
+      seedPanels(ids.map((id) => makeAgent(id)));
+      await executeFleetBroadcast("x".repeat(120_000), ids);
+      const s = useFleetBroadcastProgressStore.getState();
+      expect(s.total).toBe(12);
+      expect(s.completed).toBe(12);
+      expect(s.failed).toBe(0);
+      expect(s.isActive).toBe(false);
+    });
+
+    it("tracks per-batch failures through advance calls", async () => {
+      // Advance tracks failures correctly when checked via the real store.
+      // Verified by directly calling advance with batch failures.
+      useFleetBroadcastProgressStore.getState().init(12);
+      useFleetBroadcastProgressStore.getState().advance(5, 1); // batch 1: t3 failed
+      useFleetBroadcastProgressStore.getState().advance(5, 1); // batch 2: t8 failed
+      useFleetBroadcastProgressStore.getState().advance(2, 0); // batch 3: clean
+      const s = useFleetBroadcastProgressStore.getState();
+      expect(s.failed).toBe(2);
+      expect(s.completed).toBe(12);
+    });
+
+    it("calls finish even when all submissions reject (isActive becomes false)", async () => {
+      submitMock.mockReset();
+      submitMock.mockRejectedValue(new Error("boom"));
+      seedPanels([makeAgent("a"), makeAgent("b")]);
+      await executeFleetBroadcast("hello", ["a", "b"]);
+      expect(useFleetBroadcastProgressStore.getState().isActive).toBe(false);
+    });
+
+    it("calls finish even with empty targets (isActive becomes false)", async () => {
+      await executeFleetBroadcast("hello", []);
+      expect(useFleetBroadcastProgressStore.getState().isActive).toBe(false);
+    });
+
+    it("existing post-hoc result shape is unchanged by progress tracking", async () => {
+      seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c")]);
+      const result = await executeFleetBroadcast("hello", ["a", "b", "c"]);
+      expect(result.total).toBe(3);
+      expect(result.successCount).toBe(3);
+      expect(result.failureCount).toBe(0);
+      expect(result.failedIds).toEqual([]);
+      expect(result.perTarget.length).toBe(3);
+    });
   });
 });

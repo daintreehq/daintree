@@ -1,5 +1,6 @@
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { terminalClient } from "@/clients";
 import { isTerminalFleetEligible } from "@/store/fleetEligibility";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
@@ -170,40 +171,52 @@ export async function executeFleetBroadcast(
   const resolved = resolveSubmissions(draft, targetIds, perTargetOverrides);
   const results: PromiseSettledResult<void>[] = [];
 
-  if (shouldBatchAcrossTargets(resolved)) {
-    for (let i = 0; i < resolved.length; i += FLEET_LARGE_PASTE_BATCH_SIZE) {
-      const batch = resolved.slice(i, i + FLEET_LARGE_PASTE_BATCH_SIZE);
-      const batchResults = await Promise.allSettled(
-        batch.map((r) => terminalClient.submit(r.terminalId, r.payload))
-      );
-      for (const r of batchResults) results.push(r);
-      if (i + FLEET_LARGE_PASTE_BATCH_SIZE < resolved.length) {
-        await yieldToEventLoop();
+  useFleetBroadcastProgressStore.getState().init(resolved.length);
+
+  try {
+    if (shouldBatchAcrossTargets(resolved)) {
+      for (let i = 0; i < resolved.length; i += FLEET_LARGE_PASTE_BATCH_SIZE) {
+        const batch = resolved.slice(i, i + FLEET_LARGE_PASTE_BATCH_SIZE);
+        const batchResults = await Promise.allSettled(
+          batch.map((r) => terminalClient.submit(r.terminalId, r.payload))
+        );
+        for (const r of batchResults) results.push(r);
+
+        const batchFailures = batchResults.filter((r) => r.status === "rejected").length;
+        useFleetBroadcastProgressStore.getState().advance(batch.length, batchFailures);
+
+        if (i + FLEET_LARGE_PASTE_BATCH_SIZE < resolved.length) {
+          await yieldToEventLoop();
+        }
       }
+    } else {
+      const all = await Promise.allSettled(
+        resolved.map((r) => terminalClient.submit(r.terminalId, r.payload))
+      );
+      for (const r of all) results.push(r);
+      const nonBatchedFailures = all.filter((r) => r.status === "rejected").length;
+      useFleetBroadcastProgressStore.getState().advance(resolved.length, nonBatchedFailures);
     }
-  } else {
-    const all = await Promise.allSettled(
-      resolved.map((r) => terminalClient.submit(r.terminalId, r.payload))
-    );
-    for (const r of all) results.push(r);
+
+    const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => ({
+      terminalId: resolved[i]!.terminalId,
+      status: r.status,
+      reason: r.status === "rejected" ? String(r.reason) : undefined,
+    }));
+
+    const successCount = results.filter((r) => r.status === "fulfilled").length;
+    const failedIds = perTarget.filter((t) => t.status === "rejected").map((t) => t.terminalId);
+
+    return {
+      total: results.length,
+      successCount,
+      failureCount: results.length - successCount,
+      perTarget,
+      failedIds,
+    };
+  } finally {
+    useFleetBroadcastProgressStore.getState().finish();
   }
-
-  const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => ({
-    terminalId: resolved[i]!.terminalId,
-    status: r.status,
-    reason: r.status === "rejected" ? String(r.reason) : undefined,
-  }));
-
-  const successCount = results.filter((r) => r.status === "fulfilled").length;
-  const failedIds = perTarget.filter((t) => t.status === "rejected").map((t) => t.terminalId);
-
-  return {
-    total: results.length,
-    successCount,
-    failureCount: results.length - successCount,
-    perTarget,
-    failedIds,
-  };
 }
 
 /**
