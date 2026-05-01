@@ -299,7 +299,12 @@ vi.mock("lucide-react", () => ({
 
 import { AgentTrayButton } from "../AgentTrayButton";
 
-function settingsWith(overrides: Record<string, { pinned?: boolean }>): AgentSettings {
+function settingsWith(
+  overrides: Record<
+    string,
+    { pinned?: boolean; presetId?: string; worktreePresets?: Record<string, string> }
+  >
+): AgentSettings {
   return { agents: overrides } as unknown as AgentSettings;
 }
 
