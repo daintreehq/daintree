@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { CheckCircle2, XCircle, Info, AlertTriangle, MoreHorizontal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
@@ -47,6 +48,37 @@ export function NotificationCenterEntry({
   const config = TYPE_CONFIG[displayType ?? entry.type];
   const Icon = config.icon;
 
+  const showChip = typeof threadCount === "number" && threadCount > 1;
+  const chipRef = useRef<HTMLSpanElement | null>(null);
+  const lastCountRef = useRef(threadCount ?? 0);
+  const bumpClearRef = useRef<number | null>(null);
+  useEffect(() => {
+    const next = threadCount ?? 0;
+    if (next === lastCountRef.current) return;
+    const isIncrease = next > lastCountRef.current;
+    lastCountRef.current = next;
+    if (bumpClearRef.current !== null) {
+      window.clearTimeout(bumpClearRef.current);
+      bumpClearRef.current = null;
+    }
+    if (!isIncrease) return;
+    const node = chipRef.current;
+    if (!node) return;
+    node.classList.remove("animate-badge-bump");
+    void node.offsetWidth;
+    node.classList.add("animate-badge-bump");
+    bumpClearRef.current = window.setTimeout(() => {
+      node.classList.remove("animate-badge-bump");
+      bumpClearRef.current = null;
+    }, 240);
+    return () => {
+      if (bumpClearRef.current !== null) {
+        window.clearTimeout(bumpClearRef.current);
+        bumpClearRef.current = null;
+      }
+    };
+  }, [threadCount]);
+
   return (
     <div className="group flex items-start gap-2.5 px-3 py-2 hover:bg-overlay-medium transition-colors">
       <div className={cn("mt-0.5 shrink-0", config.className)}>
@@ -54,13 +86,30 @@ export function NotificationCenterEntry({
       </div>
       <div className="flex-1 min-w-0">
         {entry.title && (
-          <p className="text-xs font-medium text-daintree-text truncate">{entry.title}</p>
+          <div className="flex items-center gap-1.5">
+            <p className="text-xs font-medium text-daintree-text truncate">{entry.title}</p>
+            {showChip && (
+              <span
+                ref={chipRef}
+                aria-label={`${threadCount} events`}
+                style={{ animationDuration: "150ms" }}
+                className="shrink-0 rounded-full bg-tint/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums"
+              >
+                {threadCount}
+              </span>
+            )}
+          </div>
         )}
         <p className="text-xs text-daintree-text/70 leading-snug break-words">{entry.message}</p>
-        {threadCount && threadCount > 1 && (
-          <p className="text-[10px] tabular-nums text-daintree-text/40 mt-0.5">
-            {threadCount} events
-          </p>
+        {showChip && !entry.title && (
+          <span
+            ref={chipRef}
+            aria-label={`${threadCount} events`}
+            style={{ animationDuration: "150ms" }}
+            className="mt-0.5 inline-block rounded-full bg-tint/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums"
+          >
+            {threadCount}
+          </span>
         )}
         {entry.actions && entry.actions.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-1.5">
