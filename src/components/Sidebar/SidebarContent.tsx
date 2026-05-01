@@ -299,6 +299,9 @@ interface SidebarContentProps {
 
 function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const overviewShortcut = useKeybindingDisplay("worktree.overview");
+  const armFocusedShortcut = useKeybindingDisplay("fleet.armFocused");
+  const refreshShortcut = useKeybindingDisplay("worktree.refresh");
+  const createWorktreeShortcut = useKeybindingDisplay("worktree.createDialog.open");
   const { worktrees, isLoading, isReconnecting, error, refresh } = useWorktrees();
   const deferredWorktrees = useDeferredValue(worktrees);
   const [isRefreshing, startRefreshTransition] = useTransition();
@@ -947,7 +950,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   <Zap className="w-3.5 h-3.5" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Select terminals to arm</TooltipContent>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Select terminals to arm", armFocusedShortcut)}
+              </TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -960,7 +965,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Refresh sidebar</TooltipContent>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Refresh sidebar", refreshShortcut)}
+              </TooltipContent>
             </Tooltip>
           </div>
           <Tooltip>
@@ -977,7 +984,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 <Plus className="w-3.5 h-3.5" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Create new worktree</TooltipContent>
+            <TooltipContent side="bottom">
+              {createTooltipWithShortcut("Create new worktree", createWorktreeShortcut)}
+            </TooltipContent>
           </Tooltip>
         </div>
       </div>
