@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { cloneElement, type ReactElement } from "react";
 import { cn } from "@/lib/utils";
 import { resolveBrandChip } from "@/lib/brandIcon";
 import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
@@ -7,7 +7,7 @@ interface BrandMarkProps {
   brandColor?: string;
   size?: number;
   className?: string;
-  children: ReactElement;
+  children: ReactElement<{ className?: string }>;
 }
 
 const SIZE_CLASS_REGEX = /\b(?:size-|w-|h-)/;
@@ -23,7 +23,12 @@ export function BrandMark({ brandColor, size, className, children }: BrandMarkPr
   const chip = resolveBrandChip(brandColor, scheme);
 
   if (!chip) {
-    return children;
+    if (!className) {
+      return children;
+    }
+    return cloneElement(children, {
+      className: cn(children.props.className, className),
+    });
   }
 
   const inferSize = size === undefined && !(className && SIZE_CLASS_REGEX.test(className));
