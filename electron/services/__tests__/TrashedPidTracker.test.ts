@@ -137,6 +137,26 @@ describe("TrashedPidTracker", () => {
       tracker.removeTrashed("term-unknown");
       expect(readFile()).toHaveLength(1);
     });
+
+    it("cancels an in-flight persistTrashed for the same terminal (trash→restore race)", async () => {
+      let resolveProbe: ((value: { stdout: string; stderr: string }) => void) | null = null;
+      mockExecFileAsync.mockImplementation((() => {
+        return new Promise<{ stdout: string; stderr: string }>((resolve) => {
+          resolveProbe = resolve;
+        });
+      }) as never);
+
+      const persistPromise = tracker.persistTrashed("term-1", 100);
+      // Yield so persistTrashed enters its await on getProcessStartTime.
+      await Promise.resolve();
+      tracker.removeTrashed("term-1");
+
+      expect(resolveProbe).not.toBeNull();
+      resolveProbe!({ stdout: MOCK_START_TIME, stderr: "" });
+      await persistPromise;
+
+      expect(readFile()).toHaveLength(0);
+    });
   });
 
   describe("clearAll", () => {
@@ -338,6 +358,49 @@ describe("TrashedPidTracker", () => {
         expect(killSpy).toHaveBeenCalledTimes(1);
         expect(killSpy).toHaveBeenCalledWith(-1002, "SIGKILL");
       }
+    });
+
+    it("preserves persistTrashed entries that arrive during cleanup (startup race)", async () => {
+      writeFile([
+        {
+          terminalId: "old-orphan",
+          pid: 9999,
+          startTime: MOCK_START_TIME_PARSED,
+          trashedAt: Date.now(),
+        },
+      ]);
+
+      const probeResolvers: Array<(value: { stdout: string; stderr: string }) => void> = [];
+      mockExecFileAsync.mockImplementation((() => {
+        return new Promise<{ stdout: string; stderr: string }>((resolve) => {
+          probeResolvers.push(resolve);
+        });
+      }) as never);
+
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+
+      const cleanupPromise = tracker.cleanupOrphans();
+      // Yield so cleanupOrphans reads the initial entry and enters its
+      // verifyProcessStartTime await.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(probeResolvers).toHaveLength(1);
+
+      // A user trashes a new terminal during the cleanup window.
+      const persistPromise = tracker.persistTrashed("new-trashed", 5555);
+
+      // Resolve cleanup's probe; cleanupOrphans proceeds to delete the file.
+      probeResolvers[0]!({ stdout: MOCK_START_TIME, stderr: "" });
+      // Resolve the new persist's probe so it writes its entry.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(probeResolvers).toHaveLength(2);
+      probeResolvers[1]!({ stdout: MOCK_START_TIME, stderr: "" });
+
+      await Promise.all([cleanupPromise, persistPromise]);
+
+      const entries = readFile() as Array<{ terminalId: string }>;
+      expect(entries.map((e) => e.terminalId).sort()).toEqual(["new-trashed"]);
     });
   });
 });

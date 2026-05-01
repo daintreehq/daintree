@@ -82,6 +82,16 @@ const FOREGROUND_SNAPSHOT_SOFT_STALE_MS = 500;
 const FOREGROUND_SNAPSHOT_MAX_AGE_MS = 1500;
 const FOREGROUND_SNAPSHOT_PROBE_TIMEOUT_MS = 750;
 
+// Sentinel returned on POSIX before the first probe resolves. Returning null
+// during the warm-up window would drop into the IdentityWatcher's
+// "Windows / unsupported" fallback branch and falsely mark the shell idle for
+// demotion. Any value where shellPgid !== foregroundPgid (and both > 0) keeps
+// the demotion gate closed; the real probe overwrites this within a few ms.
+const INITIAL_FOREGROUND_SENTINEL = Object.freeze({
+  shellPgid: 1,
+  foregroundPgid: 2,
+});
+
 const IDENTITY_DEBUG_ENABLED =
   process.env.NODE_ENV === "development" || Boolean(process.env.DAINTREE_DEBUG);
 
@@ -1305,17 +1315,19 @@ export class TerminalProcess {
       return null;
     }
 
-    const now = Date.now();
-    const age =
-      this._foregroundSnapshotUpdatedAt === 0
-        ? Number.POSITIVE_INFINITY
-        : now - this._foregroundSnapshotUpdatedAt;
+    const hasEverProbed = this._foregroundSnapshotUpdatedAt > 0;
+    const age = hasEverProbed ? Date.now() - this._foregroundSnapshotUpdatedAt : 0;
 
     if (
       !this._foregroundSnapshotRefreshing &&
-      (this._foregroundSnapshotUpdatedAt === 0 || age > FOREGROUND_SNAPSHOT_SOFT_STALE_MS)
+      (!hasEverProbed || age > FOREGROUND_SNAPSHOT_SOFT_STALE_MS)
     ) {
       void this._refreshForegroundProcessGroupSnapshot(ptyPid);
+    }
+
+    // Probe pending: keep the demotion gate closed (see sentinel comment).
+    if (!hasEverProbed) {
+      return INITIAL_FOREGROUND_SENTINEL;
     }
 
     if (age > FOREGROUND_SNAPSHOT_MAX_AGE_MS) {

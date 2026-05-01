@@ -62,6 +62,10 @@ async function verifyProcessStartTime(pid: number, expectedStartTime: string): P
 
 export class TrashedPidTracker {
   private filePath: string;
+  // Cancellation tokens for in-flight persistTrashed calls. Set by
+  // removeTrashed so a restore that races a trash drops the pending file
+  // write rather than ghosting a restored terminal into the orphan list.
+  private cancelledPersists = new Set<string>();
 
   constructor(userDataPath?: string) {
     const userData = userDataPath ?? app.getPath("userData");
@@ -71,23 +75,41 @@ export class TrashedPidTracker {
   async persistTrashed(terminalId: string, pid: number | undefined): Promise<void> {
     if (pid === undefined || !Number.isFinite(pid) || pid <= 0) return;
 
-    const startTime = await getProcessStartTime(pid);
-    if (!startTime) return;
+    // Clear any stale cancellation marker before we start awaiting.
+    this.cancelledPersists.delete(terminalId);
 
-    const entries = this.readEntries();
-    const existing = entries.findIndex((e) => e.terminalId === terminalId);
-    const entry: TrashedPidEntry = { terminalId, pid, startTime, trashedAt: Date.now() };
+    try {
+      const startTime = await getProcessStartTime(pid);
 
-    if (existing >= 0) {
-      entries[existing] = entry;
-    } else {
-      entries.push(entry);
+      // If removeTrashed ran while we awaited, it tagged this id for
+      // cancellation. Drop the write so the restored terminal doesn't get
+      // killed on next startup.
+      if (this.cancelledPersists.has(terminalId)) return;
+
+      if (!startTime) return;
+
+      const entries = this.readEntries();
+      const existing = entries.findIndex((e) => e.terminalId === terminalId);
+      const entry: TrashedPidEntry = { terminalId, pid, startTime, trashedAt: Date.now() };
+
+      if (existing >= 0) {
+        entries[existing] = entry;
+      } else {
+        entries.push(entry);
+      }
+
+      this.writeEntries(entries);
+    } finally {
+      this.cancelledPersists.delete(terminalId);
     }
-
-    this.writeEntries(entries);
   }
 
   removeTrashed(terminalId: string): void {
+    // Tag any concurrent in-flight persistTrashed for cancellation. The token
+    // is consumed by persistTrashed's settle path; if no persist is in flight
+    // it is cleared by the next persistTrashed for this id.
+    this.cancelledPersists.add(terminalId);
+
     const entries = this.readEntries();
     const filtered = entries.filter((e) => e.terminalId !== terminalId);
     if (filtered.length === entries.length) return;
@@ -106,16 +128,23 @@ export class TrashedPidTracker {
   async cleanupOrphans(): Promise<void> {
     if (!this.fileExists()) return;
 
-    const entries = this.readEntries();
-    if (entries.length === 0) {
+    const initialEntries = this.readEntries();
+    if (initialEntries.length === 0) {
       this.deleteFile();
       return;
     }
 
-    console.log(`[TrashedPidTracker] Found ${entries.length} trashed PID(s) from previous session`);
+    // Snapshot the ids we are responsible for cleaning up. Any persistTrashed
+    // call that lands during the await window writes a new entry; we must not
+    // clobber it when we tear down the file at the end.
+    const processedIds = new Set(initialEntries.map((e) => e.terminalId));
+
+    console.log(
+      `[TrashedPidTracker] Found ${initialEntries.length} trashed PID(s) from previous session`
+    );
 
     await Promise.all(
-      entries.map(async (entry) => {
+      initialEntries.map(async (entry) => {
         if (!Number.isFinite(entry.pid) || entry.pid <= 0) return;
         if (entry.pid === process.pid) return;
 
@@ -167,7 +196,16 @@ export class TrashedPidTracker {
       })
     );
 
-    this.deleteFile();
+    // Re-read so any persistTrashed that landed during our await window is
+    // preserved. Strip the ids we processed; if nothing else remains, delete
+    // the file (preserves the original behavior of removing the artifact).
+    const finalEntries = this.readEntries();
+    const remaining = finalEntries.filter((e) => !processedIds.has(e.terminalId));
+    if (remaining.length === 0) {
+      this.deleteFile();
+    } else {
+      this.writeEntries(remaining);
+    }
   }
 
   private fileExists(): boolean {
