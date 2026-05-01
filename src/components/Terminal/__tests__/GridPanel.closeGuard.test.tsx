@@ -59,11 +59,8 @@ vi.mock("@/utils/terminalChrome", () => ({
 
 // Render a stub panel kind that exposes the resolved onClose so the test can
 // drive the same code path the real PanelHeader X button uses.
-let capturedOnClose: ((force?: boolean) => void) | null = null;
-
 vi.mock("@/utils/panelProps", () => ({
   buildPanelProps: ({ overrides }: { overrides: { onClose: (force?: boolean) => void } }) => {
-    capturedOnClose = overrides.onClose;
     return overrides;
   },
 }));
@@ -139,7 +136,6 @@ describe("GridPanel header-close guard (#6330)", () => {
   beforeEach(() => {
     trashPanelGroupMock.mockClear();
     removePanelMock.mockClear();
-    capturedOnClose = null;
   });
 
   it("closes immediately when single-tab group has an idle terminal", () => {
