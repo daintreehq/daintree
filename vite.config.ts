@@ -252,6 +252,10 @@ export default defineConfig(({ command, mode }) => {
       emptyOutDir: true,
       sourcemap: false,
       rolldownOptions: {
+        onLog(level, log, defaultHandler) {
+          if (log.code === "INEFFECTIVE_DYNAMIC_IMPORT" || log.code === "PLUGIN_TIMINGS") return;
+          defaultHandler(level, log);
+        },
         ...(mode === "production" && {
           treeshake: {
             manualPureFunctions: ["console.log", "console.info", "console.warn", "console.debug"],

@@ -16,6 +16,7 @@ export default defineConfig({
     environment: "node",
     globalSetup: "./vitest.global-setup.ts",
     setupFiles: ["./vitest.setup.ts"],
+    onConsoleLog: () => false,
     minWorkers: 3,
     maxConcurrency: 10,
     include: [
