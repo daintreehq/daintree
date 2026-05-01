@@ -24,14 +24,37 @@ describe("Avatar", () => {
     expect(skeleton).toBeTruthy();
   });
 
-  it("probes complete/naturalWidth on mount to detect cached images", () => {
-    const { container } = render(<Avatar src="cached.jpg" alt="Cached" />);
-    const img = container.querySelector("img");
+  it("shows skeleton when complete is true but naturalWidth is 0", () => {
+    const origComplete = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "complete");
+    const origNaturalWidth = Object.getOwnPropertyDescriptor(
+      HTMLImageElement.prototype,
+      "naturalWidth"
+    );
 
-    expect(img).toBeTruthy();
-    // For uncached images (jsdom default), skeleton is shown and opacity is 0
-    expect(img!.style.opacity).toBe("0");
-    expect(container.querySelector(".animate-pulse")).toBeTruthy();
+    Object.defineProperty(HTMLImageElement.prototype, "complete", {
+      value: true,
+      configurable: true,
+    });
+    Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", {
+      value: 0,
+      configurable: true,
+    });
+
+    try {
+      const { container } = render(<Avatar src="broken-cached.jpg" alt="Broken" />);
+      const img = container.querySelector("img");
+      expect(img).toBeTruthy();
+      // naturalWidth=0 means a broken cached image — skeleton should remain
+      expect(img!.style.opacity).toBe("0");
+      expect(container.querySelector(".animate-pulse")).toBeTruthy();
+    } finally {
+      if (origComplete) {
+        Object.defineProperty(HTMLImageElement.prototype, "complete", origComplete);
+      }
+      if (origNaturalWidth) {
+        Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", origNaturalWidth);
+      }
+    }
   });
 
   it("sets loaded=true when cached image is detected at mount", () => {
@@ -106,13 +129,37 @@ describe("Avatar", () => {
     // Content should still render through the mocked tooltip
   });
 
-  it("does not probe when error state removes the img element", () => {
-    const { container } = render(<Avatar src="broken.jpg" alt="Broken" />);
-    const img = container.querySelector("img")!;
-    act(() => {
-      fireEvent.error(img);
+  it("loads immediately when src changes between two cached images", () => {
+    const origComplete = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "complete");
+    const origNaturalWidth = Object.getOwnPropertyDescriptor(
+      HTMLImageElement.prototype,
+      "naturalWidth"
+    );
+
+    Object.defineProperty(HTMLImageElement.prototype, "complete", {
+      value: true,
+      configurable: true,
     });
-    expect(container.querySelector("img")).toBeFalsy();
-    expect(container.querySelector(".ring-2")).toBeTruthy();
+    Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", {
+      value: 48,
+      configurable: true,
+    });
+
+    try {
+      const { container, rerender } = render(<Avatar src="a.jpg" alt="A" />);
+      expect(container.querySelector("img")!.style.opacity).toBe("1");
+
+      rerender(<Avatar src="b.jpg" alt="B" />);
+      // Src change resets state and effect re-probes the reused img node
+      expect(container.querySelector("img")!.style.opacity).toBe("1");
+      expect(container.querySelector(".animate-pulse")).toBeFalsy();
+    } finally {
+      if (origComplete) {
+        Object.defineProperty(HTMLImageElement.prototype, "complete", origComplete);
+      }
+      if (origNaturalWidth) {
+        Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", origNaturalWidth);
+      }
+    }
   });
 });
