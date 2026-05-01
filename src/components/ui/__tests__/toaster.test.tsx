@@ -652,6 +652,184 @@ describe("Toast accessibility", () => {
   });
 });
 
+describe("Toast count chip overflow & live-region throttling (issue #6427)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useNotificationStore.getState().reset();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("shows the bare ×N glyph for counts at or below 99", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ title: "Build", message: "x", count: 5 });
+      vi.advanceTimersByTime(16);
+    });
+
+    const chip = screen.getByLabelText("5 events");
+    expect(chip.textContent).toBe("×5");
+  });
+
+  it("caps the visible glyph at ×99+ but keeps the exact count in aria-label", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ title: "Build", message: "x", count: 150 });
+      vi.advanceTimersByTime(16);
+    });
+
+    const chip = screen.getByLabelText("150 events");
+    expect(chip.textContent).toBe("×99+");
+  });
+
+  it("caps the visible glyph on the no-title path", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ message: "x", count: 200 });
+      vi.advanceTimersByTime(16);
+    });
+
+    const chip = screen.getByLabelText("200 events");
+    expect(chip.textContent).toBe("×99+");
+  });
+
+  it("reserves a stable minimum width so the chip does not jump at the cap boundary", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ title: "Build", message: "x", count: 5 });
+      vi.advanceTimersByTime(16);
+    });
+
+    const chip = screen.getByLabelText("5 events");
+    expect(chip.className).toMatch(/min-w-\[3\.5ch\]/);
+    expect(chip.className).toMatch(/text-center/);
+  });
+
+  it("sets aria-busy on the live region while count updates are in flight", async () => {
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ title: "Build", message: "x", count: 2 });
+      vi.advanceTimersByTime(16);
+    });
+
+    await act(async () => {
+      useNotificationStore.getState().updateNotification(toastId!, { count: 3 });
+    });
+    expect(screen.getByRole("status").getAttribute("aria-busy")).toBe("true");
+  });
+
+  it("clears aria-busy after the trailing 300ms inactivity window", async () => {
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ title: "Build", message: "x", count: 2 });
+      vi.advanceTimersByTime(16);
+    });
+
+    await act(async () => {
+      useNotificationStore.getState().updateNotification(toastId!, { count: 3 });
+    });
+    expect(screen.getByRole("status").getAttribute("aria-busy")).toBe("true");
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(screen.getByRole("status").getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("extends the aria-busy window when count updates arrive in rapid succession", async () => {
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ title: "Build", message: "x", count: 2 });
+      vi.advanceTimersByTime(16);
+    });
+
+    await act(async () => {
+      useNotificationStore.getState().updateNotification(toastId!, { count: 3 });
+    });
+    expect(screen.getByRole("status").getAttribute("aria-busy")).toBe("true");
+
+    // Almost-but-not-quite past the trailing window — another update lands.
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+      useNotificationStore.getState().updateNotification(toastId!, { count: 4 });
+    });
+    // Original 300ms timer would have fired at this point if not reset.
+    await act(async () => {
+      vi.advanceTimersByTime(150);
+    });
+    expect(screen.getByRole("status").getAttribute("aria-busy")).toBe("true");
+
+    // Past the new trailing window.
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(screen.getByRole("status").getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("does not set aria-busy when the toast first mounts (no churn yet)", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ title: "Build", message: "x", count: 2 });
+      vi.advanceTimersByTime(16);
+    });
+
+    expect(screen.getByRole("status").getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("does not crash if the toast unmounts before the trailing busy timer fires", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ title: "Build", message: "x", count: 2 });
+      vi.advanceTimersByTime(16);
+    });
+
+    await act(async () => {
+      useNotificationStore.getState().updateNotification(toastId!, { count: 3 });
+    });
+    expect(screen.getByRole("status").getAttribute("aria-busy")).toBe("true");
+
+    // Dismiss within the 300ms trailing window; the busy timer must not
+    // fire setState on the unmounted component.
+    const dismissButton = screen.getByLabelText("Dismiss notification");
+    await act(async () => {
+      fireEvent.click(dismissButton);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+
+    const stateUpdateOnUnmounted = consoleError.mock.calls.find(
+      (call) =>
+        typeof call[0] === "string" && call[0].includes("Can't perform a React state update")
+    );
+    expect(stateUpdateOnUnmounted).toBeUndefined();
+    consoleError.mockRestore();
+  });
+
+  it("renders no chip when notification.count is non-finite", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        title: "Build",
+        message: "x",
+        count: Number.POSITIVE_INFINITY as unknown as number,
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    expect(screen.queryByLabelText(/events$/)).toBeNull();
+  });
+});
+
 describe("Toast overflow menu", () => {
   beforeEach(() => {
     vi.useFakeTimers();

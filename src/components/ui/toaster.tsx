@@ -14,12 +14,17 @@ import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import {
   DURATION_150,
+  DURATION_300,
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
   UI_ENTER_EASING,
   UI_EXIT_EASING,
   getUiTransitionDuration,
 } from "@/lib/animationUtils";
+import {
+  formatNotificationCountAriaLabel,
+  formatNotificationCountGlyph,
+} from "@/components/Notifications/notificationCount";
 import { Spinner } from "@/components/ui/Spinner";
 import { useNotificationStore, type Notification } from "@/store/notificationStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -58,6 +63,11 @@ const TYPE_ICON_CONFIG: Record<string, IconConfig> = {
 const MAX_VISIBLE_DURATION_MS = 15000;
 const VISIBLE_DURATION_MULTIPLIER = 3;
 
+// How long the success state dwells visible before the toast auto-dismisses.
+// Long enough for sighted users to notice the swap; short enough not to feel
+// stuck. Mirrors the announcer's polite cadence.
+const ACTION_SUCCESS_DWELL_MS = 500;
+
 function Toast({ notification }: { notification: Notification }) {
   const { dismissNotification, removeNotification } = useNotificationStore(
     useShallow((state) => ({
@@ -75,7 +85,15 @@ function Toast({ notification }: { notification: Notification }) {
   const [activeActionIndex, setActiveActionIndex] = useState<number | null>(null);
   const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const busyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+
+  // While bursts of count-only updates arrive, set aria-busy on the live
+  // region so AT (NVDA/ChromeVox; VoiceOver inconsistent) can suppress
+  // intermediate announcements (#6427). Trailing 300ms inactivity window so
+  // the final value is announced once the burst settles.
+  const [isCountBusy, setIsCountBusy] = useState(false);
+  const prevCountRef = useRef(notification.count ?? 0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -83,8 +101,22 @@ function Toast({ notification }: { notification: Notification }) {
       mountedRef.current = false;
       if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
       if (dwellTimerRef.current) clearTimeout(dwellTimerRef.current);
+      if (busyTimerRef.current) clearTimeout(busyTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    const next = notification.count ?? 0;
+    if (next === prevCountRef.current) return;
+    prevCountRef.current = next;
+    setIsCountBusy(true);
+    if (busyTimerRef.current) clearTimeout(busyTimerRef.current);
+    busyTimerRef.current = setTimeout(() => {
+      if (!mountedRef.current) return;
+      setIsCountBusy(false);
+      busyTimerRef.current = null;
+    }, DURATION_300);
+  }, [notification.count]);
 
   useLayoutEffect(() => {
     prevFocusRef.current = document.activeElement;
@@ -109,7 +141,8 @@ function Toast({ notification }: { notification: Notification }) {
 
   const restoreFocus = useCallback(() => {
     if (toastRef.current?.contains(document.activeElement)) {
-      (prevFocusRef.current as HTMLElement | null)?.focus?.();
+      const prev = prevFocusRef.current;
+      if (prev instanceof HTMLElement) prev.focus();
     }
   }, []);
 
@@ -201,6 +234,7 @@ function Toast({ notification }: { notification: Notification }) {
         }
       }}
       role={notification.type === "error" ? "alert" : "status"}
+      aria-busy={isCountBusy || undefined}
     >
       <div className={cn("shrink-0 mt-0.5", iconClassName)}>
         <Icon className="h-4 w-4" />
@@ -209,22 +243,26 @@ function Toast({ notification }: { notification: Notification }) {
         {notification.title ? (
           <h4 className="font-medium leading-tight tracking-tight text-xs text-daintree-text flex items-center gap-1.5">
             <span className="min-w-0 truncate">{notification.title}</span>
-            {notification.count != null && notification.count > 1 && (
-              <span
-                aria-label={`${notification.count} events`}
-                className="shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums"
-              >
-                ×{notification.count}
-              </span>
-            )}
+            {notification.count != null &&
+              Number.isFinite(notification.count) &&
+              notification.count > 1 && (
+                <span
+                  aria-label={formatNotificationCountAriaLabel(notification.count)}
+                  className="shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center"
+                >
+                  {formatNotificationCountGlyph(notification.count, "×")}
+                </span>
+              )}
           </h4>
-        ) : notification.count != null && notification.count > 1 ? (
+        ) : notification.count != null &&
+          Number.isFinite(notification.count) &&
+          notification.count > 1 ? (
           <div>
             <span
-              aria-label={`${notification.count} events`}
-              className="inline-block rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums"
+              aria-label={formatNotificationCountAriaLabel(notification.count)}
+              className="inline-block rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center"
             >
-              ×{notification.count}
+              {formatNotificationCountGlyph(notification.count, "×")}
             </span>
           </div>
         ) : null}
@@ -305,7 +343,7 @@ function Toast({ notification }: { notification: Notification }) {
               useAnnouncerStore.getState().announce(announcementText, "polite");
               dwellTimerRef.current = setTimeout(() => {
                 if (mountedRef.current) dismissRef.current();
-              }, 500);
+              }, ACTION_SUCCESS_DWELL_MS);
             }
           };
 
