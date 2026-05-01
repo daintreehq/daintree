@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/context-menu";
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
   CircleDot,
   Clock,
   Code,
@@ -92,6 +94,10 @@ export interface WorktreeMenuItemsProps {
     working: number;
   };
   onLaunchAgent?: (agentId: string) => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
   onCopyContextFull: () => void;
   onCopyContextModified: () => void;
   onCopyPath: () => void;
@@ -142,6 +148,10 @@ export function WorktreeMenuItems({
   isPinned,
   counts,
   onLaunchAgent,
+  onMoveUp,
+  onMoveDown,
+  canMoveUp,
+  canMoveDown,
   onCopyContextFull,
   onCopyContextModified,
   onCopyPath,
@@ -186,9 +196,24 @@ export function WorktreeMenuItems({
   const hasIssueOrPrSection = hasIssueSub || hasPRSub;
   const hasRecipes = recipes.length > 0;
   const hasRecipeSection = hasRecipes || (onSaveLayout && counts.active > 0);
+  const hasMoveSection = Boolean(onMoveUp || onMoveDown);
 
   return (
     <>
+      {hasMoveSection && (
+        <>
+          <C.Item onSelect={onMoveUp} disabled={!onMoveUp || !canMoveUp}>
+            <ArrowUp className="w-3.5 h-3.5 mr-2" />
+            Move Up
+          </C.Item>
+          <C.Item onSelect={onMoveDown} disabled={!onMoveDown || !canMoveDown}>
+            <ArrowDown className="w-3.5 h-3.5 mr-2" />
+            Move Down
+          </C.Item>
+          <C.Separator />
+        </>
+      )}
+
       {/* Launch submenu */}
       <C.Sub>
         <C.SubTrigger>

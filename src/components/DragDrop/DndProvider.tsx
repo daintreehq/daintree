@@ -37,12 +37,12 @@ import { useShallow } from "zustand/react/shallow";
 import { TerminalDragPreview } from "./TerminalDragPreview";
 import { WorktreeDragPreview } from "./WorktreeDragPreview";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { arrayMove } from "@dnd-kit/sortable";
 import { parseAccordionDragId } from "./SortableWorktreeTerminal";
 import { isWorktreeSortDragData, parseWorktreeSortDragId } from "./SortableWorktreeCard";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
+import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
 import type { WorktreeSnapshot } from "@shared/types";
 
 // Placeholder ID used when dragging from dock to grid
@@ -115,8 +115,37 @@ export interface WorktreeDragData extends DragData {
   origin: "accordion";
 }
 
-function getDragLabel(data: DragData | WorktreeDragData | undefined): string {
-  return data?.terminal?.title ?? "panel";
+/**
+ * Resolve the human-readable label used by drag announcements for a worktree
+ * snapshot. Falls back through `issueTitle` → `branch` → `name` so the
+ * announcement reflects whatever the user actually sees on the card.
+ */
+function resolveWorktreeLabel(worktreeId: string): string {
+  const wt = getCurrentViewStore().getState().worktrees.get(worktreeId);
+  return wt?.issueTitle ?? wt?.branch ?? wt?.name ?? "worktree";
+}
+
+function getDragLabel(data: unknown): string {
+  if (isWorktreeSortDragData(data as Record<string, unknown> | undefined)) {
+    const worktreeId = (data as { worktreeId?: string }).worktreeId;
+    return worktreeId ? resolveWorktreeLabel(worktreeId) : "worktree";
+  }
+  const dragData = data as DragData | WorktreeDragData | undefined;
+  return dragData?.terminal?.title ?? "panel";
+}
+
+/**
+ * Resolve the announcement label for a droppable. Worktree-sort uses
+ * `worktree-sort-{id}` for the sortable handle and `worktree-drop-{id}` for
+ * the row's drop target — both should announce the same human-readable label.
+ */
+function getOverDragLabel(over: { id: string | number; data: { current: unknown } }): string {
+  const sortDragId = parseWorktreeSortDragId(over.id);
+  if (sortDragId) return resolveWorktreeLabel(sortDragId);
+  if (typeof over.id === "string" && over.id.startsWith("worktree-drop-")) {
+    return resolveWorktreeLabel(over.id.slice("worktree-drop-".length));
+  }
+  return getDragLabel(over.data.current);
 }
 
 const MEASURING_CONFIG: MeasuringConfiguration = {
@@ -128,25 +157,25 @@ const MEASURING_CONFIG: MeasuringConfiguration = {
 
 const dragAnnouncements: Announcements = {
   onDragStart({ active }) {
-    return `Picked up ${getDragLabel(active.data.current as DragData | undefined)}`;
+    return `Picked up ${getDragLabel(active.data.current)}`;
   },
   onDragOver({ active, over }) {
-    const label = getDragLabel(active.data.current as DragData | undefined);
+    const label = getDragLabel(active.data.current);
     if (over) {
-      const overLabel = getDragLabel(over.data.current as DragData | undefined);
+      const overLabel = getOverDragLabel(over);
       return `${label} is over ${overLabel}`;
     }
     return `${label} is no longer over a droppable area`;
   },
   onDragEnd({ active, over }) {
-    const label = getDragLabel(active.data.current as DragData | undefined);
+    const label = getDragLabel(active.data.current);
     if (over) {
       return `Dropped ${label}`;
     }
     return `${label} returned to its original position`;
   },
   onDragCancel({ active }) {
-    const label = getDragLabel(active.data.current as DragData | undefined);
+    const label = getDragLabel(active.data.current);
     return `Drag cancelled. ${label} returned to its original position`;
   },
 };
@@ -454,31 +483,14 @@ export function DndProvider({ children }: DndProviderProps) {
           (overId.startsWith("worktree-drop-") ? overId.slice("worktree-drop-".length) : null);
         if (!activeWorktreeId || !overWorktreeId || activeWorktreeId === overWorktreeId) return;
 
-        const dragOrder = activeRawData.dragStartOrder as string[];
+        const dragOrder = activeRawData.dragStartOrder;
+        if (!Array.isArray(dragOrder)) return;
         const oldIndex = dragOrder.indexOf(activeWorktreeId);
         const newIndex = dragOrder.indexOf(overWorktreeId);
         if (oldIndex === -1 || newIndex === -1) return;
 
-        const reorderedSubset = arrayMove(dragOrder, oldIndex, newIndex);
-
-        // Merge reordered subset back into full persisted order
-        // so that worktrees hidden by filters don't lose position
         const fullOrder = useWorktreeFilterStore.getState().manualOrder;
-        const subsetSet = new Set(reorderedSubset);
-        const merged: string[] = [];
-        let subsetIdx = 0;
-        // Walk through the full order, replacing subset items in their new order
-        for (const id of fullOrder) {
-          if (subsetSet.has(id)) {
-            merged.push(reorderedSubset[subsetIdx++]!);
-          } else {
-            merged.push(id);
-          }
-        }
-        // Append any subset items not in the full order (first drag or new items)
-        while (subsetIdx < reorderedSubset.length) {
-          merged.push(reorderedSubset[subsetIdx++]!);
-        }
+        const merged = applyManualWorktreeReorder(fullOrder, dragOrder, oldIndex, newIndex);
 
         useWorktreeFilterStore.getState().setManualOrder(merged);
         useWorktreeFilterStore.getState().setOrderBy("manual");

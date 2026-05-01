@@ -159,6 +159,10 @@ export interface WorktreeCardProps {
   dragHandleListeners?: SyntheticListenerMap;
   dragHandleActivatorRef?: (node: HTMLElement | null) => void;
   isDraggingSort?: boolean;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
   projectHealth?: import("@shared/types").ProjectHealthData | null;
 }
 
@@ -181,6 +185,10 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   dragHandleListeners,
   dragHandleActivatorRef,
   isDraggingSort,
+  onMoveUp,
+  onMoveDown,
+  canMoveUp,
+  canMoveDown,
   projectHealth,
 }: WorktreeCardProps) {
   "use memo";
@@ -855,6 +863,10 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                     : undefined,
                   isCollapsed: effectiveIsCollapsed,
                   onLaunchAgent,
+                  onMoveUp,
+                  onMoveDown,
+                  canMoveUp,
+                  canMoveDown,
                   onOpenPanelPalette: () => {
                     useWorktreeSelectionStore.getState().setActiveWorktree(worktree.id);
                     void actionService.dispatch("panel.palette", undefined, {
@@ -979,6 +991,10 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             working: workingAgentCount,
           }}
           onLaunchAgent={onLaunchAgent}
+          onMoveUp={onMoveUp}
+          onMoveDown={onMoveDown}
+          canMoveUp={canMoveUp}
+          canMoveDown={canMoveDown}
           onCopyContextFull={handleCopyContextFull}
           onCopyContextModified={handleCopyContextModified}
           onCopyPath={() => void navigator.clipboard.writeText(worktree.path)}

@@ -37,6 +37,7 @@ import {
   SortableWorktreeCard,
   getWorktreeSortDragId,
 } from "@/components/DragDrop/SortableWorktreeCard";
+import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import type { RecipeTerminal } from "@/types";
@@ -87,6 +88,7 @@ interface SidebarWorktreeRowProps {
   dragStartOrder: string[];
   isSortDisabled: boolean;
   isPinned: boolean;
+  rowIndex: number;
 }
 
 const SidebarWorktreeRow = React.memo(function SidebarWorktreeRow({
@@ -102,6 +104,7 @@ const SidebarWorktreeRow = React.memo(function SidebarWorktreeRow({
   dragStartOrder,
   isSortDisabled,
   isPinned,
+  rowIndex,
 }: SidebarWorktreeRowProps) {
   const worktreeSnap = useWorktreeStore((state) => state.worktrees.get(worktreeId));
   const worktree = useMemo(
@@ -134,12 +137,42 @@ const SidebarWorktreeRow = React.memo(function SidebarWorktreeRow({
     [worktreeActions, worktreeId]
   );
 
+  const showDragHandle = !isSortDisabled && !isPinned;
+
+  // Move up/down menu items mirror the drag pathway and provide a single-pointer
+  // alternative for users who can't perform the drag gesture (WCAG 2.5.7). They
+  // operate on the visible (filtered) order — `applyManualWorktreeReorder`
+  // merges that subset back into `manualOrder` so positions of filter-hidden
+  // worktrees are preserved, and `setOrderBy("manual")` matches the auto-switch
+  // performed at drag end.
+  const handleMoveBy = useCallback(
+    (delta: -1 | 1) => {
+      const targetIndex = rowIndex + delta;
+      if (targetIndex < 0 || targetIndex >= dragStartOrder.length) return;
+      const filterStore = useWorktreeFilterStore.getState();
+      const merged = applyManualWorktreeReorder(
+        filterStore.manualOrder,
+        dragStartOrder,
+        rowIndex,
+        targetIndex
+      );
+      filterStore.setManualOrder(merged);
+      filterStore.setOrderBy("manual");
+    },
+    [dragStartOrder, rowIndex]
+  );
+  const onMoveUp = useCallback(() => handleMoveBy(-1), [handleMoveBy]);
+  const onMoveDown = useCallback(() => handleMoveBy(1), [handleMoveBy]);
+
   if (!worktree) return null;
 
-  const showDragHandle = !isSortDisabled && !isPinned;
   const isActive = worktreeId === activeWorktreeId;
   const isFocused = worktreeId === focusedWorktreeId;
   const isSingleWorktree = totalWorktreeCount === 1;
+  const moveUpHandler = showDragHandle ? onMoveUp : undefined;
+  const moveDownHandler = showDragHandle ? onMoveDown : undefined;
+  const canMoveUp = showDragHandle && rowIndex > 0;
+  const canMoveDown = showDragHandle && rowIndex < dragStartOrder.length - 1;
 
   if (showDragHandle) {
     return (
@@ -172,6 +205,10 @@ const SidebarWorktreeRow = React.memo(function SidebarWorktreeRow({
               dragHandleListeners={dragHandleListeners}
               dragHandleActivatorRef={dragHandleActivatorRef}
               isDraggingSort={isDraggingSort}
+              onMoveUp={moveUpHandler}
+              onMoveDown={moveDownHandler}
+              canMoveUp={canMoveUp}
+              canMoveDown={canMoveDown}
             />
           </ErrorBoundary>
         )}
@@ -1204,7 +1241,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             ) : (
               <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
                 <div className="flex flex-col">
-                  {filteredWorktrees.map((worktree) => {
+                  {filteredWorktrees.map((worktree, idx) => {
                     const isPinned = pinnedWorktrees.includes(worktree.id);
                     return (
                       <SidebarWorktreeRow
@@ -1221,6 +1258,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                         dragStartOrder={dragStartOrder}
                         isSortDisabled={isSortDisabled}
                         isPinned={isPinned}
+                        rowIndex={idx}
                       />
                     );
                   })}

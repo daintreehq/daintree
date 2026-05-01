@@ -346,6 +346,10 @@ export interface WorktreeHeaderProps {
     onToggleCollapse?: () => void;
     isCollapsed?: boolean;
     onLaunchAgent?: (agentId: string) => void;
+    onMoveUp?: () => void;
+    onMoveDown?: () => void;
+    canMoveUp?: boolean;
+    canMoveDown?: boolean;
     onDockAll: () => void;
     onMaximizeAll: () => void;
     onResetRenderers: () => void;
@@ -716,6 +720,10 @@ export function WorktreeHeader({
                 isPinned={isPinned}
                 counts={menu.counts}
                 onLaunchAgent={menu.onLaunchAgent ? handleLaunchAgent : undefined}
+                onMoveUp={menu.onMoveUp}
+                onMoveDown={menu.onMoveDown}
+                canMoveUp={menu.canMoveUp}
+                canMoveDown={menu.canMoveDown}
                 onCopyContextFull={menu.onCopyContextFull}
                 onCopyContextModified={menu.onCopyContextModified}
                 onCopyPath={menu.onCopyPath}
