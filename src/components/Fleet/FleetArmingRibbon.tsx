@@ -7,6 +7,7 @@ import { isMac } from "@/lib/platform";
 import { useEscapeStack, useWorktreeColorMap } from "@/hooks";
 import type { AgentState } from "@/types";
 import "./fleetRawInputBroadcast";
+import { FLEET_PROGRESS_VISIBILITY_THRESHOLD } from "./fleetBroadcast";
 import {
   useFleetArmingStore,
   computeArmByStateIds,
@@ -16,6 +17,7 @@ import {
 } from "@/store/fleetArmingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetBroadcastConfirmStore } from "@/store/fleetBroadcastConfirmStore";
+import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import {
   useFleetPendingActionStore,
   type FleetPendingActionKind,
@@ -83,6 +85,11 @@ export function FleetArmingRibbon(): ReactElement | null {
   // from a fleet primary's hybrid input bar.
   const pendingBroadcast = useFleetBroadcastConfirmStore((s) => s.pending);
   const clearPendingBroadcast = useFleetBroadcastConfirmStore((s) => s.clear);
+
+  const progressCompleted = useFleetBroadcastProgressStore((s) => s.completed);
+  const progressTotal = useFleetBroadcastProgressStore((s) => s.total);
+  const progressFailed = useFleetBroadcastProgressStore((s) => s.failed);
+  const progressActive = useFleetBroadcastProgressStore((s) => s.isActive);
 
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
@@ -677,6 +684,17 @@ export function FleetArmingRibbon(): ReactElement | null {
             open={popoverOpen}
             onOpenChange={setPopoverOpen}
           />
+          {progressActive && progressTotal >= FLEET_PROGRESS_VISIBILITY_THRESHOLD && (
+            <span
+              className="text-[11px] tabular-nums text-daintree-text/70"
+              data-testid="fleet-broadcast-progress"
+            >
+              {progressCompleted}/{progressTotal}
+              {progressFailed > 0 && (
+                <span className="text-daintree-text/50"> · {progressFailed} failed</span>
+              )}
+            </span>
+          )}
           <DropdownMenu
             onOpenChange={(open) => {
               if (!open) clearPreviewArmedIds();

@@ -36,6 +36,13 @@ export const FLEET_LARGE_PASTE_BYTE_THRESHOLD = 102_400;
 export const FLEET_LARGE_PASTE_BATCH_SIZE = 5;
 
 /**
+ * Minimum armed-target count at which the in-flight progress counter renders
+ * in the fleet ribbon. Below this threshold the per-pane red-dot failure
+ * indicators suffice — small fleets stay uncluttered.
+ */
+export const FLEET_PROGRESS_VISIBILITY_THRESHOLD = 10;
+
+/**
  * Conservative — flags commands that are usually destructive outside a sandbox.
  * Intentionally does NOT try to be a shell parser. False positives are fine
  * (an extra confirm). False negatives are the real cost.
