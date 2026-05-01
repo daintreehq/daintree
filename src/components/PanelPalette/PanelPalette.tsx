@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
+import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
 import type { PanelKindOption } from "@/hooks/usePanelPalette";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { PanelKindIcon } from "./PanelKindIcon";
@@ -22,30 +23,6 @@ interface PanelPaletteProps {
   onSelect: (kind: PanelKindOption) => void;
   onConfirm: () => void;
   onClose: () => void;
-}
-
-function HighlightText({
-  text,
-  indices,
-}: {
-  text: string;
-  indices: readonly [number, number][] | undefined;
-}) {
-  if (!indices?.length) return <>{text}</>;
-  const sorted = [...indices].sort((a, b) => a[0] - b[0]);
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  sorted.forEach(([start, end], i) => {
-    if (start > lastIndex) parts.push(text.substring(lastIndex, start));
-    parts.push(
-      <mark key={i} className="bg-daintree-accent/25 text-inherit rounded-sm">
-        {text.substring(start, end + 1)}
-      </mark>
-    );
-    lastIndex = end + 1;
-  });
-  if (lastIndex < text.length) parts.push(text.substring(lastIndex));
-  return <>{parts}</>;
 }
 
 const SECTION_LABELS: Record<"agent" | "tool" | "resume", string> = {
@@ -158,15 +135,10 @@ export function PanelPalette({
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium text-daintree-text">
-            {(() => {
-              const kindMatches = matchesById.get(kind.id);
-              const nameMatch = kindMatches?.find((m) => m.key === "name");
-              return nameMatch ? (
-                <HighlightText text={kind.name} indices={nameMatch.indices} />
-              ) : (
-                kind.name
-              );
-            })()}
+            <HighlightedText
+              text={kind.name}
+              indices={findMatchIndices(matchesById.get(kind.id), "name")}
+            />
           </div>
           {kind.description && (
             <div className="text-xs text-daintree-text/50 truncate">{kind.description}</div>

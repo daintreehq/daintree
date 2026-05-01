@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { useEscapeStack } from "@/hooks";
+import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 
 export interface SearchablePaletteProps<T> {
   isOpen: boolean;
@@ -21,16 +22,26 @@ export interface SearchablePaletteProps<T> {
    * forward it to the item's `onPointerMove` so mouse hover keeps `selectedIndex`
    * in sync with the visually highlighted row. Use `onPointerMove` (not
    * `onMouseEnter`) so keyboard scrolling doesn't trigger spurious selection
-   * changes when items move under a stationary cursor.
+   * changes when items move under a stationary cursor. The optional 5th
+   * argument is the Fuse match ranges for this item — pair with
+   * `HighlightedText` from `@/components/ui/HighlightedText` to render
+   * per-character match emphasis on string fields.
    */
   renderItem: (
     item: T,
     index: number,
     isSelected: boolean,
-    onHoverIndex: (index: number) => void
+    onHoverIndex: (index: number) => void,
+    matches: readonly FuseResultMatch[] | undefined
   ) => React.ReactNode;
   /** Called when the pointer hovers a row, for keeping selectedIndex in sync. */
   onHoverIndex?: (index: number) => void;
+  /**
+   * Optional Fuse match ranges keyed by item ID. When provided, each item's
+   * matches are forwarded to `renderItem` as the 5th argument. Produced by
+   * `useSearchablePalette({ includeMatches: true })`.
+   */
+  matchesById?: ReadonlyMap<string, readonly FuseResultMatch[]>;
 
   /** Label shown above the search input */
   label: string;
@@ -91,6 +102,7 @@ export function SearchablePalette<T>({
   getItemId,
   renderItem,
   onHoverIndex,
+  matchesById,
   label,
   keyHint,
   ariaLabel,
@@ -222,7 +234,13 @@ export function SearchablePalette<T>({
             ) : (
               <div ref={listRef} id={listId} role="listbox" aria-label={label}>
                 {results.map((item, index) =>
-                  renderItem(item, index, index === selectedIndex, hoverIndexHandler)
+                  renderItem(
+                    item,
+                    index,
+                    index === selectedIndex,
+                    hoverIndexHandler,
+                    matchesById?.get(getItemId(item))
+                  )
                 )}
               </div>
             )}
