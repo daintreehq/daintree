@@ -198,6 +198,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const [diffContext, setDiffContext] = useState<AtDiffContext | null>(null);
     const [terminalContext, setTerminalContext] = useState<AtTerminalContext | null>(null);
     const [selectionContext, setSelectionContext] = useState<AtSelectionContext | null>(null);
+    const [isEditorFocused, setIsEditorFocused] = useState(false);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
@@ -400,7 +401,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const placeholder = useMemo(() => {
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
-      return agentName ? `Type a command for ${agentName}…` : "Type a command…";
+      return agentName ? `Ask ${agentName}` : "Ask anything";
     }, [agentId]);
 
     const activeMode = slashContext
@@ -415,6 +416,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               ? "file"
               : null;
     const isAutocompleteOpen = activeMode !== null && !disabled;
+    const showLegend = isEditorFocused && value.trim() === "" && !isAutocompleteOpen && !disabled;
 
     const { files: autocompleteFiles, isLoading: isAutocompleteLoading } = useFileAutocomplete({
       cwd,
@@ -920,6 +922,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setDiffContext,
       setTerminalContext,
       setSelectionContext,
+      setIsEditorFocused,
     });
 
     const {
@@ -1157,52 +1160,79 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
+      const suppress = disabled || isAutocompleteOpen;
       view.dispatch({
         effects: tooltipCompartmentRef.current.reconfigure(
-          !disabled ? createSlashTooltip(commandMap) : []
+          suppress ? [] : createSlashTooltip(commandMap)
         ),
       });
-    }, [commandMap, disabled, tooltipCompartmentRef]);
+    }, [commandMap, disabled, isAutocompleteOpen, tooltipCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
+      const suppress = disabled || isAutocompleteOpen;
       view.dispatch({
         effects: fileChipTooltipCompartmentRef.current.reconfigure(
-          !disabled ? createFileChipTooltip() : []
+          suppress ? [] : createFileChipTooltip()
         ),
       });
-    }, [disabled, fileChipTooltipCompartmentRef]);
+    }, [disabled, isAutocompleteOpen, fileChipTooltipCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
+      const suppress = disabled || isAutocompleteOpen;
       view.dispatch({
         effects: imageChipTooltipCompartmentRef.current.reconfigure(
-          !disabled ? createImageChipTooltip() : []
+          suppress ? [] : createImageChipTooltip()
         ),
       });
-    }, [disabled, imageChipTooltipCompartmentRef]);
+    }, [disabled, isAutocompleteOpen, imageChipTooltipCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
+      const suppress = disabled || isAutocompleteOpen;
       view.dispatch({
         effects: fileDropChipTooltipCompartmentRef.current.reconfigure(
-          !disabled ? createFileDropChipTooltip() : []
+          suppress ? [] : createFileDropChipTooltip()
         ),
       });
-    }, [disabled, fileDropChipTooltipCompartmentRef]);
+    }, [disabled, isAutocompleteOpen, fileDropChipTooltipCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
+      const suppress = disabled || isAutocompleteOpen;
       view.dispatch({
         effects: diffChipTooltipCompartmentRef.current.reconfigure(
-          !disabled ? createDiffChipTooltip() : []
+          suppress ? [] : createDiffChipTooltip()
         ),
       });
-    }, [disabled, diffChipTooltipCompartmentRef]);
+    }, [disabled, isAutocompleteOpen, diffChipTooltipCompartmentRef]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+      const suppress = disabled || isAutocompleteOpen;
+      view.dispatch({
+        effects: terminalChipTooltipCompartmentRef.current.reconfigure(
+          suppress ? [] : createTerminalChipTooltip()
+        ),
+      });
+    }, [disabled, isAutocompleteOpen, terminalChipTooltipCompartmentRef]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+      const suppress = disabled || isAutocompleteOpen;
+      view.dispatch({
+        effects: selectionChipTooltipCompartmentRef.current.reconfigure(
+          suppress ? [] : createSelectionChipTooltip()
+        ),
+      });
+    }, [disabled, isAutocompleteOpen, selectionChipTooltipCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1372,6 +1402,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               />
             </div>
           </div>
+        </div>
+        <div
+          aria-hidden={!showLegend}
+          className={cn(
+            "overflow-hidden transition-[max-height,opacity] duration-150 ease-out",
+            showLegend ? "max-h-4 opacity-100" : "max-h-0 opacity-0"
+          )}
+        >
+          <p className="pt-1 text-[11px] text-daintree-text/40 select-none">
+            @ files · @diff · @terminal · / commands
+          </p>
         </div>
       </div>
     );

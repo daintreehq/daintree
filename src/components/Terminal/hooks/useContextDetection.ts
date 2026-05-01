@@ -34,6 +34,7 @@ interface UseContextDetectionParams {
   setDiffContext: Dispatch<SetStateAction<AtDiffContext | null>>;
   setTerminalContext: Dispatch<SetStateAction<AtTerminalContext | null>>;
   setSelectionContext: Dispatch<SetStateAction<AtSelectionContext | null>>;
+  setIsEditorFocused: Dispatch<SetStateAction<boolean>>;
 }
 
 export function useContextDetection({
@@ -45,6 +46,7 @@ export function useContextDetection({
   setDiffContext,
   setTerminalContext,
   setSelectionContext,
+  setIsEditorFocused,
 }: UseContextDetectionParams) {
   // Route the listener body through a ref updated in an effect. The extension is
   // built once with a stable callback that reads handleUpdateRef at invocation
@@ -63,6 +65,10 @@ export function useContextDetection({
   useEffect(() => {
     handleUpdateRef.current = (update: ViewUpdate) => {
       const trackers = trackersRef.current;
+
+      if (update.focusChanged) {
+        setIsEditorFocused(update.view.hasFocus);
+      }
 
       if (update.docChanged) {
         const nextValue = update.state.doc.toString();
