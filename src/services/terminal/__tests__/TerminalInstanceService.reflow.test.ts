@@ -136,6 +136,22 @@ function paddingHistory(managed: ManagedTerminal): string[] {
   return el.__paddingTopHistory;
 }
 
+// Test-fixture mutation helpers. The terminal mock isn't a full xterm Terminal,
+// so these consolidate the partial-shape casts in one place.
+type MutableModes = { modes?: { synchronizedOutputMode: boolean } | undefined };
+
+function setSyncMode(managed: ManagedTerminal, value: boolean): void {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const term = managed.terminal as unknown as MutableModes;
+  term.modes = { synchronizedOutputMode: value };
+}
+
+function clearSyncModes(managed: ManagedTerminal): void {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const term = managed.terminal as unknown as MutableModes;
+  term.modes = undefined;
+}
+
 describe("TerminalInstanceService maybeReflowTerminal", () => {
   let service: ReflowTestService;
 
@@ -241,9 +257,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   it("skips — and does not stamp throttle — when synchronized output mode is active", () => {
     const managed = makeManaged();
-    (managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }).modes = {
-      synchronizedOutputMode: true,
-    };
+    setSyncMode(managed, true);
 
     service.maybeReflowTerminal(managed);
     // BSU is open — refreshing now would interleave with xterm's buffered
@@ -254,9 +268,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   it("reflows when synchronized output mode is false", () => {
     const managed = makeManaged();
-    (managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }).modes = {
-      synchronizedOutputMode: false,
-    };
+    setSyncMode(managed, false);
 
     service.maybeReflowTerminal(managed);
     expect(paddingHistory(managed)).toContain("0.01px");
@@ -265,10 +277,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   it("does not throttle the post-ESU reflow after a BSU skip", () => {
     const managed = makeManaged();
-    const modes = (managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } })
-      .modes;
-    // BSU opens — guard fires, no jitter, no stamp
-    modes.synchronizedOutputMode = true;
+    setSyncMode(managed, true);
     service.maybeReflowTerminal(managed);
     expect(paddingHistory(managed).length).toBe(0);
     expect(managed.lastReflowAt).toBe(0);
@@ -276,7 +285,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     // ESU closes — the next reflow must fire immediately, not be eaten by
     // the 250ms throttle. This is the invariant that justifies the
     // no-stamp branch in the guard.
-    modes.synchronizedOutputMode = false;
+    setSyncMode(managed, false);
     service.maybeReflowTerminal(managed);
     expect(paddingHistory(managed)).toContain("0.01px");
     expect(managed.lastReflowAt).toBeGreaterThan(0);
@@ -338,6 +347,7 @@ describe("TerminalInstanceService getSynchronizedOutputMode", () => {
 
   beforeEach(async () => {
     vi.resetModules();
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     ({ terminalInstanceService: service } =
       (await import("../TerminalInstanceService")) as unknown as {
         terminalInstanceService: ReflowTestService;
@@ -352,9 +362,7 @@ describe("TerminalInstanceService getSynchronizedOutputMode", () => {
 
   it("returns true when xterm reports an open synchronized output block", () => {
     const managed = makeManaged();
-    (managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }).modes = {
-      synchronizedOutputMode: true,
-    };
+    setSyncMode(managed, true);
     service.instances.set("t1", managed);
 
     expect(service.getSynchronizedOutputMode("t1")).toBe(true);
@@ -373,7 +381,7 @@ describe("TerminalInstanceService getSynchronizedOutputMode", () => {
 
   it("returns null when xterm did not surface modes (defensive)", () => {
     const managed = makeManaged();
-    (managed.terminal as unknown as { modes?: unknown }).modes = undefined;
+    clearSyncModes(managed);
     service.instances.set("t1", managed);
 
     expect(service.getSynchronizedOutputMode("t1")).toBeNull();
@@ -434,9 +442,7 @@ describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
 
   it("heartbeat does not reflow or stamp throttle while sync block is open", () => {
     const managed = makeManaged();
-    (managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }).modes = {
-      synchronizedOutputMode: true,
-    };
+    setSyncMode(managed, true);
     service.instances.set("t1", managed);
 
     vi.advanceTimersByTime(3000);
