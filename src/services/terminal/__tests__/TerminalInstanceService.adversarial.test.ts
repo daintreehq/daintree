@@ -371,12 +371,14 @@ describe("TerminalInstanceService adversarial", () => {
     service.writeToTerminal("t1", "abc");
 
     expect(capturedCallback).toBeTypeOf("function");
+    expect(managed.pendingWrites).toBe(1);
     expect(testState.clientMocks.acknowledgePortData).not.toHaveBeenCalled();
     expect(testState.clientMocks.acknowledgeData).not.toHaveBeenCalled();
     expect(notifyWriteCompleteSpy).not.toHaveBeenCalled();
 
     await Promise.resolve();
 
+    expect(managed.pendingWrites).toBe(0);
     expect(testState.clientMocks.acknowledgePortData).toHaveBeenCalledTimes(1);
     expect(testState.clientMocks.acknowledgePortData).toHaveBeenCalledWith("t1", 3);
     expect(testState.clientMocks.acknowledgeData).toHaveBeenCalledTimes(1);
