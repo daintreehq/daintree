@@ -73,6 +73,15 @@ describe("useQuickSwitcher isLoading", () => {
     expect(result.current.isLoading).toBe(false);
   });
 
+  it("does not show the bar after a fatal workspace-host error", () => {
+    // setFatalError clears isInitialized AND isLoading and sets error. Without
+    // the error guard, the bar would spin forever in this state instead of
+    // letting the surrounding UI surface the failure.
+    seedWorktreeState({ isInitialized: false, isLoading: false, error: "host crashed" });
+    const { result } = renderHook(() => useQuickSwitcher());
+    expect(result.current.isLoading).toBe(false);
+  });
+
   it("is reactive to store updates", () => {
     seedWorktreeState({ isInitialized: false });
     const { result, rerender } = renderHook(() => useQuickSwitcher());

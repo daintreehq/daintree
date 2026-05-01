@@ -57,7 +57,12 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
   const mruList = usePanelStore(useShallow((state) => state.mruList));
   const pruneMru = usePanelStore((state) => state.pruneMru);
 
-  const { worktrees, worktreeMap, isInitialized: worktreesInitialized } = useWorktrees();
+  const {
+    worktrees,
+    worktreeMap,
+    isInitialized: worktreesInitialized,
+    error: worktreeError,
+  } = useWorktrees();
   const { selectWorktree } = useWorktreeSelectionStore(
     useShallow((state) => ({
       selectWorktree: state.selectWorktree,
@@ -205,7 +210,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     results,
     totalResults,
     selectedIndex,
-    isLoading: !worktreesInitialized,
+    isLoading: !worktreesInitialized && worktreeError === null,
     open,
     close,
     toggle,
