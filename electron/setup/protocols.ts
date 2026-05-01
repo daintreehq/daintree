@@ -195,10 +195,7 @@ function createDaintreeFileProtocolHandler() {
       // still applies. Mirrors the files:read IPC handler.
       let fileHandle: Awaited<ReturnType<typeof fs.open>>;
       try {
-        fileHandle = await fs.open(
-          normalizedFile,
-          fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
-        );
+        fileHandle = await fs.open(normalizedFile, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
       } catch (err) {
         const errCode = (err as NodeJS.ErrnoException).code;
         if (errCode === "ELOOP" || errCode === "ENOENT") {
