@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { SquareTerminal, Globe } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
-import { createTooltipWithShortcut } from "@/lib/platform";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 
 type LauncherType = "terminal" | "browser";
@@ -71,7 +71,7 @@ export const ToolbarLauncherButton = memo(function ToolbarLauncherButton({
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">
-        {createTooltipWithShortcut(config.tooltipLabel, shortcut)}
+        {createTooltipContent(config.tooltipLabel, shortcut)}
       </TooltipContent>
     </Tooltip>
   );

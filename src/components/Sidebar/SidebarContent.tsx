@@ -19,7 +19,7 @@ import {
   useWorktreeActions,
   useKeybindingDisplay,
 } from "@/hooks";
-import { createTooltipWithShortcut } from "@/lib/platform";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Kbd } from "@/components/ui/Kbd";
 import {
@@ -1061,7 +1061,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Open worktrees overview", overviewShortcut)}
+                {createTooltipContent("Open worktrees overview", overviewShortcut)}
               </TooltipContent>
             </Tooltip>
             <Tooltip>
@@ -1075,7 +1075,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Select terminals to arm", armFocusedShortcut)}
+                {createTooltipContent("Select terminals to arm", armFocusedShortcut)}
               </TooltipContent>
             </Tooltip>
             <Tooltip>
@@ -1090,7 +1090,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Refresh sidebar", refreshShortcut)}
+                {createTooltipContent("Refresh sidebar", refreshShortcut)}
               </TooltipContent>
             </Tooltip>
           </div>
@@ -1109,7 +1109,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {createTooltipWithShortcut("Create new worktree", createWorktreeShortcut)}
+              {createTooltipContent("Create new worktree", createWorktreeShortcut)}
             </TooltipContent>
           </Tooltip>
         </div>

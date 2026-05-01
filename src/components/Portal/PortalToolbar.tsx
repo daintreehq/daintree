@@ -18,7 +18,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import type { PortalTab, PortalLink } from "@shared/types";
 import { cn } from "@/lib/utils";
-import { createTooltipWithShortcut } from "@/lib/platform";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
 import { PortalIcon } from "./PortalIcon";
@@ -315,7 +315,7 @@ export function PortalToolbar({
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {createTooltipWithShortcut("Close portal", closePortalShortcut)}
+              {createTooltipContent("Close portal", closePortalShortcut)}
             </TooltipContent>
           </Tooltip>
         </div>
@@ -391,7 +391,7 @@ export function PortalToolbar({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  {createTooltipWithShortcut("New Tab", newTabShortcut)}
+                  {createTooltipContent("New Tab", newTabShortcut)}
                 </TooltipContent>
               </Tooltip>
             </div>

@@ -4,7 +4,7 @@ import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
-import { createTooltipWithShortcut } from "@/lib/platform";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
@@ -43,7 +43,7 @@ export const ToolbarProblemsButton = memo(function ToolbarProblemsButton({
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">
-        {createTooltipWithShortcut("Show Problems Panel", diagnosticsShortcut)}
+        {createTooltipContent("Show Problems Panel", diagnosticsShortcut)}
       </TooltipContent>
     </Tooltip>
   );

@@ -10,7 +10,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { createTooltipWithShortcut } from "@/lib/platform";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 
@@ -63,7 +63,7 @@ export const ToolbarSettingsButton = memo(function ToolbarSettingsButton({
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {createTooltipWithShortcut("Open Settings", settingsShortcut)}
+            {createTooltipContent("Open Settings", settingsShortcut)}
           </TooltipContent>
         </Tooltip>
       </ContextMenuTrigger>

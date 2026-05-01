@@ -30,9 +30,9 @@ describe("SidebarContent shortcut tooltips — issue #5843", () => {
   });
 
   describe("no hardcoded shortcut strings in tooltips", () => {
-    it("does not hardcode shortcut strings in createTooltipWithShortcut calls", () => {
-      expect(source).not.toMatch(/createTooltipWithShortcut\([^)]*"Cmd\+/);
-      expect(source).not.toMatch(/createTooltipWithShortcut\([^)]*"Ctrl\+/);
+    it("does not hardcode shortcut strings in createTooltipContent calls", () => {
+      expect(source).not.toMatch(/createTooltipContent\([^)]*"Cmd\+/);
+      expect(source).not.toMatch(/createTooltipContent\([^)]*"Ctrl\+/);
     });
 
     it("does not assign hardcoded shortcut literals to *Shortcut variables", () => {
@@ -40,26 +40,24 @@ describe("SidebarContent shortcut tooltips — issue #5843", () => {
     });
   });
 
-  describe("createTooltipWithShortcut usage", () => {
-    it("uses createTooltipWithShortcut for Open worktrees overview tooltip", () => {
+  describe("createTooltipContent usage", () => {
+    it("uses createTooltipContent for Open worktrees overview tooltip", () => {
+      expect(source).toContain('createTooltipContent("Open worktrees overview", overviewShortcut)');
+    });
+
+    it("uses createTooltipContent for Select terminals to arm tooltip", () => {
       expect(source).toContain(
-        'createTooltipWithShortcut("Open worktrees overview", overviewShortcut)'
+        'createTooltipContent("Select terminals to arm", armFocusedShortcut)'
       );
     });
 
-    it("uses createTooltipWithShortcut for Select terminals to arm tooltip", () => {
-      expect(source).toContain(
-        'createTooltipWithShortcut("Select terminals to arm", armFocusedShortcut)'
-      );
+    it("uses createTooltipContent for Refresh sidebar tooltip", () => {
+      expect(source).toContain('createTooltipContent("Refresh sidebar", refreshShortcut)');
     });
 
-    it("uses createTooltipWithShortcut for Refresh sidebar tooltip", () => {
-      expect(source).toContain('createTooltipWithShortcut("Refresh sidebar", refreshShortcut)');
-    });
-
-    it("uses createTooltipWithShortcut for Create new worktree tooltip", () => {
+    it("uses createTooltipContent for Create new worktree tooltip", () => {
       expect(source).toContain(
-        'createTooltipWithShortcut("Create new worktree", createWorktreeShortcut)'
+        'createTooltipContent("Create new worktree", createWorktreeShortcut)'
       );
     });
   });
