@@ -756,6 +756,14 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Worktrees",
   },
   {
+    actionId: "worktree.createDialog.open",
+    combo: "Cmd+K N",
+    scope: "global",
+    priority: 0,
+    description: "Create a new worktree",
+    category: "Worktrees",
+  },
+  {
     actionId: "worktree.overview",
     combo: "Cmd+Shift+O",
     scope: "global",

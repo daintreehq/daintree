@@ -487,4 +487,51 @@ describe("KeybindingService", () => {
       warnSpy.mockRestore();
     });
   });
+
+  describe("worktree empty-state shortcut defaults — issue #6437", () => {
+    it("registers Cmd+K N as the default for worktree.createDialog.open", () => {
+      const binding = DEFAULT_KEYBINDINGS.find((b) => b.actionId === "worktree.createDialog.open");
+      expect(binding).toBeDefined();
+      expect(binding?.combo).toBe("Cmd+K N");
+      expect(binding?.scope).toBe("global");
+      expect(binding?.category).toBe("Worktrees");
+    });
+
+    it("does not collide with the existing Cmd+K W worktree-palette chord", () => {
+      const createDialog = DEFAULT_KEYBINDINGS.find(
+        (b) => b.actionId === "worktree.createDialog.open"
+      );
+      const palette = DEFAULT_KEYBINDINGS.find((b) => b.actionId === "worktree.openPalette");
+      expect(createDialog?.combo).toBe("Cmd+K N");
+      expect(palette?.combo).toBe("Cmd+K W");
+      expect(createDialog?.combo).not.toBe(palette?.combo);
+    });
+
+    it("makes the chord resolvable via getChordCompletions for the Cmd+K prefix", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const completions = service.getChordCompletions("Cmd+K");
+      expect(completions).toContainEqual(
+        expect.objectContaining({ actionId: "worktree.createDialog.open" })
+      );
+    });
+
+    it("returns the display combo for worktree.createDialog.open via getDisplayCombo", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const display = service.getDisplayCombo("worktree.createDialog.open");
+      expect(display).not.toBe("");
+      expect(display).toContain("⌘");
+      expect(display.toUpperCase()).toContain("K");
+      expect(display.toUpperCase()).toContain("N");
+    });
+
+    it("registers worktree.createDialog.open in the BuiltInKeyAction value set", async () => {
+      // Registry completeness: every action with a default binding should
+      // appear in KEY_ACTION_VALUES so introspection (settings UI, conflict
+      // detection, etc.) sees it.
+      const { KEY_ACTION_VALUES } = await import("@shared/types/keymap");
+      expect(KEY_ACTION_VALUES.has("worktree.createDialog.open")).toBe(true);
+    });
+  });
 });

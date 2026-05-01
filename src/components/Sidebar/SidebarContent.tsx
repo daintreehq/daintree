@@ -21,6 +21,7 @@ import {
 } from "@/hooks";
 import { createTooltipWithShortcut } from "@/lib/platform";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Kbd } from "@/components/ui/Kbd";
 import {
   WorktreeCard,
   type WorktreeCardProps,
@@ -833,6 +834,34 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const dragStartOrder = useMemo(() => filteredWorktrees.map((w) => w.id), [filteredWorktrees]);
 
+  // Hoisted before early returns so the dialog still mounts when the zero-
+  // worktrees branch fires — its empty-state nudge dispatches
+  // worktree.createDialog.open and the dialog has nowhere else to live.
+  const dialogRootPath = currentProject?.path ?? "";
+  const newWorktreeDialogElement = dialogRootPath &&
+    (createDialog.isOpen || hasOpenedNewWorktree) && (
+      <ErrorBoundary
+        variant="component"
+        componentName="NewWorktreeDialog"
+        resetKeys={[Number(createDialog.isOpen)]}
+      >
+        <Suspense fallback={null}>
+          <LazyNewWorktreeDialog
+            isOpen={createDialog.isOpen}
+            onClose={closeCreateDialog}
+            rootPath={dialogRootPath}
+            onWorktreeCreated={(worktreeId) => {
+              refresh();
+              createDialog.onCreated?.(worktreeId);
+            }}
+            initialIssue={createDialog.initialIssue}
+            initialPR={createDialog.initialPR}
+            initialRecipeId={createDialog.initialRecipeId}
+          />
+        </Suspense>
+      </ErrorBoundary>
+    );
+
   if (isLoading && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
@@ -867,37 +896,45 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   if (worktrees.length === 0) {
     return (
-      <div className="flex flex-col h-full">
-        <div className="flex items-center px-4 py-4 border-b border-divider shrink-0">
-          <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
-        </div>
+      <>
+        <div className="flex flex-col h-full">
+          <div className="flex items-center px-4 py-4 border-b border-divider shrink-0">
+            <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
+          </div>
 
-        <div className="flex flex-col items-center justify-center py-12 px-4 text-center flex-1">
-          <FolderOpen className="w-12 h-12 text-daintree-text/60 mb-3" aria-hidden="true" />
+          <div className="flex flex-col items-center justify-center py-12 px-4 text-center flex-1">
+            <FolderOpen className="w-12 h-12 text-daintree-text/60 mb-3" aria-hidden="true" />
 
-          <h3 className="text-daintree-text font-medium mb-2">No worktrees yet</h3>
+            <h3 className="text-daintree-text font-medium mb-2">No worktrees yet</h3>
 
-          <p className="text-sm text-daintree-text/60 mb-4 max-w-xs">
-            Open a Git repository with worktrees to get started. Use{" "}
-            <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-xs">
-              File → Open Directory
-            </kbd>
-          </p>
+            <p className="text-sm text-daintree-text/60 mb-4 max-w-xs">
+              Open a Git repository with worktrees to get started. Use{" "}
+              <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-xs">
+                File → Open Directory
+              </kbd>
+            </p>
 
-          <div className="text-xs text-daintree-text/60 text-left w-full max-w-xs">
-            <div className="font-medium mb-1">Quick Start:</div>
-            <ol className="space-y-1 list-decimal list-inside">
-              <li>Open a repository</li>
-              <li>Launch an agent</li>
-              <li>Inject context to AI agent</li>
-            </ol>
+            {createWorktreeShortcut && (
+              <p className="text-xs text-daintree-text/60 mb-4 max-w-xs">
+                Press <Kbd>{createWorktreeShortcut}</Kbd> to create a worktree
+              </p>
+            )}
+
+            <div className="text-xs text-daintree-text/60 text-left w-full max-w-xs">
+              <div className="font-medium mb-1">Quick Start:</div>
+              <ol className="space-y-1 list-decimal list-inside">
+                <li>Open a repository</li>
+                <li>Launch an agent</li>
+                <li>Inject context to AI agent</li>
+              </ol>
+            </div>
           </div>
         </div>
-      </div>
+        {newWorktreeDialogElement}
+      </>
     );
   }
 
-  const rootPath = currentProject?.path ?? "";
   const hasNonMainWorktrees = deferredWorktrees.length > 1;
   const hasFilters = hasActiveFilters();
   const hasPopoverFilters =
@@ -1224,28 +1261,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         />
       </ErrorBoundary>
 
-      {rootPath && (createDialog.isOpen || hasOpenedNewWorktree) && (
-        <ErrorBoundary
-          variant="component"
-          componentName="NewWorktreeDialog"
-          resetKeys={[Number(createDialog.isOpen)]}
-        >
-          <Suspense fallback={null}>
-            <LazyNewWorktreeDialog
-              isOpen={createDialog.isOpen}
-              onClose={closeCreateDialog}
-              rootPath={rootPath}
-              onWorktreeCreated={(worktreeId) => {
-                refresh();
-                createDialog.onCreated?.(worktreeId);
-              }}
-              initialIssue={createDialog.initialIssue}
-              initialPR={createDialog.initialPR}
-              initialRecipeId={createDialog.initialRecipeId}
-            />
-          </Suspense>
-        </ErrorBoundary>
-      )}
+      {newWorktreeDialogElement}
 
       <ErrorBoundary
         variant="component"

@@ -26,3 +26,72 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
     expect(content).not.toContain("handleRunRecipe");
   });
 });
+
+describe("ContentGrid TIPS live shortcut migration — issue #6437", () => {
+  it("imports useKeybindingDisplay so tip shortcuts react to remaps", async () => {
+    const content = await readFile(GRID_PATH, "utf-8");
+    expect(content).toMatch(/import \{ useKeybindingDisplay \} from "@\/hooks\/useKeybinding"/);
+  });
+
+  it("declares a messageWithShortcut field on TipEntry", async () => {
+    const content = await readFile(GRID_PATH, "utf-8");
+    expect(content).toMatch(/messageWithShortcut\?: \(shortcut: string\) => React\.ReactNode/);
+  });
+
+  it("defines a LiveTipMessage component that calls useKeybindingDisplay", async () => {
+    const content = await readFile(GRID_PATH, "utf-8");
+    expect(content).toContain("function LiveTipMessage");
+    const liveTipMatch = content.match(/function LiveTipMessage\([\s\S]*?\n\}/);
+    expect(liveTipMatch).not.toBeNull();
+    expect(liveTipMatch![0]).toContain("useKeybindingDisplay(lookupId)");
+    expect(liveTipMatch![0]).toContain("tip.messageWithShortcut");
+  });
+
+  it("falls back to the static tip.message when no shortcut is bound", async () => {
+    const content = await readFile(GRID_PATH, "utf-8");
+    const liveTipMatch = content.match(/function LiveTipMessage\([\s\S]*?\n\}/);
+    expect(liveTipMatch).not.toBeNull();
+    // The component must render `tip.message` when shortcut is empty so unbound
+    // tips degrade gracefully instead of rendering "Press  to ..." with a blank
+    // <Kbd>.
+    expect(liveTipMatch![0]).toMatch(/return <>\{tip\.message\}<\/>/);
+  });
+
+  it("RotatingTip renders <LiveTipMessage tip={tip} /> instead of {tip.message} directly", async () => {
+    const content = await readFile(GRID_PATH, "utf-8");
+    expect(content).toContain("<LiveTipMessage tip={tip} />");
+    // The previous direct-render pattern should be gone from the RotatingTip JSX
+    // (the static `message` field is still referenced inside LiveTipMessage as
+    // the fallback path, which is fine).
+    expect(content).not.toMatch(/Tip: \{tip\.message\}/);
+  });
+
+  it("shortcut-driven tips supply messageWithShortcut so the live combo renders inline", async () => {
+    const content = await readFile(GRID_PATH, "utf-8");
+    // Spot-check a few representative keybinding-driven tips. Each should
+    // declare a messageWithShortcut function so the live combo replaces the
+    // hardcoded glyph when the action is bound.
+    const tipIds = [
+      "quick-switcher",
+      "panel-palette",
+      "action-palette",
+      "worktree-overview",
+      "new-worktree",
+    ];
+    for (const id of tipIds) {
+      const tipBlock = content.match(new RegExp(`id: "${id}",[\\s\\S]*?(?=\\n {2}\\},)`));
+      expect(tipBlock, `Expected tip block for ${id}`).not.toBeNull();
+      expect(tipBlock![0]).toContain("messageWithShortcut:");
+    }
+  });
+
+  it("worktree-overview tip uses worktree.overview (the toggle action) for shortcut display", async () => {
+    const content = await readFile(GRID_PATH, "utf-8");
+    // The toggle is what owns the Cmd+Shift+O default binding; the .open
+    // variant has no binding registered, so we must look up the toggle to get
+    // a non-empty display combo.
+    const tipBlock = content.match(/id: "worktree-overview",[\s\S]*?(?=\n {2}\},)/);
+    expect(tipBlock).not.toBeNull();
+    expect(tipBlock![0]).toContain('shortcutActionId: "worktree.overview"');
+  });
+});
