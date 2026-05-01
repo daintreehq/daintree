@@ -93,8 +93,8 @@ const createErrorStore: StateCreator<ErrorStore> = (set, get) => ({
                 timestamp: now,
                 retryAction: error.retryAction ?? e.retryAction,
                 retryArgs: error.retryArgs ?? e.retryArgs,
-                recoveryHint: error.recoveryHint ?? e.recoveryHint,
-                correlationId: error.correlationId ?? e.correlationId,
+                recoveryHint: e.recoveryHint ?? error.recoveryHint,
+                correlationId: e.correlationId ?? error.correlationId,
               }
             : e
         ),
