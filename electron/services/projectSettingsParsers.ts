@@ -1,4 +1,5 @@
 import type { ProjectTerminalSettings } from "../types/index.js";
+import type { FleetSavedScope } from "../../shared/types/project.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import path from "path";
 import { normalizeScrollbackLines } from "../../shared/config/scrollback.js";
@@ -88,4 +89,42 @@ export function parseNotificationOverrides(
   }
 
   return Object.keys(result).length > 0 ? result : undefined;
+}
+
+const VALID_PREDICATE_SCOPES = new Set(["current", "all"]);
+const VALID_PREDICATE_STATES = new Set(["all", "working", "waiting", "finished"]);
+
+export function parseFleetSavedScopes(raw: unknown): FleetSavedScope[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: FleetSavedScope[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const o = entry as Record<string, unknown>;
+    if (typeof o.id !== "string" || !o.id.trim()) continue;
+    if (typeof o.name !== "string" || !o.name.trim()) continue;
+    if (typeof o.createdAt !== "number" || !Number.isFinite(o.createdAt)) continue;
+    if (o.kind === "snapshot") {
+      if (!Array.isArray(o.terminalIds)) continue;
+      const terminalIds = o.terminalIds.filter((t): t is string => typeof t === "string");
+      out.push({
+        kind: "snapshot",
+        id: o.id,
+        name: o.name,
+        terminalIds,
+        createdAt: o.createdAt,
+      });
+    } else if (o.kind === "predicate") {
+      if (typeof o.scope !== "string" || !VALID_PREDICATE_SCOPES.has(o.scope)) continue;
+      if (typeof o.stateFilter !== "string" || !VALID_PREDICATE_STATES.has(o.stateFilter)) continue;
+      out.push({
+        kind: "predicate",
+        id: o.id,
+        name: o.name,
+        scope: o.scope as "current" | "all",
+        stateFilter: o.stateFilter as "all" | "working" | "waiting" | "finished",
+        createdAt: o.createdAt,
+      });
+    }
+  }
+  return out.length > 0 ? out : undefined;
 }

@@ -300,7 +300,10 @@ export type BuiltInActionId =
   | "fleet.scope.enter"
   | "fleet.scope.exit"
   | "fleet.armMatchingFilter"
-  | "fleet.retryFailures";
+  | "fleet.retryFailures"
+  | "fleet.saveNamedFleet"
+  | "fleet.recallNamedFleet"
+  | "fleet.deleteNamedFleet";
 
 export type ActionId = BuiltInActionId | (string & {});
 

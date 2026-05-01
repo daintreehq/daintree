@@ -284,16 +284,28 @@ export type ResourceEnvironment = {
   icon?: string;
 };
 
-/** A saved fleet scope — a named selection of terminal IDs or filter preset */
-export interface FleetSavedScope {
+/** Snapshot fleet scope: stores the exact pane IDs at save time. Missing IDs are silently dropped on recall. */
+export interface SnapshotFleetSavedScope {
+  kind: "snapshot";
   id: string;
   name: string;
-  /** Explicit terminal IDs — takes precedence over filter when present */
-  terminalIds?: string[];
-  /** Filter-based scope that is re-evaluated against current panels on recall */
-  filter?: { scope: "current" | "all"; stateFilter: string };
+  terminalIds: string[];
   createdAt: number;
 }
+
+/** Predicate fleet scope: stores a filter rule that is re-evaluated against the current panel set on recall. */
+export interface PredicateFleetSavedScope {
+  kind: "predicate";
+  id: string;
+  name: string;
+  scope: "current" | "all";
+  /** "all" maps to armAll(scope); "working"/"waiting"/"finished" map to armByState(preset, scope, false). */
+  stateFilter: "all" | "working" | "waiting" | "finished";
+  createdAt: number;
+}
+
+/** A saved fleet scope — a named selection persisted per-project for quick recall. */
+export type FleetSavedScope = SnapshotFleetSavedScope | PredicateFleetSavedScope;
 
 /** Per-project terminal configuration overrides */
 export interface ProjectTerminalSettings {

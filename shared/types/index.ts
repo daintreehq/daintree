@@ -86,6 +86,9 @@ export type {
   ProjectSettings,
   ProjectTerminalSettings,
   CopyTreeSettings,
+  FleetSavedScope,
+  SnapshotFleetSavedScope,
+  PredicateFleetSavedScope,
 } from "./project.js";
 
 // IPC types - communication payloads

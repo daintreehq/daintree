@@ -7,6 +7,9 @@ import {
   isFleetInterruptAgentEligible,
   isFleetRestartAgentEligible,
   isFleetWaitingAgentEligible,
+  collectEligibleIds,
+  computeArmByStateIds,
+  type FleetArmStatePreset,
 } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import {
@@ -15,9 +18,13 @@ import {
 } from "@/store/fleetPendingActionStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { terminalClient } from "@/clients";
+import { useProjectStore } from "@/store/projectStore";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { projectClient, terminalClient } from "@/clients";
 import { broadcastFleetLiteralPaste } from "@/components/Fleet/fleetExecution";
-import type { TerminalInstance } from "@shared/types";
+import { notify } from "@/lib/notify";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import type { FleetSavedScope, TerminalInstance } from "@shared/types";
 
 interface ArmedSnapshot {
   terminalTargets: TerminalInstance[];
@@ -348,4 +355,216 @@ export function registerFleetActions(actions: ActionRegistry): void {
       useFleetArmingStore.getState().toggleId(focusedId);
     },
   }));
+
+  actions.set("fleet.saveNamedFleet", () => ({
+    id: "fleet.saveNamedFleet",
+    title: "Fleet: Save named fleet",
+    description:
+      "Persist the current fleet selection (snapshot) or a state filter (predicate) under a name for later recall.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: saveNamedFleetSchema,
+    run: async (args: unknown) => {
+      const parsed = saveNamedFleetSchema.parse(args);
+      const name = parsed.name.trim();
+      if (name.length === 0) return;
+      const projectId = useProjectStore.getState().currentProject?.id ?? null;
+      if (!projectId) return;
+      // Capture the snapshot's terminal IDs BEFORE the IPC round-trip so a
+      // user changing the armed set during the await doesn't end up saving a
+      // different selection than the one they clicked Save on.
+      const newScope = buildSavedScope(parsed);
+      if (!newScope) return;
+      try {
+        const current = await projectClient.getSettings(projectId);
+        if (useProjectStore.getState().currentProject?.id !== projectId) return;
+        const next: FleetSavedScope[] = [...(current.fleetSavedScopes ?? []), newScope];
+        const nextSettings = { ...current, fleetSavedScopes: next };
+        await projectClient.saveSettings(projectId, nextSettings);
+        if (useProjectStore.getState().currentProject?.id !== projectId) return;
+        // Write-through: the SavedFleetsSection reads from useProjectSettingsStore,
+        // so the row only appears if the in-memory cache is updated. Without
+        // this the user clicks Save, the disk write succeeds, but no row shows.
+        if (useProjectSettingsStore.getState().projectId === projectId) {
+          useProjectSettingsStore.getState().setSettings(nextSettings);
+        }
+        notify({
+          type: "success",
+          message: `Saved fleet "${newScope.name}"`,
+          priority: "low",
+        });
+      } catch (error) {
+        notify({
+          type: "error",
+          title: "Couldn't save fleet",
+          message: formatErrorMessage(error, "Couldn't save the fleet to project settings"),
+          duration: 5000,
+        });
+      }
+    },
+  }));
+
+  actions.set("fleet.recallNamedFleet", () => ({
+    id: "fleet.recallNamedFleet",
+    title: "Fleet: Recall named fleet",
+    description:
+      "Apply panes from a saved fleet. Snapshots drop missing IDs; predicates re-evaluate against current panes.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: idArgSchema,
+    run: async (args: unknown) => {
+      const { id } = idArgSchema.parse(args);
+      const projectId = useProjectStore.getState().currentProject?.id ?? null;
+      if (!projectId) return;
+      try {
+        const current = await projectClient.getSettings(projectId);
+        if (useProjectStore.getState().currentProject?.id !== projectId) return;
+        const scope = (current.fleetSavedScopes ?? []).find((s) => s.id === id);
+        if (!scope) return;
+        applySavedScope(scope);
+      } catch (error) {
+        notify({
+          type: "error",
+          title: "Couldn't recall fleet",
+          message: formatErrorMessage(error, "Couldn't read project settings to recall the fleet"),
+          duration: 5000,
+        });
+      }
+    },
+  }));
+
+  actions.set("fleet.deleteNamedFleet", () => ({
+    id: "fleet.deleteNamedFleet",
+    title: "Fleet: Delete named fleet",
+    description: "Remove a saved fleet by id. Idempotent — unknown ids are silently ignored.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: idArgSchema,
+    run: async (args: unknown) => {
+      const { id } = idArgSchema.parse(args);
+      const projectId = useProjectStore.getState().currentProject?.id ?? null;
+      if (!projectId) return;
+      try {
+        const current = await projectClient.getSettings(projectId);
+        if (useProjectStore.getState().currentProject?.id !== projectId) return;
+        const existing = current.fleetSavedScopes ?? [];
+        const next = existing.filter((s) => s.id !== id);
+        if (next.length === existing.length) return;
+        const nextSettings = { ...current, fleetSavedScopes: next };
+        await projectClient.saveSettings(projectId, nextSettings);
+        if (useProjectStore.getState().currentProject?.id !== projectId) return;
+        if (useProjectSettingsStore.getState().projectId === projectId) {
+          useProjectSettingsStore.getState().setSettings(nextSettings);
+        }
+      } catch (error) {
+        notify({
+          type: "error",
+          title: "Couldn't delete fleet",
+          message: formatErrorMessage(error, "Couldn't update project settings"),
+          duration: 5000,
+        });
+      }
+    },
+  }));
+}
+
+const saveNamedFleetSchema = z.object({ name: z.string().min(1) }).and(
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      terminalIds: z.array(z.string()).optional(),
+    }),
+    z.object({
+      kind: z.literal("predicate"),
+      scope: z.enum(["current", "all"]),
+      stateFilter: z.enum(["all", "working", "waiting", "finished"]),
+    }),
+  ])
+);
+
+const idArgSchema = z.object({ id: z.string().min(1) });
+
+type SaveNamedFleetArgs = z.infer<typeof saveNamedFleetSchema>;
+
+/**
+ * Build the persisted scope object. For snapshots without an explicit terminalIds
+ * argument, we read armOrder live so the UI doesn't have to pass IDs around — but
+ * if the caller did pass an empty array on purpose we still honor it (zero-pane
+ * snapshot is allowed; recall will arm nothing).
+ */
+function buildSavedScope(args: SaveNamedFleetArgs): FleetSavedScope | null {
+  const id = generateScopeId();
+  const createdAt = Date.now();
+  const name = args.name.trim();
+  if (args.kind === "snapshot") {
+    const terminalIds =
+      args.terminalIds !== undefined
+        ? [...args.terminalIds]
+        : [...useFleetArmingStore.getState().armOrder];
+    return { kind: "snapshot", id, name, terminalIds, createdAt };
+  }
+  return {
+    kind: "predicate",
+    id,
+    name,
+    scope: args.scope,
+    stateFilter: args.stateFilter,
+    createdAt,
+  };
+}
+
+function applySavedScope(scope: FleetSavedScope): void {
+  const fleet = useFleetArmingStore.getState();
+  if (scope.kind === "snapshot") {
+    const { panelsById } = usePanelStore.getState();
+    const validIds: string[] = [];
+    const ids = Array.isArray(scope.terminalIds) ? scope.terminalIds : [];
+    for (const id of ids) {
+      if (isFleetArmEligible(panelsById[id])) validIds.push(id);
+    }
+    fleet.armIds(validIds);
+    return;
+  }
+  if (scope.stateFilter === "all") {
+    fleet.armAll(scope.scope);
+    return;
+  }
+  fleet.armByState(scope.stateFilter as FleetArmStatePreset, scope.scope, false);
+}
+
+function generateScopeId(): string {
+  return crypto.randomUUID();
+}
+
+/**
+ * Compute how many panes a saved scope would currently arm. Used by the UI to
+ * render live counts on saved-fleet rows. Predicate scopes re-evaluate against
+ * the current panel state; snapshot scopes return the count of still-eligible
+ * stored IDs (silent drop semantics).
+ */
+export function computeSavedScopePaneCount(scope: FleetSavedScope): number {
+  if (scope.kind === "snapshot") {
+    const { panelsById } = usePanelStore.getState();
+    const ids = Array.isArray(scope.terminalIds) ? scope.terminalIds : [];
+    let n = 0;
+    for (const id of ids) {
+      if (isFleetArmEligible(panelsById[id])) n++;
+    }
+    return n;
+  }
+  const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
+  if (scope.stateFilter === "all") {
+    return collectEligibleIds(scope.scope, activeWorktreeId).length;
+  }
+  return computeArmByStateIds(
+    scope.stateFilter as FleetArmStatePreset,
+    scope.scope,
+    activeWorktreeId
+  ).length;
 }

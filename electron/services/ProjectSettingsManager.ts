@@ -10,7 +10,11 @@ import { sanitizeSvg } from "../../shared/utils/svgSanitizer.js";
 import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
 import { projectEnvSecureStorage } from "./ProjectEnvSecureStorage.js";
 import { getProjectStateDir, settingsFilePath } from "./projectStorePaths.js";
-import { parseTerminalSettings, parseNotificationOverrides } from "./projectSettingsParsers.js";
+import {
+  parseFleetSavedScopes,
+  parseNotificationOverrides,
+  parseTerminalSettings,
+} from "./projectSettingsParsers.js";
 import { Cache } from "../utils/cache.js";
 
 export class ProjectSettingsManager {
@@ -209,6 +213,7 @@ export class ProjectSettingsManager {
             : undefined,
         terminalSettings: parseTerminalSettings(parsed.terminalSettings),
         notificationOverrides: parseNotificationOverrides(parsed.notificationOverrides),
+        fleetSavedScopes: parseFleetSavedScopes(parsed.fleetSavedScopes),
         resourceEnvironments:
           parsed.resourceEnvironments &&
           typeof parsed.resourceEnvironments === "object" &&
