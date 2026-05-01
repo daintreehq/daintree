@@ -452,13 +452,7 @@ const TYPE_KEYS: TypeFilter[] = [
   "other",
 ];
 const GITHUB_KEYS: GitHubFilter[] = ["hasIssue", "hasPR", "prOpen", "prMerged", "prClosed"];
-const SESSION_KEYS: SessionFilter[] = [
-  "hasTerminals",
-  "working",
-  "waiting",
-  "completed",
-  "exited",
-];
+const SESSION_KEYS: SessionFilter[] = ["hasTerminals", "working", "waiting", "completed", "exited"];
 const ACTIVITY_KEYS: ActivityFilter[] = ["last15m", "last1h", "last24h", "last7d"];
 
 const ACTIVITY_WINDOW_MS: Record<ActivityFilter, number> = {
