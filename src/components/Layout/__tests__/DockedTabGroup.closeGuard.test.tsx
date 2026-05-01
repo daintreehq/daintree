@@ -56,6 +56,12 @@ vi.mock("@/store", () => ({
     selector({ showDockAgentHighlights: false }),
 }));
 
+let mockHiddenTabIds: ReadonlySet<string> = new Set();
+
+vi.mock("@/hooks", () => ({
+  useTabOverflow: () => mockHiddenTabIds,
+}));
+
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: (selector: (s: { settings: null }) => unknown) =>
     selector({ settings: null }),
@@ -144,6 +150,27 @@ vi.mock("@/components/Panel/SortableTabButton", () => ({
   SortableTabButton: ({ id, onClose }: { id: string; onClose: () => void }) => (
     <button data-testid={`close-${id}`} onClick={onClose}>
       close {id}
+    </button>
+  ),
+}));
+
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="dock-overflow-menu">{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    ...rest
+  }: {
+    children: React.ReactNode;
+    onSelect?: (e: Event) => void;
+    [key: string]: unknown;
+  }) => (
+    <button {...rest} onClick={() => onSelect?.(new Event("select"))}>
+      {children}
     </button>
   ),
 }));
@@ -239,6 +266,7 @@ describe("DockedTabGroup close guard (#6330)", () => {
     mockActiveDockTerminalId = null;
     mockTabGroups = new Map();
     mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"]));
+    mockHiddenTabIds = new Set();
   });
 
   it("closes immediately when the tab's agent is idle", () => {
@@ -332,5 +360,68 @@ describe("DockedTabGroup close guard (#6330)", () => {
     fireEvent.click(getByTestId("dialog-cancel"));
 
     expect(openDockTerminalMock).toHaveBeenCalledWith("t-1");
+  });
+});
+
+describe("DockedTabGroup tab overflow menu (#6429)", () => {
+  beforeEach(() => {
+    trashPanelMock.mockClear();
+    setActiveTabMock.mockClear();
+    setFocusedMock.mockClear();
+    openDockTerminalMock.mockClear();
+    closeDockTerminalMock.mockClear();
+    mockActiveDockTerminalId = null;
+    mockTabGroups = new Map();
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2", "t-3"]));
+    mockHiddenTabIds = new Set();
+  });
+
+  it("does not render the overflow trigger when no dock tabs are hidden", () => {
+    const panels = [
+      makePanel({ id: "t-1", agentState: "idle" as AgentState }),
+      makePanel({ id: "t-2", agentState: "idle" as AgentState }),
+    ];
+    const { queryByTestId } = render(
+      <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+    );
+    expect(queryByTestId("dock-tabs-overflow")).toBeNull();
+  });
+
+  it("renders the overflow trigger when dock tabs are hidden", () => {
+    mockHiddenTabIds = new Set(["t-3"]);
+    const panels = [
+      makePanel({ id: "t-1", title: "Alpha", agentState: "idle" as AgentState }),
+      makePanel({ id: "t-2", title: "Beta", agentState: "idle" as AgentState }),
+      makePanel({ id: "t-3", title: "Gamma", agentState: "idle" as AgentState }),
+    ];
+    const { getByTestId } = render(
+      <DockedTabGroup group={makeGroup(["t-1", "t-2", "t-3"], "t-1")} panels={panels} />
+    );
+    const trigger = getByTestId("dock-tabs-overflow");
+    expect(trigger.getAttribute("aria-label")).toBe("Show hidden tabs");
+    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+    const menu = getByTestId("dock-overflow-menu");
+    expect(menu.textContent).toContain("Gamma");
+    expect(menu.textContent).not.toContain("Alpha");
+  });
+
+  it("activates and focuses a hidden dock tab when its menu item is selected", () => {
+    mockHiddenTabIds = new Set(["t-3"]);
+    const panels = [
+      makePanel({ id: "t-1", title: "Alpha", agentState: "idle" as AgentState }),
+      makePanel({ id: "t-2", title: "Beta", agentState: "idle" as AgentState }),
+      makePanel({ id: "t-3", title: "Gamma", agentState: "idle" as AgentState }),
+    ];
+    const { getByTestId } = render(
+      <DockedTabGroup group={makeGroup(["t-1", "t-2", "t-3"], "t-1")} panels={panels} />
+    );
+    const menu = getByTestId("dock-overflow-menu");
+    const item = Array.from(menu.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Gamma")
+    );
+    item?.click();
+    expect(setActiveTabMock).toHaveBeenCalledWith("g-1", "t-3");
+    expect(setFocusedMock).toHaveBeenCalledWith("t-3");
+    expect(openDockTerminalMock).toHaveBeenCalledWith("t-3");
   });
 });
