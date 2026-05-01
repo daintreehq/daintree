@@ -53,7 +53,7 @@ function routeError(error: ErrorRecord): void {
   const escalated = shouldEscalateTransientError(error);
   const priority = escalated ? "high" : getErrorPriority(error);
 
-  useErrorStore.getState().addError({
+  const errorId = useErrorStore.getState().addError({
     type: error.type,
     message: error.message,
     details: error.details,
@@ -73,7 +73,35 @@ function routeError(error: ErrorRecord): void {
   // "Copy details" is omitted for low-priority errors: those route to the
   // history inbox without a toast, so the action would never be reachable —
   // and notify() auto-promotes action-bearing toasts to sticky.
-  const action = priority === "low" ? undefined : buildCopyDetailsAction(error);
+  const copyAction = priority === "low" ? undefined : buildCopyDetailsAction(error);
+
+  let retryNotificationAction: NotificationAction | undefined;
+  if (error.retryAction) {
+    retryNotificationAction = {
+      label: "Retry",
+      variant: "primary",
+      onClick: async () => {
+        const state = useErrorStore.getState();
+        const stored = state.errors.find((e) => e.id === errorId);
+        if (!stored?.retryAction) return;
+        try {
+          await errorsClient.retry(errorId, stored.retryAction, stored.retryArgs);
+          state.removeError(errorId);
+        } catch (err) {
+          logErrorWithContext(err, {
+            operation: "toast_retry",
+            component: "useErrors",
+            details: { errorId, action: stored.retryAction, args: stored.retryArgs },
+          });
+        } finally {
+          state.clearRetryProgress(errorId);
+        }
+      },
+    };
+  }
+
+  const action = retryNotificationAction ?? copyAction;
+  const actions = retryNotificationAction && copyAction ? [copyAction] : undefined;
 
   const toastId = notify({
     type: "error",
@@ -82,6 +110,7 @@ function routeError(error: ErrorRecord): void {
     correlationId: error.correlationId,
     priority,
     action,
+    actions,
   });
 
   if (escalated && toastId) {
