@@ -95,3 +95,88 @@ describe("NotificationCenterEntry unread signal", () => {
     expect(row.className).not.toMatch(/bg-daintree-accent\/\[0\.04\]/);
   });
 });
+
+describe("NotificationCenterEntry thread count chip", () => {
+  it("renders a count chip with the bare number when threadCount >= 2", () => {
+    render(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={3} />);
+    const chip = screen.getByLabelText("3 events");
+    expect(chip).toBeTruthy();
+    expect(chip.textContent).toBe("3");
+  });
+
+  it("does not render the legacy 'N events' subtitle text", () => {
+    render(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={3} />);
+    expect(screen.queryByText(/^\d+ events$/)).toBeNull();
+  });
+
+  it("does not render a chip when threadCount is 1, 0, or omitted", () => {
+    const { rerender } = render(
+      <NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={1} />
+    );
+    expect(screen.queryByLabelText(/events$/)).toBeNull();
+
+    rerender(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={0} />);
+    expect(screen.queryByLabelText(/events$/)).toBeNull();
+
+    rerender(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} />);
+    expect(screen.queryByLabelText(/events$/)).toBeNull();
+  });
+
+  it("places the chip beside the title when one exists", () => {
+    render(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={2} />);
+    const chip = screen.getByLabelText("2 events");
+    const title = screen.getByText("Build");
+    expect(chip.parentElement).toBe(title.parentElement);
+  });
+
+  it("renders the chip below the message when no title is present", () => {
+    render(<NotificationCenterEntry entry={makeEntry({ message: "Plain" })} threadCount={2} />);
+    expect(screen.getByLabelText("2 events")).toBeTruthy();
+  });
+
+  it("uses tint-based background, not the accent color", () => {
+    render(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={2} />);
+    const chip = screen.getByLabelText("2 events");
+    expect(chip.className).toMatch(/bg-tint\//);
+    expect(chip.className).not.toMatch(/bg-daintree-accent/);
+    expect(chip.className).not.toMatch(/text-accent-primary/);
+  });
+
+  it("pulses with animate-badge-bump when threadCount increases, then clears", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={2} />
+      );
+      const chip = screen.getByLabelText("2 events");
+      expect(chip.className).not.toMatch(/animate-badge-bump/);
+
+      rerender(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={3} />);
+      const grown = screen.getByLabelText("3 events");
+      expect(grown.className).toMatch(/animate-badge-bump/);
+
+      act(() => {
+        vi.advanceTimersByTime(260);
+      });
+      expect(grown.className).not.toMatch(/animate-badge-bump/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not pulse on initial mount or when threadCount stays the same", () => {
+    const { rerender } = render(
+      <NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={3} />
+    );
+    expect(screen.getByLabelText("3 events").className).not.toMatch(/animate-badge-bump/);
+
+    rerender(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={3} />);
+    expect(screen.getByLabelText("3 events").className).not.toMatch(/animate-badge-bump/);
+  });
+
+  it("sets a 150ms inline animation duration on the chip", () => {
+    render(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={2} />);
+    const chip = screen.getByLabelText("2 events") as HTMLElement;
+    expect(chip.style.animationDuration).toBe("150ms");
+  });
+});

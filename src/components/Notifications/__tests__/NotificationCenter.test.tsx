@@ -527,6 +527,95 @@ describe("NotificationCenter muted pill", () => {
   });
 });
 
+describe("NotificationThread visual treatment", () => {
+  it("wraps grouped threads with a 2px tint left rail", async () => {
+    const correlationId = "thread-rail";
+    useNotificationHistoryStore.getState().addEntry(
+      makeEntry({
+        id: "rail-entry-1",
+        type: "info",
+        message: "Step 1",
+        correlationId,
+        timestamp: Date.now() - 2000,
+      })
+    );
+    useNotificationHistoryStore.getState().addEntry(
+      makeEntry({
+        id: "rail-entry-2",
+        type: "info",
+        message: "Step 2",
+        correlationId,
+        timestamp: Date.now() - 1000,
+      })
+    );
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Step 2")).toBeTruthy();
+    });
+
+    const wrapper = screen.getByTestId("notification-thread");
+    expect(wrapper.className).toMatch(/border-l-2/);
+    expect(wrapper.className).toMatch(/border-tint\//);
+    expect(wrapper.className).not.toMatch(/border-daintree-accent/);
+    expect(wrapper.className).not.toMatch(/bg-daintree-accent/);
+  });
+
+  it("does not render the thread rail wrapper for solo entries", async () => {
+    setEntries([makeEntry({ message: "Solo" })]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Solo")).toBeTruthy();
+    });
+
+    expect(screen.queryByTestId("notification-thread")).toBeNull();
+  });
+});
+
+describe("NotificationCenter empty state — zero data", () => {
+  it("renders a description that explains where notifications appear", () => {
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.getByText(/Notifications appear here/)).toBeTruthy();
+  });
+
+  it("renders 'Notification settings' as a clickable link inline in the description", async () => {
+    const onClose = vi.fn();
+    render(<NotificationCenter open onClose={onClose} />);
+
+    const link = screen.getByRole("button", { name: "Notification settings" });
+    expect(link).toBeTruthy();
+    expect(link.tagName).toBe("BUTTON");
+
+    await act(async () => {
+      fireEvent.click(link);
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "notifications" },
+      { source: "user" }
+    );
+  });
+
+  it("does not render the description on the user-cleared empty state", async () => {
+    setEntries([makeEntry({ seenAsToast: true })]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const unreadButton = screen.getByText("Unread");
+    await act(async () => {
+      fireEvent.click(unreadButton);
+    });
+
+    expect(screen.getByText("You're all caught up")).toBeTruthy();
+    expect(screen.queryByText(/Notifications appear here/)).toBeNull();
+  });
+});
+
 describe("NotificationCenter overflow menu", () => {
   it("does not render overflow trigger when there are no entries", () => {
     render(<NotificationCenter open onClose={() => {}} />);

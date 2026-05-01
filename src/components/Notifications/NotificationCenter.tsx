@@ -353,6 +353,19 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               variant="zero-data"
               title="No notifications yet"
               icon={<Bell />}
+              description={
+                <>
+                  Notifications appear here. Adjust which ones at{" "}
+                  <button
+                    type="button"
+                    onClick={openNotificationSettings}
+                    className="underline text-daintree-text/70 hover:text-daintree-text transition-colors"
+                  >
+                    Notification settings
+                  </button>
+                  .
+                </>
+              }
               className="py-10"
             />
           )
@@ -396,7 +409,7 @@ function NotificationThread({
   const displayType = getWorstSeverity(group.entries);
 
   return (
-    <div className="relative">
+    <div data-testid="notification-thread" className="relative border-l-2 border-tint/15">
       <NotificationCenterEntry
         entry={latest}
         displayType={displayType}
