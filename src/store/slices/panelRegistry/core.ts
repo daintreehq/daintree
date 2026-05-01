@@ -686,6 +686,7 @@ export const createCorePanelActions = (
   },
 
   removePanel: (id) => {
+    console.error("[DEBUG removePanel called] id=", id, "stack=", new Error().stack);
     clearTrashExpiryTimer(id);
     const state = get();
     const removedIndex = state.panelIds.indexOf(id);
@@ -904,6 +905,7 @@ export const createCorePanelActions = (
     }
 
     // Single ungrouped panel - move just this panel
+    console.error("[DEBUG moveTerminalToDock] id=", id, "stack=", new Error().stack);
     const terminal = get().panelsById[id];
 
     set((state) => {

@@ -26,6 +26,31 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
   });
 
   test("GitHub issues dropdown shows error state on IPC fault", async () => {
+    // Seed a fake GitHub token in the main process so the renderer's no-token
+    // empty state ("Add GitHub token") doesn't short-circuit the IPC path the
+    // injected fault is meant to exercise. The token is never validated against
+    // GitHub — the seeding hook pre-populates cached user info to mirror the
+    // post-validate state.
+    await ctx.app.evaluate((_modules, token) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- E2E hook
+      const seed = (globalThis as any).__daintreeSeedGitHubToken as
+        | ((t: string) => void)
+        | undefined;
+      if (!seed)
+        throw new Error(
+          "GitHub token seed hook not available — launch with DAINTREE_E2E_FAULT_MODE=1"
+        );
+      seed(token);
+    }, "ghp_e2e_fault_test_0000000000000000000000");
+
+    // Refresh the renderer's GitHub config store so it picks up the seeded
+    // token's `hasToken: true` and skips rendering the no-token empty state.
+    await ctx.window.evaluate(async () => {
+      const refresh = window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__;
+      if (!refresh) throw new Error("E2E GitHub config refresh hook not available");
+      await refresh();
+    });
+
     await injectFault(ctx.app, "github:list-issues", "E2E_INJECTED_ERROR");
 
     const issuesButton = ctx.window.locator('button[aria-label*="open issues"]');
@@ -38,6 +63,13 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
     await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();
 
     await ctx.window.keyboard.press("Escape");
+
+    // Clean up seeded token so subsequent tests start from a clean state.
+    await ctx.app.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- E2E hook
+      const clear = (globalThis as any).__daintreeClearGitHubToken as (() => void) | undefined;
+      if (clear) clear();
+    });
   });
 
   test("diagnostics dock continues working when persistence fails", async () => {

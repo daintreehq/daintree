@@ -189,8 +189,18 @@ export function BrowserPane({
 
   // Clean up console messages when pane unmounts
   useEffect(() => {
-    return () => removePane(id);
+    return () => {
+      console.error("[DEBUG BrowserPane UNMOUNT] id=", id);
+      removePane(id);
+    };
   }, [id, removePane]);
+
+  useEffect(() => {
+    console.error("[DEBUG BrowserPane MOUNT] id=", id);
+    return () => {
+      console.error("[DEBUG BrowserPane EFFECT TEARDOWN] id=", id);
+    };
+  }, [id]);
 
   // Listen for blocked navigation events from main process (debounced 150ms for redirect chains)
   useEffect(() => {
@@ -545,7 +555,13 @@ export function BrowserPane({
 
       const webview = webviewRef.current;
       if (webview && isWebviewReady) {
-        webview.loadURL(url);
+        // ERR_ABORTED (-3) is benign: emitted when a pending load is superseded
+        // by a fresh navigation (typing a new URL while the previous one is
+        // still loading). The did-fail-load handler already filters -3 — we
+        // mirror that here on the loadURL Promise so the rejection doesn't
+        // bubble to the global unhandled-rejection handler. Any genuine load
+        // failure will surface through did-fail-load with a non-(-3) code.
+        webview.loadURL(url).catch(() => {});
       }
     },
     [isWebviewReady]
@@ -602,10 +618,12 @@ export function BrowserPane({
       const previousUrl = next.present;
       lastSetUrlRef.current = previousUrl;
 
-      // Navigate webview back
+      // Navigate webview back. Swallow ERR_ABORTED-class rejections — see
+      // commitNavigation comment above; did-fail-load is the source of truth
+      // for genuine failures.
       const webview = webviewRef.current;
       if (webview && isWebviewReady) {
-        webview.loadURL(previousUrl);
+        webview.loadURL(previousUrl).catch(() => {});
       }
 
       return next;
@@ -623,10 +641,11 @@ export function BrowserPane({
       const nextUrl = next.present;
       lastSetUrlRef.current = nextUrl;
 
-      // Navigate webview forward
+      // Navigate webview forward. Swallow ERR_ABORTED-class rejections —
+      // see commitNavigation comment.
       const webview = webviewRef.current;
       if (webview && isWebviewReady) {
-        webview.loadURL(nextUrl);
+        webview.loadURL(nextUrl).catch(() => {});
       }
 
       return next;
@@ -667,7 +686,8 @@ export function BrowserPane({
     setIsSlowLoad(false);
     setIsLoading(true);
     if (currentUrl) {
-      webviewRef.current?.loadURL(currentUrl);
+      // Swallow ERR_ABORTED-class rejections — see commitNavigation comment.
+      webviewRef.current?.loadURL(currentUrl).catch(() => {});
     } else {
       webviewRef.current?.reload();
     }

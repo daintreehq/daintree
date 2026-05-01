@@ -134,6 +134,21 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       });
 
       app.on("close", () => console.log("[e2e] Electron app closed"));
+      // DIAGNOSTIC: forward stdout/stderr so we can see main-process logs
+      try {
+        const proc = app.process();
+        proc.stdout?.on("data", (chunk: Buffer) => {
+          process.stderr.write(`[E2E_STDOUT] ${chunk.toString()}`);
+        });
+        proc.stderr?.on("data", (chunk: Buffer) => {
+          process.stderr.write(`[E2E_STDERR] ${chunk.toString()}`);
+        });
+        proc.on("exit", (code: number | null, signal: string | null) => {
+          process.stderr.write(`[E2E_EXIT] code=${code} signal=${signal}\n`);
+        });
+      } catch {
+        /* best-effort diagnostic */
+      }
 
       // After WebContentsView migration, firstWindow() returns the BW sentinel page.
       // Poll for the real app page loaded in the WebContentsView.
@@ -436,7 +451,17 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
 }
 
 export async function closeApp(app: ElectronApplication): Promise<void> {
-  const pid = app.process().pid;
+  // app.process() throws on Playwright >=1.58 if the underlying child process
+  // has already exited (e.g., a launch attempt crashed during startup before
+  // the WebContentsView appeared). Without this guard, closeApp throws inside
+  // launchApp's retry-cleanup path and prevents descendant processes from
+  // being reaped — turning a single launch flake into a zombie-process leak.
+  let pid: number | undefined;
+  try {
+    pid = app.process()?.pid;
+  } catch {
+    pid = undefined;
+  }
 
   // Collect all descendant PIDs BEFORE closing — once the parent dies,
   // children get reparented to PID 1 and we can no longer find them via ppid.

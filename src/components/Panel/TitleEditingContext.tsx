@@ -1,5 +1,5 @@
-import type { ReactElement, ReactNode } from "react";
-import { createContext, useContext, useState, useCallback, useEffect } from "react";
+import type { ReactElement, ReactNode, RefObject } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 
 export interface TitleEditingContextValue {
   isEditingTitle: boolean;
@@ -10,6 +10,12 @@ export interface TitleEditingContextValue {
   handleTitleDoubleClick: (e: React.MouseEvent) => void;
   handleTitleKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void;
   handleTitleBlur: () => void;
+  /**
+   * Timestamp (ms) when editing most recently started. Consumers use this to
+   * suppress spurious blur events that fire while overlay-restoration logic
+   * (e.g. Radix's `onCloseAutoFocus`) is racing the input's mount.
+   */
+  editingStartedAtRef: RefObject<number>;
 }
 
 const TitleEditingContext = createContext<TitleEditingContextValue | null>(null);
@@ -27,8 +33,14 @@ export function TitleEditingProvider({
   title,
   onTitleChange,
 }: TitleEditingProviderProps): ReactElement {
-  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [isEditingTitle, setIsEditingTitleState] = useState(false);
   const [editingValue, setEditingValue] = useState(title);
+  const editingStartedAtRef = useRef(0);
+
+  const setIsEditingTitle = useCallback((next: boolean) => {
+    if (next) editingStartedAtRef.current = Date.now();
+    setIsEditingTitleState(next);
+  }, []);
 
   // Sync editing value with title when not editing
   useEffect(() => {
@@ -42,7 +54,7 @@ export function TitleEditingProvider({
       setEditingValue(title);
       setIsEditingTitle(true);
     }
-  }, [title, onTitleChange]);
+  }, [title, onTitleChange, setIsEditingTitle]);
 
   // Listen for rename events from context menu
   useEffect(() => {
@@ -63,7 +75,7 @@ export function TitleEditingProvider({
       signal: controller.signal,
     });
     return () => controller.abort();
-  }, [id, title, onTitleChange]);
+  }, [id, title, onTitleChange, setIsEditingTitle]);
 
   const stopEditing = useCallback(() => {
     setIsEditingTitle(false);
@@ -114,6 +126,7 @@ export function TitleEditingProvider({
     handleTitleDoubleClick,
     handleTitleKeyDown,
     handleTitleBlur,
+    editingStartedAtRef,
   };
 
   return <TitleEditingContext.Provider value={value}>{children}</TitleEditingContext.Provider>;

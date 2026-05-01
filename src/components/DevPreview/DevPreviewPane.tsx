@@ -439,7 +439,9 @@ export function DevPreviewPane({
     setIsSlowLoad(false);
     setIsLoading(true);
     if (currentUrl) {
-      webviewRef.current?.loadURL(currentUrl);
+      // Swallow ERR_ABORTED-class rejections — did-fail-load is the source
+      // of truth for genuine failures.
+      webviewRef.current?.loadURL(currentUrl).catch(() => {});
     } else {
       webviewRef.current?.reload();
     }

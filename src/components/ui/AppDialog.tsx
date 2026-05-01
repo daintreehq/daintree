@@ -142,6 +142,31 @@ export function AppDialog({
 
   useEscapeStack(isOpen, handleClose);
 
+  // Backstop Escape handler on document bubble.
+  //
+  // The bubble-phase escape stack dispatcher (`useGlobalEscapeDispatcher`)
+  // bails when `defaultPrevented` is true. Radix DismissableLayers
+  // (tooltips, popovers) register Escape handling on document with
+  // capture and call `preventDefault()` when they're the highest
+  // layer — including while they're mid-exit (data-state="closed" but
+  // still mounted by Presence). That preempts the dispatcher and
+  // leaves the dialog stuck open.
+  //
+  // This handler runs on document bubble (after target handlers like
+  // a search input clearing its query) and ignores defaultPrevented,
+  // so the dialog still closes. Inner handlers can opt out by calling
+  // `e.stopPropagation()` — which the settings search input already
+  // does when clearing a non-empty query.
+  useEffect(() => {
+    if (!isOpen || !dismissible) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing || e.repeat) return;
+      void handleClose();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [isOpen, dismissible, handleClose]);
+
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === "Tab" && dialogRef.current) {
       // Don't interfere if another modal (e.g., a nested dialog portal) has focus

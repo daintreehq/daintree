@@ -69,6 +69,23 @@ export function AppPaletteDialog({
     }
   }, [isOpen]);
 
+  // Backstop Escape on document bubble. The bubble-phase escape
+  // stack dispatcher (`useGlobalEscapeDispatcher`) bails when
+  // `defaultPrevented` is true, which Radix DismissableLayers
+  // (tooltips, popovers) set in capture phase even mid-exit.
+  // Document-bubble fires after target handlers but ignores
+  // defaultPrevented; inner handlers can still opt out by calling
+  // `e.stopPropagation()`.
+  useEffect(() => {
+    if (!isOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing || e.repeat) return;
+      onClose();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [isOpen, onClose]);
+
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {

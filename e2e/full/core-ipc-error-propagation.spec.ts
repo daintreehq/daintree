@@ -173,10 +173,13 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     await bell.click();
 
     // The notification center renders in a FixedDropdown portal.
-    // Look for the error message inside the surface-overlay container.
+    // Look for the error inside the surface-overlay container. The renderer
+    // routes errors through humanizeAppError, which maps `type: "network"` to
+    // a friendly title — the raw IPC message ("ECONNREFUSED: ...") is
+    // intentionally never piped to UI copy (see shared/utils/errorMessage.ts).
     const dropdownContent = ctx.window.locator(".surface-overlay");
     await expect(dropdownContent).toBeVisible({ timeout: 3000 });
-    await expect(dropdownContent.getByText("ECONNREFUSED: connection refused")).toBeVisible({
+    await expect(dropdownContent.getByText("Network problem")).toBeVisible({
       timeout: 3000,
     });
 

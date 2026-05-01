@@ -338,6 +338,22 @@ export async function setupWindowServices(
       }
     }
 
+    // E2E hook: seed/clear an in-memory GitHub token so fault-mode tests can
+    // reach IPC paths gated on `hasToken: true` without hitting the network.
+    // Skips token validation by pre-seeding cached user info, mirroring the
+    // post-validate state. Mirrors the __daintreeFaultRegistry / __daintreeResetRateLimits
+    // pattern — gated on DAINTREE_E2E_FAULT_MODE, never present in production.
+    if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+      (globalThis as Record<string, unknown>).__daintreeSeedGitHubToken = (token: string) => {
+        GitHubAuth.setMemoryToken(token);
+        const version = GitHubAuth.getTokenVersion();
+        GitHubAuth.setValidatedUserInfo("e2e-user", undefined, ["repo"], version);
+      };
+      (globalThis as Record<string, unknown>).__daintreeClearGitHubToken = () => {
+        GitHubAuth.setMemoryToken(null);
+      };
+    }
+
     // Start background token-health polling (30-minute interval + focus/wake
     // re-checks). The service guards itself with the GitHubAuth.tokenVersion
     // so a stale probe cannot clobber a freshly-set token.

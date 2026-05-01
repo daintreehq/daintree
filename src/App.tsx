@@ -131,6 +131,7 @@ import {
   useNotificationSettingsStore,
   usePreferencesStore,
 } from "./store";
+import { useGitHubConfigStore } from "./store/githubConfigStore";
 import { useAgentSettingsStore } from "./store/agentSettingsStore";
 import { isAgentLaunchable } from "../shared/utils/agentAvailability";
 import { isAgentPinned } from "../shared/utils/agentPinned";
@@ -173,10 +174,15 @@ function App() {
     window.__DAINTREE_E2E_CLEAR_ERRORS__ = () => {
       useErrorStore.getState().clearAll();
     };
+    // Refreshes the GitHub config store from the main process. Used by
+    // fault-mode tests to pick up a token seeded via __daintreeSeedGitHubToken
+    // so the no-token empty state doesn't short-circuit IPC fault paths.
+    window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__ = () => useGitHubConfigStore.getState().refresh();
     return () => {
       delete window.__DAINTREE_E2E_ERROR_STORE__;
       delete window.__DAINTREE_E2E_ADD_ERROR__;
       delete window.__DAINTREE_E2E_CLEAR_ERRORS__;
+      delete window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__;
     };
   }, []);
 

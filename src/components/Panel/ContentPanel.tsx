@@ -211,11 +211,13 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   }, [id]);
 
   // Focus and select input when editing starts (handles context menu rename).
-  // Use a short delay instead of rAF so the context menu's focus restoration
-  // (Radix returns focus to the trigger) completes before we grab focus.
+  // The delay must outlast Radix's `onCloseAutoFocus` window — otherwise the
+  // dropdown/context-menu's focus restoration steals focus from the input
+  // immediately after we grab it, the input fires `onBlur`, and editing ends
+  // before the user sees it. 200ms covers Tier 2-fast palette/menu exit.
   useEffect(() => {
     if (titleEditing.isEditingTitle && titleInputRef.current) {
-      const timer = setTimeout(() => titleInputRef.current?.select(), 60);
+      const timer = setTimeout(() => titleInputRef.current?.select(), 200);
       return () => clearTimeout(timer);
     }
     return undefined;
@@ -317,6 +319,18 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   );
 
   const handleTitleSave = useCallback(() => {
+    // Ignore spurious blurs that happen while overlay-restoration logic is
+    // racing the input's mount. When the rename action starts editing from a
+    // context menu, Radix's `onCloseAutoFocus` may steal focus from the input
+    // moments after we focus it — this fires a stray blur. Re-anchor focus on
+    // the input instead of saving with the unchanged value.
+    if (
+      titleEditing.editingStartedAtRef.current &&
+      Date.now() - titleEditing.editingStartedAtRef.current < 300
+    ) {
+      requestAnimationFrame(() => titleInputRef.current?.focus());
+      return;
+    }
     titleEditing.stopEditing();
     if (titleEditing.editingValue.trim() && titleEditing.editingValue !== title) {
       onTitleChange?.(titleEditing.editingValue.trim());

@@ -37,6 +37,12 @@ async function focusAndRunCommand(page: Page, panel: Locator, command: string): 
 
 test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
   test.beforeAll(async () => {
+    // beforeAll opens 3 projects and runs 5 project switches through
+    // refreshActiveWindow, which uses adaptive timeouts (20s local, 30s CI,
+    // 60s Windows CI) per operation. End-to-end this comfortably exceeds the
+    // default 120s hook budget on slower / CI machines, so widen explicitly.
+    test.setTimeout(300_000);
+
     const [repoA, repoB, repoC] = createFixtureRepos(3);
 
     ctx = await launchApp();
