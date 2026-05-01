@@ -206,6 +206,46 @@ describe("resolveIssuePrequeries", () => {
     expect(failedItems.some((f) => f.number === 1)).toBe(true);
   });
 
+  it("resolves branch names sequentially so each call sees prior in-batch claims", async () => {
+    // #6463 regression guard: parallel resolution let two siblings both see
+    // "name X is free in git" before either created its worktree. With
+    // sequential resolution the second call starts strictly after the first
+    // returns.
+    let inFlight = 0;
+    let maxObservedConcurrency = 0;
+    const callOrder: string[] = [];
+
+    const getAvailableBranch = vi.fn(async (_: string, name: string) => {
+      inFlight++;
+      maxObservedConcurrency = Math.max(maxObservedConcurrency, inFlight);
+      callOrder.push(`enter:${name}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      callOrder.push(`exit:${name}`);
+      inFlight--;
+      return name;
+    });
+    const getDefaultPath = vi.fn((_, branch) => Promise.resolve(`/path/${branch}`));
+
+    await resolveIssuePrequeries({
+      rootPath: "/repo",
+      items: [mockPlanned(1), mockPlanned(2), mockPlanned(3)],
+      existingBranches: null,
+      getAvailableBranch,
+      getDefaultPath,
+      isStaleRun: () => false,
+    });
+
+    expect(maxObservedConcurrency).toBe(1);
+    expect(callOrder).toEqual([
+      "enter:feature/issue-1",
+      "exit:feature/issue-1",
+      "enter:feature/issue-2",
+      "exit:feature/issue-2",
+      "enter:feature/issue-3",
+      "exit:feature/issue-3",
+    ]);
+  });
+
   it("calls onProgress callback with completion stats", async () => {
     const getAvailableBranch = vi.fn().mockResolvedValue("branch");
     const getDefaultPath = vi.fn().mockResolvedValue("/path");

@@ -5,6 +5,7 @@ import type { WorkspaceService } from "../WorkspaceService.js";
 const mockSimpleGit = {
   raw: vi.fn().mockResolvedValue(undefined),
   branch: vi.fn().mockResolvedValue({ current: "main" }),
+  branchLocal: vi.fn().mockResolvedValue({ all: [], current: "", branches: {}, detached: false }),
 };
 
 vi.mock("simple-git", () => ({
@@ -129,6 +130,19 @@ describe("WorkspaceService.createWorktree", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+
+    // restoreAllMocks (in afterEach) wipes mockResolvedValue so we re-anchor
+    // the defaults each test. Without this, branchLocal returns undefined on
+    // the second test onwards, which the createWorktree pre-flight handles
+    // via try/catch — but the fallback masks real test failures.
+    mockSimpleGit.raw.mockResolvedValue(undefined);
+    mockSimpleGit.branch.mockResolvedValue({ current: "main" });
+    mockSimpleGit.branchLocal.mockResolvedValue({
+      all: [],
+      current: "",
+      branches: {},
+      detached: false,
+    });
 
     const fsModule = await import("../../utils/fs.js");
     waitForPathExists = vi.mocked(fsModule.waitForPathExists);
@@ -279,7 +293,10 @@ describe("WorkspaceService.createWorktree", () => {
 
     const createPromise = service.createWorktree(requestId, "/test/root", options);
 
-    await Promise.resolve();
+    // The pre-flight branchLocal check (added for #6463) adds one microtask
+    // hop before git.raw is reached on the happy path; flush via setImmediate
+    // so this assertion isn't tied to the precise tick count.
+    await flushAsyncTail();
     expect(mockSimpleGit.raw).toHaveBeenCalled();
     expect(waitForPathExists).toHaveBeenCalledTimes(1);
 
@@ -422,6 +439,203 @@ describe("WorkspaceService.createWorktree", () => {
 
     expect(monitorPresentAtEmission).toBe(true);
     expect(service["monitors"].has("/test/worktree-sync")).toBe(true);
+  });
+
+  it("reuses a stale local branch (no -b) when it exists locally and is not checked out in any worktree", async () => {
+    // #6463 regression guard: a leftover local branch from a previously
+    // deleted worktree must not poison the next create. Reuse semantics
+    // (`git worktree add <path> <branch>`) preserve the user's chosen name.
+    mockSimpleGit.branchLocal.mockResolvedValueOnce({
+      all: ["main", "bugfix/issue-6463"],
+      current: "main",
+      branches: {},
+      detached: false,
+    });
+    // git worktree list --porcelain — only main is checked out, the stale
+    // bugfix/issue-6463 branch has no live worktree.
+    mockSimpleGit.raw.mockImplementationOnce((args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        return Promise.resolve(
+          ["worktree /test/root", "HEAD abc123", "branch refs/heads/main", ""].join("\n")
+        );
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await service.createWorktree("req-stale-reuse", "/test/root", {
+      baseBranch: "main",
+      newBranch: "bugfix/issue-6463",
+      path: "/test/worktree-reuse",
+    });
+
+    const worktreeAddCall = mockSimpleGit.raw.mock.calls.find(
+      ([args]: [string[]]) => args[0] === "worktree" && args[1] === "add"
+    );
+    expect(worktreeAddCall).toBeDefined();
+    // No -b — reuse path, like the explicit useExistingBranch caller.
+    expect(worktreeAddCall![0]).toEqual([
+      "worktree",
+      "add",
+      "/test/worktree-reuse",
+      "bugfix/issue-6463",
+    ]);
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-stale-reuse",
+        success: true,
+      })
+    );
+  });
+
+  it("suffixes branch name when it exists locally and is already checked out in another worktree", async () => {
+    // #6463: branch is live in another worktree → cannot reuse, must
+    // generate a unique suffix and create with -b.
+    mockSimpleGit.branchLocal.mockResolvedValueOnce({
+      all: ["main", "feature/foo"],
+      current: "main",
+      branches: {},
+      detached: false,
+    });
+    mockSimpleGit.raw.mockImplementationOnce((args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        return Promise.resolve(
+          [
+            "worktree /test/root",
+            "HEAD abc123",
+            "branch refs/heads/main",
+            "",
+            "worktree /test/foo-existing",
+            "HEAD def456",
+            "branch refs/heads/feature/foo",
+            "",
+          ].join("\n")
+        );
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await service.createWorktree("req-checked-out", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/foo",
+      path: "/test/worktree-foo",
+    });
+
+    const worktreeAddCall = mockSimpleGit.raw.mock.calls.find(
+      ([args]: [string[]]) => args[0] === "worktree" && args[1] === "add"
+    );
+    expect(worktreeAddCall).toBeDefined();
+    expect(worktreeAddCall![0]).toEqual([
+      "worktree",
+      "add",
+      "-b",
+      "feature/foo-2",
+      "--no-track",
+      "/test/worktree-foo",
+      "main",
+    ]);
+
+    // Emitted worktree carries the suffixed branch name, not the original.
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "worktree-update",
+        worktree: expect.objectContaining({ branch: "feature/foo-2" }),
+      })
+    );
+  });
+
+  it("picks the next free suffix past existing -2/-3 collisions", async () => {
+    mockSimpleGit.branchLocal.mockResolvedValueOnce({
+      all: ["main", "feature/foo", "feature/foo-2", "feature/foo-3"],
+      current: "main",
+      branches: {},
+      detached: false,
+    });
+    mockSimpleGit.raw.mockImplementationOnce((args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        // feature/foo is live; feature/foo-2 and feature/foo-3 are stale
+        // local branches but the requested name is feature/foo (live), so
+        // we must suffix past every existing local name.
+        return Promise.resolve(
+          [
+            "worktree /test/root",
+            "HEAD abc",
+            "branch refs/heads/main",
+            "",
+            "worktree /test/foo-live",
+            "HEAD def",
+            "branch refs/heads/feature/foo",
+            "",
+          ].join("\n")
+        );
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await service.createWorktree("req-suffix-skip", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/foo",
+      path: "/test/worktree-foo-new",
+    });
+
+    const worktreeAddCall = mockSimpleGit.raw.mock.calls.find(
+      ([args]: [string[]]) => args[0] === "worktree" && args[1] === "add"
+    );
+    expect(worktreeAddCall![0]).toContain("feature/foo-4");
+  });
+
+  it("proceeds with the original -b path when the branch does not exist locally", async () => {
+    // Baseline: the guard is a no-op when there's no collision. Argv must
+    // match the pre-fix shape exactly so the issue-mode --no-track contract
+    // is preserved.
+    mockSimpleGit.branchLocal.mockResolvedValueOnce({
+      all: ["main", "develop"],
+      current: "main",
+      branches: {},
+      detached: false,
+    });
+
+    await service.createWorktree("req-no-collision", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/brand-new",
+      path: "/test/worktree-new",
+    });
+
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith([
+      "worktree",
+      "add",
+      "-b",
+      "feature/brand-new",
+      "--no-track",
+      "/test/worktree-new",
+      "main",
+    ]);
+    // Never queried the worktree list — short-circuit when branch is free.
+    const listCall = mockSimpleGit.raw.mock.calls.find(
+      ([args]: [string[]]) => args[0] === "worktree" && args[1] === "list"
+    );
+    expect(listCall).toBeUndefined();
+  });
+
+  it("skips the pre-flight guard entirely when useExistingBranch is true", async () => {
+    // The caller is asking for explicit reuse; the guard's job is done by
+    // intent, not detection. Confirms we don't add a redundant branchLocal
+    // round-trip on the explicit-reuse path.
+    await service.createWorktree("req-explicit-reuse", "/test/root", {
+      baseBranch: "main",
+      newBranch: "existing-branch",
+      path: "/test/worktree-explicit",
+      useExistingBranch: true,
+    });
+
+    expect(mockSimpleGit.branchLocal).not.toHaveBeenCalled();
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith([
+      "worktree",
+      "add",
+      "/test/worktree-explicit",
+      "existing-branch",
+    ]);
   });
 
   it("emits a worktree-update before create-worktree-result so the renderer's store picks up the new worktree", async () => {
