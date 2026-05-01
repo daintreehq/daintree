@@ -42,8 +42,19 @@ describe("BrandMark", () => {
       </BrandMark>
     );
 
-    const cls = getByTestId("icon").getAttribute("class") ?? "";
-    expect(cls.split(/\s+/)).toEqual(expect.arrayContaining(["text-status-info", "mr-2"]));
+    expect(getByTestId("icon").getAttribute("class")).toBe("text-status-info mr-2");
+  });
+
+  it("preserves child size classes when BrandMark adds spacing (DockLaunchMenuItems shape)", () => {
+    resolveBrandChipMock.mockReturnValue(null);
+
+    const { getByTestId } = render(
+      <BrandMark className="w-3.5 h-3.5 mr-2">
+        <TestIcon className="w-3.5 h-3.5" />
+      </BrandMark>
+    );
+
+    expect(getByTestId("icon").getAttribute("class")).toBe("w-3.5 h-3.5 mr-2");
   });
 
   it("renders bare child unchanged when no className is supplied", () => {
