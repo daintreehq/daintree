@@ -3,6 +3,7 @@ import { StateField } from "@codemirror/state";
 import { getAllAtSelectionTokens, type AtSelectionToken } from "../hybridInputParsing";
 import { TERMINAL_ICON_SVG } from "./base";
 import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
 
 interface SelectionChipState {
   tokens: AtSelectionToken[];
@@ -30,7 +31,7 @@ class SelectionChipWidget extends WidgetType {
     span.setAttribute("aria-label", "Terminal selection");
 
     const icon = document.createElement("span");
-    icon.innerHTML = TERMINAL_ICON_SVG;
+    setTrustedInnerHTML(icon, createTrustedHTML(TERMINAL_ICON_SVG));
     icon.style.display = "inline-flex";
     icon.style.alignItems = "center";
     span.appendChild(icon);

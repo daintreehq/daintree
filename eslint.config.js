@@ -135,6 +135,9 @@ export default tseslint.config(
   // Also ban `void window.electron.X()` — fire-and-forget IPC must route
   // through safeFireAndForget so rejections reach reportRendererGlobalError
   // with call-site context. See issue #6029.
+  // Also ban bare `dangerouslySetInnerHTML` — Trusted Types CSP requires the
+  // `__html` value to be a `TrustedHTML` from the daintree-svg policy. See
+  // issue #6392.
   // Note: the renderer block below re-declares no-restricted-syntax at "warn"
   // level for src/** with additional selectors. That block's array is the
   // effective set for src/ files, so it must keep these selectors in sync.
@@ -180,6 +183,17 @@ export default tseslint.config(
             "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) ObjectExpression > Property[key.name='message'] MemberExpression[property.name='message']:matches([object.name=/^(error|err|e)$/], [object.property.name=/^(error|err|e)$/])",
           message:
             "Don't pipe raw error.message into user-facing notifications. Use humanizeAppError(error) from @shared/utils/errorMessage to produce a friendly title and body, and stash the raw message in a 'Copy details' action. See #6050.",
+        },
+        {
+          // why: Trusted Types CSP (`require-trusted-types-for 'script'`)
+          // means `dangerouslySetInnerHTML.__html` must be a `TrustedHTML`
+          // produced by the `daintree-svg` policy, not a raw string. Allow
+          // the attribute only when its `__html` value is a CallExpression
+          // (e.g. `createTrustedHTML(...)` or another wrapper). See #6392.
+          selector:
+            "JSXAttribute[name.name='dangerouslySetInnerHTML'] > JSXExpressionContainer > ObjectExpression > Property[key.name='__html']:not(:has(CallExpression))",
+          message:
+            "Pass __html through createTrustedHTML(value) from @/lib/trustedTypesPolicy instead of a raw string. See #6392.",
         },
       ],
     },
@@ -258,6 +272,12 @@ export default tseslint.config(
             "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) ObjectExpression > Property[key.name='message'] MemberExpression[property.name='message']:matches([object.name=/^(error|err|e)$/], [object.property.name=/^(error|err|e)$/])",
           message:
             "Don't pipe raw error.message into user-facing notifications. Use humanizeAppError(error) from @shared/utils/errorMessage to produce a friendly title and body, and stash the raw message in a 'Copy details' action. See #6050.",
+        },
+        {
+          selector:
+            "JSXAttribute[name.name='dangerouslySetInnerHTML'] > JSXExpressionContainer > ObjectExpression > Property[key.name='__html']:not(:has(CallExpression))",
+          message:
+            "Pass __html through createTrustedHTML(value) from @/lib/trustedTypesPolicy instead of a raw string. See #6392.",
         },
         {
           selector:

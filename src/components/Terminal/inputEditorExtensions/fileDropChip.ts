@@ -3,6 +3,7 @@ import type { Extension } from "@codemirror/state";
 import { StateField, StateEffect } from "@codemirror/state";
 import { formatFileSize, removeChipRange } from "./base";
 import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
 
 interface FileDropChipEntry {
   from: number;
@@ -41,7 +42,7 @@ class FileDropChipWidget extends WidgetType {
     span.setAttribute("aria-label", `File: ${this.filePath}`);
 
     const icon = document.createElement("span");
-    icon.innerHTML = FILE_ICON_SVG;
+    setTrustedInnerHTML(icon, createTrustedHTML(FILE_ICON_SVG));
     icon.style.display = "inline-flex";
     icon.style.alignItems = "center";
     span.appendChild(icon);

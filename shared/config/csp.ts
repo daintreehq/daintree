@@ -11,6 +11,11 @@ const FRAME_LOCALHOST =
 
 const GITHUB_AVATARS = "https://avatars.githubusercontent.com";
 
+// Named Trusted Types policy backing all DOM HTML-sink writes in the renderer.
+// 'allow-duplicates' is required so Vite HMR can re-evaluate the policy module
+// on hot reload without throwing 'Policy with name "<x>" already exists'.
+export const TRUSTED_TYPES_POLICY_NAME = "daintree-svg";
+
 /**
  * Production CSP for the trusted Daintree renderer (`persist:daintree`).
  *
@@ -40,6 +45,8 @@ export function getDaintreeAppProdCSP(): string {
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'none'",
+    "require-trusted-types-for 'script'",
+    `trusted-types ${TRUSTED_TYPES_POLICY_NAME} 'allow-duplicates'`,
   ].join("; ");
 }
 
@@ -72,6 +79,8 @@ export function getDaintreeAppDevCSP(): string {
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'none'",
+    "require-trusted-types-for 'script'",
+    `trusted-types ${TRUSTED_TYPES_POLICY_NAME} 'allow-duplicates'`,
   ].join("; ");
 }
 

@@ -14,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import { isClientAppError } from "@/utils/clientAppError";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
+import { createTrustedHTML } from "@/lib/trustedTypesPolicy";
 import { logError } from "@/utils/logger";
 
 export interface FileViewerModalProps {
@@ -401,7 +402,7 @@ export function FileViewerModal({
             {loadState === "svg" && sanitizedSvg && (
               <div
                 className="max-w-full max-h-[70vh] overflow-auto [&>svg]:max-w-full [&>svg]:h-auto"
-                dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
+                dangerouslySetInnerHTML={{ __html: createTrustedHTML(sanitizedSvg) }}
               />
             )}
           </div>

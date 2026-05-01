@@ -4,7 +4,10 @@ export function renderBootstrapError(rootEl: HTMLElement, error: unknown): void 
   const message = formatErrorMessage(error, "Renderer failed to initialize");
   const stack = error instanceof Error ? error.stack : undefined;
 
-  rootEl.innerHTML = "";
+  // textContent (not innerHTML) — bootstrap-error path runs before the TT
+  // policy module is guaranteed to be loaded, and textContent isn't a
+  // TT-gated sink so it stays safe under `require-trusted-types-for 'script'`.
+  rootEl.textContent = "";
   const container = document.createElement("div");
   container.style.cssText =
     "display:flex;align-items:center;justify-content:center;height:100vh;width:100vw;background:#1a1a2e;color:#e0e0e0;font-family:system-ui,sans-serif;padding:2rem;";

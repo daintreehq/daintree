@@ -2,6 +2,7 @@ import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/vi
 import { StateField } from "@codemirror/state";
 import { getAllAtDiffTokens, type AtDiffToken, type DiffContextType } from "../hybridInputParsing";
 import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
 
 const DIFF_LABELS: Record<DiffContextType, string> = {
   unstaged: "Working tree diff",
@@ -38,7 +39,7 @@ class DiffChipWidget extends WidgetType {
     span.setAttribute("aria-label", `Diff: ${DIFF_LABELS[this.diffType]}`);
 
     const icon = document.createElement("span");
-    icon.innerHTML = GIT_BRANCH_ICON_SVG;
+    setTrustedInnerHTML(icon, createTrustedHTML(GIT_BRANCH_ICON_SVG));
     icon.style.display = "inline-flex";
     icon.style.alignItems = "center";
     span.appendChild(icon);
