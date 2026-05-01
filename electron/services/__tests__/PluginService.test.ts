@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import type { PanelKindConfig } from "../../../shared/config/panelKindRegistry.js";
 
 const appMock = vi.hoisted(() => ({
   getVersion: vi.fn(() => "0.0.0"),
@@ -1402,9 +1403,9 @@ describe("Plugin panel kind registry broadcast", () => {
     // the shared registry during the test.
     const registryMock = await import("../../../shared/config/panelKindRegistry.js");
     const onRegisteredMock = vi.mocked(registryMock.onPanelKindRegistered);
-    let capturedRegisterListener: (() => void) | null = null;
-    onRegisteredMock.mockImplementation((listener: (config: unknown) => void) => {
-      capturedRegisterListener = listener as () => void;
+    let capturedRegisterListener: ((config: PanelKindConfig) => void) | null = null;
+    onRegisteredMock.mockImplementation((listener: (config: PanelKindConfig) => void) => {
+      capturedRegisterListener = listener;
       return () => {};
     });
 
@@ -1412,7 +1413,17 @@ describe("Plugin panel kind registry broadcast", () => {
     expect(capturedRegisterListener).toBeTypeOf("function");
 
     // Simulate a register event — schedules a microtask broadcast
-    capturedRegisterListener!();
+    const mockConfig: PanelKindConfig = {
+      id: "test-panel",
+      name: "Test Panel",
+      iconId: "test",
+      color: "#000000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "test-ext",
+    };
+    capturedRegisterListener!(mockConfig);
     // Dispose before the microtask drains
     service.dispose();
 

@@ -153,7 +153,7 @@ function notifyDefinitionListeners(): void {
     try {
       listener();
     } catch (err) {
-      console.error("[panelKindRegistry] definition listener threw:", err);
+      console.warn("[panelKindRegistry] definition listener threw:", err);
     }
   }
 }
