@@ -99,18 +99,26 @@ describe("Toast accessibility", () => {
     expect(useAnnouncerStore.getState().polite).toBeNull();
   });
 
-  it("renders ReactNode message content visibly when inboxMessage is provided", async () => {
+  it("uses inboxMessage as the live-region announcement for ReactNode messages", async () => {
     render(<Toaster />);
     await act(async () => {
       addToast({
-        message: (<span>Rich content</span>) as unknown as string,
-        inboxMessage: "Plain text fallback",
+        message: (<span>45% complete</span>) as unknown as string,
+        inboxMessage: "Downloading update: 45%",
       });
       vi.advanceTimersByTime(16);
     });
 
     const toast = screen.getByRole("status");
-    expect(toast.textContent).toContain("Rich content");
+    // sr-only span carries the controlled inboxMessage for assistive tech.
+    const srOnlyNode = toast.querySelector(".sr-only");
+    expect(srOnlyNode?.textContent).toBe("Downloading update: 45%");
+    // The visual ReactNode is aria-hidden so screen readers only hear the
+    // controlled inboxMessage — not both (issue #6331).
+    const visualNode = screen.getByText("45% complete").closest('[aria-hidden="true"]');
+    expect(visualNode).not.toBeNull();
+    // Sighted users still see the rendered JSX content.
+    expect(screen.getByText("45% complete")).toBeTruthy();
     // The shared announcer must stay silent — the role node is the sole
     // live-region path (issue #6331).
     expect(useAnnouncerStore.getState().polite).toBeNull();
@@ -294,6 +302,33 @@ describe("Toast accessibility", () => {
     const toast = screen.getByRole("status");
     expect(toast.style.transitionDuration).toBe("120ms");
     expect(toast.style.transitionTimingFunction).toBe("cubic-bezier(0.2, 0, 0.7, 0)");
+  });
+
+  it("removes the toast from the DOM exactly after UI_EXIT_DURATION (issue #6331)", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ message: "Boundary check" });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(16);
+    });
+
+    const dismissButton = screen.getByLabelText("Dismiss notification");
+    await act(async () => {
+      fireEvent.click(dismissButton);
+    });
+
+    // Just before the 120ms exit window — toast is still mounted.
+    await act(async () => {
+      vi.advanceTimersByTime(119);
+    });
+    expect(screen.queryByText("Boundary check")).toBeTruthy();
+
+    // Cross the exit boundary — toast is unmounted.
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.queryByText("Boundary check")).toBeNull();
   });
 
   it("resets auto-dismiss timer when the message changes", async () => {

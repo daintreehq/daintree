@@ -200,9 +200,21 @@ function Toast({ notification }: { notification: Notification }) {
             </span>
           </div>
         ) : null}
-        <div className="text-xs text-daintree-text/70 leading-snug break-words">
-          {notification.message}
-        </div>
+        {typeof notification.message !== "string" && notification.inboxMessage ? (
+          <>
+            <span className="sr-only">{notification.inboxMessage}</span>
+            <div
+              aria-hidden="true"
+              className="text-xs text-daintree-text/70 leading-snug break-words"
+            >
+              {notification.message}
+            </div>
+          </>
+        ) : (
+          <div className="text-xs text-daintree-text/70 leading-snug break-words">
+            {notification.message}
+          </div>
+        )}
         {(() => {
           const actions = [
             ...(notification.actions ?? []),
