@@ -908,23 +908,49 @@ export function GitHubResourceList({
   );
 
   const renderEmpty = () => {
-    if (exactNumberNotFound !== null) {
+    const trimmedSearch = debouncedSearch.trim();
+    const isFilterActive =
+      exactNumberNotFound !== null ||
+      numberQuery !== null ||
+      trimmedSearch.length > 0 ||
+      filterState !== "open";
+    const resourceLabel = type === "issue" ? "issues" : "pull requests";
+
+    if (isFilterActive) {
+      const title =
+        exactNumberNotFound !== null
+          ? `${type === "issue" ? "Issue" : "PR"} #${exactNumberNotFound} not found`
+          : trimmedSearch.length > 0
+            ? `No ${resourceLabel} match "${trimmedSearch}"`
+            : `No ${resourceLabel} in this view`;
+
       return (
-        <div className="p-8 text-center text-muted-foreground">
-          <p className="text-sm">
-            {type === "issue" ? "Issue" : "PR"} #{exactNumberNotFound} not found
-          </p>
-        </div>
+        <EmptyState
+          variant="filtered-empty"
+          title={title}
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setSearchQuery("");
+                setFilterState("open" as StateFilter);
+              }}
+            >
+              Clear filters
+            </Button>
+          }
+          className="flex-1 justify-center"
+        />
       );
     }
 
     return (
-      <div className="p-8 text-center text-muted-foreground">
-        <p className="text-sm">
-          No {type === "issue" ? "issues" : "pull requests"} found
-          {debouncedSearch && ` for "${debouncedSearch}"`}
-        </p>
-      </div>
+      <EmptyState
+        variant="zero-data"
+        title={`No ${resourceLabel} found`}
+        className="flex-1 justify-center"
+      />
     );
   };
 
