@@ -161,16 +161,14 @@ describe("WorktreePortBroker adversarial", () => {
     expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents))).toBe(true);
     const channel = createdChannels[0];
 
-    webContents.emit(
-      "did-start-navigation",
-      {},
-      {
-        url: "https://example.com/new-page",
-        isSameDocument: false,
-        isMainFrame: true,
-        frame: null,
-      }
-    );
+    webContents.emit("did-start-navigation", {
+      url: "https://example.com/new-page",
+      isSameDocument: false,
+      isMainFrame: true,
+      frame: null,
+      preventDefault: () => {},
+      defaultPrevented: false,
+    });
 
     expect(channel.port1.close).toHaveBeenCalledTimes(1);
     expect(broker.hasPort(webContents.id)).toBe(false);
@@ -184,16 +182,14 @@ describe("WorktreePortBroker adversarial", () => {
     expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents))).toBe(true);
     const channel = createdChannels[0];
 
-    webContents.emit(
-      "did-start-navigation",
-      {},
-      {
-        url: "https://example.com/#section",
-        isSameDocument: true,
-        isMainFrame: true,
-        frame: null,
-      }
-    );
+    webContents.emit("did-start-navigation", {
+      url: "https://example.com/#section",
+      isSameDocument: true,
+      isMainFrame: true,
+      frame: null,
+      preventDefault: () => {},
+      defaultPrevented: false,
+    });
 
     expect(channel.port1.close).not.toHaveBeenCalled();
     expect(broker.hasPort(webContents.id)).toBe(true);
@@ -207,16 +203,14 @@ describe("WorktreePortBroker adversarial", () => {
     expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents))).toBe(true);
     const channel = createdChannels[0];
 
-    webContents.emit(
-      "did-start-navigation",
-      {},
-      {
-        url: "https://example.com/iframe-content",
-        isSameDocument: false,
-        isMainFrame: false,
-        frame: null,
-      }
-    );
+    webContents.emit("did-start-navigation", {
+      url: "https://example.com/iframe-content",
+      isSameDocument: false,
+      isMainFrame: false,
+      frame: null,
+      preventDefault: () => {},
+      defaultPrevented: false,
+    });
 
     expect(channel.port1.close).not.toHaveBeenCalled();
     expect(broker.hasPort(webContents.id)).toBe(true);
@@ -233,16 +227,14 @@ describe("WorktreePortBroker adversarial", () => {
     webContents.emit("destroyed");
 
     expect(() => {
-      webContents.emit(
-        "did-start-navigation",
-        {},
-        {
-          url: "https://example.com/late-navigation",
-          isSameDocument: false,
-          isMainFrame: true,
-          frame: null,
-        }
-      );
+      webContents.emit("did-start-navigation", {
+        url: "https://example.com/late-navigation",
+        isSameDocument: false,
+        isMainFrame: true,
+        frame: null,
+        preventDefault: () => {},
+        defaultPrevented: false,
+      });
     }).not.toThrow();
   });
 
@@ -258,16 +250,14 @@ describe("WorktreePortBroker adversarial", () => {
     const channelA = createdChannels[0];
     const channelB = createdChannels[1];
 
-    viewA.emit(
-      "did-start-navigation",
-      {},
-      {
-        url: "https://example.com/new-page",
-        isSameDocument: false,
-        isMainFrame: true,
-        frame: null,
-      }
-    );
+    viewA.emit("did-start-navigation", {
+      url: "https://example.com/new-page",
+      isSameDocument: false,
+      isMainFrame: true,
+      frame: null,
+      preventDefault: () => {},
+      defaultPrevented: false,
+    });
 
     expect(channelA.port1.close).toHaveBeenCalledTimes(1);
     expect(broker.hasPort(viewA.id)).toBe(false);

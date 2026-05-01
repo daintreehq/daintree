@@ -67,8 +67,7 @@ export class WorktreePortBroker {
       this.closePortsForView(wcId);
     };
     const onNavigation = (
-      _event: Electron.Event,
-      details: Electron.WebContentsDidStartNavigationEventParams
+      details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>
     ) => {
       if (details.isMainFrame && !details.isSameDocument && !webContents.isDestroyed()) {
         this.closePortsForView(wcId);
