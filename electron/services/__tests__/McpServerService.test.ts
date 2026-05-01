@@ -381,6 +381,7 @@ describe("McpServerService", () => {
   });
 
   it("sets openWorldHint true for network-bound categories and false for local ones", async () => {
+    storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
