@@ -76,6 +76,43 @@ describe("Toolbar responsive design — issue #4133", () => {
     });
   });
 
+  describe("overflow trigger surfaces hidden state — issue #6416", () => {
+    it("calls useOverflowBadgeSeverity for both left and right overflow", () => {
+      expect(source).toContain("useOverflowBadgeSeverity(leftOverflow");
+      expect(source).toContain("useOverflowBadgeSeverity(rightOverflow");
+    });
+
+    it("passes left and right severities into renderOverflowMenu independently", () => {
+      expect(source).toContain("leftOverflowSeverity");
+      expect(source).toContain("rightOverflowSeverity");
+    });
+
+    it("maps severity to a Tailwind dot color via OVERFLOW_BADGE_CLASS", () => {
+      expect(source).toContain("OVERFLOW_BADGE_CLASS");
+      expect(source).toContain("bg-status-error");
+      expect(source).toContain("bg-state-waiting");
+      expect(source).toContain("bg-daintree-text/50");
+    });
+
+    it("renders a dot inside the overflow Button when severity is set", () => {
+      expect(source).toContain("toolbar-overflow-badge");
+      expect(source).toMatch(/data-severity=\{severity\}/);
+    });
+
+    it("builds a dynamic tooltip listing the hidden buttons", () => {
+      expect(source).toContain("itemLabels");
+      expect(source).toMatch(/\$\{overflowIds\.length\} more — /);
+    });
+
+    it("supplies a fallback label for voice-recording so the count and named list stay aligned", () => {
+      // voice-recording is absent from OVERFLOW_MENU_META on purpose — it
+      // has no dropdown rendering — so the tooltip must look it up
+      // separately or the spoken count would exceed the list.
+      expect(source).toContain('id === "voice-recording"');
+      expect(source).toContain('"Voice recording"');
+    });
+  });
+
   describe("overflow menu focus ring after pointer dismissal — issue #6119", () => {
     it("declares the overflowMenuPointerCloseRef", () => {
       expect(source).toContain("overflowMenuPointerCloseRef");

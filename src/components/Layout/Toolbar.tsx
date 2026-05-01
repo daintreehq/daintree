@@ -62,6 +62,7 @@ import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
 import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
+import { useOverflowBadgeSeverity, type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
 
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 import { getAgentConfig } from "@/config/agents";
@@ -111,6 +112,12 @@ export function PluginToolbarButton({
     </Tooltip>
   );
 }
+
+const OVERFLOW_BADGE_CLASS: Record<Exclude<OverflowBadgeSeverity, null>, string> = {
+  critical: "bg-status-error",
+  warning: "bg-state-waiting",
+  info: "bg-daintree-text/50",
+};
 
 export const OVERFLOW_MENU_META: Partial<Record<AnyToolbarButtonId, OverflowMenuMeta>> = {
   ...(Object.fromEntries(
@@ -640,6 +647,9 @@ export function Toolbar({
     availableRightIds
   );
 
+  const leftOverflowSeverity = useOverflowBadgeSeverity(leftOverflow, errorCount);
+  const rightOverflowSeverity = useOverflowBadgeSeverity(rightOverflow, errorCount);
+
   const leftVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(leftVisible), [leftVisible]);
   const rightVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(rightVisible), [rightVisible]);
 
@@ -779,8 +789,28 @@ export function Toolbar({
     ]
   );
 
-  const renderOverflowMenu = (overflowIds: AnyToolbarButtonId[], side: "left" | "right") => {
+  const renderOverflowMenu = (
+    overflowIds: AnyToolbarButtonId[],
+    side: "left" | "right",
+    severity: OverflowBadgeSeverity
+  ) => {
     if (overflowIds.length === 0) return null;
+    // voice-recording is intentionally absent from OVERFLOW_MENU_META — it
+    // doesn't render a dropdown menu item and has no actionable target while
+    // already active. Surface it in the tooltip/aria-label only so the
+    // count and the named list stay in sync.
+    const itemLabels = overflowIds
+      .map((id) => {
+        if (id === "voice-recording") return "Voice recording";
+        return OVERFLOW_MENU_META[id]?.label ?? pluginOverflowMeta[id]?.label;
+      })
+      .filter((label): label is string => Boolean(label));
+    const tooltipText =
+      itemLabels.length > 0
+        ? `${overflowIds.length} more — ${itemLabels.join(", ")}`
+        : `${overflowIds.length} more toolbar items`;
+    const ariaLabel =
+      itemLabels.length > 0 ? tooltipText : `${overflowIds.length} more toolbar items`;
     return (
       <DropdownMenu>
         <Tooltip>
@@ -791,13 +821,24 @@ export function Toolbar({
                 size="icon"
                 data-toolbar-item=""
                 className={toolbarIconButtonClass}
-                aria-label={`${overflowIds.length} more toolbar items`}
+                aria-label={ariaLabel}
               >
                 <Ellipsis />
+                {severity && (
+                  <span
+                    aria-hidden="true"
+                    data-testid="toolbar-overflow-badge"
+                    data-severity={severity}
+                    className={cn(
+                      "absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-bg/60 pointer-events-none",
+                      OVERFLOW_BADGE_CLASS[severity]
+                    )}
+                  />
+                )}
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
-          <TooltipContent side="bottom">More items</TooltipContent>
+          <TooltipContent side="bottom">{tooltipText}</TooltipContent>
         </Tooltip>
         <DropdownMenuContent
           align={side === "left" ? "start" : "end"}
@@ -897,7 +938,9 @@ export function Toolbar({
           >
             {renderLeftButtons(effectiveLeftButtons, leftVisibleSet)}
           </div>
-          <div className="app-no-drag">{renderOverflowMenu(leftOverflow, "left")}</div>
+          <div className="app-no-drag">
+            {renderOverflowMenu(leftOverflow, "left", leftOverflowSeverity)}
+          </div>
         </div>
 
         {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
@@ -982,7 +1025,9 @@ export function Toolbar({
           >
             {renderButtons(effectiveRightButtons, rightVisibleSet)}
           </div>
-          <div className="app-no-drag">{renderOverflowMenu(rightOverflow, "right")}</div>
+          <div className="app-no-drag">
+            {renderOverflowMenu(rightOverflow, "right", rightOverflowSeverity)}
+          </div>
 
           <div className={toolbarDividerClass} />
 
