@@ -258,4 +258,15 @@ describe("normalizeQuery", () => {
   it("lowercases input", () => {
     expect(normalizeQuery("CMD+K")).toBe("cmd+k");
   });
+
+  it("preserves plain-text words containing modifier substrings", () => {
+    expect(normalizeQuery("metadata")).toBe("metadata");
+    expect(normalizeQuery("optional")).toBe("optional");
+    expect(normalizeQuery("toggle")).toBe("toggle");
+  });
+
+  it("canonicalizes whole-token modifier aliases", () => {
+    expect(normalizeQuery("command+shift+p")).toBe("cmd+shift+p");
+    expect(normalizeQuery("command palette")).toBe("cmd+palette");
+  });
 });

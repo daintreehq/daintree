@@ -181,11 +181,19 @@ export function normalizeQuery(query: string): string {
   let normalized = query.toLowerCase().trim();
   normalized = normalized.replace(/\s*\+\s*/g, "+").replace(/\s+/g, "+");
 
+  // Replace unicode modifier symbols globally (safe — these glyphs don't appear
+  // in plain-English text, so there are no false positives).
   for (const [symbol, text] of Object.entries(MODIFIER_SEARCH_MAP)) {
-    if (symbol !== text) {
+    if (symbol !== text && /[⌘⌥⌃⇧]/.test(symbol)) {
       normalized = normalized.replace(new RegExp(symbol, "g"), text);
     }
   }
 
-  return normalized;
+  // Map each +-separated token through the search map individually so modifier
+  // aliases are only replaced when they appear as whole tokens, not as substrings
+  // of unrelated words ("metadata" stays "metadata", not "cmddata").
+  return normalized
+    .split("+")
+    .map((token) => MODIFIER_SEARCH_MAP[token] ?? token)
+    .join("+");
 }
