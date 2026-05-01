@@ -110,10 +110,10 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     path: "/tmp/test",
     emoji: "🚀",
     color: "blue",
-    status: "open",
+    status: "active",
     lastOpened: 0,
     ...overrides,
-  } as Project;
+  };
 }
 
 function setStore(patch: Partial<ProjectStoreState>) {
