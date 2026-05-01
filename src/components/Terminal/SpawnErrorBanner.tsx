@@ -16,17 +16,17 @@ export interface SpawnErrorBannerProps {
 function getErrorTitle(code: SpawnError["code"]): string {
   switch (code) {
     case "ENOENT":
-      return "Shell or Command Not Found";
+      return "Couldn't find shell or command";
     case "EACCES":
-      return "Permission Denied";
+      return "Permission denied";
     case "ENOTDIR":
-      return "Invalid Working Directory";
+      return "Invalid working directory";
     case "EIO":
-      return "PTY Allocation Failed";
+      return "Couldn't allocate terminal";
     case "DISCONNECTED":
-      return "Terminal Disconnected";
+      return "Terminal disconnected";
     default:
-      return "Failed to Start Terminal";
+      return "Couldn't start terminal";
   }
 }
 
@@ -34,17 +34,17 @@ function getErrorDescription(error: SpawnError, cwd?: string): string {
   switch (error.code) {
     case "ENOENT":
       if (error.path) {
-        return `Could not find: ${error.path}`;
+        return `Couldn't find: ${error.path}`;
       }
       return error.message;
     case "EACCES":
-      return `You don't have permission to execute: ${error.path || "the shell"}`;
+      return `Couldn't execute ${error.path || "the shell"} — check permissions`;
     case "ENOTDIR":
-      return `The working directory is not valid: ${cwd || "(unknown)"}`;
+      return `The working directory isn't valid: ${cwd || "(unknown)"}`;
     case "EIO":
-      return "Failed to allocate a pseudo-terminal. The system may be running low on resources.";
+      return "Couldn't allocate a pseudo-terminal. The system may be running low on resources.";
     case "DISCONNECTED":
-      return "The terminal process is no longer running. Click Retry to start a new session.";
+      return "The terminal process is no longer running.";
     default:
       return error.message;
   }
@@ -65,11 +65,11 @@ function SpawnErrorBannerComponent({
   if (isCwdError) {
     actions.push({
       id: "update-cwd",
-      label: "Update Directory",
+      label: "Change directory",
       icon: FolderEdit,
       variant: "accent",
       onClick: () => onUpdateCwd(terminalId),
-      title: "Update Working Directory",
+      title: "Change working directory",
       ariaLabel: "Update working directory",
     });
   }
@@ -89,7 +89,7 @@ function SpawnErrorBannerComponent({
       icon: Trash2,
       variant: "danger",
       onClick: () => onTrash(terminalId),
-      title: "Move to Trash",
+      title: "Move to trash",
       ariaLabel: "Move to trash",
     }
   );

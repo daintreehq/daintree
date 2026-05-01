@@ -26,11 +26,11 @@ function TerminalErrorBannerComponent({
   if (error.recoverable && isCwdError) {
     actions.push({
       id: "update-cwd",
-      label: "Update Directory",
+      label: "Change directory",
       icon: FolderEdit,
       variant: "accent",
       onClick: () => onUpdateCwd(terminalId),
-      title: "Update Working Directory",
+      title: "Change working directory",
       ariaLabel: "Update working directory",
     });
   }
@@ -41,7 +41,7 @@ function TerminalErrorBannerComponent({
       icon: RotateCcw,
       variant: "primary",
       onClick: () => onRetry(terminalId),
-      title: "Retry Restart",
+      title: "Retry restart",
       ariaLabel: "Retry restart",
     },
     {
@@ -50,7 +50,7 @@ function TerminalErrorBannerComponent({
       icon: Trash2,
       variant: "danger",
       onClick: () => onTrash(terminalId),
-      title: "Move to Trash",
+      title: "Move to trash",
       ariaLabel: "Move to trash",
     }
   );
@@ -58,7 +58,7 @@ function TerminalErrorBannerComponent({
   return (
     <InlineStatusBanner
       icon={AlertTriangle}
-      title="Terminal Restart Failed"
+      title="Terminal restart failed"
       description={error.message}
       contextLine={error.context?.failedCwd && `Directory: ${error.context.failedCwd}`}
       severity="error"

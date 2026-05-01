@@ -297,16 +297,16 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     const banner = targetPanel.locator('[role="alert"]');
     await expect(banner).toBeVisible({ timeout: 5000 });
 
-    // Title should say "Shell or Command Not Found"
-    await expect(banner.getByText("Shell or Command Not Found")).toBeVisible();
+    // Title should say "Couldn't find shell or command"
+    await expect(banner.getByText("Couldn't find shell or command")).toBeVisible();
 
     // Retry and Trash buttons should be visible
     await expect(banner.locator('[aria-label="Retry starting terminal"]')).toBeVisible();
     await expect(banner.locator('[aria-label="Move to trash"]')).toBeVisible();
   });
 
-  test("ENOTDIR spawn error shows Update Directory action", async () => {
-    // AC 4: Terminal spawn ENOTDIR renders SpawnErrorBanner with "Update Directory"
+  test("ENOTDIR spawn error shows Change directory action", async () => {
+    // AC 4: Terminal spawn ENOTDIR renders SpawnErrorBanner with "Change directory"
     // Project is already open from previous test
     await openTerminal(ctx.window);
 
@@ -322,10 +322,10 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     const banner = lastPanel.locator('[role="alert"]');
     await expect(banner).toBeVisible({ timeout: 5000 });
 
-    // Title should say "Invalid Working Directory"
-    await expect(banner.getByText("Invalid Working Directory")).toBeVisible();
+    // Title should say "Invalid working directory"
+    await expect(banner.getByText("Invalid working directory")).toBeVisible();
 
-    // "Update Directory" button should be visible
+    // "Change directory" button should be visible
     await expect(banner.locator('[aria-label="Update working directory"]')).toBeVisible();
 
     // Retry and Trash should also be visible

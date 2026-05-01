@@ -14,11 +14,11 @@ export interface ReconnectErrorBannerProps {
 function getErrorTitle(type: TerminalReconnectError["type"]): string {
   switch (type) {
     case "timeout":
-      return "Reconnection Timed Out";
+      return "Reconnection timed out";
     case "not_found":
-      return "Previous Session Not Found";
+      return "Previous session not found";
     default:
-      return "Reconnection Failed";
+      return "Reconnection failed";
   }
 }
 
@@ -63,7 +63,7 @@ function ReconnectErrorBannerComponent({
           icon: RotateCcw,
           variant: "primary",
           onClick: () => onRestart(terminalId),
-          title: "Restart Terminal",
+          title: "Restart terminal",
           ariaLabel: "Restart terminal",
         },
       ]}
