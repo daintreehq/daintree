@@ -292,6 +292,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.moveToGrid",
   "terminal.watch",
   "terminal.duplicate",
+  "terminal.background",
   "terminal.contextMenu",
   "terminal.stashInput",
   "terminal.popStash",

@@ -145,6 +145,12 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       const store = getCurrentViewStoreOrNull();
       return store !== null && store.getState().error !== null;
     },
+    disabledReason: () => {
+      const store = getCurrentViewStoreOrNull();
+      if (store === null) return "No project view available";
+      if (store.getState().error === null) return "Workspace service has not crashed";
+      return undefined;
+    },
     run: async () => {
       await worktreeClient.restartService();
     },
@@ -865,6 +871,14 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
         return typeof worktree?.prUrl === "string" && worktree.prUrl.trim().length > 0;
       },
+      disabledReason: (ctx: ActionContext) => {
+        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!worktreeId) return "No worktree selected";
+        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
+        if (typeof worktree?.prUrl !== "string" || worktree.prUrl.trim().length === 0)
+          return "Worktree has no associated PR";
+        return undefined;
+      },
     })
   );
 
@@ -924,6 +938,14 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
         return typeof worktree?.issueNumber === "number" && worktree.issueNumber > 0;
       },
+      disabledReason: (ctx: ActionContext) => {
+        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!worktreeId) return "No worktree selected";
+        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
+        if (typeof worktree?.issueNumber !== "number" || worktree.issueNumber <= 0)
+          return "Worktree has no associated issue";
+        return undefined;
+      },
     })
   );
 
@@ -942,6 +964,13 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         if (!worktreeId) return false;
         const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
         return !!worktree?.hasProvisionCommand;
+      },
+      disabledReason: (ctx: ActionContext) => {
+        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!worktreeId) return "No worktree selected";
+        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
+        if (!worktree?.hasProvisionCommand) return "Worktree has no provision command configured";
+        return undefined;
       },
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
@@ -972,6 +1001,13 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
         return !!worktree?.hasTeardownCommand;
       },
+      disabledReason: (ctx: ActionContext) => {
+        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!worktreeId) return "No worktree selected";
+        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
+        if (!worktree?.hasTeardownCommand) return "Worktree has no teardown command configured";
+        return undefined;
+      },
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
@@ -1000,6 +1036,13 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         if (!worktreeId) return false;
         const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
         return !!worktree?.hasResumeCommand;
+      },
+      disabledReason: (ctx: ActionContext) => {
+        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!worktreeId) return "No worktree selected";
+        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
+        if (!worktree?.hasResumeCommand) return "Worktree has no resume command configured";
+        return undefined;
       },
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
@@ -1030,6 +1073,13 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
         return !!worktree?.hasPauseCommand;
       },
+      disabledReason: (ctx: ActionContext) => {
+        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!worktreeId) return "No worktree selected";
+        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
+        if (!worktree?.hasPauseCommand) return "Worktree has no pause command configured";
+        return undefined;
+      },
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
@@ -1059,6 +1109,13 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
         return !!worktree?.hasStatusCommand;
       },
+      disabledReason: (ctx: ActionContext) => {
+        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!worktreeId) return "No worktree selected";
+        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
+        if (!worktree?.hasStatusCommand) return "Worktree has no status command configured";
+        return undefined;
+      },
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
@@ -1087,6 +1144,14 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         if (!worktreeId) return false;
         const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
         return !!worktree?.resourceConnectCommand;
+      },
+      disabledReason: (ctx: ActionContext) => {
+        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!worktreeId) return "No worktree selected";
+        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
+        if (!worktree?.resourceConnectCommand)
+          return "Worktree has no resource connect command configured";
+        return undefined;
       },
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;

@@ -23,19 +23,32 @@ const SENSITIVE_ARG_FIELDS = new Set(["token", "password", "secret", "key", "aut
 const MAX_ARG_PAYLOAD_SIZE = 1024;
 
 /**
+ * Validate a definition against invariants that should hold for every action.
+ * Returns an array of violation messages (empty = valid). Pure function with
+ * no side effects — safe to call from vitest, ActionService.register(), or CI.
+ */
+export function validateDefinitionInvariants(definition: AnyActionDefinition): string[] {
+  const violations: string[] = [];
+
+  if (definition.isEnabled && !definition.disabledReason) {
+    violations.push(
+      `Action "${definition.id}" defines isEnabled but no disabledReason callback. ` +
+        `Users may see a disabled command with no explanation.`
+    );
+  }
+
+  return violations;
+}
+
+/**
  * Validate an action definition for common anti-patterns.
  * Emits console warnings in dev mode only.
  */
-function validateActionDefinition<S extends z.ZodTypeAny | undefined, Result>(
-  definition: ActionDefinition<S, Result>
-): void {
+function validateActionDefinition(definition: AnyActionDefinition): void {
   if (!import.meta.env.DEV) return;
 
-  if (definition.isEnabled && !definition.disabledReason) {
-    console.warn(
-      `[ActionRegistry] Action "${definition.id}" defines isEnabled but no disabledReason callback. ` +
-        `Users may see a disabled command with no explanation.`
-    );
+  for (const violation of validateDefinitionInvariants(definition)) {
+    console.warn(`[ActionRegistry] ${violation}`);
   }
 }
 

@@ -31,8 +31,11 @@ import { registerWorkflowActions } from "./definitions/workflowActions";
 
 export type { ActionCallbacks, ActionRegistry } from "./actionTypes";
 
-export function createActionDefinitions(callbacks: ActionCallbacks): ActionRegistry {
-  const actions: ActionRegistry = new Map();
+export function createActionDefinitions(
+  callbacks: ActionCallbacks,
+  actions?: ActionRegistry
+): ActionRegistry {
+  actions ??= new Map();
 
   registerTerminalQueryActions(actions, callbacks);
   registerTerminalSpawnActions(actions, callbacks);

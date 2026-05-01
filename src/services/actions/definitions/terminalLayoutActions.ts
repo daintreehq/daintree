@@ -296,6 +296,12 @@ export function registerTerminalLayoutActions(
     danger: "safe",
     scope: "renderer",
     isEnabled: () => useLayoutUndoStore.getState().canUndo,
+    disabledReason: () => {
+      if (!useLayoutUndoStore.getState().canUndo) {
+        return "No layout change to undo";
+      }
+      return undefined;
+    },
     run: async () => {
       useLayoutUndoStore.getState().undo();
     },
@@ -310,6 +316,12 @@ export function registerTerminalLayoutActions(
     danger: "safe",
     scope: "renderer",
     isEnabled: () => useLayoutUndoStore.getState().canRedo,
+    disabledReason: () => {
+      if (!useLayoutUndoStore.getState().canRedo) {
+        return "No layout change to redo";
+      }
+      return undefined;
+    },
     run: async () => {
       useLayoutUndoStore.getState().redo();
     },

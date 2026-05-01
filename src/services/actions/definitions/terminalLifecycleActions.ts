@@ -330,6 +330,12 @@ export function registerTerminalLifecycleActions(
     scope: "renderer",
     keywords: ["pty", "backend", "recover", "host"],
     isEnabled: () => usePanelStore.getState().backendStatus === "disconnected",
+    disabledReason: () => {
+      if (usePanelStore.getState().backendStatus !== "disconnected") {
+        return "Terminal backend is connected";
+      }
+      return undefined;
+    },
     run: async () => {
       await terminalClient.restartService();
     },
@@ -347,6 +353,12 @@ export function registerTerminalLifecycleActions(
     keywords: ["monitor", "observe", "notify", "alert"],
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     isEnabled: (ctx) => !!ctx.focusedTerminalId,
+    disabledReason: (ctx) => {
+      if (!ctx.focusedTerminalId) {
+        return "No focused terminal to watch";
+      }
+      return undefined;
+    },
     run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       const state = usePanelStore.getState();
