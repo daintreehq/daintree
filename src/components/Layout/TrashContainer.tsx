@@ -7,7 +7,11 @@ import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { useIsDragging, TRASH_DROPPABLE_ID } from "@/components/DragDrop";
+import {
+  useIsDragging,
+  useIsWorktreeSortDragging,
+  TRASH_DROPPABLE_ID,
+} from "@/components/DragDrop";
 import type { TerminalInstance } from "@/store";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TrashBinItem } from "./TrashBinItem";
@@ -47,7 +51,11 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
   const [pulseKey, setPulseKey] = useState(0);
   const prevLengthRef = useRef(trashedTerminals.length);
   const { worktreeMap } = useWorktrees();
+  // Only show the ghost pill for panel drags — worktree-card sort drags also flip
+  // isDragging but cannot drop on trash, and a phantom drop target is misleading.
   const isDragging = useIsDragging();
+  const isWorktreeSortDragging = useIsWorktreeSortDragging();
+  const isPanelDragging = isDragging && !isWorktreeSortDragging;
   const { setNodeRef, isOver } = useDroppable({ id: TRASH_DROPPABLE_ID });
 
   useEffect(() => {
@@ -139,7 +147,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
     return items.sort((a, b) => a.sortKey - b.sortKey);
   }, [trashedTerminals]);
 
-  if (trashedTerminals.length === 0 && !isDragging) return null;
+  if (trashedTerminals.length === 0 && !isPanelDragging) return null;
 
   const count = trashedTerminals.length;
   const contentId = "trash-container-popover";

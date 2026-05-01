@@ -8,6 +8,7 @@ import type { TrashedTerminal } from "@/store/slices";
 
 const dndMocks = vi.hoisted(() => ({
   isDragging: false,
+  isWorktreeSortDragging: false,
   isOver: false,
 }));
 
@@ -43,6 +44,7 @@ vi.mock("@dnd-kit/core", () => ({
 
 vi.mock("@/components/DragDrop", () => ({
   useIsDragging: () => dndMocks.isDragging,
+  useIsWorktreeSortDragging: () => dndMocks.isWorktreeSortDragging,
   TRASH_DROPPABLE_ID: "__trash-droppable__",
 }));
 
@@ -65,6 +67,7 @@ describe("TrashContainer", () => {
     vi.useFakeTimers();
     useAnnouncerStore.setState({ polite: null, assertive: null });
     dndMocks.isDragging = false;
+    dndMocks.isWorktreeSortDragging = false;
     dndMocks.isOver = false;
   });
 
@@ -113,6 +116,13 @@ describe("TrashContainer", () => {
     expect(pill.className).toContain("bg-overlay-soft");
     expect(pill.className).toContain("ring-border-default");
     expect(pill.className).not.toContain("daintree-accent");
+  });
+
+  it("does not render ghost pill during worktree-sort drags", () => {
+    dndMocks.isDragging = true;
+    dndMocks.isWorktreeSortDragging = true;
+    const { container } = render(<TrashContainer trashedTerminals={[]} />);
+    expect(container.innerHTML).toBe("");
   });
 
   it("does not pulse on initial mount", () => {

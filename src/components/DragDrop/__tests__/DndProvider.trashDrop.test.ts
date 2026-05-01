@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TRASH_DROPPABLE_ID } from "../DndProvider";
 
 interface BranchDeps {
-  trashPanel: (id: string) => void;
+  trashPanelGroup: (id: string) => void;
   reorderTerminals: (...args: unknown[]) => void;
 }
 
@@ -19,7 +19,9 @@ function runTrashBranch(
 ): "trashed" | "fall-through" {
   if (!draggedId) return "fall-through";
   if (overId === TRASH_DROPPABLE_ID) {
-    deps.trashPanel(draggedId);
+    // trashPanelGroup handles both single panels and tab groups; for ungrouped
+    // panels it transparently falls back to trashPanel inside the registry.
+    deps.trashPanelGroup(draggedId);
     return "trashed";
   }
   // In production this is followed by accordion / reorder / cross-container logic.
@@ -29,45 +31,61 @@ function runTrashBranch(
 }
 
 describe("DndProvider trash-drop branch", () => {
-  it("calls trashPanel with the dragged panel id when dropped on TRASH_DROPPABLE_ID", () => {
-    const trashPanel = vi.fn();
+  it("calls trashPanelGroup with the dragged panel id when dropped on TRASH_DROPPABLE_ID", () => {
+    const trashPanelGroup = vi.fn();
     const reorderTerminals = vi.fn();
 
     const result = runTrashBranch(TRASH_DROPPABLE_ID, "panel-42", {
-      trashPanel,
+      trashPanelGroup,
       reorderTerminals,
     });
 
     expect(result).toBe("trashed");
-    expect(trashPanel).toHaveBeenCalledWith("panel-42");
+    expect(trashPanelGroup).toHaveBeenCalledWith("panel-42");
     expect(reorderTerminals).not.toHaveBeenCalled();
   });
 
+  it("uses trashPanelGroup so multi-panel tab groups trash atomically (issue #6428)", () => {
+    // Regression guard: dragging a tab group must trash the whole group, not just
+    // the panel attached to the draggable. trashPanelGroup is the only entry point
+    // that handles both single panels and groups; trashPanel would orphan siblings.
+    const trashPanelGroup = vi.fn();
+    const reorderTerminals = vi.fn();
+
+    runTrashBranch(TRASH_DROPPABLE_ID, "first-panel-of-group", {
+      trashPanelGroup,
+      reorderTerminals,
+    });
+
+    expect(trashPanelGroup).toHaveBeenCalledTimes(1);
+    expect(trashPanelGroup).toHaveBeenCalledWith("first-panel-of-group");
+  });
+
   it("falls through to reorder logic when overId is not the trash droppable", () => {
-    const trashPanel = vi.fn();
+    const trashPanelGroup = vi.fn();
     const reorderTerminals = vi.fn();
 
     const result = runTrashBranch("some-other-panel", "panel-42", {
-      trashPanel,
+      trashPanelGroup,
       reorderTerminals,
     });
 
     expect(result).toBe("fall-through");
-    expect(trashPanel).not.toHaveBeenCalled();
+    expect(trashPanelGroup).not.toHaveBeenCalled();
     expect(reorderTerminals).toHaveBeenCalled();
   });
 
-  it("does not call trashPanel when there is no draggedId", () => {
-    const trashPanel = vi.fn();
+  it("does not call trashPanelGroup when there is no draggedId", () => {
+    const trashPanelGroup = vi.fn();
     const reorderTerminals = vi.fn();
 
     const result = runTrashBranch(TRASH_DROPPABLE_ID, null, {
-      trashPanel,
+      trashPanelGroup,
       reorderTerminals,
     });
 
     expect(result).toBe("fall-through");
-    expect(trashPanel).not.toHaveBeenCalled();
+    expect(trashPanelGroup).not.toHaveBeenCalled();
     expect(reorderTerminals).not.toHaveBeenCalled();
   });
 

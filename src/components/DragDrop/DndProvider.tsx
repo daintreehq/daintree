@@ -516,9 +516,11 @@ export function DndProvider({ children }: DndProviderProps) {
 
       const overId = over.id as string;
 
-      // Drag-to-trash: drop on the trash pill trashes the panel and skips reorder logic.
+      // Drag-to-trash: drop on the trash pill trashes the panel — or its whole tab
+      // group, matching the X-button path — and skips reorder logic. trashPanelGroup
+      // falls back to trashPanel when the dragged panel has no group.
       if (overId === TRASH_DROPPABLE_ID) {
-        usePanelStore.getState().trashPanel(draggedId);
+        usePanelStore.getState().trashPanelGroup(draggedId);
         return;
       }
 
