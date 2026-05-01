@@ -15,6 +15,7 @@ import {
   matchesFilters,
   sortWorktrees,
   groupByType,
+  computeChipCounts,
   type DerivedWorktreeMeta,
   type FilterState,
   type GroupedSection,
@@ -245,6 +246,11 @@ export function WorktreeOverviewModal({
     }
     return map;
   }, [worktrees, panelsById, panelIds]);
+
+  const chipCounts = useMemo(() => {
+    const candidates = hideMainWorktree ? worktrees.filter((w) => !w.isMainWorktree) : worktrees;
+    return computeChipCounts(candidates, derivedMetaMap, activeWorktreeId);
+  }, [worktrees, derivedMetaMap, activeWorktreeId, hideMainWorktree]);
 
   // Compute aggregate statistics from derivedMetaMap
   const aggregateStats = useMemo(() => {
@@ -488,7 +494,7 @@ export function WorktreeOverviewModal({
               </Tooltip>
             )}
             {/* Filter Popover */}
-            <WorktreeFilterPopover />
+            <WorktreeFilterPopover chipCounts={chipCounts} />
             {/* Clear Filters Button - only shown when filters are active */}
             {hasActiveFilters() && (
               <Tooltip>

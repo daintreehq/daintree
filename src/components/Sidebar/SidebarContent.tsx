@@ -49,6 +49,7 @@ import {
   groupByType,
   findIntegrationWorktree,
   scoreWorktree,
+  computeChipCounts,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "@/lib/worktreeFilters";
@@ -523,6 +524,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return counts;
   }, [deferredWorktrees, derivedMetaMap, mainWorktree, integrationWorktree]);
 
+  const chipCounts = useMemo(() => {
+    const nonMain = deferredWorktrees.filter(
+      (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
+    );
+    return computeChipCounts(nonMain, derivedMetaMap, activeWorktreeId);
+  }, [deferredWorktrees, derivedMetaMap, mainWorktree, integrationWorktree, activeWorktreeId]);
+
   const mainWorktreeAggregateCounts = useMemo(() => {
     const nonMainCount = deferredWorktrees.length - 1 - (integrationWorktree ? 1 : 0);
     if (
@@ -983,7 +991,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       </div>
 
       {/* Inline search bar — only when there are non-main worktrees */}
-      {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
+      {hasNonMainWorktrees && (
+        <WorktreeSidebarSearchBar inputRef={searchInputRef} chipCounts={chipCounts} />
+      )}
 
       {/* Arm all terminals matching the active filter — only when a filter narrows the list */}
       {hasNonMainWorktrees && hasFilters && filteredWorktrees.length > 0 && (

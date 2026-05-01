@@ -3,9 +3,11 @@ import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
+import type { ChipCounts } from "@/lib/worktreeFilters";
 
 interface WorktreeSidebarSearchBarProps {
   inputRef?: React.Ref<HTMLInputElement>;
+  chipCounts?: ChipCounts;
 }
 
 function assignForwardedRef<T>(ref: React.Ref<T> | undefined, value: T | null): void {
@@ -16,7 +18,7 @@ function assignForwardedRef<T>(ref: React.Ref<T> | undefined, value: T | null): 
   }
 }
 
-export function WorktreeSidebarSearchBar({ inputRef }: WorktreeSidebarSearchBarProps) {
+export function WorktreeSidebarSearchBar({ inputRef, chipCounts }: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
   const setQuery = useWorktreeFilterStore((state) => state.setQuery);
   const clearAll = useWorktreeFilterStore((state) => state.clearAll);
@@ -123,7 +125,7 @@ export function WorktreeSidebarSearchBar({ inputRef }: WorktreeSidebarSearchBarP
               <X className="w-3 h-3" />
             </button>
           )}
-          <WorktreeFilterPopover hideSearchInput />
+          <WorktreeFilterPopover hideSearchInput chipCounts={chipCounts} />
         </div>
       </div>
     </div>
