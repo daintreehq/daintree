@@ -137,10 +137,71 @@ describe("ErrorBanner", () => {
       expect(screen.queryByRole("button", { name: "View errors" })).toBeNull();
       expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
     });
+  });
 
-    it("does not render 'View errors' in full (non-compact) mode", () => {
+  describe("full variant dismiss-only fallback", () => {
+    afterEach(() => {
+      useDiagnosticsStore.getState().reset();
+    });
+
+    it("renders 'View errors' alongside dismiss when full has no retry and no details", () => {
       render(<ErrorBanner error={makeError()} onDismiss={onDismiss} />);
+      expect(screen.getByRole("button", { name: "View errors" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Dismiss error" })).toBeTruthy();
+    });
+
+    it("opens the diagnostics dock to the problems tab when 'View errors' clicked", () => {
+      render(<ErrorBanner error={makeError()} onDismiss={onDismiss} />);
+      expect(useDiagnosticsStore.getState().isOpen).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "View errors" }));
+      const state = useDiagnosticsStore.getState();
+      expect(state.isOpen).toBe(true);
+      expect(state.activeTab).toBe("problems");
+    });
+
+    it("does not render 'View errors' when retry is available", () => {
+      render(
+        <ErrorBanner
+          error={makeError({ isTransient: true, retryAction: "git" })}
+          onDismiss={onDismiss}
+          onRetry={vi.fn()}
+        />
+      );
       expect(screen.queryByRole("button", { name: "View errors" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+
+    it("does not render 'View errors' when error.details is present", () => {
+      render(
+        <ErrorBanner error={makeError({ details: "stack trace here" })} onDismiss={onDismiss} />
+      );
+      expect(screen.queryByRole("button", { name: "View errors" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
+    });
+
+    it("hides 'View errors' while a retry is in progress", () => {
+      render(
+        <ErrorBanner
+          error={makeError({
+            retryProgress: { attempt: 1, maxAttempts: 3 },
+          })}
+          onDismiss={onDismiss}
+          onCancelRetry={vi.fn()}
+        />
+      );
+      expect(screen.queryByRole("button", { name: "View errors" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    });
+
+    it("renders 'View errors' when isTransient is true but onRetry is missing", () => {
+      render(
+        <ErrorBanner
+          error={makeError({ isTransient: true, retryAction: "git" })}
+          onDismiss={onDismiss}
+        />
+      );
+      expect(screen.getByRole("button", { name: "View errors" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     });
   });
 

@@ -226,6 +226,11 @@ export function ErrorBanner({
               Retry
             </Button>
           )}
+          {!isRetrying && !canRetry && !error.details && (
+            <Button variant="ghost-danger" size="xs" onClick={handleViewErrors}>
+              View errors
+            </Button>
+          )}
           <Button
             variant="ghost-danger"
             size="icon-sm"
