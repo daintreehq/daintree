@@ -152,7 +152,7 @@ export function useActionPalette(): UseActionPaletteReturn {
           if (!result.ok && result.error.code !== "DISABLED") {
             notify({
               type: "error",
-              title: "Action failed",
+              title: `Couldn't run '${item.title}'`,
               message: formatErrorMessage(result.error, "Action failed."),
             });
           }
@@ -160,7 +160,7 @@ export function useActionPalette(): UseActionPaletteReturn {
         .catch(() => {
           notify({
             type: "error",
-            title: "Action failed",
+            title: `Couldn't run '${item.title}'`,
             message: "An unexpected error occurred.",
           });
         });

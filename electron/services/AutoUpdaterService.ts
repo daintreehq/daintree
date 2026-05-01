@@ -218,7 +218,7 @@ class AutoUpdaterService {
           this.isManualCheck = false;
           broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
             type: "info",
-            title: "No Updates Available",
+            title: "No updates available",
             message: `${PRODUCT_NAME} ${app.getVersion()} is the latest version.`,
           });
         }
@@ -232,7 +232,7 @@ class AutoUpdaterService {
         if (wasManual) {
           broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
             type: "error",
-            title: "Update Failed",
+            title: "Update failed",
             message: err.message,
             action: {
               label: "Retry",
