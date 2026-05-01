@@ -79,7 +79,7 @@ describe("ContentGrid TIPS live shortcut migration — issue #6437", () => {
       "new-worktree",
     ];
     for (const id of tipIds) {
-      const tipBlock = content.match(new RegExp(`id: "${id}",[\\s\\S]*?(?=\\n  \\},)`));
+      const tipBlock = content.match(new RegExp(`id: "${id}",[\\s\\S]*?(?=\\n {2}\\},)`));
       expect(tipBlock, `Expected tip block for ${id}`).not.toBeNull();
       expect(tipBlock![0]).toContain("messageWithShortcut:");
     }
@@ -90,7 +90,7 @@ describe("ContentGrid TIPS live shortcut migration — issue #6437", () => {
     // The toggle is what owns the Cmd+Shift+O default binding; the .open
     // variant has no binding registered, so we must look up the toggle to get
     // a non-empty display combo.
-    const tipBlock = content.match(/id: "worktree-overview",[\s\S]*?(?=\n  \},)/);
+    const tipBlock = content.match(/id: "worktree-overview",[\s\S]*?(?=\n {2}\},)/);
     expect(tipBlock).not.toBeNull();
     expect(tipBlock![0]).toContain('shortcutActionId: "worktree.overview"');
   });
