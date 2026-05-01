@@ -27,7 +27,7 @@ export function FleetDraftingPill(): ReactElement | null {
   };
 
   return (
-    <div data-testid="fleet-drafting-pill" className="mb-1.5 flex items-center text-[11px]">
+    <div data-testid="fleet-drafting-pill" className="flex items-center text-[11px]">
       <Popover open={open} onOpenChange={handleOpenChange}>
         <PopoverTrigger asChild>
           <button
@@ -54,7 +54,7 @@ export function FleetDraftingPill(): ReactElement | null {
         </PopoverTrigger>
         <PopoverContent
           side="bottom"
-          align="start"
+          align="end"
           sideOffset={4}
           data-testid="fleet-resolution-popover"
           className="max-h-[320px] w-[360px] overflow-y-auto p-1"
