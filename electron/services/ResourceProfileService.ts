@@ -78,7 +78,6 @@ export class ResourceProfileService {
   private lagEscalatedActive = false;
   private lagEnterTicks = 0;
   private lagExitTicks = 0;
-  private lagLevel2Ticks = 0;
 
   constructor(private deps: ResourceProfileDeps) {
     const totalRamMb = os.totalmem() / 1024 / 1024;
@@ -141,9 +140,22 @@ export class ResourceProfileService {
         resolution: LAG_HISTOGRAM_RESOLUTION_MS,
       });
       this.lagHistogram.enable();
-      this.lagPreviousElu = performance.eventLoopUtilization();
     } catch {
       // perf_hooks may be unavailable in some embedded contexts; skip silently
+      this.lagHistogram = null;
+      this.lagPreviousElu = null;
+      return;
+    }
+    try {
+      this.lagPreviousElu = performance.eventLoopUtilization();
+    } catch {
+      // ELU unavailable: tear the histogram down so it isn't orphaned in the
+      // native layer accumulating samples no one will ever read.
+      try {
+        this.lagHistogram.disable();
+      } catch {
+        // non-critical
+      }
       this.lagHistogram = null;
       this.lagPreviousElu = null;
       return;
@@ -161,9 +173,13 @@ export class ResourceProfileService {
     try {
       const raw = this.lagHistogram.percentile(99) / 1_000_000;
       if (Number.isFinite(raw)) p99Ms = raw;
+    } catch {
+      // Read failure: histogram still needs reset below so the window stays bounded.
+    }
+    try {
       this.lagHistogram.reset();
     } catch {
-      return;
+      // non-critical
     }
 
     let utilization = 0;
@@ -189,24 +205,18 @@ export class ResourceProfileService {
           this.lagEscalatedActive = false;
           this.lagEnterTicks = 0;
           this.lagExitTicks = 0;
-          this.lagLevel2Ticks = 0;
           logInfo("event-loop-lag-cleared", { p99Ms: Math.round(p99Ms) });
         }
         return;
       }
       this.lagExitTicks = 0;
 
-      if (p99Ms > LAG_ESCALATE_P99_MS) {
-        this.lagLevel2Ticks += 1;
-        if (this.lagLevel2Ticks >= 1 && !this.lagEscalatedActive) {
-          this.lagEscalatedActive = true;
-          logInfo("event-loop-lag-escalated", {
-            p99Ms: Math.round(p99Ms),
-            utilization: Math.round(utilization * 100) / 100,
-          });
-        }
-      } else {
-        this.lagLevel2Ticks = 0;
+      if (p99Ms > LAG_ESCALATE_P99_MS && !this.lagEscalatedActive) {
+        this.lagEscalatedActive = true;
+        logInfo("event-loop-lag-escalated", {
+          p99Ms: Math.round(p99Ms),
+          utilization: Math.round(utilization * 100) / 100,
+        });
       }
       return;
     }
@@ -272,7 +282,6 @@ export class ResourceProfileService {
     this.lagEscalatedActive = false;
     this.lagEnterTicks = 0;
     this.lagExitTicks = 0;
-    this.lagLevel2Ticks = 0;
     this.disposed = true;
     logInfo("resource-profile-service-stopped");
   }

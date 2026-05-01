@@ -563,11 +563,9 @@ describe("ResourceProfileService adversarial", () => {
       const internals = service as unknown as {
         lagPressureActive: boolean;
         lagEscalatedActive: boolean;
-        lagLevel2Ticks: number;
       };
       expect(internals.lagPressureActive).toBe(false);
       expect(internals.lagEscalatedActive).toBe(false);
-      expect(internals.lagLevel2Ticks).toBe(0);
 
       service.stop();
     });
@@ -582,6 +580,72 @@ describe("ResourceProfileService adversarial", () => {
       vi.advanceTimersByTime(5_000);
       vi.advanceTimersByTime(5_000);
       expect(lagState.resetCount - before).toBe(3);
+
+      service.stop();
+    });
+
+    it("entry thresholds are strict greater-than (boundary values do not trigger)", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // Exactly at thresholds: p99 === 250 and util === 0.7. Neither satisfies `>`.
+      setLag(250, 0.7);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("balanced");
+
+      // p99 just over while util at boundary — still no entry.
+      setLag(251, 0.7);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("balanced");
+
+      // util just over while p99 at boundary — still no entry.
+      setLag(250, 0.71);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("balanced");
+
+      // Both strictly over → enters as expected.
+      setLag(251, 0.71);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      service.stop();
+    });
+
+    it("normal scoring upgrades out of efficiency after lag recovery", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // Drive into efficiency via lag.
+      mockGetAppMetrics.mockReturnValue([]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      // Recover.
+      setLag(50, 0.1);
+      for (let i = 0; i < 6; i++) {
+        vi.advanceTimersByTime(5_000);
+      }
+      expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(false);
+
+      // From here, normal scoring should drive back up. While lag was active,
+      // evaluate() returned early at the lag floor without exiting warmup,
+      // so tickCount has only crossed the floor branch. Drive past the
+      // 2-warmup ticks + 60s upgrade hold combination.
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+      expect(service.getProfile()).toBe("performance");
 
       service.stop();
     });
