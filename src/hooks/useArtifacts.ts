@@ -14,8 +14,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 const artifactStore = new Map<string, Artifact[]>();
 const listeners = new Set<(terminalId: string, artifacts: Artifact[]) => void>();
-let listenerRefCount = 0;
-let ipcUnsubscribe: (() => void) | null = null;
+const refState = { count: 0, unsubscribe: null as (() => void) | null };
 
 function notifyListeners(terminalId: string, artifacts: Artifact[]) {
   listeners.forEach((listener) => listener(terminalId, artifacts));
@@ -60,10 +59,10 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
   useEffect(() => {
     if (!isElectronAvailable()) return;
 
-    listenerRefCount++;
+    refState.count++;
 
-    if (listenerRefCount === 1 && !ipcUnsubscribe) {
-      ipcUnsubscribe = artifactClient.onDetected((payload: ArtifactDetectedPayload) => {
+    if (refState.count === 1 && !refState.unsubscribe) {
+      refState.unsubscribe = artifactClient.onDetected((payload: ArtifactDetectedPayload) => {
         const currentArtifacts = artifactStore.get(payload.terminalId) || [];
         const newArtifacts = [...currentArtifacts, ...payload.artifacts];
         artifactStore.set(payload.terminalId, newArtifacts);
@@ -73,11 +72,11 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
     }
 
     return () => {
-      listenerRefCount--;
+      refState.count--;
 
-      if (listenerRefCount === 0 && ipcUnsubscribe) {
-        ipcUnsubscribe();
-        ipcUnsubscribe = null;
+      if (refState.count === 0 && refState.unsubscribe) {
+        refState.unsubscribe();
+        refState.unsubscribe = null;
       }
     };
   }, []);
