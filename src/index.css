@@ -1591,12 +1591,19 @@ body[data-reduce-animations="true"]
     .animate-trash-pulse,
     .animate-all-clear-flash,
     .animate-diagnostics-flash,
-    .animate-border-flash
+    .animate-border-flash,
+    .github-stat-count-flash-issues,
+    .github-stat-count-flash-prs
   ) {
   animation: none;
   opacity: 1;
   transform: none;
   will-change: auto;
+}
+
+body[data-reduce-animations="true"]
+  :is(.github-stat-count-flash-issues, .github-stat-count-flash-prs) {
+  color: inherit;
 }
 
 body[data-reduce-animations="true"] .animate-skeleton-shimmer::after {
@@ -2073,6 +2080,34 @@ body[data-reduce-animations="true"] .terminal-pane {
   will-change: opacity, transform;
 }
 
+/* Digit flash - color decay from domain hue back to neutral when a count rises.
+ * The decay IS the count-rose signal (semantic exception per CLAUDE.md). */
+@keyframes github-stat-count-flash-issues {
+  from {
+    color: var(--color-github-open);
+  }
+  to {
+    color: var(--color-daintree-text);
+  }
+}
+
+@keyframes github-stat-count-flash-prs {
+  from {
+    color: var(--color-github-merged);
+  }
+  to {
+    color: var(--color-daintree-text);
+  }
+}
+
+.github-stat-count-flash-issues {
+  animation: github-stat-count-flash-issues 800ms ease-out forwards;
+}
+
+.github-stat-count-flash-prs {
+  animation: github-stat-count-flash-prs 800ms ease-out forwards;
+}
+
 /* Error pulse - subtle breathing animation */
 @keyframes github-status-error-pulse {
   0%,
@@ -2109,6 +2144,12 @@ body[data-reduce-animations="true"] .terminal-pane {
   .github-status-error {
     animation: none;
     opacity: 1;
+  }
+
+  .github-stat-count-flash-issues,
+  .github-stat-count-flash-prs {
+    animation: none;
+    color: inherit;
   }
 
   .palette-loading-bar__sweep {

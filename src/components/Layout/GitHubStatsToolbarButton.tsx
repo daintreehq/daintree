@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   useEffect,
+  useEffectEvent,
   useCallback,
   useImperativeHandle,
   memo,
@@ -249,6 +250,14 @@ export const GitHubStatsToolbarButton = memo(
     const [rateLimitNow, setRateLimitNow] = useState(() => Date.now());
     const prevLastUpdatedRef = useRef<number | null>(null);
 
+    // Per-digit flash counters. Incrementing forces a key-driven remount of
+    // the digit span, restarting its CSS @keyframes animation cleanly without
+    // the el.offsetWidth reflow hack. Key starts at 0 and the flash class is
+    // only applied once it's > 0, so the very first mount paints neutral.
+    const [issueFlashKey, setIssueFlashKey] = useState(0);
+    const [prFlashKey, setPrFlashKey] = useState(0);
+    const prevStatsRef = useRef<{ issueCount: number | null; prCount: number | null } | null>(null);
+
     // Eagerly resolve the dropdown body components so the click path renders
     // them concretely without going through Suspense. The toolbar is a
     // long-lived global UI surface and these dropdowns are commonly used,
@@ -485,15 +494,62 @@ export const GitHubStatsToolbarButton = memo(
       []
     );
 
+    // Delta check for the digit-flash animation. Wrapped in useEffectEvent so
+    // it reads the latest stats, dropdown-open state, and document.hidden at
+    // fire time without widening the effect's dep array. prevStatsRef is
+    // updated on every fresh stats arrival regardless of suppression — that
+    // way a backgrounded tab returning to focus doesn't replay every poll's
+    // worth of accumulated deltas at once.
+    const checkForCountIncrease = useEffectEvent(() => {
+      const next = stats;
+      if (!next) return;
+      const prev = prevStatsRef.current;
+      if (prev != null) {
+        const suppressed = document.hidden;
+        if (
+          !suppressed &&
+          !issuesOpen &&
+          prev.issueCount != null &&
+          next.issueCount != null &&
+          next.issueCount > prev.issueCount
+        ) {
+          setIssueFlashKey((k) => k + 1);
+        }
+        if (
+          !suppressed &&
+          !prsOpen &&
+          prev.prCount != null &&
+          next.prCount != null &&
+          next.prCount > prev.prCount
+        ) {
+          setPrFlashKey((k) => k + 1);
+        }
+      }
+      prevStatsRef.current = { issueCount: next.issueCount, prCount: next.prCount };
+    });
+
     useEffect(() => {
       if (statsLoading || statsError) {
         setStatsJustUpdated(false);
-      } else if (
-        lastUpdated != null &&
-        prevLastUpdatedRef.current != null &&
-        lastUpdated > prevLastUpdatedRef.current
-      ) {
+        return;
+      }
+      if (lastUpdated == null) {
+        // Project switch / reset path: useRepositoryStats clears lastUpdated
+        // to null when the user switches projects. Clear delta tracking too
+        // so the next first successful poll doesn't compare new-project
+        // counts against the previous project's stale counts (which would
+        // produce a spurious flash whenever the new project's count is
+        // higher).
+        prevStatsRef.current = null;
+        prevLastUpdatedRef.current = null;
+        return;
+      }
+      if (prevLastUpdatedRef.current != null && lastUpdated > prevLastUpdatedRef.current) {
         setStatsJustUpdated(true);
+        checkForCountIncrease();
+      } else if (prevLastUpdatedRef.current == null) {
+        // First successful poll — seed prevStatsRef without flashing.
+        checkForCountIncrease();
       }
       prevLastUpdatedRef.current = lastUpdated;
     }, [lastUpdated, statsLoading, statsError]);
@@ -627,7 +683,13 @@ export const GitHubStatsToolbarButton = memo(
                   isTokenError ? "text-muted-foreground" : "text-github-open"
                 )}
               />
-              <span className="text-xs font-medium tabular-nums">
+              <span
+                key={issueFlashKey}
+                className={cn(
+                  "text-xs font-medium tabular-nums",
+                  issueFlashKey > 0 && "github-stat-count-flash-issues"
+                )}
+              >
                 {stats?.issueCount ?? "\u2014"}
               </span>
             </Button>
@@ -743,7 +805,15 @@ export const GitHubStatsToolbarButton = memo(
                   isTokenError ? "text-muted-foreground" : "text-github-merged"
                 )}
               />
-              <span className="text-xs font-medium tabular-nums">{stats?.prCount ?? "\u2014"}</span>
+              <span
+                key={prFlashKey}
+                className={cn(
+                  "text-xs font-medium tabular-nums",
+                  prFlashKey > 0 && "github-stat-count-flash-prs"
+                )}
+              >
+                {stats?.prCount ?? "\u2014"}
+              </span>
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
