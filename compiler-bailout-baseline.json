@@ -293,19 +293,25 @@
     "error": 0,
     "pipeline": 0
   },
-  "src/components/Fleet/FleetArmingDialog.tsx": {
-    "success": 7,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0
-  },
   "src/components/Fleet/FleetArmingRibbon.tsx": {
-    "success": 3,
+    "success": 6,
     "skip": 0,
     "error": 1,
     "pipeline": 0
   },
   "src/components/Fleet/FleetDraftingPill.tsx": {
+    "success": 2,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Fleet/FleetPickerContent.tsx": {
+    "success": 8,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Fleet/FleetPickerPalette.tsx": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -366,9 +372,9 @@
     "pipeline": 0
   },
   "src/components/HelpPanel/HelpPanel.tsx": {
-    "success": 1,
+    "success": 0,
     "skip": 0,
-    "error": 0,
+    "error": 2,
     "pipeline": 0
   },
   "src/components/KeyboardShortcuts/SettingsShortcutCapture.tsx": {
@@ -557,6 +563,12 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/components/Layout/useOverflowBadgeSeverity.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/LogLevelPalette/LogLevelPalette.tsx": {
     "success": 1,
     "skip": 0,
@@ -654,7 +666,7 @@
     "pipeline": 0
   },
   "src/components/PanelPalette/PanelPalette.tsx": {
-    "success": 2,
+    "success": 1,
     "skip": 0,
     "error": 0,
     "pipeline": 0
@@ -1181,6 +1193,12 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/components/Sidebar/useWorktreeGridRovingFocus.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/Terminal/ArtifactOverlay.tsx": {
     "success": 2,
     "skip": 0,
@@ -1194,7 +1212,7 @@
     "pipeline": 0
   },
   "src/components/Terminal/ContentGrid.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
     "error": 3,
     "pipeline": 0
@@ -1775,6 +1793,12 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/components/icons/BrandMark.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/icons/DaintreeIcon.tsx": {
     "success": 1,
     "skip": 0,
@@ -2027,14 +2051,26 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/components/ui/ContentFadeIn.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/ui/EmptyState.tsx": {
     "success": 1,
     "skip": 0,
     "error": 0,
     "pipeline": 0
   },
-  "src/components/ui/Kbd.tsx": {
+  "src/components/ui/HighlightedText.tsx": {
     "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/ui/Kbd.tsx": {
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0
@@ -2077,6 +2113,12 @@
   },
   "src/components/ui/ShortcutRevealChip.tsx": {
     "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/ui/Skeleton.tsx": {
+    "success": 4,
     "skip": 0,
     "error": 0,
     "pipeline": 0
@@ -2136,7 +2178,7 @@
     "pipeline": 0
   },
   "src/components/ui/toaster.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
     "error": 1,
     "pipeline": 0
@@ -2291,6 +2333,12 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/hooks/useActiveAppScheme.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/hooks/useAgentLauncher.ts": {
     "success": 0,
     "skip": 0,
@@ -2312,7 +2360,7 @@
   "src/hooks/useArtifacts.ts": {
     "success": 0,
     "skip": 0,
-    "error": 10,
+    "error": 8,
     "pipeline": 0
   },
   "src/hooks/useBranchForPath.ts": {
@@ -2405,6 +2453,12 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/hooks/useFleetPicker.ts": {
+    "success": 0,
+    "skip": 0,
+    "error": 4,
+    "pipeline": 0
+  },
   "src/hooks/useGitHubTokenExpiryNotification.ts": {
     "success": 1,
     "skip": 0,
@@ -2435,6 +2489,12 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/hooks/useGlobalMinuteTicker.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/hooks/useGlobalSecondTicker.ts": {
     "success": 1,
     "skip": 0,
@@ -2442,9 +2502,9 @@
     "pipeline": 0
   },
   "src/hooks/useGridNavigation.ts": {
-    "success": 1,
+    "success": 0,
     "skip": 0,
-    "error": 0,
+    "error": 1,
     "pipeline": 0
   },
   "src/hooks/useHasBeenVisible.ts": {
@@ -2562,6 +2622,12 @@
     "pipeline": 0
   },
   "src/hooks/usePluginActions.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/hooks/usePluginPanelKinds.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -2688,6 +2754,12 @@
     "pipeline": 0
   },
   "src/hooks/useSoundPlaybackListener.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/hooks/useTabOverflow.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
