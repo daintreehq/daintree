@@ -262,7 +262,7 @@ export default defineConfig(({ command, mode }) => {
       compilerReportPlugin,
       rendererBundleSizePlugin(),
       xtermMinifyIdentifiersGuardPlugin(),
-      ...(process.env.ANALYZE
+      ...(process.env.ANALYZE === "true"
         ? [visualizer({ filename: "stats.html", gzipSize: true, brotliSize: true }) as Plugin]
         : []),
     ],
@@ -317,7 +317,7 @@ export default defineConfig(({ command, mode }) => {
               },
               {
                 name: "vendor-react",
-                test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+                test: /node_modules[\\/](react|react-dom|scheduler|use-sync-external-store)[\\/]/,
                 priority: 15,
               },
               {
