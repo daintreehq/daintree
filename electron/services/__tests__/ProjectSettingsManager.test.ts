@@ -183,4 +183,43 @@ describe("ProjectSettingsManager caching", () => {
     const loaded = await manager.getProjectSettings(projectId);
     expect(loaded.turbopackEnabled).toBeUndefined();
   });
+
+  it.each(["off", "workbench", "action", "system"] as const)(
+    "round-trips daintreeMcpTier=%s through save/load",
+    async (tier) => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        daintreeMcpTier: tier,
+      });
+
+      const freshManager = new ProjectSettingsManager(tempDir, createMockStore());
+      const loaded = await freshManager.getProjectSettings(projectId);
+      expect(loaded.daintreeMcpTier).toBe(tier);
+    }
+  );
+
+  it("rejects unknown daintreeMcpTier values from disk", async () => {
+    const settingsPath = path.join(tempDir, projectId, "settings.json");
+    await fs.writeFile(
+      settingsPath,
+      JSON.stringify({ runCommands: [], daintreeMcpTier: "godmode" }),
+      "utf-8"
+    );
+
+    const loaded = await manager.getProjectSettings(projectId);
+    expect(loaded.daintreeMcpTier).toBeUndefined();
+  });
+
+  it("preserves the deprecated exposeDaintreeMcpToAgents flag for migration", async () => {
+    const settingsPath = path.join(tempDir, projectId, "settings.json");
+    await fs.writeFile(
+      settingsPath,
+      JSON.stringify({ runCommands: [], exposeDaintreeMcpToAgents: true }),
+      "utf-8"
+    );
+
+    const loaded = await manager.getProjectSettings(projectId);
+    expect(loaded.exposeDaintreeMcpToAgents).toBe(true);
+    expect(loaded.daintreeMcpTier).toBeUndefined();
+  });
 });

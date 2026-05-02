@@ -1454,12 +1454,41 @@ describe("McpServerService", () => {
         title: "Create Worktree",
         description: "Create a new worktree",
       }),
+      // System-only tools — irreversible or externally-visible mutations.
       createManifestEntry({
         id: "git.commit" as ActionId,
         title: "Commit",
         description: "Create a git commit",
       }),
+      createManifestEntry({
+        id: "git.push" as ActionId,
+        title: "Push",
+        description: "Push commits to a remote",
+      }),
+      createManifestEntry({
+        id: "worktree.delete" as ActionId,
+        title: "Delete Worktree",
+        description: "Permanently remove a worktree",
+      }),
+      createManifestEntry({
+        id: "terminal.sendCommand" as ActionId,
+        title: "Send Terminal Command",
+        description: "Run an arbitrary command in a terminal",
+      }),
+      createManifestEntry({
+        id: "agent.terminal" as ActionId,
+        title: "Agent Terminal",
+        description: "Drive a running agent",
+      }),
     ];
+
+    const SYSTEM_ONLY_TOOLS = [
+      "git.commit",
+      "git.push",
+      "worktree.delete",
+      "terminal.sendCommand",
+      "agent.terminal",
+    ] as const;
 
     it("workbench tier exposes only read-only introspection tools", async () => {
       paneTokenTiers.set("token-wb", "workbench");
@@ -1491,7 +1520,9 @@ describe("McpServerService", () => {
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
       expect(ids).toContain("worktree.create");
-      expect(ids).not.toContain("git.commit");
+      for (const id of SYSTEM_ONLY_TOOLS) {
+        expect(ids).not.toContain(id);
+      }
     });
 
     it("system tier exposes the full curated allowlist including irreversible mutations", async () => {
@@ -1507,7 +1538,9 @@ describe("McpServerService", () => {
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
       expect(ids).toContain("worktree.create");
-      expect(ids).toContain("git.commit");
+      for (const id of SYSTEM_ONLY_TOOLS) {
+        expect(ids).toContain(id);
+      }
     });
 
     it("rejects callTool for actions outside the session tier with MethodNotFound", async () => {
@@ -1528,6 +1561,33 @@ describe("McpServerService", () => {
 
       await expect(
         client.callTool({ name: "git.commit", arguments: { message: "x" } })
+      ).rejects.toMatchObject({ code: -32601 });
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("filters listTools and rejects callTool over the Streamable HTTP transport", async () => {
+      paneTokenTiers.set("token-wb-http", "workbench");
+      const dispatchMock = vi.fn(
+        (): ActionDispatchResult => ({ ok: true, result: "should-not-run" })
+      );
+      const { window } = createMockWindow({
+        getManifest: tierManifest,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectHttpClient(service.currentPort!, {
+        Authorization: "Bearer token-wb-http",
+      });
+      httpTransports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).toContain("worktree.list");
+      expect(ids).not.toContain("worktree.create");
+      expect(ids).not.toContain("git.commit");
+
+      await expect(
+        client.callTool({ name: "worktree.create", arguments: {} })
       ).rejects.toMatchObject({ code: -32601 });
       expect(dispatchMock).not.toHaveBeenCalled();
     });
