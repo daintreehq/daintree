@@ -326,11 +326,9 @@ export function McpServerSettingsTab() {
     }
   }, []);
 
-  const handleCopyAuditAsJson = useCallback(async () => {
+  const handleCopyAuditAsJson = useCallback(async (records: McpAuditRecord[]) => {
     try {
-      const records = await window.electron.mcpServer.getAuditRecords();
       await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
-      setAuditRecords(records);
       notify({
         type: "info",
         title: "Audit log copied",
@@ -706,11 +704,27 @@ export function McpServerSettingsTab() {
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => void handleCopyAuditAsJson()}
+                  onClick={() => void refreshAuditRecords()}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+                  aria-label="Refresh audit log"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCopyAuditAsJson(filteredAuditRecords)}
+                  disabled={filteredAuditRecords.length === 0}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
+                    filteredAuditRecords.length === 0
+                      ? "border-daintree-border text-daintree-text/30 cursor-not-allowed"
+                      : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+                  )}
                 >
                   <Copy className="w-3.5 h-3.5" />
-                  Copy as JSON
+                  Copy {filteredAuditRecords.length === auditRecords.length ? "all" : "filtered"} as
+                  JSON
                 </button>
                 <button
                   type="button"

@@ -1251,6 +1251,116 @@ describe("McpServerService", () => {
       expect(records[0].id).toBe("seed-1");
     });
 
+    it("treats a missing auditEnabled key (legacy persisted config) as enabled", async () => {
+      // Simulate a user whose config.json predates this feature: auditEnabled
+      // and auditMaxRecords are absent. A naive `!auditEnabled` guard would
+      // silently drop every record while the UI shows "Capture on".
+      delete (storeState.mcpServer as Partial<typeof storeState.mcpServer>).auditEnabled;
+      delete (storeState.mcpServer as Partial<typeof storeState.mcpServer>).auditMaxRecords;
+
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "actions.list" as ActionId,
+            title: "List Actions",
+            description: "Read the action registry",
+          }),
+        ],
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await client.callTool({ name: "actions.list", arguments: {} });
+
+      const records = getAuditRecords(service);
+      expect(records).toHaveLength(1);
+      expect(records[0].toolId).toBe("actions.list");
+
+      const config = (
+        service as unknown as { getAuditConfig: () => { enabled: boolean; maxRecords: number } }
+      ).getAuditConfig();
+      expect(config.enabled).toBe(true);
+      expect(config.maxRecords).toBe(500);
+    });
+
+    it("debounced flush persists without an explicit clear or stop", async () => {
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "actions.list" as ActionId,
+            title: "List Actions",
+            description: "Read the action registry",
+          }),
+        ],
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout"],
+        shouldAdvanceTime: true,
+        advanceTimeDelta: 50,
+      });
+      try {
+        await client.callTool({ name: "actions.list", arguments: { x: 1 } });
+        storeMocks.set.mockClear();
+
+        // Before the debounce window expires, no flush.
+        vi.advanceTimersByTime(1000);
+        expect(storeMocks.set).not.toHaveBeenCalled();
+
+        // After the 2s window the debounced flush fires once.
+        vi.advanceTimersByTime(1500);
+        const calls = storeMocks.set.mock.calls.filter((call) => call[0] === "mcpServer");
+        expect(calls.length).toBeGreaterThanOrEqual(1);
+        const last = calls[calls.length - 1];
+        expect((last[1] as { auditLog: Array<{ toolId: string }> }).auditLog).toHaveLength(1);
+        expect((last[1] as { auditLog: Array<{ toolId: string }> }).auditLog[0].toolId).toBe(
+          "actions.list"
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("clearAuditLog cancels any pending debounce flush", async () => {
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "actions.list" as ActionId,
+            title: "List Actions",
+            description: "Read the action registry",
+          }),
+        ],
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout"],
+        shouldAdvanceTime: true,
+        advanceTimeDelta: 50,
+      });
+      try {
+        await client.callTool({ name: "actions.list", arguments: {} });
+        // Pending debounce timer is now set with the record in the buffer.
+        (service as unknown as { clearAuditLog: () => void }).clearAuditLog();
+        storeMocks.set.mockClear();
+
+        // Advance well past the original debounce window. The cancelled
+        // timer must not fire and re-persist the cleared record.
+        vi.advanceTimersByTime(5000);
+        expect(storeMocks.set).not.toHaveBeenCalled();
+        expect(getAuditRecords(service)).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("preserves audit log when other config writes happen", async () => {
       const { window } = createMockWindow({
         getManifest: () => [

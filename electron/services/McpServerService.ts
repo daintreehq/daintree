@@ -387,7 +387,10 @@ export class McpServerService {
     durationMs: number;
     outcome: { kind: "result"; value: ActionDispatchResult } | { kind: "throw"; error: unknown };
   }): void {
-    if (!this.getConfig().auditEnabled) return;
+    // `=== false` so legacy persisted configs (undefined) default to enabled,
+    // matching `getAuditConfig()`. A bare `!auditEnabled` would silently drop
+    // every record for any user whose store predates this feature.
+    if (this.getConfig().auditEnabled === false) return;
     this.hydrateAuditLog();
 
     const classification = this.classifyDispatchResult(input.outcome);
