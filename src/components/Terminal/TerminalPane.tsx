@@ -1,13 +1,4 @@
-import React, {
-  Suspense,
-  lazy,
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import React, { Suspense, lazy, useEffect, useEffectEvent, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { AlertTriangle, RefreshCw, Settings } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -213,12 +204,12 @@ function TerminalPaneComponent({
   const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
 
   const cliDetails = useCliAvailabilityStore((state) => state.details);
-  const getPanelCliDetail = useCallback((): AgentCliDetail | undefined => {
+  const getPanelCliDetail = (): AgentCliDetail | undefined => {
     if (!agentId) return undefined;
     return cliDetails[agentId];
-  }, [agentId, cliDetails]);
+  };
 
-  const handleRunAnyway = useCallback(() => {
+  const handleRunAnyway = () => {
     const panel = usePanelStore.getState().panelsById[id];
     if (!panel || !agentId) return;
 
@@ -238,7 +229,7 @@ function TerminalPaneComponent({
       agentPresetId: panel.agentPresetId,
       env: presetEnv,
     });
-  }, [id, agentId, addPanel, removePanel]);
+  };
 
   // Fleet arming store for multi-select gestures. Selection treatment is
   // identical to focus: a pane is "selected" any time it's armed. A
@@ -313,7 +304,7 @@ function TerminalPaneComponent({
   const presetProjectPresets = useProjectPresetsStore((s) =>
     agentId ? s.presetsByAgent[agentId] : undefined
   );
-  const livePresetColor = useMemo(() => {
+  const livePresetColor = (() => {
     if (!agentPresetId || !agentId) return presetColor;
     const preset = getMergedPresets(
       agentId,
@@ -322,38 +313,19 @@ function TerminalPaneComponent({
       presetProjectPresets
     ).find((f) => f.id === agentPresetId);
     return preset?.color ?? presetColor;
-  }, [
-    agentPresetId,
-    agentId,
-    presetCustomPresets,
-    presetCcrPresets,
-    presetProjectPresets,
-    presetColor,
-  ]);
-  const chrome = useMemo(
-    () =>
-      chromeProp && chromeProp.color === livePresetColor
-        ? chromeProp
-        : deriveTerminalChrome({
-            kind,
-            launchAgentId: agentId,
-            runtimeIdentity,
-            detectedAgentId,
-            detectedProcessId,
-            agentState,
-            presetColor: livePresetColor,
-          }),
-    [
-      chromeProp,
-      kind,
-      agentId,
-      runtimeIdentity,
-      detectedAgentId,
-      detectedProcessId,
-      agentState,
-      livePresetColor,
-    ]
-  );
+  })();
+  const chrome =
+    chromeProp && chromeProp.color === livePresetColor
+      ? chromeProp
+      : deriveTerminalChrome({
+          kind,
+          launchAgentId: agentId,
+          runtimeIdentity,
+          detectedAgentId,
+          detectedProcessId,
+          agentState,
+          presetColor: livePresetColor,
+        });
   const effectiveAgentId = isBuiltInAgentId(chrome.agentId) ? chrome.agentId : undefined;
   const showHybridInputBar = shouldShowHybridInputBar({
     hasAgentIdentity: effectiveAgentId !== undefined,
@@ -362,10 +334,8 @@ function TerminalPaneComponent({
     fleetSize: armedIds.size,
   });
 
-  const pingedIdSelector = useMemo(
-    () => (state: ReturnType<typeof usePanelStore.getState>) => state.pingedId === id,
-    [id]
-  );
+  const pingedIdSelector = (state: ReturnType<typeof usePanelStore.getState>) =>
+    state.pingedId === id;
   const isPinged = usePanelStore(pingedIdSelector);
   const wasJustSelected = isPinged && isFocused && performance.now() < justFocusedUntil;
 
@@ -376,13 +346,10 @@ function TerminalPaneComponent({
   const removeError = useErrorStore((state) => state.removeError);
   const clearRetryProgress = useErrorStore((state) => state.clearRetryProgress);
 
-  const handleCancelRetry = useCallback(
-    (errorId: string) => {
-      errorsClient.cancelRetry(errorId);
-      clearRetryProgress(errorId);
-    },
-    [clearRetryProgress]
-  );
+  const handleCancelRetry = (errorId: string) => {
+    errorsClient.cancelRetry(errorId);
+    clearRetryProgress(errorId);
+  };
 
   const { isExited, exitCode, handleExit, handleErrorRetry } = useTerminalLogic({
     id,
@@ -498,31 +465,28 @@ function TerminalPaneComponent({
     };
   }, [id, updateVisibility]);
 
-  const handleReady = useCallback(() => {}, []);
+  const handleReady = () => {};
 
-  const handleInput = useCallback(
-    (data: string) => {
-      const results = inputTracker.process(data);
+  const handleInput = (data: string) => {
+    const results = inputTracker.process(data);
 
-      for (const result of results) {
-        if (result.isClear) {
-          const managed = terminalInstanceService.get(id);
-          if (managed?.terminal) {
-            try {
-              managed.terminal.clear();
-            } catch (error) {
-              console.warn(`Failed to clear terminal ${id}:`, error);
-            }
+    for (const result of results) {
+      if (result.isClear) {
+        const managed = terminalInstanceService.get(id);
+        if (managed?.terminal) {
+          try {
+            managed.terminal.clear();
+          } catch (error) {
+            console.warn(`Failed to clear terminal ${id}:`, error);
           }
         }
-
-        if (result.command) {
-          updateLastCommand(id, result.command);
-        }
       }
-    },
-    [id, updateLastCommand, inputTracker]
-  );
+
+      if (result.command) {
+        updateLastCommand(id, result.command);
+      }
+    }
+  };
 
   useEffect(() => {
     const handleFindInPanel = () => {
@@ -537,179 +501,159 @@ function TerminalPaneComponent({
     return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
   }, [isFocused]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      // Handle Cmd+C to copy xterm selection regardless of which child has focus.
-      // This is needed because agent terminals focus the hybrid input bar, so
-      // xterm's built-in copy handler never receives the copy event.
-      if (e.metaKey && e.key === "c") {
-        const managed = terminalInstanceService.get(id);
-        if (managed?.terminal.hasSelection()) {
-          const nativeSelection = window.getSelection()?.toString() ?? "";
-          if (nativeSelection.length === 0) {
-            e.preventDefault();
-            void navigator.clipboard.writeText(managed.terminal.getSelection());
-            return;
-          }
-        }
-      }
-
-      const target = e.target as HTMLElement;
-
-      if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") {
-        return;
-      }
-
-      if (target.tagName === "BUTTON" || target !== e.currentTarget) {
-        return;
-      }
-
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        setFocused(id);
-      }
-    },
-    [id, setFocused]
-  );
-
-  const getRefreshTierCallback = useCallback(() => {
-    const terminal = getTerminal(id);
-    return getTerminalRefreshTier(terminal, isFocused);
-  }, [id, isFocused, getTerminal]);
-
-  const handleClick = useCallback(
-    (e?: React.MouseEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Handle Cmd+C to copy xterm selection regardless of which child has focus.
+    // This is needed because agent terminals focus the hybrid input bar, so
+    // xterm's built-in copy handler never receives the copy event.
+    if (e.metaKey && e.key === "c") {
       const managed = terminalInstanceService.get(id);
       if (managed?.terminal.hasSelection()) {
-        // Prevent ContentPanel from calling onFocus() which triggers parent
-        // re-renders. Don't call setFocused() either — it triggers a
-        // wake+restore cycle that calls terminal.reset(), clearing selection.
-        e?.preventDefault();
-        return;
-      }
-
-      // Chrome-level multi-select gestures only fire when the click
-      // originates inside pane chrome (the title bar) AND not on an
-      // interactive child of the chrome (overflow menu, close, restore,
-      // title input, etc). Without the interactive guard, clicking the
-      // overflow trigger of a pane while a fleet is armed would clear
-      // the fleet before the menu opens.
-      const target = e?.target as HTMLElement | null;
-      const isChromeClick = !!target?.closest("[data-pane-chrome]");
-      const isInteractiveChild = !!target?.closest(
-        "button, input, textarea, select, a, [role='button'], [role='menuitem']"
-      );
-
-      if (e && isChromeClick && !isInteractiveChild) {
-        const terminal = getTerminal(id);
-        const isEligible = !!(terminal && isFleetArmEligible(terminal));
-        const armingStore = useFleetArmingStore.getState();
-        const action = decideChromeAction(
-          { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey },
-          {
-            isEligible,
-            isArmed: armingStore.armedIds.has(id),
-            armedSize: armingStore.armedIds.size,
-          }
-        );
-
-        if (action.type === "toggle") {
-          // Empty fleet + shift/cmd-click on an unarmed pane: the focused
-          // pane is the implicit "first member" so the user ends up with
-          // a 2-pane fleet rather than a lonely toggled pane. Mirrors the
-          // mental model of "I have one selected, now add another".
-          if (armingStore.armedIds.size === 0 && !armingStore.armedIds.has(id)) {
-            const focusedId = usePanelStore.getState().focusedId;
-            if (focusedId && focusedId !== id) {
-              const focusedTerminal = usePanelStore.getState().panelsById[focusedId];
-              if (focusedTerminal && isFleetArmEligible(focusedTerminal)) {
-                armingStore.armId(focusedId);
-              }
-            }
-          }
-          armingStore.toggleId(id);
+        const nativeSelection = window.getSelection()?.toString() ?? "";
+        if (nativeSelection.length === 0) {
           e.preventDefault();
+          void navigator.clipboard.writeText(managed.terminal.getSelection());
           return;
         }
-        if (action.type === "clear") {
-          armingStore.clear();
-          // fall through — setFocused below makes the clicked pane the
-          // new exclusive selection.
-        }
       }
+    }
 
-      setFocused(id);
-      terminalInstanceService.boostRefreshRate(id);
-    },
-    [id, setFocused, getTerminal]
-  );
+    const target = e.target as HTMLElement;
 
-  const handleXtermPointerDownCapture = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (e.button !== 0) return;
+    if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") {
+      return;
+    }
 
-      const target = e.target as HTMLElement | null;
-      const xtermElement = target?.closest(".xterm");
-      if (!xtermElement) return;
+    if (target.tagName === "BUTTON" || target !== e.currentTarget) {
+      return;
+    }
 
-      const focusTarget = getTerminalFocusTarget({
-        hasHybridInputSurface: showHybridInputBar,
-        isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
-        hybridInputEnabled,
-        hybridInputAutoFocus,
-      });
-
-      const suppressTarget = shouldSuppressUnfocusedClick({
-        location,
-        isFocused,
-        isCursorPointer: xtermElement.classList.contains("xterm-cursor-pointer"),
-        focusTarget,
-      });
-
-      if (!suppressTarget) return;
-
+    if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      e.stopPropagation();
-
       setFocused(id);
-      terminalInstanceService.boostRefreshRate(id);
+    }
+  };
 
-      if (suppressTarget === "hybridInput") {
-        requestAnimationFrame(() => inputBarRef.current?.focusWithCursorAtEnd());
-      } else {
-        requestAnimationFrame(() => terminalInstanceService.focus(id));
+  const getRefreshTierCallback = () => {
+    const terminal = getTerminal(id);
+    return getTerminalRefreshTier(terminal, isFocused);
+  };
+
+  const handleClick = (e?: React.MouseEvent) => {
+    const managed = terminalInstanceService.get(id);
+    if (managed?.terminal.hasSelection()) {
+      // Prevent ContentPanel from calling onFocus() which triggers parent
+      // re-renders. Don't call setFocused() either — it triggers a
+      // wake+restore cycle that calls terminal.reset(), clearing selection.
+      e?.preventDefault();
+      return;
+    }
+
+    // Chrome-level multi-select gestures only fire when the click
+    // originates inside pane chrome (the title bar) AND not on an
+    // interactive child of the chrome (overflow menu, close, restore,
+    // title input, etc). Without the interactive guard, clicking the
+    // overflow trigger of a pane while a fleet is armed would clear
+    // the fleet before the menu opens.
+    const target = e?.target as HTMLElement | null;
+    const isChromeClick = !!target?.closest("[data-pane-chrome]");
+    const isInteractiveChild = !!target?.closest(
+      "button, input, textarea, select, a, [role='button'], [role='menuitem']"
+    );
+
+    if (e && isChromeClick && !isInteractiveChild) {
+      const terminal = getTerminal(id);
+      const isEligible = !!(terminal && isFleetArmEligible(terminal));
+      const armingStore = useFleetArmingStore.getState();
+      const action = decideChromeAction(
+        { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey },
+        {
+          isEligible,
+          isArmed: armingStore.armedIds.has(id),
+          armedSize: armingStore.armedIds.size,
+        }
+      );
+
+      if (action.type === "toggle") {
+        // Empty fleet + shift/cmd-click on an unarmed pane: the focused
+        // pane is the implicit "first member" so the user ends up with
+        // a 2-pane fleet rather than a lonely toggled pane. Mirrors the
+        // mental model of "I have one selected, now add another".
+        if (armingStore.armedIds.size === 0 && !armingStore.armedIds.has(id)) {
+          const focusedId = usePanelStore.getState().focusedId;
+          if (focusedId && focusedId !== id) {
+            const focusedTerminal = usePanelStore.getState().panelsById[focusedId];
+            if (focusedTerminal && isFleetArmEligible(focusedTerminal)) {
+              armingStore.armId(focusedId);
+            }
+          }
+        }
+        armingStore.toggleId(id);
+        e.preventDefault();
+        return;
       }
-    },
-    [
-      id,
-      location,
-      showHybridInputBar,
+      if (action.type === "clear") {
+        armingStore.clear();
+        // fall through — setFocused below makes the clicked pane the
+        // new exclusive selection.
+      }
+    }
+
+    setFocused(id);
+    terminalInstanceService.boostRefreshRate(id);
+  };
+
+  const handleXtermPointerDownCapture = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+
+    const target = e.target as HTMLElement | null;
+    const xtermElement = target?.closest(".xterm");
+    if (!xtermElement) return;
+
+    const focusTarget = getTerminalFocusTarget({
+      hasHybridInputSurface: showHybridInputBar,
+      isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
       hybridInputEnabled,
       hybridInputAutoFocus,
-      isBackendDisconnected,
-      isBackendRecovering,
-      isInputLocked,
-      isFocused,
-      setFocused,
-    ]
-  );
+    });
 
-  const handleRestart = useCallback(() => {
+    const suppressTarget = shouldSuppressUnfocusedClick({
+      location,
+      isFocused,
+      isCursorPointer: xtermElement.classList.contains("xterm-cursor-pointer"),
+      focusTarget,
+    });
+
+    if (!suppressTarget) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    setFocused(id);
+    terminalInstanceService.boostRefreshRate(id);
+
+    if (suppressTarget === "hybridInput") {
+      requestAnimationFrame(() => inputBarRef.current?.focusWithCursorAtEnd());
+    } else {
+      requestAnimationFrame(() => terminalInstanceService.focus(id));
+    }
+  };
+
+  const handleRestart = () => {
     restartTerminal(id);
     inputTracker.reset();
-  }, [restartTerminal, id, inputTracker]);
+  };
 
-  const handleUpdateCwd = useCallback(() => {
+  const handleUpdateCwd = () => {
     setIsUpdateCwdOpen(true);
-  }, []);
+  };
 
-  const handleTrash = useCallback(() => {
+  const handleTrash = () => {
     trashPanel(id);
-  }, [trashPanel, id]);
+  };
 
-  const handleDismissReconnectError = useCallback(() => {
+  const handleDismissReconnectError = () => {
     clearReconnectError(id);
-  }, [clearReconnectError, id]);
+  };
 
   useEffect(() => {
     terminalInstanceService.setFocused(id, isFocused);
@@ -779,7 +723,7 @@ function TerminalPaneComponent({
   const isWorking = agentState === "working";
   const allowPing = !isMaximized && (location !== "grid" || (gridPanelCount ?? 2) > 1);
 
-  const agentHeaderActions = useMemo(() => {
+  const agentHeaderActions = (() => {
     if (!effectiveAgentId) return undefined;
     const agentConfig = getAgentConfig(effectiveAgentId);
     const agentName = agentConfig?.name ?? effectiveAgentId;
@@ -797,7 +741,7 @@ function TerminalPaneComponent({
         {agentName} Settings
       </DropdownMenuItem>
     );
-  }, [effectiveAgentId]);
+  })();
 
   return (
     <ContentPanel
@@ -1111,4 +1055,4 @@ function TerminalPaneComponent({
   );
 }
 
-export const TerminalPane = React.memo(TerminalPaneComponent);
+export const TerminalPane = TerminalPaneComponent;
