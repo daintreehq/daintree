@@ -1407,6 +1407,43 @@ body,
   z-index: 2;
 }
 
+/* FileChangeList row-recency cue — a transient left-edge gutter bar that
+ * acknowledges rows freshly arrived between renders. The 2000ms duration is a
+ * semantic exception to Tier 1 (150ms): the decay IS the "newness" signal,
+ * same category as ActivityLight 1000ms color fade. Hold the bar at full
+ * opacity for the first ~30% (so the eye can land), then decay to invisible
+ * over the remaining ~70%.
+ */
+@keyframes file-change-row-appear {
+  0% {
+    opacity: 1;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.file-change-row-new {
+  position: relative;
+}
+
+.file-change-row-new::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: var(--color-status-info);
+  border-radius: 1px;
+  animation: file-change-row-appear 2000ms ease-out 1 both;
+  will-change: opacity;
+  pointer-events: none;
+}
+
 /* Respect user's motion preferences — OS prefers-reduced-motion and the
  * Daintree-level "Reduce UI animations" toggle (body[data-reduce-animations])
  * both remove spatial motion while leaving opacity changes intact.
@@ -1463,6 +1500,15 @@ body,
   }
 
   .fleet-exit-pulse-overlay {
+    animation: none;
+    opacity: 0;
+    will-change: auto;
+  }
+
+  /* FileChangeList row-recency — the bar has no static-state purpose, so drop
+   * it entirely under reduced motion. WCAG 2.3.3: remove motion, don't freeze.
+   */
+  .file-change-row-new::before {
     animation: none;
     opacity: 0;
     will-change: auto;
@@ -1576,6 +1622,12 @@ body[data-reduce-animations="true"] .animate-fleet-bar-commit-flash::before {
 }
 
 body[data-reduce-animations="true"] .fleet-exit-pulse-overlay {
+  animation: none;
+  opacity: 0;
+  will-change: auto;
+}
+
+body[data-reduce-animations="true"] .file-change-row-new::before {
   animation: none;
   opacity: 0;
   will-change: auto;
