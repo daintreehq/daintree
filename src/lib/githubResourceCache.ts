@@ -47,6 +47,33 @@ export function getGeneration(key: string): number {
   return generationMap.get(key) ?? 0;
 }
 
+/**
+ * Apply a transform across every cached slot for a given (projectPath, type)
+ * pair, regardless of filter or sort. Use after a mutation (close, merge,
+ * reopen) so sibling filter slots don't serve stale rows on the next switch.
+ *
+ * The transform receives each entry and returns either a new entry (write
+ * back + bump generation to discard any concurrent in-flight SWR for that
+ * slot) or null (leave untouched, no generation bump).
+ *
+ * Prefix-matches on `${projectPath}:${type}:` rather than splitting on `:`
+ * because `projectPath` can contain colons on Windows (e.g., `C:\projects`).
+ */
+export function mutateCacheEntries(
+  projectPath: string,
+  type: string,
+  transform: (entry: GitHubResourceCacheEntry) => GitHubResourceCacheEntry | null
+): void {
+  const prefix = `${projectPath}:${type}:`;
+  for (const [key, entry] of cache.entries()) {
+    if (!key.startsWith(prefix)) continue;
+    const next = transform(entry);
+    if (next === null) continue;
+    setCache(key, next);
+    nextGeneration(key);
+  }
+}
+
 export function _resetForTests(): void {
   cache.clear();
   generationMap.clear();

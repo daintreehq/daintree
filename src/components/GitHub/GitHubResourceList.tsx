@@ -501,10 +501,37 @@ export function GitHubResourceList({
     }
 
     // Filter/sort changed while mounted (or projectPath changed via the
-    // keepMounted body): clear and refetch with skeleton. First-mount cache
-    // miss skips the explicit clear (data is already [] from the useState
-    // initializer) so no spurious setState/render churn.
+    // keepMounted body). If the target slot is warm in cache, hydrate
+    // synchronously and run the silent SWR revalidate path — no skeleton
+    // flash on Open → Closed → Open round-trips. Cold target slot keeps the
+    // existing clear-and-skeleton behavior so genuine first views still
+    // signal "loading".
     if (!isFirstMount) {
+      // Search isn't part of `cacheKey`, so the warm slot only describes
+      // the unsearched view. Falling through to the cold path while a
+      // search is active flashes unfiltered cached rows before the
+      // searched fetch lands; gate hydration to non-search transitions.
+      const targetCached = !debouncedSearch ? getCache(cacheKey) : undefined;
+      if (targetCached) {
+        // A previous cold fetch may have set `loading=true` and then been
+        // aborted by this effect's cleanup, which skips its `setLoading(false)`
+        // because the abort signal fired. Clear it explicitly so an empty
+        // warm slot doesn't render the skeleton via `loading && !data.length`.
+        setLoading(false);
+        setData(targetCached.items);
+        setCursor(targetCached.endCursor);
+        setHasMore(targetCached.hasNextPage);
+        setLastUpdatedAt(targetCached.timestamp);
+        setExactNumberNotFound(null);
+        setError(null);
+        fetchData(null, false, abortController.signal, {
+          revalidating: true,
+          generation: gen,
+          cacheKey,
+        });
+        lastLoadedEffectKeyRef.current = effectKey;
+        return () => abortController.abort();
+      }
       setCursor(null);
       setHasMore(false);
       setExactNumberNotFound(null);

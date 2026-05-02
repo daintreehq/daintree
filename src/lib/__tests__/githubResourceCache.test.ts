@@ -5,8 +5,21 @@ import {
   setCache,
   nextGeneration,
   getGeneration,
+  mutateCacheEntries,
   _resetForTests,
 } from "../githubResourceCache";
+import type { GitHubIssue } from "@shared/types/github";
+
+const makeIssue = (n: number, state: "OPEN" | "CLOSED" = "OPEN"): GitHubIssue => ({
+  number: n,
+  title: `Issue #${n}`,
+  url: `https://example.test/${n}`,
+  state,
+  updatedAt: "",
+  author: { login: "u", avatarUrl: "" },
+  assignees: [],
+  commentCount: 0,
+});
 
 describe("githubResourceCache", () => {
   beforeEach(() => {
@@ -158,6 +171,110 @@ describe("githubResourceCache", () => {
       nextGeneration("gen-key-20");
       expect(getGeneration("gen-key-0")).toBe(0);
       expect(getGeneration("gen-key-20")).toBe(1);
+    });
+  });
+
+  describe("mutateCacheEntries", () => {
+    const seedSlot = (
+      projectPath: string,
+      type: string,
+      filter: string,
+      sort: string,
+      items: GitHubIssue[]
+    ): string => {
+      const key = buildCacheKey(projectPath, type, filter, sort);
+      setCache(key, {
+        items,
+        endCursor: null,
+        hasNextPage: false,
+        timestamp: 1,
+      });
+      return key;
+    };
+
+    it("applies the transform across every (filter, sort) slot for the matching project + type", () => {
+      const openCreated = seedSlot("/proj", "issue", "open", "created", [
+        makeIssue(1),
+        makeIssue(2),
+      ]);
+      const closedCreated = seedSlot("/proj", "issue", "closed", "created", [makeIssue(3)]);
+      const openUpdated = seedSlot("/proj", "issue", "open", "updated", [
+        makeIssue(1),
+        makeIssue(2),
+      ]);
+
+      mutateCacheEntries("/proj", "issue", (entry) => ({
+        ...entry,
+        items: entry.items.filter((item) => item.number !== 2),
+      }));
+
+      expect(getCache(openCreated)?.items.map((i) => i.number)).toEqual([1]);
+      expect(getCache(closedCreated)?.items.map((i) => i.number)).toEqual([3]);
+      expect(getCache(openUpdated)?.items.map((i) => i.number)).toEqual([1]);
+    });
+
+    it("does not touch slots from a different project", () => {
+      const sameProj = seedSlot("/proj-a", "issue", "open", "created", [makeIssue(1)]);
+      const otherProj = seedSlot("/proj-b", "issue", "open", "created", [makeIssue(1)]);
+
+      mutateCacheEntries("/proj-a", "issue", (entry) => ({
+        ...entry,
+        items: [],
+      }));
+
+      expect(getCache(sameProj)?.items).toEqual([]);
+      expect(getCache(otherProj)?.items.map((i) => i.number)).toEqual([1]);
+    });
+
+    it("does not touch slots from a different resource type", () => {
+      const issueSlot = seedSlot("/proj", "issue", "open", "created", [makeIssue(1)]);
+      const prSlot = seedSlot("/proj", "pr", "open", "created", [makeIssue(1)]);
+
+      mutateCacheEntries("/proj", "issue", (entry) => ({ ...entry, items: [] }));
+
+      expect(getCache(issueSlot)?.items).toEqual([]);
+      expect(getCache(prSlot)?.items.map((i) => i.number)).toEqual([1]);
+    });
+
+    it("bumps the generation counter only for changed slots", () => {
+      const changedKey = seedSlot("/proj", "issue", "open", "created", [
+        makeIssue(1),
+        makeIssue(2),
+      ]);
+      const skippedKey = seedSlot("/proj", "issue", "closed", "created", [makeIssue(3)]);
+      const changedGenBefore = getGeneration(changedKey);
+      const skippedGenBefore = getGeneration(skippedKey);
+
+      mutateCacheEntries("/proj", "issue", (entry) => {
+        if (entry.items.some((item) => item.number === 1)) {
+          return { ...entry, items: entry.items.filter((item) => item.number !== 1) };
+        }
+        return null;
+      });
+
+      expect(getGeneration(changedKey)).toBe(changedGenBefore + 1);
+      expect(getGeneration(skippedKey)).toBe(skippedGenBefore);
+    });
+
+    it("is a no-op on an empty cache", () => {
+      expect(() =>
+        mutateCacheEntries("/proj", "issue", (entry) => ({ ...entry, items: [] }))
+      ).not.toThrow();
+    });
+
+    it("handles project paths that contain colons (Windows-style)", () => {
+      const windowsKey = seedSlot("C:\\projects\\repo", "issue", "open", "created", [
+        makeIssue(10),
+      ]);
+      const otherKey = seedSlot("C:\\projects\\other", "issue", "open", "created", [makeIssue(10)]);
+
+      mutateCacheEntries("C:\\projects\\repo", "issue", (entry) => ({
+        ...entry,
+        items: [],
+      }));
+
+      expect(getCache(windowsKey)?.items).toEqual([]);
+      expect(getCache(otherKey)?.items.map((i) => i.number)).toEqual([10]);
     });
   });
 });

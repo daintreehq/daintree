@@ -1156,6 +1156,165 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
     });
   });
 
+  it("hydrates from warm cache without flashing the skeleton on filter switch", async () => {
+    const openKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    const closedKey = buildCacheKey("/test/proj", "issue", "closed", "created");
+    setCache(openKey, {
+      items: [makeIssue(60)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+    setCache(closedKey, {
+      items: [makeIssue(61), makeIssue(62)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    // Mount-time revalidate for "open", then closed-filter revalidate after switch.
+    mockListIssues
+      .mockResolvedValueOnce(makeResponse([makeIssue(60)]))
+      .mockResolvedValueOnce(makeResponse([makeIssue(61), makeIssue(62)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    expect(screen.getByTestId("item-60")).toBeTruthy();
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      useGitHubFilterStore.getState().setIssueFilter("closed");
+    });
+
+    // Warm closed cache → rows swap synchronously, no skeleton flash.
+    expect(screen.queryByTestId("skeleton")).toBeNull();
+    expect(screen.getByTestId("item-61")).toBeTruthy();
+    expect(screen.getByTestId("item-62")).toBeTruthy();
+    expect(screen.queryByTestId("item-60")).toBeNull();
+
+    // Background revalidate for the closed slot uses the bypass-cache path.
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(2);
+    });
+    expect(mockListIssues.mock.calls[1]?.[0]).toMatchObject({
+      state: "closed",
+      bypassCache: true,
+    });
+  });
+
+  it("survives Open → Closed → Open round-trip with no skeleton on the second Open", async () => {
+    const openKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    const closedKey = buildCacheKey("/test/proj", "issue", "closed", "created");
+    setCache(openKey, {
+      items: [makeIssue(70)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+    setCache(closedKey, {
+      items: [makeIssue(71)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    mockListIssues.mockImplementation(
+      ({ state }: { state: "open" | "closed" | "merged" | "all" }) => {
+        if (state === "closed") return Promise.resolve(makeResponse([makeIssue(71)]));
+        return Promise.resolve(makeResponse([makeIssue(70)]));
+      }
+    );
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    expect(screen.getByTestId("item-70")).toBeTruthy();
+    expect(screen.queryByTestId("skeleton")).toBeNull();
+
+    act(() => {
+      useGitHubFilterStore.getState().setIssueFilter("closed");
+    });
+    expect(screen.queryByTestId("skeleton")).toBeNull();
+    expect(screen.getByTestId("item-71")).toBeTruthy();
+
+    act(() => {
+      useGitHubFilterStore.getState().setIssueFilter("open");
+    });
+    // Warm Open cache still present — second Open shows item-70 with no flash.
+    expect(screen.queryByTestId("skeleton")).toBeNull();
+    expect(screen.getByTestId("item-70")).toBeTruthy();
+  });
+
+  it("does not flash unsearched cached rows when a search query becomes active", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(81), makeIssue(82), makeIssue(83)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    // Mount-time revalidate resolves quickly; the searched fetch hangs so the
+    // transitional UI (post-debounce) is observable.
+    mockListIssues
+      .mockResolvedValueOnce(makeResponse([makeIssue(81), makeIssue(82), makeIssue(83)]))
+      .mockImplementation(() => new Promise(() => {}));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    expect(screen.getByTestId("item-81")).toBeTruthy();
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      useGitHubFilterStore.getState().setIssueSearchQuery("foo");
+    });
+
+    // After the 300ms debounce fires, the effect re-runs. The cacheKey
+    // doesn't include the search, so naively reading the warm slot would
+    // re-show the unfiltered list. Verify the cold path runs instead.
+    await waitFor(() => {
+      expect(screen.queryByTestId("item-81")).toBeNull();
+    });
+    expect(screen.getByTestId("skeleton")).toBeTruthy();
+  });
+
+  it("clears stranded loading state when switching from a cold pending filter to a warm empty slot", async () => {
+    const closedKey = buildCacheKey("/test/proj", "issue", "closed", "created");
+    setCache(closedKey, {
+      items: [],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    // Initial open-filter fetch hangs so loading sticks at true; the closed
+    // revalidate resolves to the cached empty page.
+    mockListIssues.mockImplementation(
+      ({ state }: { state: "open" | "closed" | "merged" | "all" }) => {
+        if (state === "closed") return Promise.resolve(makeResponse([]));
+        return new Promise(() => {});
+      }
+    );
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    expect(screen.getByTestId("skeleton")).toBeTruthy();
+
+    act(() => {
+      useGitHubFilterStore.getState().setIssueFilter("closed");
+    });
+
+    // Warm closed cache is empty — the skeleton must clear (loading reset),
+    // exposing the empty state instead.
+    await waitFor(() => {
+      expect(screen.queryByTestId("skeleton")).toBeNull();
+    });
+    expect(screen.getByText("No issues in this view")).toBeTruthy();
+  });
+
   it("clears rows and shows the skeleton when the filter changes while keepMounted", async () => {
     const openKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(openKey, {

@@ -31,4 +31,15 @@ export class TtlCache<K, V> {
   get size(): number {
     return this.store.size;
   }
+
+  *entries(): IterableIterator<[K, V]> {
+    const now = Date.now();
+    for (const [key, entry] of this.store) {
+      if (now > entry.expiresAt) {
+        this.store.delete(key);
+        continue;
+      }
+      yield [key, entry.value];
+    }
+  }
 }

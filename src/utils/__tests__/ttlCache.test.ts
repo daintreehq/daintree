@@ -89,4 +89,38 @@ describe("TtlCache", () => {
     expect(cache.get("d")).toBe(4);
     expect(cache.size).toBe(2);
   });
+
+  describe("entries()", () => {
+    it("yields every non-expired entry in insertion order", () => {
+      const cache = new TtlCache<string, number>(10, 60_000);
+      cache.set("a", 1);
+      cache.set("b", 2);
+      cache.set("c", 3);
+
+      expect(Array.from(cache.entries())).toEqual([
+        ["a", 1],
+        ["b", 2],
+        ["c", 3],
+      ]);
+    });
+
+    it("skips and evicts expired entries during iteration", () => {
+      const cache = new TtlCache<string, number>(10, 5_000);
+      cache.set("a", 1);
+      vi.advanceTimersByTime(3_000);
+      cache.set("b", 2);
+      vi.advanceTimersByTime(3_000);
+      // "a" is now expired, "b" is still alive.
+
+      expect(Array.from(cache.entries())).toEqual([["b", 2]]);
+      // Iteration removed the expired entry.
+      expect(cache.size).toBe(1);
+      expect(cache.get("a")).toBeUndefined();
+    });
+
+    it("returns nothing on an empty cache", () => {
+      const cache = new TtlCache<string, number>(10, 60_000);
+      expect(Array.from(cache.entries())).toEqual([]);
+    });
+  });
 });
