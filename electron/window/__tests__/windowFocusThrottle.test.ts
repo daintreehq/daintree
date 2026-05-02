@@ -44,6 +44,7 @@ function createMockDeps() {
     updateMonitorConfig: vi.fn(),
     refresh: vi.fn().mockResolvedValue(undefined),
     setPollingEnabled: vi.fn(),
+    setPRPollCadence: vi.fn(),
   } as unknown as WorkspaceClient;
 
   const statsService = {
@@ -126,6 +127,7 @@ describe("WindowFocusThrottle", () => {
       pollIntervalBackground: 50_000,
     });
     expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
+    expect(workspaceClient.setPRPollCadence).toHaveBeenCalledWith(false);
     expect(statsService.updatePollInterval).toHaveBeenCalledWith(25_000);
     expect(
       vi.mocked(ptyClient as unknown as { setProcessTreePollInterval: () => void })
@@ -178,6 +180,7 @@ describe("WindowFocusThrottle", () => {
     // Reset mocks to verify unthrottle calls
     vi.mocked(workspaceClient.updateMonitorConfig).mockClear();
     vi.mocked(workspaceClient.setPollingEnabled).mockClear();
+    vi.mocked(workspaceClient.setPRPollCadence).mockClear();
     vi.mocked(statsService.updatePollInterval).mockClear();
 
     // Then unthrottle
@@ -188,6 +191,7 @@ describe("WindowFocusThrottle", () => {
       pollIntervalBackground: 10_000,
     });
     expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(workspaceClient.setPRPollCadence).toHaveBeenCalledWith(true);
     expect(workspaceClient.refresh).toHaveBeenCalled();
 
     // setPollingEnabled(true) must run before refresh() so the host is

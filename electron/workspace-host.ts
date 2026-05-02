@@ -426,6 +426,13 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.setPollingEnabled(request.enabled);
         break;
 
+      case "set-pr-poll-cadence":
+        {
+          const { pullRequestService } = await import("./services/PullRequestService.js");
+          pullRequestService.setFocusCadence(request.focused);
+        }
+        break;
+
       case "background":
         workspaceService.pause();
         break;

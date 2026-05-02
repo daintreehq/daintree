@@ -148,6 +148,7 @@ function applyThrottle(): void {
       pollIntervalBackground: WORKSPACE_BACKGROUND_NORMAL * THROTTLE_MULTIPLIER,
     });
     workspaceClient.setPollingEnabled(false);
+    workspaceClient.setPRPollCadence(false);
   }
 
   const statsService = focusThrottleDeps.getProjectStatsService();
@@ -172,6 +173,7 @@ function removeThrottle(): void {
       pollIntervalBackground: WORKSPACE_BACKGROUND_NORMAL,
     });
     workspaceClient.setPollingEnabled(true);
+    workspaceClient.setPRPollCadence(true);
     void workspaceClient.refresh();
   }
 

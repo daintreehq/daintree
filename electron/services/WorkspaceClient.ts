@@ -899,6 +899,12 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
+  setPRPollCadence(focused: boolean): void {
+    for (const entry of this.entries.values()) {
+      entry.host.send({ type: "set-pr-poll-cadence", focused });
+    }
+  }
+
   /**
    * Forward a per-worktree WSL git opt-in / dismissed change to every host.
    * Each host filters by worktree id internally — broadcasting is cheaper

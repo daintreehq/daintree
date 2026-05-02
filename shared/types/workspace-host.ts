@@ -240,6 +240,8 @@ export type WorkspaceHostRequest =
     }
   // Polling control
   | { type: "set-polling-enabled"; enabled: boolean }
+  // PR polling cadence control (window-focus aware)
+  | { type: "set-pr-poll-cadence"; focused: boolean }
   // WSL-routed git opt-in / banner dismissal (Windows only)
   | {
       type: "set-wsl-opt-in";
