@@ -66,11 +66,11 @@ All three share:
 
 Claude help sessions run at one of three authorization tiers, selected by user settings. The local `daintree` MCP server filters its `ListTools` response and rejects out-of-tier `CallTool` requests with `TIER_NOT_PERMITTED`. Tiers are additive: `action` is `workbench` plus addons, `system` is `action` plus addons.
 
-| Tier        | Trigger                                 | Capabilities (categories)                                                                                                       |
-| ----------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `workbench` | (not exposed to help sessions today)    | Read-only introspection: list projects, worktrees, terminals; read git status, diffs, commits; view GitHub issues/PRs.         |
-| `action`    | Default for help sessions               | Adds non-destructive mutations: create worktrees, inject context, run recipes, open files, focus agents.                       |
-| `system`    | Help-session skip-permissions setting   | Adds destructive operations: delete worktrees, send raw terminal commands, stage/commit/push git, open issues/PRs, launch agents. |
+| Tier        | Trigger                               | Capabilities (categories)                                                                                                         |
+| ----------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `workbench` | (not exposed to help sessions today)  | Read-only introspection: list projects, worktrees, terminals; read git status, diffs, commits; view GitHub issues/PRs.            |
+| `action`    | Default for help sessions             | Adds non-destructive mutations: create worktrees, inject context, run recipes, open files, focus agents.                          |
+| `system`    | Help-session skip-permissions setting | Adds destructive operations: delete worktrees, send raw terminal commands, stage/commit/push git, open issues/PRs, launch agents. |
 
 The authoritative tier definitions live in `electron/services/McpServerService.ts` (`WORKBENCH_TOOLS`, `ACTION_TIER_ADDONS`, `SYSTEM_TIER_ADDONS`). When local MCP is disabled in settings, the `daintree` server is omitted from the per-session `.mcp.json` entirely — Claude falls back to docs-only behavior.
 
