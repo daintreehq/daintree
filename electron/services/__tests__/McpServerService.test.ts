@@ -1689,11 +1689,16 @@ describe("McpServerService", () => {
     httpTransports.push(transport);
 
     await client.callTool({ name: "actions.list", arguments: {} });
-    await client.callTool({ name: "actions.list", arguments: {} });
 
     const httpSessions = (service as unknown as { httpSessions: Map<string, unknown> })
       .httpSessions;
-    expect(httpSessions.size).toBe(1);
+    const sessionIdsAfterFirst = Array.from(httpSessions.keys());
+    expect(sessionIdsAfterFirst).toHaveLength(1);
+
+    await client.callTool({ name: "actions.list", arguments: {} });
+
+    const sessionIdsAfterSecond = Array.from(httpSessions.keys());
+    expect(sessionIdsAfterSecond).toEqual(sessionIdsAfterFirst);
     expect(dispatchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -1714,7 +1719,48 @@ describe("McpServerService", () => {
     });
 
     expect(result.status).toBe(404);
-    expect(result.body).toBe("Session not found");
+    const parsed = JSON.parse(result.body) as {
+      jsonrpc: string;
+      error: { code: number; message: string };
+      id: null;
+    };
+    expect(parsed.jsonrpc).toBe("2.0");
+    expect(parsed.error.code).toBe(-32001);
+    expect(parsed.error.message).toBe("Session not found");
+    expect(parsed.id).toBeNull();
+  });
+
+  it("returns 405 with an Allow header for unsupported methods on /mcp", async () => {
+    const { window } = createMockWindow();
+    await service.start(window);
+
+    const port = service.currentPort!;
+    const result = await new Promise<{ status: number; allow: string | undefined }>(
+      (resolve, reject) => {
+        const req = http.request(
+          {
+            host: "127.0.0.1",
+            port,
+            path: "/mcp",
+            method: "PUT",
+            headers: { Authorization: `Bearer ${storeState.mcpServer.apiKey}` },
+          },
+          (res) => {
+            const allow = res.headers["allow"];
+            resolve({
+              status: res.statusCode ?? 0,
+              allow: Array.isArray(allow) ? allow[0] : allow,
+            });
+            res.resume();
+          }
+        );
+        req.on("error", reject);
+        req.end();
+      }
+    );
+
+    expect(result.status).toBe(405);
+    expect(result.allow).toBe("GET, POST, DELETE");
   });
 
   it("rejects /mcp requests that fail auth, host, or origin checks", async () => {

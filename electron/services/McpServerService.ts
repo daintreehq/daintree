@@ -1144,10 +1144,15 @@ export class McpServerService {
         res.writeHead(404, { "Content-Type": "text/plain" });
         res.end("Session not found");
       }
-    } else if (
-      url.pathname === "/mcp" &&
-      (req.method === "GET" || req.method === "POST" || req.method === "DELETE")
-    ) {
+    } else if (url.pathname === "/mcp") {
+      if (req.method !== "GET" && req.method !== "POST" && req.method !== "DELETE") {
+        res.writeHead(405, {
+          Allow: "GET, POST, DELETE",
+          "Content-Type": "text/plain",
+        });
+        res.end("Method not allowed");
+        return;
+      }
       await this.handleStreamableHttpRequest(req, res);
     } else {
       res.writeHead(404, { "Content-Type": "text/plain" });
@@ -1165,8 +1170,14 @@ export class McpServerService {
     if (sessionId !== undefined && sessionId !== "") {
       const session = this.httpSessions.get(sessionId);
       if (!session) {
-        res.writeHead(404, { "Content-Type": "text/plain" });
-        res.end("Session not found");
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            error: { code: -32001, message: "Session not found" },
+            id: null,
+          })
+        );
         return;
       }
       this.resetHttpIdleTimer(sessionId);
