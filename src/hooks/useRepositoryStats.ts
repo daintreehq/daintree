@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { GitHubRateLimitKind, RepositoryStats } from "../types";
 import { githubClient, projectClient } from "@/clients";
 import { isTokenRelatedError } from "@/lib/githubErrors";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
+import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 
 function isValidPagePayload(page: unknown): page is {
   items: unknown[];
@@ -25,6 +26,29 @@ const ERROR_BACKOFF_INTERVAL = 2 * 60 * 1000;
 // reset even under clock skew.
 const RATE_LIMIT_RESUME_BUFFER_MS = 2_000;
 
+// Freshness tier thresholds keyed off the active poll cadence
+// (`ACTIVE_POLL_INTERVAL` = 30s). 90s is 3× the active poll — long enough that
+// a single missed poll does not flip the badge, short enough that a paused or
+// failing poll surfaces visibly. 300s sits inside the idle-poll window so a
+// backgrounded app reaches `aging` before its next scheduled poll.
+export const FRESH_THRESHOLD_MS = 90_000;
+export const AGING_THRESHOLD_MS = 300_000;
+
+/**
+ * Per-pill freshness tier driving the toolbar's visual encoding. Replaces the
+ * old binary `isStale` so a 30-second-old poll, a disk-cache cold start, and a
+ * full network failure no longer share one tint.
+ *
+ * - `fresh`: poll completed within {@link FRESH_THRESHOLD_MS}
+ * - `aging`: poll older than {@link FRESH_THRESHOLD_MS} but still in-session;
+ *   typically means the active poll is overdue or the app was backgrounded
+ * - `stale-disk`: backend served disk-cached data (token absent / rate-limited
+ *   / offline) but no upstream API error string was attached
+ * - `errored`: backend served disk data with an error string, or the renderer
+ *   fetch threw and no stats are available
+ */
+export type FreshnessLevel = "fresh" | "aging" | "stale-disk" | "errored";
+
 export interface UseRepositoryStatsReturn {
   stats: RepositoryStats | null;
   loading: boolean;
@@ -34,6 +58,7 @@ export interface UseRepositoryStatsReturn {
   lastUpdated: number | null;
   rateLimitResetAt: number | null;
   rateLimitKind: GitHubRateLimitKind | null;
+  freshnessLevel: FreshnessLevel;
   refresh: (options?: { force?: boolean }) => Promise<void>;
 }
 
@@ -348,6 +373,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       rateLimitResetAtRef.current = null;
       setRateLimitResetAt(null);
       setRateLimitKind(null);
+      // Reset error state too — without this the previous project's failure
+      // (e.g. ghError = "no token") would carry into the new project's
+      // freshness tier as `errored` until its first poll completes.
+      setError(null);
+      lastErrorRef.current = null;
 
       fetchStats().then(() => {
         if (mountedRef.current) {
@@ -547,6 +577,49 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
   const isTokenError = isTokenRelatedError(error);
 
+  // Subscribe to the shared 30-second tick so the level re-evaluates against
+  // wall-clock without each consumer registering its own interval. Stays
+  // paused while the document is hidden — fine because the visibility handler
+  // refetches on resume and the next render will reset the tier.
+  const tick = useGlobalMinuteTicker();
+  const ghError = stats?.ghError;
+  const freshnessLevel = useMemo<FreshnessLevel>(() => {
+    // Disk-fallback path: `GitHubService` only sets `stale: true` when it
+    // returned persistent-cache data after a token / rate-limit / network
+    // failure. The presence of an upstream error string upgrades that to
+    // "errored" so the user sees something distinct from a quiet cold start.
+    if (isStale) {
+      return ghError ? "errored" : "stale-disk";
+    }
+    // Errored without a successful baseline: covers two paths the `isStale`
+    // branch above misses — the IPC handler returning `ghError` with `stale=
+    // false` (no-token / first-launch failure) and `fetchStats`'s catch block
+    // setting `error` after a throw before any `lastUpdated` was applied.
+    // Once a fresh poll lands (`lastUpdated` set) a transient subsequent
+    // error stays in age-driven freshness so the user keeps seeing valid
+    // recent data instead of a sudden alarm.
+    if (error && lastUpdated == null) {
+      return "errored";
+    }
+    if (lastUpdated == null) {
+      // No data yet (cold mount before first poll resolves) — treat as fresh
+      // so the loading/empty state isn't decorated with a staleness icon.
+      return "fresh";
+    }
+    // `tick` is intentionally read so re-renders against the global ticker
+    // re-evaluate `Date.now() - lastUpdated` and let `aging` activate when
+    // the active poll falls behind without a backend-side stale flag.
+    void tick;
+    const age = Date.now() - lastUpdated;
+    if (age < FRESH_THRESHOLD_MS) return "fresh";
+    if (age < AGING_THRESHOLD_MS) return "aging";
+    // Past the aging ceiling the in-session counts haven't been refreshed but
+    // no backend has flagged stale either — keep `aging` rather than minting
+    // a fifth tier. The threshold is exported as documentation of the
+    // "expected" freshness ceiling and is consumed by tests.
+    return "aging";
+  }, [isStale, ghError, error, lastUpdated, tick]);
+
   return {
     stats,
     loading,
@@ -556,6 +629,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     lastUpdated,
     rateLimitResetAt,
     rateLimitKind,
+    freshnessLevel,
     refresh,
   };
 }
