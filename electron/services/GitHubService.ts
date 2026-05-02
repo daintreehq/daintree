@@ -71,15 +71,21 @@ const issueListCache = new Cache<string, GitHubListResponse<GitHubIssue>>({ defa
 const prListCache = new Cache<string, GitHubListResponse<GitHubPR>>({ defaultTTL: 60000 });
 const projectHealthCache = new Cache<string, ProjectHealth>({ defaultTTL: 60000 });
 const issueTooltipCache = new Cache<string, IssueTooltipData>({ defaultTTL: 300000 }); // 5 min TTL
-const prTooltipCache = new Cache<string, PRTooltipData>({ defaultTTL: 300000 }); // 5 min TTL
 // Newest-wins guard for prTooltipCache: tracks the request-start timestamp of
 // the most recent successful write per cache key. Both poll-path (pre-warm)
 // and hover-path writes capture Date.now() before awaiting the network call,
 // then only commit when their captured timestamp is >= the stored one. Without
 // this guard a slow poll resolving after a faster hover fetch would clobber
-// fresher data with staler data (lessons #2243, #1377). MUST be cleared
-// alongside prTooltipCache wherever it is cleared.
+// fresher data with staler data (lessons #2243, #1377). The Cache `onEvict`
+// hook keeps this map's lifetime tied to prTooltipCache so LRU eviction does
+// not leave orphaned timestamps; explicit clears below also reset it.
 const prTooltipWrittenAt = new Map<string, number>();
+const prTooltipCache = new Cache<string, PRTooltipData>({
+  defaultTTL: 300000, // 5 min TTL
+  onEvict: (key) => {
+    prTooltipWrittenAt.delete(key as string);
+  },
+});
 
 // ETag cache for PR conditional revalidation. Key: `owner/repo#prNumber`.
 // Cleared on token rotation via clearGitHubCaches (ETags are token-scoped).
