@@ -103,7 +103,7 @@ describe("GitHubStatsToolbarButton freshness wiring", () => {
   it("derives the tooltip aging copy from useGlobalMinuteTicker, not a per-component setInterval", () => {
     expect(source).toContain('from "@/hooks/useGlobalMinuteTicker"');
     expect(source).toMatch(/const\s+tick\s*=\s*useGlobalMinuteTicker\(\)/);
-    expect(source).toMatch(/useMemo\(\s*\(\)\s*=>\s*Date\.now\(\)/);
+    expect(source).toMatch(/useMemo\(\s*\(\)\s*=>\s*\{[\s\S]*?Date\.now\(\)/);
   });
 
   it("only bumps animation keys when the displayed count actually changes", () => {
