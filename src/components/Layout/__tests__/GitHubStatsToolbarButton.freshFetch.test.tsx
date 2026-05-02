@@ -220,9 +220,7 @@ describe("GitHubStatsToolbarButton digit flash CSS", () => {
   it("suppresses flash under @media (prefers-reduced-motion: reduce)", () => {
     // The flash classes must appear inside *some* prefers-reduced-motion
     // block with an `animation: none` rule. Walk the file looking for one.
-    const matches = [
-      ...css.matchAll(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{/g),
-    ];
+    const matches = [...css.matchAll(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{/g)];
     expect(matches.length).toBeGreaterThan(0);
     const sliceContaining = matches
       .map((m) => {

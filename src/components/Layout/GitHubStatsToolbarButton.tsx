@@ -256,9 +256,7 @@ export const GitHubStatsToolbarButton = memo(
     // only applied once it's > 0, so the very first mount paints neutral.
     const [issueFlashKey, setIssueFlashKey] = useState(0);
     const [prFlashKey, setPrFlashKey] = useState(0);
-    const prevStatsRef = useRef<{ issueCount: number | null; prCount: number | null } | null>(
-      null
-    );
+    const prevStatsRef = useRef<{ issueCount: number | null; prCount: number | null } | null>(null);
 
     // Eagerly resolve the dropdown body components so the click path renders
     // them concretely without going through Suspense. The toolbar is a
