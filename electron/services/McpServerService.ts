@@ -663,6 +663,7 @@ export class McpServerService {
       event: Electron.IpcMainEvent,
       payload: { requestId: string; manifest: unknown }
     ) => {
+      if (!payload || typeof payload.requestId !== "string") return;
       const pending = this.pendingManifests.get(payload.requestId);
       if (!pending) return;
       if (event.sender.id !== pending.webContentsId) {
@@ -683,6 +684,7 @@ export class McpServerService {
       event: Electron.IpcMainEvent,
       payload: { requestId: string; result: ActionDispatchResult }
     ) => {
+      if (!payload || typeof payload.requestId !== "string") return;
       const pending = this.pendingDispatches.get(payload.requestId);
       if (!pending) return;
       if (event.sender.id !== pending.webContentsId) {
