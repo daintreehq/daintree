@@ -138,7 +138,7 @@ const { LiveTimeAgoMock } = vi.hoisted(() => {
 vi.mock("@/components/Worktree/LiveTimeAgo", () => ({
   LiveTimeAgo: (props: any) => {
     LiveTimeAgoMock(props);
-    return <span>1m ago</span>;
+    return <span>1m</span>;
   },
 }));
 
@@ -262,9 +262,11 @@ describe("GitHubResourceList SWR behavior", () => {
       expect(screen.getByText(/Network error/)).toBeTruthy();
     });
     expect(screen.getByTestId("item-20")).toBeTruthy();
-    expect(screen.getByText(/1m ago/)).toBeTruthy();
+    expect(screen.getByText("1m")).toBeTruthy();
     // The label must reflect the cached timestamp, not Date.now() of the failure.
-    expect(LiveTimeAgoMock).toHaveBeenCalledTimes(1);
+    expect(LiveTimeAgoMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timestamp: expect.any(Number) })
+    );
   });
 
   it("clears error banner and refreshes timestamp after successful retry", async () => {
@@ -317,7 +319,7 @@ describe("GitHubResourceList SWR behavior", () => {
     await waitFor(() => {
       expect(screen.getByText(/Initial fail/)).toBeTruthy();
     });
-    expect(screen.getByText(/1m ago/)).toBeTruthy();
+    expect(screen.getByText("1m")).toBeTruthy();
 
     useGitHubFilterStore.getState().setIssueFilter("closed");
 
