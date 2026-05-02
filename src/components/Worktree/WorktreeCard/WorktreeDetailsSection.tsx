@@ -116,7 +116,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
       { scale: [1, 1.06, 1] },
       { duration: DURATION_200 / 1000, ease: [0.4, 0, 0.2, 1] }
     );
-  }, [changedFileCount, prefersReducedMotion, animate]);
+  }, [changedFileCount, prefersReducedMotion, animate, countScope]);
 
   const rsLower = resourceStatus?.toLowerCase();
   const showResourceResume =

@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { WorktreeState } from "@/types";
+import type { WorktreeChanges } from "@shared/types/git";
 import type { ComputedSubtitle } from "../hooks/useWorktreeStatus";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -31,7 +32,7 @@ vi.mock("framer-motion", () => {
     domMax: {},
     m: { div: MotionDiv },
     motion: { div: MotionDiv },
-    useAnimate: () => [{ current: null } as React.RefObject<HTMLElement>, mockAnimate],
+    useAnimate: () => [{ current: null } as unknown as React.RefObject<HTMLElement>, mockAnimate],
     useReducedMotion: () => mockReducedMotion,
   };
 });
@@ -56,7 +57,14 @@ const baseWorktree: WorktreeState = {
   branch: "feature/test",
   isCurrent: false,
   isMainWorktree: false,
-  worktreeChanges: { changedFileCount: 3, insertions: 5, deletions: 2, changes: [], rootPath: "" },
+  worktreeChanges: {
+    worktreeId: "test-wt",
+    changedFileCount: 3,
+    insertions: 5,
+    deletions: 2,
+    changes: [],
+    rootPath: "",
+  },
   lastActivityTimestamp: null,
 };
 
@@ -74,6 +82,13 @@ const baseProps: WorktreeDetailsSectionProps = {
   onDismissError: noop,
   onRetryError: noopAsync,
 };
+
+function withChanges(overrides: Partial<WorktreeChanges>): WorktreeState {
+  return {
+    ...baseWorktree,
+    worktreeChanges: { ...baseWorktree.worktreeChanges, ...overrides } as WorktreeChanges,
+  };
+}
 
 function renderSection(overrides: Partial<WorktreeDetailsSectionProps> = {}) {
   return render(
@@ -103,15 +118,7 @@ describe("WorktreeDetailsSection count pill bump", () => {
   it("calls animate when changedFileCount changes after mount", () => {
     const { rerender } = renderSection();
 
-    const updated = {
-      ...baseWorktree,
-      worktreeChanges: {
-        ...baseWorktree.worktreeChanges,
-        changedFileCount: 5,
-        insertions: 10,
-        deletions: 3,
-      },
-    };
+    const updated = withChanges({ changedFileCount: 5, insertions: 10, deletions: 3 });
 
     rerender(
       <TooltipProvider>
@@ -126,33 +133,9 @@ describe("WorktreeDetailsSection count pill bump", () => {
   it("coalesces rapid changes within 200ms gate", () => {
     const { rerender } = renderSection();
 
-    const first = {
-      ...baseWorktree,
-      worktreeChanges: {
-        ...baseWorktree.worktreeChanges,
-        changedFileCount: 5,
-        insertions: 10,
-        deletions: 3,
-      },
-    };
-    const second = {
-      ...baseWorktree,
-      worktreeChanges: {
-        ...baseWorktree.worktreeChanges,
-        changedFileCount: 7,
-        insertions: 12,
-        deletions: 5,
-      },
-    };
-    const third = {
-      ...baseWorktree,
-      worktreeChanges: {
-        ...baseWorktree.worktreeChanges,
-        changedFileCount: 9,
-        insertions: 15,
-        deletions: 8,
-      },
-    };
+    const first = withChanges({ changedFileCount: 5, insertions: 10, deletions: 3 });
+    const second = withChanges({ changedFileCount: 7, insertions: 12, deletions: 5 });
+    const third = withChanges({ changedFileCount: 9, insertions: 15, deletions: 8 });
 
     rerender(
       <TooltipProvider>
@@ -179,15 +162,7 @@ describe("WorktreeDetailsSection count pill bump", () => {
     try {
       const { rerender } = renderSection();
 
-      const first = {
-        ...baseWorktree,
-        worktreeChanges: {
-          ...baseWorktree.worktreeChanges,
-          changedFileCount: 5,
-          insertions: 10,
-          deletions: 3,
-        },
-      };
+      const first = withChanges({ changedFileCount: 5, insertions: 10, deletions: 3 });
 
       rerender(
         <TooltipProvider>
@@ -198,15 +173,7 @@ describe("WorktreeDetailsSection count pill bump", () => {
 
       vi.advanceTimersByTime(250);
 
-      const second = {
-        ...baseWorktree,
-        worktreeChanges: {
-          ...baseWorktree.worktreeChanges,
-          changedFileCount: 7,
-          insertions: 12,
-          deletions: 5,
-        },
-      };
+      const second = withChanges({ changedFileCount: 7, insertions: 12, deletions: 5 });
 
       rerender(
         <TooltipProvider>
@@ -224,15 +191,7 @@ describe("WorktreeDetailsSection count pill bump", () => {
     mockReducedMotion = true;
     const { rerender } = renderSection();
 
-    const updated = {
-      ...baseWorktree,
-      worktreeChanges: {
-        ...baseWorktree.worktreeChanges,
-        changedFileCount: 5,
-        insertions: 10,
-        deletions: 3,
-      },
-    };
+    const updated = withChanges({ changedFileCount: 5, insertions: 10, deletions: 3 });
 
     rerender(
       <TooltipProvider>
@@ -262,15 +221,7 @@ describe("WorktreeDetailsSection count pill bump", () => {
     const { rerender } = renderSection();
     const firstNode = screen.getByText(/3 files/);
 
-    const updated = {
-      ...baseWorktree,
-      worktreeChanges: {
-        ...baseWorktree.worktreeChanges,
-        changedFileCount: 5,
-        insertions: 10,
-        deletions: 3,
-      },
-    };
+    const updated = withChanges({ changedFileCount: 5, insertions: 10, deletions: 3 });
 
     rerender(
       <TooltipProvider>
@@ -298,15 +249,7 @@ describe("WorktreeDetailsSection count pill bump", () => {
   it("does not animate when expanded (count span not rendered)", () => {
     const { rerender } = renderSection({ isExpanded: false });
 
-    const updated = {
-      ...baseWorktree,
-      worktreeChanges: {
-        ...baseWorktree.worktreeChanges,
-        changedFileCount: 5,
-        insertions: 10,
-        deletions: 3,
-      },
-    };
+    const updated = withChanges({ changedFileCount: 5, insertions: 10, deletions: 3 });
 
     rerender(
       <TooltipProvider>
@@ -320,15 +263,7 @@ describe("WorktreeDetailsSection count pill bump", () => {
   it("does not animate when count span not rendered, then allows bump after collapse", () => {
     const { rerender } = renderSection({ isExpanded: true });
 
-    const collapsed = {
-      ...baseWorktree,
-      worktreeChanges: {
-        ...baseWorktree.worktreeChanges,
-        changedFileCount: 5,
-        insertions: 10,
-        deletions: 3,
-      },
-    };
+    const collapsed = withChanges({ changedFileCount: 5, insertions: 10, deletions: 3 });
 
     rerender(
       <TooltipProvider>
@@ -343,15 +278,7 @@ describe("WorktreeDetailsSection count pill bump", () => {
     document.body.dataset.performanceMode = "true";
     const { rerender } = renderSection();
 
-    const updated = {
-      ...baseWorktree,
-      worktreeChanges: {
-        ...baseWorktree.worktreeChanges,
-        changedFileCount: 5,
-        insertions: 10,
-        deletions: 3,
-      },
-    };
+    const updated = withChanges({ changedFileCount: 5, insertions: 10, deletions: 3 });
 
     rerender(
       <TooltipProvider>
