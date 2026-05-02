@@ -105,7 +105,7 @@ describe("FileChangeList — row-recency cue (#6544)", () => {
 
     const newClassRows = container.querySelectorAll<HTMLElement>(".file-change-row-new");
     expect(newClassRows.length).toBe(1);
-    expect(newClassRows[0].textContent).toContain("c.ts");
+    expect(newClassRows[0]!.textContent).toContain("c.ts");
   });
 
   it("clears the cue from previously-new rows on the next update", () => {
