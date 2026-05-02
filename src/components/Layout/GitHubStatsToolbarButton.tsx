@@ -324,13 +324,19 @@ export const GitHubStatsToolbarButton = memo(
     const [rateLimitNow, setRateLimitNow] = useState(() => Date.now());
     const prevLastUpdatedRef = useRef<number | null>(null);
 
-    // Per-digit flash counters. Incrementing forces a key-driven remount of
-    // the digit span, restarting its CSS @keyframes animation cleanly without
-    // the el.offsetWidth reflow hack. Key starts at 0 and the flash class is
-    // only applied once it's > 0, so the very first mount paints neutral.
-    const [issueFlashKey, setIssueFlashKey] = useState(0);
-    const [prFlashKey, setPrFlashKey] = useState(0);
-    const prevStatsRef = useRef<{ issueCount: number | null; prCount: number | null } | null>(null);
+    // Per-digit pulse counters. Incrementing forces a key-driven remount of
+    // the digit span, restarting the badge-bump keyframe cleanly without the
+    // el.offsetWidth reflow hack. Key starts at 0 and the class is only
+    // applied once it's > 0, so the very first mount paints neutral. The
+    // matching `xCountRef` defaults to `undefined` so the no-op poll guard
+    // (`xCountRef.current !== xCount`) can't fire on first mount — only an
+    // explicit seed flips the ref to a real value.
+    const [issueAnimKey, setIssueAnimKey] = useState(0);
+    const [prAnimKey, setPrAnimKey] = useState(0);
+    const [commitAnimKey, setCommitAnimKey] = useState(0);
+    const issueCountRef = useRef<number | null | undefined>(undefined);
+    const prCountRef = useRef<number | null | undefined>(undefined);
+    const commitCountRef = useRef<number | null | undefined>(undefined);
 
     // Local count derivations — read once per render so aria-labels, tooltip
     // copy, and the rendered numeral all reference the same value without
@@ -575,38 +581,63 @@ export const GitHubStatsToolbarButton = memo(
       []
     );
 
-    // Delta check for the digit-flash animation. Wrapped in useEffectEvent so
+    // Delta check for the digit-pulse animation. Wrapped in useEffectEvent so
     // it reads the latest stats, dropdown-open state, and document.hidden at
-    // fire time without widening the effect's dep array. prevStatsRef is
-    // updated on every fresh stats arrival regardless of suppression — that
-    // way a backgrounded tab returning to focus doesn't replay every poll's
-    // worth of accumulated deltas at once.
+    // fire time without widening the effect's dep array. Each ref is updated
+    // on every fresh stats arrival regardless of suppression — that way a
+    // backgrounded tab returning to focus doesn't replay every poll's worth
+    // of accumulated deltas at once. The `=== undefined` branch handles the
+    // initial seed (no pulse on cold launch); the `!== xCount` branch is
+    // the no-op-poll guard so unchanged counts never re-bump.
     const checkForCountIncrease = useEffectEvent(() => {
       const next = stats;
       if (!next) return;
-      const prev = prevStatsRef.current;
-      if (prev != null) {
-        const suppressed = document.hidden;
+      const suppressed = document.hidden;
+
+      if (issueCountRef.current === undefined) {
+        issueCountRef.current = issueCount;
+      } else if (issueCountRef.current !== issueCount) {
         if (
           !suppressed &&
           !issuesOpen &&
-          prev.issueCount != null &&
-          next.issueCount != null &&
-          next.issueCount > prev.issueCount
+          issueCountRef.current != null &&
+          issueCount != null &&
+          issueCount > issueCountRef.current
         ) {
-          setIssueFlashKey((k) => k + 1);
+          setIssueAnimKey((k) => k + 1);
         }
+        issueCountRef.current = issueCount;
+      }
+
+      if (prCountRef.current === undefined) {
+        prCountRef.current = prCount;
+      } else if (prCountRef.current !== prCount) {
         if (
           !suppressed &&
           !prsOpen &&
-          prev.prCount != null &&
-          next.prCount != null &&
-          next.prCount > prev.prCount
+          prCountRef.current != null &&
+          prCount != null &&
+          prCount > prCountRef.current
         ) {
-          setPrFlashKey((k) => k + 1);
+          setPrAnimKey((k) => k + 1);
         }
+        prCountRef.current = prCount;
       }
-      prevStatsRef.current = { issueCount: next.issueCount, prCount: next.prCount };
+
+      if (commitCountRef.current === undefined) {
+        commitCountRef.current = commitCount;
+      } else if (commitCountRef.current !== commitCount) {
+        if (
+          !suppressed &&
+          !commitsOpen &&
+          commitCountRef.current != null &&
+          commitCount != null &&
+          commitCount > commitCountRef.current
+        ) {
+          setCommitAnimKey((k) => k + 1);
+        }
+        commitCountRef.current = commitCount;
+      }
     });
 
     useEffect(() => {
@@ -616,12 +647,14 @@ export const GitHubStatsToolbarButton = memo(
       }
       if (lastUpdated == null) {
         // Project switch / reset path: useRepositoryStats clears lastUpdated
-        // to null when the user switches projects. Clear delta tracking too
-        // so the next first successful poll doesn't compare new-project
-        // counts against the previous project's stale counts (which would
-        // produce a spurious flash whenever the new project's count is
-        // higher).
-        prevStatsRef.current = null;
+        // to null when the user switches projects. Re-seed the per-count
+        // refs to `undefined` so the next first successful poll re-enters
+        // the seed branch instead of comparing new-project counts against
+        // the previous project's stale counts (which would produce a
+        // spurious pulse whenever the new project's count is higher).
+        issueCountRef.current = undefined;
+        prCountRef.current = undefined;
+        commitCountRef.current = undefined;
         prevLastUpdatedRef.current = null;
         return;
       }
@@ -629,7 +662,7 @@ export const GitHubStatsToolbarButton = memo(
         setStatsJustUpdated(true);
         checkForCountIncrease();
       } else if (prevLastUpdatedRef.current == null) {
-        // First successful poll — seed prevStatsRef without flashing.
+        // First successful poll — seed the count refs without pulsing.
         checkForCountIncrease();
       }
       prevLastUpdatedRef.current = lastUpdated;
@@ -750,10 +783,10 @@ export const GitHubStatsToolbarButton = memo(
                 )}
               />
               <span
-                key={issueFlashKey}
+                key={issueAnimKey}
                 className={cn(
                   "text-xs font-medium tabular-nums",
-                  issueFlashKey > 0 && "github-stat-count-flash-issues"
+                  issueAnimKey > 0 && "animate-badge-bump"
                 )}
               >
                 {issueCount ?? "\u2014"}
@@ -873,10 +906,10 @@ export const GitHubStatsToolbarButton = memo(
                 )}
               />
               <span
-                key={prFlashKey}
+                key={prAnimKey}
                 className={cn(
                   "text-xs font-medium tabular-nums",
-                  prFlashKey > 0 && "github-stat-count-flash-prs"
+                  prAnimKey > 0 && "animate-badge-bump"
                 )}
               >
                 {prCount ?? "\u2014"}
@@ -958,7 +991,15 @@ export const GitHubStatsToolbarButton = memo(
               aria-label={`${commitCount ?? "\u2014"} commits${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
             >
               <GitCommit className="h-4 w-4" />
-              <span className="text-xs font-medium tabular-nums">{commitCount ?? "\u2014"}</span>
+              <span
+                key={commitAnimKey}
+                className={cn(
+                  "text-xs font-medium tabular-nums",
+                  commitAnimKey > 0 && "animate-badge-bump"
+                )}
+              >
+                {commitCount ?? "\u2014"}
+              </span>
               <FreshnessGlyph level={freshnessLevel} />
             </Button>
           </TooltipTrigger>

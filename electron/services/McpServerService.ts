@@ -1185,12 +1185,17 @@ export class McpServerService {
       return;
     }
 
-    const server = this.createSessionServer();
+    // Pre-generate the sessionId so `createSessionServer` can stamp it onto
+    // every audit record for this transport. The transport reuses the same
+    // id via `sessionIdGenerator`, keeping the audit log keyed consistently
+    // with the entry in `httpSessions`.
+    const newSessionId = randomUUID();
+    const server = this.createSessionServer(newSessionId);
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (newSessionId) => {
-        const idleTimer = this.createHttpIdleTimer(newSessionId);
-        this.httpSessions.set(newSessionId, { transport, server, idleTimer });
+      sessionIdGenerator: () => newSessionId,
+      onsessioninitialized: (initializedSessionId) => {
+        const idleTimer = this.createHttpIdleTimer(initializedSessionId);
+        this.httpSessions.set(initializedSessionId, { transport, server, idleTimer });
       },
     });
 

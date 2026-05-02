@@ -84,9 +84,10 @@ describe("GitHubStatsToolbarButton freshness wiring", () => {
   });
 
   it("scopes opacity transitions explicitly (not bare `transition` or `transition-all`)", () => {
-    // Scan only the three button className blocks — bare `transition` outside
-    // toolbar buttons (e.g. inside skeletons) is unrelated.
-    const tooltipBlocks = source.match(/className=\{cn\(\s*"h-full[\s\S]*?\)\s*\}/g);
+    // Anchor on `cn("h-full gap-2` — the three button className blocks all
+    // start with that pair, while unrelated `cn("h-full ...` elsewhere in
+    // the file (e.g. RateLimitBucketRow's progress bar) does not.
+    const tooltipBlocks = source.match(/className=\{cn\(\s*"h-full gap-2[\s\S]*?\)\s*\}/g);
     expect(tooltipBlocks).not.toBeNull();
     expect(tooltipBlocks?.length).toBe(3);
     for (const block of tooltipBlocks ?? []) {
