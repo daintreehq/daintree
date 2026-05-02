@@ -292,7 +292,7 @@ export default defineConfig(({ command, mode }) => {
               { name: "vendor-xterm", test: /node_modules[\\/]@xterm[\\/]/, priority: 70 },
               {
                 name: "vendor-editor",
-                test: /node_modules[\\/](@codemirror[\\/]|@uiw[\\/]|refractor[\\/])/,
+                test: /node_modules[\\/](@codemirror[\\/]|@uiw[\\/]|refractor[\\/](?!lang[\\/]))/,
                 priority: 60,
               },
               {
@@ -325,7 +325,11 @@ export default defineConfig(({ command, mode }) => {
                 test: /node_modules[\\/]@radix-ui[\\/]/,
                 priority: 12,
               },
-              { name: "vendor", test: /node_modules[\\/]/, priority: 10 },
+              {
+                name: "vendor",
+                test: /node_modules[\\/](?!refractor[\\/]lang[\\/])/,
+                priority: 10,
+              },
             ],
           },
         },

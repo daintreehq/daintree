@@ -1,13 +1,70 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { parseDiff, Diff, Hunk, tokenize, markEdits, DiffType, ViewType } from "react-diff-view";
 import type { HunkData, HunkTokens, TokenizeOptions } from "react-diff-view";
-import { refractor } from "refractor";
+import { refractor } from "refractor/core";
+import type { Syntax } from "refractor/core";
+import bash from "refractor/bash";
+import css from "refractor/css";
+import javascript from "refractor/javascript";
+import jsx from "refractor/jsx";
+import json from "refractor/json";
+import markdown from "refractor/markdown";
+import tsx from "refractor/tsx";
+import typescript from "refractor/typescript";
 import "react-diff-view/style/index.css";
 import { ExternalLink } from "lucide-react";
 import path from "path-browserify";
 import { getLanguageForFile } from "@/components/FileViewer/languageUtils";
 import { actionService } from "@/services/ActionService";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+
+for (const lang of [bash, css, javascript, jsx, json, markdown, tsx, typescript]) {
+  refractor.register(lang);
+}
+
+const LANG_LOADERS: Record<string, () => Promise<{ default: Syntax }>> = {
+  c: () => import("refractor/c"),
+  cpp: () => import("refractor/cpp"),
+  csharp: () => import("refractor/csharp"),
+  docker: () => import("refractor/docker"),
+  go: () => import("refractor/go"),
+  graphql: () => import("refractor/graphql"),
+  java: () => import("refractor/java"),
+  kotlin: () => import("refractor/kotlin"),
+  less: () => import("refractor/less"),
+  makefile: () => import("refractor/makefile"),
+  markup: () => import("refractor/markup"),
+  php: () => import("refractor/php"),
+  python: () => import("refractor/python"),
+  ruby: () => import("refractor/ruby"),
+  rust: () => import("refractor/rust"),
+  sass: () => import("refractor/sass"),
+  scss: () => import("refractor/scss"),
+  sql: () => import("refractor/sql"),
+  swift: () => import("refractor/swift"),
+  toml: () => import("refractor/toml"),
+  yaml: () => import("refractor/yaml"),
+};
+
+const langLoadPromises = new Map<string, Promise<void>>();
+
+function ensureLanguage(language: string): Promise<void> {
+  if (refractor.registered(language)) return Promise.resolve();
+  const loader = LANG_LOADERS[language];
+  if (!loader) return Promise.resolve();
+  let pending = langLoadPromises.get(language);
+  if (!pending) {
+    pending = loader()
+      .then((mod) => {
+        refractor.register(mod.default);
+      })
+      // Intentional: no retry. A failed chunk load caches as a resolved
+      // no-op so the language renders as plain text and renders don't loop.
+      .catch(() => {});
+    langLoadPromises.set(language, pending);
+  }
+  return pending;
+}
 
 export interface DiffViewerProps {
   diff: string;
@@ -18,8 +75,25 @@ export interface DiffViewerProps {
 }
 
 function useTokens(hunks: HunkData[], language: string): HunkTokens | null {
+  const [langReady, setLangReady] = useState(() => refractor.registered(language));
+
+  useEffect(() => {
+    if (refractor.registered(language)) {
+      setLangReady(true);
+      return;
+    }
+    setLangReady(false);
+    let cancelled = false;
+    void ensureLanguage(language).then(() => {
+      if (!cancelled) setLangReady(refractor.registered(language));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [language]);
+
   return useMemo(() => {
-    if (!hunks.length) return null;
+    if (!hunks.length || !langReady) return null;
 
     const options: TokenizeOptions = {
       highlight: true,
@@ -33,7 +107,7 @@ function useTokens(hunks: HunkData[], language: string): HunkTokens | null {
     } catch {
       return null;
     }
-  }, [hunks, language]);
+  }, [hunks, language, langReady]);
 }
 
 export function DiffViewer({ diff, filePath, viewType = "split", rootPath }: DiffViewerProps) {
