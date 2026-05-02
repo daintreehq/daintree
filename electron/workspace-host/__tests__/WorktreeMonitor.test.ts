@@ -381,6 +381,26 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
+    it("clears stale counts when upstream is removed between polls", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValueOnce(
+        cleanChangesWith({ tracking: "origin/main", ahead: 2, behind: 1 })
+      );
+      mockGetWorktreeChangesWithStats.mockResolvedValueOnce(cleanChangesWith({ tracking: null }));
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+      expect(monitor.getSnapshot().aheadCount).toBe(2);
+      expect(monitor.getSnapshot().behindCount).toBe(1);
+
+      await monitor.refresh();
+
+      expect(monitor.getSnapshot().aheadCount).toBeUndefined();
+      expect(monitor.getSnapshot().behindCount).toBeUndefined();
+
+      monitor.stop();
+    });
+
     it("treats empty-string tracking as no upstream", async () => {
       mockGetWorktreeChangesWithStats.mockResolvedValue(
         cleanChangesWith({ tracking: "", ahead: 0, behind: 0 })

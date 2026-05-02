@@ -170,6 +170,91 @@ describe("getWorktreeChangesWithStats --no-ext-diff", () => {
   });
 });
 
+describe("getWorktreeChangesWithStats upstream tracking normalization", () => {
+  const baseStatus = {
+    modified: [],
+    created: [],
+    deleted: [],
+    renamed: [],
+    staged: [],
+    conflicted: [],
+    not_added: [],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fs.access as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    mockGit.revparse.mockResolvedValue("/test/path\n");
+    mockGit.raw.mockResolvedValue("100\t0\tsome msg");
+    mockGit.diff.mockResolvedValue("");
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000 });
+  });
+
+  it("preserves zero ahead/behind when tracking is configured (in-sync branch)", async () => {
+    mockGit.status.mockResolvedValue({
+      ...baseStatus,
+      tracking: "origin/main",
+      ahead: 0,
+      behind: 0,
+    });
+
+    const cwd = "/upstream-test/" + Math.random();
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    expect(result.tracking).toBe("origin/main");
+    expect(result.ahead).toBe(0);
+    expect(result.behind).toBe(0);
+  });
+
+  it("surfaces non-zero ahead/behind from a tracked branch", async () => {
+    mockGit.status.mockResolvedValue({
+      ...baseStatus,
+      tracking: "origin/feature",
+      ahead: 3,
+      behind: 1,
+    });
+
+    const cwd = "/upstream-test/" + Math.random();
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    expect(result.tracking).toBe("origin/feature");
+    expect(result.ahead).toBe(3);
+    expect(result.behind).toBe(1);
+  });
+
+  it("normalizes null tracking to undefined ahead/behind", async () => {
+    mockGit.status.mockResolvedValue({
+      ...baseStatus,
+      tracking: null,
+      ahead: 0,
+      behind: 0,
+    });
+
+    const cwd = "/upstream-test/" + Math.random();
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    expect(result.tracking).toBeNull();
+    expect(result.ahead).toBeUndefined();
+    expect(result.behind).toBeUndefined();
+  });
+
+  it("normalizes empty-string tracking to null + undefined counts", async () => {
+    mockGit.status.mockResolvedValue({
+      ...baseStatus,
+      tracking: "",
+      ahead: 0,
+      behind: 0,
+    });
+
+    const cwd = "/upstream-test/" + Math.random();
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    expect(result.tracking).toBeNull();
+    expect(result.ahead).toBeUndefined();
+    expect(result.behind).toBeUndefined();
+  });
+});
+
 describe("getWorktreeChangesWithStats in-flight deduplication", () => {
   const emptyStatus = {
     modified: [],
