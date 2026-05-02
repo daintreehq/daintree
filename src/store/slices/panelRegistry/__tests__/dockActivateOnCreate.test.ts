@@ -18,6 +18,32 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 const acknowledgeWaitingMock = vi.fn();
 const acknowledgeWorkingPulseMock = vi.fn();
 
+// Set up window.electron globally before any module imports
+(globalThis as any).window = {
+  electron: {
+    globalEnv: {
+      get: vi.fn().mockResolvedValue({}),
+      set: vi.fn().mockResolvedValue(undefined),
+    },
+    notification: {
+      updateBadge: vi.fn(),
+      getSettings: vi.fn().mockResolvedValue({}),
+      setSettings: vi.fn().mockResolvedValue(undefined),
+      playSound: vi.fn().mockResolvedValue(undefined),
+      playUiEvent: vi.fn().mockResolvedValue(undefined),
+      showNative: vi.fn(),
+      showWatchNotification: vi.fn(),
+      onShowToast: vi.fn(() => () => {}),
+      onWatchNavigate: vi.fn(() => () => {}),
+      syncWatchedPanels: vi.fn(),
+      acknowledgeData: vi.fn(),
+      acknowledgeWaiting: acknowledgeWaitingMock,
+      acknowledgeWorkingPulse: acknowledgeWorkingPulseMock,
+      setSessionMuteUntil: vi.fn(),
+    },
+  },
+} as unknown as typeof globalThis.window;
+
 vi.mock("@/clients", () => ({
   terminalClient: {
     spawn: vi.fn().mockResolvedValue("spawn-id"),
@@ -70,28 +96,6 @@ vi.mock("../persistence", async () => {
 beforeEach(() => {
   acknowledgeWaitingMock.mockReset();
   acknowledgeWorkingPulseMock.mockReset();
-  window.electron = {
-    globalEnv: {
-      get: vi.fn().mockResolvedValue({}),
-      set: vi.fn().mockResolvedValue(undefined),
-    },
-    notification: {
-      updateBadge: vi.fn(),
-      getSettings: vi.fn().mockResolvedValue({}),
-      setSettings: vi.fn().mockResolvedValue(undefined),
-      playSound: vi.fn().mockResolvedValue(undefined),
-      playUiEvent: vi.fn().mockResolvedValue(undefined),
-      showNative: vi.fn(),
-      showWatchNotification: vi.fn(),
-      onShowToast: vi.fn(() => () => {}),
-      onWatchNavigate: vi.fn(() => () => {}),
-      syncWatchedPanels: vi.fn(),
-      acknowledgeData: vi.fn(),
-      acknowledgeWaiting: acknowledgeWaitingMock,
-      acknowledgeWorkingPulse: acknowledgeWorkingPulseMock,
-      setSessionMuteUntil: vi.fn(),
-    },
-  } as unknown as typeof window.electron;
 });
 
 const { usePanelStore } = await import("../../../panelStore");
