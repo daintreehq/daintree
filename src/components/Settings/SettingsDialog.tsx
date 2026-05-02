@@ -1400,6 +1400,10 @@ function SettingsDialogInner({
                               onDevServerLoadTimeoutChange={projectForm.setDevServerLoadTimeout}
                               turbopackEnabled={projectForm.turbopackEnabled}
                               onTurbopackEnabledChange={projectForm.setTurbopackEnabled}
+                              exposeDaintreeMcpToAgents={projectForm.exposeDaintreeMcpToAgents}
+                              onExposeDaintreeMcpToAgentsChange={
+                                projectForm.setExposeDaintreeMcpToAgents
+                              }
                               projectIconSvg={projectForm.projectIconSvg}
                               onProjectIconSvgChange={projectForm.setProjectIconSvg}
                               enableInRepoSettings={projectForm.enableInRepoSettings}

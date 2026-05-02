@@ -13,6 +13,8 @@ import {
   typedHandleValidated,
 } from "../../utils.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { mcpServerService } from "../../../services/McpServerService.js";
+import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import type { HandlerDependencies } from "../../types.js";
 import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
 
@@ -203,7 +205,39 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     if (hasMultilineCommand) {
       console.error("Multi-line commands not allowed for security, ignoring");
     }
-    const safeCommand = hasMultilineCommand ? "" : trimmedCommand;
+    let safeCommand = hasMultilineCommand ? "" : trimmedCommand;
+    let spawnEnv: Record<string, string> | undefined = validatedOptions.env;
+
+    // Daintree MCP injection for Claude Code agent launches.
+    // Mints a per-pane bearer token, writes a managed --mcp-config JSON under
+    // userData, and injects the flag into the command + the token into env.
+    // Token is revoked and the file deleted on PTY exit (see registerTerminalEventHandlers).
+    if (
+      launchAgentId === "claude" &&
+      safeCommand.length > 0 &&
+      projectId &&
+      mcpServerService.isRunning
+    ) {
+      try {
+        const projSettings = await projectStore.getProjectSettings(projectId);
+        if (projSettings.exposeDaintreeMcpToAgents) {
+          const port = mcpServerService.currentPort;
+          if (port) {
+            const { configPath, token } = await mcpPaneConfigService.preparePaneConfig({
+              paneId: id,
+              port,
+            });
+            safeCommand = `${safeCommand} --mcp-config ${shellQuote(configPath)}`;
+            spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: token };
+          }
+        }
+      } catch (mcpErr) {
+        console.error(
+          "[TerminalSpawn] Failed to prepare Daintree MCP config; continuing without MCP injection:",
+          mcpErr
+        );
+      }
+    }
 
     // Resolve shell and args: project overrides > spawn options > defaults.
     // For command launches on POSIX, run the command through the shell's
@@ -226,7 +260,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         cols,
         rows,
         command: safeCommand || undefined,
-        env: validatedOptions.env,
+        env: spawnEnv,
         kind,
         launchAgentId,
         title,
@@ -254,6 +288,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
       return id;
     } catch (error) {
+      // If we minted an MCP pane config above and the PTY spawn never landed,
+      // revoke it now so we don't leak per-pane tokens or config files.
+      mcpPaneConfigService.revokePaneConfig(id).catch(() => {
+        // best-effort cleanup
+      });
       const errorMessage = formatErrorMessage(error, "Failed to spawn terminal");
       throw new Error(`Failed to spawn terminal: ${errorMessage}`);
     }

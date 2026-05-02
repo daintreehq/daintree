@@ -5,6 +5,7 @@
 import { CHANNELS } from "../../channels.js";
 import { broadcastToRenderer } from "../../utils.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
+import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import type {
   SpawnResult,
   BroadcastWriteResultPayload,
@@ -28,6 +29,11 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   handlers.push(() => ptyClient.off("data", handlePtyData));
 
   const handlePtyExit = (id: string, exitCode: number) => {
+    // Best-effort: revoke any per-pane MCP token + delete the managed config
+    // file. Idempotent — no-ops if no pane config was minted for this terminal.
+    mcpPaneConfigService.revokePaneConfig(id).catch((err) => {
+      console.error("[MCP] Failed to revoke pane config on exit:", err);
+    });
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "terminal:exit",
       payload: [id, exitCode],
@@ -44,6 +50,14 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // Spawn result events (success or failure)
   const handleSpawnResult = (id: string, result: SpawnResult) => {
+    if (!result.success) {
+      // Async pty-host spawn rejection (PENDING_SPAWNS_CAPPED, bad shell path,
+      // etc.) doesn't throw from ptyClient.spawn(). Revoke any minted pane
+      // config so the token doesn't outlive the never-running PTY.
+      mcpPaneConfigService.revokePaneConfig(id).catch((err) => {
+        console.error("[MCP] Failed to revoke pane config on spawn failure:", err);
+      });
+    }
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "terminal:spawn-result",
       payload: [id, result],

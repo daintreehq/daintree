@@ -398,4 +398,6 @@ export interface ProjectSettings {
   defaultWorktreeMode?: string;
   /** Hostnames the user approved for the browser panel beyond the implicit local/private allow-list */
   browserAllowedHosts?: string[];
+  /** Expose the Daintree MCP server to Claude Code agents launched in this project's worktrees */
+  exposeDaintreeMcpToAgents?: boolean;
 }

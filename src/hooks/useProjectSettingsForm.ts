@@ -51,6 +51,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const [devServerCommand, setDevServerCommand] = useState<string>("");
   const [devServerLoadTimeout, setDevServerLoadTimeout] = useState<number | undefined>(undefined);
   const [turbopackEnabled, setTurbopackEnabled] = useState<boolean>(true);
+  const [exposeDaintreeMcpToAgents, setExposeDaintreeMcpToAgents] = useState<boolean>(false);
   const [commandOverrides, setCommandOverrides] = useState<CommandOverride[]>([]);
   const [copyTreeSettings, setCopyTreeSettings] = useState<CopyTreeSettings>({});
   const [branchPrefixMode, setBranchPrefixMode] = useState<"none" | "username" | "custom">("none");
@@ -133,7 +134,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       resourceEnvironments,
       activeResourceEnvironment,
       defaultWorktreeMode,
-      turbopackEnabled
+      turbopackEnabled,
+      exposeDaintreeMcpToAgents
     );
   }, [
     projectName,
@@ -159,6 +161,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     activeResourceEnvironment,
     defaultWorktreeMode,
     turbopackEnabled,
+    exposeDaintreeMcpToAgents,
   ]);
   useEffect(() => {
     currentProjectSnapshotRef.current = currentProjectSnapshot;
@@ -181,6 +184,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       setDevServerCommand("");
       setDevServerLoadTimeout(undefined);
       setTurbopackEnabled(true);
+      setExposeDaintreeMcpToAgents(false);
       setCommandOverrides([]);
       setCopyTreeSettings({});
       setProjectAutoSaveError(null);
@@ -217,6 +221,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     const initialDevServerCommand = projectSettings.devServerCommand || "";
     const initialDevServerLoadTimeout = projectSettings.devServerLoadTimeout;
     const initialTurbopackEnabled = projectSettings.turbopackEnabled ?? true;
+    const initialExposeDaintreeMcpToAgents = projectSettings.exposeDaintreeMcpToAgents ?? false;
     const initialCommandOverrides = projectSettings.commandOverrides || [];
     const initialCopyTreeSettings = projectSettings.copyTreeSettings || {};
     const initialBranchPrefixMode = projectSettings.branchPrefixMode ?? "none";
@@ -256,6 +261,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setDevServerCommand(initialDevServerCommand);
     setDevServerLoadTimeout(initialDevServerLoadTimeout);
     setTurbopackEnabled(initialTurbopackEnabled);
+    setExposeDaintreeMcpToAgents(initialExposeDaintreeMcpToAgents);
     setCommandOverrides(initialCommandOverrides);
     setCopyTreeSettings(initialCopyTreeSettings);
     setBranchPrefixMode(initialBranchPrefixMode);
@@ -297,7 +303,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       initialResourceEnvironments,
       initialActiveResourceEnvironment,
       initialDefaultWorktreeMode,
-      initialTurbopackEnabled
+      initialTurbopackEnabled,
+      initialExposeDaintreeMcpToAgents
     );
     setProjectIsInitialized(true);
   }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading, projectId]);
@@ -383,6 +390,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         devServerCommand: devServerCommand.trim() || undefined,
         devServerLoadTimeout,
         turbopackEnabled: turbopackEnabled === true ? undefined : false,
+        exposeDaintreeMcpToAgents: exposeDaintreeMcpToAgents ? true : undefined,
         commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
         copyTreeSettings: hasCopyTreeSettings ? sanitizedCopyTreeSettings : undefined,
         branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
@@ -460,6 +468,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setDevServerLoadTimeout,
     turbopackEnabled,
     setTurbopackEnabled,
+    exposeDaintreeMcpToAgents,
+    setExposeDaintreeMcpToAgents,
     commandOverrides,
     setCommandOverrides,
     copyTreeSettings,

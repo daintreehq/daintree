@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Image, Upload, X, Rocket, Check, FolderOpen, Copy, Palette } from "lucide-react";
-import { FolderGit2 } from "@/components/icons";
+import { FolderGit2, McpServerIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
@@ -54,6 +54,8 @@ interface GeneralTabProps {
   onDevServerLoadTimeoutChange: (value: number | undefined) => void;
   turbopackEnabled: boolean;
   onTurbopackEnabledChange: (value: boolean) => void;
+  exposeDaintreeMcpToAgents: boolean;
+  onExposeDaintreeMcpToAgentsChange: (value: boolean) => void;
   projectIconSvg: string | undefined;
   onProjectIconSvgChange: (value: string | undefined) => void;
   enableInRepoSettings: (projectId: string) => Promise<Project>;
@@ -76,6 +78,8 @@ export function GeneralTab({
   onDevServerLoadTimeoutChange,
   turbopackEnabled,
   onTurbopackEnabledChange,
+  exposeDaintreeMcpToAgents,
+  onExposeDaintreeMcpToAgentsChange,
   projectIconSvg,
   onProjectIconSvgChange,
   enableInRepoSettings,
@@ -450,6 +454,26 @@ export function GeneralTab({
             Auto-inject <code className="font-mono">--turbopack</code> for Next.js 15+ projects
           </label>
         </div>
+      </div>
+
+      <div className="mb-6 pb-6 border-b border-daintree-border">
+        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+          <McpServerIcon className="h-4 w-4" />
+          Agent integrations
+        </h3>
+        <p className="text-xs text-daintree-text/60 mb-4">
+          Connect Claude Code agents launched in this project's worktrees to the Daintree MCP
+          server. Agents can read worktree status, terminal output, and run safe project actions.
+        </p>
+
+        <SettingsSwitchCard
+          icon={McpServerIcon}
+          title="Expose Daintree MCP to Claude Code agents"
+          subtitle="Injects --mcp-config with a per-pane bearer token on agent launch"
+          isEnabled={exposeDaintreeMcpToAgents}
+          onChange={() => onExposeDaintreeMcpToAgentsChange(!exposeDaintreeMcpToAgents)}
+          ariaLabel="Expose Daintree MCP to Claude Code agents"
+        />
       </div>
 
       <div className="mb-6">

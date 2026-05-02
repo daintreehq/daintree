@@ -15,6 +15,7 @@ import type { ActionManifestEntry, ActionDispatchResult } from "../../shared/typ
 import { store } from "../store.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { mcpPaneConfigService } from "./McpPaneConfigService.js";
 
 const DISCOVERY_DIR = path.join(os.homedir(), ".daintree");
 const DISCOVERY_FILE = path.join(DISCOVERY_DIR, "mcp.json");
@@ -593,12 +594,25 @@ export class McpServerService {
 
   private isAuthorized(req: http.IncomingMessage): boolean {
     const apiKey = this.getConfig().apiKey;
-    if (!apiKey) return true;
     const auth = req.headers.authorization ?? "";
-    const expected = `Bearer ${apiKey}`;
-    const actualHash = createHash("sha256").update(auth).digest();
-    const expectedHash = createHash("sha256").update(expected).digest();
-    return timingSafeEqual(actualHash, expectedHash);
+
+    if (apiKey) {
+      const expected = `Bearer ${apiKey}`;
+      const actualHash = createHash("sha256").update(auth).digest();
+      const expectedHash = createHash("sha256").update(expected).digest();
+      if (timingSafeEqual(actualHash, expectedHash)) return true;
+    } else if (auth.length === 0) {
+      // No global key configured and no Authorization header sent — legacy permissive path.
+      return true;
+    }
+
+    // Per-pane bearer token (minted at PTY spawn, revoked on exit).
+    if (auth.startsWith("Bearer ")) {
+      const token = auth.slice("Bearer ".length);
+      if (mcpPaneConfigService.isValidPaneToken(token)) return true;
+    }
+
+    return false;
   }
 
   private isValidOrigin(req: http.IncomingMessage): boolean {
