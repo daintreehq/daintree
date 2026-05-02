@@ -607,13 +607,19 @@ export const createCorePanelActions = (
     // created as the active dock panel — the state activation was already
     // committed atomically in the set() above (see #6590); this only handles
     // the renderer-side side effects that `openDockTerminal` would normally
-    // perform.
+    // perform. Wrapped to mirror the prewarm block: a renderer service
+    // failure should not strand the panel in `spawning` with the spawn
+    // promise never started.
     if (options.activateDockOnCreate && location === "dock") {
-      terminalInstanceService.wake(id);
-      if (agentState === "waiting") {
-        window.electron?.notification?.acknowledgeWaiting(id);
-      } else if (agentState === "working") {
-        window.electron?.notification?.acknowledgeWorkingPulse(id);
+      try {
+        terminalInstanceService.wake(id);
+        if (agentState === "waiting") {
+          window.electron?.notification?.acknowledgeWaiting(id);
+        } else if (agentState === "working") {
+          window.electron?.notification?.acknowledgeWorkingPulse(id);
+        }
+      } catch (error) {
+        logWarn("[TerminalStore] Failed to wake/acknowledge active dock panel", { id, error });
       }
     }
 

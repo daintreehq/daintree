@@ -38,11 +38,18 @@ export interface AddPanelOptionsBase {
   /** Bypass panel limit checks (used during hydration/state restoration) */
   bypassLimits?: boolean;
   /**
-   * When `location === "dock"`, atomically set the new panel as the open dock
-   * panel in the same `set()` that commits `panelsById`/`panelIds`. Eliminates
-   * the create-then-activate race where the watchdog effect can see
-   * `activeDockTerminalId` set across a microtask boundary from the panel
-   * commit. Ignored during hydration batches.
+   * When the panel's *resolved* `location` is `"dock"`, atomically set it as
+   * the open dock panel in the same `set()` that commits `panelsById`/
+   * `panelIds`. Eliminates the create-then-activate race where the watchdog
+   * effect can see `activeDockTerminalId` set across a microtask boundary
+   * from the panel commit.
+   *
+   * Note: location can resolve to `"dock"` even when caller requested
+   * `"grid"` if the grid is at capacity (auto-dock). In that case the flag
+   * still fires; pass `false` if you specifically want grid-only activation
+   * to be skipped on auto-dock.
+   *
+   * Ignored during hydration batches.
    */
   activateDockOnCreate?: boolean;
   // --- PTY-related fields (optional on all types, only used by PTY panel kinds) ---

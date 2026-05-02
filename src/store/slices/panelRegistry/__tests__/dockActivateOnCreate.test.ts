@@ -256,6 +256,90 @@ describe("atomic dock activation on create (#6590)", () => {
     expect(state.activeDockTerminalId).toBe("dock-focus-1");
   });
 
+  it("calls wake() and acknowledgeWorkingPulse for an active dock agent", async () => {
+    const { terminalInstanceService } =
+      (await import("@/services/TerminalInstanceService")) as unknown as {
+        terminalInstanceService: { wake: ReturnType<typeof vi.fn> };
+      };
+    const acknowledgeWorkingPulse = (
+      globalThis as unknown as {
+        window: {
+          electron: { notification: { acknowledgeWorkingPulse: ReturnType<typeof vi.fn> } };
+        };
+      }
+    ).window.electron.notification.acknowledgeWorkingPulse;
+    terminalInstanceService.wake.mockReset();
+    acknowledgeWorkingPulse.mockReset();
+
+    const { addPanel } = usePanelStore.getState();
+    const id = await addPanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requestedId: "wake-1",
+      cwd: "/",
+      location: "dock",
+      bypassLimits: true,
+      activateDockOnCreate: true,
+      // explicit "working" agentState (default for new agent panels)
+      agentState: "working",
+    });
+    expect(id).toBe("wake-1");
+    expect(terminalInstanceService.wake).toHaveBeenCalledWith("wake-1");
+    expect(acknowledgeWorkingPulse).toHaveBeenCalledWith("wake-1");
+  });
+
+  it("calls wake() and acknowledgeWaiting for a waiting active dock agent", async () => {
+    const { terminalInstanceService } =
+      (await import("@/services/TerminalInstanceService")) as unknown as {
+        terminalInstanceService: { wake: ReturnType<typeof vi.fn> };
+      };
+    const acknowledgeWaiting = (
+      globalThis as unknown as {
+        window: { electron: { notification: { acknowledgeWaiting: ReturnType<typeof vi.fn> } } };
+      }
+    ).window.electron.notification.acknowledgeWaiting;
+    terminalInstanceService.wake.mockReset();
+    acknowledgeWaiting.mockReset();
+
+    const { addPanel } = usePanelStore.getState();
+    const id = await addPanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requestedId: "waiting-1",
+      cwd: "/",
+      location: "dock",
+      bypassLimits: true,
+      activateDockOnCreate: true,
+      agentState: "waiting",
+    });
+    expect(id).toBe("waiting-1");
+    expect(terminalInstanceService.wake).toHaveBeenCalledWith("waiting-1");
+    expect(acknowledgeWaiting).toHaveBeenCalledWith("waiting-1");
+  });
+
+  it("does not call wake() when activateDockOnCreate is omitted", async () => {
+    const { terminalInstanceService } =
+      (await import("@/services/TerminalInstanceService")) as unknown as {
+        terminalInstanceService: { wake: ReturnType<typeof vi.fn> };
+      };
+    terminalInstanceService.wake.mockReset();
+
+    const { addPanel } = usePanelStore.getState();
+    await addPanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requestedId: "no-wake-1",
+      cwd: "/",
+      location: "dock",
+      bypassLimits: true,
+      agentState: "working",
+    });
+    expect(terminalInstanceService.wake).not.toHaveBeenCalled();
+  });
+
   it("activates a non-PTY (browser) panel in the dock atomically", async () => {
     const targetId = "browser-dock-1";
     const snapshotsWithPanel: Array<{
