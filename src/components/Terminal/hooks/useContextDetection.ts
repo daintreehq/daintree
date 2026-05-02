@@ -34,7 +34,7 @@ interface UseContextDetectionParams {
   setDiffContext: Dispatch<SetStateAction<AtDiffContext | null>>;
   setTerminalContext: Dispatch<SetStateAction<AtTerminalContext | null>>;
   setSelectionContext: Dispatch<SetStateAction<AtSelectionContext | null>>;
-  setIsEditorFocused: Dispatch<SetStateAction<boolean>>;
+  setIsEditorFocused?: Dispatch<SetStateAction<boolean>>;
 }
 
 export function useContextDetection({
@@ -66,7 +66,7 @@ export function useContextDetection({
     handleUpdateRef.current = (update: ViewUpdate) => {
       const trackers = trackersRef.current;
 
-      if (update.focusChanged) {
+      if (update.focusChanged && setIsEditorFocused) {
         setIsEditorFocused(update.view.hasFocus);
       }
 

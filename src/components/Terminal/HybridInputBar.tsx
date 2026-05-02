@@ -206,7 +206,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const [diffContext, setDiffContext] = useState<AtDiffContext | null>(null);
     const [terminalContext, setTerminalContext] = useState<AtTerminalContext | null>(null);
     const [selectionContext, setSelectionContext] = useState<AtSelectionContext | null>(null);
-    const [isEditorFocused, setIsEditorFocused] = useState(false);
+
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
@@ -936,7 +936,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setDiffContext,
       setTerminalContext,
       setSelectionContext,
-      setIsEditorFocused,
     });
 
     const {
@@ -1323,11 +1322,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       >
         {isFleetPrimary && (
           <div className="pointer-events-none absolute bottom-full right-3.5 mb-1 flex items-center gap-2">
-            {isFleetPrimary && (
-              <div className="pointer-events-auto">
-                <FleetDraftingPill />
-              </div>
-            )}
+            <div className="pointer-events-auto">
+              <FleetDraftingPill />
+            </div>
           </div>
         )}
         <div className="flex items-end gap-2">
