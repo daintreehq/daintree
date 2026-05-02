@@ -25,6 +25,8 @@ import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import type { HelpAssistantSettings } from "@shared/types";
 
+const COPY_RESET_DELAY_MS = 2000;
+
 const DEFAULT_SETTINGS: HelpAssistantSettings = {
   docSearch: true,
   daintreeControl: true,
@@ -135,7 +137,6 @@ export function DaintreeAssistantSettingsTab() {
       }
       // settings is intentionally read at call time via the closure; no stale risk
       // because we set it synchronously above.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     },
     [settings]
   );
@@ -215,7 +216,7 @@ export function DaintreeAssistantSettingsTab() {
       await navigator.clipboard.writeText(snippet);
       setCopied(true);
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
+      copyTimeoutRef.current = setTimeout(() => setCopied(false), COPY_RESET_DELAY_MS);
     } catch (err) {
       setError(formatErrorMessage(err, "Couldn't copy config"));
       logError("Failed to copy MCP config", err);
