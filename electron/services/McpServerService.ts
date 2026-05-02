@@ -17,6 +17,7 @@ import type { ActionManifestEntry, ActionDispatchResult } from "../../shared/typ
 import {
   type McpAuditRecord,
   type McpAuditResult,
+  type McpConfirmationDecision,
   MCP_AUDIT_DEFAULT_MAX_RECORDS,
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_MIN_RECORDS,
@@ -24,6 +25,7 @@ import {
 import { store } from "../store.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { summarizeMcpArgs } from "../../shared/utils/mcpArgsSummary.js";
 import { mcpPaneConfigService } from "./McpPaneConfigService.js";
 
 const DISCOVERY_DIR = path.join(os.homedir(), ".daintree");
@@ -35,9 +37,9 @@ const MAX_PORT_RETRIES = 10;
 const MCP_SSE_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 const AUDIT_FLUSH_DEBOUNCE_MS = 2000;
-const AUDIT_ARGS_INLINE_STRING_LIMIT = 50;
-const AUDIT_ARGS_SUMMARY_LIMIT = 300;
 const CONFIRMATION_REQUIRED_CODE = "CONFIRMATION_REQUIRED";
+const USER_REJECTED_CODE = "USER_REJECTED";
+const CONFIRMATION_TIMEOUT_CODE = "CONFIRMATION_TIMEOUT";
 
 const OPEN_WORLD_CATEGORIES: ReadonlySet<string> = new Set([
   "browser",
@@ -283,6 +285,18 @@ interface PendingRequest<T> {
   destroyedCleanup?: () => void;
 }
 
+/**
+ * Renderer-supplied envelope for dispatch responses. Wraps the canonical
+ * `ActionDispatchResult` and carries an optional `confirmationDecision`
+ * when the renderer surfaced a `danger: "confirm"` modal — this lets the
+ * audit log capture per-decision outcomes without main having to inspect
+ * action metadata it does not own.
+ */
+interface DispatchEnvelope {
+  result: ActionDispatchResult;
+  confirmationDecision?: McpConfirmationDecision;
+}
+
 interface McpSseSession {
   transport: SSEServerTransport;
   idleTimer: ReturnType<typeof setTimeout>;
@@ -358,7 +372,7 @@ export class McpServerService {
    */
   private sessionTierMap = new Map<string, McpTier>();
   private pendingManifests = new Map<string, PendingRequest<ActionManifestEntry[]>>();
-  private pendingDispatches = new Map<string, PendingRequest<ActionDispatchResult>>();
+  private pendingDispatches = new Map<string, PendingRequest<DispatchEnvelope>>();
   private cleanupListeners: Array<() => void> = [];
   private statusListeners = new Set<(running: boolean) => void>();
   private auditRecords: McpAuditRecord[] = [];
@@ -530,57 +544,6 @@ export class McpServerService {
     return n;
   }
 
-  /**
-   * Redact a tool-call argument blob into a short summary string. Walks one
-   * level deep on top-level objects; long strings collapse to
-   * `<string: N chars>`, nested objects/arrays collapse to `<object>`.
-   * Final output is truncated to keep audit records compact and to avoid
-   * leaking pasted file contents or terminal output through the UI.
-   */
-  private redactArgsSummary(args: unknown): string {
-    const summarize = (value: unknown): unknown => {
-      if (value === null) return null;
-      if (typeof value === "string") {
-        return value.length > AUDIT_ARGS_INLINE_STRING_LIMIT
-          ? `<string: ${value.length} chars>`
-          : value;
-      }
-      if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-        return typeof value === "bigint" ? `${value.toString()}n` : value;
-      }
-      if (typeof value === "undefined") return undefined;
-      return "<object>";
-    };
-
-    let summary: unknown;
-    if (args === undefined || args === null) {
-      summary = args ?? null;
-    } else if (typeof args !== "object" || Array.isArray(args)) {
-      summary = summarize(args);
-    } else {
-      const out: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
-        if (key === "_meta") continue;
-        const reduced = summarize(value);
-        if (reduced !== undefined) {
-          out[key] = reduced;
-        }
-      }
-      summary = out;
-    }
-
-    let serialized: string;
-    try {
-      serialized = JSON.stringify(summary) ?? "";
-    } catch {
-      serialized = "<unserializable>";
-    }
-    if (serialized.length > AUDIT_ARGS_SUMMARY_LIMIT) {
-      return `${serialized.slice(0, AUDIT_ARGS_SUMMARY_LIMIT - 1)}…`;
-    }
-    return serialized;
-  }
-
   private classifyDispatchResult(
     outcome:
       | { kind: "result"; value: ActionDispatchResult }
@@ -601,6 +564,31 @@ export class McpServerService {
     return { result: "error", errorCode: value.error.code };
   }
 
+  /**
+   * Resolve the confirmation decision stored alongside an audit record.
+   * Trusts the renderer-supplied hint for `"approved"` (the only case main
+   * cannot infer — a successful dispatch may be a directly-authorized agent
+   * call or a modal-approved one), but always derives `"rejected"` and
+   * `"timeout"` from the canonical error codes so a renderer that forgets
+   * to set the hint still gets the right outcome recorded.
+   */
+  private deriveConfirmationDecision(
+    outcome:
+      | { kind: "result"; value: ActionDispatchResult }
+      | { kind: "throw"; error: unknown }
+      | { kind: "unauthorized" },
+    hint: McpConfirmationDecision | undefined
+  ): McpConfirmationDecision | undefined {
+    if (outcome.kind === "result" && !outcome.value.ok) {
+      if (outcome.value.error.code === USER_REJECTED_CODE) return "rejected";
+      if (outcome.value.error.code === CONFIRMATION_TIMEOUT_CODE) return "timeout";
+    }
+    if (hint === "approved" && outcome.kind === "result" && outcome.value.ok) {
+      return "approved";
+    }
+    return undefined;
+  }
+
   private appendAuditRecord(input: {
     toolId: string;
     sessionId: string;
@@ -611,6 +599,7 @@ export class McpServerService {
       | { kind: "result"; value: ActionDispatchResult }
       | { kind: "throw"; error: unknown }
       | { kind: "unauthorized" };
+    confirmationDecision?: McpConfirmationDecision;
   }): void {
     // `=== false` so legacy persisted configs (undefined) default to enabled,
     // matching `getAuditConfig()`. A bare `!auditEnabled` would silently drop
@@ -619,18 +608,22 @@ export class McpServerService {
     this.hydrateAuditLog();
 
     const classification = this.classifyDispatchResult(input.outcome);
+    const decision = this.deriveConfirmationDecision(input.outcome, input.confirmationDecision);
     const record: McpAuditRecord = {
       id: randomUUID(),
       timestamp: Date.now(),
       toolId: input.toolId,
       sessionId: input.sessionId,
       tier: input.tier,
-      argsSummary: this.redactArgsSummary(input.args),
+      argsSummary: summarizeMcpArgs(input.args),
       result: classification.result,
       durationMs: Math.max(0, Math.round(input.durationMs)),
     };
     if (classification.errorCode !== undefined) {
       record.errorCode = classification.errorCode;
+    }
+    if (decision !== undefined) {
+      record.confirmationDecision = decision;
     }
 
     this.auditRecords.push(record);
@@ -920,7 +913,11 @@ export class McpServerService {
 
     const dispatchHandler = (
       event: Electron.IpcMainEvent,
-      payload: { requestId: string; result: ActionDispatchResult }
+      payload: {
+        requestId: string;
+        result: ActionDispatchResult;
+        confirmationDecision?: McpConfirmationDecision;
+      }
     ) => {
       if (!payload || typeof payload.requestId !== "string") return;
       const pending = this.pendingDispatches.get(payload.requestId);
@@ -934,7 +931,10 @@ export class McpServerService {
       clearTimeout(pending.timer);
       pending.destroyedCleanup?.();
       this.pendingDispatches.delete(payload.requestId);
-      pending.resolve(payload.result);
+      pending.resolve({
+        result: payload.result,
+        confirmationDecision: payload.confirmationDecision,
+      });
     };
 
     ipcMain.on("mcp:get-manifest-response", manifestHandler);
@@ -1004,7 +1004,7 @@ export class McpServerService {
     actionId: string,
     args: unknown,
     confirmed = false
-  ): Promise<ActionDispatchResult> {
+  ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
       let webContents: Electron.WebContents;
       try {
@@ -1117,11 +1117,13 @@ export class McpServerService {
       let outcome:
         | { kind: "result"; value: ActionDispatchResult }
         | { kind: "throw"; error: unknown };
+      let confirmationDecision: McpConfirmationDecision | undefined;
 
       try {
         try {
-          const value = await this.dispatchAction(actionId, args, confirmed);
-          outcome = { kind: "result", value };
+          const envelope = await this.dispatchAction(actionId, args, confirmed);
+          outcome = { kind: "result", value: envelope.result };
+          confirmationDecision = envelope.confirmationDecision;
         } catch (err) {
           outcome = { kind: "throw", error: err };
           return {
@@ -1167,6 +1169,7 @@ export class McpServerService {
             args,
             durationMs: Date.now() - startedAt,
             outcome: outcome!,
+            confirmationDecision,
           });
         } catch (err) {
           console.error("[MCP] Failed to append audit record:", err);

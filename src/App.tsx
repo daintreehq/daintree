@@ -101,6 +101,7 @@ import { QuickSwitcher } from "./components/QuickSwitcher";
 import { SendToAgentPalette } from "./components/Terminal/SendToAgentPalette";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
+import { McpConfirmDialog } from "./components/McpConfirmDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
 import { PanelLimitConfirmDialog } from "./components/Terminal/PanelLimitConfirmDialog";
@@ -841,6 +842,7 @@ function App() {
 
             <TerminalInfoDialogHost />
             <TerminalCloseConfirmHost />
+            <McpConfirmDialog />
             <FileViewerModalHost />
 
             {gitInitDirectoryPath && (

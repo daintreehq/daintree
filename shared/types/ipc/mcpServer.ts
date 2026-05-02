@@ -29,6 +29,19 @@ export type McpAuditResult = "success" | "error" | "confirmation-pending" | "una
  * that are not yet stamped fall back to `"workbench"` — the most
  * restrictive tier — so an unstamped session can never elevate access.
  */
+/**
+ * Outcome of a user-facing confirmation modal for `danger: "confirm"` MCP
+ * dispatches. Set only when the renderer actually surfaced a modal — direct
+ * agent-confirmed dispatches and safe actions leave this undefined.
+ *
+ * - `approved`: user clicked the destructive confirm button.
+ * - `rejected`: user closed the modal or clicked cancel.
+ * - `timeout`: modal aged out without a decision (mirrors the renderer's
+ *   confirmation timer, which fires before the main-process dispatch
+ *   timer).
+ */
+export type McpConfirmationDecision = "approved" | "rejected" | "timeout";
+
 export interface McpAuditRecord {
   id: string;
   timestamp: number;
@@ -39,6 +52,7 @@ export interface McpAuditRecord {
   result: McpAuditResult;
   errorCode?: string;
   durationMs: number;
+  confirmationDecision?: McpConfirmationDecision;
 }
 
 /** Minimum and maximum values accepted for the configurable ring-buffer cap. */

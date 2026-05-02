@@ -168,7 +168,12 @@ let nextWebContentsId = 100;
 
 function createMockWindow(options?: {
   getManifest?: () => ActionManifestEntry[];
-  dispatchAction?: (payload: DispatchRequest) => ActionDispatchResult;
+  dispatchAction?: (payload: DispatchRequest) =>
+    | ActionDispatchResult
+    | {
+        result: ActionDispatchResult;
+        confirmationDecision?: "approved" | "rejected" | "timeout";
+      };
   senderIdOverride?: number;
   hostShellWebContentsId?: number;
 }) {
@@ -213,12 +218,22 @@ function createMockWindow(options?: {
 
         if (channel === "mcp:dispatch-action-request") {
           queueMicrotask(() => {
+            const dispatched = dispatchAction(payload as DispatchRequest);
+            const isEnvelope =
+              typeof dispatched === "object" && dispatched !== null && !("ok" in dispatched);
+            const envelope = isEnvelope
+              ? (dispatched as {
+                  result: ActionDispatchResult;
+                  confirmationDecision?: "approved" | "rejected" | "timeout";
+                })
+              : { result: dispatched as ActionDispatchResult };
             electronMocks.ipcMain.emit(
               "mcp:dispatch-action-response",
               { sender: { id: senderId } },
               {
                 requestId: payload.requestId,
-                result: dispatchAction(payload as DispatchRequest),
+                result: envelope.result,
+                confirmationDecision: envelope.confirmationDecision,
               }
             );
           });
@@ -1322,6 +1337,7 @@ describe("McpServerService", () => {
       result: "success" | "error" | "confirmation-pending" | "unauthorized";
       errorCode?: string;
       durationMs: number;
+      confirmationDecision?: "approved" | "rejected" | "timeout";
     };
 
     function getAuditRecords(svc: McpServerService): AuditRecord[] {
@@ -1777,6 +1793,7 @@ describe("McpServerService", () => {
       result: "success" | "error" | "confirmation-pending" | "unauthorized";
       errorCode?: string;
       durationMs: number;
+      confirmationDecision?: "approved" | "rejected" | "timeout";
     };
 
     function getAuditRecords(svc: McpServerService): AuditRecord[] {
@@ -1871,6 +1888,103 @@ describe("McpServerService", () => {
       expect(byTool["worktree.delete"].errorCode).toBe("CONFIRMATION_REQUIRED");
       expect(byTool["actions.list"].result).toBe("error");
       expect(byTool["actions.list"].errorCode).toBe("EXECUTION_ERROR");
+    });
+
+    it("records confirmationDecision='approved' when the renderer signals an approved modal", async () => {
+      const dispatchMock = vi.fn(() => ({
+        result: { ok: true, result: { ok: true } } satisfies ActionDispatchResult,
+        confirmationDecision: "approved" as const,
+      }));
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "worktree.delete" as ActionId,
+            title: "Delete Worktree",
+            description: "Delete a worktree",
+            danger: "confirm",
+          }),
+        ],
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await client.callTool({ name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+
+      const records = getAuditRecords(service);
+      expect(records).toHaveLength(1);
+      expect(records[0].result).toBe("success");
+      expect(records[0].confirmationDecision).toBe("approved");
+      expect(records[0].errorCode).toBeUndefined();
+    });
+
+    it("records confirmationDecision='rejected' when dispatch returns USER_REJECTED", async () => {
+      const dispatchMock = vi.fn(
+        (): ActionDispatchResult => ({
+          ok: false,
+          error: { code: "USER_REJECTED", message: "User rejected the confirmation request." },
+        })
+      );
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "worktree.delete" as ActionId,
+            title: "Delete Worktree",
+            description: "Delete a worktree",
+            danger: "confirm",
+          }),
+        ],
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await client.callTool({ name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+
+      const records = getAuditRecords(service);
+      expect(records).toHaveLength(1);
+      expect(records[0].result).toBe("error");
+      expect(records[0].errorCode).toBe("USER_REJECTED");
+      expect(records[0].confirmationDecision).toBe("rejected");
+    });
+
+    it("records confirmationDecision='timeout' when dispatch returns CONFIRMATION_TIMEOUT", async () => {
+      const dispatchMock = vi.fn(
+        (): ActionDispatchResult => ({
+          ok: false,
+          error: {
+            code: "CONFIRMATION_TIMEOUT",
+            message: "Confirmation request timed out before the user responded.",
+          },
+        })
+      );
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "worktree.delete" as ActionId,
+            title: "Delete Worktree",
+            description: "Delete a worktree",
+            danger: "confirm",
+          }),
+        ],
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await client.callTool({ name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+
+      const records = getAuditRecords(service);
+      expect(records).toHaveLength(1);
+      expect(records[0].result).toBe("error");
+      expect(records[0].errorCode).toBe("CONFIRMATION_TIMEOUT");
+      expect(records[0].confirmationDecision).toBe("timeout");
     });
 
     it("records dispatch throws even when no result envelope is returned", async () => {

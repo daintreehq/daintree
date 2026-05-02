@@ -2380,7 +2380,11 @@ const api: ElectronAPI = {
       return () => ipcRenderer.removeListener("mcp:dispatch-action-request", handler);
     },
 
-    sendDispatchActionResponse: (payload: { requestId: string; result: unknown }) => {
+    sendDispatchActionResponse: (payload: {
+      requestId: string;
+      result: unknown;
+      confirmationDecision?: "approved" | "rejected" | "timeout";
+    }) => {
       ipcRenderer.send("mcp:dispatch-action-response", payload);
     },
   },
