@@ -276,6 +276,52 @@ describe("RepoFetchCoordinator", () => {
     expect(coord.hasFailureFor("/repo/.git")).toBe(false);
   });
 
+  it("destroy() isolates generations across same-repo re-entry", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    let resolveFirst: (() => void) | undefined;
+    let rawCalls = 0;
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() => {
+        rawCalls++;
+        if (rawCalls === 1) {
+          return new Promise<void>((res) => {
+            resolveFirst = res;
+          });
+        }
+        return Promise.resolve();
+      })
+    );
+
+    const onFetchSuccess = vi.fn();
+    const coord = new RepoFetchCoordinator({ onFetchSuccess });
+
+    // First fetch: starts but doesn't resolve.
+    const inFlight = coord.fetchForWorktree({
+      worktreeId: "wtA",
+      worktreePath: "/repo",
+    });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(resolveFirst).toBeDefined();
+
+    // Project switch: destroy + reopen same repo path.
+    coord.destroy();
+    const second = await coord.fetchForWorktree({
+      worktreeId: "wtB",
+      worktreePath: "/repo",
+    });
+    expect(second.status).toBe("success");
+    // onFetchSuccess fired exactly once for wtB; not for wtA.
+    expect(onFetchSuccess).toHaveBeenCalledTimes(1);
+    expect(onFetchSuccess).toHaveBeenCalledWith("wtB");
+
+    // Now resolve the original fetch — its completion must NOT fire onFetchSuccess
+    // for wtA, because its captured generation is older than the post-destroy
+    // baseline assigned to the new state.
+    resolveFirst?.();
+    await inFlight;
+    expect(onFetchSuccess).toHaveBeenCalledTimes(1);
+  });
+
   it("destroy() bumps the generation so in-flight completions are discarded", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
     let resolveFetch: (() => void) | undefined;

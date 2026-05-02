@@ -70,6 +70,15 @@ export interface FetchResult {
  */
 export class RepoFetchCoordinator {
   private readonly states = new Map<string, RepoState>();
+  /**
+   * Coordinator-wide generation baseline. Bumped by `destroy()` so any new
+   * `RepoState` created after a project switch (e.g. when reopening the same
+   * repo path on a fresh project) starts at a higher generation than any
+   * still-in-flight pre-destroy fetch. Without this, a stale completion that
+   * captured `generationAtStart=0` could pass the guard against a fresh
+   * `state.generation=0` and corrupt the new project's failure cache.
+   */
+  private baseGeneration = 0;
 
   constructor(private readonly callbacks: RepoFetchCoordinatorCallbacks = {}) {}
 
@@ -150,6 +159,9 @@ export class RepoFetchCoordinator {
   /**
    * Mark every known repo's generation as invalidated, dropping in-flight
    * results before they mutate state. Called on shutdown / project switch.
+   * Bumps the coordinator-wide baseline too so freshly-created states (e.g.
+   * after reopening the same repo on a different project) start above any
+   * still-in-flight pre-destroy fetch's captured generation.
    */
   destroy(): void {
     for (const state of this.states.values()) {
@@ -157,6 +169,7 @@ export class RepoFetchCoordinator {
       state.failure = null;
     }
     this.states.clear();
+    this.baseGeneration += 1;
   }
 
   /** Test/diagnostic accessor. */
@@ -176,7 +189,7 @@ export class RepoFetchCoordinator {
         chain: Promise.resolve(),
         failure: null,
         lastSuccessfulFetch: null,
-        generation: 0,
+        generation: this.baseGeneration,
       };
       this.states.set(commonDir, state);
     }
@@ -190,6 +203,7 @@ export class RepoFetchCoordinator {
   ): Promise<FetchResult> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_ABORT_TIMEOUT_MS);
+    let succeeded = false;
     try {
       const git = createBackgroundFetchGit(opts.worktreePath, {
         signal: controller.signal,
@@ -202,7 +216,7 @@ export class RepoFetchCoordinator {
       }
       state.failure = null;
       state.lastSuccessfulFetch = Date.now();
-      this.callbacks.onFetchSuccess?.(opts.worktreeId);
+      succeeded = true;
       return { status: "success" };
     } catch (error) {
       const reason = classifyGitError(error);
@@ -214,6 +228,15 @@ export class RepoFetchCoordinator {
       return { status: "failed", reason };
     } finally {
       clearTimeout(timeout);
+      // Notify outside the try/catch so a throwing observer can't poison the
+      // failure cache. Wrapped defensively — `onFetchSuccess` is fire-and-forget.
+      if (succeeded) {
+        try {
+          this.callbacks.onFetchSuccess?.(opts.worktreeId);
+        } catch {
+          // Observer threw — silently swallow; fetch itself succeeded.
+        }
+      }
     }
   }
 

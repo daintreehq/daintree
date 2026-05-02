@@ -22,7 +22,7 @@ import type {
 } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
 import { detectWslPath, listFirstWslDistro } from "../utils/wsl.js";
-import { getGitDir, clearGitDirCache } from "../utils/gitUtils.js";
+import { getGitDir, clearGitDirCache, clearGitCommonDirCache } from "../utils/gitUtils.js";
 import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { pullRequestService } from "../services/PullRequestService.js";
@@ -1920,6 +1920,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.projectEnvVars = {};
 
     clearGitDirCache();
+    clearGitCommonDirCache();
     this.listService.invalidateCache();
     this.listService.setGit(null, null);
 

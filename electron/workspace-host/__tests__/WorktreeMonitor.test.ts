@@ -1794,5 +1794,46 @@ describe("WorktreeMonitor", () => {
 
       monitor.stop();
     });
+
+    it("triggerFetchNow() defers behind a pending fetch and runs after it lands", async () => {
+      let resolveFirst: (() => void) | undefined;
+      const invocations: Array<{ force: boolean }> = [];
+      const onScheduleFetch = vi
+        .fn()
+        .mockImplementation((_id: string, _isCurrent: boolean, force: boolean) => {
+          invocations.push({ force });
+          if (invocations.length === 1) {
+            return new Promise<void>((res) => {
+              resolveFirst = res;
+            });
+          }
+          return Promise.resolve();
+        });
+
+      const callbacks = makeCallbacks({ onScheduleFetch });
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      await monitor.start();
+      // Let the initial-delay timer fire so the first (non-force) fetch starts.
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(invocations).toEqual([{ force: false }]);
+      expect(resolveFirst).toBeDefined();
+
+      // Issue a force request while the first is pending. It must not be lost.
+      const triggered = monitor.triggerFetchNow();
+
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+      // Still only 1 invocation — the force request is deferred.
+      expect(invocations).toHaveLength(1);
+
+      // Resolve the first; the deferred force should fire next.
+      resolveFirst?.();
+      await triggered;
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      expect(invocations).toEqual([{ force: false }, { force: true }]);
+
+      monitor.stop();
+    });
   });
 });

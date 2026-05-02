@@ -177,6 +177,13 @@ export class WorktreeMonitor {
   // `_isCurrent`; rescheduling happens in the `isCurrent` setter.
   private fetchTimer: NodeJS.Timeout | null = null;
   private _pendingFetchPromise: Promise<void> | null = null;
+  /**
+   * When `triggerFetchNow()` is called while a non-force fetch is in-flight,
+   * we can't drop the force request — wake / auth-rotation hooks rely on it
+   * bypassing the failure cache. Defer it: set this flag, let the in-flight
+   * call complete, then run a forced fetch in the post-pending hook.
+   */
+  private _pendingForceFetch: boolean = false;
 
   // Poll queue concurrency
   private _pendingPollPromise: Promise<void> | null = null;
@@ -1054,7 +1061,16 @@ export class WorktreeMonitor {
   private async runFetch(force: boolean): Promise<void> {
     if (!this._isRunning) return;
     if (!this.callbacks.onScheduleFetch) return;
-    if (this._pendingFetchPromise) return;
+    if (this._pendingFetchPromise) {
+      // A fetch is already in-flight. Drop non-force duplicates, but defer a
+      // force request so wake / auth-rotation can still bypass the failure
+      // cache once the current fetch lands.
+      if (force) {
+        this._pendingForceFetch = true;
+        await this._pendingFetchPromise;
+      }
+      return;
+    }
 
     const run = Promise.resolve(this.callbacks.onScheduleFetch(this.id, this._isCurrent, force))
       .catch(() => {
@@ -1063,8 +1079,14 @@ export class WorktreeMonitor {
       })
       .finally(() => {
         this._pendingFetchPromise = null;
+        const queuedForce = this._pendingForceFetch;
+        this._pendingForceFetch = false;
         if (this._isRunning) {
-          this.scheduleNextFetch(false);
+          if (queuedForce) {
+            void this.runFetch(true);
+          } else {
+            this.scheduleNextFetch(false);
+          }
         }
       });
     this._pendingFetchPromise = run;
