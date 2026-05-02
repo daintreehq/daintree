@@ -1158,11 +1158,7 @@ export async function batchCheckLinkedPRs(
     for (let i = 0; i < candidates.length; i++) {
       const c = candidates[i];
       const branch = c.branchName?.trim();
-      if (
-        typeof c.knownPRNumber !== "number" &&
-        typeof c.issueNumber !== "number" &&
-        branch
-      ) {
+      if (typeof c.knownPRNumber !== "number" && typeof c.issueNumber !== "number" && branch) {
         const existing = probeableIndicesByBranch.get(branch);
         if (existing) {
           existing.push(i);

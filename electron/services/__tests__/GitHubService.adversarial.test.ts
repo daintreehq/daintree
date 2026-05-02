@@ -144,8 +144,7 @@ function createBranchListResponse(
     status,
     statusText: status === 304 ? "Not Modified" : "OK",
     headers,
-    json: () =>
-      options.body === undefined ? Promise.resolve([]) : Promise.resolve(options.body),
+    json: () => (options.body === undefined ? Promise.resolve([]) : Promise.resolve(options.body)),
   } as unknown as Response;
 }
 
@@ -608,9 +607,7 @@ describe("GitHubService adversarial", () => {
     vi.mocked(global.fetch).mockResolvedValueOnce(
       createBranchListResponse(200, { etag: 'W/"seed-2"', body: [] })
     );
-    await github.batchCheckLinkedPRs("/repo", [
-      { worktreeId: "wt-1", branchName: "feature/x" },
-    ]);
+    await github.batchCheckLinkedPRs("/repo", [{ worktreeId: "wt-1", branchName: "feature/x" }]);
 
     // Cycle 2 must send If-None-Match and target the filtered pulls URL.
     let capturedUrl: string | undefined;
@@ -621,9 +618,7 @@ describe("GitHubService adversarial", () => {
       return createBranchListResponse(304);
     });
 
-    await github.batchCheckLinkedPRs("/repo", [
-      { worktreeId: "wt-1", branchName: "feature/x" },
-    ]);
+    await github.batchCheckLinkedPRs("/repo", [{ worktreeId: "wt-1", branchName: "feature/x" }]);
 
     expect(capturedUrl).toBe(
       "https://api.github.com/repos/owner/repo/pulls?head=owner:feature%2Fx&state=all"
@@ -713,18 +708,14 @@ describe("GitHubService adversarial", () => {
     shared.graphqlClient.mockResolvedValueOnce({
       wt_0_branch: { pullRequests: { nodes: [] } },
     });
-    await github.batchCheckLinkedPRs("/repo", [
-      { worktreeId: "wt-1", branchName: "feature/x" },
-    ]);
+    await github.batchCheckLinkedPRs("/repo", [{ worktreeId: "wt-1", branchName: "feature/x" }]);
 
     let capturedHeaders: Record<string, string> | undefined;
     vi.mocked(global.fetch).mockImplementationOnce(async (_url, init) => {
       capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
       return createBranchListResponse(200, { etag: 'W/"fresh"', body: [] });
     });
-    await github.batchCheckLinkedPRs("/repo", [
-      { worktreeId: "wt-1", branchName: "feature/x" },
-    ]);
+    await github.batchCheckLinkedPRs("/repo", [{ worktreeId: "wt-1", branchName: "feature/x" }]);
 
     expect(capturedHeaders?.["If-None-Match"]).toBeUndefined();
   });
@@ -749,9 +740,7 @@ describe("GitHubService adversarial", () => {
     vi.mocked(global.fetch).mockResolvedValueOnce(
       createBranchListResponse(200, { etag: 'W/"v1"', body: [] })
     );
-    await github.batchCheckLinkedPRs("/repo", [
-      { worktreeId: "wt-1", branchName: "feature/x" },
-    ]);
+    await github.batchCheckLinkedPRs("/repo", [{ worktreeId: "wt-1", branchName: "feature/x" }]);
 
     // Rotate token — branch-list ETag cache must be cleared atomically.
     github.setGitHubToken("ghp_rotated");
@@ -762,9 +751,7 @@ describe("GitHubService adversarial", () => {
       capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
       return createBranchListResponse(200, { etag: 'W/"v2"', body: [] });
     });
-    await github.batchCheckLinkedPRs("/repo", [
-      { worktreeId: "wt-1", branchName: "feature/x" },
-    ]);
+    await github.batchCheckLinkedPRs("/repo", [{ worktreeId: "wt-1", branchName: "feature/x" }]);
 
     expect(capturedHeaders?.["If-None-Match"]).toBeUndefined();
   });
