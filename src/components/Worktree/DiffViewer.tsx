@@ -173,16 +173,18 @@ function FileDiff({ file, viewType, language, rootPath }: FileDiffProps) {
           </div>
         </div>
       )}
-      <Diff
-        viewType={viewType}
-        diffType={diffType}
-        hunks={file.hunks ?? []}
-        tokens={tokens ?? undefined}
-      >
-        {(hunks: HunkData[]) =>
-          hunks.map((hunk) => <Hunk key={`${hunk.oldStart}-${hunk.newStart}`} hunk={hunk} />)
-        }
-      </Diff>
+      <div className="diff-file-scroll">
+        <Diff
+          viewType={viewType}
+          diffType={diffType}
+          hunks={file.hunks ?? []}
+          tokens={tokens ?? undefined}
+        >
+          {(hunks: HunkData[]) =>
+            hunks.map((hunk) => <Hunk key={`${hunk.oldStart}-${hunk.newStart}`} hunk={hunk} />)
+          }
+        </Diff>
+      </div>
     </div>
   );
 }
