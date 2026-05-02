@@ -155,6 +155,19 @@ describe("GitHubStatsToolbarButton digit flash", () => {
     expect(slice).not.toMatch(/key=\{[a-zA-Z]*FlashKey\}/);
   });
 
+  it("clears prevStatsRef when lastUpdated transitions to null (project switch)", () => {
+    // Regression guard for spurious cross-project flashes.
+    // useRepositoryStats resets lastUpdated to null on project switch, and
+    // without clearing prevStatsRef the next first poll would compare new
+    // counts against the previous project's stale counts.
+    const effectStart = source.indexOf("if (statsLoading || statsError)");
+    expect(effectStart).toBeGreaterThan(0);
+    const slice = source.slice(effectStart, effectStart + 1500);
+    expect(slice).toMatch(/lastUpdated\s*==\s*null/);
+    expect(slice).toMatch(/prevStatsRef\.current\s*=\s*null/);
+    expect(slice).toMatch(/prevLastUpdatedRef\.current\s*=\s*null/);
+  });
+
   it("does not add transition-colors to the flashing spans (would fight @keyframes)", () => {
     // Past lesson #4738: any transition-* on the flashing element competes
     // with the @keyframes color animation and produces visible jitter.

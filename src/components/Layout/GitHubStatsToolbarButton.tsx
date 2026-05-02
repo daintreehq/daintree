@@ -535,10 +535,21 @@ export const GitHubStatsToolbarButton = memo(
         setStatsJustUpdated(false);
         return;
       }
-      if (lastUpdated != null && prevLastUpdatedRef.current != null && lastUpdated > prevLastUpdatedRef.current) {
+      if (lastUpdated == null) {
+        // Project switch / reset path: useRepositoryStats clears lastUpdated
+        // to null when the user switches projects. Clear delta tracking too
+        // so the next first successful poll doesn't compare new-project
+        // counts against the previous project's stale counts (which would
+        // produce a spurious flash whenever the new project's count is
+        // higher).
+        prevStatsRef.current = null;
+        prevLastUpdatedRef.current = null;
+        return;
+      }
+      if (prevLastUpdatedRef.current != null && lastUpdated > prevLastUpdatedRef.current) {
         setStatsJustUpdated(true);
         checkForCountIncrease();
-      } else if (lastUpdated != null && prevLastUpdatedRef.current == null) {
+      } else if (prevLastUpdatedRef.current == null) {
         // First successful poll — seed prevStatsRef without flashing.
         checkForCountIncrease();
       }
