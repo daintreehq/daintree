@@ -26,7 +26,9 @@ export function getScrollbackForType(isAgent: boolean, baseScrollback: number): 
   return Math.max(policy.minLines, Math.min(policy.maxLines, calculated));
 }
 
-const BYTES_PER_LINE = 250; // Average with ANSI codes
+// xterm.js 6 BufferLine: 80 cols × CELL_SIZE(3) × 4 bytes/cell = 960 raw
+// + ~240 V8/object/_combined overhead = ~1,200 bytes/line
+const BYTES_PER_LINE = 1200;
 
 /**
  * Estimate memory usage for a mix of agent/plain terminals at the given
@@ -41,16 +43,6 @@ export function estimateMemoryUsage(
   const plainBytes =
     getScrollbackForType(false, baseScrollback) * BYTES_PER_LINE * terminalCounts.plain;
   return { agent: agentBytes, plain: plainBytes, total: agentBytes + plainBytes };
-}
-
-/**
- * Format bytes as a human-readable string (e.g., "25 MB").
- */
-export function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /**

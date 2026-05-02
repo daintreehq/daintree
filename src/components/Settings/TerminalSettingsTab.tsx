@@ -42,9 +42,9 @@ import type { PanelLayoutStrategy } from "@/types";
 import {
   getScrollbackForType,
   estimateMemoryUsage,
-  formatBytes,
   PERFORMANCE_MODE_SCROLLBACK,
 } from "@/utils/scrollbackConfig";
+import { formatBytes } from "@/lib/formatBytes";
 import { actionService } from "@/services/ActionService";
 import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
