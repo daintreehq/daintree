@@ -7,6 +7,8 @@ export interface ResourceProfileConfig {
   pollIntervalBackground: number;
   /** ProcessTreeCache polling interval (ms) */
   processTreePollInterval: number;
+  /** ProjectStatsService polling interval (ms) */
+  projectStatsPollInterval: number;
   /** Max WebGL contexts in the renderer */
   maxWebGLContexts: number;
   /** HibernationService memory-pressure inactivity threshold (ms) */
@@ -24,6 +26,7 @@ export interface ResourceProfilePayload {
  * - pollIntervalActive: 2000 (WorkspaceService DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS)
  * - pollIntervalBackground: 10000 (WorkspaceService DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS)
  * - processTreePollInterval: 2500 (ProcessTreeCache constructor default)
+ * - projectStatsPollInterval: 5000 (ProjectStatsService DEFAULT_POLL_INTERVAL_MS)
  * - maxWebGLContexts: 12 (TerminalWebGLManager MAX_CONTEXTS)
  * - memoryPressureInactiveMs: 1800000 (HibernationService MEMORY_PRESSURE_INACTIVE_MS = 30min)
  */
@@ -32,6 +35,7 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     pollIntervalActive: 1500,
     pollIntervalBackground: 5000,
     processTreePollInterval: 2000,
+    projectStatsPollInterval: 5000,
     maxWebGLContexts: 16,
     memoryPressureInactiveMs: 60 * 60 * 1000, // 60 min
   },
@@ -39,6 +43,7 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     pollIntervalActive: 2000,
     pollIntervalBackground: 10000,
     processTreePollInterval: 2500,
+    projectStatsPollInterval: 5000,
     maxWebGLContexts: 12,
     memoryPressureInactiveMs: 30 * 60 * 1000, // 30 min
   },
@@ -46,6 +51,7 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     pollIntervalActive: 4000,
     pollIntervalBackground: 20000,
     processTreePollInterval: 5000,
+    projectStatsPollInterval: 25000,
     maxWebGLContexts: 6,
     memoryPressureInactiveMs: 15 * 60 * 1000, // 15 min
   },

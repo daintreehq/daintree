@@ -91,6 +91,7 @@ import { shouldEnableEarlyRenderer } from "./earlyRenderer.js";
 import { extractCliPath, getPendingCliPath, setPendingCliPath } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { getProjectViewManager } from "./windowRef.js";
+import { getProjectStatsService } from "../ipc/handlers/projectCrud/index.js";
 import {
   registerDeferredTask,
   finalizeDeferredRegistration,
@@ -641,6 +642,7 @@ export async function setupWindowServices(
           getWorkspaceClient: () => workspaceClient,
           getHibernationService: () => getHibernationService(),
           getProjectViewManager: () => getProjectViewManager(),
+          getProjectStatsService: () => getProjectStatsService(),
           getUserCachedViewLimit: () =>
             store.get("terminalConfig")?.cachedProjectViews ??
             (process.env.DAINTREE_E2E_MODE ? 4 : 1),

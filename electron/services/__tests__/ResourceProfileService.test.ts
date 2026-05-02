@@ -3,6 +3,7 @@ import type { PtyClient } from "../PtyClient.js";
 import type { WorkspaceClient } from "../WorkspaceClient.js";
 import type { HibernationService } from "../HibernationService.js";
 import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
+import type { ProjectStatsService } from "../ProjectStatsService.js";
 
 // Mock electron modules before importing
 vi.mock("electron", () => ({
@@ -83,6 +84,9 @@ interface MockHibernationService {
 interface MockProjectViewManager {
   setCachedViewLimit: Mock;
 }
+interface MockProjectStatsService {
+  updatePollInterval: Mock;
+}
 
 function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDeps {
   const mockPtyClient: MockPtyClient = {
@@ -98,12 +102,16 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDe
   const mockProjectViewManager: MockProjectViewManager = {
     setCachedViewLimit: vi.fn(),
   };
+  const mockProjectStatsService: MockProjectStatsService = {
+    updatePollInterval: vi.fn(),
+  };
 
   return {
     getPtyClient: () => mockPtyClient as unknown as PtyClient,
     getWorkspaceClient: () => mockWorkspaceClient as unknown as WorkspaceClient,
     getHibernationService: () => mockHibernationService as unknown as HibernationService,
     getProjectViewManager: () => mockProjectViewManager as unknown as ProjectViewManager,
+    getProjectStatsService: () => mockProjectStatsService as unknown as ProjectStatsService,
     getUserCachedViewLimit: () => 2,
     ...overrides,
   };
@@ -266,6 +274,11 @@ describe("ResourceProfileService", () => {
       RESOURCE_PROFILE_CONFIGS.efficiency.memoryPressureInactiveMs
     );
 
+    const stats = deps.getProjectStatsService() as unknown as MockProjectStatsService;
+    expect(stats.updatePollInterval).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.projectStatsPollInterval
+    );
+
     service.stop();
   });
 
@@ -275,6 +288,7 @@ describe("ResourceProfileService", () => {
       getWorkspaceClient: () => null,
       getHibernationService: () => null,
       getProjectViewManager: () => null,
+      getProjectStatsService: () => null,
     });
     const service = new ResourceProfileService(deps);
     service.start();
@@ -403,6 +417,7 @@ describe("ResourceProfileService", () => {
     expect(balanced.pollIntervalActive).toBe(2000);
     expect(balanced.pollIntervalBackground).toBe(10000);
     expect(balanced.processTreePollInterval).toBe(2500);
+    expect(balanced.projectStatsPollInterval).toBe(5000);
     expect(balanced.maxWebGLContexts).toBe(12);
     expect(balanced.memoryPressureInactiveMs).toBe(30 * 60 * 1000);
   });

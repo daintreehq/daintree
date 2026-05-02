@@ -13,6 +13,7 @@ import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import type { HibernationService } from "./HibernationService.js";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
+import type { ProjectStatsService } from "./ProjectStatsService.js";
 import {
   RESOURCE_PROFILE_CONFIGS,
   type ResourceProfile,
@@ -56,6 +57,7 @@ export interface ResourceProfileDeps {
   getWorkspaceClient: () => WorkspaceClient | null;
   getHibernationService: () => HibernationService | null;
   getProjectViewManager: () => ProjectViewManager | null;
+  getProjectStatsService: () => ProjectStatsService | null;
   getUserCachedViewLimit: () => number;
 }
 
@@ -411,6 +413,16 @@ export class ResourceProfileService {
     if (ptyClient) {
       try {
         ptyClient.setResourceProfile(profile);
+      } catch {
+        // non-critical
+      }
+    }
+
+    // Update project stats polling cadence
+    const statsService = this.deps.getProjectStatsService();
+    if (statsService) {
+      try {
+        statsService.updatePollInterval(config.projectStatsPollInterval);
       } catch {
         // non-critical
       }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import type { PtyClient } from "../PtyClient.js";
 import type { WorkspaceClient } from "../WorkspaceClient.js";
 import type { HibernationService } from "../HibernationService.js";
+import type { ProjectStatsService } from "../ProjectStatsService.js";
 
 const lagState = vi.hoisted(() => ({
   // Returned by histogram.percentile(99) — nanoseconds.
@@ -75,6 +76,10 @@ interface MockHibernationService {
   setMemoryPressureThresholdMs: Mock;
 }
 
+interface MockProjectStatsService {
+  updatePollInterval: Mock;
+}
+
 interface Deferred<T> {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -112,6 +117,7 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
   workspace: MockWorkspaceClient;
   pty: MockPtyClient;
   hibernation: MockHibernationService;
+  stats: MockProjectStatsService;
 } {
   const pty: MockPtyClient = {
     setResourceProfile: vi.fn(),
@@ -123,6 +129,9 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
   const hibernation: MockHibernationService = {
     setMemoryPressureThresholdMs: vi.fn(),
   };
+  const stats: MockProjectStatsService = {
+    updatePollInterval: vi.fn(),
+  };
 
   return {
     deps: {
@@ -130,12 +139,14 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
       getWorkspaceClient: () => workspace as unknown as WorkspaceClient,
       getHibernationService: () => hibernation as unknown as HibernationService,
       getProjectViewManager: () => null,
+      getProjectStatsService: () => stats as unknown as ProjectStatsService,
       getUserCachedViewLimit: () => 1,
       ...overrides,
     },
     workspace,
     pty,
     hibernation,
+    stats,
   };
 }
 
