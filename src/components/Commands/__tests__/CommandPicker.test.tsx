@@ -150,10 +150,14 @@ describe("CommandPicker confirm guard", () => {
     expect(capturedProps!.isFiltering).toBe(true);
 
     // Simulate clicking a row — renderItem produces the button element
-    const element = capturedProps!.renderItem!(commands[0], 0, true) as React.ReactElement;
-    // Extract onClick from the rendered button
-    const button = (element as React.ReactElement<{ children: React.ReactNode }>).props
-      .children[1] as React.ReactElement<{ onClick: () => void }>;
+    const element = capturedProps!.renderItem!(commands[0], 0, true) as React.ReactElement<{
+      children: React.ReactNode;
+    }>;
+    const children = React.Children.toArray(element.props.children);
+    const button = children.find(
+      (c): c is React.ReactElement<{ onClick: () => void }> =>
+        React.isValidElement(c) && c.type === "button"
+    )!;
     act(() => {
       button.props.onClick();
     });
@@ -165,9 +169,14 @@ describe("CommandPicker confirm guard", () => {
     renderPicker(onSelect);
 
     // Not stale — useDeferredValue passthrough
-    const element = capturedProps!.renderItem!(commands[0], 0, true) as React.ReactElement;
-    const button = (element as React.ReactElement<{ children: React.ReactNode }>).props
-      .children[1] as React.ReactElement<{ onClick: () => void }>;
+    const element = capturedProps!.renderItem!(commands[0], 0, true) as React.ReactElement<{
+      children: React.ReactNode;
+    }>;
+    const children = React.Children.toArray(element.props.children);
+    const button = children.find(
+      (c): c is React.ReactElement<{ onClick: () => void }> =>
+        React.isValidElement(c) && c.type === "button"
+    )!;
     act(() => {
       button.props.onClick();
     });
