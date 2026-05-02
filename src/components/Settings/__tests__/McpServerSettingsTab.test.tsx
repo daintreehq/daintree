@@ -37,6 +37,11 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
       configuredPort: 9020,
       apiKey: "",
     }),
+    getAuditRecords: vi.fn().mockResolvedValue([]),
+    getAuditConfig: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
+    clearAuditLog: vi.fn().mockResolvedValue(undefined),
+    setAuditEnabled: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
+    setAuditMaxRecords: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
     ...overrides,
   };
 }
