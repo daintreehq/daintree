@@ -172,7 +172,7 @@ const IssueBadge = memo(function IssueBadge({
         {missingToken ? (
           <TokenMissingTooltip type="issue" />
         ) : loading ? (
-          <TooltipLoading type="issue" />
+          <TooltipLoading />
         ) : data ? (
           <IssueTooltipContent data={data} />
         ) : error ? (
@@ -274,7 +274,7 @@ const PRBadge = memo(function PRBadge({
         {missingToken ? (
           <TokenMissingTooltip type="pr" />
         ) : loading ? (
-          <TooltipLoading type="pr" />
+          <TooltipLoading />
         ) : data ? (
           <PRTooltipContent data={data} />
         ) : error ? (

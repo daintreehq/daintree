@@ -1,3 +1,5 @@
+import type { PRTooltipData } from "../../../shared/types/github.js";
+
 export interface RepoContext {
   owner: string;
   repo: string;
@@ -28,6 +30,12 @@ export interface PRCheckResult {
   issueTitle?: string;
   branchName?: string;
   pr: LinkedPR | null;
+  /**
+   * Tooltip-shaped data harvested from the same batch query, used to pre-warm
+   * `prTooltipCache` so hover-time fetches hit instantly. Populated only when
+   * the batch query yielded a PR with the extended tooltip fields.
+   */
+  tooltipData?: PRTooltipData;
 }
 
 export interface PRCheckCandidate {

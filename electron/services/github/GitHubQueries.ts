@@ -450,6 +450,11 @@ export function buildBatchPRQuery(
                       state
                       isDraft
                       merged
+                      bodyText
+                      createdAt
+                      author { login avatarUrl }
+                      assignees(first: 5) { nodes { login avatarUrl } }
+                      labels(first: 10) { nodes { name color } }
                     }
                   }
                 }
@@ -462,6 +467,11 @@ export function buildBatchPRQuery(
                       state
                       isDraft
                       merged
+                      bodyText
+                      createdAt
+                      author { login avatarUrl }
+                      assignees(first: 5) { nodes { login avatarUrl } }
+                      labels(first: 10) { nodes { name color } }
                     }
                   }
                 }
@@ -486,6 +496,11 @@ export function buildBatchPRQuery(
               state
               isDraft
               merged
+              bodyText
+              createdAt
+              author { login avatarUrl }
+              assignees(first: 5) { nodes { login avatarUrl } }
+              labels(first: 10) { nodes { name color } }
             }
           }
         }

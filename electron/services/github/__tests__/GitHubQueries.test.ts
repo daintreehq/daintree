@@ -199,4 +199,80 @@ describe("buildBatchPRQuery", () => {
     expect(query).toContain("issue(number: 7)");
     expect(query).toContain('headRefName: "feature-branch"');
   });
+
+  describe("tooltip pre-warm fields", () => {
+    // The poll-driven batch query over-fetches PR fields that match
+    // PRTooltipData so `prTooltipCache` can be warmed without an extra
+    // round-trip on first hover. Both query paths (issue timeline + branch
+    // search) must emit the same field shape.
+
+    it("includes tooltip fields on the issue-path PR fragments", () => {
+      const query = buildBatchPRQuery("owner", "repo", [{ worktreeId: "wt-1", issueNumber: 42 }]);
+
+      // Locate the issue path slice (no branch path emitted for this candidate).
+      const issuePathStart = query.indexOf("wt_0_issue:");
+      expect(issuePathStart).toBeGreaterThanOrEqual(0);
+      const issuePath = query.slice(issuePathStart);
+
+      // Both timeline event types resolve to PullRequest fragments — both
+      // need the tooltip projection so either codepath warms the cache.
+      const sourceFragmentStart = issuePath.indexOf("source");
+      const subjectFragmentStart = issuePath.indexOf("subject");
+      expect(sourceFragmentStart).toBeGreaterThanOrEqual(0);
+      expect(subjectFragmentStart).toBeGreaterThan(sourceFragmentStart);
+
+      const sourceFragment = issuePath.slice(sourceFragmentStart, subjectFragmentStart);
+      const subjectFragment = issuePath.slice(subjectFragmentStart);
+
+      for (const fragment of [sourceFragment, subjectFragment]) {
+        expect(fragment).toContain("bodyText");
+        expect(fragment).toContain("createdAt");
+        expect(fragment).toContain("author { login avatarUrl }");
+        expect(fragment).toContain("assignees(first: 5) { nodes { login avatarUrl } }");
+        expect(fragment).toContain("labels(first: 10) { nodes { name color } }");
+      }
+    });
+
+    it("includes tooltip fields on the branch-path PR nodes", () => {
+      const query = buildBatchPRQuery("owner", "repo", [
+        { worktreeId: "wt-1", branchName: "feature-branch" },
+      ]);
+
+      const branchPathStart = query.indexOf("wt_0_branch:");
+      expect(branchPathStart).toBeGreaterThanOrEqual(0);
+      const branchPath = query.slice(branchPathStart);
+
+      expect(branchPath).toContain("bodyText");
+      expect(branchPath).toContain("createdAt");
+      expect(branchPath).toContain("author { login avatarUrl }");
+      expect(branchPath).toContain("assignees(first: 5) { nodes { login avatarUrl } }");
+      expect(branchPath).toContain("labels(first: 10) { nodes { name color } }");
+    });
+
+    it("does not add an orderBy argument to assignees or labels connections", () => {
+      // Past lesson #3339: schema-context mismatches on connection ordering
+      // produce silent failures. Neither GitHub's PR.assignees nor PR.labels
+      // accepts an order arg; keep the call sites bare.
+      const query = buildBatchPRQuery("owner", "repo", [
+        { worktreeId: "wt-1", issueNumber: 42, branchName: "feature-branch" },
+      ]);
+
+      expect(query).not.toMatch(/assignees\(first:\s*5,\s*orderBy/);
+      expect(query).not.toMatch(/labels\(first:\s*10,\s*orderBy/);
+    });
+
+    it("uses bodyText (not body) so the response carries plain-text excerpt content", () => {
+      // GraphQL has both `body` (Markdown) and `bodyText` (plain text). The
+      // tooltip excerpt is rendered as plain text; using `body` would force
+      // every consumer to strip Markdown and breaks parity with getPRTooltip.
+      const query = buildBatchPRQuery("owner", "repo", [
+        { worktreeId: "wt-1", issueNumber: 42, branchName: "feature-branch" },
+      ]);
+
+      expect(query).toContain("bodyText");
+      // `body` is not present as a standalone field on either path. Match
+      // a word boundary to avoid matching `bodyText`.
+      expect(query).not.toMatch(/\bbody\b(?!Text)/);
+    });
+  });
 });

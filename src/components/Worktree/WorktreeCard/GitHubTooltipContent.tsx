@@ -1,7 +1,6 @@
 import { memo } from "react";
 import type { IssueTooltipData, PRTooltipData } from "@shared/types/github";
 import { User, Users, Calendar, KeyRound } from "lucide-react";
-import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 
 function formatDate(dateString: string): string {
@@ -13,15 +12,24 @@ function formatDate(dateString: string): string {
   });
 }
 
-interface TooltipLoadingProps {
-  type: "issue" | "pr";
-}
-
-export const TooltipLoading = memo(function TooltipLoading({ type }: TooltipLoadingProps) {
+export const TooltipLoading = memo(function TooltipLoading() {
+  // Doherty-gated skeleton: `animate-pulse-delayed` keeps the bars invisible
+  // for the first 400ms, so a fast cache-warm response (the common case after
+  // the poll has pre-warmed `prTooltipCache`) shows nothing rather than a
+  // flash. After 400ms the bars fade in and pulse. Layout mirrors PR/issue
+  // tooltip content: title row, body excerpt, metadata row.
   return (
-    <div className="flex items-center gap-2 text-daintree-text/70 py-1">
-      <Spinner size="xs" />
-      <span className="text-xs">Loading {type} details...</span>
+    <div className="space-y-2 max-w-[280px]" aria-hidden="true">
+      <div className="flex items-start gap-2">
+        <div className="animate-pulse-delayed h-3 w-10 rounded bg-muted" />
+        <div className="animate-pulse-delayed h-3 flex-1 rounded bg-muted" />
+      </div>
+      <div className="animate-pulse-delayed h-2.5 w-full rounded bg-muted" />
+      <div className="animate-pulse-delayed h-2.5 w-2/3 rounded bg-muted" />
+      <div className="flex items-center gap-3 pt-1">
+        <div className="animate-pulse-delayed h-2 w-16 rounded bg-muted" />
+        <div className="animate-pulse-delayed h-2 w-20 rounded bg-muted" />
+      </div>
     </div>
   );
 });

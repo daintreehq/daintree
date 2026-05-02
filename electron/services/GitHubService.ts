@@ -72,6 +72,14 @@ const prListCache = new Cache<string, GitHubListResponse<GitHubPR>>({ defaultTTL
 const projectHealthCache = new Cache<string, ProjectHealth>({ defaultTTL: 60000 });
 const issueTooltipCache = new Cache<string, IssueTooltipData>({ defaultTTL: 300000 }); // 5 min TTL
 const prTooltipCache = new Cache<string, PRTooltipData>({ defaultTTL: 300000 }); // 5 min TTL
+// Newest-wins guard for prTooltipCache: tracks the request-start timestamp of
+// the most recent successful write per cache key. Both poll-path (pre-warm)
+// and hover-path writes capture Date.now() before awaiting the network call,
+// then only commit when their captured timestamp is >= the stored one. Without
+// this guard a slow poll resolving after a faster hover fetch would clobber
+// fresher data with staler data (lessons #2243, #1377). MUST be cleared
+// alongside prTooltipCache wherever it is cleared.
+const prTooltipWrittenAt = new Map<string, number>();
 
 // ETag cache for PR conditional revalidation. Key: `owner/repo#prNumber`.
 // Cleared on token rotation via clearGitHubCaches (ETags are token-scoped).
@@ -806,6 +814,76 @@ export async function getRepoInfo(cwd: string): Promise<RepoContext | null> {
   return getRepoContext(cwd);
 }
 
+/**
+ * Tooltip-shaped raw fields fetched alongside `LinkedPR` shape in the batch
+ * query. Mirrors the subset of `GET_PR_QUERY` fields that `getPRTooltip`
+ * reads, so the same projection logic produces a `PRTooltipData`.
+ */
+interface BatchPRTooltipFields {
+  bodyText?: string | null;
+  createdAt?: string;
+  author?: { login?: string; avatarUrl?: string } | null;
+  assignees?: { nodes?: Array<{ login?: string; avatarUrl?: string }> };
+  labels?: { nodes?: Array<{ name?: string; color?: string }> };
+}
+
+interface BatchPRRawNode extends BatchPRTooltipFields {
+  number?: number;
+  title?: string;
+  url?: string;
+  state?: string;
+  isDraft?: boolean;
+  merged?: boolean;
+}
+
+/**
+ * Build a `PRTooltipData` from the raw GraphQL node returned by the batch
+ * query. Mirrors the projection in `getPRTooltip` (single-PR path) so both
+ * write paths produce structurally identical cache entries. Returns
+ * `undefined` when required fields are missing — the batch query may degrade
+ * gracefully if a node was selected via the `LinkedPR` shape only (e.g., on
+ * a partial response).
+ */
+function buildTooltipDataFromBatchNode(node: BatchPRRawNode): PRTooltipData | undefined {
+  if (typeof node.number !== "number" || typeof node.title !== "string") {
+    return undefined;
+  }
+  if (typeof node.createdAt !== "string") {
+    // createdAt is a required scalar on PRTooltipData — without it we cannot
+    // construct a valid entry (callers format it as a date).
+    return undefined;
+  }
+
+  const merged = node.merged ?? false;
+  const rawState = (node.state ?? "OPEN").toUpperCase();
+  const state: "OPEN" | "CLOSED" | "MERGED" = merged
+    ? "MERGED"
+    : rawState === "CLOSED"
+      ? "CLOSED"
+      : "OPEN";
+
+  return {
+    number: node.number,
+    title: node.title,
+    bodyExcerpt: truncateBody(node.bodyText ?? null),
+    state,
+    isDraft: node.isDraft ?? false,
+    createdAt: node.createdAt,
+    author: {
+      login: node.author?.login ?? "unknown",
+      avatarUrl: node.author?.avatarUrl ?? "",
+    },
+    assignees: (node.assignees?.nodes ?? []).filter(Boolean).map((a) => ({
+      login: a.login ?? "unknown",
+      avatarUrl: a.avatarUrl ?? "",
+    })),
+    labels: (node.labels?.nodes ?? []).filter(Boolean).map((l) => ({
+      name: l.name ?? "",
+      color: l.color ?? "",
+    })),
+  };
+}
+
 function parseBatchPRResponse(
   data: Record<string, unknown>,
   candidates: PRCheckCandidate[]
@@ -816,6 +894,7 @@ function parseBatchPRResponse(
     const candidate = candidates[i];
     const alias = `wt_${i}`;
     let foundPR: LinkedPR | null = null;
+    let foundTooltip: PRTooltipData | undefined;
     const issueResponse = (
       data?.[`${alias}_issue`] as {
         issue?: { title?: string; timelineItems?: { nodes?: unknown[] } };
@@ -824,54 +903,46 @@ function parseBatchPRResponse(
     const issueTitle = issueResponse?.title;
     const issueData = issueResponse?.timelineItems?.nodes;
     if (issueData && Array.isArray(issueData)) {
-      const prs: LinkedPR[] = [];
+      const prs: Array<{ pr: LinkedPR; raw: BatchPRRawNode }> = [];
       const seenPRNumbers = new Set<number>();
       for (const node of issueData as Array<{
-        // CROSS_REFERENCED_EVENT uses 'source'
-        source?: {
-          number?: number;
-          title?: string;
-          url?: string;
-          state?: string;
-          isDraft?: boolean;
-          merged?: boolean;
-        };
-        // CONNECTED_EVENT uses 'subject'
-        subject?: {
-          number?: number;
-          title?: string;
-          url?: string;
-          state?: string;
-          isDraft?: boolean;
-          merged?: boolean;
-        };
+        source?: BatchPRRawNode;
+        subject?: BatchPRRawNode;
       }>) {
         // Handle both CROSS_REFERENCED_EVENT (source) and CONNECTED_EVENT (subject)
         const prData = node?.source ?? node?.subject;
         if (prData?.number && prData?.url && !seenPRNumbers.has(prData.number)) {
           seenPRNumbers.add(prData.number);
           prs.push({
-            number: prData.number,
-            title: prData.title || "",
-            url: prData.url,
-            state: prData.merged
-              ? "merged"
-              : (prData.state?.toLowerCase() as "open" | "closed") || "open",
-            isDraft: prData.isDraft ?? false,
+            pr: {
+              number: prData.number,
+              title: prData.title || "",
+              url: prData.url,
+              state: prData.merged
+                ? "merged"
+                : (prData.state?.toLowerCase() as "open" | "closed") || "open",
+              isDraft: prData.isDraft ?? false,
+            },
+            raw: prData,
           });
         }
       }
 
-      const openPRs = prs.filter((pr) => pr.state === "open");
-      const mergedPRs = prs.filter((pr) => pr.state === "merged");
-      const closedPRs = prs.filter((pr) => pr.state === "closed");
+      const openPRs = prs.filter((entry) => entry.pr.state === "open");
+      const mergedPRs = prs.filter((entry) => entry.pr.state === "merged");
+      const closedPRs = prs.filter((entry) => entry.pr.state === "closed");
 
+      let chosen: { pr: LinkedPR; raw: BatchPRRawNode } | undefined;
       if (openPRs.length > 0) {
-        foundPR = openPRs[openPRs.length - 1];
+        chosen = openPRs[openPRs.length - 1];
       } else if (mergedPRs.length > 0) {
-        foundPR = mergedPRs[mergedPRs.length - 1];
+        chosen = mergedPRs[mergedPRs.length - 1];
       } else if (closedPRs.length > 0) {
-        foundPR = closedPRs[closedPRs.length - 1];
+        chosen = closedPRs[closedPRs.length - 1];
+      }
+      if (chosen) {
+        foundPR = chosen.pr;
+        foundTooltip = buildTooltipDataFromBatchNode(chosen.raw);
       }
     }
 
@@ -880,39 +951,40 @@ function parseBatchPRResponse(
         ?.pullRequests?.nodes;
       if (branchData && Array.isArray(branchData)) {
         // Parse all PRs from branch query
-        const branchPRs: LinkedPR[] = [];
-        for (const node of branchData as Array<{
-          number?: number;
-          title?: string;
-          url?: string;
-          state?: string;
-          isDraft?: boolean;
-          merged?: boolean;
-        }>) {
+        const branchPRs: Array<{ pr: LinkedPR; raw: BatchPRRawNode }> = [];
+        for (const node of branchData as BatchPRRawNode[]) {
           if (node?.number && node?.url) {
             branchPRs.push({
-              number: node.number,
-              title: node.title || "",
-              url: node.url,
-              state: node.merged
-                ? "merged"
-                : (node.state?.toLowerCase() as "open" | "closed") || "open",
-              isDraft: node.isDraft ?? false,
+              pr: {
+                number: node.number,
+                title: node.title || "",
+                url: node.url,
+                state: node.merged
+                  ? "merged"
+                  : (node.state?.toLowerCase() as "open" | "closed") || "open",
+                isDraft: node.isDraft ?? false,
+              },
+              raw: node,
             });
           }
         }
 
         // Apply same preference: open > merged > closed
-        const openPRs = branchPRs.filter((pr) => pr.state === "open");
-        const mergedPRs = branchPRs.filter((pr) => pr.state === "merged");
-        const closedPRs = branchPRs.filter((pr) => pr.state === "closed");
+        const openPRs = branchPRs.filter((entry) => entry.pr.state === "open");
+        const mergedPRs = branchPRs.filter((entry) => entry.pr.state === "merged");
+        const closedPRs = branchPRs.filter((entry) => entry.pr.state === "closed");
 
+        let chosen: { pr: LinkedPR; raw: BatchPRRawNode } | undefined;
         if (openPRs.length > 0) {
-          foundPR = openPRs[openPRs.length - 1];
+          chosen = openPRs[openPRs.length - 1];
         } else if (mergedPRs.length > 0) {
-          foundPR = mergedPRs[mergedPRs.length - 1];
+          chosen = mergedPRs[mergedPRs.length - 1];
         } else if (closedPRs.length > 0) {
-          foundPR = closedPRs[closedPRs.length - 1];
+          chosen = closedPRs[closedPRs.length - 1];
+        }
+        if (chosen) {
+          foundPR = chosen.pr;
+          foundTooltip = buildTooltipDataFromBatchNode(chosen.raw);
         }
       }
     }
@@ -922,6 +994,7 @@ function parseBatchPRResponse(
       issueTitle,
       branchName: candidate.branchName,
       pr: foundPR,
+      ...(foundTooltip ? { tooltipData: foundTooltip } : {}),
     });
   }
 
@@ -1203,12 +1276,18 @@ export async function batchCheckLinkedPRs(
   }
 
   try {
+    // Capture timestamp BEFORE the network round-trip so the newest-wins guard
+    // orders writes by request-start time, not response-arrival time. A slow
+    // batch that starts before a fast hover but resolves after must NOT
+    // overwrite the fresher hover write.
+    const requestedAt = Date.now();
     const query = buildBatchPRQuery(context.owner, context.repo, candidatesForGraphQL);
     const response = (await client(query, {
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as Record<string, unknown>;
 
     const results = parseBatchPRResponse(response, candidatesForGraphQL);
+    prewarmPRTooltipCache(context.owner, context.repo, results, requestedAt);
     return { results };
   } catch (error) {
     if (isRepoNotFoundError(error)) {
@@ -1219,6 +1298,7 @@ export async function batchCheckLinkedPRs(
         (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
       ) {
         try {
+          const retryRequestedAt = Date.now();
           const retryQuery = buildBatchPRQuery(
             freshContext.owner,
             freshContext.repo,
@@ -1227,13 +1307,45 @@ export async function batchCheckLinkedPRs(
           const retryResponse = (await client(retryQuery, {
             request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
           })) as Record<string, unknown>;
-          return { results: parseBatchPRResponse(retryResponse, candidatesForGraphQL) };
+          const retryResults = parseBatchPRResponse(retryResponse, candidatesForGraphQL);
+          prewarmPRTooltipCache(
+            freshContext.owner,
+            freshContext.repo,
+            retryResults,
+            retryRequestedAt
+          );
+          return { results: retryResults };
         } catch (retryError) {
           return { results: new Map(), error: parseGitHubError(retryError), ...rateLimitMeta() };
         }
       }
     }
     return { results: new Map(), error: parseGitHubError(error), ...rateLimitMeta() };
+  }
+}
+
+/**
+ * Write each batch result's harvested tooltip data into `prTooltipCache`
+ * subject to the newest-wins guard. Cache key matches `getPRTooltip`'s
+ * format so on-hover IPC calls hit the warm entry instead of issuing a
+ * fresh GraphQL request.
+ */
+function prewarmPRTooltipCache(
+  owner: string,
+  repo: string,
+  results: Map<string, PRCheckResult>,
+  requestedAt: number
+): void {
+  for (const result of results.values()) {
+    const prNumber = result.pr?.number;
+    const tooltipData = result.tooltipData;
+    if (typeof prNumber !== "number" || !tooltipData) continue;
+    const cacheKey = `${owner}/${repo}:${prNumber}`;
+    const existing = prTooltipWrittenAt.get(cacheKey);
+    if (existing === undefined || requestedAt >= existing) {
+      prTooltipCache.set(cacheKey, tooltipData);
+      prTooltipWrittenAt.set(cacheKey, requestedAt);
+    }
   }
 }
 
@@ -1506,6 +1618,7 @@ export function clearGitHubCaches(): void {
   prListCache.clear();
   issueTooltipCache.clear();
   prTooltipCache.clear();
+  prTooltipWrittenAt.clear();
   prETagCache.clear();
   branchListETagCache.clear();
   prRequiredStatusCache.clear();
@@ -1517,6 +1630,7 @@ export function clearGitHubCaches(): void {
 export function clearPRCaches(): void {
   prListCache.clear();
   prTooltipCache.clear();
+  prTooltipWrittenAt.clear();
   prRequiredStatusCache.clear();
 }
 
@@ -2132,6 +2246,10 @@ export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRToo
         return cached;
       }
 
+      // Capture timestamp BEFORE the network round-trip so the newest-wins
+      // guard orders writes by request-start time. A poll batch starting
+      // later would still overwrite if we used response-arrival time here.
+      const requestedAt = Date.now();
       const response = (await client(GET_PR_QUERY, {
         owner: context.owner,
         repo: context.repo,
@@ -2178,7 +2296,11 @@ export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRToo
         })),
       };
 
-      prTooltipCache.set(cacheKey, tooltipData);
+      const existing = prTooltipWrittenAt.get(cacheKey);
+      if (existing === undefined || requestedAt >= existing) {
+        prTooltipCache.set(cacheKey, tooltipData);
+        prTooltipWrittenAt.set(cacheKey, requestedAt);
+      }
       return tooltipData;
     });
   } catch {
