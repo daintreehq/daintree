@@ -514,7 +514,10 @@ describe("McpServerService", () => {
         confirmed: true,
       })
     );
-    expect(webContents.send).toHaveBeenCalledTimes(2);
+    // Each dispatch is preceded by a manifest fetch (used to look up the
+    // action's danger field for the tier authorization gate), so two
+    // callTool invocations send 4 IPC messages total.
+    expect(webContents.send).toHaveBeenCalledTimes(4);
   });
 
   it("refreshes the discovery file when authentication changes while running", async () => {
@@ -964,7 +967,7 @@ describe("McpServerService", () => {
     expect(ids).not.toContain("panel.gridLayout.setStrategy");
   });
 
-  it("dispatches non-allowlisted actions even in curated mode", async () => {
+  it("blocks non-allowlisted actions in curated mode (external tier)", async () => {
     const dispatchMock = vi.fn(
       (payload: DispatchRequest): ActionDispatchResult => ({
         ok: true,
@@ -979,6 +982,11 @@ describe("McpServerService", () => {
           title: "List Actions",
           description: "Read the action registry",
           kind: "query",
+        }),
+        createManifestEntry({
+          id: "panel.gridLayout.setStrategy" as ActionId,
+          title: "Set grid layout",
+          description: "UI plumbing — out of curated surface",
         }),
       ],
       dispatchAction: dispatchMock,
@@ -998,11 +1006,333 @@ describe("McpServerService", () => {
       })
     );
 
-    expect(result.isError).not.toBe(true);
-    expect(result.content[0].text).toContain('"dispatched": "panel.gridLayout.setStrategy"');
-    expect(dispatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({ actionId: "panel.gridLayout.setStrategy" })
-    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("not authorized for MCP tier 'external'");
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  describe("tier authorization", () => {
+    type Tier = "workbench" | "action" | "system";
+
+    function tieredManifest(): ReturnType<typeof createManifestEntry>[] {
+      return [
+        createManifestEntry({
+          id: "actions.list" as ActionId,
+          title: "List Actions",
+          description: "Read the action registry",
+          kind: "query",
+        }),
+        createManifestEntry({
+          id: "terminal.list" as ActionId,
+          title: "List Terminals",
+          description: "Workbench-tier read",
+          kind: "query",
+        }),
+        createManifestEntry({
+          id: "terminal.inject" as ActionId,
+          title: "Inject Context",
+          description: "Action-tier mutation",
+        }),
+        createManifestEntry({
+          id: "terminal.sendCommand" as ActionId,
+          title: "Send Command",
+          description: "System-tier raw command",
+          danger: "confirm",
+        }),
+        createManifestEntry({
+          id: "git.commit" as ActionId,
+          title: "Commit",
+          description: "System-tier git mutation",
+          danger: "confirm",
+        }),
+        createManifestEntry({
+          id: "panel.gridLayout.setStrategy" as ActionId,
+          title: "Set Layout",
+          description: "Outside any internal tier",
+        }),
+        createManifestEntry({
+          id: "internal.dangerous" as ActionId,
+          title: "Restricted",
+          description: "Always blocked",
+          danger: "restricted",
+        }),
+      ];
+    }
+
+    async function startWithMintedTier(tier: Tier): Promise<{
+      client: Client;
+      transport: SSEClientTransport;
+      dispatchMock: ReturnType<typeof vi.fn>;
+      token: string;
+    }> {
+      const dispatchMock = vi.fn(
+        (payload: DispatchRequest): ActionDispatchResult => ({
+          ok: true,
+          result: { dispatched: payload.actionId, args: payload.args },
+        })
+      );
+      // Configure an external apiKey so unauthenticated requests are rejected
+      // — the minted token is then the only credential in play for these tests.
+      storeState.mcpServer.apiKey = "external-secret";
+      const { window } = createMockWindow({
+        getManifest: tieredManifest,
+        dispatchAction: dispatchMock,
+      });
+      await service.start(window);
+      const token = service.mintToken(tier);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: `Bearer ${token}`,
+      });
+      transports.push(transport);
+      return { client, transport, dispatchMock, token };
+    }
+
+    it("workbench tier permits reads and rejects mutations at dispatch", async () => {
+      const { client, dispatchMock } = await startWithMintedTier("workbench");
+
+      const ok = getTextResult(await client.callTool({ name: "terminal.list", arguments: {} }));
+      expect(ok.isError).not.toBe(true);
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+
+      const denied = getTextResult(
+        await client.callTool({ name: "terminal.inject", arguments: {} })
+      );
+      expect(denied.isError).toBe(true);
+      expect(denied.content[0].text).toContain("not authorized for MCP tier 'workbench'");
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("action tier permits non-destructive mutations and rejects system actions", async () => {
+      const { client, dispatchMock } = await startWithMintedTier("action");
+
+      const ok = getTextResult(await client.callTool({ name: "terminal.inject", arguments: {} }));
+      expect(ok.isError).not.toBe(true);
+
+      const denied = getTextResult(
+        await client.callTool({
+          name: "terminal.sendCommand",
+          arguments: { _meta: { confirmed: true } },
+        })
+      );
+      expect(denied.isError).toBe(true);
+      expect(denied.content[0].text).toContain("not authorized for MCP tier 'action'");
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("system tier permits destructive system actions including git.commit", async () => {
+      const { client, dispatchMock } = await startWithMintedTier("system");
+
+      const sent = getTextResult(
+        await client.callTool({
+          name: "terminal.sendCommand",
+          arguments: { _meta: { confirmed: true } },
+        })
+      );
+      expect(sent.isError).not.toBe(true);
+
+      const committed = getTextResult(
+        await client.callTool({
+          name: "git.commit",
+          arguments: { _meta: { confirmed: true } },
+        })
+      );
+      expect(committed.isError).not.toBe(true);
+      expect(dispatchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("no tier may dispatch a danger:'restricted' action", async () => {
+      for (const tier of ["workbench", "action", "system"] as const) {
+        const { client, dispatchMock, transport } = await startWithMintedTier(tier);
+
+        const denied = getTextResult(
+          await client.callTool({ name: "internal.dangerous", arguments: {} })
+        );
+        expect(denied.isError).toBe(true);
+        expect(dispatchMock).not.toHaveBeenCalled();
+
+        await transport.close().catch(() => {});
+        await service.stop();
+        // Reset for the next iteration.
+        storeState.mcpServer = {
+          enabled: true,
+          port: 0,
+          apiKey: "",
+          fullToolSurface: false,
+        };
+        electronMocks.ipcMain.removeAllListeners();
+        service = new McpServerService();
+      }
+    });
+
+    it("listTools advertises only the tier's surface for minted tokens", async () => {
+      const { client } = await startWithMintedTier("workbench");
+      const ids = (await client.listTools()).tools.map((t) => t.name);
+      expect(ids).toContain("terminal.list");
+      expect(ids).toContain("actions.list");
+      expect(ids).not.toContain("terminal.inject");
+      expect(ids).not.toContain("terminal.sendCommand");
+      expect(ids).not.toContain("git.commit");
+      expect(ids).not.toContain("internal.dangerous");
+    });
+
+    it("fullToolSurface=true widens external-tier dispatch but never restricted actions", async () => {
+      storeState.mcpServer.fullToolSurface = true;
+      const dispatchMock = vi.fn(
+        (payload: DispatchRequest): ActionDispatchResult => ({
+          ok: true,
+          result: { dispatched: payload.actionId },
+        })
+      );
+      const { window } = createMockWindow({
+        getManifest: tieredManifest,
+        dispatchAction: dispatchMock,
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const widened = getTextResult(
+        await client.callTool({
+          name: "panel.gridLayout.setStrategy",
+          arguments: {},
+        })
+      );
+      expect(widened.isError).not.toBe(true);
+
+      const restricted = getTextResult(
+        await client.callTool({ name: "internal.dangerous", arguments: {} })
+      );
+      expect(restricted.isError).toBe(true);
+      expect(restricted.content[0].text).toContain("not authorized for MCP tier 'external'");
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("fullToolSurface=true does NOT widen minted internal-tier dispatch", async () => {
+      storeState.mcpServer.fullToolSurface = true;
+      const { client, dispatchMock } = await startWithMintedTier("workbench");
+
+      const denied = getTextResult(
+        await client.callTool({
+          name: "panel.gridLayout.setStrategy",
+          arguments: {},
+        })
+      );
+      expect(denied.isError).toBe(true);
+      expect(denied.content[0].text).toContain("not authorized for MCP tier 'workbench'");
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("revokeToken invalidates a previously minted token at the next connection", async () => {
+      storeState.mcpServer.apiKey = "external-secret";
+      const { window } = createMockWindow({ getManifest: tieredManifest });
+      await service.start(window);
+      const port = service.currentPort!;
+
+      const peekStatus = (token: string): Promise<number> =>
+        new Promise((resolve, reject) => {
+          const req = http.request(
+            {
+              host: "127.0.0.1",
+              port,
+              path: "/sse",
+              method: "GET",
+              headers: { Authorization: `Bearer ${token}` },
+            },
+            (res) => {
+              const status = res.statusCode ?? 0;
+              req.destroy();
+              resolve(status);
+            }
+          );
+          req.on("error", (err: NodeJS.ErrnoException) => {
+            if (err.code === "ECONNRESET") return;
+            reject(err);
+          });
+          req.end();
+        });
+
+      const token = service.mintToken("workbench");
+      expect(await peekStatus(token)).toBe(200);
+
+      service.revokeToken(token);
+      expect(await peekStatus(token)).toBe(401);
+    });
+
+    it("mintToken returns distinct tokens; revokeToken is idempotent", async () => {
+      const { window } = createMockWindow();
+      await service.start(window);
+
+      const a = service.mintToken("action");
+      const b = service.mintToken("action");
+      expect(a).not.toBe(b);
+
+      service.revokeToken(a);
+      expect(() => service.revokeToken(a)).not.toThrow();
+      expect(() => service.revokeToken("never-minted")).not.toThrow();
+    });
+
+    it("preserves open-by-default external tier when apiKey is empty (backward compat)", async () => {
+      // apiKey starts empty in beforeEach. No bearer header is sent.
+      const dispatchMock = vi.fn(
+        (payload: DispatchRequest): ActionDispatchResult => ({
+          ok: true,
+          result: { dispatched: payload.actionId },
+        })
+      );
+      const { window } = createMockWindow({
+        getManifest: tieredManifest,
+        dispatchAction: dispatchMock,
+      });
+      await service.start(window);
+      // generateApiKey runs at start when apiKey is empty — clear it back out
+      // to verify the empty-key path inside resolveAuthTier.
+      storeState.mcpServer.apiKey = "";
+
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const ok = getTextResult(await client.callTool({ name: "actions.list", arguments: {} }));
+      expect(ok.isError).not.toBe(true);
+      expect(dispatchMock).toHaveBeenCalled();
+    });
+  });
+
+  describe("tier allowlist invariants", () => {
+    it("workbench ⊆ action ⊆ system and external is the curated allowlist", async () => {
+      const { __testing } = await import("../McpServerService.js");
+      const wb = __testing.WORKBENCH_TIER_ACTIONS;
+      const act = __testing.ACTION_TIER_ACTIONS;
+      const sys = __testing.SYSTEM_TIER_ACTIONS;
+      const ext = __testing.MCP_TOOL_ALLOWLIST;
+
+      for (const id of wb) {
+        expect(act.has(id), `action tier missing workbench id: ${id}`).toBe(true);
+      }
+      for (const id of act) {
+        expect(sys.has(id), `system tier missing action id: ${id}`).toBe(true);
+      }
+      // external is independent of workbench/action/system — but every internal
+      // tier ID should also be in the curated external allowlist so external
+      // clients can discover anything that internal automations rely on.
+      for (const id of sys) {
+        expect(ext.has(id), `external allowlist missing system-tier id: ${id}`).toBe(true);
+      }
+    });
+
+    it("tierAllowsAction rejects unknown ids and accepts known ids per tier", async () => {
+      const { __testing } = await import("../McpServerService.js");
+      const fn = __testing.tierAllowsAction;
+      expect(fn("workbench", "actions.list")).toBe(true);
+      expect(fn("workbench", "terminal.inject")).toBe(false);
+      expect(fn("action", "terminal.inject")).toBe(true);
+      expect(fn("action", "git.commit")).toBe(false);
+      expect(fn("system", "git.commit")).toBe(true);
+      expect(fn("external", "actions.list")).toBe(true);
+      expect(fn("external", "panel.gridLayout.setStrategy")).toBe(false);
+      for (const tier of __testing.TIER_ORDER) {
+        expect(fn(tier, "this.action.does.not.exist")).toBe(false);
+      }
+    });
   });
 
   it("returns safe text output for circular tool results", async () => {

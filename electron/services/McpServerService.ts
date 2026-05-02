@@ -33,12 +33,117 @@ const OPEN_WORLD_CATEGORIES: ReadonlySet<string> = new Set([
   "system",
 ]);
 
+export type McpTier = "workbench" | "action" | "system" | "external";
+
+const TIER_ORDER: readonly McpTier[] = ["workbench", "action", "system", "external"];
+
+// Read-only introspection actions. The lowest tier — safe for any internal
+// observer (help assistants, diagnostics surfaces) that should never mutate
+// state. Every entry must be a query or a non-mutating utility.
+const WORKBENCH_TIER_ACTIONS: ReadonlySet<string> = new Set([
+  "actions.list",
+  "actions.getContext",
+
+  "agent.focusNextWaiting",
+  "agent.focusNextWorking",
+
+  "git.getProjectPulse",
+  "git.getFileDiff",
+  "git.listCommits",
+  "git.getStagingStatus",
+  "git.snapshotGet",
+  "git.snapshotList",
+
+  "github.checkCli",
+  "github.getRepoStats",
+  "github.listIssues",
+  "github.listPullRequests",
+
+  "terminal.list",
+  "terminal.getOutput",
+
+  "worktree.list",
+  "worktree.getCurrent",
+  "worktree.refresh",
+  "worktree.listBranches",
+  "worktree.getDefaultPath",
+  "worktree.getAvailableBranch",
+  "worktree.resource.status",
+
+  "files.search",
+  "file.view",
+
+  "copyTree.isAvailable",
+
+  "slashCommands.list",
+
+  "project.getAll",
+  "project.getCurrent",
+  "project.getSettings",
+  "project.getStats",
+  "project.detectRunners",
+
+  "recipe.list",
+
+  "system.checkCommand",
+  "system.checkDirectory",
+]);
+
+// Workbench plus non-destructive mutations. Suitable for internal automation
+// agents that may direct activity (open editor, create worktrees, inject
+// context) but should not commit, push, or send raw shell input.
+const ACTION_TIER_ACTIONS: ReadonlySet<string> = new Set([
+  ...WORKBENCH_TIER_ACTIONS,
+
+  "copyTree.injectToTerminal",
+
+  "terminal.inject",
+  "terminal.new",
+  "terminal.bulkCommand",
+
+  "worktree.setActive",
+  "worktree.createWithRecipe",
+
+  "recipe.run",
+
+  "file.openInEditor",
+
+  "github.openIssue",
+  "github.openPR",
+]);
+
+// Action plus destructive or process-spawning operations. Required for
+// project worktree agents that need to commit, push, manage worktrees, and
+// launch subordinate agents.
+const SYSTEM_TIER_ACTIONS: ReadonlySet<string> = new Set([
+  ...ACTION_TIER_ACTIONS,
+
+  "agent.launch",
+  "agent.terminal",
+
+  "terminal.sendCommand",
+
+  "git.stageFile",
+  "git.unstageFile",
+  "git.stageAll",
+  "git.unstageAll",
+  "git.commit",
+  "git.push",
+
+  "worktree.create",
+  "worktree.delete",
+
+  "copyTree.generate",
+  "copyTree.generateAndCopyFile",
+]);
+
 // Curated set of action IDs advertised over MCP by default. Keeps the tool
 // surface small enough for `tool_choice: "auto"` reliability and bounded
 // token cost while still covering the agent-facing introspection,
 // query, and command actions. Power users opt into the full surface via
-// `mcpServer.fullToolSurface = true`. Dispatch is not gated by this list —
-// callers that already know an ID can still invoke it.
+// `mcpServer.fullToolSurface = true`. The `external` tier is enforced at
+// dispatch — callers that know an ID outside this set are rejected unless
+// `fullToolSurface` is set.
 const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   "actions.list",
   "actions.getContext",
@@ -120,7 +225,30 @@ interface PendingRequest<T> {
 interface McpSseSession {
   transport: SSEServerTransport;
   idleTimer: ReturnType<typeof setTimeout>;
+  tier: McpTier;
 }
+
+function tierAllowsAction(tier: McpTier, actionId: string): boolean {
+  switch (tier) {
+    case "workbench":
+      return WORKBENCH_TIER_ACTIONS.has(actionId);
+    case "action":
+      return ACTION_TIER_ACTIONS.has(actionId);
+    case "system":
+      return SYSTEM_TIER_ACTIONS.has(actionId);
+    case "external":
+      return MCP_TOOL_ALLOWLIST.has(actionId);
+  }
+}
+
+export const __testing = {
+  WORKBENCH_TIER_ACTIONS,
+  ACTION_TIER_ACTIONS,
+  SYSTEM_TIER_ACTIONS,
+  MCP_TOOL_ALLOWLIST,
+  TIER_ORDER,
+  tierAllowsAction,
+};
 
 function safeSerializeToolResult(value: unknown): string {
   const seen = new WeakSet<object>();
@@ -180,6 +308,7 @@ export class McpServerService {
   private pendingDispatches = new Map<string, PendingRequest<ActionDispatchResult>>();
   private cleanupListeners: Array<() => void> = [];
   private statusListeners = new Set<(running: boolean) => void>();
+  private tokenTiers = new Map<string, McpTier>();
 
   get isRunning(): boolean {
     return this.httpServer !== null && this.port !== null;
@@ -252,6 +381,23 @@ export class McpServerService {
       await this.writeDiscoveryFile();
     }
     return key;
+  }
+
+  /**
+   * Mint a fresh in-memory bearer token bound to the given tier. Used by
+   * internal clients (help assistants, fleet-agent terminals) to obtain a
+   * scoped credential without sharing the user's external `apiKey`. Tokens
+   * are not persisted across restarts.
+   */
+  mintToken(tier: McpTier): string {
+    const token = `daintree_${randomUUID().replace(/-/g, "")}`;
+    this.tokenTiers.set(token, tier);
+    return token;
+  }
+
+  /** Revoke a previously minted token. Idempotent. */
+  revokeToken(token: string): void {
+    this.tokenTiers.delete(token);
   }
 
   async start(registry: WindowRegistry): Promise<void> {
@@ -519,7 +665,7 @@ export class McpServerService {
     });
   }
 
-  private createSessionServer(): Server {
+  private createSessionServer(tier: McpTier): Server {
     const server = new Server(
       { name: "Daintree", version: "1.0.0" },
       { capabilities: { tools: {} } }
@@ -529,7 +675,7 @@ export class McpServerService {
       const manifest = await this.requestManifest();
       return {
         tools: manifest
-          .filter((entry) => this.shouldExposeTool(entry))
+          .filter((entry) => this.shouldExposeTool(entry, tier))
           .map((entry) => ({
             name: entry.id,
             description: this.buildToolDescription(entry),
@@ -542,6 +688,34 @@ export class McpServerService {
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const actionId = request.params.name;
       const { args, confirmed } = this.parseToolArguments(request.params.arguments);
+
+      let manifestEntry: ActionManifestEntry | undefined;
+      try {
+        const manifest = await this.requestManifest();
+        manifestEntry = manifest.find((entry) => entry.id === actionId);
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error: ${formatErrorMessage(err, "Action manifest unavailable")}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (!this.isActionDispatchAllowed(actionId, manifestEntry?.danger, tier)) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Action '${actionId}' is not authorized for MCP tier '${tier}'.`,
+            },
+          ],
+          isError: true,
+        };
+      }
 
       let result: ActionDispatchResult;
       try {
@@ -591,14 +765,36 @@ export class McpServerService {
     return host === `127.0.0.1:${this.port}` || host === `localhost:${this.port}`;
   }
 
-  private isAuthorized(req: http.IncomingMessage): boolean {
+  private resolveAuthTier(req: http.IncomingMessage): McpTier | null {
     const apiKey = this.getConfig().apiKey;
-    if (!apiKey) return true;
     const auth = req.headers.authorization ?? "";
-    const expected = `Bearer ${apiKey}`;
-    const actualHash = createHash("sha256").update(auth).digest();
-    const expectedHash = createHash("sha256").update(expected).digest();
-    return timingSafeEqual(actualHash, expectedHash);
+
+    const mintedTier = this.matchMintedToken(auth);
+    if (mintedTier !== null) return mintedTier;
+
+    if (apiKey) {
+      const expected = `Bearer ${apiKey}`;
+      const actualHash = createHash("sha256").update(auth).digest();
+      const expectedHash = createHash("sha256").update(expected).digest();
+      if (timingSafeEqual(actualHash, expectedHash)) return "external";
+      return null;
+    }
+
+    // No `apiKey` configured: preserve historical open-by-default behavior
+    // for the external tier so existing clients (and the test suite) keep
+    // working before a key is generated. Once a key is set, strict matching
+    // applies above.
+    return "external";
+  }
+
+  private matchMintedToken(authHeader: string): McpTier | null {
+    if (this.tokenTiers.size === 0) return null;
+    const actualHash = createHash("sha256").update(authHeader).digest();
+    for (const [token, tier] of this.tokenTiers) {
+      const expectedHash = createHash("sha256").update(`Bearer ${token}`).digest();
+      if (timingSafeEqual(actualHash, expectedHash)) return tier;
+    }
+    return null;
   }
 
   private isValidOrigin(req: http.IncomingMessage): boolean {
@@ -607,14 +803,33 @@ export class McpServerService {
     return origin === `http://127.0.0.1:${this.port}` || origin === `http://localhost:${this.port}`;
   }
 
-  private shouldExposeTool(entry: ActionManifestEntry): boolean {
+  private shouldExposeTool(entry: ActionManifestEntry, tier: McpTier): boolean {
     if (entry.danger === "restricted") {
       return false;
     }
-    if (this.getConfig().fullToolSurface === true) {
+    // The external tier is the only one whose advertised surface widens with
+    // `fullToolSurface`. Internal tiers always advertise exactly their tier
+    // membership so internal callers cannot accidentally over-discover.
+    if (tier === "external" && this.getConfig().fullToolSurface === true) {
       return true;
     }
-    return MCP_TOOL_ALLOWLIST.has(entry.id);
+    return tierAllowsAction(tier, entry.id);
+  }
+
+  /**
+   * Authorization gate enforced inside `CallToolRequestSchema` — independent
+   * of the listTools surface so that even a caller that already knows an
+   * action ID is rejected when the tier doesn't grant it. `restricted`
+   * actions are blocked unconditionally regardless of `fullToolSurface`.
+   */
+  private isActionDispatchAllowed(
+    actionId: string,
+    danger: ActionManifestEntry["danger"] | undefined,
+    tier: McpTier
+  ): boolean {
+    if (danger === "restricted") return false;
+    if (tier === "external" && this.getConfig().fullToolSurface === true) return true;
+    return tierAllowsAction(tier, actionId);
   }
 
   private buildToolDescription(entry: ActionManifestEntry): string {
@@ -745,7 +960,8 @@ export class McpServerService {
       return;
     }
 
-    if (!this.isAuthorized(req)) {
+    const tier = this.resolveAuthTier(req);
+    if (tier === null) {
       res.writeHead(401, { "Content-Type": "text/plain" });
       res.end("Unauthorized");
       return;
@@ -761,11 +977,11 @@ export class McpServerService {
         allowedHosts,
         allowedOrigins,
       });
-      const server = this.createSessionServer();
+      const server = this.createSessionServer(tier);
       const sessionId = transport.sessionId;
 
       const idleTimer = this.createIdleTimer(sessionId);
-      this.sessions.set(sessionId, { transport, idleTimer });
+      this.sessions.set(sessionId, { transport, idleTimer, tier });
       transport.onclose = () => {
         const session = this.sessions.get(sessionId);
         if (session) {
