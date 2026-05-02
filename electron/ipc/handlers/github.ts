@@ -271,6 +271,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       // Stats-only payload: first-page cache expired but stats are still within
       // the 60-minute bootstrap TTL. Return empty pages so the hydration effect
       // can seed toolbar counts without damaging the renderer items cache.
+      if (!cachedStats) return null;
       return {
         projectPath: resolved,
         issues: { items: [], endCursor: null, hasNextPage: false },
