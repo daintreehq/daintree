@@ -214,6 +214,14 @@ if (!gotTheLock) {
         } catch (err) {
           console.error("[main] closePortsForView failed during eviction:", err);
         }
+        // Revoke help-session tokens bound to this evicted WebContents view.
+        // Done synchronously off the eviction hook (lesson #5009) so a
+        // renderer-side cleanup IPC can't go missing on view destruction.
+        import("./services/HelpSessionService.js")
+          .then(({ helpSessionService }) => helpSessionService.revokeByWebContentsId(wcId))
+          .catch((err) => {
+            console.warn("[main] revokeByWebContentsId failed during eviction:", err);
+          });
       },
       onViewCached: (wcId) => {
         // Same producer cleanup as eviction: a cached view becomes

@@ -46,6 +46,12 @@ export interface LaunchAgentOptions {
    * dock panel in the same `set()` that commits it. See #6590.
    */
   activateDockOnCreate?: boolean;
+  /**
+   * Extra environment variables to merge into the spawned PTY process.
+   * Layered after preset/global env so callers can inject secrets that the
+   * agent must read at startup (e.g. `DAINTREE_MCP_TOKEN` for help sessions).
+   */
+  env?: Record<string, string>;
 }
 
 export interface UseAgentLauncherReturn {
@@ -306,11 +312,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             }
           }
 
-          // Merge: global env (base) overridden by preset env (preset wins on conflicts)
+          // Merge: global env (base) overridden by preset env (preset wins on conflicts).
+          // Caller-supplied launchOptions.env layers on top of both — used for
+          // session-bound secrets like DAINTREE_MCP_TOKEN.
           const sanitizedGlobal = sanitizeAgentEnv(entry.globalEnv as Record<string, unknown>);
           const sanitizedPreset = preset?.env;
-          if (sanitizedGlobal || sanitizedPreset) {
-            presetEnv = { ...sanitizedGlobal, ...sanitizedPreset };
+          const callerEnv = launchOptions?.env;
+          if (sanitizedGlobal || sanitizedPreset || callerEnv) {
+            presetEnv = { ...sanitizedGlobal, ...sanitizedPreset, ...callerEnv };
           }
 
           // Merge per-preset behavioral overrides on top of agent-level settings

@@ -232,6 +232,12 @@ export interface OnboardingState {
   checklist: ChecklistState;
 }
 
+/**
+ * Tier classifications for the help-panel agent session. Maps to the
+ * action danger boundaries from the help-assistant settings (#6517).
+ */
+export type HelpAssistantTier = "workbench" | "action" | "system";
+
 /** Serializable toast payload sent from main process to renderer via IPC. */
 export interface MainProcessToastPayload {
   type: "success" | "error" | "info" | "warning";
@@ -2082,6 +2088,19 @@ export interface IpcInvokeMap {
   };
   "help:unmark-terminal": {
     args: [terminalId: string];
+    result: void;
+  };
+  "help:provision-session": {
+    args: [input: { projectId: string; projectPath: string }];
+    result: {
+      sessionId: string;
+      sessionPath: string;
+      token: string;
+      tier: HelpAssistantTier;
+    } | null;
+  };
+  "help:revoke-session": {
+    args: [sessionId: string];
     result: void;
   };
 

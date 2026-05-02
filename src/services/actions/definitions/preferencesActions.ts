@@ -732,7 +732,7 @@ export function registerPreferencesActions(
 
       // Store the terminal in the help panel
       if (result.ok && result.result?.terminalId) {
-        useHelpPanelStore.getState().setTerminal(result.result.terminalId, agentId);
+        useHelpPanelStore.getState().setTerminal(result.result.terminalId, agentId, null);
         useHelpPanelStore.getState().setOpen(true);
         window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
       }

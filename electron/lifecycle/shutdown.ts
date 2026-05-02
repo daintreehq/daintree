@@ -141,6 +141,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           import("../services/McpServerService.js")
             .then(({ mcpServerService }) => mcpServerService.stop())
             .catch(() => {}),
+          // Revoke and remove any in-flight help-session dirs. Same lazy-import
+          // guard as MCP — the module only loads if a help session was provisioned.
+          import("../services/HelpSessionService.js")
+            .then(({ helpSessionService }) => helpSessionService.revokeAll())
+            .catch(() => {}),
           new Promise<void>((resolve) => {
             disposeTaskOrchestrator();
             disposeAgentRouter();

@@ -8,22 +8,28 @@ const {
   mockLogError,
   mockGetFolderPath,
   mockMarkTerminal,
+  mockProvisionSession,
+  mockRevokeSession,
   helpPanelState,
   panelStoreState,
   cliAvailabilityState,
   agentSettingsState,
+  projectStoreState,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn(),
   mockNotify: vi.fn().mockReturnValue(""),
   mockLogError: vi.fn(),
   mockGetFolderPath: vi.fn(),
   mockMarkTerminal: vi.fn().mockResolvedValue(undefined),
+  mockProvisionSession: vi.fn().mockResolvedValue(null),
+  mockRevokeSession: vi.fn().mockResolvedValue(undefined),
   helpPanelState: {
     isOpen: true,
     width: 380,
     terminalId: null as string | null,
     agentId: null as string | null,
     preferredAgentId: null as string | null,
+    sessionId: null as string | null,
     setWidth: vi.fn(),
     setOpen: vi.fn(),
     clearTerminal: vi.fn(),
@@ -46,6 +52,9 @@ const {
   },
   agentSettingsState: {
     settings: { agents: {} as Record<string, unknown> },
+  },
+  projectStoreState: {
+    currentProject: null as { id: string; path: string } | null,
   },
 }));
 
@@ -151,10 +160,15 @@ vi.mock("@/store", () => {
     selector ? selector(agentSettingsState) : agentSettingsState;
   agentSettingsStore.getState = () => agentSettingsState;
 
+  const projectStore = (selector?: (state: typeof projectStoreState) => unknown) =>
+    selector ? selector(projectStoreState) : projectStoreState;
+  projectStore.getState = () => projectStoreState;
+
   return {
     usePanelStore: panelStore,
     useCliAvailabilityStore: cliStore,
     useAgentSettingsStore: agentSettingsStore,
+    useProjectStore: projectStore,
     getTerminalRefreshTier: () => 0,
   };
 });
@@ -180,6 +194,7 @@ function resetState() {
   helpPanelState.terminalId = null;
   helpPanelState.agentId = null;
   helpPanelState.preferredAgentId = null;
+  helpPanelState.sessionId = null;
   helpPanelState.setTerminal = vi.fn();
   helpPanelState.setOpen = vi.fn();
   helpPanelState.setWidth = vi.fn();
@@ -201,6 +216,12 @@ function resetState() {
   cliAvailabilityState.details = {};
 
   agentSettingsState.settings = { agents: {} };
+
+  projectStoreState.currentProject = null;
+  mockProvisionSession.mockReset();
+  mockProvisionSession.mockResolvedValue(null);
+  mockRevokeSession.mockReset();
+  mockRevokeSession.mockResolvedValue(undefined);
 }
 
 beforeEach(() => {
@@ -213,6 +234,8 @@ beforeEach(() => {
         help: {
           getFolderPath: mockGetFolderPath,
           markTerminal: mockMarkTerminal,
+          provisionSession: mockProvisionSession,
+          revokeSession: mockRevokeSession,
         },
       },
     },
@@ -236,7 +259,7 @@ describe("HelpPanel — manual select agent (handleSelectAgent)", () => {
       fireEvent.click(getByTestId("pick-claude"));
     });
 
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-1", "claude");
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-1", "claude", null);
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
@@ -316,7 +339,7 @@ describe("HelpPanel — manual select agent (handleSelectAgent)", () => {
       resolveDispatch({ ok: true, result: { terminalId: "term-1" } });
     });
 
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-1", "claude");
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-1", "claude", null);
   });
 });
 
@@ -331,7 +354,7 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
       render(<HelpPanel />);
     });
 
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("auto-term-1", "claude");
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("auto-term-1", "claude", null);
   });
 
   it("does not commit terminal and cleans up if user navigated away (preferredAgentId cleared) during in-flight launch", async () => {
@@ -442,7 +465,7 @@ describe("HelpPanel — handleRunAnyway", () => {
     expect(panelStoreState.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "terminal", launchAgentId: "claude", cwd: "/help" })
     );
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("restarted-term", "claude");
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("restarted-term", "claude", null);
     expect(mockMarkTerminal).toHaveBeenCalledWith("restarted-term");
   });
 
@@ -475,6 +498,100 @@ describe("HelpPanel — handleRunAnyway", () => {
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", title: "Assistant launch failed" })
     );
+  });
+});
+
+describe("HelpPanel — session provisioning", () => {
+  it("threads sessionPath as cwd and DAINTREE_MCP_TOKEN env into agent.launch", async () => {
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "sess-1",
+      sessionPath: "/sessions/sess-1",
+      token: "tok-abc",
+      tier: "action",
+    });
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
+
+    const { getByTestId } = render(<HelpPanel />);
+
+    await act(async () => {
+      fireEvent.click(getByTestId("pick-claude"));
+    });
+
+    expect(mockProvisionSession).toHaveBeenCalledWith({
+      projectId: "proj-1",
+      projectPath: "/repo",
+    });
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        cwd: "/sessions/sess-1",
+        env: { DAINTREE_MCP_TOKEN: "tok-abc" },
+      }),
+      { source: "user" }
+    );
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-1", "claude", "sess-1");
+  });
+
+  it("revokes the in-flight session when handleClose fires before setTerminal commits", async () => {
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "pending-1",
+      sessionPath: "/sessions/pending-1",
+      token: "tok-pending",
+      tier: "action",
+    });
+
+    let resolveDispatch: (v: unknown) => void = () => {};
+    mockDispatch.mockReturnValue(
+      new Promise((r) => {
+        resolveDispatch = r;
+      })
+    );
+
+    const { getByTestId, container } = render(<HelpPanel />);
+
+    await act(async () => {
+      fireEvent.click(getByTestId("pick-claude"));
+    });
+
+    // Wait a microtask for provisionSession promise to flush
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Close the panel while agent.launch is still in-flight
+    const closeBtn = container.querySelector('button[aria-label="Close help panel"]');
+    if (closeBtn) {
+      await act(async () => {
+        fireEvent.click(closeBtn);
+      });
+    }
+
+    // Now resolve the launch
+    await act(async () => {
+      resolveDispatch({ ok: true, result: { terminalId: "term-late" } });
+    });
+
+    // The pending session should have been revoked by handleClose's
+    // revokePendingSession call.
+    expect(mockRevokeSession).toHaveBeenCalledWith("pending-1");
+  });
+
+  it("revokes the bound session when the panel disappears from panelsById", async () => {
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.sessionId = "sess-bound";
+    panelStoreState.panelsById = {};
+
+    await act(async () => {
+      render(<HelpPanel />);
+    });
+
+    expect(mockRevokeSession).toHaveBeenCalledWith("sess-bound");
+    expect(helpPanelState.clearTerminal).toHaveBeenCalled();
   });
 });
 
@@ -527,6 +644,6 @@ describe("HelpPanel — hasAutoLaunched stale reset (regression)", () => {
       resolveSecond({ ok: true, result: { terminalId: "term-gemini" } });
     });
 
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-gemini", "gemini");
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-gemini", "gemini", null);
   });
 });

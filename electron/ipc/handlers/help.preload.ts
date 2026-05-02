@@ -4,6 +4,8 @@ export const HELP_METHOD_CHANNELS = {
   getFolderPath: "help:get-folder-path",
   markTerminal: "help:mark-terminal",
   unmarkTerminal: "help:unmark-terminal",
+  provisionSession: "help:provision-session",
+  revokeSession: "help:revoke-session",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof HELP_METHOD_CHANNELS;

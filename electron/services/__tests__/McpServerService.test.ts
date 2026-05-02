@@ -436,6 +436,43 @@ async function requestSse(
   });
 }
 
+/**
+ * Variant of `requestSse` that resolves with just the status code and aborts
+ * the request, used to inspect successful SSE responses (which never `end`
+ * because the stream stays open). Lets auth-positive cases assert without
+ * timing out.
+ */
+async function requestSseStatus(
+  port: number,
+  headers: Record<string, string> = {}
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port,
+        path: "/sse",
+        method: "GET",
+        headers,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        res.destroy();
+        req.destroy();
+        resolve(status);
+      }
+    );
+
+    req.on("error", (err: NodeJS.ErrnoException) => {
+      // res.destroy() can surface as ECONNRESET on the request socket — ignore
+      // since we have already resolved with the status code.
+      if (err.code === "ECONNRESET") return;
+      reject(err);
+    });
+    req.end();
+  });
+}
+
 function getTextResult(result: unknown): TextToolResult {
   return result as TextToolResult;
 }
@@ -1134,6 +1171,52 @@ describe("McpServerService", () => {
     expect(unauthorized.body).toBe("Unauthorized");
     expect(forbidden.status).toBe(403);
     expect(forbidden.body).toBe("Forbidden");
+  });
+
+  it("authorizes requests carrying a valid help-session bearer token alongside the external key", async () => {
+    storeState.mcpServer.apiKey = "external-secret";
+    const { window } = createMockWindow();
+    await service.start(window);
+
+    service.setHelpTokenValidator((token) => (token === "help-token" ? "action" : false));
+
+    const externalStatus = await requestSseStatus(service.currentPort!, {
+      Authorization: "Bearer external-secret",
+    });
+    expect(externalStatus).not.toBe(401);
+
+    const helpStatus = await requestSseStatus(service.currentPort!, {
+      Authorization: "Bearer help-token",
+    });
+    expect(helpStatus).not.toBe(401);
+
+    const denied = await requestSse(service.currentPort!, {
+      Authorization: "Bearer wrong-token",
+    });
+    expect(denied.status).toBe(401);
+  });
+
+  it("rejects help-session tokens once the validator says they are revoked", async () => {
+    storeState.mcpServer.apiKey = "external-secret";
+    const { window } = createMockWindow();
+    await service.start(window);
+
+    let isLive = true;
+    service.setHelpTokenValidator((token) =>
+      token === "rotating-token" && isLive ? "action" : false
+    );
+
+    const before = await requestSseStatus(service.currentPort!, {
+      Authorization: "Bearer rotating-token",
+    });
+    expect(before).not.toBe(401);
+
+    isLive = false;
+
+    const after = await requestSse(service.currentPort!, {
+      Authorization: "Bearer rotating-token",
+    });
+    expect(after.status).toBe(401);
   });
 
   it("fails fast when the renderer bridge is unavailable", async () => {

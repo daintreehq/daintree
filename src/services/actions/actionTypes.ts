@@ -50,6 +50,7 @@ export interface ActionCallbacks {
       modelId?: string;
       presetId?: string | null;
       activateDockOnCreate?: boolean;
+      env?: Record<string, string>;
     }
   ) => Promise<string | null>;
   onInject: (worktreeId: string) => void;

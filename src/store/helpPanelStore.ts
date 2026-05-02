@@ -13,13 +13,14 @@ interface HelpPanelState {
   terminalId: string | null;
   agentId: string | null;
   preferredAgentId: string | null;
+  sessionId: string | null;
 }
 
 interface HelpPanelActions {
   toggle: () => void;
   setOpen: (open: boolean) => void;
   setWidth: (width: number) => void;
-  setTerminal: (terminalId: string, agentId: string) => void;
+  setTerminal: (terminalId: string, agentId: string, sessionId: string | null) => void;
   clearTerminal: () => void;
   clearPreferredAgent: () => void;
 }
@@ -30,6 +31,7 @@ const initialState: HelpPanelState = {
   terminalId: null,
   agentId: null,
   preferredAgentId: null,
+  sessionId: null,
 };
 
 export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
@@ -46,11 +48,13 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           width: Math.min(Math.max(width, HELP_PANEL_MIN_WIDTH), HELP_PANEL_MAX_WIDTH),
         }),
 
-      setTerminal: (terminalId, agentId) => set({ terminalId, agentId, preferredAgentId: agentId }),
+      setTerminal: (terminalId, agentId, sessionId) =>
+        set({ terminalId, agentId, sessionId, preferredAgentId: agentId }),
 
-      clearTerminal: () => set({ terminalId: null, agentId: null }),
+      clearTerminal: () => set({ terminalId: null, agentId: null, sessionId: null }),
 
-      clearPreferredAgent: () => set({ terminalId: null, agentId: null, preferredAgentId: null }),
+      clearPreferredAgent: () =>
+        set({ terminalId: null, agentId: null, sessionId: null, preferredAgentId: null }),
     }),
     {
       name: "help-panel-storage",

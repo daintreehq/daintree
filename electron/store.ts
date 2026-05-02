@@ -194,11 +194,20 @@ export interface StoreSchema {
     auditMaxRecords: number;
     auditLog?: McpAuditRecord[];
   };
+  /**
+   * Help-assistant settings. Includes audit/permission configuration plus
+   * help-session provisioning options. Fields in the provisioning subset are
+   * optional to remain forward-compatible with the dedicated settings UI
+   * landing in #6517 / #6522 — the service falls back to safe defaults
+   * when keys are absent.
+   */
   helpAssistant: {
     docSearch: boolean;
     daintreeControl: boolean;
     skipPermissions: boolean;
     auditRetention: 7 | 30 | 0;
+    localMcpEnabled?: boolean;
+    docsServerEnabled?: boolean;
   };
   pendingErrors: ErrorRecord[];
   gpu: {
@@ -344,6 +353,8 @@ const storeOptions = {
       daintreeControl: true,
       skipPermissions: false,
       auditRetention: 7 as const,
+      localMcpEnabled: true,
+      docsServerEnabled: true,
     },
     pendingErrors: [],
     gpu: {

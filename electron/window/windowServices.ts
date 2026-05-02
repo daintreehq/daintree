@@ -673,9 +673,29 @@ export async function setupWindowServices(
         run: async () => {
           try {
             const { mcpServerService } = await import("../services/McpServerService.js");
+            const { helpSessionService } = await import("../services/HelpSessionService.js");
+            // Register the help-token validator before start() so the very first
+            // request can authenticate against a help session if the renderer
+            // races ahead of us.
+            mcpServerService.setHelpTokenValidator((token) =>
+              helpSessionService.validateToken(token)
+            );
+            helpSessionService.setMcpRegistry(registryRef);
             await mcpServerService.start(registryRef);
           } catch (err) {
             console.error("[MAIN] MCP server failed to start:", err);
+          }
+        },
+      });
+
+      registerDeferredTask({
+        name: "help-session-gc",
+        run: async () => {
+          try {
+            const { helpSessionService } = await import("../services/HelpSessionService.js");
+            await helpSessionService.gcStaleSessions();
+          } catch (err) {
+            console.warn("[MAIN] Help session GC failed:", err);
           }
         },
       });

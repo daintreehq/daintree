@@ -22,6 +22,10 @@ import {
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_MIN_RECORDS,
 } from "../../shared/types/ipc/mcpServer.js";
+import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
+
+export type McpAuthClass = "external" | HelpAssistantTier;
+export type HelpTokenValidator = (token: string) => HelpAssistantTier | false;
 import { store } from "../store.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -392,6 +396,7 @@ export class McpServerService {
    * superseded — so the UI would show a key that doesn't authenticate.
    */
   private rotateInFlight: Promise<string> | null = null;
+  private helpTokenValidator: HelpTokenValidator | null = null;
 
   get isRunning(): boolean {
     return this.httpServer !== null && this.port !== null;
@@ -407,6 +412,15 @@ export class McpServerService {
     return () => {
       this.statusListeners.delete(listener);
     };
+  }
+
+  /**
+   * Register a callback that resolves help-session bearer tokens to a tier.
+   * Wired by `HelpSessionService` so requests carrying a Daintree-issued
+   * per-session token authenticate alongside the long-lived external API key.
+   */
+  setHelpTokenValidator(validator: HelpTokenValidator | null): void {
+    this.helpTokenValidator = validator;
   }
 
   private emitStatusChange(): void {
@@ -1205,6 +1219,16 @@ export class McpServerService {
       if (mcpPaneConfigService.isValidPaneToken(token)) return true;
     }
 
+    // Help-session bearer token (minted at provisioning, revoked on panel close / app shutdown).
+    if (this.helpTokenValidator) {
+      const match = /^Bearer\s+(.+)$/.exec(auth);
+      const token = match?.[1]?.trim();
+      if (token) {
+        const tier = this.helpTokenValidator(token);
+        if (tier) return true;
+      }
+    }
+
     return false;
   }
 
@@ -1257,13 +1281,14 @@ export class McpServerService {
 
   /**
    * Resolve the source-tier classification for an authenticated request.
-   * Mirrors the three branches of `isAuthorized`:
+   * Mirrors the branches of `isAuthorized`:
    *   1. Bearer matches the global apiKey → `"external"` (legacy server).
    *   2. Bearer matches a per-pane token → the per-pane configured tier
    *      (`"workbench"`, `"action"`, or `"system"` from the project's
    *      `daintreeMcpTier` setting). Pane configs with tier `"off"` are
    *      never written, so this branch returns one of the active tiers.
-   *   3. No `Authorization` header and no apiKey configured → `"external"`
+   *   3. Bearer matches a help-session token → the tier bound at provisioning.
+   *   4. No `Authorization` header and no apiKey configured → `"external"`
    *      (legacy permissive path; preserves pre-auth behavior).
    * Falls back to `"workbench"` for anything that slipped through but
    * isn't recognized.
@@ -1286,6 +1311,10 @@ export class McpServerService {
       const paneTier = mcpPaneConfigService.getTierForToken(token);
       if (paneTier === "workbench" || paneTier === "action" || paneTier === "system") {
         return paneTier;
+      }
+      if (this.helpTokenValidator) {
+        const helpTier = this.helpTokenValidator(token);
+        if (helpTier) return helpTier;
       }
     }
 
@@ -1418,11 +1447,15 @@ export class McpServerService {
       return;
     }
 
-    if (!this.isAuthorized(req)) {
+    const authClass = this.isAuthorized(req);
+    if (!authClass) {
       res.writeHead(401, { "Content-Type": "text/plain" });
       res.end("Unauthorized");
       return;
     }
+    // The tier classification (external vs help-session workbench/action/system)
+    // will gate the exposed tool surface once #6517 lands. Authenticated for now.
+    void authClass;
 
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
 
