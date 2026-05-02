@@ -170,6 +170,21 @@ function safeSerializeToolResult(value: unknown): string {
   }
 }
 
+/**
+ * Cached state of the decrypted bearer token.
+ * - `kind: "unread"` — not yet read this session.
+ * - `kind: "absent"` — no `apiKeyEncrypted` field present on the store.
+ * - `kind: "ok"` — decrypted successfully; `value` holds the plaintext.
+ * - `kind: "undecryptable"` — `decryptString` threw (corrupted ciphertext, OS
+ *   keychain reset, bundle id change). The configured key cannot be recovered;
+ *   `isAuthorized` must deny instead of opening access.
+ */
+type DecryptedKeyState =
+  | { kind: "unread" }
+  | { kind: "absent" }
+  | { kind: "ok"; value: string }
+  | { kind: "undecryptable" };
+
 export class McpServerService {
   private httpServer: http.Server | null = null;
   private port: number | null = null;
@@ -180,6 +195,7 @@ export class McpServerService {
   private pendingDispatches = new Map<string, PendingRequest<ActionDispatchResult>>();
   private cleanupListeners: Array<() => void> = [];
   private statusListeners = new Set<(running: boolean) => void>();
+  private decryptedKey: DecryptedKeyState = { kind: "unread" };
 
   get isRunning(): boolean {
     return this.httpServer !== null && this.port !== null;
@@ -238,29 +254,45 @@ export class McpServerService {
   }
 
   /**
-   * Decrypt the persisted bearer token. Returns "" when no key is stored. On
-   * decryption failure (OS keychain reset, app bundle id change, cross-machine
-   * config copy), the corrupted ciphertext is cleared and "" is returned so
-   * the auto-keygen path in `start()` can recover on next run.
+   * Resolve and memoize the decrypted bearer token for this session. The cache
+   * is invalidated by `setApiKey`/`generateApiKey` (writes update the cache
+   * directly) and by an explicit `invalidateDecryptedKey()` call. We never
+   * mutate the persisted ciphertext from a read path — clearing the field on
+   * decrypt failure would let `isAuthorized` interpret the next request as
+   * "no key configured → open access," silently dropping authentication.
    */
-  private getApiKey(): string {
-    const config = this.getConfig();
-    const encrypted = config.apiKeyEncrypted;
-    if (!encrypted) return "";
-    try {
-      return safeStorage.decryptString(Buffer.from(encrypted, "base64"));
-    } catch (err) {
-      console.warn("[MCP] Failed to decrypt API key, clearing corrupted ciphertext:", err);
-      const { apiKeyEncrypted: _drop, ...rest } = config;
-      store.set("mcpServer", rest);
-      return "";
+  private resolveDecryptedKey(): DecryptedKeyState {
+    if (this.decryptedKey.kind !== "unread") {
+      return this.decryptedKey;
     }
+    const encrypted = this.getConfig().apiKeyEncrypted;
+    if (!encrypted) {
+      this.decryptedKey = { kind: "absent" };
+      return this.decryptedKey;
+    }
+    try {
+      const value = safeStorage.decryptString(Buffer.from(encrypted, "base64"));
+      this.decryptedKey = { kind: "ok", value };
+    } catch (err) {
+      console.warn(
+        "[MCP] Failed to decrypt API key — server will deny all requests until the key is regenerated:",
+        err
+      );
+      this.decryptedKey = { kind: "undecryptable" };
+    }
+    return this.decryptedKey;
+  }
+
+  private getApiKey(): string {
+    const state = this.resolveDecryptedKey();
+    return state.kind === "ok" ? state.value : "";
   }
 
   /**
    * Encrypt a bearer token for persistence. Returns `undefined` for an empty
    * key so callers can drop the field from the store. Throws if `safeStorage`
-   * is unavailable (caller decides whether to surface or swallow).
+   * is unavailable; callers that need graceful degradation must handle the
+   * throw themselves (e.g., the auto-keygen path in `start()`).
    */
   private encryptApiKey(apiKey: string): string | undefined {
     if (!apiKey) return undefined;
@@ -287,12 +319,14 @@ export class McpServerService {
 
   async setApiKey(apiKey: string): Promise<void> {
     const config = this.getConfig();
-    const { apiKeyEncrypted: _previous, ...rest } = config;
+    const { apiKeyEncrypted: _previous, apiKey: _legacy, ...rest } = config;
     const encrypted = this.encryptApiKey(apiKey);
     store.set(
       "mcpServer",
       encrypted === undefined ? rest : { ...rest, apiKeyEncrypted: encrypted }
     );
+    this.decryptedKey =
+      encrypted === undefined ? { kind: "absent" } : { kind: "ok", value: apiKey };
     if (this.isRunning) {
       await this.writeDiscoveryFile();
     }
@@ -319,7 +353,18 @@ export class McpServerService {
     this.starting = true;
     try {
       if (!this.getApiKey()) {
-        await this.generateApiKey();
+        try {
+          await this.generateApiKey();
+        } catch (err) {
+          // Encryption can throw when safeStorage is unavailable. Don't abort
+          // startup — the encryption-backend banner already surfaces the
+          // unprotected state to the user, and the server can still bind
+          // (open access on loopback, like a fresh install with no key set).
+          console.warn(
+            "[MCP] Could not auto-generate API key — starting without authentication:",
+            err
+          );
+        }
       }
 
       this.setupIpcListeners();
@@ -644,10 +689,15 @@ export class McpServerService {
   }
 
   private isAuthorized(req: http.IncomingMessage): boolean {
-    const apiKey = this.getApiKey();
-    if (!apiKey) return true;
+    const state = this.resolveDecryptedKey();
+    // No key was ever configured — the server runs with open access by design.
+    if (state.kind === "absent") return true;
+    // A key is on disk but couldn't be decrypted. Opening access here would
+    // silently downgrade to no-auth on a transient keychain failure, so we
+    // fail closed until the user regenerates the key.
+    if (state.kind === "undecryptable") return false;
     const auth = req.headers.authorization ?? "";
-    const expected = `Bearer ${apiKey}`;
+    const expected = `Bearer ${state.value}`;
     const actualHash = createHash("sha256").update(auth).digest();
     const expectedHash = createHash("sha256").update(expected).digest();
     return timingSafeEqual(actualHash, expectedHash);

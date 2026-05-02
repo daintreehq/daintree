@@ -100,6 +100,28 @@ describe("migration021 — migrate MCP API key to safeStorage", () => {
     expect(safeStorageMock.encryptString).not.toHaveBeenCalled();
   });
 
+  it("re-encrypts plaintext as the source of truth when both fields are present", () => {
+    const store = makeStoreMock({
+      mcpServer: {
+        enabled: true,
+        port: 45454,
+        apiKey: "fresh_plaintext",
+        apiKeyEncrypted: "stale-base64-from-a-different-machine",
+        fullToolSurface: false,
+      },
+    });
+
+    migration021.up(store);
+
+    const result = store.data.mcpServer as McpServerSnapshot;
+    expect(result.apiKey).toBeUndefined();
+    expect(result.apiKeyEncrypted).toBe(
+      Buffer.from("enc:fresh_plaintext", "utf8").toString("base64")
+    );
+    expect(safeStorageMock.encryptString).toHaveBeenCalledTimes(1);
+    expect(safeStorageMock.encryptString).toHaveBeenCalledWith("fresh_plaintext");
+  });
+
   it("is idempotent when apiKeyEncrypted already exists and no plaintext is left", () => {
     const store = makeStoreMock({
       mcpServer: {

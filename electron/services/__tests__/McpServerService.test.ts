@@ -1088,13 +1088,18 @@ describe("McpServerService", () => {
   });
 
   it("reports encryptionBackend=basic_text on Linux fallback", async () => {
-    if (process.platform !== "linux") {
-      // The platform branch only triggers on Linux; skip outside that environment.
-      return;
-    }
     safeStorageMock.isEncryptionAvailable.mockReturnValue(true);
     safeStorageMock.getSelectedStorageBackend.mockReturnValue("basic_text");
-    expect(service.getStatus().encryptionBackend).toBe("basic_text");
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      expect(service.getStatus().encryptionBackend).toBe("basic_text");
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
   });
 
   it("reports encryptionBackend=unavailable when safeStorage is disabled", async () => {
@@ -1102,7 +1107,7 @@ describe("McpServerService", () => {
     expect(service.getStatus().encryptionBackend).toBe("unavailable");
   });
 
-  it("clears corrupted ciphertext and returns empty key on decrypt failure", async () => {
+  it("returns empty key on decrypt failure but preserves the corrupted ciphertext on disk", async () => {
     storeState.mcpServer.apiKeyEncrypted = "not-real-base64-ciphertext";
     safeStorageMock.decryptString.mockImplementationOnce(() => {
       throw new Error("decryption failed");
@@ -1112,9 +1117,64 @@ describe("McpServerService", () => {
     try {
       const status = service.getStatus();
       expect(status.apiKey).toBe("");
-      expect(storeState.mcpServer.apiKeyEncrypted).toBeUndefined();
+      // Field is intentionally not cleared — `isAuthorized` needs to see it on
+      // the next request to deny instead of silently opening access.
+      expect(storeState.mcpServer.apiKeyEncrypted).toBe("not-real-base64-ciphertext");
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         expect.stringContaining("Failed to decrypt"),
+        expect.any(Error)
+      );
+    } finally {
+      consoleWarnSpy.mockRestore();
+    }
+  });
+
+  it("denies all requests when the persisted key cannot be decrypted (no silent auth bypass)", async () => {
+    storeState.mcpServer.apiKeyEncrypted = "ciphertext-from-another-machine";
+    safeStorageMock.decryptString.mockImplementation(() => {
+      throw new Error("keychain access denied");
+    });
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const { window } = createMockWindow();
+      // Block the auto-keygen in start() so the configured-but-undecryptable
+      // state survives into the request-handling phase. (In real life the user
+      // would not see this — the test simulates a transient keychain failure
+      // that the user hasn't recovered from yet.)
+      safeStorageMock.encryptString.mockImplementationOnce(() => {
+        throw new Error("keychain unavailable");
+      });
+      await service.start(window);
+
+      const noCredentials = await requestSse(service.currentPort!);
+      const wrongCredentials = await requestSse(service.currentPort!, {
+        Authorization: "Bearer anything",
+      });
+
+      expect(noCredentials.status).toBe(401);
+      expect(wrongCredentials.status).toBe(401);
+    } finally {
+      consoleWarnSpy.mockRestore();
+    }
+  });
+
+  it("starts without authentication when safeStorage is unavailable instead of crashing", async () => {
+    safeStorageMock.isEncryptionAvailable.mockReturnValue(false);
+    safeStorageMock.encryptString.mockImplementation(() => {
+      throw new Error("encryption is not available");
+    });
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const { window } = createMockWindow();
+      await service.start(window);
+      expect(service.isRunning).toBe(true);
+      // No key was generated — server runs open-access.
+      expect(storeState.mcpServer.apiKeyEncrypted).toBeUndefined();
+      expect(service.getStatus().encryptionBackend).toBe("unavailable");
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Could not auto-generate API key"),
         expect.any(Error)
       );
     } finally {

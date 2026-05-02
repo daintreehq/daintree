@@ -317,7 +317,8 @@ export function McpServerSettingsTab() {
               <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
                 <AlertCircle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" />
                 <p className="text-xs text-status-warning leading-relaxed">
-                  Encryption isn't available on this system. Your API key is stored unprotected.
+                  Encryption isn't available on this system — the MCP server can't generate or save
+                  an API key. Connections won't require authentication.
                 </p>
               </div>
             )}
