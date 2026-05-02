@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from "vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
+import { visualizer } from "rollup-plugin-visualizer";
 import path from "path";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
@@ -261,10 +262,13 @@ export default defineConfig(({ command, mode }) => {
       compilerReportPlugin,
       rendererBundleSizePlugin(),
       xtermMinifyIdentifiersGuardPlugin(),
+      ...(process.env.ANALYZE === "true"
+        ? [visualizer({ filename: "stats.html", gzipSize: true, brotliSize: true }) as Plugin]
+        : []),
     ],
     base: "./",
     build: {
-      target: "chrome144",
+      target: "chrome146",
       modulePreload: { polyfill: false },
       outDir: "dist",
       emptyOutDir: true,
@@ -310,6 +314,16 @@ export default defineConfig(({ command, mode }) => {
                 name: "vendor-zod",
                 test: /node_modules[\\/](zod[\\/]|zod-to-json-schema[\\/])/,
                 priority: 20,
+              },
+              {
+                name: "vendor-react",
+                test: /node_modules[\\/](react|react-dom|scheduler|use-sync-external-store)[\\/]/,
+                priority: 15,
+              },
+              {
+                name: "vendor-radix",
+                test: /node_modules[\\/]@radix-ui[\\/]/,
+                priority: 12,
               },
               { name: "vendor", test: /node_modules[\\/]/, priority: 10 },
             ],

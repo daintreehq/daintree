@@ -9,6 +9,7 @@ dist-typecheck/
 out/
 release/
 *.asar
+stats.html
 
 # Build resources - keep icons but ignore iconset
 build/icon.iconset/
