@@ -1174,7 +1174,7 @@ describe("McpServerService", () => {
   });
 
   it("authorizes requests carrying a valid help-session bearer token alongside the external key", async () => {
-    storeState.mcpServer.apiKey = "external-secret";
+    await seedDiscoveryFile("external-secret");
     const { window } = createMockWindow();
     await service.start(window);
 
@@ -1197,7 +1197,7 @@ describe("McpServerService", () => {
   });
 
   it("rejects help-session tokens once the validator says they are revoked", async () => {
-    storeState.mcpServer.apiKey = "external-secret";
+    await seedDiscoveryFile("external-secret");
     const { window } = createMockWindow();
     await service.start(window);
 
