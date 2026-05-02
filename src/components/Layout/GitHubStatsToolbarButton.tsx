@@ -7,19 +7,21 @@ import {
   useEffectEvent,
   useCallback,
   useImperativeHandle,
+  useMemo,
   memo,
   forwardRef,
 } from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
-import { CircleDot, Clock, GitPullRequest, GitCommit } from "lucide-react";
+import { CircleDot, Clock, GitPullRequest, GitCommit, WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useGitHubFilterStore } from "@/store/githubFilterStore";
-import { useRepositoryStats } from "@/hooks/useRepositoryStats";
+import { useRepositoryStats, type FreshnessLevel } from "@/hooks/useRepositoryStats";
+import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { useGitHubTokenExpiryNotification } from "@/hooks/useGitHubTokenExpiryNotification";
 import {
   GitHubResourceListSkeleton,
@@ -48,6 +50,70 @@ const PREFETCH_FRESHNESS_MS = 10_000;
 // status / PR state could be visibly out of date. Within this window, trust
 // the cache and let the existing 30s poll keep things fresh in background.
 const OPEN_FORCE_REFRESH_STALENESS_MS = 2 * 60 * 1000;
+
+// Per-tier opacity so the badge no longer conflates fresh, in-session aging,
+// disk-cached, and errored data into a single `opacity-60` tint. `aging` stays
+// closest to full opacity since the data is in-session and probably fine; the
+// remaining tiers step down so a glance distinguishes them. WCAG 1.4.11 means
+// opacity alone isn't sufficient, so the count icon below pairs an explicit
+// glyph with each non-fresh tier.
+function freshnessOpacityClass(level: FreshnessLevel): string {
+  switch (level) {
+    case "aging":
+      return "opacity-75";
+    case "stale-disk":
+      return "opacity-60";
+    case "errored":
+      return "opacity-50";
+    case "fresh":
+    default:
+      return "";
+  }
+}
+
+// Returns a small lucide glyph rendered after the count to give a non-color
+// signal for non-fresh tiers. `aging` returns null because the data is still
+// in-session — the opacity step is enough and the row should not be cluttered
+// with an icon for a state the user encounters most often. `aria-hidden`
+// because the freshness state is already announced via the per-button
+// `aria-label`.
+function FreshnessGlyph({ level }: { level: FreshnessLevel }) {
+  if (level === "stale-disk") {
+    return <Clock className="h-3 w-3 text-muted-foreground" aria-hidden="true" />;
+  }
+  if (level === "errored") {
+    return <WifiOff className="h-3 w-3 text-muted-foreground" aria-hidden="true" />;
+  }
+  return null;
+}
+
+function formatTimeSince(timestamp: number | null, now: number): string {
+  if (timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0) {
+    return "unknown";
+  }
+  const seconds = Math.floor((now - timestamp) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function freshnessSuffix(level: FreshnessLevel, lastUpdated: number | null, now: number): string {
+  switch (level) {
+    case "aging":
+      return ` · updated ${formatTimeSince(lastUpdated, now)}`;
+    case "stale-disk":
+      return " · cached from previous session";
+    case "errored":
+      return " · couldn't reach GitHub";
+    case "fresh":
+    default:
+      return "";
+  }
+}
 
 function formatRateLimitCountdown(remainingMs: number): string {
   const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
@@ -224,13 +290,21 @@ export const GitHubStatsToolbarButton = memo(
       error: statsError,
       isTokenError,
       refresh: refreshStats,
-      isStale,
       lastUpdated,
       rateLimitResetAt,
       rateLimitKind,
+      freshnessLevel,
     } = useRepositoryStats();
 
     useGitHubTokenExpiryNotification(isTokenError);
+
+    // Drives the tooltip aging copy ("updated 3m ago") without per-component
+    // intervals — the ticker is shared, paused on hidden tabs, and tears down
+    // when no consumers remain. The memo re-captures `Date.now()` on every
+    // tick so the freshness suffix advances even between background polls.
+    const tick = useGlobalMinuteTicker();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const now = useMemo(() => Date.now(), [tick]);
 
     const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
     const activeWorktree = useWorktreeStore((state) =>
@@ -257,6 +331,13 @@ export const GitHubStatsToolbarButton = memo(
     const [issueFlashKey, setIssueFlashKey] = useState(0);
     const [prFlashKey, setPrFlashKey] = useState(0);
     const prevStatsRef = useRef<{ issueCount: number | null; prCount: number | null } | null>(null);
+
+    // Local count derivations — read once per render so aria-labels, tooltip
+    // copy, and the rendered numeral all reference the same value without
+    // repeating `stats?.x ?? null` at each call site.
+    const issueCount = stats?.issueCount ?? null;
+    const prCount = stats?.prCount ?? null;
+    const commitCount = stats?.commitCount ?? null;
 
     // Eagerly resolve the dropdown body components so the click path renders
     // them concretely without going through Suspense. The toolbar is a
@@ -565,21 +646,6 @@ export const GitHubStatsToolbarButton = memo(
       setStatsJustUpdated(false);
     }, []);
 
-    const getTimeSinceUpdate = useCallback((timestamp: number | null): string => {
-      if (timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0) {
-        return "unknown";
-      }
-      const seconds = Math.floor((Date.now() - timestamp) / 1000);
-      if (seconds < 0) return "just now";
-      if (seconds < 60) return "just now";
-      const minutes = Math.floor(seconds / 60);
-      if (minutes < 60) return `${minutes}m ago`;
-      const hours = Math.floor(minutes / 60);
-      if (hours < 24) return `${hours}h ago`;
-      const days = Math.floor(hours / 24);
-      return `${days}d ago`;
-    }, []);
-
     const openSettingsForToken = useCallback(() => {
       void actionService.dispatch(
         "app.settings.openTab",
@@ -664,17 +730,17 @@ export const GitHubStatsToolbarButton = memo(
                 }
               }}
               className={cn(
-                "h-full gap-2 rounded-none px-3 text-daintree-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
+                "h-full gap-2 rounded-none px-3 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                 isTokenError && "opacity-40",
                 !isTokenError && stats?.issueCount === 0 && "opacity-50",
-                !isTokenError && isStale && "opacity-60",
+                !isTokenError && freshnessOpacityClass(freshnessLevel),
                 issuesOpen &&
                   "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-open/20"
               )}
               aria-label={
                 isTokenError
                   ? "Configure GitHub token to see issues"
-                  : `${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`
+                  : `${issueCount ?? "\u2014"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
               }
             >
               <CircleDot
@@ -690,16 +756,17 @@ export const GitHubStatsToolbarButton = memo(
                   issueFlashKey > 0 && "github-stat-count-flash-issues"
                 )}
               >
-                {stats?.issueCount ?? "\u2014"}
+                {issueCount ?? "\u2014"}
               </span>
+              {!isTokenError ? <FreshnessGlyph level={freshnessLevel} /> : null}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
             {isTokenError
               ? "Configure GitHub token to see issues"
-              : isStale
-                ? `${stats?.issueCount ?? "\u2014"} open issues (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
-                : "Browse GitHub Issues"}
+              : freshnessLevel === "fresh"
+                ? "Browse GitHub Issues"
+                : `${issueCount ?? "\u2014"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
           </TooltipContent>
         </Tooltip>
         <FixedDropdown
@@ -786,17 +853,17 @@ export const GitHubStatsToolbarButton = memo(
                 }
               }}
               className={cn(
-                "h-full gap-2 rounded-none px-3 text-daintree-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
+                "h-full gap-2 rounded-none px-3 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                 isTokenError && "opacity-40",
                 !isTokenError && stats?.prCount === 0 && "opacity-50",
-                !isTokenError && isStale && "opacity-60",
+                !isTokenError && freshnessOpacityClass(freshnessLevel),
                 prsOpen &&
                   "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-merged/20"
               )}
               aria-label={
                 isTokenError
                   ? "Configure GitHub token to see pull requests"
-                  : `${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`
+                  : `${prCount ?? "\u2014"} open pull requests${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
               }
             >
               <GitPullRequest
@@ -812,16 +879,17 @@ export const GitHubStatsToolbarButton = memo(
                   prFlashKey > 0 && "github-stat-count-flash-prs"
                 )}
               >
-                {stats?.prCount ?? "\u2014"}
+                {prCount ?? "\u2014"}
               </span>
+              {!isTokenError ? <FreshnessGlyph level={freshnessLevel} /> : null}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
             {isTokenError
               ? "Configure GitHub token to see pull requests"
-              : isStale
-                ? `${stats?.prCount ?? "\u2014"} open PRs (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
-                : "Browse GitHub Pull Requests"}
+              : freshnessLevel === "fresh"
+                ? "Browse GitHub Pull Requests"
+                : `${prCount ?? "\u2014"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
           </TooltipContent>
         </Tooltip>
         <FixedDropdown
@@ -881,20 +949,24 @@ export const GitHubStatsToolbarButton = memo(
                 setCommitsOpen(!commitsOpen);
               }}
               className={cn(
-                "h-full gap-2 rounded-none px-3 text-daintree-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
+                "h-full gap-2 rounded-none px-3 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                 stats?.commitCount === 0 && "opacity-50",
+                freshnessOpacityClass(freshnessLevel),
                 commitsOpen &&
                   "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-border-strong"
               )}
-              aria-label={`${stats?.commitCount ?? "\u2014"} commits`}
+              aria-label={`${commitCount ?? "\u2014"} commits${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
             >
               <GitCommit className="h-4 w-4" />
-              <span className="text-xs font-medium tabular-nums">
-                {stats?.commitCount ?? "\u2014"}
-              </span>
+              <span className="text-xs font-medium tabular-nums">{commitCount ?? "\u2014"}</span>
+              <FreshnessGlyph level={freshnessLevel} />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Browse Git Commits</TooltipContent>
+          <TooltipContent side="bottom">
+            {freshnessLevel === "fresh"
+              ? "Browse Git Commits"
+              : `${commitCount ?? "\u2014"} commits${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
+          </TooltipContent>
         </Tooltip>
         <FixedDropdown
           open={commitsOpen}

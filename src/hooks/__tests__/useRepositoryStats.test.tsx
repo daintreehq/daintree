@@ -851,6 +851,112 @@ describe("useRepositoryStats", () => {
     });
   });
 
+  describe("freshnessLevel", () => {
+    // Real timers throughout — `waitFor` relies on microtasks + setTimeout to
+    // poll, which `vi.useFakeTimers` would deadlock. Test ages are anchored to
+    // `Date.now()` at the start of each test instead, and the freshness
+    // computation reads `Date.now()` directly at render time.
+    it("returns 'fresh' when lastUpdated is within 90s", async () => {
+      const now = Date.now();
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: now - 30_000,
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.commitCount).toBe(5);
+        expect(result.current.freshnessLevel).toBe("fresh");
+      });
+    });
+
+    it("returns 'aging' when lastUpdated is between 90s and 5min", async () => {
+      const now = Date.now();
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: now - 120_000,
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.lastUpdated).toBe(now - 120_000);
+        expect(result.current.freshnessLevel).toBe("aging");
+      });
+    });
+
+    it("returns 'stale-disk' when stale=true and no ghError", async () => {
+      const now = Date.now();
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: true,
+        lastUpdated: now - 10_000,
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.isStale).toBe(true);
+        expect(result.current.freshnessLevel).toBe("stale-disk");
+      });
+    });
+
+    it("returns 'errored' when stale=true with a ghError string", async () => {
+      const now = Date.now();
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: true,
+        lastUpdated: now - 10_000,
+        ghError: "Network unreachable",
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.isStale).toBe(true);
+        expect(result.current.error).toBe("Network unreachable");
+        expect(result.current.freshnessLevel).toBe("errored");
+      });
+    });
+
+    it("returns 'errored' when fetchStats throws and no stats are applied", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockRejectedValue(new Error("kaboom"));
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.error).not.toBeNull();
+        expect(result.current.stats).toBeNull();
+        expect(result.current.freshnessLevel).toBe("errored");
+      });
+    });
+  });
+
   describe("rate limits", () => {
     it("surfaces rateLimitResetAt and rateLimitKind from the stats payload", async () => {
       getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });

@@ -43,11 +43,16 @@ vi.mock("@/hooks/useRepositoryStats", () => ({
     lastUpdated: Date.now(),
     rateLimitResetAt: mockRateLimitResetAt,
     rateLimitKind: null,
+    freshnessLevel: "fresh" as const,
   }),
 }));
 
 vi.mock("@/hooks/useGitHubTokenExpiryNotification", () => ({
   useGitHubTokenExpiryNotification: () => {},
+}));
+
+vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
+  useGlobalMinuteTicker: () => 0,
 }));
 
 vi.mock("@/store/worktreeStore", () => ({
