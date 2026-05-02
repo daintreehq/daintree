@@ -254,33 +254,37 @@ export class McpServerService {
   }
 
   /**
-   * Resolve and memoize the decrypted bearer token for this session. The cache
-   * is invalidated by `setApiKey`/`generateApiKey` (writes update the cache
-   * directly) and by an explicit `invalidateDecryptedKey()` call. We never
-   * mutate the persisted ciphertext from a read path — clearing the field on
-   * decrypt failure would let `isAuthorized` interpret the next request as
-   * "no key configured → open access," silently dropping authentication.
+   * Resolve and memoize the decrypted bearer token for this session. Writes
+   * (`setApiKey`/`generateApiKey`) update the cache directly. We never mutate
+   * the persisted ciphertext from a read path — clearing the field on decrypt
+   * failure would let `isAuthorized` interpret the next request as "no key
+   * configured → open access," silently dropping authentication.
    */
-  private resolveDecryptedKey(): DecryptedKeyState {
-    if (this.decryptedKey.kind !== "unread") {
-      return this.decryptedKey;
+  private resolveDecryptedKey(): Exclude<DecryptedKeyState, { kind: "unread" }> {
+    const cached = this.decryptedKey;
+    if (cached.kind !== "unread") {
+      return cached;
     }
     const encrypted = this.getConfig().apiKeyEncrypted;
+    let next: Exclude<DecryptedKeyState, { kind: "unread" }>;
     if (!encrypted) {
-      this.decryptedKey = { kind: "absent" };
-      return this.decryptedKey;
+      next = { kind: "absent" };
+    } else {
+      try {
+        next = {
+          kind: "ok",
+          value: safeStorage.decryptString(Buffer.from(encrypted, "base64")),
+        };
+      } catch (err) {
+        console.warn(
+          "[MCP] Failed to decrypt API key — server will deny all requests until the key is regenerated:",
+          err
+        );
+        next = { kind: "undecryptable" };
+      }
     }
-    try {
-      const value = safeStorage.decryptString(Buffer.from(encrypted, "base64"));
-      this.decryptedKey = { kind: "ok", value };
-    } catch (err) {
-      console.warn(
-        "[MCP] Failed to decrypt API key — server will deny all requests until the key is regenerated:",
-        err
-      );
-      this.decryptedKey = { kind: "undecryptable" };
-    }
-    return this.decryptedKey;
+    this.decryptedKey = next;
+    return next;
   }
 
   private getApiKey(): string {
