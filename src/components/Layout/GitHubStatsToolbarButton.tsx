@@ -31,6 +31,10 @@ import { GitHubStatusIndicator, type GitHubStatusIndicatorStatus } from "./GitHu
 import { githubClient } from "@/clients/githubClient";
 import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
+import {
+  useGitHubSeenAnchorsStore,
+  deriveBadgeLabel,
+} from "@/store/githubSeenAnchorsStore";
 import type { Project } from "@shared/types";
 import type { GitHubRateLimitDetails, RepositoryStats } from "@shared/types";
 
@@ -462,12 +466,35 @@ export const GitHubStatsToolbarButton = memo(
     // request that could overwrite fresh mount-fetch data in the cache.
     const issuesOpenRef = useRef(issuesOpen);
     const prsOpenRef = useRef(prsOpen);
+    const commitsOpenRef = useRef(commitsOpen);
     useEffect(() => {
       issuesOpenRef.current = issuesOpen;
     }, [issuesOpen]);
     useEffect(() => {
       prsOpenRef.current = prsOpen;
     }, [prsOpen]);
+    useEffect(() => {
+      commitsOpenRef.current = commitsOpen;
+    }, [commitsOpen]);
+
+    // Per-project, per-category "+N since opened" anchors. Read-only selectors
+    // here; writes go through `useGitHubSeenAnchorsStore.getState().recordOpen`
+    // synchronously inside each click/imperative handler so the anchor is
+    // captured at the precise moment of intent — not after an async refresh
+    // races in with a newer count.
+    const projectPath = currentProject?.path;
+    const issuesAnchor = useGitHubSeenAnchorsStore((s) =>
+      projectPath ? s.anchors[projectPath]?.issues : undefined
+    );
+    const prsAnchor = useGitHubSeenAnchorsStore((s) =>
+      projectPath ? s.anchors[projectPath]?.prs : undefined
+    );
+    const commitsAnchor = useGitHubSeenAnchorsStore((s) =>
+      projectPath ? s.anchors[projectPath]?.commits : undefined
+    );
+    const issuesDeltaLabel = deriveBadgeLabel(issuesAnchor, issueCount, issuesOpen, now);
+    const prsDeltaLabel = deriveBadgeLabel(prsAnchor, prCount, prsOpen, now);
+    const commitsDeltaLabel = deriveBadgeLabel(commitsAnchor, commitCount, commitsOpen, now);
 
     useEffect(() => {
       return () => {
@@ -700,6 +727,14 @@ export const GitHubStatsToolbarButton = memo(
             openSettingsForToken();
             return;
           }
+          // Only anchor on the open transition — toggling closed should not
+          // re-record. `issuesOpenRef` is mirrored from state via useEffect
+          // and is current at imperative-call time.
+          if (!issuesOpenRef.current && currentProject && issueCount != null) {
+            useGitHubSeenAnchorsStore
+              .getState()
+              .recordOpen(currentProject.path, "issues", issueCount);
+          }
           setIssuesOpen((p) => !p);
         },
         openPrs: () => {
@@ -707,12 +742,24 @@ export const GitHubStatsToolbarButton = memo(
             openSettingsForToken();
             return;
           }
+          if (!prsOpenRef.current && currentProject && prCount != null) {
+            useGitHubSeenAnchorsStore
+              .getState()
+              .recordOpen(currentProject.path, "prs", prCount);
+          }
           setPrsOpen((p) => !p);
         },
-        openCommits: () => setCommitsOpen((p) => !p),
+        openCommits: () => {
+          if (!commitsOpenRef.current && currentProject && commitCount != null) {
+            useGitHubSeenAnchorsStore
+              .getState()
+              .recordOpen(currentProject.path, "commits", commitCount);
+          }
+          setCommitsOpen((p) => !p);
+        },
         stats,
       }),
-      [stats, isTokenError, openSettingsForToken]
+      [stats, isTokenError, openSettingsForToken, currentProject, issueCount, prCount, commitCount]
     );
 
     if (!currentProject) return null;
@@ -750,6 +797,16 @@ export const GitHubStatsToolbarButton = memo(
                 const willOpen = !issuesOpen;
                 setIssuesOpen(willOpen);
                 if (!willOpen) setIssueSearchQuery("");
+                // Capture the "+N since opened" anchor synchronously here so a
+                // poll that lands during dropdown-opening can't race a newer
+                // count past the seen marker. Anchored at click intent, not
+                // poll completion. `currentProject` is guaranteed non-null by
+                // the early-return above.
+                if (willOpen && issueCount != null) {
+                  useGitHubSeenAnchorsStore
+                    .getState()
+                    .recordOpen(currentProject.path, "issues", issueCount);
+                }
                 // Only force-refresh on open if the polled stats are stale
                 // enough to be visibly out of date. Within the freshness
                 // window, the 30s poll has the cache hot and the dropdown
@@ -791,6 +848,14 @@ export const GitHubStatsToolbarButton = memo(
               >
                 {issueCount ?? "\u2014"}
               </span>
+              {!isTokenError && issuesDeltaLabel ? (
+                <span
+                  className="text-[10px] font-medium leading-none text-muted-foreground"
+                  aria-label={`${issuesDeltaLabel} since you last opened issues`}
+                >
+                  {issuesDeltaLabel}
+                </span>
+              ) : null}
               {!isTokenError ? <FreshnessGlyph level={freshnessLevel} /> : null}
             </Button>
           </TooltipTrigger>
@@ -873,6 +938,11 @@ export const GitHubStatsToolbarButton = memo(
                 const willOpen = !prsOpen;
                 setPrsOpen(willOpen);
                 if (!willOpen) setPrSearchQuery("");
+                if (willOpen && prCount != null) {
+                  useGitHubSeenAnchorsStore
+                    .getState()
+                    .recordOpen(currentProject.path, "prs", prCount);
+                }
                 // Only force-refresh on open if the polled stats are stale
                 // enough to be visibly out of date. Within the freshness
                 // window, the 30s poll has the cache hot and the dropdown
@@ -914,6 +984,14 @@ export const GitHubStatsToolbarButton = memo(
               >
                 {prCount ?? "\u2014"}
               </span>
+              {!isTokenError && prsDeltaLabel ? (
+                <span
+                  className="text-[10px] font-medium leading-none text-muted-foreground"
+                  aria-label={`${prsDeltaLabel} since you last opened pull requests`}
+                >
+                  {prsDeltaLabel}
+                </span>
+              ) : null}
               {!isTokenError ? <FreshnessGlyph level={freshnessLevel} /> : null}
             </Button>
           </TooltipTrigger>
@@ -979,7 +1057,13 @@ export const GitHubStatsToolbarButton = memo(
                 setIssueSearchQuery("");
                 setPrsOpen(false);
                 setPrSearchQuery("");
-                setCommitsOpen(!commitsOpen);
+                const willOpen = !commitsOpen;
+                setCommitsOpen(willOpen);
+                if (willOpen && commitCount != null) {
+                  useGitHubSeenAnchorsStore
+                    .getState()
+                    .recordOpen(currentProject.path, "commits", commitCount);
+                }
               }}
               className={cn(
                 "h-full gap-2 rounded-none px-3 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
@@ -1000,6 +1084,14 @@ export const GitHubStatsToolbarButton = memo(
               >
                 {commitCount ?? "\u2014"}
               </span>
+              {commitsDeltaLabel ? (
+                <span
+                  className="text-[10px] font-medium leading-none text-muted-foreground"
+                  aria-label={`${commitsDeltaLabel} since you last opened commits`}
+                >
+                  {commitsDeltaLabel}
+                </span>
+              ) : null}
               <FreshnessGlyph level={freshnessLevel} />
             </Button>
           </TooltipTrigger>
