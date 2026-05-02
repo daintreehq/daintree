@@ -223,6 +223,16 @@ export function HelpPanel() {
           return;
         }
 
+        // Stale-launch guard: handleClose / handleBack revoked the pending
+        // session via revokePendingSession (clearing the ref). Drop the orphan
+        // terminal rather than binding a panel to a revoked token.
+        const expectedSessionId = session?.sessionId ?? null;
+        if (expectedSessionId && pendingSessionIdRef.current !== expectedSessionId) {
+          usePanelStore.getState().removePanel(result.result.terminalId);
+          hasAutoLaunched.current = false;
+          return;
+        }
+
         useHelpPanelStore
           .getState()
           .setTerminal(result.result.terminalId, launchAgentId, session?.sessionId ?? null);
@@ -346,6 +356,15 @@ export function HelpPanel() {
           return;
         }
 
+        // Stale-launch guard: if handleClose / handleBack revoked the pending
+        // session while dispatch was in-flight, the session is dead. Drop the
+        // orphan terminal rather than binding a panel to a revoked token.
+        const expectedSessionId = session?.sessionId ?? null;
+        if (expectedSessionId && pendingSessionIdRef.current !== expectedSessionId) {
+          usePanelStore.getState().removePanel(result.result.terminalId);
+          return;
+        }
+
         useHelpPanelStore
           .getState()
           .setTerminal(result.result.terminalId, selectedAgentId, session?.sessionId ?? null);
@@ -398,8 +417,9 @@ export function HelpPanel() {
 
     safeFireAndForget(
       (async () => {
+        let session: HelpSessionRef | null = null;
         try {
-          const session = await provisionHelpSession();
+          session = await provisionHelpSession();
           const cwd = session?.sessionPath ?? panel.cwd ?? "";
           const projectId = useProjectStore.getState().currentProject?.id ?? null;
           const helpEnv = buildHelpEnv(session, projectId);
@@ -434,6 +454,7 @@ export function HelpPanel() {
             logError("Failed to mark help terminal", err);
           });
         } catch (error) {
+          revokeHelpSession(session?.sessionId ?? null);
           logError("Help run-anyway failed", error);
           notifyLaunchFailed(launchAgentId, "The agent didn't start. Try again.");
         } finally {

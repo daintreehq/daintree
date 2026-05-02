@@ -499,6 +499,43 @@ describe("HelpPanel — handleRunAnyway", () => {
       expect.objectContaining({ type: "error", title: "Assistant launch failed" })
     );
   });
+
+  it("revokes the freshly-provisioned session when addPanel throws (regression: leaked token)", async () => {
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    helpPanelState.terminalId = "gate-1";
+    helpPanelState.agentId = "claude";
+    panelStoreState.panelsById = {
+      "gate-1": {
+        id: "gate-1",
+        kind: "terminal",
+        spawnStatus: "missing-cli",
+        cwd: "/help",
+        title: "Claude",
+        command: "claude",
+        location: "dock",
+      },
+    };
+    cliAvailabilityState.details = {
+      claude: { state: "missing", resolvedPath: null, via: null },
+    };
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "leaked-sess",
+      sessionPath: "/sessions/leaked-sess",
+      token: "tok-leak",
+      tier: "action",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockRejectedValue(new Error("spawn failed"));
+
+    const { getByTestId } = render(<HelpPanel />);
+
+    await act(async () => {
+      fireEvent.click(getByTestId("run-anyway"));
+    });
+
+    expect(mockRevokeSession).toHaveBeenCalledWith("leaked-sess");
+  });
 });
 
 describe("HelpPanel — session provisioning", () => {
@@ -619,6 +656,50 @@ describe("HelpPanel — session provisioning", () => {
     // The pending session should have been revoked by handleClose's
     // revokePendingSession call.
     expect(mockRevokeSession).toHaveBeenCalledWith("pending-1");
+  });
+
+  it("does not commit terminal and removes orphan when session was revoked during in-flight launch", async () => {
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "pending-2",
+      sessionPath: "/sessions/pending-2",
+      token: "tok-pending-2",
+      tier: "action",
+      mcpUrl: null,
+      windowId: 1,
+    });
+
+    let resolveDispatch: (v: unknown) => void = () => {};
+    mockDispatch.mockReturnValue(
+      new Promise((r) => {
+        resolveDispatch = r;
+      })
+    );
+
+    const { getByTestId, container } = render(<HelpPanel />);
+
+    await act(async () => {
+      fireEvent.click(getByTestId("pick-claude"));
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const closeBtn = container.querySelector('button[aria-label="Close help panel"]');
+    if (closeBtn) {
+      await act(async () => {
+        fireEvent.click(closeBtn);
+      });
+    }
+
+    await act(async () => {
+      resolveDispatch({ ok: true, result: { terminalId: "orphan-term" } });
+    });
+
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("orphan-term");
   });
 
   it("revokes the bound session when the panel disappears from panelsById", async () => {
