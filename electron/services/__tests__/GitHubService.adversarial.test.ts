@@ -133,6 +133,22 @@ function createETagResponse(status: number, etag?: string): Response {
   } as unknown as Response;
 }
 
+function createBranchListResponse(
+  status: number,
+  options: { etag?: string; body?: unknown } = {}
+): Response {
+  const headers = new Headers();
+  if (options.etag) headers.set("etag", options.etag);
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 304 ? "Not Modified" : "OK",
+    headers,
+    json: () =>
+      options.body === undefined ? Promise.resolve([]) : Promise.resolve(options.body),
+  } as unknown as Response;
+}
+
 function buildIssueNode(
   overrides?: Partial<{ assignees: Array<{ login: string; avatarUrl: string }> }>
 ) {
@@ -483,15 +499,14 @@ describe("GitHubService adversarial", () => {
     expect(shared.graphqlClient).toHaveBeenCalledTimes(1);
   });
 
-  it("BATCHCHECK_DISCOVERY_WITHOUT_KNOWNPR_SKIPS_ETAG_PROBE", async () => {
-    // Discovery path: no knownPRNumber → ETag probe must not run.
+  it("BATCHCHECK_DISCOVERY_WITHOUT_BRANCHNAME_SKIPS_PROBE", async () => {
+    // Discovery candidate without a branchName cannot be probed via the REST
+    // pulls list — the helper falls straight through to GraphQL.
     shared.graphqlClient.mockResolvedValueOnce({
       wt_0_branch: { pullRequests: { nodes: [] } },
     });
 
-    await github.batchCheckLinkedPRs("/repo", [
-      { worktreeId: "wt-1", branchName: "feature/discovery" },
-    ]);
+    await github.batchCheckLinkedPRs("/repo", [{ worktreeId: "wt-1" }]);
     expect(global.fetch).not.toHaveBeenCalled();
     expect(shared.graphqlClient).toHaveBeenCalledTimes(1);
   });
@@ -524,8 +539,15 @@ describe("GitHubService adversarial", () => {
   });
 
   it("BATCHCHECK_MIXED_DISCOVERY_AND_REVALIDATION_BYPASSES_FAST_PATH", async () => {
-    // One candidate with knownPRNumber, one without → fast path must be
-    // skipped and GraphQL must run for both.
+    // One candidate with knownPRNumber, one without → all-revalidation fast
+    // path must be skipped. The discovery candidate's branch-list probe
+    // returns a PR (changed), so GraphQL runs for the full batch.
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      createBranchListResponse(200, {
+        etag: 'W/"branch-etag"',
+        body: [{ number: 99 }],
+      })
+    );
     shared.graphqlClient.mockResolvedValueOnce({
       wt_0_branch: { pullRequests: { nodes: [] } },
       wt_1_branch: { pullRequests: { nodes: [] } },
@@ -536,9 +558,150 @@ describe("GitHubService adversarial", () => {
       { worktreeId: "wt-2", branchName: "feature/discovery" },
     ]);
 
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(shared.graphqlClient).toHaveBeenCalledTimes(1);
     expect(result.results.size).toBe(2);
+  });
+
+  it("BATCHCHECK_DISCOVERY_BRANCH_304_SKIPS_GRAPHQL", async () => {
+    // Cycle 1: 200 with empty array seeds the ETag and skips GraphQL.
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      createBranchListResponse(200, { etag: 'W/"seed"', body: [] })
+    );
+    const cycleOne = await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/discovery" },
+    ]);
+    expect(cycleOne.results.size).toBe(0);
+    expect(shared.graphqlClient).not.toHaveBeenCalled();
+
+    // Cycle 2: 304 — must still skip GraphQL, no quota burned.
+    vi.mocked(global.fetch).mockResolvedValueOnce(createBranchListResponse(304));
+    const cycleTwo = await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/discovery" },
+    ]);
+    expect(cycleTwo.results.size).toBe(0);
+    expect(shared.graphqlClient).not.toHaveBeenCalled();
+  });
+
+  it("BATCHCHECK_DISCOVERY_BRANCH_200_WITH_PRS_FALLS_THROUGH", async () => {
+    // 200 with one or more PRs in the body → caller falls through to GraphQL
+    // for full enrichment.
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      createBranchListResponse(200, {
+        etag: 'W/"discovered"',
+        body: [{ number: 7 }],
+      })
+    );
+    shared.graphqlClient.mockResolvedValueOnce({
+      wt_0_branch: { pullRequests: { nodes: [] } },
+    });
+
+    const result = await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/has-pr" },
+    ]);
+    expect(result.results.size).toBe(1);
+    expect(shared.graphqlClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("BATCHCHECK_DISCOVERY_BRANCH_PROBE_SENDS_IF_NONE_MATCH", async () => {
+    // Cycle 1 seeds the branch-list ETag.
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      createBranchListResponse(200, { etag: 'W/"seed-2"', body: [] })
+    );
+    await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/x" },
+    ]);
+
+    // Cycle 2 must send If-None-Match and target the filtered pulls URL.
+    let capturedUrl: string | undefined;
+    let capturedHeaders: Record<string, string> | undefined;
+    vi.mocked(global.fetch).mockImplementationOnce(async (url, init) => {
+      capturedUrl = typeof url === "string" ? url : String(url);
+      capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
+      return createBranchListResponse(304);
+    });
+
+    await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/x" },
+    ]);
+
+    expect(capturedUrl).toBe(
+      "https://api.github.com/repos/owner/repo/pulls?head=owner:feature%2Fx&state=all"
+    );
+    expect(capturedHeaders?.["If-None-Match"]).toBe('W/"seed-2"');
+  });
+
+  it("BATCHCHECK_DISCOVERY_BRANCH_PROBE_ERROR_FALLS_THROUGH", async () => {
+    // A network failure on the branch-list probe must not block discovery —
+    // GraphQL still runs as the authoritative source.
+    vi.mocked(global.fetch).mockRejectedValueOnce(new Error("network down"));
+    shared.graphqlClient.mockResolvedValueOnce({
+      wt_0_branch: { pullRequests: { nodes: [] } },
+    });
+
+    const result = await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/x" },
+    ]);
+    expect(result.results.size).toBe(1);
+    expect(shared.graphqlClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("BATCHCHECK_DISCOVERY_BRANCH_PARTIAL_SKIP_FILTERS_GRAPHQL", async () => {
+    // Mixed discovery batch: one branch has no PR (skip), the other has a PR
+    // (fall through). Only the changed candidate should be queried via GraphQL.
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(createBranchListResponse(200, { etag: 'W/"a"', body: [] }))
+      .mockResolvedValueOnce(
+        createBranchListResponse(200, { etag: 'W/"b"', body: [{ number: 11 }] })
+      );
+    let capturedCandidates: unknown;
+    const githubIndex = await import("../github/index.js");
+    const buildBatch = vi.mocked(githubIndex.buildBatchPRQuery);
+    buildBatch.mockImplementationOnce((_owner, _repo, candidates) => {
+      capturedCandidates = candidates;
+      return "FILTERED_QUERY";
+    });
+    shared.graphqlClient.mockResolvedValueOnce({
+      wt_0_branch: { pullRequests: { nodes: [] } },
+    });
+
+    const result = await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/empty" },
+      { worktreeId: "wt-2", branchName: "feature/has-pr" },
+    ]);
+
+    expect(result.results.size).toBe(1);
+    expect(result.results.has("wt-2")).toBe(true);
+    expect(result.results.has("wt-1")).toBe(false);
+    expect(Array.isArray(capturedCandidates)).toBe(true);
+    expect((capturedCandidates as Array<{ worktreeId: string }>).map((c) => c.worktreeId)).toEqual([
+      "wt-2",
+    ]);
+  });
+
+  it("BATCHCHECK_DISCOVERY_BRANCH_ETAG_CLEARED_ON_TOKEN_ROTATION", async () => {
+    // Cycle 1: seed branch-list ETag.
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      createBranchListResponse(200, { etag: 'W/"v1"', body: [] })
+    );
+    await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/x" },
+    ]);
+
+    // Rotate token — branch-list ETag cache must be cleared atomically.
+    github.setGitHubToken("ghp_rotated");
+
+    // Cycle 2: probe must send no If-None-Match because the cache was cleared.
+    let capturedHeaders: Record<string, string> | undefined;
+    vi.mocked(global.fetch).mockImplementationOnce(async (_url, init) => {
+      capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
+      return createBranchListResponse(200, { etag: 'W/"v2"', body: [] });
+    });
+    await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/x" },
+    ]);
+
+    expect(capturedHeaders?.["If-None-Match"]).toBeUndefined();
   });
 
   it("BATCHCHECK_DUPLICATE_PR_NUMBERS_PROBED_ONCE", async () => {
