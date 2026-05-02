@@ -864,28 +864,24 @@ describe("FleetArmingDialog", () => {
   });
 
   describe("footer hint", () => {
-    it("shows all three hints simultaneously when terminals are visible and none are selected", () => {
+    it("renders the secondary-shortcuts popover trigger when terminals are visible", () => {
       seedTerminals([makeTerminal("a", { title: "alpha" })]);
       renderDialog([makeWorktreeSnap("wt-1", "Main")]);
-      expect(screen.getByText("Select all")).toBeTruthy();
-      expect(screen.getByText("Range")).toBeTruthy();
-      expect(screen.getByText("Invert")).toBeTruthy();
+      expect(screen.getByLabelText("More keyboard shortcuts")).toBeTruthy();
     });
 
-    it("shows all three hints simultaneously when at least one terminal is selected", () => {
+    it("reveals all three secondary shortcuts when the popover is opened", () => {
       seedTerminals([makeTerminal("a", { title: "alpha" }), makeTerminal("b", { title: "beta" })]);
       renderDialog([makeWorktreeSnap("wt-1", "Main")]);
-      fireEvent.click(screen.getByLabelText("Select alpha"));
+      fireEvent.click(screen.getByLabelText("More keyboard shortcuts"));
       expect(screen.getByText("Select all")).toBeTruthy();
       expect(screen.getByText("Range")).toBeTruthy();
       expect(screen.getByText("Invert")).toBeTruthy();
     });
 
-    it("shows no hint when no terminals are visible", () => {
+    it("does not render the popover trigger when no terminals are visible", () => {
       renderDialog([makeWorktreeSnap("wt-1", "Main")]);
-      expect(screen.queryByText("Select all")).toBeNull();
-      expect(screen.queryByText("Range")).toBeNull();
-      expect(screen.queryByText("Invert")).toBeNull();
+      expect(screen.queryByLabelText("More keyboard shortcuts")).toBeNull();
     });
   });
 
