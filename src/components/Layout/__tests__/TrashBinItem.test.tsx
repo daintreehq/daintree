@@ -194,12 +194,12 @@ describe("TrashBinItem", () => {
       const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
       const initialMatch = container.textContent?.match(/(\d+)s remaining/);
       expect(initialMatch).toBeTruthy();
-      const initialSeconds = parseInt(initialMatch![1], 10);
+      const initialSeconds = parseInt(initialMatch?.[1] ?? "0", 10);
 
       act(() => vi.advanceTimersByTime(2000));
       const laterMatch = container.textContent?.match(/(\d+)s remaining/);
       expect(laterMatch).toBeTruthy();
-      const laterSeconds = parseInt(laterMatch![1], 10);
+      const laterSeconds = parseInt(laterMatch?.[1] ?? "0", 10);
 
       expect(laterSeconds).toBeLessThan(initialSeconds);
     });
@@ -236,7 +236,7 @@ describe("TrashBinItem", () => {
 
       const afterRestore = container.textContent?.match(/(\d+)s remaining/);
       expect(afterRestore).toBeTruthy();
-      const seconds = parseInt(afterRestore![1], 10);
+      const seconds = parseInt(afterRestore?.[1] ?? "0", 10);
       // 20s initial - 1s tick before hide - 10s hidden ≈ 9s remaining
       expect(seconds).toBeLessThanOrEqual(10);
     });

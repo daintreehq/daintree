@@ -38,6 +38,7 @@ export function TrashGroupItem({
   const canRestore = !isOrphan || !!activeWorktreeId;
 
   const tick = useGlobalSecondTicker();
+  void tick;
   const timeRemaining = Math.max(0, earliestExpiry - Date.now());
   const seconds = Math.ceil(timeRemaining / 1000);
 

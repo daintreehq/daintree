@@ -25,6 +25,7 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
   const isOrphan = !!terminal.worktreeId && !worktreeName;
 
   const tick = useGlobalSecondTicker();
+  void tick;
   const timeRemaining = Math.max(0, trashedInfo.expiresAt - Date.now());
   const seconds = Math.ceil(timeRemaining / 1000);
 

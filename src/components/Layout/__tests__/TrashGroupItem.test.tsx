@@ -67,6 +67,7 @@ const groupMetadata: TrashedTerminalGroupMetadata = {
   worktreeId: "wt1",
   panelIds: ["t1", "t2"],
   activeTabId: "t1",
+  location: "grid",
 };
 
 const terminals = [
@@ -103,7 +104,16 @@ describe("TrashGroupItem", () => {
     });
 
     it("shows singular tab label for one terminal", () => {
-      const single = [terminals[0]];
+      const single = [
+        {
+          terminal: makeTerminal({ id: "t1", title: "First tab" }),
+          trashedInfo: {
+            id: "t1",
+            expiresAt: Date.now() + 20000,
+            originalLocation: "grid",
+          } as TrashedTerminal,
+        },
+      ];
       const { container } = render(
         <TrashGroupItem
           groupRestoreId="grp1"
@@ -252,12 +262,12 @@ describe("TrashGroupItem", () => {
       );
       const initialMatch = container.textContent?.match(/(\d+)s remaining/);
       expect(initialMatch).toBeTruthy();
-      const initialSeconds = parseInt(initialMatch![1], 10);
+      const initialSeconds = parseInt(initialMatch?.[1] ?? "0", 10);
 
       act(() => vi.advanceTimersByTime(2000));
       const laterMatch = container.textContent?.match(/(\d+)s remaining/);
       expect(laterMatch).toBeTruthy();
-      const laterSeconds = parseInt(laterMatch![1], 10);
+      const laterSeconds = parseInt(laterMatch?.[1] ?? "0", 10);
 
       expect(laterSeconds).toBeLessThan(initialSeconds);
     });
@@ -296,7 +306,7 @@ describe("TrashGroupItem", () => {
 
       const afterRestore = container.textContent?.match(/(\d+)s remaining/);
       expect(afterRestore).toBeTruthy();
-      const seconds = parseInt(afterRestore![1], 10);
+      const seconds = parseInt(afterRestore?.[1] ?? "0", 10);
       expect(seconds).toBeLessThanOrEqual(10);
     });
 
