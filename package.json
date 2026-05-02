@@ -11,7 +11,7 @@
   "main": "dist-electron/electron/bootstrap.js",
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "lint-staged": {
     "*": "prettier --write --ignore-unknown"
