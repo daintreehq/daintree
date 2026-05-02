@@ -30,7 +30,11 @@ vi.mock("@/components/ui/Kbd", () => ({
 }));
 
 import { AppPaletteDialog } from "../AppPaletteDialog";
-import { UI_PALETTE_ENTER_DURATION, UI_PALETTE_EXIT_DURATION } from "@/lib/animationUtils";
+import {
+  UI_PALETTE_ENTER_DURATION,
+  UI_DOHERTY_THRESHOLD,
+  UI_PALETTE_EXIT_DURATION,
+} from "@/lib/animationUtils";
 
 function getLoadingBar(): HTMLElement | null {
   return document.querySelector<HTMLElement>(".palette-loading-bar");
@@ -64,7 +68,7 @@ describe("AppPaletteDialog.Header loading bar", () => {
     expect(bar?.dataset.loading).toBe("false");
   });
 
-  it("reveals the bar with a grace-period delay when isLoading is true", () => {
+  it("reveals the bar with a Doherty-threshold delay when isLoading is true", () => {
     render(
       <AppPaletteDialog.Header label="Quick switch" isLoading>
         <input aria-label="Search" />
@@ -72,8 +76,8 @@ describe("AppPaletteDialog.Header loading bar", () => {
     );
     const bar = getLoadingBar();
     expect(bar?.style.opacity).toBe("1");
-    // Grace period matches the palette enter duration so fast loads never flash
-    expect(bar?.style.transitionDelay).toBe(`${UI_PALETTE_ENTER_DURATION}ms`);
+    // 400ms Doherty threshold so fast loads never flash a sweep
+    expect(bar?.style.transitionDelay).toBe(`${UI_DOHERTY_THRESHOLD}ms`);
     expect(bar?.style.transitionDuration).toBe(`${UI_PALETTE_ENTER_DURATION}ms`);
     expect(bar?.dataset.loading).toBe("true");
   });

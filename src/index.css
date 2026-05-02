@@ -1103,7 +1103,8 @@ body,
  * Doherty anti-flicker gate: if the deferred work resolves in under one frame
  * (typical for ~258 actions on fast hardware), the dim never starts. On a
  * genuinely overloaded render the surface fades to half opacity as a "still
- * working" cue. */
+ * working" cue.
+ * Keep in sync with UI_DOHERTY_THRESHOLD in src/lib/animationUtils.ts. */
 .palette-results-stale,
 .surface-stale {
   opacity: 0.5;

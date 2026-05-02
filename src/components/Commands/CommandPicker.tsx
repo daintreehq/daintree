@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useDeferredValue } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { Spinner } from "@/components/ui/Spinner";
@@ -49,6 +49,9 @@ export function CommandPicker({
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
 
+  const deferredQuery = useDeferredValue(query);
+  const isStale = query !== deferredQuery;
+
   const filteredCommands = useMemo(() => {
     let result = commands;
 
@@ -56,15 +59,15 @@ export function CommandPicker({
       result = result.filter((cmd) => filter.includes(cmd.category));
     }
 
-    if (query.trim()) {
+    if (deferredQuery.trim()) {
       result = result.filter((cmd) => {
         const searchText = `${cmd.id} ${cmd.label} ${cmd.description} ${cmd.keywords?.join(" ") ?? ""}`;
-        return fuzzyMatch(searchText, query.trim());
+        return fuzzyMatch(searchText, deferredQuery.trim());
       });
     }
 
     return result;
-  }, [commands, filter, query]);
+  }, [commands, filter, deferredQuery]);
 
   const groupedCommands = useMemo(() => {
     const groups = new Map<CommandCategory, CommandManifestEntry[]>();
@@ -136,10 +139,13 @@ export function CommandPicker({
   }, [flatCommands]);
 
   const handleConfirm = useCallback(() => {
+    // While the deferred filter is catching up, results may not match the input.
+    // No-op and wait for the next render; a repeat Enter lands on the right item.
+    if (isStale) return;
     if (flatCommands[selectedIndex]?.enabled) {
       onSelect(flatCommands[selectedIndex]);
     }
-  }, [flatCommands, selectedIndex, onSelect]);
+  }, [flatCommands, selectedIndex, onSelect, isStale]);
 
   if (isLoading) {
     return (
@@ -184,6 +190,7 @@ export function CommandPicker({
       onConfirm={handleConfirm}
       onClose={onDismiss}
       getItemId={(cmd) => cmd.id}
+      isFiltering={isStale}
       renderItem={(cmd, index, isSelected) => {
         const category = categoryStarts.get(cmd.id);
         return (
@@ -214,7 +221,10 @@ export function CommandPicker({
                   : "border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text",
                 !cmd.enabled && "opacity-50 cursor-not-allowed"
               )}
-              onClick={() => cmd.enabled && onSelect(cmd)}
+              onClick={() => {
+                if (isStale) return;
+                if (cmd.enabled) onSelect(cmd);
+              }}
             >
               <div className="flex items-center justify-between">
                 <span className="font-mono text-sm text-daintree-text/90">/{cmd.id}</span>
