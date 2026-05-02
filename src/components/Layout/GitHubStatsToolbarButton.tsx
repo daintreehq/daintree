@@ -729,8 +729,9 @@ export const GitHubStatsToolbarButton = memo(
           }
           // Only anchor on the open transition — toggling closed should not
           // re-record. `issuesOpenRef` is mirrored from state via useEffect
-          // and is current at imperative-call time.
-          if (!issuesOpenRef.current && currentProject && issueCount != null) {
+          // and is current at imperative-call time. A null count clears any
+          // stale anchor so the next known-count open starts fresh.
+          if (!issuesOpenRef.current && currentProject) {
             useGitHubSeenAnchorsStore
               .getState()
               .recordOpen(currentProject.path, "issues", issueCount);
@@ -742,7 +743,7 @@ export const GitHubStatsToolbarButton = memo(
             openSettingsForToken();
             return;
           }
-          if (!prsOpenRef.current && currentProject && prCount != null) {
+          if (!prsOpenRef.current && currentProject) {
             useGitHubSeenAnchorsStore
               .getState()
               .recordOpen(currentProject.path, "prs", prCount);
@@ -750,7 +751,7 @@ export const GitHubStatsToolbarButton = memo(
           setPrsOpen((p) => !p);
         },
         openCommits: () => {
-          if (!commitsOpenRef.current && currentProject && commitCount != null) {
+          if (!commitsOpenRef.current && currentProject) {
             useGitHubSeenAnchorsStore
               .getState()
               .recordOpen(currentProject.path, "commits", commitCount);
@@ -801,8 +802,10 @@ export const GitHubStatsToolbarButton = memo(
                 // poll that lands during dropdown-opening can't race a newer
                 // count past the seen marker. Anchored at click intent, not
                 // poll completion. `currentProject` is guaranteed non-null by
-                // the early-return above.
-                if (willOpen && issueCount != null) {
+                // the early-return above. A null `issueCount` means stats
+                // haven't loaded yet — `recordOpen` clears any stale anchor in
+                // that case so the next open with a known count starts fresh.
+                if (willOpen) {
                   useGitHubSeenAnchorsStore
                     .getState()
                     .recordOpen(currentProject.path, "issues", issueCount);
@@ -830,7 +833,9 @@ export const GitHubStatsToolbarButton = memo(
               aria-label={
                 isTokenError
                   ? "Configure GitHub token to see issues"
-                  : `${issueCount ?? "\u2014"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+                  : `${issueCount ?? "\u2014"} open issues${
+                      issuesDeltaLabel ? ` (${issuesDeltaLabel} since last opened)` : ""
+                    }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
               }
             >
               <CircleDot
@@ -851,7 +856,7 @@ export const GitHubStatsToolbarButton = memo(
               {!isTokenError && issuesDeltaLabel ? (
                 <span
                   className="text-[10px] font-medium leading-none text-muted-foreground"
-                  aria-label={`${issuesDeltaLabel} since you last opened issues`}
+                  aria-hidden="true"
                 >
                   {issuesDeltaLabel}
                 </span>
@@ -938,7 +943,7 @@ export const GitHubStatsToolbarButton = memo(
                 const willOpen = !prsOpen;
                 setPrsOpen(willOpen);
                 if (!willOpen) setPrSearchQuery("");
-                if (willOpen && prCount != null) {
+                if (willOpen) {
                   useGitHubSeenAnchorsStore
                     .getState()
                     .recordOpen(currentProject.path, "prs", prCount);
@@ -966,7 +971,9 @@ export const GitHubStatsToolbarButton = memo(
               aria-label={
                 isTokenError
                   ? "Configure GitHub token to see pull requests"
-                  : `${prCount ?? "\u2014"} open pull requests${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+                  : `${prCount ?? "\u2014"} open pull requests${
+                      prsDeltaLabel ? ` (${prsDeltaLabel} since last opened)` : ""
+                    }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
               }
             >
               <GitPullRequest
@@ -987,7 +994,7 @@ export const GitHubStatsToolbarButton = memo(
               {!isTokenError && prsDeltaLabel ? (
                 <span
                   className="text-[10px] font-medium leading-none text-muted-foreground"
-                  aria-label={`${prsDeltaLabel} since you last opened pull requests`}
+                  aria-hidden="true"
                 >
                   {prsDeltaLabel}
                 </span>
@@ -1059,7 +1066,7 @@ export const GitHubStatsToolbarButton = memo(
                 setPrSearchQuery("");
                 const willOpen = !commitsOpen;
                 setCommitsOpen(willOpen);
-                if (willOpen && commitCount != null) {
+                if (willOpen) {
                   useGitHubSeenAnchorsStore
                     .getState()
                     .recordOpen(currentProject.path, "commits", commitCount);
@@ -1072,7 +1079,9 @@ export const GitHubStatsToolbarButton = memo(
                 commitsOpen &&
                   "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-border-strong"
               )}
-              aria-label={`${commitCount ?? "\u2014"} commits${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
+              aria-label={`${commitCount ?? "\u2014"} commits${
+                commitsDeltaLabel ? ` (${commitsDeltaLabel} since last opened)` : ""
+              }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
             >
               <GitCommit className="h-4 w-4" />
               <span
@@ -1087,7 +1096,7 @@ export const GitHubStatsToolbarButton = memo(
               {commitsDeltaLabel ? (
                 <span
                   className="text-[10px] font-medium leading-none text-muted-foreground"
-                  aria-label={`${commitsDeltaLabel} since you last opened commits`}
+                  aria-hidden="true"
                 >
                   {commitsDeltaLabel}
                 </span>

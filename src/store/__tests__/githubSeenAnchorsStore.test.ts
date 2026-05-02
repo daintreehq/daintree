@@ -63,6 +63,20 @@ describe("deriveBadgeLabel", () => {
     expect(deriveBadgeLabel(zeroAnchor, 0, false, now)).toBeNull();
     expect(deriveBadgeLabel(zeroAnchor, 1, false, now)).toBe("+1");
   });
+
+  it("returns null for non-finite count or seenAt (corrupted persisted state)", () => {
+    expect(deriveBadgeLabel({ count: NaN, seenAt: now - 60_000 }, 12, false, now)).toBeNull();
+    expect(deriveBadgeLabel({ count: 10, seenAt: NaN }, 12, false, now)).toBeNull();
+    expect(deriveBadgeLabel({ count: Infinity, seenAt: now - 60_000 }, 12, false, now)).toBeNull();
+    expect(
+      deriveBadgeLabel(
+        { count: "bad" as unknown as number, seenAt: now - 60_000 },
+        12,
+        false,
+        now
+      )
+    ).toBeNull();
+  });
 });
 
 describe("useGitHubSeenAnchorsStore.recordOpen", () => {
@@ -93,6 +107,24 @@ describe("useGitHubSeenAnchorsStore.recordOpen", () => {
     expect(proj?.issues?.count).toBe(12);
     expect(proj?.prs?.count).toBe(4);
     expect(proj?.commits?.count).toBe(30);
+  });
+
+  it("clears the anchor when count is null (open before stats loaded)", () => {
+    useGitHubSeenAnchorsStore.getState().recordOpen("/proj/a", "issues", 12);
+    useGitHubSeenAnchorsStore.getState().recordOpen("/proj/a", "prs", 4);
+    expect(useGitHubSeenAnchorsStore.getState().anchors["/proj/a"]?.issues?.count).toBe(12);
+
+    // Opening again while count is unknown clears the issues anchor only —
+    // the badge will be suppressed until the next open with a known count.
+    useGitHubSeenAnchorsStore.getState().recordOpen("/proj/a", "issues", null);
+    const proj = useGitHubSeenAnchorsStore.getState().anchors["/proj/a"];
+    expect(proj?.issues).toBeUndefined();
+    expect(proj?.prs?.count).toBe(4);
+  });
+
+  it("recordOpen with null count is a no-op when no prior anchor exists", () => {
+    useGitHubSeenAnchorsStore.getState().recordOpen("/proj/a", "issues", null);
+    expect(useGitHubSeenAnchorsStore.getState().anchors["/proj/a"]?.issues).toBeUndefined();
   });
 
   it("re-recording the same category updates count and seenAt without disturbing siblings", () => {

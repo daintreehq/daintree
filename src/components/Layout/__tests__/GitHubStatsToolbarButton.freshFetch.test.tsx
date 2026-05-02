@@ -198,7 +198,8 @@ describe("GitHubStatsToolbarButton +N badge wiring", () => {
 
   it("calls recordOpen synchronously inside each willOpen branch", () => {
     // Issue, PR, and commit click handlers each anchor before any async
-    // refresh fires. Three call sites, one per category.
+    // refresh fires. recordOpen is called unconditionally on the open
+    // transition; a null count clears any stale anchor for that category.
     const issuesCalls = source.match(
       /recordOpen\(\s*currentProject\.path,\s*"issues"\s*,\s*issueCount\s*\)/g
     );
@@ -212,6 +213,16 @@ describe("GitHubStatsToolbarButton +N badge wiring", () => {
     expect(issuesCalls?.length).toBe(2);
     expect(prsCalls?.length).toBe(2);
     expect(commitsCalls?.length).toBe(2);
+  });
+
+  it("does not gate recordOpen on a non-null count (null clears the anchor)", () => {
+    // Earlier drafts gated `recordOpen` on `issueCount != null` etc., which
+    // left a stale anchor when the user opened before the first stats fetch
+    // completed. The store now treats `null` as a clear-anchor signal, so the
+    // call sites must NOT include the count-not-null guard.
+    expect(source).not.toMatch(/willOpen\s*&&\s*issueCount\s*!=\s*null/);
+    expect(source).not.toMatch(/willOpen\s*&&\s*prCount\s*!=\s*null/);
+    expect(source).not.toMatch(/willOpen\s*&&\s*commitCount\s*!=\s*null/);
   });
 
   it("guards imperative anchor recording on the closed→open transition only", () => {
@@ -239,7 +250,7 @@ describe("GitHubStatsToolbarButton +N badge wiring", () => {
 
     // Each badge span uses text-muted-foreground (codebase de-emphasis idiom),
     // not text-accent-primary or any accent token. Window is generous because
-    // each block spans ~300 chars including aria-label and inner content.
+    // each block spans ~300 chars including aria attribute and inner content.
     const badgeBlocks = source.match(/DeltaLabel\s*\?\s*\([\s\S]{0,500}?<\/span>/g);
     expect(badgeBlocks).not.toBeNull();
     expect(badgeBlocks?.length).toBe(3);
@@ -247,7 +258,24 @@ describe("GitHubStatsToolbarButton +N badge wiring", () => {
       expect(block).toContain("text-muted-foreground");
       expect(block).not.toContain("text-accent");
       expect(block).not.toContain("accent-primary");
+      // Child <span> aria-label inside a button with explicit aria-label is
+      // ignored by ARIA — the delta is announced via the button's aria-label
+      // instead. Badge spans must use aria-hidden so screen readers don't
+      // double-announce the visual digits.
+      expect(block).toContain('aria-hidden="true"');
+      expect(block).not.toContain("aria-label");
     }
+  });
+
+  it("folds the delta label into each button's aria-label for screen readers", () => {
+    // The visual badge has aria-hidden, so the delta must reach screen
+    // readers via the button's accessible name. Each of the three button
+    // aria-label expressions must reference its matching delta label.
+    expect(source).toMatch(/issuesDeltaLabel\s*\?\s*` \(\$\{issuesDeltaLabel\} since last opened\)`/);
+    expect(source).toMatch(/prsDeltaLabel\s*\?\s*` \(\$\{prsDeltaLabel\} since last opened\)`/);
+    expect(source).toMatch(
+      /commitsDeltaLabel\s*\?\s*` \(\$\{commitsDeltaLabel\} since last opened\)`/
+    );
   });
 
   it("places each badge between the count digit and the FreshnessGlyph", () => {
@@ -255,25 +283,26 @@ describe("GitHubStatsToolbarButton +N badge wiring", () => {
     //   <span ... tabular-nums>{count}</span>
     //   {deltaLabel ? <span ...muted...> : null}
     //   <FreshnessGlyph ...>
-    // Anchored on the unique animKey props so we don't conflate aria-label
-    // sites that happen to also reference the count value.
+    // The badge-render anchor is `<category>DeltaLabel ? (` — distinct from
+    // the aria-label form `<category>DeltaLabel ? \`...\`` which also
+    // appears earlier in the button props.
 
     const issuesSpan = source.indexOf("key={issueAnimKey}");
-    const issuesBadge = source.indexOf("issuesDeltaLabel ?");
+    const issuesBadge = source.indexOf("issuesDeltaLabel ? (", issuesSpan);
     const issuesGlyph = source.indexOf("<FreshnessGlyph", issuesSpan);
     expect(issuesSpan).toBeGreaterThan(0);
     expect(issuesBadge).toBeGreaterThan(issuesSpan);
     expect(issuesGlyph).toBeGreaterThan(issuesBadge);
 
     const prsSpan = source.indexOf("key={prAnimKey}");
-    const prsBadge = source.indexOf("prsDeltaLabel ?");
+    const prsBadge = source.indexOf("prsDeltaLabel ? (", prsSpan);
     const prsGlyph = source.indexOf("<FreshnessGlyph", prsSpan);
     expect(prsSpan).toBeGreaterThan(0);
     expect(prsBadge).toBeGreaterThan(prsSpan);
     expect(prsGlyph).toBeGreaterThan(prsBadge);
 
     const commitsSpan = source.indexOf("key={commitAnimKey}");
-    const commitsBadge = source.indexOf("commitsDeltaLabel ?");
+    const commitsBadge = source.indexOf("commitsDeltaLabel ? (", commitsSpan);
     const commitsGlyph = source.indexOf("<FreshnessGlyph", commitsSpan);
     expect(commitsSpan).toBeGreaterThan(0);
     expect(commitsBadge).toBeGreaterThan(commitsSpan);

@@ -26,6 +26,10 @@ export function deriveBadgeLabel(
   now: number
 ): string | null {
   if (!anchor) return null;
+  // Defensive: corrupted persisted state (manual localStorage edit, partial
+  // write, or a future schema change) could surface a non-numeric `count` or
+  // `seenAt` that would otherwise produce `+NaN`.
+  if (!Number.isFinite(anchor.count) || !Number.isFinite(anchor.seenAt)) return null;
   if (isOpen) return null;
   if (now - anchor.seenAt > SEEN_SUPPRESSION_TTL_MS) return null;
   if (currentCount == null) return null;
@@ -36,7 +40,19 @@ export function deriveBadgeLabel(
 
 interface GitHubSeenAnchorsState {
   anchors: Record<string, PerCategoryAnchors>;
-  recordOpen: (projectPath: string, category: GitHubSeenAnchorCategory, count: number) => void;
+  /**
+   * Records an anchor for the given project + category. Pass `null` for
+   * `count` when the user opens the dropdown while stats haven't loaded yet —
+   * any existing anchor for that category is cleared so a stale value can't
+   * over-report once stats arrive (the user attended to the category but had
+   * nothing concrete to anchor against). On the next open with a known count
+   * a fresh anchor is captured.
+   */
+  recordOpen: (
+    projectPath: string,
+    category: GitHubSeenAnchorCategory,
+    count: number | null
+  ) => void;
 }
 
 export const useGitHubSeenAnchorsStore = create<GitHubSeenAnchorsState>()(
@@ -45,15 +61,28 @@ export const useGitHubSeenAnchorsStore = create<GitHubSeenAnchorsState>()(
       anchors: {},
 
       recordOpen: (projectPath, category, count) =>
-        set((state) => ({
-          anchors: {
-            ...state.anchors,
-            [projectPath]: {
-              ...(state.anchors[projectPath] ?? {}),
-              [category]: { count, seenAt: Date.now() },
+        set((state) => {
+          const projectAnchors = state.anchors[projectPath] ?? {};
+          if (count == null) {
+            if (!(category in projectAnchors)) return state;
+            const { [category]: _omit, ...rest } = projectAnchors;
+            return {
+              anchors: {
+                ...state.anchors,
+                [projectPath]: rest,
+              },
+            };
+          }
+          return {
+            anchors: {
+              ...state.anchors,
+              [projectPath]: {
+                ...projectAnchors,
+                [category]: { count, seenAt: Date.now() },
+              },
             },
-          },
-        })),
+          };
+        }),
     }),
     {
       name: "daintree-github-seen-anchors",
