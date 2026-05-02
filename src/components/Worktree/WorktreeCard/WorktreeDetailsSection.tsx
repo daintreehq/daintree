@@ -1,8 +1,10 @@
 import type React from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { WorktreeState } from "@/types";
 import type { RetryAction } from "@/store";
 import type { ErrorRecord } from "@/store/errorStore";
+import { useAnimate, useReducedMotion } from "framer-motion";
+import { DURATION_200 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { ActivityLight } from "../ActivityLight";
 import { LiveTimeAgo } from "../LiveTimeAgo";
@@ -85,21 +87,27 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const detailsId = `worktree-${worktree.id}-details`;
   const detailsPanelId = `worktree-${worktree.id}-details-panel`;
 
-  // One-shot bump on file-count change. Counter increments on every change
-  // and is used as a `key` on the count span so back-to-back updates remount
-  // the node and restart the animation (a plain boolean latch would silently
-  // drop a second update arriving inside the 200ms animation window).
-  // prevRef seeded to current value so mount produces no bump.
   const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;
-  const prevCountRef = useRef(changedFileCount);
-  const [bumpKey, setBumpKey] = useState(0);
+  const [countScope, animate] = useAnimate<HTMLSpanElement>();
+  const prefersReducedMotion = useReducedMotion();
+  const didMountRef = useRef(false);
+  const lastBumpTimeRef = useRef(0);
 
   useEffect(() => {
-    if (prevCountRef.current !== changedFileCount) {
-      prevCountRef.current = changedFileCount;
-      setBumpKey((k) => k + 1);
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
     }
-  }, [changedFileCount]);
+    if (prefersReducedMotion) return;
+    if (Date.now() - lastBumpTimeRef.current < DURATION_200) return;
+
+    lastBumpTimeRef.current = Date.now();
+    animate(
+      countScope.current,
+      { scale: [1, 1.06, 1] },
+      { duration: DURATION_200 / 1000, ease: [0.4, 0, 0.2, 1] }
+    );
+  }, [changedFileCount, prefersReducedMotion, animate]);
 
   const rsLower = resourceStatus?.toLowerCase();
   const showResourceResume =
@@ -190,10 +198,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 <span className="text-status-error">{lifecycleLabel}</span>
               ) : hasChanges && worktree.worktreeChanges ? (
                 <span className="flex items-center gap-1.5 text-text-secondary">
-                  <span
-                    key={bumpKey}
-                    className={cn("inline-block", bumpKey > 0 && "animate-badge-bump")}
-                  >
+                  <span ref={countScope} className="inline-block">
                     {worktree.worktreeChanges.changedFileCount} file
                     {worktree.worktreeChanges.changedFileCount !== 1 ? "s" : ""}
                   </span>
