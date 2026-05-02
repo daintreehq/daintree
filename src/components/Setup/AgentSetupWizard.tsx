@@ -13,6 +13,7 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { cliAvailabilityClient } from "@/clients";
 import { logError } from "@/utils/logger";
 import type { CliAvailability } from "@shared/types";
+import { useAgentSetupPoll } from "./useAgentSetupPoll";
 import { isAgentInstalled, isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { Sparkles, ChevronLeft, ChevronRight, ArrowRight, Check, Sun, Moon } from "lucide-react";
 import { AnimatePresence, m, useReducedMotion, type Variants } from "framer-motion";
@@ -27,7 +28,6 @@ import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 
 const AGENT_ORDER = BUILT_IN_AGENT_IDS;
-const POLL_INTERVAL = 3000;
 
 const daintreeScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
 const bondiScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === "bondi")!;
@@ -347,7 +347,6 @@ export function AgentSetupWizard({
   const [telemetryEnabled, setTelemetryEnabled] = useState(false);
   const telemetryCommittedRef = useRef(false);
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isOpenRef = useRef(isOpen);
   const initRef = useRef(false);
   const directionRef = useRef<1 | -1>(1);
@@ -375,31 +374,10 @@ export function AgentSetupWizard({
     prevIsOpenRef.current = isOpen;
   }, [isOpen, initialAvailability]);
 
-  // Poll availability
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const poll = () => {
-      cliAvailabilityClient
-        .refresh()
-        .then((result) => {
-          if (isOpenRef.current) {
-            dispatch({ type: "SET_AVAILABILITY", payload: result });
-          }
-        })
-        .catch((err) => logError("Failed to refresh CLI availability", err));
-    };
-
-    poll();
-    pollRef.current = setInterval(poll, POLL_INTERVAL);
-
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, [isOpen]);
+  // Poll availability — paused when document is hidden
+  useAgentSetupPoll(isOpen, (result) => {
+    dispatch({ type: "SET_AVAILABILITY", payload: result });
+  });
 
   // Initialize selections once when availability is ready
   useEffect(() => {
