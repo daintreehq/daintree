@@ -396,6 +396,32 @@ export interface ProjectSettings {
   defaultWorktreeMode?: string;
   /** Hostnames the user approved for the browser panel beyond the implicit local/private allow-list */
   browserAllowedHosts?: string[];
-  /** Expose the Daintree MCP server to Claude Code agents launched in this project's worktrees */
+  /**
+   * Tier of Daintree MCP access exposed to agents launched in this project's worktrees.
+   * - `off` (default): no MCP server injected
+   * - `workbench`: read-only introspection (worktree/files/terminal output, project state, history)
+   * - `action`: workbench + non-destructive operations (create worktrees, inject context, stage changes)
+   * - `system`: action + destructive/irreversible operations (delete worktrees, commit/push, send terminal commands)
+   */
+  daintreeMcpTier?: DaintreeMcpTier;
+  /**
+   * @deprecated Use `daintreeMcpTier` instead. Kept for one-cycle migration of existing project files.
+   * `true` migrates to `workbench` on read; `false`/undefined migrates to `off`.
+   */
   exposeDaintreeMcpToAgents?: boolean;
+}
+
+/** Tier of Daintree MCP access exposed to agents in a project. */
+export type DaintreeMcpTier = "off" | "workbench" | "action" | "system";
+
+/** Resolve the legacy boolean field into the new tier enum. */
+export function resolveDaintreeMcpTier(settings: {
+  daintreeMcpTier?: DaintreeMcpTier;
+  exposeDaintreeMcpToAgents?: boolean;
+}): DaintreeMcpTier {
+  const tier = settings.daintreeMcpTier;
+  if (tier === "workbench" || tier === "action" || tier === "system") return tier;
+  if (tier === "off") return "off";
+  if (settings.exposeDaintreeMcpToAgents === true) return "workbench";
+  return "off";
 }

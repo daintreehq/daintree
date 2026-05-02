@@ -1,6 +1,7 @@
 import type { CommandOverride } from "@shared/types/commands";
 import type {
   CopyTreeSettings,
+  DaintreeMcpTier,
   ProjectTerminalSettings,
   ResourceEnvironment,
 } from "@shared/types/project";
@@ -12,7 +13,7 @@ export interface ProjectSettingsSnapshot {
   devServerCommand: string;
   devServerLoadTimeout: number | undefined;
   turbopackEnabled: boolean;
-  exposeDaintreeMcpToAgents: boolean;
+  daintreeMcpTier: DaintreeMcpTier;
   projectIconSvg: string | undefined;
   excludedPaths: string[];
   environmentVariables: Record<string, string>;
@@ -78,7 +79,7 @@ export function createProjectSettingsSnapshot(
   activeResourceEnvironment: string | undefined = undefined,
   defaultWorktreeMode: string | undefined = undefined,
   turbopackEnabled: boolean = true,
-  exposeDaintreeMcpToAgents: boolean = false
+  daintreeMcpTier: DaintreeMcpTier = "off"
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -147,7 +148,7 @@ export function createProjectSettingsSnapshot(
     devServerCommand: devServerCommand.trim(),
     devServerLoadTimeout,
     turbopackEnabled,
-    exposeDaintreeMcpToAgents,
+    daintreeMcpTier,
     projectIconSvg,
     excludedPaths: sanitizedPaths,
     environmentVariables: sortedEnvVars,
@@ -220,7 +221,7 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
   if (a.devServerCommand !== b.devServerCommand) return false;
   if (a.devServerLoadTimeout !== b.devServerLoadTimeout) return false;
   if (a.turbopackEnabled !== b.turbopackEnabled) return false;
-  if (a.exposeDaintreeMcpToAgents !== b.exposeDaintreeMcpToAgents) return false;
+  if (a.daintreeMcpTier !== b.daintreeMcpTier) return false;
   if (a.projectIconSvg !== b.projectIconSvg) return false;
   if (a.defaultWorktreeRecipeId !== b.defaultWorktreeRecipeId) return false;
 

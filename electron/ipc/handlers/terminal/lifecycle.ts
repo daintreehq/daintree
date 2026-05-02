@@ -17,6 +17,7 @@ import { mcpServerService } from "../../../services/McpServerService.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import type { HandlerDependencies } from "../../types.js";
 import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
+import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
 import {
@@ -220,12 +221,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     ) {
       try {
         const projSettings = await projectStore.getProjectSettings(projectId);
-        if (projSettings.exposeDaintreeMcpToAgents) {
+        const tier = resolveDaintreeMcpTier(projSettings);
+        if (tier !== "off") {
           const port = mcpServerService.currentPort;
           if (port) {
             const { configPath, token } = await mcpPaneConfigService.preparePaneConfig({
               paneId: id,
               port,
+              tier,
             });
             safeCommand = `${safeCommand} --mcp-config ${shellQuote(configPath)}`;
             spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: token };

@@ -1199,7 +1199,10 @@ export class McpServerService {
    * Resolve the source-tier classification for an authenticated request.
    * Mirrors the three branches of `isAuthorized`:
    *   1. Bearer matches the global apiKey → `"external"` (legacy server).
-   *   2. Bearer matches a per-pane token → `"workbench"` (project agents).
+   *   2. Bearer matches a per-pane token → the per-pane configured tier
+   *      (`"workbench"`, `"action"`, or `"system"` from the project's
+   *      `daintreeMcpTier` setting). Pane configs with tier `"off"` are
+   *      never written, so this branch returns one of the active tiers.
    *   3. No `Authorization` header and no apiKey configured → `"external"`
    *      (legacy permissive path; preserves pre-auth behavior).
    * Falls back to `"workbench"` for anything that slipped through but
@@ -1220,7 +1223,10 @@ export class McpServerService {
 
     if (auth.startsWith("Bearer ")) {
       const token = auth.slice("Bearer ".length);
-      if (mcpPaneConfigService.isValidPaneToken(token)) return "workbench";
+      const paneTier = mcpPaneConfigService.getTierForToken(token);
+      if (paneTier === "workbench" || paneTier === "action" || paneTier === "system") {
+        return paneTier;
+      }
     }
 
     return "workbench";

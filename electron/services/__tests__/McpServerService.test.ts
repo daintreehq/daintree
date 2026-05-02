@@ -112,11 +112,12 @@ vi.mock("../../store.js", () => ({
   },
 }));
 
-const paneTokens = vi.hoisted(() => new Set<string>());
+const paneTokenTiers = vi.hoisted(() => new Map<string, "workbench" | "action" | "system">());
 
 vi.mock("../McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
-    isValidPaneToken: (token: string) => paneTokens.has(token),
+    isValidPaneToken: (token: string) => paneTokenTiers.has(token),
+    getTierForToken: (token: string) => paneTokenTiers.get(token),
   },
 }));
 
@@ -413,7 +414,7 @@ describe("McpServerService", () => {
     };
     storeMocks.get.mockClear();
     storeMocks.set.mockClear();
-    paneTokens.clear();
+    paneTokenTiers.clear();
     electronMocks.ipcMain.removeAllListeners();
     electronMocks.ipcMain.handle.mockClear();
     electronMocks.ipcMain.removeHandler.mockClear();
@@ -1192,7 +1193,7 @@ describe("McpServerService", () => {
       port: number
     ): Promise<{ client: Client; transport: SSEClientTransport; token: string }> {
       const token = `pane-token-${Math.random().toString(36).slice(2)}`;
-      paneTokens.add(token);
+      paneTokenTiers.set(token, "workbench");
       const client = new Client({ name: "mcp-pane-client", version: "1.0.0" });
       const headers = { Authorization: `Bearer ${token}` };
       const transport = new SSEClientTransport(new URL(`http://127.0.0.1:${port}/sse`), {
@@ -1404,7 +1405,7 @@ describe("McpServerService", () => {
       await service.start(window);
 
       const token = `pane-token-${Math.random().toString(36).slice(2)}`;
-      paneTokens.add(token);
+      paneTokenTiers.set(token, "workbench");
       const client = new Client({ name: "mcp-pane-http-client", version: "1.0.0" });
       const transport = new StreamableHTTPClientTransport(
         new URL(`http://127.0.0.1:${service.currentPort}/mcp`),
@@ -1431,6 +1432,132 @@ describe("McpServerService", () => {
       expect(denyRecord?.tier).toBe("workbench");
       expect(denyRecord?.result).toBe("unauthorized");
       expect(allowRecord?.tier).toBe("workbench");
+    });
+  });
+
+  describe("per-pane MCP tier", () => {
+    const tierManifest = () => [
+      createManifestEntry({
+        id: "actions.list" as ActionId,
+        title: "List Actions",
+        description: "Read the action registry",
+        kind: "query",
+      }),
+      createManifestEntry({
+        id: "worktree.list" as ActionId,
+        title: "List Worktrees",
+        description: "Read worktree state",
+        kind: "query",
+      }),
+      createManifestEntry({
+        id: "worktree.create" as ActionId,
+        title: "Create Worktree",
+        description: "Create a new worktree",
+      }),
+      createManifestEntry({
+        id: "git.commit" as ActionId,
+        title: "Commit",
+        description: "Create a git commit",
+      }),
+    ];
+
+    it("workbench tier exposes only read-only introspection tools", async () => {
+      paneTokenTiers.set("token-wb", "workbench");
+      const { window } = createMockWindow({ getManifest: tierManifest });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-wb",
+      });
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).toContain("actions.list");
+      expect(ids).toContain("worktree.list");
+      expect(ids).not.toContain("worktree.create");
+      expect(ids).not.toContain("git.commit");
+    });
+
+    it("action tier adds non-destructive mutations but excludes irreversible ones", async () => {
+      paneTokenTiers.set("token-action", "action");
+      const { window } = createMockWindow({ getManifest: tierManifest });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-action",
+      });
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).toContain("worktree.list");
+      expect(ids).toContain("worktree.create");
+      expect(ids).not.toContain("git.commit");
+    });
+
+    it("system tier exposes the full curated allowlist including irreversible mutations", async () => {
+      paneTokenTiers.set("token-sys", "system");
+      const { window } = createMockWindow({ getManifest: tierManifest });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-sys",
+      });
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).toContain("worktree.list");
+      expect(ids).toContain("worktree.create");
+      expect(ids).toContain("git.commit");
+    });
+
+    it("rejects callTool for actions outside the session tier with MethodNotFound", async () => {
+      paneTokenTiers.set("token-wb", "workbench");
+      const dispatchMock = vi.fn(
+        (): ActionDispatchResult => ({ ok: true, result: "should-not-run" })
+      );
+      const { window } = createMockWindow({
+        getManifest: tierManifest,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-wb",
+      });
+      transports.push(transport);
+
+      await expect(
+        client.callTool({ name: "git.commit", arguments: { message: "x" } })
+      ).rejects.toMatchObject({ code: -32601 });
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("tier filtering takes precedence over fullToolSurface for pane-scoped sessions", async () => {
+      storeState.mcpServer.fullToolSurface = true;
+      paneTokenTiers.set("token-wb", "workbench");
+      const { window } = createMockWindow({
+        getManifest: () => [
+          ...tierManifest(),
+          createManifestEntry({
+            id: "panel.gridLayout.setStrategy" as ActionId,
+            title: "Set grid layout",
+            description: "Power-user UI plumbing",
+          }),
+        ],
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-wb",
+      });
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).toContain("worktree.list");
+      // workbench excludes these even with fullToolSurface enabled.
+      expect(ids).not.toContain("worktree.create");
+      expect(ids).not.toContain("git.commit");
+      expect(ids).not.toContain("panel.gridLayout.setStrategy");
     });
   });
 

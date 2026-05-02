@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { app } from "electron";
 import { resilientAtomicWriteFile, resilientUnlink } from "../utils/fs.js";
+import type { DaintreeMcpTier } from "../../shared/types/project.js";
 
 const PANE_CONFIG_DIR_NAME = "mcp-pane-configs";
 const MCP_SERVER_KEY = "daintree";
@@ -10,11 +11,18 @@ const MCP_SERVER_KEY = "daintree";
 interface PaneRecord {
   configPath: string;
   token: string;
+  tier: DaintreeMcpTier;
+}
+
+interface TokenRecord {
+  paneId: string;
+  tier: DaintreeMcpTier;
 }
 
 export interface PreparePaneConfigParams {
   paneId: string;
   port: number;
+  tier: DaintreeMcpTier;
 }
 
 export interface PreparedPaneConfig {
@@ -24,7 +32,7 @@ export interface PreparedPaneConfig {
 
 export class McpPaneConfigService {
   private records = new Map<string, PaneRecord>();
-  private tokens = new Map<string, string>();
+  private tokens = new Map<string, TokenRecord>();
 
   private get baseDir(): string {
     return path.join(app.getPath("userData"), PANE_CONFIG_DIR_NAME);
@@ -43,12 +51,19 @@ export class McpPaneConfigService {
     return candidate;
   }
 
-  async preparePaneConfig({ paneId, port }: PreparePaneConfigParams): Promise<PreparedPaneConfig> {
+  async preparePaneConfig({
+    paneId,
+    port,
+    tier,
+  }: PreparePaneConfigParams): Promise<PreparedPaneConfig> {
     if (!paneId) {
       throw new Error("paneId is required");
     }
     if (!Number.isInteger(port) || port <= 0 || port > 65535) {
       throw new Error(`Invalid MCP port: ${port}`);
+    }
+    if (tier === "off") {
+      throw new Error('preparePaneConfig should not be called with tier "off"');
     }
     // Validate paneId early — configPathFor throws on traversal attempts.
     const configPath = this.configPathFor(paneId);
@@ -80,8 +95,8 @@ export class McpPaneConfigService {
       mode: 0o600,
     });
 
-    this.records.set(paneId, { configPath, token });
-    this.tokens.set(token, paneId);
+    this.records.set(paneId, { configPath, token, tier });
+    this.tokens.set(token, { paneId, tier });
 
     return { configPath, token };
   }
@@ -124,6 +139,11 @@ export class McpPaneConfigService {
   isValidPaneToken(token: string): boolean {
     if (!token) return false;
     return this.tokens.has(token);
+  }
+
+  getTierForToken(token: string): DaintreeMcpTier | undefined {
+    if (!token) return undefined;
+    return this.tokens.get(token)?.tier;
   }
 }
 
