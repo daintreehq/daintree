@@ -1101,6 +1101,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                     source: "user",
                   })
                 }
+                onPointerEnter={() => void preloadNewWorktreeDialog()}
                 className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors"
                 aria-label="Create new worktree"
               >
