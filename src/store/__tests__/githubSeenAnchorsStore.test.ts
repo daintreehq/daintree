@@ -69,12 +69,7 @@ describe("deriveBadgeLabel", () => {
     expect(deriveBadgeLabel({ count: 10, seenAt: NaN }, 12, false, now)).toBeNull();
     expect(deriveBadgeLabel({ count: Infinity, seenAt: now - 60_000 }, 12, false, now)).toBeNull();
     expect(
-      deriveBadgeLabel(
-        { count: "bad" as unknown as number, seenAt: now - 60_000 },
-        12,
-        false,
-        now
-      )
+      deriveBadgeLabel({ count: "bad" as unknown as number, seenAt: now - 60_000 }, 12, false, now)
     ).toBeNull();
   });
 });

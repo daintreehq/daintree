@@ -88,7 +88,9 @@ export const useGitHubSeenAnchorsStore = create<GitHubSeenAnchorsState>()(
       name: "daintree-github-seen-anchors",
       storage: createSafeJSONStorage(),
       version: 0,
-      migrate: (persistedState) => persistedState as GitHubSeenAnchorsState,
+      migrate: (persistedState) =>
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        persistedState as GitHubSeenAnchorsState,
       partialize: (state) => ({ anchors: state.anchors }),
     }
   )

@@ -31,10 +31,7 @@ import { GitHubStatusIndicator, type GitHubStatusIndicatorStatus } from "./GitHu
 import { githubClient } from "@/clients/githubClient";
 import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
-import {
-  useGitHubSeenAnchorsStore,
-  deriveBadgeLabel,
-} from "@/store/githubSeenAnchorsStore";
+import { useGitHubSeenAnchorsStore, deriveBadgeLabel } from "@/store/githubSeenAnchorsStore";
 import type { Project } from "@shared/types";
 import type { GitHubRateLimitDetails, RepositoryStats } from "@shared/types";
 
@@ -744,9 +741,7 @@ export const GitHubStatsToolbarButton = memo(
             return;
           }
           if (!prsOpenRef.current && currentProject) {
-            useGitHubSeenAnchorsStore
-              .getState()
-              .recordOpen(currentProject.path, "prs", prCount);
+            useGitHubSeenAnchorsStore.getState().recordOpen(currentProject.path, "prs", prCount);
           }
           setPrsOpen((p) => !p);
         },

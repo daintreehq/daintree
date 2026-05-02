@@ -271,7 +271,9 @@ describe("GitHubStatsToolbarButton +N badge wiring", () => {
     // The visual badge has aria-hidden, so the delta must reach screen
     // readers via the button's accessible name. Each of the three button
     // aria-label expressions must reference its matching delta label.
-    expect(source).toMatch(/issuesDeltaLabel\s*\?\s*` \(\$\{issuesDeltaLabel\} since last opened\)`/);
+    expect(source).toMatch(
+      /issuesDeltaLabel\s*\?\s*` \(\$\{issuesDeltaLabel\} since last opened\)`/
+    );
     expect(source).toMatch(/prsDeltaLabel\s*\?\s*` \(\$\{prsDeltaLabel\} since last opened\)`/);
     expect(source).toMatch(
       /commitsDeltaLabel\s*\?\s*` \(\$\{commitsDeltaLabel\} since last opened\)`/
