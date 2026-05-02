@@ -4,6 +4,7 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
+import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 export function registerTerminalLifecycleActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -30,7 +31,8 @@ export function registerTerminalLifecycleActions(
       // Match the per-tab/header X-button guards: prompt before closing a
       // terminal whose agent is mid-task. The host listens via CustomEvent
       // and renders the same ConfirmDialog the buttons render inline.
-      if (state.panelsById[targetId]?.agentState === "working") {
+      const targetAgentState = state.panelsById[targetId]?.agentState;
+      if (targetAgentState && CLOSE_CONFIRM_AGENT_STATES.has(targetAgentState)) {
         window.dispatchEvent(
           new CustomEvent("daintree:close-confirm", { detail: { terminalId: targetId } })
         );

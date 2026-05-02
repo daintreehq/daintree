@@ -116,6 +116,18 @@ describe("TerminalCloseConfirmHost (#6513)", () => {
     expect(queryByTestId("confirm-dialog")).toBeNull();
   });
 
+  it("ignores a second event while a dialog is already open (target stays the first id)", () => {
+    const { getByTestId } = render(<TerminalCloseConfirmHost />);
+
+    dispatchCloseConfirm({ terminalId: "term-first" });
+    dispatchCloseConfirm({ terminalId: "term-second" });
+
+    fireEvent.click(getByTestId("dialog-confirm"));
+
+    expect(trashPanelMock).toHaveBeenCalledTimes(1);
+    expect(trashPanelMock).toHaveBeenCalledWith("term-first");
+  });
+
   it("removes the event listener on unmount", () => {
     const { unmount, queryByTestId } = render(<TerminalCloseConfirmHost />);
     unmount();

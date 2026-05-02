@@ -17,7 +17,11 @@ export function TerminalCloseConfirmHost() {
       const detail = e.detail as { terminalId?: unknown } | undefined;
       const id = typeof detail?.terminalId === "string" ? detail.terminalId : null;
       if (!id) return;
-      setPendingTerminalId(id);
+      // If a dialog is already open for another terminal, ignore the new
+      // event rather than silently swapping target — the user is staring at
+      // a dialog naming one terminal and clicking confirm should not close a
+      // different one. Rapid Cmd+W or agent-driven dispatches land here.
+      setPendingTerminalId((prev) => prev ?? id);
     };
 
     const controller = new AbortController();
