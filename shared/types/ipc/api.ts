@@ -1299,6 +1299,7 @@ export interface ElectronAPI {
     sendDispatchActionResponse(payload: {
       requestId: string;
       result: import("../actions.js").ActionDispatchResult;
+      confirmationDecision?: import("./mcpServer.js").McpConfirmationDecision;
     }): void;
   };
   plugin: {

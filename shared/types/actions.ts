@@ -406,7 +406,9 @@ export type ActionErrorCode =
   | "DISABLED"
   | "RESTRICTED"
   | "CONFIRMATION_REQUIRED"
-  | "EXECUTION_ERROR";
+  | "EXECUTION_ERROR"
+  | "USER_REJECTED"
+  | "CONFIRMATION_TIMEOUT";
 
 export interface ActionError {
   code: ActionErrorCode;
