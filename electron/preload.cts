@@ -1499,6 +1499,8 @@ const api: ElectronAPI = {
     onRateLimitChanged: (callback: (data: GitHubRateLimitPayload) => void) =>
       _typedOn(CHANNELS.GITHUB_RATE_LIMIT_CHANGED, callback),
 
+    getRateLimitDetails: () => _unwrappingInvoke(CHANNELS.GITHUB_GET_RATE_LIMIT_DETAILS),
+
     onTokenHealthChanged: (callback: (data: GitHubTokenHealthPayload) => void) =>
       _typedOn(CHANNELS.GITHUB_TOKEN_HEALTH_CHANGED, callback),
 

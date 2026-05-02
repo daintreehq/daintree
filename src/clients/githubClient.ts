@@ -5,6 +5,7 @@ import type {
   GitHubTokenConfig,
   GitHubTokenValidation,
   GitHubRateLimitPayload,
+  GitHubRateLimitDetails,
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
   GitHubFirstPageCachePayload,
@@ -107,6 +108,10 @@ export const githubClient = {
 
   onRateLimitChanged: (callback: (data: GitHubRateLimitPayload) => void): (() => void) => {
     return window.electron.github.onRateLimitChanged(callback);
+  },
+
+  getRateLimitDetails: (): Promise<GitHubRateLimitDetails | null> => {
+    return window.electron.github.getRateLimitDetails();
   },
 
   onTokenHealthChanged: (callback: (data: GitHubTokenHealthPayload) => void): (() => void) => {

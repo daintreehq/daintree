@@ -11,7 +11,7 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
-import { CircleDot, GitPullRequest, GitCommit } from "lucide-react";
+import { CircleDot, Clock, GitPullRequest, GitCommit } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
@@ -29,7 +29,7 @@ import { githubClient } from "@/clients/githubClient";
 import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
 import type { Project } from "@shared/types";
-import type { RepositoryStats } from "@shared/types";
+import type { GitHubRateLimitDetails, RepositoryStats } from "@shared/types";
 
 // Hover-to-prefetch tuning. 150ms matches the codebase's Tier 1 state-change
 // timing and is long enough to filter mouse traversal across the toolbar pill
@@ -50,11 +50,12 @@ const OPEN_FORCE_REFRESH_STALENESS_MS = 2 * 60 * 1000;
 
 function formatRateLimitCountdown(remainingMs: number): string {
   const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
-  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+  if (totalSeconds < 60) return `${pad2(totalSeconds)}s`;
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   if (minutes < 60) {
-    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+    return seconds > 0 ? `${minutes}m ${pad2(seconds)}s` : `${minutes}m`;
   }
   const hours = Math.floor(minutes / 60);
   const remMinutes = minutes % 60;
@@ -77,6 +78,106 @@ export function msUntilNextLabelChange(remainingMs: number): number {
   }
   const minutes = Math.floor(totalSeconds / 60);
   return remainingMs - (60_000 * minutes - 1000);
+}
+
+interface RateLimitDetailsPanelProps {
+  kind: "primary" | "secondary" | null;
+  details: GitHubRateLimitDetails | null;
+  now: number;
+  fallbackResetAt: number | null;
+}
+
+function RateLimitDetailsPanel({
+  kind,
+  details,
+  now,
+  fallbackResetAt,
+}: RateLimitDetailsPanelProps) {
+  const heading =
+    kind === "secondary"
+      ? "Secondary rate limit"
+      : kind === "primary"
+        ? "Rate limit reached"
+        : "GitHub API quota";
+  const subheading =
+    kind === "secondary"
+      ? "GitHub paused requests for abuse protection. Polling resumes automatically."
+      : "Polling resumes when the bucket resets.";
+
+  const buckets: Array<{ label: string; bucket: GitHubRateLimitDetails["core"] | null }> = details
+    ? [
+        { label: "GraphQL", bucket: details.graphql },
+        { label: "REST core", bucket: details.core },
+        { label: "Search", bucket: details.search },
+      ]
+    : [];
+
+  return (
+    <div className="w-[260px] px-3.5 py-3.5">
+      <div className="pb-5">
+        <div className="text-text-primary text-sm font-semibold leading-tight">{heading}</div>
+        <div className="text-muted-foreground mt-1 text-[11px] leading-snug">{subheading}</div>
+      </div>
+      {details ? (
+        <div className="flex flex-col gap-4">
+          {buckets.map(({ label, bucket }) =>
+            bucket ? (
+              <RateLimitBucketRow key={label} label={label} bucket={bucket} now={now} />
+            ) : null
+          )}
+        </div>
+      ) : (
+        <div className="text-muted-foreground text-[11px] tabular-nums">
+          {fallbackResetAt && fallbackResetAt > now
+            ? formatRateLimitCountdown(fallbackResetAt - now)
+            : "Loading…"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface RateLimitBucketRowProps {
+  label: string;
+  bucket: GitHubRateLimitDetails["core"];
+  now: number;
+}
+
+function RateLimitBucketRow({ label, bucket, now }: RateLimitBucketRowProps) {
+  const remainingMs = Math.max(0, bucket.resetAt - now);
+  const exhausted = bucket.remaining <= 0;
+  const ratio = bucket.limit > 0 ? Math.min(1, bucket.used / bucket.limit) : 0;
+  const timeLabel = remainingMs > 0 ? formatRateLimitCountdown(remainingMs) : "Reset due";
+  const aria = `${label}: ${bucket.remaining.toLocaleString()} of ${bucket.limit.toLocaleString()} remaining. ${
+    remainingMs > 0 ? `Resets in ${timeLabel}` : "Reset available"
+  }.`;
+
+  return (
+    <div className="flex flex-col gap-2" aria-label={aria}>
+      <div className="flex items-baseline justify-between gap-3">
+        <span
+          className={cn(
+            "text-[13px] font-medium leading-none",
+            exhausted ? "text-text-primary" : "text-daintree-text"
+          )}
+        >
+          {label}
+        </span>
+        <span className="text-muted-foreground text-[11px] leading-none tabular-nums">
+          {timeLabel}
+        </span>
+      </div>
+      <div className="bg-overlay-subtle h-1.5 overflow-hidden rounded-full">
+        <div
+          className={cn(
+            "h-full rounded-full transition-[width] duration-300 ease-out",
+            exhausted ? "bg-github-closed" : "bg-daintree-text/60"
+          )}
+          style={{ width: `${ratio * 100}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
 // Two-tier loading: the toolbar uses lazy()/Suspense for the cold-click case
@@ -143,6 +244,9 @@ export const GitHubStatsToolbarButton = memo(
     const [commitsOpen, setCommitsOpen] = useState(false);
     const [statsJustUpdated, setStatsJustUpdated] = useState(false);
     const [rateLimitCountdown, setRateLimitCountdown] = useState<string | null>(null);
+    const [rateLimitTooltipOpen, setRateLimitTooltipOpen] = useState(false);
+    const [rateLimitDetails, setRateLimitDetails] = useState<GitHubRateLimitDetails | null>(null);
+    const [rateLimitNow, setRateLimitNow] = useState(() => Date.now());
     const prevLastUpdatedRef = useRef<number | null>(null);
 
     // Eagerly resolve the dropdown body components so the click path renders
@@ -218,6 +322,32 @@ export const GitHubStatsToolbarButton = memo(
         ? `Paused · resumes in ${rateLimitCountdown}`
         : `Resets in ${rateLimitCountdown}`
       : null;
+
+    // Fetch the per-bucket breakdown when the tooltip opens, and tick a 1Hz
+    // clock so the per-bucket countdowns animate locally without re-fetching.
+    // GitHub's `/rate_limit` endpoint is itself quota-free, so opening the
+    // tooltip doesn't compete with the very limit it's reporting on.
+    useEffect(() => {
+      if (!rateLimitActive || !rateLimitTooltipOpen) return;
+      let cancelled = false;
+      void githubClient.getRateLimitDetails().then((details) => {
+        if (!cancelled) setRateLimitDetails(details);
+      });
+      setRateLimitNow(Date.now());
+      const intervalId = window.setInterval(() => {
+        setRateLimitNow(Date.now());
+      }, 1000);
+      return () => {
+        cancelled = true;
+        window.clearInterval(intervalId);
+      };
+    }, [rateLimitActive, rateLimitTooltipOpen]);
+
+    // Drop stale per-bucket data once the limit clears so the next time the
+    // tooltip opens we don't flash old numbers before the fresh fetch lands.
+    useEffect(() => {
+      if (!rateLimitActive) setRateLimitDetails(null);
+    }, [rateLimitActive]);
 
     const issuesButtonRef = useRef<HTMLButtonElement>(null);
     const prsButtonRef = useRef<HTMLButtonElement>(null);
@@ -735,7 +865,7 @@ export const GitHubStatsToolbarButton = memo(
           onTransitionEnd={handleGitHubStatusTransitionEnd}
         />
         {rateLimitActive && rateLimitLabel ? (
-          <Tooltip>
+          <Tooltip open={rateLimitTooltipOpen} onOpenChange={setRateLimitTooltipOpen}>
             <TooltipTrigger asChild>
               <div
                 role="status"
@@ -745,15 +875,19 @@ export const GitHubStatsToolbarButton = memo(
                     ? `GitHub secondary rate limit — resuming in ${rateLimitCountdown}`
                     : `GitHub rate limit — resets in ${rateLimitCountdown}`
                 }
-                className="flex h-full items-center px-2 text-[10px] font-medium text-muted-foreground opacity-60"
+                className="flex h-full items-center gap-1.5 px-2.5 text-[10px] font-medium text-muted-foreground"
               >
-                {rateLimitLabel}
+                <Clock className="h-3 w-3 opacity-70" aria-hidden />
+                <span className="tabular-nums">{rateLimitLabel}</span>
               </div>
             </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {rateLimitKind === "secondary"
-                ? "GitHub triggered a secondary (abuse) rate limit — polling paused until it clears."
-                : "GitHub API quota exhausted — polling paused until the quota resets."}
+            <TooltipContent side="bottom" className="px-0 py-0">
+              <RateLimitDetailsPanel
+                kind={rateLimitKind}
+                details={rateLimitDetails}
+                now={rateLimitNow}
+                fallbackResetAt={rateLimitResetAt}
+              />
             </TooltipContent>
           </Tooltip>
         ) : null}

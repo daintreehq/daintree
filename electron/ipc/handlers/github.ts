@@ -12,8 +12,14 @@ import type {
   GitHubTokenValidation,
   RepoStatsAndPagePayload,
   GitHubFirstPageCachePayload,
+  GitHubRateLimitDetails,
 } from "../../types/index.js";
-import { gitHubRateLimitService, gitHubTokenHealthService } from "../../services/github/index.js";
+import {
+  GitHubAuth,
+  GITHUB_API_TIMEOUT_MS,
+  gitHubRateLimitService,
+  gitHubTokenHealthService,
+} from "../../services/github/index.js";
 import { getWorkspaceClient } from "../../services/WorkspaceClient.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
@@ -81,6 +87,48 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   // the token stays unhealthy).
   const handleGetTokenHealth = async () => gitHubTokenHealthService.getState();
   handlers.push(typedHandle(CHANNELS.GITHUB_GET_TOKEN_HEALTH, handleGetTokenHealth));
+
+  // GitHub's `/rate_limit` endpoint is itself quota-free, so the renderer
+  // can call this on demand (e.g. opening the rate-limit tooltip) without
+  // worrying about feedback loops with the very limit it's reporting on.
+  const handleGetRateLimitDetails = async (): Promise<GitHubRateLimitDetails | null> => {
+    checkRateLimit(CHANNELS.GITHUB_GET_RATE_LIMIT_DETAILS, 30, 60_000);
+    const token = GitHubAuth.getToken();
+    if (!token) return null;
+    try {
+      const response = await fetch("https://api.github.com/rate_limit", {
+        headers: {
+          Authorization: `token ${token}`,
+          Accept: "application/vnd.github.v3+json",
+        },
+        signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+      });
+      if (!response.ok) return null;
+      const body = (await response.json()) as {
+        resources?: Record<
+          string,
+          { limit: number; used: number; remaining: number; reset: number } | undefined
+        >;
+      };
+      const resources = body.resources;
+      if (!resources?.core || !resources.graphql || !resources.search) return null;
+      const toBucket = (b: { limit: number; used: number; remaining: number; reset: number }) => ({
+        limit: b.limit,
+        used: b.used,
+        remaining: b.remaining,
+        resetAt: b.reset * 1000,
+      });
+      return {
+        core: toBucket(resources.core),
+        graphql: toBucket(resources.graphql),
+        search: toBucket(resources.search),
+        fetchedAt: Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  };
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_RATE_LIMIT_DETAILS, handleGetRateLimitDetails));
 
   const handleGitHubGetRepoStats = async (
     cwd: string,

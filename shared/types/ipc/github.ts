@@ -33,6 +33,27 @@ export interface GitHubRateLimitPayload {
   resetAt?: number;
 }
 
+/** A single rate-limit bucket as reported by `/rate_limit` */
+export interface GitHubRateLimitBucket {
+  limit: number;
+  used: number;
+  remaining: number;
+  /** Unix epoch milliseconds when this bucket's quota resets */
+  resetAt: number;
+}
+
+/**
+ * Detailed per-bucket rate-limit snapshot from `GET /rate_limit`. Calls to that
+ * endpoint don't count against any quota, so consumers can poll it freely.
+ */
+export interface GitHubRateLimitDetails {
+  core: GitHubRateLimitBucket;
+  graphql: GitHubRateLimitBucket;
+  search: GitHubRateLimitBucket;
+  /** Wall-clock timestamp (ms) when the snapshot was fetched */
+  fetchedAt: number;
+}
+
 /**
  * Current health of the configured GitHub token.
  *

@@ -106,6 +106,7 @@ import type {
   GitHubTokenConfig,
   GitHubTokenValidation,
   GitHubRateLimitPayload,
+  GitHubRateLimitDetails,
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
   GitHubFirstPageCachePayload,
@@ -2038,6 +2039,10 @@ export interface IpcInvokeMap {
   "github:get-token-health": {
     args: [];
     result: GitHubTokenHealthPayload;
+  };
+  "github:get-rate-limit-details": {
+    args: [];
+    result: GitHubRateLimitDetails | null;
   };
 
   // Per-service connectivity channels

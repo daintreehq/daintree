@@ -164,6 +164,8 @@ export type {
   GitHubTokenValidation,
   GitHubRateLimitPayload,
   GitHubRateLimitKind,
+  GitHubRateLimitBucket,
+  GitHubRateLimitDetails,
   GitHubTokenHealthPayload,
   GitHubTokenHealthStatus,
   // Per-service connectivity types

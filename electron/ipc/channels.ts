@@ -147,6 +147,7 @@ export const CHANNELS = {
   GITHUB_GET_PR_BY_NUMBER: "github:get-pr-by-number",
   GITHUB_LIST_REMOTES: "github:list-remotes",
   GITHUB_RATE_LIMIT_CHANGED: "github:rate-limit-changed",
+  GITHUB_GET_RATE_LIMIT_DETAILS: "github:get-rate-limit-details",
   GITHUB_TOKEN_HEALTH_CHANGED: "github:token-health-changed",
   GITHUB_GET_TOKEN_HEALTH: "github:get-token-health",
   GITHUB_REPO_STATS_AND_PAGE_UPDATED: "github:repo-stats-and-page-updated",
