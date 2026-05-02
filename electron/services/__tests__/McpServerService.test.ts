@@ -1271,6 +1271,122 @@ describe("McpServerService", () => {
       expect(() => service.revokeToken("never-minted")).not.toThrow();
     });
 
+    it("rejects POST /messages whose credential tier doesn't match the session tier", async () => {
+      // Set up: external apiKey + minted workbench token. Open a system-tier
+      // session-stand-in by minting a system token and connecting with it.
+      // Then attempt to POST to that session's id using the workbench token.
+      storeState.mcpServer.apiKey = "external-secret";
+      const { window } = createMockWindow({ getManifest: tieredManifest });
+      await service.start(window);
+
+      const systemToken = service.mintToken("system");
+      const workbenchToken = service.mintToken("workbench");
+
+      const { transport } = await connectClient(service.currentPort!, {
+        Authorization: `Bearer ${systemToken}`,
+      });
+      transports.push(transport);
+
+      const sessions = (
+        service as unknown as { sessions: Map<string, { transport: { sessionId: string } }> }
+      ).sessions;
+      const sessionId = Array.from(sessions.keys())[0];
+      expect(sessionId).toBeDefined();
+
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          {
+            host: "127.0.0.1",
+            port: service.currentPort!,
+            path: `/messages?sessionId=${encodeURIComponent(sessionId!)}`,
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${workbenchToken}`,
+              "Content-Type": "application/json",
+            },
+          },
+          (res) => resolve(res.statusCode ?? 0)
+        );
+        req.on("error", reject);
+        req.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: "terminal.sendCommand", arguments: {} },
+          })
+        );
+      });
+
+      expect(status).toBe(403);
+    });
+
+    it("rejects callTool for an action ID missing from the manifest, even with fullToolSurface", async () => {
+      storeState.mcpServer.fullToolSurface = true;
+      const dispatchMock = vi.fn(
+        (payload: DispatchRequest): ActionDispatchResult => ({
+          ok: true,
+          result: { dispatched: payload.actionId },
+        })
+      );
+      const { window } = createMockWindow({
+        // Manifest deliberately omits "ghost.action".
+        getManifest: () => [
+          createManifestEntry({
+            id: "actions.list" as ActionId,
+            title: "List Actions",
+            description: "Read the action registry",
+            kind: "query",
+          }),
+        ],
+        dispatchAction: dispatchMock,
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = getTextResult(await client.callTool({ name: "ghost.action", arguments: {} }));
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("not registered");
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("clears minted tokens on stop() so they don't survive restart", async () => {
+      storeState.mcpServer.apiKey = "external-secret";
+      const { window } = createMockWindow({ getManifest: tieredManifest });
+      await service.start(window);
+      const token = service.mintToken("workbench");
+      const portBefore = service.currentPort!;
+
+      const peekStatus = (port: number, t: string): Promise<number> =>
+        new Promise((resolve, reject) => {
+          const req = http.request(
+            {
+              host: "127.0.0.1",
+              port,
+              path: "/sse",
+              method: "GET",
+              headers: { Authorization: `Bearer ${t}` },
+            },
+            (res) => {
+              const status = res.statusCode ?? 0;
+              req.destroy();
+              resolve(status);
+            }
+          );
+          req.on("error", (err: NodeJS.ErrnoException) => {
+            if (err.code === "ECONNRESET") return;
+            reject(err);
+          });
+          req.end();
+        });
+
+      expect(await peekStatus(portBefore, token)).toBe(200);
+      await service.stop();
+      await service.start(window);
+      expect(await peekStatus(service.currentPort!, token)).toBe(401);
+    });
+
     it("preserves open-by-default external tier when apiKey is empty (backward compat)", async () => {
       // apiKey starts empty in beforeEach. No bearer header is sent.
       const dispatchMock = vi.fn(

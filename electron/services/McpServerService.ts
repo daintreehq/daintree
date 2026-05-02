@@ -463,6 +463,7 @@ export class McpServerService {
       }
     }
     this.sessions.clear();
+    this.tokenTiers.clear();
 
     for (const cleanup of this.cleanupListeners) {
       cleanup();
@@ -705,7 +706,19 @@ export class McpServerService {
         };
       }
 
-      if (!this.isActionDispatchAllowed(actionId, manifestEntry?.danger, tier)) {
+      if (manifestEntry === undefined) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Action '${actionId}' is not registered.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (!this.isActionDispatchAllowed(actionId, manifestEntry.danger, tier)) {
         return {
           content: [
             {
@@ -821,10 +834,13 @@ export class McpServerService {
    * of the listTools surface so that even a caller that already knows an
    * action ID is rejected when the tier doesn't grant it. `restricted`
    * actions are blocked unconditionally regardless of `fullToolSurface`.
+   * Caller is responsible for verifying the action is in the manifest;
+   * passing an unknown ID with `fullToolSurface=true` would otherwise reach
+   * `dispatchAction` for the renderer to reject.
    */
   private isActionDispatchAllowed(
     actionId: string,
-    danger: ActionManifestEntry["danger"] | undefined,
+    danger: ActionManifestEntry["danger"],
     tier: McpTier
   ): boolean {
     if (danger === "restricted") return false;
@@ -996,6 +1012,16 @@ export class McpServerService {
       const session = this.sessions.get(sessionId);
 
       if (session) {
+        // Bind the POST credential to the session's tier. Without this the
+        // SSE-resolved tier (captured in createSessionServer's closure) would
+        // be applied to messages whose Authorization header may be from a
+        // less-privileged credential — letting a workbench-token caller send
+        // calls into a system-tier session if it could observe the sessionId.
+        if (tier !== session.tier) {
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Forbidden");
+          return;
+        }
         this.resetIdleTimer(sessionId);
         await session.transport.handlePostMessage(req, res);
       } else {
