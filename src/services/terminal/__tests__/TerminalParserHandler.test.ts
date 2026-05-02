@@ -100,8 +100,8 @@ describe("TerminalParserHandler", () => {
 
     new TerminalParserHandler(mockManaged);
     expect(escHandlers).toHaveLength(0);
-    // 1 alt screen exit (?l) + 2 dynamic agent blockers (?h) + 2 DECRQM blockers.
-    expect(csiHandlers).toHaveLength(5);
+    // 1 alt screen exit (?l) + 2 dynamic agent blockers (?h).
+    expect(csiHandlers).toHaveLength(3);
     const dynamicBlockers = csiHandlers.filter(
       (h) => h.opts.prefix === "?" && h.opts.final === "h"
     );
@@ -110,26 +110,6 @@ describe("TerminalParserHandler", () => {
     // OSC 52 clipboard block applies unconditionally to all terminal kinds
     expect(oscHandlers).toHaveLength(1);
     expect(oscHandlers[0].ident).toBe(52);
-  });
-
-  it("should block DECRQM queries to prevent xterm.js parser crash", () => {
-    mockManaged.kind = "terminal";
-    mockManaged.launchAgentId = undefined;
-    mockManaged.runtimeAgentId = undefined;
-
-    new TerminalParserHandler(mockManaged);
-
-    const privateDecrqm = csiHandlers.find(
-      (h) => h.opts.prefix === "?" && h.opts.intermediates === "$" && h.opts.final === "p"
-    );
-    const nonPrivateDecrqm = csiHandlers.find(
-      (h) => !h.opts.prefix && h.opts.intermediates === "$" && h.opts.final === "p"
-    );
-    expect(privateDecrqm).toBeDefined();
-    expect(nonPrivateDecrqm).toBeDefined();
-    // Handlers should consume (return true)
-    expect(privateDecrqm.handler()).toBe(true);
-    expect(nonPrivateDecrqm.handler()).toBe(true);
   });
 
   it("should NOT block alt screen for OpenCode agent", () => {

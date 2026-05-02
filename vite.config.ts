@@ -141,6 +141,28 @@ function cspTransformPlugin(): Plugin {
   };
 }
 
+// Build-time invariant guard: esbuild.minifyIdentifiers must stay false.
+// xterm 6.0 ships pre-minified code with a closure in `requestMode` that
+// captures a mangled parameter name. If esbuild re-minifies the bundle, it
+// renames the parameter but not the closure reference, producing
+// `ReferenceError: i is not defined` and crashing the parser silently.
+// This guard fails the build if the config is accidentally changed.
+function xtermMinifyIdentifiersGuardPlugin(): Plugin {
+  return {
+    name: "xterm-minify-identifiers-guard",
+    apply: "build",
+    configResolved(config) {
+      const esbuildConfig = config.esbuild;
+      if (!esbuildConfig || esbuildConfig.minifyIdentifiers !== false) {
+        throw new Error(
+          "esbuild.minifyIdentifiers must be false to prevent xterm 6.0 parser crash. " +
+            "See https://github.com/daintreehq/daintree/blob/develop/vite.config.ts#L215-L221"
+        );
+      }
+    },
+  };
+}
+
 // Emits dist/renderer-bundle-size-report.json after the build completes with
 // per-chunk and total JS/CSS sizes (raw + gzip). Used by the CI bundle size
 // budget gate to catch silent regressions from dependency upgrades or
@@ -238,6 +260,7 @@ export default defineConfig(({ command, mode }) => {
       cspTransformPlugin(),
       compilerReportPlugin,
       rendererBundleSizePlugin(),
+      xtermMinifyIdentifiersGuardPlugin(),
     ],
     base: "./",
     build: {
