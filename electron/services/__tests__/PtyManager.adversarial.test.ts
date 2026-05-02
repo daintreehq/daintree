@@ -65,6 +65,10 @@ class MockTerminalProcess {
   kill = vi.fn((_reason?: string) => {
     this.info.wasKilled = true;
   });
+  resize = vi.fn((cols: number, rows: number) => {
+    this.info.cols = cols;
+    this.info.rows = rows;
+  });
   setSabModeEnabled = vi.fn();
   setActivityMonitorTier = vi.fn();
   startProcessDetector = vi.fn();
@@ -482,5 +486,78 @@ describe("PtyManager adversarial", () => {
     expect(shared.created[1]!.dispose).toHaveBeenCalledTimes(1);
     expect(manager.listenerCount("data")).toBe(0);
     expect(shared.disposeSerializer).toHaveBeenCalledTimes(1);
+  });
+
+  it("RESIZE_BEFORE_SPAWN_APPLIES_BUFFERED_DIMS", () => {
+    const manager = new PtyManager();
+
+    manager.resize("t1", 120, 40);
+    manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
+
+    const created = shared.created[0]!;
+    expect(created.info.cols).toBe(120);
+    expect(created.info.rows).toBe(40);
+    expect(created.resize).not.toHaveBeenCalled();
+  });
+
+  it("RESIZE_BEFORE_SPAWN_COALESCES_LAST_WRITE", () => {
+    const manager = new PtyManager();
+
+    manager.resize("t1", 80, 24);
+    manager.resize("t1", 140, 50);
+    manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
+
+    const created = shared.created[0]!;
+    expect(created.info.cols).toBe(140);
+    expect(created.info.rows).toBe(50);
+  });
+
+  it("RESIZE_BEFORE_SPAWN_USES_DEBUG_NOT_WARN", () => {
+    const manager = new PtyManager();
+
+    manager.resize("t1", 100, 30);
+
+    expect(logWarn).not.toHaveBeenCalled();
+    expect(logDebug).toHaveBeenCalledWith(expect.stringContaining("buffering resize 100x30"));
+  });
+
+  it("RESIZE_AFTER_SPAWN_FORWARDS_TO_TERMINAL", () => {
+    const manager = new PtyManager();
+
+    manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
+    manager.resize("t1", 90, 32);
+
+    const created = shared.created[0]!;
+    expect(created.resize).toHaveBeenCalledWith(90, 32);
+  });
+
+  it("KILL_CLEARS_PENDING_RESIZE", () => {
+    const manager = new PtyManager();
+
+    manager.resize("t1", 200, 60);
+    manager.kill("t1");
+    manager.spawn("t1", spawnOptions({ projectId: "project-a", cols: 80, rows: 24 }));
+
+    const created = shared.created[0]!;
+    // Pending dims were cleared by kill, so spawn uses its own options.
+    expect(created.info.cols).toBe(80);
+    expect(created.info.rows).toBe(24);
+  });
+
+  it("SPAWN_CONSUMES_PENDING_RESIZE_ONCE", () => {
+    const manager = new PtyManager();
+
+    manager.resize("t1", 200, 60);
+    manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
+
+    expect(shared.created[0]!.info.cols).toBe(200);
+    expect(shared.created[0]!.info.rows).toBe(60);
+
+    // Kill and respawn — no pending entry should remain to leak into the next boot.
+    manager.kill("t1");
+    manager.spawn("t1", spawnOptions({ projectId: "project-a", cols: 80, rows: 24 }));
+
+    expect(shared.created[1]!.info.cols).toBe(80);
+    expect(shared.created[1]!.info.rows).toBe(24);
   });
 });

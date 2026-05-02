@@ -62,6 +62,11 @@ export class PtyManager extends EventEmitter {
   private processTreeCache: ProcessTreeCache | null = null;
   private activeProjectId: string | null = null;
   private sabModeEnabled = false;
+  // Resize requests that arrived before the terminal was registered.
+  // Applied as initial dims at spawn so the PTY boots at the correct size
+  // (no SIGWINCH-after-start), avoiding the race between the renderer's
+  // ResizeObserver/MessagePort resize and the slower spawn IPC round-trip.
+  private pendingResizes = new Map<string, { cols: number; rows: number }>();
 
   constructor() {
     super();
@@ -199,6 +204,12 @@ export class PtyManager extends EventEmitter {
    * Spawn a new terminal.
    */
   spawn(id: string, options: PtySpawnOptions): void {
+    const pendingResize = this.pendingResizes.get(id);
+    if (pendingResize) {
+      options = { ...options, cols: pendingResize.cols, rows: pendingResize.rows };
+      this.pendingResizes.delete(id);
+    }
+
     if (this.registry.has(id)) {
       const existing = this.registry.get(id);
       const existingInfo = existing?.getInfo();
@@ -321,7 +332,9 @@ export class PtyManager extends EventEmitter {
     if (terminal) {
       terminal.resize(cols, rows);
     } else {
-      logWarn(`Terminal ${id} not found, cannot resize`);
+      // Buffer the dims and apply them at spawn time. Coalesces last-write-wins.
+      this.pendingResizes.set(id, { cols, rows });
+      logDebug(`Terminal ${id} not yet registered, buffering resize ${cols}x${rows}`);
     }
   }
 
@@ -341,6 +354,7 @@ export class PtyManager extends EventEmitter {
    * Kill a terminal process.
    */
   kill(id: string, reason?: string, options?: { preserveSession?: boolean }): void {
+    this.pendingResizes.delete(id);
     this.registry.clearTrashTimeout(id);
 
     const terminal = this.registry.get(id);
@@ -364,6 +378,7 @@ export class PtyManager extends EventEmitter {
    * Move a terminal to the trash.
    */
   trash(id: string): void {
+    this.pendingResizes.delete(id);
     this.registry.trash(id, (termId) => {
       // Capture terminal info before async kill (info may be unavailable after kill)
       const terminal = this.registry.get(termId);
@@ -833,6 +848,7 @@ export class PtyManager extends EventEmitter {
     }
 
     this.registry.dispose();
+    this.pendingResizes.clear();
     this.removeAllListeners();
 
     disposeTerminalSerializerService();
