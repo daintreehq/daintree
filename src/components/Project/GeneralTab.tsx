@@ -1,16 +1,50 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Image, Upload, X, Rocket, Check, FolderOpen, Copy, Palette } from "lucide-react";
+import {
+  Image,
+  Upload,
+  X,
+  Rocket,
+  Check,
+  FolderOpen,
+  Copy,
+  Palette,
+  AlertTriangle,
+} from "lucide-react";
 import { FolderGit2, McpServerIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
+import { SettingsChoicebox, type ChoiceboxOption } from "@/components/Settings/SettingsChoicebox";
 import { getProjectGradient, isValidHexColor } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
 import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
 import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { Project } from "@shared/types/project";
+import type { DaintreeMcpTier, Project } from "@shared/types/project";
+
+const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
+  {
+    value: "off",
+    label: "Off",
+    description: "No Daintree MCP access. Default for new projects.",
+  },
+  {
+    value: "workbench",
+    label: "Workbench",
+    description: "Read-only: worktree status, terminal output, file search, project history.",
+  },
+  {
+    value: "action",
+    label: "Action",
+    description: "Workbench + create worktrees, inject context, stage changes.",
+  },
+  {
+    value: "system",
+    label: "System",
+    description: "Action + commit, push, delete, send terminal commands.",
+  },
+];
 
 const PRESET_SWATCHES = [
   { label: "Blue", cssVar: "--theme-category-blue" },
@@ -54,8 +88,8 @@ interface GeneralTabProps {
   onDevServerLoadTimeoutChange: (value: number | undefined) => void;
   turbopackEnabled: boolean;
   onTurbopackEnabledChange: (value: boolean) => void;
-  exposeDaintreeMcpToAgents: boolean;
-  onExposeDaintreeMcpToAgentsChange: (value: boolean) => void;
+  daintreeMcpTier: DaintreeMcpTier;
+  onDaintreeMcpTierChange: (value: DaintreeMcpTier) => void;
   projectIconSvg: string | undefined;
   onProjectIconSvgChange: (value: string | undefined) => void;
   enableInRepoSettings: (projectId: string) => Promise<Project>;
@@ -78,8 +112,8 @@ export function GeneralTab({
   onDevServerLoadTimeoutChange,
   turbopackEnabled,
   onTurbopackEnabledChange,
-  exposeDaintreeMcpToAgents,
-  onExposeDaintreeMcpToAgentsChange,
+  daintreeMcpTier,
+  onDaintreeMcpTierChange,
   projectIconSvg,
   onProjectIconSvgChange,
   enableInRepoSettings,
@@ -462,18 +496,34 @@ export function GeneralTab({
           Agent integrations
         </h3>
         <p className="text-xs text-daintree-text/60 mb-4">
-          Connect Claude Code agents launched in this project's worktrees to the Daintree MCP
-          server. Agents can read worktree status, terminal output, and run safe project actions.
+          Choose how much of Daintree the Claude Code agents launched in this project's worktrees
+          can reach. Each tier expands what's available — newly launched agents pick up the change.
         </p>
 
-        <SettingsSwitchCard
-          icon={McpServerIcon}
-          title="Expose Daintree MCP to Claude Code agents"
-          subtitle="Injects --mcp-config with a per-pane bearer token on agent launch"
-          isEnabled={exposeDaintreeMcpToAgents}
-          onChange={() => onExposeDaintreeMcpToAgentsChange(!exposeDaintreeMcpToAgents)}
-          ariaLabel="Expose Daintree MCP to Claude Code agents"
-        />
+        <div className="flex flex-col gap-3">
+          <SettingsChoicebox<DaintreeMcpTier>
+            value={daintreeMcpTier}
+            onChange={onDaintreeMcpTierChange}
+            options={DAINTREE_MCP_TIER_OPTIONS}
+            columns={2}
+            aria-label="Daintree MCP access tier"
+          />
+          {daintreeMcpTier === "system" && (
+            <div
+              className={cn(
+                "flex items-start gap-2 p-3 rounded-[var(--radius-md)]",
+                "bg-overlay-subtle border border-daintree-border"
+              )}
+            >
+              <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" />
+              <div className="text-xs text-daintree-text/70 leading-relaxed select-text">
+                System tier lets agents commit, push, delete worktrees, and send terminal commands —
+                some of these are irreversible or visible to teammates. Only enable it for projects
+                where you trust the agent to take that kind of action.
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="mb-6">

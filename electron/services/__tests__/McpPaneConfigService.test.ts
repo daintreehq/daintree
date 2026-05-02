@@ -36,6 +36,7 @@ describe("McpPaneConfigService", () => {
     const { configPath, token } = await service.preparePaneConfig({
       paneId: "pane-001",
       port: 45454,
+      tier: "workbench",
     });
 
     expect(configPath).toBe(path.join(testUserData, "mcp-pane-configs", "pane-001.json"));
@@ -54,7 +55,7 @@ describe("McpPaneConfigService", () => {
   it("creates the pane config directory with mode 0700 on POSIX", async () => {
     if (process.platform === "win32") return;
 
-    await service.preparePaneConfig({ paneId: "pane-002", port: 45454 });
+    await service.preparePaneConfig({ paneId: "pane-002", port: 45454, tier: "workbench" });
     const stat = await fs.stat(path.join(testUserData, "mcp-pane-configs"));
     expect(stat.mode & 0o777).toBe(0o700);
   });
@@ -62,13 +63,21 @@ describe("McpPaneConfigService", () => {
   it("creates the config file with mode 0600 on POSIX", async () => {
     if (process.platform === "win32") return;
 
-    const { configPath } = await service.preparePaneConfig({ paneId: "pane-003", port: 45454 });
+    const { configPath } = await service.preparePaneConfig({
+      paneId: "pane-003",
+      port: 45454,
+      tier: "workbench",
+    });
     const stat = await fs.stat(configPath);
     expect(stat.mode & 0o777).toBe(0o600);
   });
 
   it("registers the token as valid and rejects unknown tokens", async () => {
-    const { token } = await service.preparePaneConfig({ paneId: "pane-004", port: 45454 });
+    const { token } = await service.preparePaneConfig({
+      paneId: "pane-004",
+      port: 45454,
+      tier: "workbench",
+    });
 
     expect(service.isValidPaneToken(token)).toBe(true);
     expect(service.isValidPaneToken("not-a-real-token")).toBe(false);
@@ -79,6 +88,7 @@ describe("McpPaneConfigService", () => {
     const { configPath, token } = await service.preparePaneConfig({
       paneId: "pane-005",
       port: 45454,
+      tier: "action",
     });
 
     expect(service.isValidPaneToken(token)).toBe(true);
@@ -91,15 +101,23 @@ describe("McpPaneConfigService", () => {
   it("is idempotent — revokePaneConfig tolerates missing files and unknown panes", async () => {
     await expect(service.revokePaneConfig("never-existed")).resolves.toBeUndefined();
 
-    await service.preparePaneConfig({ paneId: "pane-006", port: 45454 });
+    await service.preparePaneConfig({ paneId: "pane-006", port: 45454, tier: "workbench" });
     await service.revokePaneConfig("pane-006");
     // second call against an already-revoked pane must not throw
     await expect(service.revokePaneConfig("pane-006")).resolves.toBeUndefined();
   });
 
   it("re-preparing the same paneId rotates the token and overwrites the file", async () => {
-    const first = await service.preparePaneConfig({ paneId: "pane-007", port: 45454 });
-    const second = await service.preparePaneConfig({ paneId: "pane-007", port: 45454 });
+    const first = await service.preparePaneConfig({
+      paneId: "pane-007",
+      port: 45454,
+      tier: "workbench",
+    });
+    const second = await service.preparePaneConfig({
+      paneId: "pane-007",
+      port: 45454,
+      tier: "system",
+    });
 
     expect(second.token).not.toBe(first.token);
     expect(service.isValidPaneToken(first.token)).toBe(false);
@@ -111,42 +129,99 @@ describe("McpPaneConfigService", () => {
   });
 
   it("rejects invalid ports", async () => {
-    await expect(service.preparePaneConfig({ paneId: "pane-008", port: 0 })).rejects.toThrow(
-      /Invalid MCP port/
-    );
-    await expect(service.preparePaneConfig({ paneId: "pane-009", port: 70000 })).rejects.toThrow(
-      /Invalid MCP port/
-    );
     await expect(
-      service.preparePaneConfig({ paneId: "pane-010", port: -1 as unknown as number })
+      service.preparePaneConfig({ paneId: "pane-008", port: 0, tier: "workbench" })
+    ).rejects.toThrow(/Invalid MCP port/);
+    await expect(
+      service.preparePaneConfig({ paneId: "pane-009", port: 70000, tier: "workbench" })
+    ).rejects.toThrow(/Invalid MCP port/);
+    await expect(
+      service.preparePaneConfig({
+        paneId: "pane-010",
+        port: -1 as unknown as number,
+        tier: "workbench",
+      })
     ).rejects.toThrow(/Invalid MCP port/);
   });
 
   it("rejects empty pane IDs", async () => {
-    await expect(service.preparePaneConfig({ paneId: "", port: 45454 })).rejects.toThrow(
-      /paneId is required/
-    );
+    await expect(
+      service.preparePaneConfig({ paneId: "", port: 45454, tier: "workbench" })
+    ).rejects.toThrow(/paneId is required/);
+  });
+
+  it('rejects tier "off" — caller must skip preparePaneConfig instead', async () => {
+    await expect(
+      service.preparePaneConfig({ paneId: "pane-off", port: 45454, tier: "off" })
+    ).rejects.toThrow(/should not be called with tier "off"/);
   });
 
   it("rejects path-traversal pane IDs", async () => {
-    await expect(service.preparePaneConfig({ paneId: "../escape", port: 45454 })).rejects.toThrow(
-      /Invalid paneId/
-    );
     await expect(
-      service.preparePaneConfig({ paneId: "../../etc/passwd", port: 45454 })
+      service.preparePaneConfig({ paneId: "../escape", port: 45454, tier: "workbench" })
     ).rejects.toThrow(/Invalid paneId/);
-    await expect(service.preparePaneConfig({ paneId: "subdir/leak", port: 45454 })).rejects.toThrow(
-      /Invalid paneId/
-    );
+    await expect(
+      service.preparePaneConfig({
+        paneId: "../../etc/passwd",
+        port: 45454,
+        tier: "workbench",
+      })
+    ).rejects.toThrow(/Invalid paneId/);
+    await expect(
+      service.preparePaneConfig({ paneId: "subdir/leak", port: 45454, tier: "workbench" })
+    ).rejects.toThrow(/Invalid paneId/);
 
     // Confirm no file was written outside the base directory.
     const escapeCandidate = path.join(testUserData, "escape.json");
     await expect(fs.stat(escapeCandidate)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("getTierForToken returns the tier the token was minted at", async () => {
+    const wb = await service.preparePaneConfig({
+      paneId: "pane-wb",
+      port: 45454,
+      tier: "workbench",
+    });
+    const action = await service.preparePaneConfig({
+      paneId: "pane-action",
+      port: 45454,
+      tier: "action",
+    });
+    const sys = await service.preparePaneConfig({
+      paneId: "pane-sys",
+      port: 45454,
+      tier: "system",
+    });
+
+    expect(service.getTierForToken(wb.token)).toBe("workbench");
+    expect(service.getTierForToken(action.token)).toBe("action");
+    expect(service.getTierForToken(sys.token)).toBe("system");
+    expect(service.getTierForToken("not-a-real-token")).toBeUndefined();
+    expect(service.getTierForToken("")).toBeUndefined();
+  });
+
+  it("revokePaneConfig clears the tier mapping", async () => {
+    const { token } = await service.preparePaneConfig({
+      paneId: "pane-revoke-tier",
+      port: 45454,
+      tier: "system",
+    });
+    expect(service.getTierForToken(token)).toBe("system");
+    await service.revokePaneConfig("pane-revoke-tier");
+    expect(service.getTierForToken(token)).toBeUndefined();
+  });
+
   it("revokeAll clears all tokens and files", async () => {
-    const a = await service.preparePaneConfig({ paneId: "pane-a", port: 45454 });
-    const b = await service.preparePaneConfig({ paneId: "pane-b", port: 45454 });
+    const a = await service.preparePaneConfig({
+      paneId: "pane-a",
+      port: 45454,
+      tier: "workbench",
+    });
+    const b = await service.preparePaneConfig({
+      paneId: "pane-b",
+      port: 45454,
+      tier: "system",
+    });
 
     expect(service.isValidPaneToken(a.token)).toBe(true);
     expect(service.isValidPaneToken(b.token)).toBe(true);

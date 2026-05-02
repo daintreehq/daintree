@@ -222,6 +222,17 @@ export class ProjectSettingsManager {
             : undefined,
         defaultWorktreeMode:
           typeof parsed.defaultWorktreeMode === "string" ? parsed.defaultWorktreeMode : undefined,
+        daintreeMcpTier:
+          parsed.daintreeMcpTier === "off" ||
+          parsed.daintreeMcpTier === "workbench" ||
+          parsed.daintreeMcpTier === "action" ||
+          parsed.daintreeMcpTier === "system"
+            ? parsed.daintreeMcpTier
+            : undefined,
+        exposeDaintreeMcpToAgents:
+          typeof parsed.exposeDaintreeMcpToAgents === "boolean"
+            ? parsed.exposeDaintreeMcpToAgents
+            : undefined,
       };
 
       this.notificationOverridesCache.set(projectId, settings.notificationOverrides);
