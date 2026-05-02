@@ -42,6 +42,8 @@ async function handleProvisionSession(
   sessionPath: string;
   token: string;
   tier: HelpAssistantTier;
+  mcpUrl: string | null;
+  windowId: number;
 } | null> {
   if (!ctx.senderWindow) {
     console.warn("[help] provisionSession invoked without a senderWindow — skipping");
