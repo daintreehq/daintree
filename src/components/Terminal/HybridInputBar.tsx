@@ -40,6 +40,7 @@ import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { tryFleetBroadcastFromEditor } from "@/components/Fleet/fleetEnterBroadcast";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -1318,9 +1319,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const barContent = (
       <div
-        className="group cursor-text px-3.5 pb-2.5 pt-2.5"
+        className="relative group cursor-text px-3.5 pb-2.5 pt-2.5"
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
+        {(showLegend || isFleetPrimary) && (
+          <div className="pointer-events-none absolute bottom-full right-3.5 mb-1 flex items-center gap-2">
+            {showLegend && (
+              <p
+                aria-hidden={!showLegend}
+                className="text-[11px] text-daintree-text/40 select-none"
+              >
+                @ files · @diff · @terminal · / commands
+              </p>
+            )}
+            {isFleetPrimary && (
+              <div className="pointer-events-auto">
+                <FleetDraftingPill />
+              </div>
+            )}
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}
@@ -1433,17 +1451,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               />
             </div>
           </div>
-        </div>
-        <div
-          aria-hidden={!showLegend}
-          className={cn(
-            "overflow-hidden transition-[max-height,opacity] duration-150 ease-out",
-            showLegend ? "max-h-6 opacity-100" : "max-h-0 opacity-0"
-          )}
-        >
-          <p className="pt-1 text-[11px] text-daintree-text/40 select-none">
-            @ files · @diff · @terminal · / commands
-          </p>
         </div>
       </div>
     );

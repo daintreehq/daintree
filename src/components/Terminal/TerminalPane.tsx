@@ -53,7 +53,6 @@ import type { HybridInputBarHandle } from "./HybridInputBar";
 const LazyHybridInputBar = lazy(() =>
   import("./HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
 );
-import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import {
   getTerminalFocusTarget,
   shouldShowHybridInputBar,
@@ -255,7 +254,6 @@ function TerminalPaneComponent({
   // is suppressed on a single-armed seed selection because nothing fans out
   // until a second pane joins.
   const isFleetFollower = isArmed && !isFocused && armedIds.size >= 2;
-  const isFleetPrimary = isArmed && isFocused && armedIds.size >= 2;
 
   // Consolidate terminal state selectors to avoid multiple scans and ensure consistent snapshots
   const terminalState = usePanelStore(
@@ -1070,14 +1068,6 @@ function TerminalPaneComponent({
                 </div>
               )}
             </div>
-
-            {isFleetPrimary && (
-              <div className="relative h-0 shrink-0 z-10 pointer-events-none">
-                <div className="absolute right-3.5 bottom-2 pointer-events-auto">
-                  <FleetDraftingPill />
-                </div>
-              </div>
-            )}
 
             {showHybridInputBar && (
               <Suspense fallback={null}>
