@@ -8,8 +8,11 @@
  *   `CONFIRMATION_REQUIRED` error code — surfaced separately so audit
  *   readers can distinguish "agent forgot `_meta.confirmed`" from a real
  *   failure.
+ * - `unauthorized`: the session's tier was not permitted to invoke the
+ *   action — the dispatch was rejected before reaching the renderer. Carries
+ *   `errorCode: "TIER_NOT_PERMITTED"`.
  */
-export type McpAuditResult = "success" | "error" | "confirmation-pending";
+export type McpAuditResult = "success" | "error" | "confirmation-pending" | "unauthorized";
 
 /**
  * Persisted audit record for a single MCP tool dispatch. Written once per
@@ -21,9 +24,10 @@ export type McpAuditResult = "success" | "error" | "confirmation-pending";
  * persisted because tool args may carry terminal output, file content, or
  * prompt text.
  *
- * `tier` carries a placeholder of `"unknown"` until the tier-policy work
- * (issue #6517) lands. The field exists on the record so downstream readers
- * (incident reports, support exports) can rely on a stable schema.
+ * `tier` records the source-tier classification of the connection that
+ * issued the call (`workbench`, `action`, `system`, `external`). Sessions
+ * that are not yet stamped fall back to `"workbench"` — the most
+ * restrictive tier — so an unstamped session can never elevate access.
  */
 export interface McpAuditRecord {
   id: string;

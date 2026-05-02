@@ -48,12 +48,144 @@ const OPEN_WORLD_CATEGORIES: ReadonlySet<string> = new Set([
   "system",
 ]);
 
-// Curated set of action IDs advertised over MCP by default. Keeps the tool
-// surface small enough for `tool_choice: "auto"` reliability and bounded
-// token cost while still covering the agent-facing introspection,
-// query, and command actions. Power users opt into the full surface via
-// `mcpServer.fullToolSurface = true`. Dispatch is not gated by this list —
-// callers that already know an ID can still invoke it.
+/**
+ * Source-tier classification for an authenticated MCP connection. Each
+ * connection is stamped with a tier at session-creation time and that tier
+ * gates every `CallTool` and `ListTools` request for the session's
+ * lifetime. Tiers are strictly nested: `workbench ⊂ action ⊂ system`, with
+ * `external` carrying its own legacy curated allowlist for backward
+ * compatibility with the pre-tier user-facing server.
+ *
+ * - `workbench` — read-only Daintree introspection (queries, file/diff
+ *   reads, listings). The default for project agents that opt in.
+ * - `action` — workbench plus non-destructive mutations (create worktree,
+ *   run recipe, inject text into a terminal, panel manipulation). Default
+ *   for the help assistant.
+ * - `system` — action plus destructive operations (delete worktree, send
+ *   raw terminal commands, git mutations, agent.launch). Reserved for
+ *   "skip permissions" or explicitly-elevated external clients.
+ * - `external` — today's curated allowlist, tied to the global apiKey.
+ */
+export type McpTier = "workbench" | "action" | "system" | "external";
+
+/**
+ * Workbench tier — read-only introspection and queries. No mutations, no
+ * external network side effects. Walks of the action manifest filtered by
+ * `kind: "query"` plus a small set of safe-to-read commands.
+ */
+const WORKBENCH_TOOLS: ReadonlySet<string> = new Set([
+  "actions.list",
+  "actions.getContext",
+
+  "project.getAll",
+  "project.getCurrent",
+  "project.getSettings",
+  "project.getStats",
+  "project.detectRunners",
+
+  "worktree.list",
+  "worktree.getCurrent",
+  "worktree.listBranches",
+  "worktree.getDefaultPath",
+  "worktree.getAvailableBranch",
+  "worktree.resource.status",
+
+  "files.search",
+  "file.view",
+
+  "copyTree.isAvailable",
+  "copyTree.generate",
+
+  "terminal.list",
+  "terminal.getOutput",
+
+  "slashCommands.list",
+
+  "git.getProjectPulse",
+  "git.getFileDiff",
+  "git.listCommits",
+  "git.getStagingStatus",
+  "git.snapshotGet",
+  "git.snapshotList",
+
+  "github.checkCli",
+  "github.getRepoStats",
+  "github.listIssues",
+  "github.listPullRequests",
+
+  "system.checkCommand",
+  "system.checkDirectory",
+]);
+
+/**
+ * Action tier additions — non-destructive mutations layered on top of
+ * workbench. Creates resources and injects context into existing terminals,
+ * but does not delete, send raw input, or commit/push git state.
+ */
+const ACTION_TIER_ADDONS: ReadonlySet<string> = new Set([
+  "worktree.create",
+  "worktree.createWithRecipe",
+  "worktree.setActive",
+  "worktree.refresh",
+
+  "terminal.inject",
+  "terminal.new",
+
+  "recipe.list",
+  "recipe.run",
+
+  "copyTree.injectToTerminal",
+  "copyTree.generateAndCopyFile",
+
+  "file.openInEditor",
+
+  "agent.focusNextWaiting",
+  "agent.focusNextWorking",
+]);
+
+/**
+ * System tier additions — destructive or privileged operations layered on
+ * top of action. Includes deleting worktrees, raw terminal input, git
+ * mutations, and launching new agents.
+ */
+const SYSTEM_TIER_ADDONS: ReadonlySet<string> = new Set([
+  "worktree.delete",
+
+  "terminal.sendCommand",
+  "terminal.bulkCommand",
+
+  "git.stageFile",
+  "git.unstageFile",
+  "git.stageAll",
+  "git.unstageAll",
+  "git.commit",
+  "git.push",
+  "git.snapshotRevert",
+  "git.snapshotDelete",
+
+  "github.openIssue",
+  "github.openPR",
+
+  "agent.launch",
+  "agent.terminal",
+]);
+
+function unionSet(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const set of sets) {
+    for (const value of set) out.add(value);
+  }
+  return out;
+}
+
+// External tier — curated set of action IDs advertised over MCP for the
+// legacy user-facing server. Keeps the tool surface small enough for
+// `tool_choice: "auto"` reliability and bounded token cost while still
+// covering the agent-facing introspection, query, and command actions.
+// Power users opt into the full surface via `mcpServer.fullToolSurface =
+// true`. Tier-gated dispatch enforces this list at CallTool time — a
+// caller that knows an action ID outside this set will receive a
+// `TIER_NOT_PERMITTED` rejection.
 const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   "actions.list",
   "actions.getContext",
@@ -126,6 +258,23 @@ const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   "system.checkDirectory",
 ]);
 
+/**
+ * Per-tier allowlist of action IDs. Tiers are additive: `action` is the
+ * union of `workbench` plus its addons; `system` adds further on top of
+ * `action`. Callers should treat these as the authoritative gate for both
+ * `ListTools` filtering and `CallTool` dispatch. `external` is intentionally
+ * NOT a superset of `system` — it tracks the legacy curated allowlist so
+ * existing apiKey clients keep seeing the same tools they always have.
+ */
+const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
+  workbench: WORKBENCH_TOOLS,
+  action: unionSet(WORKBENCH_TOOLS, ACTION_TIER_ADDONS),
+  system: unionSet(WORKBENCH_TOOLS, ACTION_TIER_ADDONS, SYSTEM_TIER_ADDONS),
+  external: MCP_TOOL_ALLOWLIST,
+};
+
+const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
+
 interface PendingRequest<T> {
   resolve: (value: T) => void;
   reject: (err: Error) => void;
@@ -137,12 +286,6 @@ interface PendingRequest<T> {
 interface McpSseSession {
   transport: SSEServerTransport;
   idleTimer: ReturnType<typeof setTimeout>;
-  /**
-   * Source-tier classification for the SSE peer. Will be populated by the
-   * tier-policy work in #6517; until then every record is tagged
-   * `"unknown"`.
-   */
-  tier?: string;
 }
 
 interface McpHttpSession {
@@ -206,6 +349,14 @@ export class McpServerService {
   private starting = false;
   private sessions = new Map<string, McpSseSession>();
   private httpSessions = new Map<string, McpHttpSession>();
+  /**
+   * Authoritative session-id → tier map used by both transports. Written
+   * when a new SSE or HTTP session is created (after the request has
+   * already passed `isAuthorized`) and read inside the `CallTool` /
+   * `ListTools` handlers via `getSessionTier`. Cleared in the matching
+   * `transport.onclose` and idle-eviction paths.
+   */
+  private sessionTierMap = new Map<string, McpTier>();
   private pendingManifests = new Map<string, PendingRequest<ActionManifestEntry[]>>();
   private pendingDispatches = new Map<string, PendingRequest<ActionDispatchResult>>();
   private cleanupListeners: Array<() => void> = [];
@@ -378,10 +529,16 @@ export class McpServerService {
   }
 
   private classifyDispatchResult(
-    outcome: { kind: "result"; value: ActionDispatchResult } | { kind: "throw"; error: unknown }
+    outcome:
+      | { kind: "result"; value: ActionDispatchResult }
+      | { kind: "throw"; error: unknown }
+      | { kind: "unauthorized" }
   ): { result: McpAuditResult; errorCode?: string } {
     if (outcome.kind === "throw") {
       return { result: "error", errorCode: "DISPATCH_THREW" };
+    }
+    if (outcome.kind === "unauthorized") {
+      return { result: "unauthorized", errorCode: TIER_NOT_PERMITTED_CODE };
     }
     const value = outcome.value;
     if (value.ok) return { result: "success" };
@@ -394,10 +551,13 @@ export class McpServerService {
   private appendAuditRecord(input: {
     toolId: string;
     sessionId: string;
-    tier: string | undefined;
+    tier: McpTier;
     args: unknown;
     durationMs: number;
-    outcome: { kind: "result"; value: ActionDispatchResult } | { kind: "throw"; error: unknown };
+    outcome:
+      | { kind: "result"; value: ActionDispatchResult }
+      | { kind: "throw"; error: unknown }
+      | { kind: "unauthorized" };
   }): void {
     // `=== false` so legacy persisted configs (undefined) default to enabled,
     // matching `getAuditConfig()`. A bare `!auditEnabled` would silently drop
@@ -411,7 +571,7 @@ export class McpServerService {
       timestamp: Date.now(),
       toolId: input.toolId,
       sessionId: input.sessionId,
-      tier: input.tier ?? "unknown",
+      tier: input.tier,
       argsSummary: this.redactArgsSummary(input.args),
       result: classification.result,
       durationMs: Math.max(0, Math.round(input.durationMs)),
@@ -574,6 +734,7 @@ export class McpServerService {
       }
     }
     this.httpSessions.clear();
+    this.sessionTierMap.clear();
 
     for (const cleanup of this.cleanupListeners) {
       cleanup();
@@ -853,9 +1014,10 @@ export class McpServerService {
 
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       const manifest = await this.requestManifest();
+      const tier = this.getSessionTier(sessionId);
       return {
         tools: manifest
-          .filter((entry) => this.shouldExposeTool(entry))
+          .filter((entry) => this.shouldExposeTool(entry, tier))
           .map((entry) => ({
             name: entry.id,
             description: this.buildToolDescription(entry),
@@ -869,7 +1031,32 @@ export class McpServerService {
       const actionId = request.params.name;
       const { args, confirmed } = this.parseToolArguments(request.params.arguments);
       const startedAt = Date.now();
-      const tier = this.sessions.get(sessionId)?.tier;
+      const tier = this.getSessionTier(sessionId);
+
+      if (!this.isTierPermitted(tier, actionId)) {
+        try {
+          this.appendAuditRecord({
+            toolId: actionId,
+            sessionId,
+            tier,
+            args,
+            durationMs: Date.now() - startedAt,
+            outcome: { kind: "unauthorized" },
+          });
+        } catch (err) {
+          console.error("[MCP] Failed to append audit record:", err);
+        }
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error [${TIER_NOT_PERMITTED_CODE}]: action '${actionId}' is not permitted for the '${tier}' tier.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
       let outcome:
         | { kind: "result"; value: ActionDispatchResult }
         | { kind: "throw"; error: unknown };
@@ -967,14 +1154,76 @@ export class McpServerService {
     return origin === `http://127.0.0.1:${this.port}` || origin === `http://localhost:${this.port}`;
   }
 
-  private shouldExposeTool(entry: ActionManifestEntry): boolean {
+  /**
+   * Returns true if the entry should be advertised to a session at the
+   * given tier. `restricted` actions are never advertised regardless of
+   * tier. `fullToolSurface` widens the surface only for the `external`
+   * tier — tier allowlists are security boundaries for the other tiers,
+   * not convenience filters that can be opted out of.
+   */
+  private shouldExposeTool(entry: ActionManifestEntry, tier: McpTier): boolean {
     if (entry.danger === "restricted") {
       return false;
     }
-    if (this.getConfig().fullToolSurface === true) {
+    if (tier === "external" && this.getConfig().fullToolSurface === true) {
       return true;
     }
-    return MCP_TOOL_ALLOWLIST.has(entry.id);
+    return TIER_ALLOWLISTS[tier].has(entry.id);
+  }
+
+  /**
+   * Hard gate consulted before every CallTool dispatch. Mirrors
+   * `shouldExposeTool` so a tool that appears in `ListTools` is always
+   * callable — `fullToolSurface=true` widens the external tier for both
+   * listing and dispatch in lockstep. The non-external tiers ignore the
+   * flag because their allowlists are security boundaries.
+   */
+  private isTierPermitted(tier: McpTier, actionId: string): boolean {
+    if (tier === "external" && this.getConfig().fullToolSurface === true) {
+      return true;
+    }
+    return TIER_ALLOWLISTS[tier].has(actionId);
+  }
+
+  /**
+   * Read the tier stamped on the session by the connection-time auth
+   * resolver. Falls back to `"workbench"` — the most restrictive tier — so
+   * a session that somehow escaped tier stamping cannot elevate access by
+   * default.
+   */
+  private getSessionTier(sessionId: string): McpTier {
+    return this.sessionTierMap.get(sessionId) ?? "workbench";
+  }
+
+  /**
+   * Resolve the source-tier classification for an authenticated request.
+   * Mirrors the three branches of `isAuthorized`:
+   *   1. Bearer matches the global apiKey → `"external"` (legacy server).
+   *   2. Bearer matches a per-pane token → `"workbench"` (project agents).
+   *   3. No `Authorization` header and no apiKey configured → `"external"`
+   *      (legacy permissive path; preserves pre-auth behavior).
+   * Falls back to `"workbench"` for anything that slipped through but
+   * isn't recognized.
+   */
+  private resolveTokenTier(req: http.IncomingMessage): McpTier {
+    const apiKey = this.getConfig().apiKey;
+    const auth = req.headers.authorization ?? "";
+
+    if (apiKey) {
+      const expected = `Bearer ${apiKey}`;
+      const actualHash = createHash("sha256").update(auth).digest();
+      const expectedHash = createHash("sha256").update(expected).digest();
+      if (timingSafeEqual(actualHash, expectedHash)) return "external";
+    } else if (auth.length === 0) {
+      return "external";
+    }
+
+    if (auth.startsWith("Bearer ")) {
+      const token = auth.slice("Bearer ".length);
+      if (mcpPaneConfigService.isValidPaneToken(token)) return "workbench";
+    }
+
+    return "workbench";
   }
 
   private buildToolDescription(entry: ActionManifestEntry): string {
@@ -1120,6 +1369,8 @@ export class McpServerService {
         allowedOrigins,
       });
       const sessionId = transport.sessionId;
+      const tier = this.resolveTokenTier(req);
+      this.sessionTierMap.set(sessionId, tier);
       const server = this.createSessionServer(sessionId);
 
       const idleTimer = this.createIdleTimer(sessionId);
@@ -1130,6 +1381,7 @@ export class McpServerService {
           clearTimeout(session.idleTimer);
           this.sessions.delete(sessionId);
         }
+        this.sessionTierMap.delete(sessionId);
       };
 
       await server.connect(transport);
@@ -1190,6 +1442,12 @@ export class McpServerService {
     // id via `sessionIdGenerator`, keeping the audit log keyed consistently
     // with the entry in `httpSessions`.
     const newSessionId = randomUUID();
+    // Resolve the tier from the initialize request's Authorization header
+    // and stamp it eagerly. The token is stable for the lifetime of the
+    // transport, so resolving once at connection time avoids re-hashing
+    // on every CallTool.
+    const tier = this.resolveTokenTier(req);
+    this.sessionTierMap.set(newSessionId, tier);
     const server = this.createSessionServer(newSessionId);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => newSessionId,
@@ -1207,6 +1465,7 @@ export class McpServerService {
         clearTimeout(session.idleTimer);
         this.httpSessions.delete(id);
       }
+      this.sessionTierMap.delete(id);
     };
 
     try {
@@ -1221,6 +1480,9 @@ export class McpServerService {
           clearTimeout(session.idleTimer);
           this.httpSessions.delete(id);
         }
+        this.sessionTierMap.delete(id);
+      } else {
+        this.sessionTierMap.delete(newSessionId);
       }
       await transport.close().catch(() => {});
       if (!res.headersSent) {
@@ -1235,6 +1497,7 @@ export class McpServerService {
       const session = this.httpSessions.get(sessionId);
       if (!session) return;
       this.httpSessions.delete(sessionId);
+      this.sessionTierMap.delete(sessionId);
       session.transport.close().catch(() => {
         // ignore close errors during idle timeout cleanup
       });
@@ -1255,6 +1518,7 @@ export class McpServerService {
       const session = this.sessions.get(sessionId);
       if (!session) return;
       this.sessions.delete(sessionId);
+      this.sessionTierMap.delete(sessionId);
       session.transport.close().catch(() => {
         // ignore close errors during idle timeout cleanup
       });

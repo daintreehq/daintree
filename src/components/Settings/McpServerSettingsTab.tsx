@@ -41,12 +41,14 @@ const RESULT_LABEL: Record<McpAuditResult, string> = {
   success: "Success",
   error: "Error",
   "confirmation-pending": "Awaiting confirmation",
+  unauthorized: "Unauthorized",
 };
 
 const RESULT_DOT_CLASS: Record<McpAuditResult, string> = {
   success: "bg-status-success",
   error: "bg-status-danger",
   "confirmation-pending": "bg-status-warning",
+  unauthorized: "bg-status-danger",
 };
 
 function formatRelativeTimestamp(ts: number): string {
