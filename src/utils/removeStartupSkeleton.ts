@@ -52,9 +52,29 @@ export function removeStartupSkeleton(): void {
         !prefersReducedMotion();
 
       if (canViewTransition) {
-        doc.startViewTransition!(() => {
+        const transition = doc.startViewTransition!(() => {
           el.remove();
         });
+        // The shared `::view-transition-old(root)` / `::view-transition-new(root)`
+        // rules in src/index.css set `animation: none` so the theme-reveal can
+        // drive its own clip-path animation via WAAPI. We follow the same
+        // pattern: fade the old root snapshot out over UI_EXIT_DURATION.
+        transition.ready
+          .then(() => {
+            document.documentElement.animate(
+              { opacity: [1, 0] },
+              {
+                duration: UI_EXIT_DURATION,
+                easing: "ease-out",
+                pseudoElement: "::view-transition-old(root)",
+                fill: "forwards",
+              }
+            );
+          })
+          .catch(() => {
+            // Transition aborted (e.g. another startViewTransition started)
+            // — the callback already removed the skeleton, nothing else to do.
+          });
         return;
       }
 

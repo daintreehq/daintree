@@ -116,6 +116,47 @@ describe("removeStartupSkeleton", () => {
     expect(document.getElementById("startup-skeleton")).toBeNull();
   });
 
+  it("animates ::view-transition-old(root) opacity over UI_EXIT_DURATION on transition.ready", async () => {
+    const startViewTransition = vi.fn(() => ({
+      ready: Promise.resolve(),
+      finished: Promise.resolve(),
+    }));
+    (
+      document as unknown as { startViewTransition: typeof startViewTransition }
+    ).startViewTransition = startViewTransition;
+
+    const animate = vi.fn();
+    const originalAnimate = (document.documentElement as unknown as { animate?: unknown }).animate;
+    (document.documentElement as unknown as { animate: typeof animate }).animate = animate;
+
+    try {
+      const { removeStartupSkeleton } = await import("../removeStartupSkeleton");
+      addSkeleton();
+      removeStartupSkeleton();
+
+      flushRaf();
+      flushRaf();
+
+      // transition.ready resolves microtask-async; flush the queue so the
+      // .then handler that drives the WAAPI animation runs before assertions.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(animate).toHaveBeenCalledTimes(1);
+      const call = animate.mock.calls[0];
+      expect(call).toBeDefined();
+      const [keyframes, options] = call!;
+      expect(keyframes).toEqual({ opacity: [1, 0] });
+      expect(options).toMatchObject({
+        duration: UI_EXIT_DURATION,
+        pseudoElement: "::view-transition-old(root)",
+        fill: "forwards",
+      });
+    } finally {
+      (document.documentElement as unknown as { animate?: unknown }).animate = originalAnimate;
+    }
+  });
+
   it("skips the View Transitions path when prefers-reduced-motion is set", async () => {
     matchesReducedMotion = true;
     const startViewTransition = vi.fn();

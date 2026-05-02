@@ -131,6 +131,10 @@ export function AppLayout({
 
   useEffect(() => {
     if (layout.isFocusMode) return;
+    // Skip until hydration completes — the pre-hydration mount uses the
+    // default 350px and would otherwise overwrite the persisted value before
+    // restoreState() reads it back.
+    if (!isHydrated) return;
 
     const persistSidebarWidth = async () => {
       try {
@@ -142,7 +146,7 @@ export function AppLayout({
 
     const timer = setTimeout(persistSidebarWidth, 300);
     return () => clearTimeout(timer);
-  }, [sidebarWidth, layout.isFocusMode]);
+  }, [sidebarWidth, layout.isFocusMode, isHydrated]);
 
   useEffect(() => {
     // Gate persistence until hydration completes and project switching ends
