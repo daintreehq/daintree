@@ -1066,6 +1066,43 @@ describe("McpServerService", () => {
     expect(ids).not.toContain("internal.dangerous");
   });
 
+  it("dispatches fullToolSurface external tools that are outside the curated allowlist", async () => {
+    storeState.mcpServer.fullToolSurface = true;
+    const dispatchMock = vi.fn(
+      (payload: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result: { dispatched: payload.actionId },
+      })
+    );
+    const { window } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "panel.gridLayout.setStrategy" as ActionId,
+          title: "Set grid layout",
+          description: "Power-user UI plumbing",
+        }),
+      ],
+      dispatchAction: dispatchMock,
+    });
+
+    await service.start(window);
+    const { client, transport } = await connectClient(service.currentPort!);
+    transports.push(transport);
+
+    const result = getTextResult(
+      await client.callTool({
+        name: "panel.gridLayout.setStrategy",
+        arguments: { strategy: "automatic" },
+      })
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.content[0].text).toContain('"dispatched": "panel.gridLayout.setStrategy"');
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ actionId: "panel.gridLayout.setStrategy" })
+    );
+  });
+
   it("treats non-true fullToolSurface values as curated (fail-closed)", async () => {
     (storeState.mcpServer as { fullToolSurface: unknown }).fullToolSurface = "false";
     const { window } = createMockWindow({
@@ -1361,6 +1398,49 @@ describe("McpServerService", () => {
       // connectHttpClient sends the global apiKey header → external tier.
       expect(records[0].tier).toBe("external");
       expect(records[0].result).toBe("success");
+    });
+
+    it("Streamable HTTP transport with a pane token stamps workbench tier and gates dispatch", async () => {
+      const dispatchMock = vi.fn(
+        (): ActionDispatchResult => ({ ok: true, result: { ok: true } })
+      );
+      const { window } = createMockWindow({
+        getManifest: manifestForAllAllowlistedTools,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+
+      const token = `pane-token-${Math.random().toString(36).slice(2)}`;
+      paneTokens.add(token);
+      const client = new Client({ name: "mcp-pane-http-client", version: "1.0.0" });
+      const transport = new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${service.currentPort}/mcp`),
+        { requestInit: { headers: { Authorization: `Bearer ${token}` } } }
+      );
+      await client.connect(transport);
+      httpTransports.push(transport);
+
+      // Query allowed
+      const allowed = getTextResult(
+        await client.callTool({ name: "actions.list", arguments: {} })
+      );
+      expect(allowed.isError).not.toBe(true);
+
+      // Destructive denied at dispatch time
+      const denied = getTextResult(
+        await client.callTool({ name: "worktree.delete", arguments: { id: "x" } })
+      );
+      expect(denied.isError).toBe(true);
+      expect(denied.content[0].text).toContain("TIER_NOT_PERMITTED");
+      expect(denied.content[0].text).toContain("workbench");
+
+      const records = getAuditRecords(service);
+      const denyRecord = records.find((r) => r.toolId === "worktree.delete");
+      const allowRecord = records.find((r) => r.toolId === "actions.list");
+      expect(denyRecord?.tier).toBe("workbench");
+      expect(denyRecord?.result).toBe("unauthorized");
+      expect(allowRecord?.tier).toBe("workbench");
     });
   });
 

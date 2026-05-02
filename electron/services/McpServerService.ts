@@ -1171,8 +1171,17 @@ export class McpServerService {
     return TIER_ALLOWLISTS[tier].has(entry.id);
   }
 
-  /** Hard gate consulted before every CallTool dispatch. */
+  /**
+   * Hard gate consulted before every CallTool dispatch. Mirrors
+   * `shouldExposeTool` so a tool that appears in `ListTools` is always
+   * callable — `fullToolSurface=true` widens the external tier for both
+   * listing and dispatch in lockstep. The non-external tiers ignore the
+   * flag because their allowlists are security boundaries.
+   */
   private isTierPermitted(tier: McpTier, actionId: string): boolean {
+    if (tier === "external" && this.getConfig().fullToolSurface === true) {
+      return true;
+    }
     return TIER_ALLOWLISTS[tier].has(actionId);
   }
 
