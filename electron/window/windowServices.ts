@@ -364,19 +364,6 @@ export async function setupWindowServices(
       };
     }
 
-    // Start background token-health polling (30-minute interval + focus/wake
-    // re-checks). The service guards itself with the GitHubAuth.tokenVersion
-    // so a stale probe cannot clobber a freshly-set token.
-    gitHubTokenHealthService.start();
-    console.log("[MAIN] GitHubTokenHealthService started");
-
-    // Start background agent provider reachability probes (Claude, Gemini,
-    // Codex). Then wire up the registry that aggregates GitHub, agents, and
-    // MCP into a single per-service connectivity snapshot for renderers.
-    agentConnectivityService.start();
-    getServiceConnectivityRegistry().start();
-    console.log("[MAIN] ServiceConnectivityRegistry started");
-
     // Notifications (global singletons)
     // AgentNotificationService is deferred — agents can't emit state events
     // before the renderer is interactive, and its boot grace period now starts
@@ -648,6 +635,34 @@ export async function setupWindowServices(
             (process.env.DAINTREE_E2E_MODE ? 4 : 1),
         });
         resourceProfileService.start();
+      },
+    });
+
+    // Background token-health polling (30-minute interval + focus/wake
+    // re-checks). The service guards itself with the GitHubAuth.tokenVersion
+    // so a stale probe cannot clobber a freshly-set token.
+    registerDeferredTask({
+      name: "github-token-health",
+      run: () => {
+        gitHubTokenHealthService.start();
+      },
+    });
+
+    // Background agent provider reachability probes (Claude, Gemini, Codex)
+    // and the registry that aggregates GitHub, agents, and MCP into a single
+    // per-service connectivity snapshot for renderers. Registry must register
+    // before mcp-server so it wires onStatusChange before MCP's first event.
+    registerDeferredTask({
+      name: "agent-connectivity",
+      run: () => {
+        agentConnectivityService.start();
+      },
+    });
+
+    registerDeferredTask({
+      name: "service-connectivity-registry",
+      run: () => {
+        getServiceConnectivityRegistry().start();
       },
     });
 
