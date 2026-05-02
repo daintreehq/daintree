@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 /**
- * GridPanel — header-X close guard for active-agent groups (#6330).
+ * GridPanel — header-X close guard for working-agent groups (#6330, #6513).
  *
  * The per-tab guard in GridTabGroup only intercepts the per-tab X buttons.
  * The panel-header X button calls handleClose(false) → trashPanelGroup,
  * which silently kills the entire group — including single-tab groups whose
  * only close affordance IS that header button. This test pins the parallel
- * guard at the GridPanel layer.
+ * guard at the GridPanel layer. The guard fires only for "working" tabs;
+ * "waiting"/"directing" close immediately (#6513).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
@@ -159,10 +160,26 @@ describe("GridPanel header-close guard (#6330)", () => {
     );
   });
 
-  it.each(["working", "waiting", "directing"] as const)(
-    "shows the confirm dialog when single-tab group has a %s terminal",
+  it("shows the confirm dialog when single-tab group has a working terminal", () => {
+    const { getByTestId } = render(
+      <GridPanel
+        terminal={makeTerminal({ agentState: "working" })}
+        isFocused={false}
+        tabs={[makeTab("t-1", "working")]}
+      />
+    );
+
+    fireEvent.click(getByTestId("header-close"));
+
+    expect(getByTestId("confirm-dialog")).toBeTruthy();
+    expect(getByTestId("dialog-title").textContent).toBe("Stop this agent?");
+    expect(trashPanelGroupMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["waiting", "directing"] as const)(
+    "closes immediately when single-tab group has a %s terminal (#6513)",
     (state) => {
-      const { getByTestId } = render(
+      const { getByTestId, queryByTestId } = render(
         <GridPanel
           terminal={makeTerminal({ agentState: state as AgentState })}
           isFocused={false}
@@ -172,9 +189,13 @@ describe("GridPanel header-close guard (#6330)", () => {
 
       fireEvent.click(getByTestId("header-close"));
 
-      expect(getByTestId("confirm-dialog")).toBeTruthy();
-      expect(getByTestId("dialog-title").textContent).toBe("Stop this agent?");
-      expect(trashPanelGroupMock).not.toHaveBeenCalled();
+      expect(queryByTestId("confirm-dialog")).toBeNull();
+      return new Promise<void>((resolve) =>
+        setTimeout(() => {
+          expect(trashPanelGroupMock).toHaveBeenCalledWith("t-1");
+          resolve();
+        }, 0)
+      );
     }
   );
 

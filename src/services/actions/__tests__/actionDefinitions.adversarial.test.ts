@@ -485,6 +485,75 @@ describe("terminal action hardening", () => {
     expect(mocks.appClient.quit).not.toHaveBeenCalled();
   });
 
+  // #6513: Cmd+W (terminal.close action) must match the per-tab/header X-button
+  // guards — prompt before closing a "working" agent, but close idle/waiting/
+  // directing terminals immediately.
+  it("dispatches daintree:close-confirm and skips trash when target agent is working", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const closeTerminal = actions.get("terminal.close")!();
+
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+
+    usePanelStore.setState({
+      panelsById: {
+        "term-1": createTerminal({
+          id: "term-1",
+          location: "grid",
+          agentState: "working",
+        }),
+      },
+      panelIds: ["term-1"],
+      focusedId: "term-1",
+    });
+
+    await closeTerminal.run(undefined, {} as never);
+
+    expect(usePanelStore.getState().panelsById["term-1"]?.location).toBe("grid");
+    const confirmEvents = dispatchSpy.mock.calls
+      .map(([event]) => event)
+      .filter(
+        (e): e is CustomEvent => e instanceof CustomEvent && e.type === "daintree:close-confirm"
+      );
+    expect(confirmEvents).toHaveLength(1);
+    expect((confirmEvents[0]!.detail as { terminalId: string }).terminalId).toBe("term-1");
+
+    dispatchSpy.mockRestore();
+  });
+
+  it.each(["idle", "waiting", "directing", "completed", "exited"] as const)(
+    "trashes a %s agent terminal immediately on terminal.close (no confirm event)",
+    async (state) => {
+      const actions = buildRegistry(registerTerminalActions);
+      const closeTerminal = actions.get("terminal.close")!();
+
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+
+      usePanelStore.setState({
+        panelsById: {
+          "term-1": createTerminal({
+            id: "term-1",
+            location: "grid",
+            agentState: state,
+          }),
+        },
+        panelIds: ["term-1"],
+        focusedId: "term-1",
+      });
+
+      await closeTerminal.run(undefined, {} as never);
+
+      expect(usePanelStore.getState().panelsById["term-1"]?.location).toBe("trash");
+      const confirmEvents = dispatchSpy.mock.calls
+        .map(([event]) => event)
+        .filter(
+          (e): e is CustomEvent => e instanceof CustomEvent && e.type === "daintree:close-confirm"
+        );
+      expect(confirmEvents).toHaveLength(0);
+
+      dispatchSpy.mockRestore();
+    }
+  );
+
   it("duplicates trashed terminals back into the grid with a copied title", async () => {
     const actions = buildRegistry(registerTerminalActions);
     const duplicate = actions.get("terminal.duplicate")!();

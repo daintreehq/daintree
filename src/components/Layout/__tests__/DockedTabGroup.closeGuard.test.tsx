@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 /**
- * DockedTabGroup — confirm-before-close guard for active-agent tabs (#6330).
+ * DockedTabGroup — confirm-before-close guard for working-agent tabs (#6330, #6513).
  *
  * Mirrors the GridTabGroup guard with one wrinkle: the dock popover collapses
  * when a body-portalled dialog mounts (Radix's onInteractOutside reads the
  * focus shift), so the close handler must call closeDockTerminal() before
  * showing the ConfirmDialog. Otherwise canceling leaves the user with no
  * popover to return to and the dialog backdrop drops onto a half-broken state.
+ * The guard fires only for "working" tabs; "waiting"/"directing" close
+ * immediately (#6513).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
@@ -286,25 +288,42 @@ describe("DockedTabGroup close guard (#6330)", () => {
     expect(closeDockTerminalMock).not.toHaveBeenCalled();
   });
 
-  it.each(["working", "waiting", "directing"] as const)(
-    "shows the confirm dialog and closes the popover for a %s agent tab",
+  it("shows the confirm dialog and closes the popover for a working agent tab", () => {
+    const panels = [
+      makePanel({ id: "t-1", agentState: "idle" as AgentState }),
+      makePanel({ id: "t-2", agentState: "working" as AgentState }),
+    ];
+
+    const { getByTestId } = render(
+      <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+    );
+
+    fireEvent.click(getByTestId("close-t-2"));
+
+    expect(trashPanelMock).not.toHaveBeenCalled();
+    expect(closeDockTerminalMock).toHaveBeenCalledTimes(1);
+    expect(getByTestId("confirm-dialog")).toBeTruthy();
+    expect(getByTestId("dialog-title").textContent).toBe("Stop this agent?");
+    expect(getByTestId("dialog-confirm").textContent).toBe("Stop and close");
+  });
+
+  it.each(["waiting", "directing"] as const)(
+    "closes a %s agent tab immediately without confirmation (#6513)",
     (state) => {
       const panels = [
         makePanel({ id: "t-1", agentState: "idle" as AgentState }),
         makePanel({ id: "t-2", agentState: state as AgentState }),
       ];
 
-      const { getByTestId } = render(
+      const { getByTestId, queryByTestId } = render(
         <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
       );
 
       fireEvent.click(getByTestId("close-t-2"));
 
-      expect(trashPanelMock).not.toHaveBeenCalled();
-      expect(closeDockTerminalMock).toHaveBeenCalledTimes(1);
-      expect(getByTestId("confirm-dialog")).toBeTruthy();
-      expect(getByTestId("dialog-title").textContent).toBe("Stop this agent?");
-      expect(getByTestId("dialog-confirm").textContent).toBe("Stop and close");
+      expect(trashPanelMock).toHaveBeenCalledWith("t-2");
+      expect(queryByTestId("confirm-dialog")).toBeNull();
+      expect(closeDockTerminalMock).not.toHaveBeenCalled();
     }
   );
 

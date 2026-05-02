@@ -15,7 +15,7 @@ import { buildPanelProps } from "@/utils/panelProps";
 import type { AgentState } from "@/types";
 import { terminalChromeDescriptorsEqual } from "@/utils/terminalChrome";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
+import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 
 export interface GridPanelProps {
   terminal: TerminalInstance;
@@ -168,7 +168,7 @@ export const GridPanel = React.memo(function GridPanel({
       }
       const candidates = tabs?.length ? tabs.map((t) => t.agentState) : [terminal.agentState];
       const hasActiveAgent = candidates.some(
-        (state) => state !== undefined && ACTIVE_AGENT_STATES.has(state)
+        (state) => state !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(state)
       );
       if (hasActiveAgent) {
         setPendingGroupClose(true);

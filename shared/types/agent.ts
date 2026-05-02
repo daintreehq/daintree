@@ -8,6 +8,14 @@ export const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set([
   "directing",
 ]);
 
+/**
+ * Agent states that should trigger a close-confirmation dialog. Narrower than
+ * ACTIVE_AGENT_STATES: only "working" represents in-flight computation that
+ * would be lost on close. "waiting"/"directing" are agent-paused states where
+ * stopping is not disruptive, so closing should not require confirmation.
+ */
+export const CLOSE_CONFIRM_AGENT_STATES: ReadonlySet<AgentState> = new Set(["working"]);
+
 const CANONICAL_AGENT_STATES: ReadonlySet<AgentState> = new Set([
   "idle",
   "working",

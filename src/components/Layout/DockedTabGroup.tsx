@@ -59,7 +59,7 @@ import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopove
 import { usePreferencesStore } from "@/store";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
+import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 
 interface DockedTabGroupProps {
   group: TabGroup;
@@ -265,7 +265,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const handleTabClose = useCallback(
     (tabId: string) => {
       const panel = panels.find((p) => p.id === tabId);
-      if (panel?.agentState && ACTIVE_AGENT_STATES.has(panel.agentState)) {
+      if (panel?.agentState && CLOSE_CONFIRM_AGENT_STATES.has(panel.agentState)) {
         closeDockTerminal();
         setPendingCloseTabId(tabId);
         return;

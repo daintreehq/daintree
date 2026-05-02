@@ -13,7 +13,7 @@ import { focusPanelInput } from "./terminalFocusRegistry";
 import { getGroupAmbientAgentState } from "@/components/Layout/useDockBlockedState";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
+import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 
 export interface GridTabGroupProps {
   group: TabGroup;
@@ -300,7 +300,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   const handleTabClose = useCallback(
     (tabId: string) => {
       const panel = panels.find((p) => p.id === tabId);
-      if (panel?.agentState && ACTIVE_AGENT_STATES.has(panel.agentState)) {
+      if (panel?.agentState && CLOSE_CONFIRM_AGENT_STATES.has(panel.agentState)) {
         setPendingCloseTabId(tabId);
         return;
       }

@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 /**
- * GridTabGroup — confirm-before-close guard for active-agent tabs (#6330).
+ * GridTabGroup — confirm-before-close guard for working-agent tabs (#6330, #6513).
  *
- * Closing a tab whose agent is mid-task (working/waiting/directing) routes
- * through a destructive ConfirmDialog. Idle/completed/exited tabs close
- * immediately as before. Alt+Click force-close on PanelHeader bypasses
- * handleTabClose entirely (it goes through usePanelHandlers → removePanel)
- * so it doesn't need to be exercised here.
+ * Closing a tab whose agent is "working" (in-flight computation) routes through
+ * a destructive ConfirmDialog. Idle/waiting/directing/completed/exited tabs
+ * close immediately — "waiting" and "directing" represent agent-paused states
+ * where stopping is not disruptive (#6513). Alt+Click force-close on
+ * PanelHeader bypasses handleTabClose entirely.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
@@ -195,29 +195,45 @@ describe("GridTabGroup close guard (#6330)", () => {
     expect(queryByTestId("confirm-dialog")).toBeNull();
   });
 
-  it.each(["working", "waiting", "directing"] as const)(
-    "shows the confirm dialog when closing a %s agent tab",
+  it("shows the confirm dialog when closing a working agent tab", () => {
+    const panels = [
+      makePanel({ id: "t-1", agentState: "idle" as AgentState }),
+      makePanel({ id: "t-2", agentState: "working" as AgentState }),
+    ];
+
+    const { getByTestId } = render(
+      <GridTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} focusedId="t-1" />
+    );
+
+    fireEvent.click(getByTestId("close-t-2"));
+
+    expect(trashPanelMock).not.toHaveBeenCalled();
+    const dialog = getByTestId("confirm-dialog");
+    expect(dialog).toBeTruthy();
+    expect(dialog.getAttribute("data-variant")).toBe("destructive");
+    expect(getByTestId("dialog-title").textContent).toBe("Stop this agent?");
+    expect(getByTestId("dialog-description").textContent).toBe(
+      "The agent is currently working. Closing this tab will stop it."
+    );
+    expect(getByTestId("dialog-confirm").textContent).toBe("Stop and close");
+  });
+
+  it.each(["waiting", "directing"] as const)(
+    "closes a %s agent tab immediately without confirmation (#6513)",
     (state) => {
       const panels = [
         makePanel({ id: "t-1", agentState: "idle" as AgentState }),
         makePanel({ id: "t-2", agentState: state as AgentState }),
       ];
 
-      const { getByTestId } = render(
+      const { getByTestId, queryByTestId } = render(
         <GridTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} focusedId="t-1" />
       );
 
       fireEvent.click(getByTestId("close-t-2"));
 
-      expect(trashPanelMock).not.toHaveBeenCalled();
-      const dialog = getByTestId("confirm-dialog");
-      expect(dialog).toBeTruthy();
-      expect(dialog.getAttribute("data-variant")).toBe("destructive");
-      expect(getByTestId("dialog-title").textContent).toBe("Stop this agent?");
-      expect(getByTestId("dialog-description").textContent).toBe(
-        "The agent is currently working. Closing this tab will stop it."
-      );
-      expect(getByTestId("dialog-confirm").textContent).toBe("Stop and close");
+      expect(trashPanelMock).toHaveBeenCalledWith("t-2");
+      expect(queryByTestId("confirm-dialog")).toBeNull();
     }
   );
 
