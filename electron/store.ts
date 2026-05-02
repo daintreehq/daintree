@@ -190,6 +190,12 @@ export interface StoreSchema {
     apiKey: string;
     fullToolSurface: boolean;
   };
+  helpAssistant: {
+    docSearch: boolean;
+    daintreeControl: boolean;
+    skipPermissions: boolean;
+    auditRetention: 7 | 30 | 0;
+  };
   pendingErrors: ErrorRecord[];
   gpu: {
     hardwareAccelerationDisabled: boolean;
@@ -327,6 +333,12 @@ const storeOptions = {
       port: 45454,
       apiKey: "",
       fullToolSurface: false,
+    },
+    helpAssistant: {
+      docSearch: true,
+      daintreeControl: true,
+      skipPermissions: false,
+      auditRetention: 7 as const,
     },
     pendingErrors: [],
     gpu: {

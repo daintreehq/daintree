@@ -230,6 +230,8 @@ export type {
   VoiceTranscriptionModel,
   VoiceCorrectionModel,
   VoiceParagraphingStrategy,
+  HelpAssistantSettings,
+  HelpAssistantAuditRetention,
   MicPermissionStatus,
   BranchInfo,
   CreateWorktreeOptions,

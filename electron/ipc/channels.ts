@@ -520,6 +520,10 @@ export const CHANNELS = {
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
   VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
 
+  // Help assistant settings channels
+  HELP_ASSISTANT_GET_SETTINGS: "help-assistant:get-settings",
+  HELP_ASSISTANT_SET_SETTINGS: "help-assistant:set-settings",
+
   // Onboarding channels
   ONBOARDING_GET: "onboarding:get",
   ONBOARDING_SET_STEP: "onboarding:set-step",

@@ -1,0 +1,278 @@
+// @vitest-environment jsdom
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+vi.mock("@/utils/logger", () => ({
+  logError: vi.fn(),
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+}));
+
+vi.mock("@/components/icons", () => ({
+  DaintreeIcon: ({ className }: { className?: string }) => (
+    <span data-testid="daintree-icon" className={className} />
+  ),
+  McpServerIcon: ({ className }: { className?: string }) => (
+    <span data-testid="mcp-icon" className={className} />
+  ),
+}));
+
+const updateAgentMock = vi.fn().mockResolvedValue(undefined);
+
+const claudeEntry = {
+  enabled: true,
+  customPresets: [],
+  presetId: undefined,
+  worktreePresets: {},
+  pinned: true,
+  shareClipboardDirectory: true,
+  inlineMode: false,
+  dangerousEnabled: false,
+  assistantModelId: undefined,
+} as Record<string, unknown>;
+
+vi.mock("@/store", () => ({
+  useAgentSettingsStore: (
+    selector: (s: { settings: unknown; updateAgent: typeof updateAgentMock }) => unknown
+  ) => selector({ settings: { agents: { claude: claudeEntry } }, updateAgent: updateAgentMock }),
+}));
+
+vi.mock("@shared/types", () => ({
+  getAgentSettingsEntry: () => claudeEntry,
+}));
+
+vi.mock("@/config/agents", () => ({
+  getAgentConfig: () => ({
+    id: "claude",
+    name: "Claude",
+    models: [
+      { id: "claude-haiku-4-5", name: "Haiku" },
+      { id: "claude-sonnet-4-6", name: "Sonnet" },
+      { id: "claude-opus-4-7", name: "Opus" },
+    ],
+  }),
+}));
+
+vi.mock("@shared/config/agentRegistry", () => ({
+  ASSISTANT_FAST_MODELS: { claude: "claude-haiku-4-5" },
+}));
+
+interface SettingsSelectStubOption {
+  value: string;
+  label: string;
+}
+
+vi.mock("../SettingsSelect", () => ({
+  SettingsSelect: ({
+    label,
+    value,
+    onValueChange,
+    options,
+  }: {
+    label: string;
+    value: string;
+    onValueChange: (v: string) => void;
+    options: SettingsSelectStubOption[];
+  }) => (
+    <label>
+      {label}
+      <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  ),
+}));
+
+import { DaintreeAssistantSettingsTab } from "../DaintreeAssistantSettingsTab";
+
+const writeText = vi.fn().mockResolvedValue(undefined);
+
+interface HelpAssistantApi {
+  getSettings: ReturnType<typeof vi.fn>;
+  setSettings: ReturnType<typeof vi.fn>;
+}
+
+interface McpServerApi {
+  getStatus: ReturnType<typeof vi.fn>;
+  generateApiKey: ReturnType<typeof vi.fn>;
+  getConfigSnippet: ReturnType<typeof vi.fn>;
+}
+
+function installApi(
+  helpAssistant: Partial<HelpAssistantApi> = {},
+  mcpServer: Partial<McpServerApi> = {}
+) {
+  const helpDefaults: HelpAssistantApi = {
+    getSettings: vi.fn().mockResolvedValue({
+      docSearch: true,
+      daintreeControl: true,
+      skipPermissions: false,
+      auditRetention: 7,
+    }),
+    setSettings: vi.fn().mockResolvedValue(undefined),
+  };
+  const mcpDefaults: McpServerApi = {
+    getStatus: vi.fn().mockResolvedValue({
+      enabled: true,
+      port: 45454,
+      configuredPort: 45454,
+      apiKey: "dnt-key-abc",
+    }),
+    generateApiKey: vi.fn().mockResolvedValue("dnt-key-new"),
+    getConfigSnippet: vi.fn().mockResolvedValue('{ "url": "http://127.0.0.1:45454/sse" }'),
+  };
+  window.electron = {
+    helpAssistant: { ...helpDefaults, ...helpAssistant },
+    mcpServer: { ...mcpDefaults, ...mcpServer },
+  } as unknown as typeof window.electron;
+}
+
+describe("DaintreeAssistantSettingsTab", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+    claudeEntry.assistantModelId = undefined;
+    installApi();
+  });
+
+  const waitForContent = (container: HTMLElement, text: string) =>
+    waitFor(
+      () => {
+        expect(container.textContent).toContain(text);
+      },
+      { timeout: 5000 }
+    );
+
+  it("loads settings and MCP status on mount", async () => {
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Search documentation");
+
+    expect(window.electron.helpAssistant.getSettings).toHaveBeenCalledTimes(1);
+    expect(window.electron.mcpServer.getStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggling doc search persists docSearch=false", async () => {
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Search documentation");
+
+    const toggle = screen.getByLabelText("Allow the assistant to search Daintree documentation");
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({ docSearch: false });
+    });
+  });
+
+  it("turning on skip permissions reveals the inline warning copy", async () => {
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Skip permission prompts");
+
+    expect(container.textContent).not.toContain("becomes the only safeguard");
+
+    const toggle = screen.getByLabelText("Skip permission prompts during help sessions");
+    fireEvent.click(toggle);
+
+    await waitForContent(container, "becomes the only safeguard");
+    expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+      skipPermissions: true,
+    });
+  });
+
+  it("regenerate key calls mcpServer.generateApiKey", async () => {
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Regenerate MCP key");
+
+    fireEvent.click(screen.getByRole("button", { name: /regenerate mcp key/i }));
+
+    await waitFor(() => {
+      expect(window.electron.mcpServer.generateApiKey).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("copy MCP config writes the snippet to the clipboard and shows confirmation", async () => {
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Copy MCP config");
+
+    fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
+
+    await waitFor(() => {
+      expect(window.electron.mcpServer.getConfigSnippet).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith('{ "url": "http://127.0.0.1:45454/sse" }');
+    });
+    await waitForContent(container, "Copied");
+  });
+
+  it("hides connection details and shows guidance when MCP is disabled", async () => {
+    installApi(
+      {},
+      {
+        getStatus: vi.fn().mockResolvedValue({
+          enabled: false,
+          port: null,
+          configuredPort: null,
+          apiKey: "",
+        }),
+      }
+    );
+
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "MCP server is off");
+
+    expect(screen.queryByRole("button", { name: /regenerate mcp key/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /copy mcp config/i })).toBeNull();
+  });
+
+  it("changing the model select calls updateAgent on the claude agent", async () => {
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Preferred model");
+
+    const select = screen.getByLabelText("Model") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "claude-sonnet-4-6" } });
+
+    await waitFor(() => {
+      expect(updateAgentMock).toHaveBeenCalledWith("claude", {
+        assistantModelId: "claude-sonnet-4-6",
+      });
+    });
+  });
+
+  it("resetting the model select calls updateAgent with undefined", async () => {
+    claudeEntry.assistantModelId = "claude-opus-4-7";
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Preferred model");
+
+    const select = screen.getByLabelText("Model") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "__default__" } });
+
+    await waitFor(() => {
+      expect(updateAgentMock).toHaveBeenCalledWith("claude", { assistantModelId: undefined });
+    });
+  });
+
+  it("audit retention select offers off / 7 / 30 day options and persists changes", async () => {
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Audit log retention");
+
+    const select = screen.getByLabelText("Audit log retention") as HTMLSelectElement;
+    const optionLabels = Array.from(select.options).map((o) => o.label);
+    expect(optionLabels).toEqual(["7 days (default)", "30 days", "Off"]);
+
+    fireEvent.change(select, { target: { value: "30" } });
+
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        auditRetention: 30,
+      });
+    });
+  });
+});

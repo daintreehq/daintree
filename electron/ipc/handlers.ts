@@ -44,6 +44,7 @@ import { registerMilestonesHandlers } from "./handlers/milestones.js";
 import { registerShortcutHintsHandlers } from "./handlers/shortcutHints.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
+import { registerHelpAssistantHandlers } from "./handlers/helpAssistant.js";
 import { registerWebviewHandlers } from "./handlers/webview.js";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
 import { registerPerfHandlers } from "./handlers/perf.js";
@@ -141,6 +142,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerShortcutHintsHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerMcpServerHandlers());
+    register(() => registerHelpAssistantHandlers());
     register(() => registerWebviewHandlers(deps));
     register(() => registerDiagnosticsHandlers(deps));
 

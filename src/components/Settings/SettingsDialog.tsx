@@ -45,7 +45,7 @@ import {
   Command,
   AlertTriangle,
 } from "lucide-react";
-import { FolderGit2, Plug, Workflow, McpServerIcon } from "@/components/icons";
+import { DaintreeIcon, FolderGit2, Plug, Workflow, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import {
@@ -72,6 +72,7 @@ const importIntegrationsTab = () => import("./IntegrationsTab");
 const importVoiceInputSettingsTab = () => import("./VoiceInputSettingsTab");
 
 const importMcpServerSettingsTab = () => import("./McpServerSettingsTab");
+const importDaintreeAssistantSettingsTab = () => import("./DaintreeAssistantSettingsTab");
 const importEnvironmentSettingsTab = () => import("./EnvironmentSettingsTab");
 const importPrivacyDataTab = () => import("./PrivacyDataTab");
 
@@ -115,6 +116,9 @@ const LazyVoiceInputSettingsTab = lazy(() =>
 const LazyMcpServerSettingsTab = lazy(() =>
   importMcpServerSettingsTab().then((m) => ({ default: m.McpServerSettingsTab }))
 );
+const LazyDaintreeAssistantSettingsTab = lazy(() =>
+  importDaintreeAssistantSettingsTab().then((m) => ({ default: m.DaintreeAssistantSettingsTab }))
+);
 const LazyEnvironmentSettingsTab = lazy(() =>
   importEnvironmentSettingsTab().then((m) => ({ default: m.EnvironmentSettingsTab }))
 );
@@ -137,6 +141,7 @@ function preloadAllSettingsTabs() {
   importVoiceInputSettingsTab();
 
   importMcpServerSettingsTab();
+  importDaintreeAssistantSettingsTab();
   importEnvironmentSettingsTab();
   importPrivacyDataTab();
 }
@@ -188,6 +193,7 @@ export type SettingsTab =
   | "terminalAppearance"
   | "worktree"
   | "agents"
+  | "assistant"
   | "github"
   | "portal"
   | "toolbar"
@@ -621,6 +627,7 @@ function SettingsDialogInner({
     terminalAppearance: "Appearance",
     worktree: "Worktree Paths",
     agents: "CLI Agents",
+    assistant: "Daintree Assistant",
     github: "GitHub Integration",
     portal: "Portal Links",
     toolbar: "Toolbar Customization",
@@ -649,6 +656,7 @@ function SettingsDialogInner({
     terminalAppearance: <SquareTerminal className="w-5 h-5 text-text-secondary" />,
     worktree: <FolderGit2 className="w-5 h-5 text-text-secondary" />,
     agents: <Plug className="w-5 h-5 text-text-secondary" />,
+    assistant: <DaintreeIcon className="w-5 h-5 text-text-secondary" size={20} />,
     github: <Github className="w-5 h-5 text-text-secondary" />,
     portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
     toolbar: <SettingsIcon className="w-5 h-5 text-text-secondary" />,
@@ -851,6 +859,18 @@ function SettingsDialogInner({
                     isSearching={isSearching}
                     matchCount={matchCounts.environment}
                     hasError={tabsWithErrors.has("environment")}
+                    onSelect={handleNavSelect}
+                  />
+                </NavGroup>
+                <NavGroup label="Assistant">
+                  <NavItem
+                    tab="assistant"
+                    icon={<DaintreeIcon className="w-4 h-4" size={16} />}
+                    label="Daintree Assistant"
+                    activeTab={activeTab}
+                    isSearching={isSearching}
+                    matchCount={matchCounts.assistant}
+                    hasError={tabsWithErrors.has("assistant")}
                     onSelect={handleNavSelect}
                   />
                 </NavGroup>
@@ -1203,6 +1223,20 @@ function SettingsDialogInner({
                         }
                         onSettingsChange={onSettingsChange}
                       />
+                    </Suspense>
+                  )}
+                </div>
+
+                <div
+                  role="tabpanel"
+                  id="settings-panel-assistant"
+                  aria-labelledby="settings-tab-assistant"
+                  tabIndex={0}
+                  className={activeTab === "assistant" ? "" : "hidden"}
+                >
+                  {visitedTabs.has("assistant") && (
+                    <Suspense fallback={null}>
+                      <LazyDaintreeAssistantSettingsTab />
                     </Suspense>
                   )}
                 </div>

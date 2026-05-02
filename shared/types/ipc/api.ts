@@ -1270,6 +1270,10 @@ export interface ElectronAPI {
     /** Get the JSON config snippet to paste into an MCP client config */
     getConfigSnippet(): Promise<string>;
   };
+  helpAssistant: {
+    getSettings(): Promise<HelpAssistantSettings>;
+    setSettings(settings: Partial<HelpAssistantSettings>): Promise<void>;
+  };
   mcpBridge: {
     /** Listen for manifest requests from main process */
     onGetManifestRequest(callback: (requestId: string) => void): () => void;
@@ -1435,4 +1439,17 @@ export interface VoiceInputSettings {
   paragraphingStrategy: VoiceParagraphingStrategy;
   /** When enabled, voice commands like "link to X" resolve to @file references. Defaults to true. */
   resolveFileLinks: boolean;
+}
+
+export type HelpAssistantAuditRetention = 7 | 30 | 0;
+
+export interface HelpAssistantSettings {
+  /** Allow the help assistant to search Daintree documentation. Defaults to true. */
+  docSearch: boolean;
+  /** Allow the help assistant to call Daintree control tools via the local MCP. Defaults to true. */
+  daintreeControl: boolean;
+  /** Pass --dangerously-skip-permissions when launching the help assistant. Defaults to false. */
+  skipPermissions: boolean;
+  /** How long to retain help-session audit logs. 7 = 7 days, 30 = 30 days, 0 = off. Defaults to 7. */
+  auditRetention: HelpAssistantAuditRetention;
 }

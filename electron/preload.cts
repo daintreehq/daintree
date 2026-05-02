@@ -2335,6 +2335,18 @@ const api: ElectronAPI = {
     getConfigSnippet: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_CONFIG_SNIPPET),
   },
 
+  helpAssistant: {
+    getSettings: () => _unwrappingInvoke(CHANNELS.HELP_ASSISTANT_GET_SETTINGS),
+    setSettings: (
+      patch: Partial<{
+        docSearch: boolean;
+        daintreeControl: boolean;
+        skipPermissions: boolean;
+        auditRetention: 7 | 30 | 0;
+      }>
+    ) => _unwrappingInvoke(CHANNELS.HELP_ASSISTANT_SET_SETTINGS, patch),
+  },
+
   mcpBridge: {
     onGetManifestRequest: (callback: (requestId: string) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: { requestId: string }) =>
