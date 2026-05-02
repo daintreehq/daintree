@@ -84,10 +84,13 @@ describe("GitHubStatsToolbarButton freshness wiring", () => {
   });
 
   it("scopes opacity transitions explicitly (not bare `transition` or `transition-all`)", () => {
-    // Anchor on `cn("h-full gap-2` — the three button className blocks all
-    // start with that pair, while unrelated `cn("h-full ...` elsewhere in
-    // the file (e.g. RateLimitBucketRow's progress bar) does not.
-    const tooltipBlocks = source.match(/className=\{cn\(\s*"h-full gap-2[\s\S]*?\)\s*\}/g);
+    // Anchor on the toolbar-pill button signature `h-full gap-2 rounded-none`
+    // which is unique to the three stats buttons. An optional leading
+    // `relative ` is allowed so absolute-positioned chips (issues + PRs
+    // corner activity chip) can be anchored without breaking this regex.
+    const tooltipBlocks = source.match(
+      /className=\{cn\(\s*"(?:relative\s+)?h-full gap-2 rounded-none[\s\S]*?\)\s*\}/g
+    );
     expect(tooltipBlocks).not.toBeNull();
     expect(tooltipBlocks?.length).toBe(3);
     for (const block of tooltipBlocks ?? []) {

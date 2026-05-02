@@ -31,7 +31,6 @@ import { GitHubStatusIndicator, type GitHubStatusIndicatorStatus } from "./GitHu
 import { githubClient } from "@/clients/githubClient";
 import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
-import { useGitHubSeenAnchorsStore, deriveBadgeLabel } from "@/store/githubSeenAnchorsStore";
 import type { Project } from "@shared/types";
 import type { GitHubRateLimitDetails, RepositoryStats } from "@shared/types";
 
@@ -51,6 +50,12 @@ const PREFETCH_FRESHNESS_MS = 10_000;
 // status / PR state could be visibly out of date. Within this window, trust
 // the cache and let the existing 30s poll keep things fresh in background.
 const OPEN_FORCE_REFRESH_STALENESS_MS = 2 * 60 * 1000;
+
+// Lifetime of the corner activity chip after the most recent count increase.
+// The chip is a glanceable "something new arrived" cue, not a persistent
+// unread-state badge — three minutes is long enough for a user to notice it
+// during normal task flow without lingering past the moment of relevance.
+const ACTIVITY_CHIP_TTL_MS = 3 * 60 * 1000;
 
 // Per-tier opacity so the badge no longer conflates fresh, in-session aging,
 // disk-cached, and errored data into a single `opacity-60` tint. `aging` stays
@@ -474,24 +479,46 @@ export const GitHubStatsToolbarButton = memo(
       commitsOpenRef.current = commitsOpen;
     }, [commitsOpen]);
 
-    // Per-project, per-category "+N since opened" anchors. Read-only selectors
-    // here; writes go through `useGitHubSeenAnchorsStore.getState().recordOpen`
-    // synchronously inside each click/imperative handler so the anchor is
-    // captured at the precise moment of intent — not after an async refresh
-    // races in with a newer count.
-    const projectPath = currentProject?.path;
-    const issuesAnchor = useGitHubSeenAnchorsStore((s) =>
-      projectPath ? s.anchors[projectPath]?.issues : undefined
-    );
-    const prsAnchor = useGitHubSeenAnchorsStore((s) =>
-      projectPath ? s.anchors[projectPath]?.prs : undefined
-    );
-    const commitsAnchor = useGitHubSeenAnchorsStore((s) =>
-      projectPath ? s.anchors[projectPath]?.commits : undefined
-    );
-    const issuesDeltaLabel = deriveBadgeLabel(issuesAnchor, issueCount, issuesOpen, now);
-    const prsDeltaLabel = deriveBadgeLabel(prsAnchor, prCount, prsOpen, now);
-    const commitsDeltaLabel = deriveBadgeLabel(commitsAnchor, commitCount, commitsOpen, now);
+    // Per-category corner-chip pulse timestamps. Set when the digit-pulse
+    // detector sees a strict count increase (poll-driven, dropdown closed,
+    // tab visible — same trigger as the digit bump). The chip auto-hides
+    // ACTIVITY_CHIP_TTL_MS after the most recent increase, or immediately
+    // when the user opens the matching dropdown. State is intentionally not
+    // persisted: the chip is a fresh-activity cue, not an unread-state
+    // indicator that should survive app restarts.
+    const [issuesPulseAt, setIssuesPulseAt] = useState<number | null>(null);
+    const [prsPulseAt, setPrsPulseAt] = useState<number | null>(null);
+
+    const showIssuesChip =
+      !isTokenError && issuesPulseAt !== null && !issuesOpen && (issueCount ?? 0) > 0;
+    const showPrsChip = !isTokenError && prsPulseAt !== null && !prsOpen && (prCount ?? 0) > 0;
+
+    // Auto-clear each chip ACTIVITY_CHIP_TTL_MS after the most recent count
+    // increase. The dependency on `*PulseAt` re-arms the timer whenever a
+    // newer increase resets the timestamp; the cleanup cancels any pending
+    // timer if the user opens the dropdown (which sets pulseAt → null) or
+    // a fresher pulse takes its place.
+    useEffect(() => {
+      if (issuesPulseAt === null) return;
+      const remaining = ACTIVITY_CHIP_TTL_MS - (Date.now() - issuesPulseAt);
+      if (remaining <= 0) {
+        setIssuesPulseAt(null);
+        return;
+      }
+      const id = window.setTimeout(() => setIssuesPulseAt(null), remaining);
+      return () => window.clearTimeout(id);
+    }, [issuesPulseAt]);
+
+    useEffect(() => {
+      if (prsPulseAt === null) return;
+      const remaining = ACTIVITY_CHIP_TTL_MS - (Date.now() - prsPulseAt);
+      if (remaining <= 0) {
+        setPrsPulseAt(null);
+        return;
+      }
+      const id = window.setTimeout(() => setPrsPulseAt(null), remaining);
+      return () => window.clearTimeout(id);
+    }, [prsPulseAt]);
 
     useEffect(() => {
       return () => {
@@ -629,6 +656,7 @@ export const GitHubStatsToolbarButton = memo(
           issueCount > issueCountRef.current
         ) {
           setIssueAnimKey((k) => k + 1);
+          setIssuesPulseAt(Date.now());
         }
         issueCountRef.current = issueCount;
       }
@@ -644,6 +672,7 @@ export const GitHubStatsToolbarButton = memo(
           prCount > prCountRef.current
         ) {
           setPrAnimKey((k) => k + 1);
+          setPrsPulseAt(Date.now());
         }
         prCountRef.current = prCount;
       }
@@ -676,10 +705,14 @@ export const GitHubStatsToolbarButton = memo(
         // the seed branch instead of comparing new-project counts against
         // the previous project's stale counts (which would produce a
         // spurious pulse whenever the new project's count is higher).
+        // Also clear the activity chips — a chip earned on project A must
+        // not linger after switching to project B.
         issueCountRef.current = undefined;
         prCountRef.current = undefined;
         commitCountRef.current = undefined;
         prevLastUpdatedRef.current = null;
+        setIssuesPulseAt(null);
+        setPrsPulseAt(null);
         return;
       }
       if (prevLastUpdatedRef.current != null && lastUpdated > prevLastUpdatedRef.current) {
@@ -724,15 +757,10 @@ export const GitHubStatsToolbarButton = memo(
             openSettingsForToken();
             return;
           }
-          // Only anchor on the open transition — toggling closed should not
-          // re-record. `issuesOpenRef` is mirrored from state via useEffect
-          // and is current at imperative-call time. A null count clears any
-          // stale anchor so the next known-count open starts fresh.
-          if (!issuesOpenRef.current && currentProject) {
-            useGitHubSeenAnchorsStore
-              .getState()
-              .recordOpen(currentProject.path, "issues", issueCount);
-          }
+          // Clear the chip on the open transition only — toggling closed
+          // should not dismiss it, and the digit-pulse detector won't fire
+          // again until a fresh count increase.
+          if (!issuesOpenRef.current) setIssuesPulseAt(null);
           setIssuesOpen((p) => !p);
         },
         openPrs: () => {
@@ -740,22 +768,15 @@ export const GitHubStatsToolbarButton = memo(
             openSettingsForToken();
             return;
           }
-          if (!prsOpenRef.current && currentProject) {
-            useGitHubSeenAnchorsStore.getState().recordOpen(currentProject.path, "prs", prCount);
-          }
+          if (!prsOpenRef.current) setPrsPulseAt(null);
           setPrsOpen((p) => !p);
         },
         openCommits: () => {
-          if (!commitsOpenRef.current && currentProject) {
-            useGitHubSeenAnchorsStore
-              .getState()
-              .recordOpen(currentProject.path, "commits", commitCount);
-          }
           setCommitsOpen((p) => !p);
         },
         stats,
       }),
-      [stats, isTokenError, openSettingsForToken, currentProject, issueCount, prCount, commitCount]
+      [stats, isTokenError, openSettingsForToken]
     );
 
     if (!currentProject) return null;
@@ -793,18 +814,10 @@ export const GitHubStatsToolbarButton = memo(
                 const willOpen = !issuesOpen;
                 setIssuesOpen(willOpen);
                 if (!willOpen) setIssueSearchQuery("");
-                // Capture the "+N since opened" anchor synchronously here so a
-                // poll that lands during dropdown-opening can't race a newer
-                // count past the seen marker. Anchored at click intent, not
-                // poll completion. `currentProject` is guaranteed non-null by
-                // the early-return above. A null `issueCount` means stats
-                // haven't loaded yet — `recordOpen` clears any stale anchor in
-                // that case so the next open with a known count starts fresh.
-                if (willOpen) {
-                  useGitHubSeenAnchorsStore
-                    .getState()
-                    .recordOpen(currentProject.path, "issues", issueCount);
-                }
+                // Clear the corner activity chip the moment the user opens
+                // the dropdown — it's served its purpose. The next pulse
+                // requires another strict count increase.
+                if (willOpen) setIssuesPulseAt(null);
                 // Only force-refresh on open if the polled stats are stale
                 // enough to be visibly out of date. Within the freshness
                 // window, the 30s poll has the cache hot and the dropdown
@@ -818,7 +831,7 @@ export const GitHubStatsToolbarButton = memo(
                 }
               }}
               className={cn(
-                "h-full gap-2 rounded-none px-3 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
+                "relative h-full gap-2 rounded-none px-3 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                 isTokenError && "opacity-40",
                 !isTokenError && stats?.issueCount === 0 && "opacity-50",
                 !isTokenError && freshnessOpacityClass(freshnessLevel),
@@ -829,7 +842,7 @@ export const GitHubStatsToolbarButton = memo(
                 isTokenError
                   ? "Configure GitHub token to see issues"
                   : `${issueCount ?? "\u2014"} open issues${
-                      issuesDeltaLabel ? ` (${issuesDeltaLabel} since last opened)` : ""
+                      showIssuesChip ? " (new since last view)" : ""
                     }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
               }
             >
@@ -848,15 +861,14 @@ export const GitHubStatsToolbarButton = memo(
               >
                 {issueCount ?? "\u2014"}
               </span>
-              {!isTokenError && issuesDeltaLabel ? (
-                <span
-                  className="text-[10px] font-medium leading-none text-muted-foreground"
-                  aria-hidden="true"
-                >
-                  {issuesDeltaLabel}
-                </span>
-              ) : null}
               {!isTokenError ? <FreshnessGlyph level={freshnessLevel} /> : null}
+              {showIssuesChip && (
+                <span
+                  aria-hidden="true"
+                  className="bg-github-open pointer-events-none absolute right-0 top-0 h-2 w-2"
+                  style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
+                />
+              )}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -938,11 +950,7 @@ export const GitHubStatsToolbarButton = memo(
                 const willOpen = !prsOpen;
                 setPrsOpen(willOpen);
                 if (!willOpen) setPrSearchQuery("");
-                if (willOpen) {
-                  useGitHubSeenAnchorsStore
-                    .getState()
-                    .recordOpen(currentProject.path, "prs", prCount);
-                }
+                if (willOpen) setPrsPulseAt(null);
                 // Only force-refresh on open if the polled stats are stale
                 // enough to be visibly out of date. Within the freshness
                 // window, the 30s poll has the cache hot and the dropdown
@@ -956,7 +964,7 @@ export const GitHubStatsToolbarButton = memo(
                 }
               }}
               className={cn(
-                "h-full gap-2 rounded-none px-3 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
+                "relative h-full gap-2 rounded-none px-3 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                 isTokenError && "opacity-40",
                 !isTokenError && stats?.prCount === 0 && "opacity-50",
                 !isTokenError && freshnessOpacityClass(freshnessLevel),
@@ -967,7 +975,7 @@ export const GitHubStatsToolbarButton = memo(
                 isTokenError
                   ? "Configure GitHub token to see pull requests"
                   : `${prCount ?? "\u2014"} open pull requests${
-                      prsDeltaLabel ? ` (${prsDeltaLabel} since last opened)` : ""
+                      showPrsChip ? " (new since last view)" : ""
                     }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
               }
             >
@@ -986,15 +994,14 @@ export const GitHubStatsToolbarButton = memo(
               >
                 {prCount ?? "\u2014"}
               </span>
-              {!isTokenError && prsDeltaLabel ? (
-                <span
-                  className="text-[10px] font-medium leading-none text-muted-foreground"
-                  aria-hidden="true"
-                >
-                  {prsDeltaLabel}
-                </span>
-              ) : null}
               {!isTokenError ? <FreshnessGlyph level={freshnessLevel} /> : null}
+              {showPrsChip && (
+                <span
+                  aria-hidden="true"
+                  className="bg-github-merged pointer-events-none absolute right-0 top-0 h-2 w-2"
+                  style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
+                />
+              )}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -1059,13 +1066,7 @@ export const GitHubStatsToolbarButton = memo(
                 setIssueSearchQuery("");
                 setPrsOpen(false);
                 setPrSearchQuery("");
-                const willOpen = !commitsOpen;
-                setCommitsOpen(willOpen);
-                if (willOpen) {
-                  useGitHubSeenAnchorsStore
-                    .getState()
-                    .recordOpen(currentProject.path, "commits", commitCount);
-                }
+                setCommitsOpen((p) => !p);
               }}
               className={cn(
                 "h-full gap-2 rounded-none px-3 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
@@ -1074,9 +1075,7 @@ export const GitHubStatsToolbarButton = memo(
                 commitsOpen &&
                   "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-border-strong"
               )}
-              aria-label={`${commitCount ?? "\u2014"} commits${
-                commitsDeltaLabel ? ` (${commitsDeltaLabel} since last opened)` : ""
-              }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
+              aria-label={`${commitCount ?? "\u2014"} commits${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
             >
               <GitCommit className="h-4 w-4" />
               <span
@@ -1088,14 +1087,6 @@ export const GitHubStatsToolbarButton = memo(
               >
                 {commitCount ?? "\u2014"}
               </span>
-              {commitsDeltaLabel ? (
-                <span
-                  className="text-[10px] font-medium leading-none text-muted-foreground"
-                  aria-hidden="true"
-                >
-                  {commitsDeltaLabel}
-                </span>
-              ) : null}
               <FreshnessGlyph level={freshnessLevel} />
             </Button>
           </TooltipTrigger>
