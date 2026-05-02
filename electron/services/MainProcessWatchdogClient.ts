@@ -97,6 +97,9 @@ export class MainProcessWatchdogClient {
       this.child = utilityProcess.fork(hostPath, [`--main-pid=${this.mainPid}`], {
         serviceName: SERVICE_NAME,
         stdio: "pipe",
+        // Redirect v8.setHeapSnapshotNearHeapLimit dumps and suppress env
+        // from diagnostic reports (crash dumps, process.report).
+        execArgv: [`--diagnostic-dir=${app.getPath("logs")}`, "--report-exclude-env"],
         env: {
           ...(process.env as Record<string, string>),
           DAINTREE_USER_DATA: app.getPath("userData"),

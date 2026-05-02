@@ -465,6 +465,7 @@ export class PtyClient extends EventEmitter {
         execArgv: [
           `--max-old-space-size=${this.config.memoryLimitMb}`,
           `--diagnostic-dir=${app.getPath("logs")}`,
+          "--report-exclude-env",
         ],
         env: {
           ...(process.env as Record<string, string>),
