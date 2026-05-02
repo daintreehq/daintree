@@ -313,12 +313,12 @@ describe("PullRequestService", () => {
     await pullRequestService.start();
     expect(callCount).toBe(1);
 
-    // Advance past normal poll interval — checkForPRs will throw
-    await vi.advanceTimersByTimeAsync(60 * 1000);
+    // Advance past normal poll interval (30s focused default) — checkForPRs throws
+    await vi.advanceTimersByTimeAsync(30 * 1000);
     expect(callCount).toBe(2);
 
     // The poll loop should have rescheduled despite the throw.
-    // Advance past the backoff interval (1 min for 1 error) to trigger next poll.
+    // Advance past the 1-error backoff (1 min) to trigger next poll.
     await vi.advanceTimersByTimeAsync(60 * 1000);
     expect(callCount).toBe(3);
 
@@ -557,6 +557,175 @@ describe("PullRequestService", () => {
     expect(detected[0]).toMatchObject({ worktreeId: "wt-linked", prNumber: 55 });
 
     unsubDetected();
+    pullRequestService.destroy();
+  });
+
+  it("setFocusCadence(false) lengthens the next poll to the blurred interval", async () => {
+    let callCount = 0;
+    const batchCheckLinkedPRs = vi.fn(async () => {
+      callCount++;
+      return { results: new Map() };
+    });
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/cadence" })
+    );
+
+    await pullRequestService.start();
+    expect(callCount).toBe(1);
+
+    pullRequestService.setFocusCadence(false);
+
+    // 30s elapsed should NOT trigger a poll under the 120s blurred cadence
+    await vi.advanceTimersByTimeAsync(30 * 1000);
+    expect(callCount).toBe(1);
+
+    // 120s total elapsed should trigger the next poll
+    await vi.advanceTimersByTimeAsync(90 * 1000);
+    expect(callCount).toBe(2);
+
+    pullRequestService.destroy();
+  });
+
+  it("setFocusCadence(true) fires an immediate catch-up poll on focus regain", async () => {
+    let callCount = 0;
+    const batchCheckLinkedPRs = vi.fn(async () => {
+      callCount++;
+      return { results: new Map() };
+    });
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/catchup" })
+    );
+
+    await pullRequestService.start();
+    expect(callCount).toBe(1);
+
+    // Blur, then focus — should immediately catch up
+    pullRequestService.setFocusCadence(false);
+    await vi.advanceTimersByTimeAsync(10 * 1000);
+    expect(callCount).toBe(1);
+
+    pullRequestService.setFocusCadence(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(callCount).toBe(2);
+
+    pullRequestService.destroy();
+  });
+
+  it("throttles repeated focus catch-ups within 5s", async () => {
+    let callCount = 0;
+    const batchCheckLinkedPRs = vi.fn(async () => {
+      callCount++;
+      return { results: new Map() };
+    });
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/throttle" })
+    );
+
+    await pullRequestService.start();
+    expect(callCount).toBe(1);
+
+    // First focus → catch-up fires
+    pullRequestService.setFocusCadence(false);
+    pullRequestService.setFocusCadence(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(callCount).toBe(2);
+
+    // Second blur→focus within 5s → no extra poll
+    await vi.advanceTimersByTimeAsync(2 * 1000);
+    pullRequestService.setFocusCadence(false);
+    pullRequestService.setFocusCadence(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(callCount).toBe(2);
+
+    // After 5s+ has elapsed since the last catch-up, focus regain fires again
+    await vi.advanceTimersByTimeAsync(4 * 1000);
+    pullRequestService.setFocusCadence(false);
+    pullRequestService.setFocusCadence(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(callCount).toBe(3);
+
+    pullRequestService.destroy();
+  });
+
+  it("setFocusCadence is a no-op while not polling but still updates the stored interval", async () => {
+    const batchCheckLinkedPRs = vi.fn(async () => ({ results: new Map() }));
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/idle" })
+    );
+
+    pullRequestService.setFocusCadence(false);
+    expect(batchCheckLinkedPRs).not.toHaveBeenCalled();
+
+    await pullRequestService.start();
+    // start() preserves the blurred cadence set while idle
+    expect(batchCheckLinkedPRs).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(30 * 1000);
+    expect(batchCheckLinkedPRs).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(90 * 1000);
+    expect(batchCheckLinkedPRs).toHaveBeenCalledTimes(2);
+
+    pullRequestService.destroy();
+  });
+
+  it("polls at 30s by default after start() with no interval argument", async () => {
+    let callCount = 0;
+    const batchCheckLinkedPRs = vi.fn(async () => {
+      callCount++;
+      return { results: new Map() };
+    });
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/default" })
+    );
+
+    await pullRequestService.start();
+    expect(callCount).toBe(1);
+
+    // Under the old 60s clamp this would have required 60s
+    await vi.advanceTimersByTimeAsync(30 * 1000);
+    expect(callCount).toBe(2);
+
     pullRequestService.destroy();
   });
 
