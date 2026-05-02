@@ -31,7 +31,16 @@ export class McpPaneConfigService {
   }
 
   private configPathFor(paneId: string): string {
-    return path.join(this.baseDir, `${paneId}.json`);
+    const baseDir = this.baseDir;
+    const candidate = path.join(baseDir, `${paneId}.json`);
+    // Defense in depth: paneIds are normally crypto.randomUUID(), but the
+    // callers' schemas allow arbitrary strings. Require the resulting file to
+    // be a direct child of the base dir — rejects `../escape`, `subdir/leak`,
+    // and similar.
+    if (path.dirname(candidate) !== baseDir) {
+      throw new Error(`Invalid paneId: ${paneId}`);
+    }
+    return candidate;
   }
 
   async preparePaneConfig({ paneId, port }: PreparePaneConfigParams): Promise<PreparedPaneConfig> {
@@ -41,6 +50,8 @@ export class McpPaneConfigService {
     if (!Number.isInteger(port) || port <= 0 || port > 65535) {
       throw new Error(`Invalid MCP port: ${port}`);
     }
+    // Validate paneId early — configPathFor throws on traversal attempts.
+    const configPath = this.configPathFor(paneId);
 
     await this.revokePaneConfig(paneId);
 
@@ -52,7 +63,6 @@ export class McpPaneConfigService {
     }
 
     const token = randomUUID();
-    const configPath = this.configPathFor(paneId);
 
     // Bake the token literal into the file rather than using ${VAR} substitution.
     // Claude Code's env substitution in `headers` has an active bug; literal value is reliable.

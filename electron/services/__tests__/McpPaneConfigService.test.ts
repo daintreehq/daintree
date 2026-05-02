@@ -128,6 +128,22 @@ describe("McpPaneConfigService", () => {
     );
   });
 
+  it("rejects path-traversal pane IDs", async () => {
+    await expect(service.preparePaneConfig({ paneId: "../escape", port: 45454 })).rejects.toThrow(
+      /Invalid paneId/
+    );
+    await expect(
+      service.preparePaneConfig({ paneId: "../../etc/passwd", port: 45454 })
+    ).rejects.toThrow(/Invalid paneId/);
+    await expect(service.preparePaneConfig({ paneId: "subdir/leak", port: 45454 })).rejects.toThrow(
+      /Invalid paneId/
+    );
+
+    // Confirm no file was written outside the base directory.
+    const escapeCandidate = path.join(testUserData, "escape.json");
+    await expect(fs.stat(escapeCandidate)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("revokeAll clears all tokens and files", async () => {
     const a = await service.preparePaneConfig({ paneId: "pane-a", port: 45454 });
     const b = await service.preparePaneConfig({ paneId: "pane-b", port: 45454 });
