@@ -130,12 +130,16 @@ vi.mock("react-virtuoso", () => ({
   },
 }));
 
-const { formatTimeAgoMock } = vi.hoisted(() => ({
-  formatTimeAgoMock: vi.fn<(value: number | string) => string>(() => "1m ago"),
-}));
+const { LiveTimeAgoMock } = vi.hoisted(() => {
+  const LiveTimeAgoMock = vi.fn();
+  return { LiveTimeAgoMock };
+});
 
-vi.mock("@/utils/timeAgo", () => ({
-  formatTimeAgo: formatTimeAgoMock,
+vi.mock("@/components/Worktree/LiveTimeAgo", () => ({
+  LiveTimeAgo: (props: any) => {
+    LiveTimeAgoMock(props);
+    return <span>1m</span>;
+  },
 }));
 
 import { GitHubResourceList } from "../GitHubResourceList";
@@ -162,8 +166,7 @@ beforeEach(() => {
   mockListPRs.mockReset();
   mockGetIssueByNumber.mockReset();
   mockGetPRByNumber.mockReset();
-  formatTimeAgoMock.mockClear();
-  formatTimeAgoMock.mockImplementation(() => "1m ago");
+  LiveTimeAgoMock.mockClear();
   dispatchMock.mockReset();
   initializeMock.mockClear();
   mockGitHubConfig = { hasToken: true };
@@ -259,9 +262,11 @@ describe("GitHubResourceList SWR behavior", () => {
       expect(screen.getByText(/Network error/)).toBeTruthy();
     });
     expect(screen.getByTestId("item-20")).toBeTruthy();
-    expect(screen.getByText(/Updated 1m ago/)).toBeTruthy();
+    expect(screen.getByText("1m")).toBeTruthy();
     // The label must reflect the cached timestamp, not Date.now() of the failure.
-    expect(formatTimeAgoMock).toHaveBeenCalledWith(seededTimestamp);
+    expect(LiveTimeAgoMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timestamp: expect.any(Number) })
+    );
   });
 
   it("clears error banner and refreshes timestamp after successful retry", async () => {
@@ -314,7 +319,7 @@ describe("GitHubResourceList SWR behavior", () => {
     await waitFor(() => {
       expect(screen.getByText(/Initial fail/)).toBeTruthy();
     });
-    expect(screen.getByText(/Updated 1m ago/)).toBeTruthy();
+    expect(screen.getByText("1m")).toBeTruthy();
 
     useGitHubFilterStore.getState().setIssueFilter("closed");
 

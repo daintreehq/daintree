@@ -46,7 +46,7 @@ import {
   RESOURCE_ITEM_HEIGHT_PX,
 } from "./GitHubDropdownSkeletons";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { formatTimeAgo } from "@/utils/timeAgo";
+import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
 
@@ -210,7 +210,7 @@ export function GitHubResourceList({
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(
     () => cachedEntry?.timestamp ?? null
   );
-  const [, setTick] = useState(0);
+
   const [exactNumberNotFound, setExactNumberNotFound] = useState<number | null>(null);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [sortPopoverOpen, setSortPopoverOpen] = useState(false);
@@ -801,13 +801,6 @@ export function GitHubResourceList({
     setActiveIndex(-1);
   }, [data]);
 
-  // Re-render the "Updated Xm ago" label every 60s while a stale-data banner is visible.
-  useEffect(() => {
-    if (lastUpdatedAt == null || error == null) return;
-    const id = setInterval(() => setTick((t) => t + 1), 60_000);
-    return () => clearInterval(id);
-  }, [lastUpdatedAt, error]);
-
   useEffect(() => {
     if (activeIndex < 0) return;
     if (isLoadMoreActive) {
@@ -1226,7 +1219,7 @@ export function GitHubResourceList({
                 <span className="text-xs truncate">{sanitizeIpcError(error)}</span>
                 {lastUpdatedAt != null && !debouncedSearch && (
                   <span className="text-xs text-muted-foreground/70 shrink-0 whitespace-nowrap">
-                    · Updated {formatTimeAgo(lastUpdatedAt)}
+                    · Updated <LiveTimeAgo timestamp={lastUpdatedAt} />
                   </span>
                 )}
                 {isTokenError ? (
