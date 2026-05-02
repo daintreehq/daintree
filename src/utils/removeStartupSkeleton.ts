@@ -1,5 +1,14 @@
+import { UI_EXIT_DURATION } from "../lib/animationUtils";
+import { prefersReducedMotion } from "../lib/appThemeViewTransition";
+
 const SKELETON_ID = "startup-skeleton";
-const FADE_DURATION_MS = 250;
+
+type ViewTransitionDocument = Document & {
+  startViewTransition?: (callback: () => void) => {
+    ready: Promise<void>;
+    finished: Promise<void>;
+  };
+};
 
 let firstInteractiveNotified = false;
 
@@ -19,7 +28,10 @@ function notifyFirstInteractive(): void {
  * Fade out and remove the startup skeleton overlay, and signal the main
  * process that the renderer is interactive so it can drain its deferred
  * service queue. Uses requestAnimationFrame to ensure React has painted
- * real content before both the fade and the signal fire.
+ * real content before both the fade and the signal fire, then prefers
+ * the View Transitions API for a GPU-snapshot crossfade — falling back
+ * to a plain CSS opacity transition under reduced-motion / performance
+ * mode / older runtimes.
  */
 export function removeStartupSkeleton(): void {
   const el = document.getElementById(SKELETON_ID);
@@ -31,13 +43,25 @@ export function removeStartupSkeleton(): void {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       notifyFirstInteractive();
-
       el.setAttribute("aria-busy", "false");
-      el.classList.add("fade-out");
 
+      const doc = document as ViewTransitionDocument;
+      const canViewTransition =
+        typeof doc.startViewTransition === "function" &&
+        doc.visibilityState === "visible" &&
+        !prefersReducedMotion();
+
+      if (canViewTransition) {
+        doc.startViewTransition!(() => {
+          el.remove();
+        });
+        return;
+      }
+
+      el.classList.add("fade-out");
       setTimeout(() => {
         el.remove();
-      }, FADE_DURATION_MS);
+      }, UI_EXIT_DURATION);
     });
   });
 }

@@ -59,11 +59,20 @@
         flex-direction: column;
         background: var(--theme-surface-grid, #0e0e0d);
         animation: skeleton-safety-fade 10s forwards;
-        transition: opacity 250ms ease-out;
+        transition: opacity 120ms ease-out;
       }
       #startup-skeleton.fade-out {
         opacity: 0;
         pointer-events: none;
+      }
+
+      /* View Transitions API: GPU-snapshot crossfade tuned to UI_EXIT_DURATION
+         (Tier 2 exit, 120ms). Used by removeStartupSkeleton.ts when the API is
+         available. The reduced-motion media query below short-circuits this. */
+      ::view-transition-old(root),
+      ::view-transition-new(root) {
+        animation-duration: 120ms;
+        animation-timing-function: ease-out;
       }
 
       /* ── Progressive reveal delays ── */

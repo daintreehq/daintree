@@ -1,19 +1,33 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { UI_EXIT_DURATION } from "../../lib/animationUtils";
 
 describe("removeStartupSkeleton", () => {
   let rafQueue: FrameRequestCallback[];
   let notifyFirstInteractive: ReturnType<typeof vi.fn>;
+  let matchesReducedMotion: boolean;
 
   beforeEach(async () => {
     vi.resetModules();
     rafQueue = [];
     notifyFirstInteractive = vi.fn(() => Promise.resolve());
+    matchesReducedMotion = false;
 
     vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
       rafQueue.push(cb);
       return rafQueue.length;
     });
+
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query.includes("prefers-reduced-motion") ? matchesReducedMotion : false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
 
     (
       window as unknown as { electron: { app: { notifyFirstInteractive: () => Promise<void> } } }
@@ -22,10 +36,17 @@ describe("removeStartupSkeleton", () => {
     };
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "visible",
+    });
   });
 
   afterEach(() => {
     document.getElementById("startup-skeleton")?.remove();
+    delete (document as { startViewTransition?: unknown }).startViewTransition;
+    delete document.body.dataset.performanceMode;
     vi.unstubAllGlobals();
     vi.useRealTimers();
     delete (window as unknown as { electron?: unknown }).electron;
@@ -43,7 +64,7 @@ describe("removeStartupSkeleton", () => {
     for (const cb of batch) cb(performance.now());
   }
 
-  it("adds fade-out class after two RAF ticks and removes element after timeout", async () => {
+  it("falls back to fade-out class + UI_EXIT_DURATION setTimeout when startViewTransition is unavailable", async () => {
     const { removeStartupSkeleton } = await import("../removeStartupSkeleton");
     const el = addSkeleton();
     removeStartupSkeleton();
@@ -61,7 +82,77 @@ describe("removeStartupSkeleton", () => {
     expect(notifyFirstInteractive).toHaveBeenCalledTimes(1);
     expect(document.getElementById("startup-skeleton")).toBe(el);
 
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(UI_EXIT_DURATION);
+    expect(document.getElementById("startup-skeleton")).toBeNull();
+  });
+
+  it("uses startViewTransition and removes the skeleton inside its callback when available", async () => {
+    let capturedCallback: (() => void) | null = null;
+    const startViewTransition = vi.fn((cb: () => void) => {
+      capturedCallback = cb;
+      return { ready: Promise.resolve(), finished: Promise.resolve() };
+    });
+    (
+      document as unknown as { startViewTransition: typeof startViewTransition }
+    ).startViewTransition = startViewTransition;
+
+    const { removeStartupSkeleton } = await import("../removeStartupSkeleton");
+    const el = addSkeleton();
+    removeStartupSkeleton();
+
+    flushRaf();
+    flushRaf();
+
+    expect(notifyFirstInteractive).toHaveBeenCalledTimes(1);
+    expect(el.getAttribute("aria-busy")).toBe("false");
+    expect(startViewTransition).toHaveBeenCalledTimes(1);
+    expect(document.getElementById("startup-skeleton")).toBe(el);
+    // No fallback setTimeout was scheduled — advancing the timer is a no-op
+    vi.advanceTimersByTime(UI_EXIT_DURATION);
+    expect(document.getElementById("startup-skeleton")).toBe(el);
+
+    expect(capturedCallback).toBeTypeOf("function");
+    capturedCallback!();
+    expect(document.getElementById("startup-skeleton")).toBeNull();
+  });
+
+  it("skips the View Transitions path when prefers-reduced-motion is set", async () => {
+    matchesReducedMotion = true;
+    const startViewTransition = vi.fn();
+    (
+      document as unknown as { startViewTransition: typeof startViewTransition }
+    ).startViewTransition = startViewTransition;
+
+    const { removeStartupSkeleton } = await import("../removeStartupSkeleton");
+    const el = addSkeleton();
+    removeStartupSkeleton();
+
+    flushRaf();
+    flushRaf();
+
+    expect(startViewTransition).not.toHaveBeenCalled();
+    expect(el.classList.contains("fade-out")).toBe(true);
+    vi.advanceTimersByTime(UI_EXIT_DURATION);
+    expect(document.getElementById("startup-skeleton")).toBeNull();
+  });
+
+  it("skips the View Transitions path when performance mode is enabled", async () => {
+    document.body.dataset.performanceMode = "true";
+    const startViewTransition = vi.fn();
+    (
+      document as unknown as { startViewTransition: typeof startViewTransition }
+    ).startViewTransition = startViewTransition;
+
+    const { removeStartupSkeleton } = await import("../removeStartupSkeleton");
+    const el = addSkeleton();
+    removeStartupSkeleton();
+
+    flushRaf();
+    flushRaf();
+
+    expect(startViewTransition).not.toHaveBeenCalled();
+    expect(el.classList.contains("fade-out")).toBe(true);
+    vi.advanceTimersByTime(UI_EXIT_DURATION);
     expect(document.getElementById("startup-skeleton")).toBeNull();
   });
 
@@ -83,7 +174,7 @@ describe("removeStartupSkeleton", () => {
 
     expect(notifyFirstInteractive).toHaveBeenCalledTimes(1);
 
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(UI_EXIT_DURATION);
     expect(document.getElementById("startup-skeleton")).toBeNull();
 
     removeStartupSkeleton(); // no-op, should not throw

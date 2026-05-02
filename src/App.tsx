@@ -496,7 +496,32 @@ function App() {
   }
 
   if (!crashResolved || !isStateLoaded) {
-    return <div className="h-screen w-screen bg-daintree-bg" />;
+    // Render the structural chrome (toolbar, dock) behind the HTML skeleton so
+    // the cold-start handoff has positionally-stable surfaces underneath when
+    // the skeleton fades out. AppLayout's `isHydrated={false}` mode skips the
+    // focus-mode persistence and renders no sidebar/main content.
+    return (
+      <LazyMotion strict features={loadMotionFeatures}>
+        <MotionConfig reducedMotion={reduceAnimations ? "always" : "user"}>
+          <ErrorBoundary variant="fullscreen" componentName="App">
+            <TooltipProvider
+              delayDuration={UI_TOOLTIP_DELAY_DURATION}
+              skipDelayDuration={UI_TOOLTIP_SKIP_DELAY_DURATION}
+            >
+              <AppLayout
+                onLaunchAgent={handleLaunchAgent}
+                onSettings={handleSettings}
+                onPreloadSettings={handlePreloadSettings}
+                agentAvailability={availability}
+                agentSettings={agentSettings}
+                isHydrated={false}
+                projectSwitcherPalette={projectSwitcherPalette}
+              />
+            </TooltipProvider>
+          </ErrorBoundary>
+        </MotionConfig>
+      </LazyMotion>
+    );
   }
 
   return (
