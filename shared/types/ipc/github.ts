@@ -200,6 +200,14 @@ export interface GitHubFirstPageCachePayload {
   };
   /** Wall-clock timestamp (ms) when the entry was written. */
   lastUpdated: number;
+  /** Optional cached stats for cold-start toolbar hydration (60-min TTL).
+   *  Present when `GitHubStatsCache` has a bootstrap-eligible entry even if
+   *  the first-page items cache has expired. */
+  stats?: {
+    issueCount: number;
+    prCount: number;
+    lastUpdated: number;
+  };
 }
 
 /**

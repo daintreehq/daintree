@@ -214,6 +214,162 @@ describe("GitHubStatsCache", () => {
     expect(disk.projects).toHaveProperty("octocat/dropped");
   });
 
+  describe("getForBootstrap", () => {
+    it("returns entries 10-60 minutes old that get() rejects", async () => {
+      const elevenMinutesMs = 11 * 60 * 1000;
+      fs.writeFileSync(
+        cacheFilePath,
+        JSON.stringify(
+          {
+            version: 1,
+            projects: {
+              "octocat/repo": {
+                issueCount: 5,
+                prCount: 3,
+                lastUpdated: Date.now() - elevenMinutesMs,
+                projectPath: "/repo",
+              },
+            },
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+
+      const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
+      GitHubStatsCache.resetInstance();
+      const cache = GitHubStatsCache.getInstance();
+
+      // get() rejects — entry is older than 10 minutes
+      expect(cache.get("octocat/repo")).toBeNull();
+      // getForBootstrap() accepts — entry is within 60 minutes
+      expect(cache.getForBootstrap("octocat/repo")).toEqual({
+        issueCount: 5,
+        prCount: 3,
+        lastUpdated: Date.now() - elevenMinutesMs,
+        projectPath: "/repo",
+      });
+    });
+
+    it("rejects entries older than 60 minutes", async () => {
+      const sixtyOneMinutesMs = 61 * 60 * 1000;
+      fs.writeFileSync(
+        cacheFilePath,
+        JSON.stringify(
+          {
+            version: 1,
+            projects: {
+              "octocat/repo": {
+                issueCount: 5,
+                prCount: 3,
+                lastUpdated: Date.now() - sixtyOneMinutesMs,
+                projectPath: "/repo",
+              },
+            },
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+
+      const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
+      GitHubStatsCache.resetInstance();
+      const cache = GitHubStatsCache.getInstance();
+
+      expect(cache.getForBootstrap("octocat/repo")).toBeNull();
+    });
+
+    it("returns null for malformed entries (same validation as get)", async () => {
+      fs.writeFileSync(
+        cacheFilePath,
+        JSON.stringify(
+          {
+            version: 1,
+            projects: {
+              "octocat/repo": {
+                issueCount: "not-a-number",
+                prCount: 2,
+                lastUpdated: Date.now(),
+                projectPath: "/repo",
+              },
+            },
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+
+      const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
+      GitHubStatsCache.resetInstance();
+      const cache = GitHubStatsCache.getInstance();
+
+      expect(cache.getForBootstrap("octocat/repo")).toBeNull();
+    });
+
+    it("accepts a custom maxAgeMs", async () => {
+      const twoMinutesMs = 2 * 60 * 1000;
+      fs.writeFileSync(
+        cacheFilePath,
+        JSON.stringify(
+          {
+            version: 1,
+            projects: {
+              "octocat/repo": {
+                issueCount: 5,
+                prCount: 3,
+                lastUpdated: Date.now() - twoMinutesMs,
+                projectPath: "/repo",
+              },
+            },
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+
+      const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
+      GitHubStatsCache.resetInstance();
+      const cache = GitHubStatsCache.getInstance();
+
+      // Custom 1-minute TTL — should reject the 2-minute-old entry.
+      expect(cache.getForBootstrap("octocat/repo", 60 * 1000)).toBeNull();
+      // Custom 5-minute TTL — should accept.
+      expect(cache.getForBootstrap("octocat/repo", 5 * 60 * 1000)).not.toBeNull();
+    });
+
+    it("returns null for future-dated entries", async () => {
+      fs.writeFileSync(
+        cacheFilePath,
+        JSON.stringify(
+          {
+            version: 1,
+            projects: {
+              "octocat/repo": {
+                issueCount: 1,
+                prCount: 2,
+                lastUpdated: Date.now() + 60_000,
+                projectPath: "/repo",
+              },
+            },
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+
+      const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
+      GitHubStatsCache.resetInstance();
+      const cache = GitHubStatsCache.getInstance();
+
+      expect(cache.getForBootstrap("octocat/repo")).toBeNull();
+    });
+  });
+
   it("clear removes cached data from memory and disk", async () => {
     const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
     GitHubStatsCache.resetInstance();

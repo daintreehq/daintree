@@ -239,18 +239,49 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       if (!stat.isDirectory()) return null;
 
       const { GitHubFirstPageCache } = await import("../../services/GitHubFirstPageCache.js");
+      const { GitHubStatsCache } = await import("../../services/GitHubStatsCache.js");
       const { getRepoContext } = await import("../../services/GitHubService.js");
       const context = await getRepoContext(resolved);
       if (!context) return null;
       const repoKey = `${context.owner}/${context.repo}`;
       const entry = GitHubFirstPageCache.getInstance().get(repoKey);
-      if (!entry) return null;
+      const cachedStats = GitHubStatsCache.getInstance().getForBootstrap(repoKey);
 
+      // Neither cache has data — let the network poll populate everything.
+      if (!entry && !cachedStats) return null;
+
+      // First-page items present: attach bootstrap stats if available.
+      if (entry) {
+        const payload: GitHubFirstPageCachePayload = {
+          projectPath: resolved,
+          issues: entry.issues,
+          prs: entry.prs,
+          lastUpdated: entry.lastUpdated,
+        };
+        if (cachedStats) {
+          payload.stats = {
+            issueCount: cachedStats.issueCount,
+            prCount: cachedStats.prCount,
+            lastUpdated: cachedStats.lastUpdated,
+          };
+        }
+        return payload;
+      }
+
+      // Stats-only payload: first-page cache expired but stats are still within
+      // the 60-minute bootstrap TTL. Return empty pages so the hydration effect
+      // can seed toolbar counts without damaging the renderer items cache.
+      if (!cachedStats) return null;
       return {
         projectPath: resolved,
-        issues: entry.issues,
-        prs: entry.prs,
-        lastUpdated: entry.lastUpdated,
+        issues: { items: [], endCursor: null, hasNextPage: false },
+        prs: { items: [], endCursor: null, hasNextPage: false },
+        lastUpdated: cachedStats.lastUpdated,
+        stats: {
+          issueCount: cachedStats.issueCount,
+          prCount: cachedStats.prCount,
+          lastUpdated: cachedStats.lastUpdated,
+        },
       };
     } catch {
       // Disk-cache reads are best-effort: a missing cache file, malformed

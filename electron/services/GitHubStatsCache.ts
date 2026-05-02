@@ -214,6 +214,28 @@ export class GitHubStatsCache {
     return normalized;
   }
 
+  /**
+   * Bootstrap read with a relaxed TTL. Same disk path as `get()` but rejects
+   * entries older than `maxAgeMs` (default 60 minutes) instead of the strict
+   * 10-minute `MAX_CACHE_AGE_MS`. Used by the cold-start hydration path so the
+   * toolbar pill shows cached counts immediately — "old number marked stale"
+   * beats an em-dash.
+   */
+  getForBootstrap(repoKey: string, maxAgeMs = 60 * 60 * 1000): CachedStats | null {
+    const cache = this.load();
+    const normalized = normalizeCachedStats((cache.projects as Record<string, unknown>)[repoKey]);
+    if (!normalized) {
+      return null;
+    }
+
+    const age = Date.now() - normalized.lastUpdated;
+    if (age > maxAgeMs || age < 0) {
+      return null;
+    }
+
+    return normalized;
+  }
+
   set(repoKey: string, stats: { issueCount: number; prCount: number }, projectPath: string): void {
     const cache = this.load();
     const normalizedProjects: Record<string, CachedStats> = {};
