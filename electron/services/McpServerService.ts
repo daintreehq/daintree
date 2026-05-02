@@ -371,6 +371,13 @@ export class McpServerService {
    * replaced by `rotateApiKey()`. Always non-empty once the server is running.
    */
   private apiKey: string | null = null;
+  /**
+   * Single-flight guard for `rotateApiKey()`. Without it, two parallel calls
+   * could each capture the same `previousKey`, both overwrite `this.apiKey`,
+   * and the first caller would receive a key that has already been
+   * superseded — so the UI would show a key that doesn't authenticate.
+   */
+  private rotateInFlight: Promise<string> | null = null;
 
   get isRunning(): boolean {
     return this.httpServer !== null && this.port !== null;
@@ -445,25 +452,35 @@ export class McpServerService {
   }
 
   /**
-   * Mint a fresh bearer token, write the discovery file with the new key, and
-   * only then swap `this.apiKey` so a write failure leaves the previous key
+   * Mint a fresh bearer token and rewrite the discovery file. On write
+   * failure the in-memory key is rolled back so the previous bearer remains
    * authoritative for in-flight requests. Local-loopback only — clients pick
    * up the new key on their next request via `~/.daintree/mcp.json`; no
-   * server restart is needed.
+   * server restart is needed. Single-flight: parallel callers share the same
+   * in-flight promise and receive the same returned key.
    */
   async rotateApiKey(): Promise<string> {
-    const newKey = `daintree_${randomUUID().replace(/-/g, "")}`;
-    const previousKey = this.apiKey;
-    this.apiKey = newKey;
-    if (this.isRunning) {
-      try {
-        await this.writeDiscoveryFile();
-      } catch (err) {
-        this.apiKey = previousKey;
-        throw err;
+    if (this.rotateInFlight) return this.rotateInFlight;
+    const promise = (async (): Promise<string> => {
+      const newKey = `daintree_${randomUUID().replace(/-/g, "")}`;
+      const previousKey = this.apiKey;
+      this.apiKey = newKey;
+      if (this.isRunning) {
+        try {
+          await this.writeDiscoveryFile();
+        } catch (err) {
+          this.apiKey = previousKey;
+          throw err;
+        }
       }
+      return newKey;
+    })();
+    this.rotateInFlight = promise;
+    try {
+      return await promise;
+    } finally {
+      this.rotateInFlight = null;
     }
-    return newKey;
   }
 
   /**
@@ -1597,12 +1614,19 @@ export class McpServerService {
     let existing: Record<string, unknown> = {};
     try {
       const raw = await fs.readFile(DISCOVERY_FILE, "utf-8");
-      existing = JSON.parse(raw) as Record<string, unknown>;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        existing = parsed as Record<string, unknown>;
+      }
     } catch {
       // file doesn't exist or isn't valid JSON — start fresh
     }
 
-    const mcpServers = (existing["mcpServers"] as Record<string, unknown> | undefined) ?? {};
+    const rawServers = existing["mcpServers"];
+    const mcpServers: Record<string, unknown> =
+      rawServers && typeof rawServers === "object" && !Array.isArray(rawServers)
+        ? (rawServers as Record<string, unknown>)
+        : {};
     const entry: Record<string, unknown> = {
       type: "http",
       url: `http://127.0.0.1:${this.port}/mcp`,

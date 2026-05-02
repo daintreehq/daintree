@@ -901,6 +901,94 @@ describe("McpServerService", () => {
     expect(newStatus).toBe(200);
   });
 
+  it("rolls back to the old key when rotation's discovery-file write fails", async () => {
+    const { window } = createMockWindow();
+    await service.start(window);
+
+    const oldKey = service.getStatus().apiKey;
+    expect(oldKey).toMatch(/^daintree_[a-f0-9]+$/);
+
+    // Stub the private writeDiscoveryFile to throw on the next call so we
+    // exercise rotateApiKey's rollback path without relying on filesystem
+    // permission quirks (which differ across platforms).
+    const writeStub = vi
+      .spyOn(
+        service as unknown as { writeDiscoveryFile: () => Promise<void> },
+        "writeDiscoveryFile"
+      )
+      .mockRejectedValueOnce(new Error("disk full"));
+
+    try {
+      await expect(service.rotateApiKey()).rejects.toThrow("disk full");
+    } finally {
+      writeStub.mockRestore();
+    }
+
+    // Old key must still authenticate; getStatus reflects the rollback.
+    expect(service.getStatus().apiKey).toBe(oldKey);
+    const port = service.currentPort!;
+    const oldStatus = await new Promise<number>((resolve, reject) => {
+      const req = http.request(
+        {
+          host: "127.0.0.1",
+          port,
+          path: "/sse",
+          method: "GET",
+          headers: { Authorization: `Bearer ${oldKey}` },
+        },
+        (res) => {
+          const status = res.statusCode ?? 0;
+          req.destroy();
+          resolve(status);
+        }
+      );
+      req.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "ECONNRESET") return;
+        reject(err);
+      });
+      req.end();
+    });
+    expect(oldStatus).toBe(200);
+  });
+
+  it("preserves a pre-existing mcpServers array in the discovery file without dropping the daintree entry", async () => {
+    const discoveryDir = path.join(testHomeDir, ".daintree");
+    const discoveryFile = path.join(discoveryDir, "mcp.json");
+    await fs.mkdir(discoveryDir, { recursive: true });
+    // A manually-malformed file where mcpServers is an array, not an object.
+    await fs.writeFile(discoveryFile, JSON.stringify({ mcpServers: [] }), "utf-8");
+
+    const { window } = createMockWindow();
+    await service.start(window);
+
+    const written = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
+      mcpServers: Record<string, { headers?: { Authorization: string } }>;
+    };
+    expect(written.mcpServers.daintree).toBeDefined();
+    expect(written.mcpServers.daintree.headers?.Authorization).toMatch(
+      /^Bearer daintree_[a-f0-9]+$/
+    );
+  });
+
+  it("collapses concurrent rotateApiKey calls into a single in-flight rotation", async () => {
+    const { window } = createMockWindow();
+    await service.start(window);
+    const oldKey = service.getStatus().apiKey;
+
+    const [a, b] = await Promise.all([service.rotateApiKey(), service.rotateApiKey()]);
+
+    // Both callers see the same new key, neither receives a stale value.
+    expect(a).toBe(b);
+    expect(a).not.toBe(oldKey);
+    expect(service.getStatus().apiKey).toBe(a);
+
+    const discoveryFile = path.join(testHomeDir, ".daintree", "mcp.json");
+    const written = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
+      mcpServers: Record<string, { headers?: { Authorization: string } }>;
+    };
+    expect(written.mcpServers.daintree.headers).toEqual({ Authorization: `Bearer ${a}` });
+  });
+
   it("rejects POST /messages with a non-loopback Origin header", async () => {
     const { window } = createMockWindow();
     await service.start(window);
