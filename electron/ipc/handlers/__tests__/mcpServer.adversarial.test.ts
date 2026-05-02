@@ -14,8 +14,7 @@ const serviceMock = vi.hoisted(() => ({
   })),
   setEnabled: vi.fn().mockResolvedValue(undefined),
   setPort: vi.fn().mockResolvedValue(undefined),
-  setApiKey: vi.fn().mockResolvedValue(undefined),
-  generateApiKey: vi.fn().mockResolvedValue("k-new"),
+  rotateApiKey: vi.fn().mockResolvedValue("k-new"),
   getConfigSnippet: vi.fn(() => "snippet"),
   getAuditRecords: vi.fn(() => []),
   getAuditConfig: vi.fn(() => ({ enabled: true, maxRecords: 500 })),
@@ -121,19 +120,11 @@ describe("mcpServer IPC adversarial", () => {
     expect(result).toEqual(newStatus);
   });
 
-  it("setApiKey rejects non-string values", async () => {
-    await expect(getHandler(CHANNELS.MCP_SERVER_SET_API_KEY)(fakeEvent(), 42)).rejects.toThrow(
-      /string/
-    );
-    await expect(getHandler(CHANNELS.MCP_SERVER_SET_API_KEY)(fakeEvent(), null)).rejects.toThrow(
-      /string/
-    );
-  });
-
-  it("generateApiKey passes through the service-generated key", async () => {
-    serviceMock.generateApiKey.mockResolvedValue("new-secret-123");
-    const result = await getHandler(CHANNELS.MCP_SERVER_GENERATE_API_KEY)(fakeEvent());
-    expect(result).toBe("new-secret-123");
+  it("rotateApiKey passes through the service-rotated key", async () => {
+    serviceMock.rotateApiKey.mockResolvedValue("rotated-secret-123");
+    const result = await getHandler(CHANNELS.MCP_SERVER_ROTATE_API_KEY)(fakeEvent());
+    expect(result).toBe("rotated-secret-123");
+    expect(serviceMock.rotateApiKey).toHaveBeenCalledTimes(1);
   });
 
   it("setAuditEnabled rejects non-boolean values", async () => {
@@ -194,8 +185,8 @@ describe("mcpServer IPC adversarial", () => {
     expect(serviceMock.clearAuditLog).toHaveBeenCalledTimes(1);
   });
 
-  it("cleanup removes all eleven registered handlers", () => {
-    expect(ipcHandlers.size).toBe(11);
+  it("cleanup removes all ten registered handlers", () => {
+    expect(ipcHandlers.size).toBe(10);
     cleanup();
     expect(ipcHandlers.size).toBe(0);
   });

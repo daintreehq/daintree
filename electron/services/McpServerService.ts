@@ -364,6 +364,20 @@ export class McpServerService {
   private auditRecords: McpAuditRecord[] = [];
   private auditFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private auditHydrated = false;
+  /**
+   * Bearer token for the global MCP server. Not persisted in electron-store —
+   * the `~/.daintree/mcp.json` discovery file (0600) is the sole on-disk
+   * source. Initialized in `start()` (read-from-file or generate-fresh) and
+   * replaced by `rotateApiKey()`. Always non-empty once the server is running.
+   */
+  private apiKey: string | null = null;
+  /**
+   * Single-flight guard for `rotateApiKey()`. Without it, two parallel calls
+   * could each capture the same `previousKey`, both overwrite `this.apiKey`,
+   * and the first caller would receive a key that has already been
+   * superseded — so the UI would show a key that doesn't authenticate.
+   */
+  private rotateInFlight: Promise<string> | null = null;
 
   get isRunning(): boolean {
     return this.httpServer !== null && this.port !== null;
@@ -437,20 +451,59 @@ export class McpServerService {
     }
   }
 
-  async setApiKey(apiKey: string): Promise<void> {
-    this.persistConfig({ apiKey });
-    if (this.isRunning) {
-      await this.writeDiscoveryFile();
+  /**
+   * Mint a fresh bearer token and rewrite the discovery file. On write
+   * failure the in-memory key is rolled back so the previous bearer remains
+   * authoritative for in-flight requests. Local-loopback only — clients pick
+   * up the new key on their next request via `~/.daintree/mcp.json`; no
+   * server restart is needed. Single-flight: parallel callers share the same
+   * in-flight promise and receive the same returned key.
+   */
+  async rotateApiKey(): Promise<string> {
+    if (this.rotateInFlight) return this.rotateInFlight;
+    const promise = (async (): Promise<string> => {
+      const newKey = `daintree_${randomUUID().replace(/-/g, "")}`;
+      const previousKey = this.apiKey;
+      this.apiKey = newKey;
+      if (this.isRunning) {
+        try {
+          await this.writeDiscoveryFile();
+        } catch (err) {
+          this.apiKey = previousKey;
+          throw err;
+        }
+      }
+      return newKey;
+    })();
+    this.rotateInFlight = promise;
+    try {
+      return await promise;
+    } finally {
+      this.rotateInFlight = null;
     }
   }
 
-  async generateApiKey(): Promise<string> {
-    const key = `daintree_${randomUUID().replace(/-/g, "")}`;
-    this.persistConfig({ apiKey: key });
-    if (this.isRunning) {
-      await this.writeDiscoveryFile();
+  /**
+   * Read the bearer token from the discovery file written on a previous run.
+   * Returns `null` if the file is missing, malformed, or has no Bearer entry —
+   * the caller falls back to minting a fresh key.
+   */
+  private async readApiKeyFromDiscoveryFile(): Promise<string | null> {
+    try {
+      const raw = await fs.readFile(DISCOVERY_FILE, "utf-8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const servers = parsed["mcpServers"] as Record<string, unknown> | undefined;
+      const entry = servers?.[MCP_SERVER_KEY] as Record<string, unknown> | undefined;
+      const headers = entry?.["headers"] as Record<string, unknown> | undefined;
+      const auth = headers?.["Authorization"];
+      if (typeof auth === "string" && auth.startsWith("Bearer ")) {
+        const token = auth.slice("Bearer ".length).trim();
+        return token.length > 0 ? token : null;
+      }
+      return null;
+    } catch {
+      return null;
     }
-    return key;
   }
 
   /**
@@ -670,8 +723,9 @@ export class McpServerService {
 
     this.starting = true;
     try {
-      if (!this.getConfig().apiKey) {
-        await this.generateApiKey();
+      if (!this.apiKey) {
+        const persisted = await this.readApiKeyFromDiscoveryFile();
+        this.apiKey = persisted ?? `daintree_${randomUUID().replace(/-/g, "")}`;
       }
 
       this.hydrateAuditLog();
@@ -702,7 +756,11 @@ export class McpServerService {
 
       this.port = boundPort;
       this.httpServer = server;
-      await this.writeDiscoveryFile();
+      try {
+        await this.writeDiscoveryFile();
+      } catch (err) {
+        console.error("[MCP] Failed to write discovery file:", err);
+      }
       console.log(
         `[MCP] Server started on http://127.0.0.1:${this.port}/mcp (Streamable HTTP) and /sse (legacy SSE)`
       );
@@ -782,16 +840,15 @@ export class McpServerService {
       enabled: config.enabled,
       port: this.port,
       configuredPort: config.port,
-      apiKey: config.apiKey,
+      apiKey: this.apiKey ?? "",
     };
   }
 
   getConfigSnippet(): string {
-    const config = this.getConfig();
     const url = this.port ? `http://127.0.0.1:${this.port}/mcp` : "http://127.0.0.1:<port>/mcp";
     const entry: Record<string, unknown> = { type: "http", url };
-    if (config.apiKey) {
-      entry.headers = { Authorization: `Bearer ${config.apiKey}` };
+    if (this.apiKey) {
+      entry.headers = { Authorization: `Bearer ${this.apiKey}` };
     }
     return JSON.stringify({ mcpServers: { [MCP_SERVER_KEY]: entry } }, null, 2);
   }
@@ -1126,7 +1183,7 @@ export class McpServerService {
   }
 
   private isAuthorized(req: http.IncomingMessage): boolean {
-    const apiKey = this.getConfig().apiKey;
+    const apiKey = this.apiKey;
     const auth = req.headers.authorization ?? "";
 
     if (apiKey) {
@@ -1209,7 +1266,7 @@ export class McpServerService {
    * isn't recognized.
    */
   private resolveTokenTier(req: http.IncomingMessage): McpTier {
-    const apiKey = this.getConfig().apiKey;
+    const apiKey = this.apiKey;
     const auth = req.headers.authorization ?? "";
 
     if (apiKey) {
@@ -1540,44 +1597,51 @@ export class McpServerService {
     session.idleTimer = this.createIdleTimer(sessionId);
   }
 
+  /**
+   * Write the discovery file. Throws on failure so callers that need rollback
+   * (e.g. `rotateApiKey`) can react. The startup path catches and logs to
+   * preserve the existing best-effort contract.
+   */
   private async writeDiscoveryFile(): Promise<void> {
     if (!this.port) return;
-    try {
-      await fs.mkdir(DISCOVERY_DIR, { recursive: true });
-      if (process.platform !== "win32") {
-        await fs.chmod(DISCOVERY_DIR, 0o700).catch((err) => {
-          console.error("[MCP] Failed to chmod discovery directory:", err);
-        });
-      }
-
-      let existing: Record<string, unknown> = {};
-      try {
-        const raw = await fs.readFile(DISCOVERY_FILE, "utf-8");
-        existing = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        // file doesn't exist or isn't valid JSON — start fresh
-      }
-
-      const mcpServers = (existing["mcpServers"] as Record<string, unknown> | undefined) ?? {};
-      const entry: Record<string, unknown> = {
-        type: "http",
-        url: `http://127.0.0.1:${this.port}/mcp`,
-      };
-      const apiKey = this.getConfig().apiKey;
-      if (apiKey) {
-        entry.headers = { Authorization: `Bearer ${apiKey}` };
-      }
-      mcpServers[MCP_SERVER_KEY] = entry;
-
-      await resilientAtomicWriteFile(
-        DISCOVERY_FILE,
-        JSON.stringify({ ...existing, mcpServers }, null, 2) + "\n",
-        "utf-8",
-        { mode: 0o600 }
-      );
-    } catch (err) {
-      console.error("[MCP] Failed to write discovery file:", err);
+    await fs.mkdir(DISCOVERY_DIR, { recursive: true });
+    if (process.platform !== "win32") {
+      await fs.chmod(DISCOVERY_DIR, 0o700).catch((err) => {
+        console.error("[MCP] Failed to chmod discovery directory:", err);
+      });
     }
+
+    let existing: Record<string, unknown> = {};
+    try {
+      const raw = await fs.readFile(DISCOVERY_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        existing = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // file doesn't exist or isn't valid JSON — start fresh
+    }
+
+    const rawServers = existing["mcpServers"];
+    const mcpServers: Record<string, unknown> =
+      rawServers && typeof rawServers === "object" && !Array.isArray(rawServers)
+        ? (rawServers as Record<string, unknown>)
+        : {};
+    const entry: Record<string, unknown> = {
+      type: "http",
+      url: `http://127.0.0.1:${this.port}/mcp`,
+    };
+    if (this.apiKey) {
+      entry.headers = { Authorization: `Bearer ${this.apiKey}` };
+    }
+    mcpServers[MCP_SERVER_KEY] = entry;
+
+    await resilientAtomicWriteFile(
+      DISCOVERY_FILE,
+      JSON.stringify({ ...existing, mcpServers }, null, 2) + "\n",
+      "utf-8",
+      { mode: 0o600 }
+    );
   }
 
   private async removeDiscoveryFile(): Promise<void> {

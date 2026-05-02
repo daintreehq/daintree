@@ -188,25 +188,25 @@ export function DaintreeAssistantSettingsTab() {
     })();
   }, [updateAgent]);
 
-  const handleRegenerateKey = useCallback(async () => {
+  const handleRotateKey = useCallback(async () => {
     try {
-      const key = await window.electron.mcpServer.generateApiKey();
+      const key = await window.electron.mcpServer.rotateApiKey();
       setMcpStatus((prev) => (prev ? { ...prev, apiKey: key } : prev));
       notify({
         type: "success",
-        title: "Key regenerated",
+        title: "Key rotated",
         message: "A new MCP API key has been generated. Update your MCP clients.",
         priority: "low",
       });
     } catch (err) {
-      setError(formatErrorMessage(err, "Couldn't regenerate key"));
+      setError(formatErrorMessage(err, "Couldn't rotate key"));
       notify({
         type: "error",
-        title: "Key regeneration failed",
-        message: "Couldn't generate a new API key. Try again.",
+        title: "Key rotation failed",
+        message: "Couldn't rotate the API key. Try again.",
         priority: "low",
       });
-      logError("Failed to regenerate MCP API key", err);
+      logError("Failed to rotate MCP API key", err);
     }
   }, []);
 
@@ -392,11 +392,11 @@ export function DaintreeAssistantSettingsTab() {
               </button>
               <button
                 type="button"
-                onClick={() => void handleRegenerateKey()}
+                onClick={() => void handleRotateKey()}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
-                Regenerate MCP key
+                Rotate MCP key
               </button>
             </div>
 

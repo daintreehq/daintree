@@ -1255,15 +1255,12 @@ export interface ElectronAPI {
       configuredPort: number | null;
       apiKey: string;
     }>;
-    /** Set the API key for bearer token authentication (empty string = no auth) */
-    setApiKey(apiKey: string): Promise<{
-      enabled: boolean;
-      port: number | null;
-      configuredPort: number | null;
-      apiKey: string;
-    }>;
-    /** Generate a random API key and persist it */
-    generateApiKey(): Promise<string>;
+    /**
+     * Mint a fresh bearer token, rewrite `~/.daintree/mcp.json`, and return
+     * the new key. Clients pick up the new key on their next request — no
+     * server restart is needed.
+     */
+    rotateApiKey(): Promise<string>;
     /** Get the JSON config snippet to paste into an MCP client config */
     getConfigSnippet(): Promise<string>;
     /** Read the audit-log ring buffer (newest first). */

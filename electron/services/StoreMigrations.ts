@@ -4,7 +4,7 @@ import fs from "fs";
 import { z } from "zod";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
-export const LATEST_SCHEMA_VERSION = 20;
+export const LATEST_SCHEMA_VERSION = 21;
 
 export interface Migration {
   version: number;

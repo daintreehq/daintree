@@ -189,7 +189,6 @@ export interface StoreSchema {
   mcpServer: {
     enabled: boolean;
     port: number | null;
-    apiKey: string;
     fullToolSurface: boolean;
     auditEnabled: boolean;
     auditMaxRecords: number;
@@ -336,7 +335,6 @@ const storeOptions = {
     mcpServer: {
       enabled: false,
       port: 45454,
-      apiKey: "",
       fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: MCP_AUDIT_DEFAULT_MAX_RECORDS,

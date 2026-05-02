@@ -146,7 +146,7 @@ export function createHeavyMigrationFixture(): StoreSchema {
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
     },
-    mcpServer: { enabled: false, port: 45454, apiKey: "" },
+    mcpServer: { enabled: false, port: 45454 },
     pendingErrors,
     gpu: { hardwareAccelerationDisabled: false },
     crashRecovery: { autoRestoreOnCrash: false },

@@ -47,18 +47,9 @@ export function registerMcpServerHandlers(): () => void {
   );
 
   handlers.push(
-    typedHandle(CHANNELS.MCP_SERVER_SET_API_KEY, async (apiKey: string) => {
-      if (typeof apiKey !== "string") throw new Error("apiKey must be a string");
+    typedHandle(CHANNELS.MCP_SERVER_ROTATE_API_KEY, async () => {
       const svc = await getMcpServerService();
-      await svc.setApiKey(apiKey);
-      return svc.getStatus();
-    })
-  );
-
-  handlers.push(
-    typedHandle(CHANNELS.MCP_SERVER_GENERATE_API_KEY, async () => {
-      const svc = await getMcpServerService();
-      return await svc.generateApiKey();
+      return await svc.rotateApiKey();
     })
   );
 

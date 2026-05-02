@@ -30,13 +30,7 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     setEnabled: vi.fn(),
     setPort: vi.fn(),
     getConfigSnippet: vi.fn().mockResolvedValue("http://127.0.0.1:9020/sse"),
-    generateApiKey: vi.fn().mockResolvedValue("dnt-key-new456"),
-    setApiKey: vi.fn().mockResolvedValue({
-      enabled: true,
-      port: 9020,
-      configuredPort: 9020,
-      apiKey: "",
-    }),
+    rotateApiKey: vi.fn().mockResolvedValue("dnt-key-rotated789"),
     getAuditRecords: vi.fn().mockResolvedValue([]),
     getAuditConfig: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
     clearAuditLog: vi.fn().mockResolvedValue(undefined),
@@ -127,25 +121,26 @@ describe("McpServerSettingsTab", () => {
     expect(writeText).toHaveBeenCalledWith("dnt-key-abc123");
   });
 
-  it("Regenerate calls generateApiKey", async () => {
+  it("Rotate calls rotateApiKey and surfaces the new key", async () => {
     const { container } = render(<McpServerSettingsTab />);
     await waitForContent(container, "API key active");
 
-    fireEvent.click(screen.getByTitle("Regenerate API key"));
+    fireEvent.click(screen.getByTitle("Rotate API key"));
     await waitFor(() => {
-      expect(window.electron.mcpServer.generateApiKey).toHaveBeenCalled();
+      expect(window.electron.mcpServer.rotateApiKey).toHaveBeenCalledTimes(1);
+    });
+
+    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    await waitFor(() => {
+      expect(displayArea.textContent).toContain("dnt-key-rotated789");
     });
   });
 
-  it("Remove clears the key and shows Generate API Key button", async () => {
+  it("does not render a Remove button — the key is mandatory", async () => {
     const { container } = render(<McpServerSettingsTab />);
     await waitForContent(container, "API key active");
 
-    fireEvent.click(screen.getByText("Remove"));
-    await waitFor(() => {
-      expect(window.electron.mcpServer.setApiKey).toHaveBeenCalledWith("");
-      expect(screen.getByText("Generate API Key")).toBeTruthy();
-    });
+    expect(screen.queryByRole("button", { name: /^remove$/i })).toBeNull();
   });
 
   it("routes IPC failure to inbox via low-priority notify and inline error", async () => {

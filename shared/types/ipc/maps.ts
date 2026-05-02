@@ -1813,16 +1813,7 @@ export interface IpcInvokeMap {
       apiKey: string;
     };
   };
-  "mcp-server:set-api-key": {
-    args: [apiKey: string];
-    result: {
-      enabled: boolean;
-      port: number | null;
-      configuredPort: number | null;
-      apiKey: string;
-    };
-  };
-  "mcp-server:generate-api-key": {
+  "mcp-server:rotate-api-key": {
     args: [];
     result: string;
   };

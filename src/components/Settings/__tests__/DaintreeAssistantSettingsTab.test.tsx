@@ -100,7 +100,7 @@ interface HelpAssistantApi {
 
 interface McpServerApi {
   getStatus: ReturnType<typeof vi.fn>;
-  generateApiKey: ReturnType<typeof vi.fn>;
+  rotateApiKey: ReturnType<typeof vi.fn>;
   getConfigSnippet: ReturnType<typeof vi.fn>;
 }
 
@@ -124,7 +124,7 @@ function installApi(
       configuredPort: 45454,
       apiKey: "dnt-key-abc",
     }),
-    generateApiKey: vi.fn().mockResolvedValue("dnt-key-new"),
+    rotateApiKey: vi.fn().mockResolvedValue("dnt-key-new"),
     getConfigSnippet: vi.fn().mockResolvedValue('{ "url": "http://127.0.0.1:45454/sse" }'),
   };
   window.electron = {
@@ -188,14 +188,14 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  it("regenerate key calls mcpServer.generateApiKey", async () => {
+  it("rotate key calls mcpServer.rotateApiKey", async () => {
     const { container } = render(<DaintreeAssistantSettingsTab />);
-    await waitForContent(container, "Regenerate MCP key");
+    await waitForContent(container, "Rotate MCP key");
 
-    fireEvent.click(screen.getByRole("button", { name: /regenerate mcp key/i }));
+    fireEvent.click(screen.getByRole("button", { name: /rotate mcp key/i }));
 
     await waitFor(() => {
-      expect(window.electron.mcpServer.generateApiKey).toHaveBeenCalledTimes(1);
+      expect(window.electron.mcpServer.rotateApiKey).toHaveBeenCalledTimes(1);
     });
   });
 

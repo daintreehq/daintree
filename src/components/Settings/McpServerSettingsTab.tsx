@@ -209,40 +209,28 @@ export function McpServerSettingsTab() {
     }
   }, [portInput]);
 
-  const handleGenerateApiKey = useCallback(async () => {
+  const handleRotateApiKey = useCallback(async () => {
     try {
       setError(null);
-      const key = await window.electron.mcpServer.generateApiKey();
+      const key = await window.electron.mcpServer.rotateApiKey();
       setStatus((prev) => ({ ...prev, apiKey: key }));
       setShowApiKey(true);
       setCopiedKey(false);
-    } catch (err) {
-      setError(formatErrorMessage(err, "Failed to generate API key"));
       notify({
-        type: "error",
-        title: "API key generation failed",
-        message: "Couldn't generate a new API key. Try again.",
+        type: "success",
+        title: "API key rotated",
+        message: "Update any external MCP clients with the new key.",
         priority: "low",
       });
-      logError("Failed to generate MCP API key", err);
-    }
-  }, []);
-
-  const handleClearApiKey = useCallback(async () => {
-    try {
-      setError(null);
-      const newStatus = await window.electron.mcpServer.setApiKey("");
-      setStatus(newStatus);
-      setCopiedKey(false);
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to clear API key"));
+      setError(formatErrorMessage(err, "Failed to rotate API key"));
       notify({
         type: "error",
-        title: "API key removal failed",
-        message: "Couldn't remove the API key. Try again.",
+        title: "API key rotation failed",
+        message: "Couldn't rotate the API key. Try again.",
         priority: "low",
       });
-      logError("Failed to clear MCP API key", err);
+      logError("Failed to rotate MCP API key", err);
     }
   }, []);
 
@@ -479,7 +467,7 @@ export function McpServerSettingsTab() {
           <SettingsSection
             icon={Shield}
             title="Authentication"
-            description="Optionally require a bearer token for MCP connections. Recommended if other users share this machine. Not needed for typical local-only use."
+            description="Every MCP connection must present this bearer token. The key is held in memory while Daintree runs and written only to ~/.daintree/mcp.json (0600). Rotate it if you suspect it has leaked."
           >
             {status.apiKey ? (
               <div className="contents">
@@ -526,18 +514,12 @@ export function McpServerSettingsTab() {
                     {copiedKey ? "Copied!" : "Copy"}
                   </button>
                   <button
-                    onClick={handleGenerateApiKey}
+                    onClick={handleRotateApiKey}
                     className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
-                    title="Regenerate API key"
+                    title="Rotate API key"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    Regenerate
-                  </button>
-                  <button
-                    onClick={handleClearApiKey}
-                    className="px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20 transition-colors"
-                  >
-                    Remove
+                    Rotate API key
                   </button>
                 </div>
               </div>
@@ -546,16 +528,9 @@ export function McpServerSettingsTab() {
                 <div className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border">
                   <div className="w-2 h-2 rounded-full bg-daintree-text/30" />
                   <span className="text-xs text-daintree-text/60">
-                    No authentication — any local process can connect
+                    Key will be generated when the server starts.
                   </span>
                 </div>
-                <button
-                  onClick={handleGenerateApiKey}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
-                >
-                  <Key className="w-3.5 h-3.5" />
-                  Generate API Key
-                </button>
               </div>
             )}
           </SettingsSection>
