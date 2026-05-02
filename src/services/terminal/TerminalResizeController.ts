@@ -25,15 +25,17 @@ interface XtermCoreRenderDimensions {
 /**
  * Returns the CSS pixel dimensions of a single terminal cell.
  *
- * xterm.js 6.0 does not expose a public API for per-cell pixel dimensions.
- * The official @xterm/addon-fit (0.11) accesses the same private path
- * (`_core._renderService.dimensions`) — see its proposeDimensions() source.
- * Upstream tracking: xtermjs/xterm.js#702 (closed; no public API in 6.0).
+ * xterm 6.0 has no public cell-dimension API (verified against installed
+ * `@xterm/xterm` typings). The only available path is the private
+ * `_core._renderService.dimensions.css.cell` property — the same approach
+ * `@xterm/addon-fit` 0.11 uses in its `proposeDimensions()` method.
  *
- * This helper uses a narrow structural type instead of `any` and rejects
- * non-finite, zero, or negative values. Returns `null` on any failure so
- * callers can fall back to fitAddon.fit().
- * Replace with a public API when one is available in our xterm version.
+ * Uses a narrow structural type instead of `any` and rejects non-finite,
+ * zero, or negative values. Returns `null` on any failure so callers can
+ * fall back to fitAddon.fit().
+ *
+ * Upstream tracking: xtermjs/xterm.js#702 (no public API in 6.0).
+ * Replace with a public API when one becomes available.
  */
 export function getXtermCellDimensions(
   terminal: Terminal
