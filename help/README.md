@@ -68,7 +68,7 @@ Claude help sessions run at one of three authorization tiers, selected by user s
 
 | Tier        | Trigger                                 | Capabilities (categories)                                                                                                       |
 | ----------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `workbench` | (not exposed to help sessions today)    | Read-only introspection: list projects, worktrees, terminals, panels; read git status, diffs, commits; view GitHub issues/PRs. |
+| `workbench` | (not exposed to help sessions today)    | Read-only introspection: list projects, worktrees, terminals; read git status, diffs, commits; view GitHub issues/PRs.         |
 | `action`    | Default for help sessions               | Adds non-destructive mutations: create worktrees, inject context, run recipes, open files, focus agents.                       |
 | `system`    | Help-session skip-permissions setting   | Adds destructive operations: delete worktrees, send raw terminal commands, stage/commit/push git, open issues/PRs, launch agents. |
 
@@ -76,7 +76,7 @@ The authoritative tier definitions live in `electron/services/McpServerService.t
 
 ## Permission Lockdown
 
-All three agents block file writes, edits, and arbitrary shell commands at the tool layer. They share a `gh` allowlist for searching/viewing GitHub issues; creating issues always requires user confirmation. Claude additionally has tier-gated access to a local `mcp__daintree__*` tool surface for inspecting and acting on the running Daintree app — Gemini and Codex do not.
+Claude and Codex block file writes, edits, and arbitrary shell commands at the tool layer; Gemini's `shell` tool is allowlisted but constrained by instruction-level guardrails. All three share a `gh` allowlist for searching/viewing GitHub issues; creating issues always requires user confirmation. Claude additionally has tier-gated access to a local `mcp__daintree__*` tool surface for inspecting and acting on the running Daintree app — Gemini and Codex do not.
 
 **Claude** (`.claude/settings.json`):
 
