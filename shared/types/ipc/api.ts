@@ -1355,6 +1355,8 @@ export interface ElectronAPI {
       sessionPath: string;
       token: string;
       tier: import("./maps.js").HelpAssistantTier;
+      mcpUrl: string | null;
+      windowId: number;
     } | null>;
     revokeSession(sessionId: string): Promise<void>;
   };

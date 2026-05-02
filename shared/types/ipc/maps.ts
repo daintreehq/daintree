@@ -2097,6 +2097,8 @@ export interface IpcInvokeMap {
       sessionPath: string;
       token: string;
       tier: HelpAssistantTier;
+      mcpUrl: string | null;
+      windowId: number;
     } | null;
   };
   "help:revoke-session": {

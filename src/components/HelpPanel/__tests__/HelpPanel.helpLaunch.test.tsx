@@ -502,7 +502,7 @@ describe("HelpPanel — handleRunAnyway", () => {
 });
 
 describe("HelpPanel — session provisioning", () => {
-  it("threads sessionPath as cwd and DAINTREE_MCP_TOKEN env into agent.launch", async () => {
+  it("threads sessionPath as cwd and full DAINTREE_* env into agent.launch", async () => {
     projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
     mockGetFolderPath.mockResolvedValue("/help");
     mockProvisionSession.mockResolvedValue({
@@ -510,6 +510,8 @@ describe("HelpPanel — session provisioning", () => {
       sessionPath: "/sessions/sess-1",
       token: "tok-abc",
       tier: "action",
+      mcpUrl: "http://127.0.0.1:45454/sse",
+      windowId: 7,
     });
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
 
@@ -527,11 +529,48 @@ describe("HelpPanel — session provisioning", () => {
       "agent.launch",
       expect.objectContaining({
         cwd: "/sessions/sess-1",
-        env: { DAINTREE_MCP_TOKEN: "tok-abc" },
+        env: {
+          DAINTREE_MCP_TOKEN: "tok-abc",
+          DAINTREE_MCP_URL: "http://127.0.0.1:45454/sse",
+          DAINTREE_WINDOW_ID: "7",
+          DAINTREE_PROJECT_ID: "proj-1",
+        },
       }),
       { source: "user" }
     );
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-1", "claude", "sess-1");
+  });
+
+  it("omits DAINTREE_MCP_URL when mcpUrl is null (localMcpEnabled=false)", async () => {
+    projectStoreState.currentProject = { id: "proj-2", path: "/repo2" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "sess-2",
+      sessionPath: "/sessions/sess-2",
+      token: "tok-xyz",
+      tier: "action",
+      mcpUrl: null,
+      windowId: 3,
+    });
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-2" } });
+
+    const { getByTestId } = render(<HelpPanel />);
+
+    await act(async () => {
+      fireEvent.click(getByTestId("pick-claude"));
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        env: {
+          DAINTREE_MCP_TOKEN: "tok-xyz",
+          DAINTREE_WINDOW_ID: "3",
+          DAINTREE_PROJECT_ID: "proj-2",
+        },
+      }),
+      { source: "user" }
+    );
   });
 
   it("revokes the in-flight session when handleClose fires before setTerminal commits", async () => {
@@ -542,6 +581,8 @@ describe("HelpPanel — session provisioning", () => {
       sessionPath: "/sessions/pending-1",
       token: "tok-pending",
       tier: "action",
+      mcpUrl: null,
+      windowId: 1,
     });
 
     let resolveDispatch: (v: unknown) => void = () => {};

@@ -17,6 +17,8 @@ import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useProjectStore } from "@/store/projectStore";
+import { logError } from "@/utils/logger";
 import { ASSISTANT_FAST_MODELS, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { getAgentSettingsEntry } from "@shared/types";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
@@ -724,17 +726,53 @@ export function registerPreferencesActions(
       const helpPrompt =
         "I need help with Daintree, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
 
+      const project = useProjectStore.getState().currentProject;
+      let session: Awaited<ReturnType<typeof window.electron.help.provisionSession>> | null = null;
+      if (project) {
+        try {
+          session = await window.electron.help.provisionSession({
+            projectId: project.id,
+            projectPath: project.path,
+          });
+        } catch (err) {
+          logError("Failed to provision help session", err);
+        }
+      }
+
+      const cwd = session?.sessionPath ?? folderPath;
+      const env: Record<string, string> | undefined = session
+        ? {
+            DAINTREE_MCP_TOKEN: session.token,
+            DAINTREE_WINDOW_ID: String(session.windowId),
+            ...(session.mcpUrl ? { DAINTREE_MCP_URL: session.mcpUrl } : {}),
+            ...(project ? { DAINTREE_PROJECT_ID: project.id } : {}),
+          }
+        : undefined;
+
       const result = await actionService.dispatch<{ terminalId: string | null }>(
         "agent.launch",
-        { agentId, cwd: folderPath, location: "dock", prompt: helpPrompt, ...(model && { model }) },
+        {
+          agentId,
+          cwd,
+          location: "dock",
+          prompt: helpPrompt,
+          ...(model && { model }),
+          ...(env && { env }),
+        },
         { source: "user" }
       );
 
       // Store the terminal in the help panel
       if (result.ok && result.result?.terminalId) {
-        useHelpPanelStore.getState().setTerminal(result.result.terminalId, agentId, null);
+        useHelpPanelStore
+          .getState()
+          .setTerminal(result.result.terminalId, agentId, session?.sessionId ?? null);
         useHelpPanelStore.getState().setOpen(true);
         window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
+      } else if (session) {
+        window.electron.help.revokeSession(session.sessionId).catch((err) => {
+          logError("Failed to revoke help session after failed launch", err);
+        });
       }
     },
   }));

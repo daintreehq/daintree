@@ -101,6 +101,25 @@ describe("HelpSessionService", () => {
     };
   }
 
+  it("returns mcpUrl and windowId on the provision result when MCP is enabled", async () => {
+    const result = await service.provisionSession(provisionInput());
+    expect(result).not.toBeNull();
+    if (!result) throw new Error("expected result");
+
+    expect(result.mcpUrl).toBe("http://127.0.0.1:45454/sse");
+    expect(result.windowId).toBe(7);
+  });
+
+  it("returns mcpUrl=null when localMcpEnabled is false", async () => {
+    mockStoreGet.mockReturnValue({ localMcpEnabled: false });
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    expect(result.mcpUrl).toBeNull();
+    expect(result.windowId).toBe(7);
+  });
+
   it("creates a session dir with a .mcp.json that uses bare Bearer ${DAINTREE_MCP_TOKEN}", async () => {
     const result = await service.provisionSession(provisionInput());
     expect(result).not.toBeNull();

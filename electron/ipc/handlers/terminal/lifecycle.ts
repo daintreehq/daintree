@@ -15,9 +15,11 @@ import {
 import { projectStore } from "../../../services/ProjectStore.js";
 import { mcpServerService } from "../../../services/McpServerService.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
+import { helpSessionService } from "../../../services/HelpSessionService.js";
 import type { HandlerDependencies } from "../../types.js";
 import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
 import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
+import { DEFAULT_DANGEROUS_ARGS } from "../../../../shared/types/agentSettings.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
 import {
@@ -209,16 +211,37 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     let safeCommand = hasMultilineCommand ? "" : trimmedCommand;
     let spawnEnv: Record<string, string> | undefined = validatedOptions.env;
 
-    // Daintree MCP injection for Claude Code agent launches.
-    // Mints a per-pane bearer token, writes a managed --mcp-config JSON under
-    // userData, and injects the flag into the command + the token into env.
-    // Token is revoked and the file deleted on PTY exit (see registerTerminalEventHandlers).
-    if (
+    // Help-assistant launches arrive with a pre-provisioned session dir whose
+    // .mcp.json is already in cwd. The renderer threads DAINTREE_MCP_TOKEN
+    // through spawnEnv; presence of a valid token signals a help launch.
+    // Skip per-pane MCP config injection (the session dir owns it) and append
+    // --strict-mcp-config so Claude Code ignores any global ~/.claude config.
+    // When the session was provisioned with skipPermissions, also append the
+    // dangerous flag so the agent runs without the per-tool prompt.
+    const helpToken = spawnEnv?.DAINTREE_MCP_TOKEN ?? "";
+    const helpTier = helpToken ? helpSessionService.validateToken(helpToken) : false;
+    const isHelpLaunch = helpTier !== false && launchAgentId === "claude" && safeCommand.length > 0;
+
+    if (isHelpLaunch) {
+      if (!safeCommand.includes("--strict-mcp-config")) {
+        safeCommand = `${safeCommand} --strict-mcp-config`;
+      }
+      if (helpTier === "system") {
+        const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
+        if (dangerous && !safeCommand.includes(dangerous)) {
+          safeCommand = `${safeCommand} ${dangerous}`;
+        }
+      }
+    } else if (
       launchAgentId === "claude" &&
       safeCommand.length > 0 &&
       projectId &&
       mcpServerService.isRunning
     ) {
+      // Daintree MCP injection for normal Claude Code agent launches.
+      // Mints a per-pane bearer token, writes a managed --mcp-config JSON under
+      // userData, and injects the flag into the command + the token into env.
+      // Token is revoked and the file deleted on PTY exit (see registerTerminalEventHandlers).
       try {
         const projSettings = await projectStore.getProjectSettings(projectId);
         const tier = resolveDaintreeMcpTier(projSettings);

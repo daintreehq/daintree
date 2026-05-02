@@ -30,6 +30,8 @@ export interface ProvisionResult {
   sessionPath: string;
   token: string;
   tier: HelpAssistantTier;
+  mcpUrl: string | null;
+  windowId: number;
 }
 
 interface HelpSessionRecord {
@@ -140,7 +142,8 @@ export class HelpSessionService {
     this.sessionsByToken.set(token, record);
     this.sessionsById.set(sessionId, record);
 
-    return { sessionId, sessionPath, token, tier };
+    const mcpUrl = settings.localMcpEnabled && port ? `http://127.0.0.1:${port}/sse` : null;
+    return { sessionId, sessionPath, token, tier, mcpUrl, windowId: input.windowId };
   }
 
   async revokeSession(sessionId: string): Promise<void> {

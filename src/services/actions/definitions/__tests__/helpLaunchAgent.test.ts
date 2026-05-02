@@ -8,6 +8,8 @@ const {
   mockGetCliAvailabilityState,
   mockGetAgentSettingsState,
   mockGetEffectiveAgentConfig,
+  mockGetProjectState,
+  mockLogError,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn().mockResolvedValue({ ok: true }),
   mockNotify: vi.fn().mockReturnValue(""),
@@ -15,6 +17,8 @@ const {
   mockGetCliAvailabilityState: vi.fn(),
   mockGetAgentSettingsState: vi.fn(),
   mockGetEffectiveAgentConfig: vi.fn(),
+  mockGetProjectState: vi.fn(),
+  mockLogError: vi.fn(),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -35,6 +39,14 @@ vi.mock("@/store/cliAvailabilityStore", () => ({
 
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: { getState: () => mockGetAgentSettingsState() },
+}));
+
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: { getState: () => mockGetProjectState() },
+}));
+
+vi.mock("@/utils/logger", () => ({
+  logError: (...args: unknown[]) => mockLogError(...args),
 }));
 
 vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
@@ -115,12 +127,18 @@ describe("help.launchAgent", () => {
     Object.defineProperty(globalThis, "window", {
       value: {
         electron: {
-          help: { getFolderPath: vi.fn() },
+          help: {
+            getFolderPath: vi.fn(),
+            provisionSession: vi.fn().mockResolvedValue(null),
+            revokeSession: vi.fn().mockResolvedValue(undefined),
+            markTerminal: vi.fn().mockResolvedValue(undefined),
+          },
         },
       },
       writable: true,
       configurable: true,
     });
+    mockGetProjectState.mockReturnValue({ currentProject: null });
     action = extractHelpLaunchAgent();
   });
 
@@ -367,5 +385,82 @@ describe("help.launchAgent", () => {
       expect.objectContaining({ agentId: "gemini", model: "gemini-2.5-pro" }),
       { source: "user" }
     );
+  });
+
+  it("provisions a help session and threads sessionPath as cwd with full DAINTREE_* env when a project is active", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetProjectState.mockReturnValue({
+      currentProject: { id: "proj-1", path: "/repo" },
+    });
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-1",
+      sessionPath: "/sessions/sess-1",
+      token: "tok-abc",
+      tier: "action",
+      mcpUrl: "http://127.0.0.1:45454/sse",
+      windowId: 5,
+    });
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
+
+    await action.run(undefined, stubCtx);
+
+    expect(window.electron.help.provisionSession).toHaveBeenCalledWith({
+      projectId: "proj-1",
+      projectPath: "/repo",
+    });
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        agentId: "claude",
+        cwd: "/sessions/sess-1",
+        env: {
+          DAINTREE_MCP_TOKEN: "tok-abc",
+          DAINTREE_MCP_URL: "http://127.0.0.1:45454/sse",
+          DAINTREE_WINDOW_ID: "5",
+          DAINTREE_PROJECT_ID: "proj-1",
+        },
+      }),
+      { source: "user" }
+    );
+  });
+
+  it("falls back to folderPath cwd when no current project is active (no provision)", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetProjectState.mockReturnValue({ currentProject: null });
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
+
+    await action.run(undefined, stubCtx);
+
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    const firstCall = mockDispatch.mock.calls[0];
+    const dispatchArg = firstCall?.[1] as Record<string, unknown> | undefined;
+    expect(dispatchArg?.cwd).toBe("/mock/help");
+    expect(dispatchArg?.env).toBeUndefined();
+  });
+
+  it("revokes the session when agent.launch fails", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetProjectState.mockReturnValue({
+      currentProject: { id: "proj-1", path: "/repo" },
+    });
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-fail",
+      sessionPath: "/sessions/sess-fail",
+      token: "tok-fail",
+      tier: "action",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    mockDispatch.mockResolvedValue({ ok: false });
+
+    await action.run(undefined, stubCtx);
+
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-fail");
   });
 });

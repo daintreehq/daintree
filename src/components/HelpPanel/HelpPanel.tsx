@@ -55,6 +55,8 @@ interface HelpSessionRef {
   sessionId: string;
   sessionPath: string;
   token: string;
+  mcpUrl: string | null;
+  windowId: number;
 }
 
 async function provisionHelpSession(): Promise<HelpSessionRef | null> {
@@ -70,6 +72,20 @@ async function provisionHelpSession(): Promise<HelpSessionRef | null> {
     logError("Failed to provision help session", err);
     return null;
   }
+}
+
+function buildHelpEnv(
+  session: HelpSessionRef | null,
+  projectId: string | null
+): Record<string, string> | undefined {
+  if (!session) return undefined;
+  const env: Record<string, string> = {
+    DAINTREE_MCP_TOKEN: session.token,
+    DAINTREE_WINDOW_ID: String(session.windowId),
+  };
+  if (session.mcpUrl) env.DAINTREE_MCP_URL = session.mcpUrl;
+  if (projectId) env.DAINTREE_PROJECT_ID = projectId;
+  return env;
 }
 
 function revokeHelpSession(sessionId: string | null): void {
@@ -165,7 +181,8 @@ export function HelpPanel() {
         const session = await provisionHelpSession();
         if (session) pendingSessionIdRef.current = session.sessionId;
         const cwd = session?.sessionPath ?? folderPath;
-        const env = session ? { DAINTREE_MCP_TOKEN: session.token } : undefined;
+        const projectId = useProjectStore.getState().currentProject?.id ?? null;
+        const env = buildHelpEnv(session, projectId);
 
         const model = resolveAssistantModel(launchAgentId);
         const result = await actionService.dispatch<{ terminalId: string | null }>(
@@ -304,7 +321,8 @@ export function HelpPanel() {
         const session = await provisionHelpSession();
         if (session) pendingSessionIdRef.current = session.sessionId;
         const cwd = session?.sessionPath ?? folderPath;
-        const env = session ? { DAINTREE_MCP_TOKEN: session.token } : undefined;
+        const projectId = useProjectStore.getState().currentProject?.id ?? null;
+        const env = buildHelpEnv(session, projectId);
 
         const model = resolveAssistantModel(selectedAgentId);
         const result = await actionService.dispatch<{ terminalId: string | null }>(
@@ -383,13 +401,10 @@ export function HelpPanel() {
         try {
           const session = await provisionHelpSession();
           const cwd = session?.sessionPath ?? panel.cwd ?? "";
+          const projectId = useProjectStore.getState().currentProject?.id ?? null;
+          const helpEnv = buildHelpEnv(session, projectId);
           const env: Record<string, string> | undefined =
-            session || presetEnv
-              ? {
-                  ...(presetEnv ?? {}),
-                  ...(session ? { DAINTREE_MCP_TOKEN: session.token } : {}),
-                }
-              : undefined;
+            helpEnv || presetEnv ? { ...(presetEnv ?? {}), ...(helpEnv ?? {}) } : undefined;
 
           const newId = await usePanelStore.getState().addPanel({
             kind: "terminal",

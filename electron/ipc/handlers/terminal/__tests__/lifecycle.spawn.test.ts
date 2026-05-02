@@ -77,6 +77,39 @@ vi.mock("../../../../shared/config/agentRegistry.js", () => ({
   isRegisteredAgent: vi.fn(() => false),
 }));
 
+const { mockValidateToken, mockIsRunning, mockCurrentPort, mockPreparePaneConfig } = vi.hoisted(
+  () => ({
+    mockValidateToken: vi.fn<(token: string) => "action" | "system" | false>(),
+    mockIsRunning: vi.fn<() => boolean>(),
+    mockCurrentPort: vi.fn<() => number | null>(),
+    mockPreparePaneConfig: vi.fn(),
+  })
+);
+
+vi.mock("../../../../services/HelpSessionService.js", () => ({
+  helpSessionService: {
+    validateToken: (token: string) => mockValidateToken(token),
+  },
+}));
+
+vi.mock("../../../../services/McpServerService.js", () => ({
+  mcpServerService: {
+    get isRunning() {
+      return mockIsRunning();
+    },
+    get currentPort() {
+      return mockCurrentPort();
+    },
+  },
+}));
+
+vi.mock("../../../../services/McpPaneConfigService.js", () => ({
+  mcpPaneConfigService: {
+    preparePaneConfig: (...args: unknown[]) => mockPreparePaneConfig(...args),
+    revokePaneConfig: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../../channels.js";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
@@ -482,5 +515,138 @@ describe("terminal spawn rate limiting (#5352)", () => {
 
     expect(waitForRateLimitSlotMock).not.toHaveBeenCalled();
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("terminal spawn handler - help session detection (#6524)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const os = await import("os");
+    tmpDir = os.tmpdir();
+    ptyClient = {
+      spawn: vi.fn(),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+    mockValidateToken.mockReturnValue(false);
+    mockIsRunning.mockReturnValue(false);
+    mockCurrentPort.mockReturnValue(null);
+  });
+
+  it("appends --strict-mcp-config and skips per-pane MCP injection when DAINTREE_MCP_TOKEN is a valid help token", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude",
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.command).toContain("--strict-mcp-config");
+    expect(spawnArgs.command).not.toContain("--mcp-config ");
+    expect(spawnArgs.command).not.toContain("--dangerously-skip-permissions");
+    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
+  });
+
+  it("appends --dangerously-skip-permissions when help session tier is 'system'", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "system-token" ? "system" : false));
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude",
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_TOKEN: "system-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.command).toContain("--strict-mcp-config");
+    expect(spawnArgs.command).toContain("--dangerously-skip-permissions");
+  });
+
+  it("does not append --strict-mcp-config twice on a re-spawn whose command already carries it", async () => {
+    mockValidateToken.mockReturnValue("action");
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude --strict-mcp-config",
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    const matches = spawnArgs.command.match(/--strict-mcp-config/g) ?? [];
+    expect(matches.length).toBe(1);
+  });
+
+  it("falls back to per-pane MCP injection when DAINTREE_MCP_TOKEN is not a valid help token", async () => {
+    mockValidateToken.mockReturnValue(false);
+    mockIsRunning.mockReturnValue(true);
+    mockCurrentPort.mockReturnValue(45454);
+    mockPreparePaneConfig.mockResolvedValue({
+      configPath: "/tmp/pane-config.json",
+      token: "pane-token",
+    });
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude",
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_TOKEN: "stale-or-spoofed" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.command).toContain("--mcp-config");
+    expect(spawnArgs.command).not.toContain("--strict-mcp-config");
+    expect(mockPreparePaneConfig).toHaveBeenCalledTimes(1);
   });
 });
