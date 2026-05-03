@@ -119,8 +119,9 @@ const WORKBENCH_TOOLS: ReadonlySet<string> = new Set([
 
 /**
  * Action tier additions — non-destructive mutations layered on top of
- * workbench. Creates resources and injects context into existing terminals,
- * but does not delete, send raw input, or commit/push git state.
+ * workbench. Creates resources, spawns terminals/agents, and drives those
+ * terminals via injected context or sent commands. Does not delete worktrees,
+ * commit/push git state, or open external GitHub URLs.
  */
 const ACTION_TIER_ADDONS: ReadonlySet<string> = new Set([
   "worktree.create",
@@ -130,6 +131,8 @@ const ACTION_TIER_ADDONS: ReadonlySet<string> = new Set([
 
   "terminal.inject",
   "terminal.new",
+  "terminal.sendCommand",
+  "terminal.bulkCommand",
 
   "recipe.list",
   "recipe.run",
@@ -139,20 +142,19 @@ const ACTION_TIER_ADDONS: ReadonlySet<string> = new Set([
 
   "file.openInEditor",
 
+  "agent.launch",
+  "agent.terminal",
   "agent.focusNextWaiting",
   "agent.focusNextWorking",
 ]);
 
 /**
- * System tier additions — destructive or privileged operations layered on
- * top of action. Includes deleting worktrees, raw terminal input, git
- * mutations, and launching new agents.
+ * System tier additions — destructive or externally-visible operations layered
+ * on top of action. Includes deleting worktrees, mutating git state, and
+ * opening external GitHub URLs.
  */
 const SYSTEM_TIER_ADDONS: ReadonlySet<string> = new Set([
   "worktree.delete",
-
-  "terminal.sendCommand",
-  "terminal.bulkCommand",
 
   "git.stageFile",
   "git.unstageFile",
@@ -165,9 +167,6 @@ const SYSTEM_TIER_ADDONS: ReadonlySet<string> = new Set([
 
   "github.openIssue",
   "github.openPR",
-
-  "agent.launch",
-  "agent.terminal",
 ]);
 
 function unionSet(...sets: ReadonlySet<string>[]): ReadonlySet<string> {

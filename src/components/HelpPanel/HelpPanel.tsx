@@ -13,13 +13,10 @@ import {
 import {
   usePanelStore,
   getTerminalRefreshTier,
-  useAgentSettingsStore,
   useCliAvailabilityStore,
   useProjectStore,
 } from "@/store";
 import { getAgentConfig } from "@/config/agents";
-import { getAgentSettingsEntry } from "@shared/types";
-import { ASSISTANT_FAST_MODELS } from "@shared/config/agentRegistry";
 import { actionService } from "@/services/ActionService";
 import { TerminalRefreshTier } from "@/types";
 import { logError } from "@/utils/logger";
@@ -28,18 +25,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 const RESIZE_STEP = 10;
 
-const HELP_PROMPT = "I need help with Daintree. Please briefly tell me how you can help.";
-
-function resolveAssistantModel(agentId: string): string | undefined {
-  const settings = useAgentSettingsStore.getState().settings;
-  const entry = getAgentSettingsEntry(settings, agentId);
-  const stored = entry.assistantModelId as string | undefined;
-  const cfg = getAgentConfig(agentId);
-  if (stored && cfg?.models?.some((m) => m.id === stored)) return stored;
-  const fast = ASSISTANT_FAST_MODELS[agentId];
-  if (fast && cfg?.models?.some((m) => m.id === fast)) return fast;
-  return undefined;
-}
+const HELP_PROMPT = "Briefly tell me what you can do.";
 
 function notifyLaunchFailed(agentId: string, reason: string): void {
   const cfg = getAgentConfig(agentId);
@@ -184,7 +170,6 @@ export function HelpPanel() {
         const projectId = useProjectStore.getState().currentProject?.id ?? null;
         const env = buildHelpEnv(session, projectId);
 
-        const model = resolveAssistantModel(launchAgentId);
         const result = await actionService.dispatch<{ terminalId: string | null }>(
           "agent.launch",
           {
@@ -193,7 +178,6 @@ export function HelpPanel() {
             cwd,
             prompt: HELP_PROMPT,
             ephemeral: true,
-            ...(model && { model }),
             ...(env && { env }),
           },
           { source: "user" }
@@ -335,7 +319,6 @@ export function HelpPanel() {
         const projectId = useProjectStore.getState().currentProject?.id ?? null;
         const env = buildHelpEnv(session, projectId);
 
-        const model = resolveAssistantModel(selectedAgentId);
         const result = await actionService.dispatch<{ terminalId: string | null }>(
           "agent.launch",
           {
@@ -344,7 +327,6 @@ export function HelpPanel() {
             cwd,
             prompt: HELP_PROMPT,
             ephemeral: true,
-            ...(model && { model }),
             ...(env && { env }),
           },
           { source: "user" }

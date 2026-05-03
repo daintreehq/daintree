@@ -203,20 +203,42 @@ describe("HelpSessionService", () => {
     expect(service.validateToken(result.token)).toBe(false);
   });
 
-  it("removes the session dir on revoke", async () => {
+  it("preserves the per-project session dir on revoke so Claude's workspace-trust acceptance carries across launches", async () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
     await fs.access(result.sessionPath);
     await service.revokeSession(result.sessionId);
 
-    let exists = true;
-    try {
-      await fs.access(result.sessionPath);
-    } catch {
-      exists = false;
-    }
-    expect(exists).toBe(false);
+    // Bearer is invalidated in-memory, but the dir stays — next launch
+    // overwrites the .mcp.json with a fresh token rather than triggering a
+    // new "Do you trust this folder?" prompt for the same project.
+    expect(service.validateToken(result.token)).toBe(false);
+    await fs.access(result.sessionPath);
+  });
+
+  it("reuses the same per-project session dir across consecutive launches with a freshly rotated bearer", async () => {
+    const first = await service.provisionSession(provisionInput());
+    if (!first) throw new Error("expected first provision");
+    await service.revokeSession(first.sessionId);
+
+    const second = await service.provisionSession(provisionInput());
+    if (!second) throw new Error("expected second provision");
+
+    expect(second.sessionPath).toBe(first.sessionPath);
+    expect(second.token).not.toBe(first.token);
+
+    const mcp = JSON.parse(await fs.readFile(path.join(second.sessionPath, ".mcp.json"), "utf-8"));
+    expect(mcp.mcpServers.daintree.headers.Authorization).toBe(`Bearer ${second.token}`);
+    expect(service.validateToken(first.token)).toBe(false);
+    expect(service.validateToken(second.token)).toBe("action");
+  });
+
+  it("derives different session dirs for different project paths", async () => {
+    const a = await service.provisionSession({ ...provisionInput(), projectPath: "/tmp/proj-a" });
+    const b = await service.provisionSession({ ...provisionInput(), projectPath: "/tmp/proj-b" });
+    if (!a || !b) throw new Error("expected provisions");
+    expect(a.sessionPath).not.toBe(b.sessionPath);
   });
 
   it("revokeByWebContentsId removes only sessions bound to the matching webContents", async () => {
@@ -239,52 +261,28 @@ describe("HelpSessionService", () => {
     expect(service.validateToken(b.token)).toBe(false);
   });
 
-  it("gcStaleSessions removes every non-live dir on disk and preserves live in-memory sessions", async () => {
-    // Tokens never survive a process restart, so any dir not protected by a
-    // live in-memory record is unreachable — GC must wipe it regardless of
-    // meta.json TTL to limit literal-bearer exposure on disk.
+  it("gcStaleSessions sweeps legacy UUID-named dirs from the old per-launch model and preserves per-project dirs", async () => {
+    // Per-project dirs (16-hex-char path-hash names) persist across launches
+    // so the user's Claude workspace-trust acceptance carries over. GC only
+    // removes dirs whose names don't match the per-project naming scheme —
+    // i.e. legacy UUID-named dirs from the old per-launch model.
 
-    // Pre-create a session dir with no meta.json (crash mid-provision)
-    const noMetaDir = path.join(userData, "help-sessions", "no-meta-session");
-    await fs.mkdir(noMetaDir, { recursive: true });
-
-    // Pre-create an expired session dir
-    const expiredDir = path.join(userData, "help-sessions", "expired-session");
-    await fs.mkdir(expiredDir, { recursive: true });
-    await fs.writeFile(
-      path.join(expiredDir, "meta.json"),
-      JSON.stringify({
-        sessionId: "expired-session",
-        createdAt: 0,
-        expiresAt: 1,
-        windowId: 0,
-        projectId: "x",
-      })
+    const legacyUuidDir = path.join(
+      userData,
+      "help-sessions",
+      "550e8400-e29b-41d4-a716-446655440000"
     );
+    await fs.mkdir(legacyUuidDir, { recursive: true });
 
-    // Pre-create a session dir whose meta.json claims it's still valid for
-    // days. Its bearer token is dead the moment the previous process died,
-    // so GC must still remove it.
-    const futureValidDir = path.join(userData, "help-sessions", "future-valid-session");
-    await fs.mkdir(futureValidDir, { recursive: true });
-    await fs.writeFile(
-      path.join(futureValidDir, "meta.json"),
-      JSON.stringify({
-        sessionId: "future-valid-session",
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
-        windowId: 0,
-        projectId: "x",
-      })
-    );
+    const arbitraryNamedDir = path.join(userData, "help-sessions", "stale-session");
+    await fs.mkdir(arbitraryNamedDir, { recursive: true });
 
-    // A fresh, live session should NOT be touched
     const fresh = await service.provisionSession(provisionInput());
     if (!fresh) throw new Error("expected fresh provision");
 
     await service.gcStaleSessions();
 
-    for (const dir of [noMetaDir, expiredDir, futureValidDir]) {
+    for (const dir of [legacyUuidDir, arbitraryNamedDir]) {
       let exists = true;
       try {
         await fs.access(dir);

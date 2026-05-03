@@ -1595,15 +1595,19 @@ describe("McpServerService", () => {
         title: "Agent Terminal",
         description: "Drive a running agent",
       }),
+      createManifestEntry({
+        id: "agent.launch" as ActionId,
+        title: "Launch Agent",
+        description: "Spawn a registered agent CLI",
+      }),
     ];
 
-    const SYSTEM_ONLY_TOOLS = [
-      "git.commit",
-      "git.push",
-      "worktree.delete",
-      "terminal.sendCommand",
-      "agent.terminal",
-    ] as const;
+    // Spawning terminals/agents and driving them via sent commands is
+    // intentionally action-tier — see ACTION_TIER_ADDONS in McpServerService.
+    // System tier is reserved for destructive or externally-visible ops.
+    const ACTION_TIER_TOOLS = ["terminal.sendCommand", "agent.terminal", "agent.launch"] as const;
+
+    const SYSTEM_ONLY_TOOLS = ["git.commit", "git.push", "worktree.delete"] as const;
 
     it("workbench tier exposes only read-only introspection tools", async () => {
       paneTokenTiers.set("token-wb", "workbench");
@@ -1622,7 +1626,7 @@ describe("McpServerService", () => {
       expect(ids).not.toContain("git.commit");
     });
 
-    it("action tier adds non-destructive mutations but excludes irreversible ones", async () => {
+    it("action tier adds non-destructive mutations and terminal/agent spawning, but excludes irreversible ones", async () => {
       paneTokenTiers.set("token-action", "action");
       const { window } = createMockWindow({ getManifest: tierManifest });
 
@@ -1635,6 +1639,9 @@ describe("McpServerService", () => {
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
       expect(ids).toContain("worktree.create");
+      for (const id of ACTION_TIER_TOOLS) {
+        expect(ids).toContain(id);
+      }
       for (const id of SYSTEM_ONLY_TOOLS) {
         expect(ids).not.toContain(id);
       }
@@ -1653,6 +1660,9 @@ describe("McpServerService", () => {
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
       expect(ids).toContain("worktree.create");
+      for (const id of ACTION_TIER_TOOLS) {
+        expect(ids).toContain(id);
+      }
       for (const id of SYSTEM_ONLY_TOOLS) {
         expect(ids).toContain(id);
       }
