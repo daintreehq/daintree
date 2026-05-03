@@ -49,7 +49,7 @@ describe("helpPanelStore persistence migration", () => {
     vi.restoreAllMocks();
   });
 
-  it("rehydrates a legacy unversioned blob and preserves in-range width", async () => {
+  it("rehydrates a legacy unversioned blob and preserves an assistant-supported preferredAgentId", async () => {
     const legacyBlob = JSON.stringify({
       state: {
         width: 500,
@@ -87,7 +87,43 @@ describe("helpPanelStore persistence migration", () => {
     expect(store.getState().width).toBeGreaterThanOrEqual(HELP_PANEL_MIN_WIDTH);
   });
 
-  it("writes version: 0 on the next persist after rehydration", async () => {
+  it("clears a legacy preferredAgentId for an agent without assistant wiring (issue #6612)", async () => {
+    const legacyBlob = JSON.stringify({
+      state: { width: 420, preferredAgentId: "gemini" },
+    });
+    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().preferredAgentId).toBeNull();
+    expect(store.getState().width).toBe(420);
+  });
+
+  it("preserves a v0 preferredAgentId when migrating to v1 if the agent is supported", async () => {
+    const v0Blob = JSON.stringify({
+      version: 0,
+      state: { width: 420, preferredAgentId: "claude" },
+    });
+    installLocalStorage({ [STORAGE_KEY]: v0Blob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().preferredAgentId).toBe("claude");
+  });
+
+  it("clears a v0 preferredAgentId when migrating to v1 if the agent is unsupported", async () => {
+    const v0Blob = JSON.stringify({
+      version: 0,
+      state: { width: 420, preferredAgentId: "codex" },
+    });
+    installLocalStorage({ [STORAGE_KEY]: v0Blob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().preferredAgentId).toBeNull();
+  });
+
+  it("writes version: 1 with a cleared preferredAgentId after rehydrating an unsupported v0 agent", async () => {
     const legacyBlob = JSON.stringify({
       state: { width: 420, preferredAgentId: "gemini" },
     });
@@ -102,8 +138,8 @@ describe("helpPanelStore persistence migration", () => {
       version: number;
       state: { width: number; preferredAgentId: string | null };
     };
-    expect(parsed.version).toBe(0);
+    expect(parsed.version).toBe(1);
     expect(parsed.state.width).toBe(450);
-    expect(parsed.state.preferredAgentId).toBe("gemini");
+    expect(parsed.state.preferredAgentId).toBeNull();
   });
 });

@@ -15,6 +15,7 @@ export const config: AgentConfig = {
   color: "#CC785C",
   iconId: "claude",
   supportsContextInjection: true,
+  supportsAssistant: true,
   shortcut: "Cmd/Ctrl+Alt+C",
   usageUrl: "https://claude.ai/settings/usage",
   version: {

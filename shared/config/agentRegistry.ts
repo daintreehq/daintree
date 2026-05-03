@@ -267,6 +267,16 @@ export interface AgentConfig {
   /** Available models for per-panel model selection at launch time */
   models?: AgentModelConfig[];
   supportsContextInjection: boolean;
+  /**
+   * When `true`, this agent has the full assistant wiring required for the
+   * Daintree help panel — MCP overlay, `.claude/settings.json` permission
+   * bake, bearer-token `.mcp.json`, and trust-dialog handling. Only agents
+   * with this flag are offered in `HelpAgentPicker`. Today this is Claude
+   * only; flip the flag on another agent's config when its overlay wiring
+   * lands. Omit (or set false) to keep an agent out of the help-panel
+   * picker even when its CLI is installed.
+   */
+  supportsAssistant?: boolean;
   shortcut?: string | null;
   tooltip?: string;
   usageUrl?: string;
@@ -538,6 +548,16 @@ export function getAgentModelConfig(
 ): AgentModelConfig | undefined {
   const config = getEffectiveAgentConfig(agentId);
   return config?.models?.find((m) => m.id === modelId);
+}
+
+/**
+ * IDs of built-in agents that pass the `supportsAssistant` gate. Used by the
+ * HelpPanel agent picker to filter the visible options and by the
+ * `helpPanelStore` rehydration guard to drop stale persisted preferences for
+ * agents that aren't (yet) wired for the assistant overlay.
+ */
+export function getAssistantSupportedAgentIds(): string[] {
+  return BUILT_IN_AGENT_IDS.filter((id) => AGENT_REGISTRY[id]?.supportsAssistant === true);
 }
 
 /**

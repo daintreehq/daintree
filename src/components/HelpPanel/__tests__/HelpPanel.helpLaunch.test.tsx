@@ -10,6 +10,7 @@ const {
   mockMarkTerminal,
   mockProvisionSession,
   mockRevokeSession,
+  mockGetAssistantSupportedAgentIds,
   helpPanelState,
   panelStoreState,
   cliAvailabilityState,
@@ -23,6 +24,7 @@ const {
   mockMarkTerminal: vi.fn().mockResolvedValue(undefined),
   mockProvisionSession: vi.fn().mockResolvedValue(null),
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
+  mockGetAssistantSupportedAgentIds: vi.fn(() => ["claude"]),
   helpPanelState: {
     isOpen: true,
     width: 380,
@@ -102,6 +104,7 @@ vi.mock("@/config/agents", () => ({
       gemini: { name: "Gemini", icon: () => null, models: [] },
       codex: { name: "Codex", icon: () => null, models: [] },
     })[id],
+  getAssistantSupportedAgentIds: () => mockGetAssistantSupportedAgentIds(),
 }));
 
 vi.mock("@shared/types", async (importOriginal) => {
@@ -179,10 +182,18 @@ vi.mock("@/types", () => ({
 
 // Stub HelpAgentPicker to expose a click target tied to the onSelectAgent prop
 vi.mock("../HelpAgentPicker", () => ({
-  HelpAgentPicker: ({ onSelectAgent }: { onSelectAgent: (id: string) => void }) => (
-    <button type="button" data-testid="pick-claude" onClick={() => onSelectAgent("claude")}>
-      Pick Claude
-    </button>
+  HelpAgentPicker: ({
+    onSelectAgent,
+    supportedAgentIds,
+  }: {
+    onSelectAgent: (id: string) => void;
+    supportedAgentIds: string[];
+  }) => (
+    <div data-testid="help-agent-picker" data-supported={supportedAgentIds.join(",")}>
+      <button type="button" data-testid="pick-claude" onClick={() => onSelectAgent("claude")}>
+        Pick Claude
+      </button>
+    </div>
   ),
 }));
 
@@ -222,6 +233,8 @@ function resetState() {
   mockProvisionSession.mockResolvedValue(null);
   mockRevokeSession.mockReset();
   mockRevokeSession.mockResolvedValue(undefined);
+  mockGetAssistantSupportedAgentIds.mockReset();
+  mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
 }
 
 beforeEach(() => {
@@ -767,5 +780,84 @@ describe("HelpPanel — hasAutoLaunched stale reset (regression)", () => {
     });
 
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-gemini", "gemini", null);
+  });
+});
+
+describe("HelpPanel — single-supported-agent auto-skip (issue #6612)", () => {
+  it("auto-launches the only supported agent without requiring user selection", async () => {
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "auto-skip-term" } });
+
+    await act(async () => {
+      render(<HelpPanel />);
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "claude" }),
+      { source: "user" }
+    );
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("auto-skip-term", "claude", null);
+  });
+
+  it("does not auto-skip when more than one supported agent is installed", async () => {
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "should-not-fire" } });
+
+    await act(async () => {
+      render(<HelpPanel />);
+    });
+
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-skip when no supported agent is installed", async () => {
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "missing", gemini: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "should-not-fire" } });
+
+    await act(async () => {
+      render(<HelpPanel />);
+    });
+
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-skip while CLI availability data is still loading", async () => {
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.hasRealData = false;
+    cliAvailabilityState.availability = { claude: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "should-not-fire" } });
+
+    await act(async () => {
+      render(<HelpPanel />);
+    });
+
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
+  });
+
+  it("passes only assistant-supported installed agents to HelpAgentPicker", async () => {
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready", gemini: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "should-not-fire" } });
+
+    const { getByTestId } = render(<HelpPanel />);
+
+    expect(getByTestId("help-agent-picker").dataset.supported).toBe("claude,codex");
   });
 });

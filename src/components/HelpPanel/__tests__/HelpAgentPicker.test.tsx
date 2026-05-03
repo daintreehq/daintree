@@ -20,10 +20,6 @@ vi.mock("@/components/ui/button", () => ({
   ),
 }));
 
-vi.mock("@shared/config/agentIds", () => ({
-  BUILT_IN_AGENT_IDS: ["claude", "gemini", "codex"],
-}));
-
 vi.mock("@/config/agents", () => ({
   AGENT_REGISTRY: {
     claude: { name: "Claude", iconId: "claude", color: "#000", icon: () => null, tooltip: "c" },
@@ -49,29 +45,24 @@ describe("HelpAgentPicker", () => {
     cliAvailabilityState.availability = {};
   });
 
-  it("renders installed agent regardless of pin state (issue #5117)", () => {
+  it("renders only the agents passed via supportedAgentIds (issue #6612)", () => {
     cliAvailabilityState.availability = {
       claude: "ready",
-      gemini: "installed",
-      codex: "missing",
+      gemini: "ready",
+      codex: "ready",
     };
 
-    render(<HelpAgentPicker onSelectAgent={vi.fn()} />);
+    render(<HelpAgentPicker onSelectAgent={vi.fn()} supportedAgentIds={["claude"]} />);
 
     expect(screen.getByText("Claude")).toBeTruthy();
-    expect(screen.getByText("Gemini")).toBeTruthy();
+    expect(screen.queryByText("Gemini")).toBeNull();
     expect(screen.queryByText("Codex")).toBeNull();
   });
 
-  it("renders empty state when real data says no agents are installed — with no 'Enable' copy", () => {
-    cliAvailabilityState.hasRealData = true;
-    cliAvailabilityState.availability = {
-      claude: "missing",
-      gemini: "missing",
-      codex: "missing",
-    };
-
-    const { container } = render(<HelpAgentPicker onSelectAgent={vi.fn()} />);
+  it("renders empty state when supportedAgentIds is empty", () => {
+    const { container } = render(
+      <HelpAgentPicker onSelectAgent={vi.fn()} supportedAgentIds={[]} />
+    );
 
     expect(screen.getByText("No agents are installed.")).toBeTruthy();
     expect(screen.getByText("Run setup wizard")).toBeTruthy();
@@ -79,15 +70,8 @@ describe("HelpAgentPicker", () => {
   });
 
   it("setup wizard CTA dispatches daintree:open-agent-setup-wizard", () => {
-    cliAvailabilityState.hasRealData = true;
-    cliAvailabilityState.availability = {
-      claude: "missing",
-      gemini: "missing",
-      codex: "missing",
-    };
-
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
-    render(<HelpAgentPicker onSelectAgent={vi.fn()} />);
+    render(<HelpAgentPicker onSelectAgent={vi.fn()} supportedAgentIds={[]} />);
 
     fireEvent.click(screen.getByText("Run setup wizard"));
 
@@ -103,34 +87,19 @@ describe("HelpAgentPicker", () => {
     // hasRealData=false means neither cache nor probe has landed — don't show
     // "No agents installed" prematurely (avoids flash on cold open with cache).
     cliAvailabilityState.hasRealData = false;
-    cliAvailabilityState.availability = {};
 
-    render(<HelpAgentPicker onSelectAgent={vi.fn()} />);
+    render(<HelpAgentPicker onSelectAgent={vi.fn()} supportedAgentIds={[]} />);
 
     expect(screen.getByText("Checking for installed agents…")).toBeTruthy();
     expect(screen.queryByText("No agents are installed.")).toBeNull();
     expect(screen.queryByText("Claude")).toBeNull();
   });
 
-  it("renders installed agents once cached data lands even before first live probe", () => {
-    // hasRealData=true flips when localStorage cache hydrates the store, even without
-    // a successful IPC call yet. Users with previously-installed agents should see
-    // them immediately on cold open.
-    cliAvailabilityState.hasRealData = true;
-    cliAvailabilityState.availability = { claude: "ready", gemini: "missing", codex: "missing" };
-
-    render(<HelpAgentPicker onSelectAgent={vi.fn()} />);
-
-    expect(screen.getByText("Claude")).toBeTruthy();
-    expect(screen.queryByText("Gemini")).toBeNull();
-    expect(screen.queryByText("Checking for installed agents…")).toBeNull();
-  });
-
   it("calls onSelectAgent when an installed agent is clicked", () => {
-    cliAvailabilityState.availability = { claude: "ready", gemini: "missing", codex: "missing" };
+    cliAvailabilityState.availability = { claude: "ready" };
 
     const onSelectAgent = vi.fn();
-    render(<HelpAgentPicker onSelectAgent={onSelectAgent} />);
+    render(<HelpAgentPicker onSelectAgent={onSelectAgent} supportedAgentIds={["claude"]} />);
 
     fireEvent.click(screen.getByText("Claude"));
     expect(onSelectAgent).toHaveBeenCalledWith("claude");

@@ -9,9 +9,10 @@ import {
   getEffectiveAgentIds,
   isEffectivelyRegisteredAgent,
   getAgentDisplayTitle,
+  getAssistantSupportedAgentIds,
 } from "../../shared/config/agentRegistry";
 
-export { getAgentDisplayTitle };
+export { getAgentDisplayTitle, getAssistantSupportedAgentIds };
 export type { AgentPreset, AgentProviderTemplate };
 import { resolveAgentIcon } from "./agentIcons";
 

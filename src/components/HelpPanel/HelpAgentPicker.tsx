@@ -1,29 +1,29 @@
-import { useMemo, useCallback } from "react";
+import { useCallback } from "react";
 import { Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 
 interface HelpAgentPickerProps {
   onSelectAgent: (agentId: string) => void;
+  /**
+   * IDs of agents that are both wired for the assistant overlay AND installed
+   * locally. Computed by `HelpPanel` so the picker and the single-supported
+   * agent auto-skip effect agree on the visible set. The picker just renders
+   * this list; it still reads `hasRealData` to distinguish "loading" from
+   * "no installed agents".
+   */
+  supportedAgentIds: string[];
 }
 
-export function HelpAgentPicker({ onSelectAgent }: HelpAgentPickerProps) {
-  const availability = useCliAvailabilityStore((s) => s.availability);
+export function HelpAgentPicker({ onSelectAgent, supportedAgentIds }: HelpAgentPickerProps) {
   // Gate on `hasRealData` (not `isInitialized`): `isInitialized` flips true even on probe
   // failure, but `hasRealData` waits for a real result — from localStorage cache or a
   // successful IPC — so users with previously-installed agents don't see the
   // "No agents are installed" empty state flash on cold open.
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
-
-  const installedAgents = useMemo(() => {
-    if (!hasRealData) return [];
-    return BUILT_IN_AGENT_IDS.filter((id) => isAgentInstalled(availability[id]));
-  }, [hasRealData, availability]);
 
   const handleOpenSetupWizard = useCallback(() => {
     window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
@@ -37,7 +37,7 @@ export function HelpAgentPicker({ onSelectAgent }: HelpAgentPickerProps) {
     );
   }
 
-  if (installedAgents.length === 0) {
+  if (supportedAgentIds.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
         <p className="text-sm text-daintree-text/50">No agents are installed.</p>
@@ -67,7 +67,7 @@ export function HelpAgentPicker({ onSelectAgent }: HelpAgentPickerProps) {
       </div>
 
       <div className="flex flex-col gap-2">
-        {installedAgents.map((id) => {
+        {supportedAgentIds.map((id) => {
           const config = AGENT_REGISTRY[id];
           if (!config) return null;
           const Icon = config.icon;

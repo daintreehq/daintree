@@ -16,7 +16,8 @@ import {
   useCliAvailabilityStore,
   useProjectStore,
 } from "@/store";
-import { getAgentConfig } from "@/config/agents";
+import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
+import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { actionService } from "@/services/ActionService";
 import { TerminalRefreshTier } from "@/types";
 import { logError } from "@/utils/logger";
@@ -101,8 +102,20 @@ export function HelpPanel() {
   const terminal = usePanelStore((s) => (terminalId ? s.panelsById[terminalId] : undefined));
   const removePanel = usePanelStore((s) => s.removePanel);
   const cliDetail = useCliAvailabilityStore((s) => (agentId ? s.details[agentId] : undefined));
+  const cliAvailability = useCliAvailabilityStore((s) => s.availability);
+  const cliHasRealData = useCliAvailabilityStore((s) => s.hasRealData);
 
   const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
+
+  // Intersection of "wired for the assistant overlay" and "CLI is installed".
+  // Drives the picker's visible options and the single-supported-agent
+  // auto-skip effect below. Recomputes only when availability or load state
+  // changes — `getAssistantSupportedAgentIds()` reads from a static registry.
+  const supportedInstalledAgentIds = useMemo(() => {
+    if (!cliHasRealData) return [];
+    return getAssistantSupportedAgentIds().filter((id) => isAgentInstalled(cliAvailability[id]));
+  }, [cliHasRealData, cliAvailability]);
+  const supportedInstalledAgentIdsKey = supportedInstalledAgentIds.join(",");
 
   // Tracks a session minted before `setTerminal` commits its sessionId to the
   // store. If the user closes/navigates while `agent.launch` is in flight,
@@ -363,6 +376,31 @@ export function HelpPanel() {
     [removePanel, clearTerminal]
   );
 
+  // Single-supported-agent auto-skip: when only one assistant-supported agent
+  // is installed and there's no persisted preference, skip the picker and
+  // launch directly. Mutually exclusive with the preferred-agent auto-launch
+  // (which only runs when `preferredAgentId` is set), so they share the same
+  // `hasAutoLaunched` ref to prevent any double-fire.
+  useEffect(() => {
+    if (!isOpen || terminalId || preferredAgentId || hasAutoLaunched.current) return;
+    if (supportedInstalledAgentIds.length !== 1) return;
+    const onlyAgentId = supportedInstalledAgentIds[0];
+    if (!onlyAgentId) return;
+    hasAutoLaunched.current = true;
+    safeFireAndForget(handleSelectAgent(onlyAgentId), {
+      context: "Auto-launching single supported help agent",
+    });
+    // The agent-id key is included in deps so a change in installed agents
+    // (e.g. user installs a second supported CLI) re-evaluates the gate.
+  }, [
+    isOpen,
+    terminalId,
+    preferredAgentId,
+    supportedInstalledAgentIdsKey,
+    supportedInstalledAgentIds,
+    handleSelectAgent,
+  ]);
+
   const handleBack = useCallback(() => {
     const { sessionId } = useHelpPanelStore.getState();
     if (terminalId) {
@@ -533,7 +571,10 @@ export function HelpPanel() {
             </div>
           )
         ) : (
-          <HelpAgentPicker onSelectAgent={handleSelectAgent} />
+          <HelpAgentPicker
+            onSelectAgent={handleSelectAgent}
+            supportedAgentIds={supportedInstalledAgentIds}
+          />
         )}
       </div>
 
