@@ -542,6 +542,9 @@ describe("McpServerService", () => {
 
     expect(safeTool).toBeDefined();
     expect(dangerousTool).toBeDefined();
+    expect(safeTool?.description).toBe("Read the action registry");
+    expect(dangerousTool?.description).not.toMatch(/^\[/);
+    expect(dangerousTool?.description).toContain("Delete a worktree");
     expect(dangerousTool?.description).toContain("Requires explicit confirmation");
     expect(safeTool?.inputSchema.additionalProperties).toBe(false);
     expect(dangerousTool?.inputSchema.additionalProperties).toBe(false);
