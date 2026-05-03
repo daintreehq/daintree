@@ -1109,14 +1109,14 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         if (!targetWorktreeId) throw new Error("No worktree selected");
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
-        if (!worktree?.hasStatusCommand) {
+        if (!worktree) throw new Error("Worktree not found");
+        if (!worktree.hasStatusCommand) {
           return { configured: false, status: null } as const;
         }
         try {
           await worktreeClient.resourceAction(targetWorktreeId, "status");
         } catch (err) {
           notifyWorktreeResourceError(err, "Status check failed", "Resource status check failed");
-          return { configured: true, status: null } as const;
         }
         const updated = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
         return { configured: true, status: updated?.resourceStatus ?? null } as const;
