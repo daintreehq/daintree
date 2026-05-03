@@ -2309,7 +2309,7 @@ export class McpServerService {
   }
 
   private buildToolDescription(entry: ActionManifestEntry): string {
-    let description = `[${entry.category}] ${entry.title}: ${entry.description}`;
+    let description = entry.description;
     if (entry.danger === "confirm") {
       description += " Requires explicit confirmation via _meta.confirmed=true.";
     }
