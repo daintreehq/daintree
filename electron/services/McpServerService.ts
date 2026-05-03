@@ -197,6 +197,8 @@ const WORKBENCH_TOOLS: ReadonlySet<string> = new Set([
   "terminal.list",
   "terminal.getOutput",
 
+  "agent.getState",
+
   "slashCommands.list",
 
   "git.getProjectPulse",
@@ -302,6 +304,7 @@ const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
 
   "agent.launch",
   "agent.terminal",
+  "agent.getState",
 
   "git.getProjectPulse",
   "git.getFileDiff",

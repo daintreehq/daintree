@@ -61,6 +61,7 @@ export function registerTerminalQueryActions(
         agentId: t.launchAgentId ?? null,
         agentState: t.agentState ?? null,
         isInputLocked: t.isInputLocked ?? false,
+        isFocused: t.id === state.focusedId,
       }));
     },
   }));

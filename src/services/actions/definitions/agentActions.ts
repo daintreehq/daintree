@@ -189,6 +189,50 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     },
   }));
 
+  actions.set("agent.getState", () => ({
+    id: "agent.getState",
+    title: "Get Agent State",
+    description:
+      "Query agent state by agentId; returns agentId, state, lastTransitionAt, terminalId, found",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({
+      agentId: z
+        .string()
+        .min(1)
+        .describe("Agent ID to look up (e.g., 'claude', 'codex'). From terminal.list[].agentId."),
+    }),
+    run: async (args: unknown) => {
+      const { agentId } = args as { agentId: string };
+      const state = usePanelStore.getState();
+      for (const id of state.panelIds) {
+        const panel = state.panelsById[id];
+        // Skip ephemeral panels (e.g. the Daintree Assistant's own dock
+        // terminal) for the same reason terminal.list filters them — the
+        // assistant must not be able to introspect its own process.
+        if (panel?.ephemeral === true) continue;
+        if (panel?.launchAgentId === agentId) {
+          return {
+            agentId,
+            state: panel.agentState ?? null,
+            lastTransitionAt: panel.lastStateChange ?? null,
+            terminalId: panel.id,
+            found: true,
+          };
+        }
+      }
+      return {
+        agentId,
+        state: null,
+        lastTransitionAt: null,
+        terminalId: null,
+        found: false,
+      };
+    },
+  }));
+
   actions.set("agent.focusPreviousAgent", () => ({
     id: "agent.focusPreviousAgent",
     title: "Focus Previous Agent",
