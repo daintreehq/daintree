@@ -62,6 +62,7 @@ interface BundledClaudeSettings {
     deny?: string[];
   };
   defaultMode?: string;
+  enableAllProjectMcpServers?: boolean;
   [key: string]: unknown;
 }
 
@@ -119,7 +120,7 @@ export class HelpSessionService {
     await fs.cp(helpFolder, sessionPath, { recursive: true });
 
     const port = await this.getMcpPort(settings.daintreeControl);
-    await this.writeMcpConfig(sessionPath, settings, port);
+    await this.writeMcpConfig(sessionPath, settings, port, token);
     await this.writeClaudeSettings(sessionPath, helpFolder, settings);
 
     const now = Date.now();
@@ -290,7 +291,8 @@ export class HelpSessionService {
   private async writeMcpConfig(
     sessionPath: string,
     settings: { daintreeControl: boolean; docSearch: boolean },
-    port: number | null
+    port: number | null,
+    token: string
   ): Promise<void> {
     const mcpServers: Record<string, unknown> = {};
     if (settings.docSearch) {
@@ -300,10 +302,16 @@ export class HelpSessionService {
       };
     }
     if (settings.daintreeControl && port) {
+      // Bake the literal token into the file rather than `${DAINTREE_MCP_TOKEN}`
+      // substitution. Claude Code's env substitution in `headers` is broken
+      // (sends the literal placeholder, gets 401). Same reason as
+      // McpPaneConfigService.ts. The session dir is 0o700 and the file is
+      // 0o600, then revoked on session exit, so the literal-on-disk window is
+      // bounded by the session lifetime.
       mcpServers["daintree"] = {
         type: "sse",
         url: `http://127.0.0.1:${port}/sse`,
-        headers: { Authorization: "Bearer ${DAINTREE_MCP_TOKEN}" },
+        headers: { Authorization: `Bearer ${token}` },
       };
     }
     const target = path.join(sessionPath, ".mcp.json");
@@ -330,6 +338,11 @@ export class HelpSessionService {
     if (settings.daintreeControl && !merged.permissions.allow.includes("mcp__daintree__*")) {
       merged.permissions.allow.push("mcp__daintree__*");
     }
+
+    // Auto-trust the project-scoped MCP servers we wrote into the session-dir
+    // .mcp.json. Without this, Claude Code prompts the user to approve each
+    // server interactively on first launch, which would block the assistant.
+    merged.enableAllProjectMcpServers = true;
 
     if (settings.skipPermissions) {
       merged.defaultMode = "bypassPermissions";

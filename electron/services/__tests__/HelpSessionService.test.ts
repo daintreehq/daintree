@@ -120,7 +120,10 @@ describe("HelpSessionService", () => {
     expect(result.windowId).toBe(7);
   });
 
-  it("creates a session dir with a .mcp.json that uses bare Bearer ${DAINTREE_MCP_TOKEN}", async () => {
+  it("creates a session dir with a .mcp.json that bakes the literal session token into the Authorization header", async () => {
+    // Claude Code's `${VAR}` substitution in `headers` is broken (sends the
+    // literal placeholder, gets 401) — must bake the literal token. Same
+    // reason as McpPaneConfigService.ts.
     const result = await service.provisionSession(provisionInput());
     expect(result).not.toBeNull();
     if (!result) throw new Error("expected result");
@@ -130,9 +133,20 @@ describe("HelpSessionService", () => {
     expect(mcp.mcpServers.daintree).toEqual({
       type: "sse",
       url: "http://127.0.0.1:45454/sse",
-      headers: { Authorization: "Bearer ${DAINTREE_MCP_TOKEN}" },
+      headers: { Authorization: `Bearer ${result.token}` },
     });
+    expect(mcp.mcpServers.daintree.headers.Authorization).not.toContain("${");
     expect(mcp.mcpServers["daintree-docs"]).toBeDefined();
+  });
+
+  it("sets enableAllProjectMcpServers in .claude/settings.json so Claude auto-trusts the bundled servers", async () => {
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    expect(settings.enableAllProjectMcpServers).toBe(true);
   });
 
   it("appends mcp__daintree__* to the bundled allowlist when daintreeControl is enabled", async () => {
