@@ -223,11 +223,26 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const isHelpLaunch = helpTier !== false && launchAgentId === "claude" && safeCommand.length > 0;
 
     if (isHelpLaunch) {
+      const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
       if (helpTier === "system") {
-        const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
         if (dangerous && !safeCommand.includes(dangerous)) {
           safeCommand = `${safeCommand} ${dangerous}`;
         }
+      } else if (dangerous) {
+        // The help-tier classification is the source of truth for whether the
+        // assistant runs in dangerous mode — `helpAssistant.skipPermissions`
+        // governs it, not the global Claude agent settings. Strip the flag if
+        // it leaked in via `entry.dangerousEnabled` from the agent registry,
+        // otherwise an `action`-tier session would silently skip permission
+        // prompts despite the assistant config saying otherwise.
+        const stripPattern = new RegExp(
+          `(^|\\s)${dangerous.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}(?=\\s|$)`,
+          "g"
+        );
+        safeCommand = safeCommand
+          .replace(stripPattern, "$1")
+          .replace(/\s{2,}/g, " ")
+          .trim();
       }
     } else if (
       launchAgentId === "claude" &&

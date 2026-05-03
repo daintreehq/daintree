@@ -239,12 +239,16 @@ describe("HelpSessionService", () => {
     expect(service.validateToken(b.token)).toBe(false);
   });
 
-  it("gcStaleSessions removes dirs whose meta.json is missing or expired", async () => {
-    // Pre-create a stale session dir on disk (no meta.json)
-    const staleDir = path.join(userData, "help-sessions", "stale-session");
-    await fs.mkdir(staleDir, { recursive: true });
+  it("gcStaleSessions removes every non-live dir on disk and preserves live in-memory sessions", async () => {
+    // Tokens never survive a process restart, so any dir not protected by a
+    // live in-memory record is unreachable — GC must wipe it regardless of
+    // meta.json TTL to limit literal-bearer exposure on disk.
 
-    // Pre-create an expired session dir with meta.json
+    // Pre-create a session dir with no meta.json (crash mid-provision)
+    const noMetaDir = path.join(userData, "help-sessions", "no-meta-session");
+    await fs.mkdir(noMetaDir, { recursive: true });
+
+    // Pre-create an expired session dir
     const expiredDir = path.join(userData, "help-sessions", "expired-session");
     await fs.mkdir(expiredDir, { recursive: true });
     await fs.writeFile(
@@ -258,27 +262,37 @@ describe("HelpSessionService", () => {
       })
     );
 
+    // Pre-create a session dir whose meta.json claims it's still valid for
+    // days. Its bearer token is dead the moment the previous process died,
+    // so GC must still remove it.
+    const futureValidDir = path.join(userData, "help-sessions", "future-valid-session");
+    await fs.mkdir(futureValidDir, { recursive: true });
+    await fs.writeFile(
+      path.join(futureValidDir, "meta.json"),
+      JSON.stringify({
+        sessionId: "future-valid-session",
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        windowId: 0,
+        projectId: "x",
+      })
+    );
+
     // A fresh, live session should NOT be touched
     const fresh = await service.provisionSession(provisionInput());
     if (!fresh) throw new Error("expected fresh provision");
 
     await service.gcStaleSessions();
 
-    let staleExists = true;
-    try {
-      await fs.access(staleDir);
-    } catch {
-      staleExists = false;
+    for (const dir of [noMetaDir, expiredDir, futureValidDir]) {
+      let exists = true;
+      try {
+        await fs.access(dir);
+      } catch {
+        exists = false;
+      }
+      expect(exists).toBe(false);
     }
-    expect(staleExists).toBe(false);
-
-    let expiredExists = true;
-    try {
-      await fs.access(expiredDir);
-    } catch {
-      expiredExists = false;
-    }
-    expect(expiredExists).toBe(false);
 
     await fs.access(fresh.sessionPath);
   });

@@ -358,7 +358,7 @@ export class McpServerService {
   private httpServer: http.Server | null = null;
   private port: number | null = null;
   private registry: WindowRegistry | null = null;
-  private starting = false;
+  private startPromise: Promise<void> | null = null;
   private sessions = new Map<string, McpSseSession>();
   private httpSessions = new Map<string, McpHttpSession>();
   /**
@@ -689,8 +689,18 @@ export class McpServerService {
   async start(registry: WindowRegistry): Promise<void> {
     this.registry = registry;
 
-    if (this.httpServer || this.starting) {
+    if (this.httpServer) {
       return;
+    }
+
+    // Single-flight: concurrent `start()` callers (e.g., the deferred startup
+    // task and a help-session provision that races it) must await the same
+    // bind so subsequent reads of `currentPort` see the bound value rather
+    // than the pre-bind `null`. Without this, a second provision called while
+    // the first is mid-bind would early-return and bake `port: null` into its
+    // .mcp.json, silently dropping the daintree MCP server from that session.
+    if (this.startPromise) {
+      return this.startPromise;
     }
 
     if (!this.isEnabled()) {
@@ -698,53 +708,56 @@ export class McpServerService {
       return;
     }
 
-    this.starting = true;
-    try {
-      if (!this.apiKey) {
-        const persisted = this.getConfig().apiKey;
-        if (persisted && persisted.length > 0) {
-          this.apiKey = persisted;
-        } else {
-          this.apiKey = `daintree_${randomUUID().replace(/-/g, "")}`;
-          this.persistConfig({ apiKey: this.apiKey });
-        }
-      }
-
-      this.hydrateAuditLog();
-      this.setupIpcListeners();
-
-      const server = http.createServer((req, res) => {
-        this.handleRequest(req, res).catch((err) => {
-          console.error("[MCP] Request handler error:", err);
-          if (!res.headersSent) {
-            res.writeHead(500, { "Content-Type": "text/plain" });
-            res.end("Internal server error");
+    this.startPromise = (async () => {
+      try {
+        if (!this.apiKey) {
+          const persisted = this.getConfig().apiKey;
+          if (persisted && persisted.length > 0) {
+            this.apiKey = persisted;
+          } else {
+            this.apiKey = `daintree_${randomUUID().replace(/-/g, "")}`;
+            this.persistConfig({ apiKey: this.apiKey });
           }
-        });
-      });
-
-      const configuredPort = this.getConfig().port ?? DEFAULT_PORT;
-      const boundPort = await this.listenWithRetry(server, configuredPort);
-
-      if (boundPort === null) {
-        for (const cleanup of this.cleanupListeners) {
-          cleanup();
         }
-        this.cleanupListeners = [];
-        throw new Error(
-          `Failed to bind MCP server: ports ${configuredPort}–${configuredPort + MAX_PORT_RETRIES} all in use`
-        );
-      }
 
-      this.port = boundPort;
-      this.httpServer = server;
-      console.log(
-        `[MCP] Server started on http://127.0.0.1:${this.port}/mcp (Streamable HTTP) and /sse (legacy SSE)`
-      );
-      this.emitStatusChange();
-    } finally {
-      this.starting = false;
-    }
+        this.hydrateAuditLog();
+        this.setupIpcListeners();
+
+        const server = http.createServer((req, res) => {
+          this.handleRequest(req, res).catch((err) => {
+            console.error("[MCP] Request handler error:", err);
+            if (!res.headersSent) {
+              res.writeHead(500, { "Content-Type": "text/plain" });
+              res.end("Internal server error");
+            }
+          });
+        });
+
+        const configuredPort = this.getConfig().port ?? DEFAULT_PORT;
+        const boundPort = await this.listenWithRetry(server, configuredPort);
+
+        if (boundPort === null) {
+          for (const cleanup of this.cleanupListeners) {
+            cleanup();
+          }
+          this.cleanupListeners = [];
+          throw new Error(
+            `Failed to bind MCP server: ports ${configuredPort}–${configuredPort + MAX_PORT_RETRIES} all in use`
+          );
+        }
+
+        this.port = boundPort;
+        this.httpServer = server;
+        console.log(
+          `[MCP] Server started on http://127.0.0.1:${this.port}/mcp (Streamable HTTP) and /sse (legacy SSE)`
+        );
+        this.emitStatusChange();
+      } finally {
+        this.startPromise = null;
+      }
+    })();
+
+    return this.startPromise;
   }
 
   async stop(): Promise<void> {

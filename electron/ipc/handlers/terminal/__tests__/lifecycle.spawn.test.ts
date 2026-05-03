@@ -596,6 +596,35 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
+  it("strips --dangerously-skip-permissions from action-tier help launches even if it leaked in via agent settings", async () => {
+    // The help-tier classification — driven by `helpAssistant.skipPermissions`
+    // — is the source of truth. If a user has Claude's global
+    // `dangerousEnabled` on, the renderer's command generator may include
+    // `--dangerously-skip-permissions`, and the action-tier help session must
+    // strip it so the assistant doesn't silently bypass permission prompts.
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude --dangerously-skip-permissions",
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.command).toBe("claude");
+    expect(spawnArgs.command).not.toContain("--dangerously-skip-permissions");
+  });
+
   it("falls back to per-pane MCP injection when DAINTREE_MCP_TOKEN is not a valid help token", async () => {
     mockValidateToken.mockReturnValue(false);
     mockIsRunning.mockReturnValue(true);

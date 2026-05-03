@@ -116,8 +116,15 @@ export class HelpSessionService {
       await this.ensureMcpServerRunning();
     }
 
-    await fs.mkdir(sessionsRoot, { recursive: true });
+    await fs.mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
+    // Ensure the parent dir is 0o700 even if it pre-existed with a wider mode
+    // from an earlier build that didn't pass `mode` to mkdir.
+    await fs.chmod(sessionsRoot, 0o700).catch(() => {});
     await fs.cp(helpFolder, sessionPath, { recursive: true });
+    // `fs.cp` inherits the source's mode (typically 0o755 for the bundled help
+    // folder), so harden the session dir before writing the literal-token
+    // .mcp.json into it. Best-effort on platforms where chmod is a no-op.
+    await fs.chmod(sessionPath, 0o700).catch(() => {});
 
     const port = await this.getMcpPort(settings.daintreeControl);
     await this.writeMcpConfig(sessionPath, settings, port, token);
@@ -176,9 +183,13 @@ export class HelpSessionService {
   }
 
   /**
-   * Sweeps stale session dirs left over from a crash. Reads each meta.json and
-   * deletes dirs whose `expiresAt` is in the past or whose meta is missing /
-   * unreadable. Live sessions are protected by their in-memory record.
+   * Sweeps session dirs left over from a previous process. Tokens only live in
+   * the in-memory `sessionsByToken` map and never rehydrate across restarts, so
+   * any dir not protected by a live in-memory record is unreachable and its
+   * literal-bearer .mcp.json is dead weight. Wipe them — keeping them around
+   * for the 7-day `expiresAt` window only widens the on-disk exposure of bearer
+   * material that can no longer authenticate anyway. Live sessions are
+   * protected by `liveSessionIds`.
    */
   async gcStaleSessions(): Promise<void> {
     const sessionsRoot = this.getSessionsRoot();
@@ -192,26 +203,11 @@ export class HelpSessionService {
     }
 
     const liveSessionIds = new Set(this.sessionsById.keys());
-    const now = Date.now();
 
     await Promise.all(
       entries.map(async (entry) => {
         if (liveSessionIds.has(entry)) return;
-        const dir = path.join(sessionsRoot, entry);
-        const metaPath = path.join(dir, META_FILE_NAME);
-        let stale = true;
-        try {
-          const raw = await fs.readFile(metaPath, "utf-8");
-          const meta = JSON.parse(raw) as Partial<SessionMeta>;
-          if (typeof meta?.expiresAt === "number" && meta.expiresAt > now) {
-            stale = false;
-          }
-        } catch {
-          stale = true;
-        }
-        if (stale) {
-          await this.removeSessionDir(dir);
-        }
+        await this.removeSessionDir(path.join(sessionsRoot, entry));
       })
     );
   }
