@@ -1667,7 +1667,7 @@ export class McpServerService {
 
     server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const actionId = request.params.name;
-      const { args, confirmed } = this.parseToolArguments(request.params.arguments);
+      const { args } = this.parseToolArguments(request.params.arguments);
       const startedAt = Date.now();
       const tier = this.getSessionTier(sessionId);
 
@@ -1743,12 +1743,55 @@ export class McpServerService {
         | { kind: "result"; value: ActionDispatchResult }
         | { kind: "throw"; error: unknown };
       let confirmationDecision: McpConfirmationDecision | undefined;
+      let dispatchConfirmed = false;
 
       try {
+        // Elicitation path: when the action is destructive and not yet
+        // confirmed, and the connected client advertises form-elicitation
+        // support, ask for explicit approval via the MCP `elicitation/create`
+        // primitive. Clients without elicitation capability fall through to
+        // the renderer-modal fallback (`dispatchAction(confirmed=false)`).
+        // The manifest is populated by ListTools, but spec-compliant clients
+        // are not required to call it before tools/call — ensure we have a
+        // copy on hand to honor the destructive-action gate.
+        const entry = await this.lookupManifestEntry(actionId);
+        if (!dispatchConfirmed && entry?.danger === "confirm") {
+          const supportsForm = server.getClientCapabilities()?.elicitation?.form !== undefined;
+          if (supportsForm) {
+            const elicitationOutcome = await this.runElicitationConfirmation(server, entry);
+            if (elicitationOutcome.kind === "throw") {
+              outcome = elicitationOutcome;
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: `Error: ${formatErrorMessage(elicitationOutcome.error, "Elicitation request failed")}`,
+                  },
+                ],
+                isError: true,
+              };
+            }
+            if (elicitationOutcome.kind === "rejected") {
+              outcome = { kind: "result", value: elicitationOutcome.value };
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: `Error [${elicitationOutcome.value.error.code}]: ${elicitationOutcome.value.error.message}`,
+                  },
+                ],
+                isError: true,
+              };
+            }
+            dispatchConfirmed = true;
+            confirmationDecision = "approved";
+          }
+        }
+
         try {
-          const envelope = await this.dispatchAction(actionId, args, confirmed);
+          const envelope = await this.dispatchAction(actionId, args, dispatchConfirmed);
           outcome = { kind: "result", value: envelope.result };
-          confirmationDecision = envelope.confirmationDecision;
+          confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
         } catch (err) {
           outcome = { kind: "throw", error: err };
           return {
@@ -1763,7 +1806,6 @@ export class McpServerService {
         }
 
         if (outcome.value.ok) {
-          const entry = this.cachedManifest?.find((e) => e.id === actionId);
           const structuredContent = this.buildStructuredContent(entry, outcome.value.result);
           return {
             content: [
@@ -2319,51 +2361,116 @@ export class McpServerService {
   }
 
   private buildToolDescription(entry: ActionManifestEntry): string {
-    let description = entry.description;
-    if (entry.danger === "confirm") {
-      description += " Requires explicit confirmation via _meta.confirmed=true.";
+    return entry.description;
+  }
+
+  /**
+   * Resolve a manifest entry by id, fetching the manifest from the
+   * renderer if no cache is on hand yet. Used by the CallTool handler so
+   * the destructive-action gate fires for clients that skip ListTools.
+   * Renderer-bridge failures degrade silently — the legacy renderer-modal
+   * fallback still safeguards destructive dispatches when the manifest is
+   * unavailable.
+   */
+  private async lookupManifestEntry(actionId: string): Promise<ActionManifestEntry | undefined> {
+    if (!this.cachedManifest) {
+      try {
+        await this.requestManifest();
+      } catch {
+        return undefined;
+      }
     }
-    return description;
+    return this.cachedManifest?.find((e) => e.id === actionId);
+  }
+
+  /**
+   * Drive the MCP `elicitation/create` round-trip used to confirm a
+   * destructive action with the client. Returns one of three shapes:
+   *
+   *   - `approved`: the user accepted and ticked the confirm box; caller
+   *     should proceed with `dispatchAction(confirmed=true)`.
+   *   - `rejected`: the user declined or cancelled, or accepted without
+   *     ticking the confirm box. Caller should return the bundled
+   *     `ActionDispatchResult` (USER_REJECTED / CONFIRMATION_TIMEOUT) as
+   *     the tool result; auditing classifies it via
+   *     `deriveConfirmationDecision`.
+   *   - `throw`: the SDK threw before reaching the client (e.g. the
+   *     advertised capability is gone, or the schema validator rejected
+   *     the response). Caller should surface a generic `isError: true`.
+   *
+   * The renderer modal is intentionally not consulted on this path —
+   * elicitation IS the confirmation prompt for capable clients, so a
+   * silent fallback to the modal could bypass the user's decision.
+   */
+  private async runElicitationConfirmation(
+    server: Server,
+    entry: ActionManifestEntry
+  ): Promise<
+    | { kind: "approved" }
+    | { kind: "rejected"; value: ActionDispatchResult }
+    | { kind: "throw"; error: unknown }
+  > {
+    let result;
+    try {
+      result = await server.elicitInput({
+        message: `Confirm ${entry.title}: ${entry.description}`,
+        requestedSchema: {
+          type: "object",
+          properties: {
+            confirmed: {
+              type: "boolean",
+              title: "Confirm destructive action",
+              default: false,
+            },
+          },
+          required: ["confirmed"],
+        },
+      });
+    } catch (err) {
+      return { kind: "throw", error: err };
+    }
+
+    if (result.action === "cancel") {
+      return {
+        kind: "rejected",
+        value: {
+          ok: false,
+          error: {
+            code: CONFIRMATION_TIMEOUT_CODE,
+            message: "Confirmation request timed out before the user responded.",
+          },
+        },
+      };
+    }
+
+    if (result.action === "decline" || result.content?.["confirmed"] !== true) {
+      return {
+        kind: "rejected",
+        value: {
+          ok: false,
+          error: {
+            code: USER_REJECTED_CODE,
+            message: "User rejected the confirmation request.",
+          },
+        },
+      };
+    }
+
+    return { kind: "approved" };
   }
 
   private buildToolInputSchema(entry: ActionManifestEntry): Record<string, unknown> {
-    const baseSchema =
+    if (
       entry.inputSchema &&
       typeof entry.inputSchema === "object" &&
       !Array.isArray(entry.inputSchema) &&
       entry.inputSchema["type"] === "object"
-        ? ({ ...entry.inputSchema } as Record<string, unknown>)
-        : {
-            type: "object",
-            properties: {},
-          };
-
-    if (entry.danger !== "confirm") {
-      return { ...baseSchema, additionalProperties: false };
+    ) {
+      return { ...entry.inputSchema, additionalProperties: false } as Record<string, unknown>;
     }
-
-    const properties =
-      baseSchema["properties"] &&
-      typeof baseSchema["properties"] === "object" &&
-      !Array.isArray(baseSchema["properties"])
-        ? { ...(baseSchema["properties"] as Record<string, unknown>) }
-        : {};
-
-    properties["_meta"] = {
-      type: "object",
-      description: "Reserved Daintree MCP metadata.",
-      properties: {
-        confirmed: {
-          type: "boolean",
-          description: "Must be true to execute this destructive action.",
-        },
-      },
-      additionalProperties: false,
-    };
-
     return {
-      ...baseSchema,
-      properties,
+      type: "object",
+      properties: {},
       additionalProperties: false,
     };
   }
@@ -2404,34 +2511,25 @@ export class McpServerService {
     return result as Record<string, unknown>;
   }
 
-  private parseToolArguments(rawArgs: unknown): { args: unknown; confirmed: boolean } {
+  /**
+   * Strip the reserved `_meta` envelope before forwarding tool arguments to
+   * the renderer. The legacy `_meta.confirmed=true` bypass is no longer
+   * honored — destructive actions are gated by `elicitation/create` (or the
+   * renderer-modal fallback for clients without elicitation capability), so
+   * any inbound `_meta.confirmed` flag is silently dropped.
+   */
+  private parseToolArguments(rawArgs: unknown): { args: unknown } {
     if (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) {
-      return {
-        args: rawArgs ?? {},
-        confirmed: false,
-      };
+      return { args: rawArgs ?? {} };
     }
 
     const argsRecord = rawArgs as Record<string, unknown>;
-    const meta = argsRecord["_meta"];
-    const metaRecord =
-      meta !== null && typeof meta === "object" && !Array.isArray(meta)
-        ? (meta as Record<string, unknown>)
-        : null;
-    const confirmed = metaRecord?.["confirmed"] === true;
-
     if (!("_meta" in argsRecord)) {
-      return {
-        args: rawArgs,
-        confirmed,
-      };
+      return { args: rawArgs };
     }
 
     const { _meta: _ignored, ...actionArgs } = argsRecord;
-    return {
-      args: Object.keys(actionArgs).length > 0 ? actionArgs : {},
-      confirmed,
-    };
+    return { args: Object.keys(actionArgs).length > 0 ? actionArgs : {} };
   }
 
   private getActiveProjectWebContents(): Electron.WebContents {

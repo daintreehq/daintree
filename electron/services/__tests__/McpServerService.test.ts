@@ -5,6 +5,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  ElicitRequestSchema,
+  type ElicitResult,
+  type ClientCapabilities,
+} from "@modelcontextprotocol/sdk/types.js";
 import type {
   ActionDispatchResult,
   ActionManifestEntry,
@@ -310,7 +315,11 @@ function getServiceApiKey(): string {
 
 async function connectClient(
   port: number,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  options?: {
+    capabilities?: ClientCapabilities;
+    onElicit?: (request: { params: { message: string } }) => Promise<ElicitResult> | ElicitResult;
+  }
 ): Promise<{ client: Client; transport: SSEClientTransport }> {
   const apiKey = getServiceApiKey();
   const mergedHeaders: Record<string, string> = {
@@ -318,7 +327,16 @@ async function connectClient(
     ...(headers ?? {}),
   };
   const hasHeaders = Object.keys(mergedHeaders).length > 0;
-  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const client = new Client(
+    { name: "mcp-test-client", version: "1.0.0" },
+    options?.capabilities ? { capabilities: options.capabilities } : undefined
+  );
+  if (options?.onElicit) {
+    const handler = options.onElicit;
+    client.setRequestHandler(ElicitRequestSchema, async (request) => {
+      return handler(request as { params: { message: string } });
+    });
+  }
   const transport = new SSEClientTransport(new URL(`http://127.0.0.1:${port}/sse`), {
     eventSourceInit: hasHeaders ? ({ headers: mergedHeaders } as never) : undefined,
     requestInit: hasHeaders ? { headers: mergedHeaders } : undefined,
@@ -506,7 +524,7 @@ describe("McpServerService", () => {
     await fs.rm(testHomeDir, { recursive: true, force: true });
   });
 
-  it("lists tools and advertises explicit confirmation metadata for destructive actions", async () => {
+  it("lists tools without injecting _meta confirmation properties on destructive actions", async () => {
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
@@ -543,22 +561,17 @@ describe("McpServerService", () => {
     expect(safeTool).toBeDefined();
     expect(dangerousTool).toBeDefined();
     expect(safeTool?.description).toBe("Read the action registry");
-    expect(dangerousTool?.description).toBe(
-      "Delete a worktree Requires explicit confirmation via _meta.confirmed=true."
-    );
+    // Confirmation is now driven by MCP `elicitation/create`, not a `_meta`
+    // schema property — the tool description and schema must not advertise
+    // the legacy bypass mechanism.
+    expect(dangerousTool?.description).not.toContain("_meta");
+    expect(dangerousTool?.description).not.toContain("Requires explicit confirmation");
     expect(safeTool?.inputSchema.additionalProperties).toBe(false);
     expect(dangerousTool?.inputSchema.additionalProperties).toBe(false);
-    expect(dangerousTool?.inputSchema.properties?._meta).toEqual({
-      type: "object",
-      description: "Reserved Daintree MCP metadata.",
-      properties: {
-        confirmed: {
-          type: "boolean",
-          description: "Must be true to execute this destructive action.",
-        },
-      },
-      additionalProperties: false,
+    expect(dangerousTool?.inputSchema.properties).toEqual({
+      worktreeId: { type: "string" },
     });
+    expect(dangerousTool?.inputSchema.properties?._meta).toBeUndefined();
 
     // Annotations — query tool
     expect(safeTool?.annotations).toEqual({
@@ -569,7 +582,9 @@ describe("McpServerService", () => {
       openWorldHint: false,
     });
 
-    // Annotations — destructive tool
+    // Annotations — destructive tool. `destructiveHint: true` is the
+    // primary signal clients use to detect that elicitation will be
+    // invoked on the next `tools/call` for this tool.
     expect(dangerousTool?.annotations).toEqual({
       title: "Delete Worktree",
       readOnlyHint: false,
@@ -730,7 +745,7 @@ describe("McpServerService", () => {
     expect(wtTool?.annotations?.openWorldHint).toBe(false);
   });
 
-  it("requires explicit MCP confirmation before dispatching destructive actions", async () => {
+  it("falls back to renderer-modal dispatch when the client does not support elicitation", async () => {
     const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
       if (!payload.confirmed) {
         return {
@@ -751,7 +766,7 @@ describe("McpServerService", () => {
       };
     });
 
-    const { window, webContents } = createMockWindow({
+    const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
           id: "worktree.delete" as ActionId,
@@ -772,6 +787,10 @@ describe("McpServerService", () => {
     });
 
     await service.start(window);
+    // Default test client does not advertise `elicitation` capability, so
+    // the server forwards the unconfirmed dispatch to the renderer bridge —
+    // exactly the fallback behavior we want to preserve for non-elicitation
+    // clients.
     const { client, transport } = await connectClient(service.currentPort!);
     transports.push(transport);
 
@@ -781,7 +800,51 @@ describe("McpServerService", () => {
         arguments: { worktreeId: "wt-123" },
       })
     );
-    const confirmed = getTextResult(
+
+    expect(unconfirmed.isError).toBe(true);
+    expect(unconfirmed.content[0]).toMatchObject({ type: "text" });
+    expect(unconfirmed.content[0].text).toContain("CONFIRMATION_REQUIRED");
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        actionId: "worktree.delete",
+        args: { worktreeId: "wt-123" },
+        confirmed: false,
+      })
+    );
+  });
+
+  it("strips legacy `_meta.confirmed=true` from arguments instead of bypassing confirmation", async () => {
+    const dispatchMock = vi.fn(
+      (): ActionDispatchResult => ({
+        ok: false,
+        error: { code: "CONFIRMATION_REQUIRED", message: "Need confirm" },
+      })
+    );
+
+    const { window } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "worktree.delete" as ActionId,
+          title: "Delete Worktree",
+          description: "Delete a worktree",
+          danger: "confirm",
+        }),
+      ],
+      dispatchAction: dispatchMock,
+    });
+
+    await service.start(window);
+    const { client, transport } = await connectClient(service.currentPort!);
+    transports.push(transport);
+
+    // Legacy clients that still pass `_meta.confirmed=true` should NOT
+    // self-confirm — the elicitation/modal flow is the only way to
+    // approve a destructive action. The `_meta` key is stripped from
+    // the args envelope before reaching the renderer.
+    const result = getTextResult(
       await client.callTool({
         name: "worktree.delete",
         arguments: {
@@ -791,15 +854,9 @@ describe("McpServerService", () => {
       })
     );
 
-    expect(unconfirmed.isError).toBe(true);
-    expect(unconfirmed.content[0]).toMatchObject({
-      type: "text",
-    });
-    expect(unconfirmed.content[0].text).toContain("CONFIRMATION_REQUIRED");
-
-    expect(confirmed.isError).not.toBe(true);
-    expect(confirmed.content[0].text).toContain('"deleted": true');
-
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("CONFIRMATION_REQUIRED");
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -808,15 +865,248 @@ describe("McpServerService", () => {
         confirmed: false,
       })
     );
-    expect(dispatchMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        actionId: "worktree.delete",
-        args: { worktreeId: "wt-123" },
-        confirmed: true,
-      })
-    );
-    expect(webContents.send).toHaveBeenCalledTimes(2);
+  });
+
+  describe("elicitation confirmation flow", () => {
+    type AuditEntry = {
+      result: "success" | "error" | "confirmation-pending" | "unauthorized";
+      errorCode?: string;
+      confirmationDecision?: "approved" | "rejected" | "timeout";
+    };
+
+    function readAuditRecords(svc: McpServerService): AuditEntry[] {
+      return (svc as unknown as { getAuditRecords: () => AuditEntry[] }).getAuditRecords();
+    }
+
+    function createDestructiveDispatchMock() {
+      return vi.fn((payload: DispatchRequest): ActionDispatchResult => {
+        if (!payload.confirmed) {
+          return {
+            ok: false,
+            error: { code: "CONFIRMATION_REQUIRED", message: "Need confirm" },
+          };
+        }
+        return {
+          ok: true,
+          result: { deleted: true },
+        };
+      });
+    }
+
+    it("dispatches with confirmed=true after the client accepts the elicitation", async () => {
+      const dispatchMock = createDestructiveDispatchMock();
+      const onElicit = vi.fn(
+        async (): Promise<ElicitResult> => ({
+          action: "accept",
+          content: { confirmed: true },
+        })
+      );
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "worktree.delete" as ActionId,
+            title: "Delete Worktree",
+            description: "Delete a worktree",
+            danger: "confirm",
+          }),
+        ],
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, undefined, {
+        capabilities: { elicitation: { form: {} } },
+        onElicit,
+      });
+      transports.push(transport);
+
+      const result = getTextResult(
+        await client.callTool({
+          name: "worktree.delete",
+          arguments: { worktreeId: "wt-123" },
+        })
+      );
+
+      expect(onElicit).toHaveBeenCalledTimes(1);
+      expect(result.isError).not.toBe(true);
+      expect(result.content[0].text).toContain('"deleted": true');
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          actionId: "worktree.delete",
+          args: { worktreeId: "wt-123" },
+          confirmed: true,
+        })
+      );
+
+      const records = readAuditRecords(service);
+      expect(records).toHaveLength(1);
+      expect(records[0].result).toBe("success");
+      expect(records[0].confirmationDecision).toBe("approved");
+    });
+
+    it("returns USER_REJECTED without dispatching when the client declines", async () => {
+      const dispatchMock = createDestructiveDispatchMock();
+      const onElicit = vi.fn(
+        async (): Promise<ElicitResult> => ({
+          action: "decline",
+        })
+      );
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "worktree.delete" as ActionId,
+            title: "Delete Worktree",
+            description: "Delete a worktree",
+            danger: "confirm",
+          }),
+        ],
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, undefined, {
+        capabilities: { elicitation: { form: {} } },
+        onElicit,
+      });
+      transports.push(transport);
+
+      const result = getTextResult(
+        await client.callTool({
+          name: "worktree.delete",
+          arguments: { worktreeId: "wt-123" },
+        })
+      );
+
+      expect(onElicit).toHaveBeenCalledTimes(1);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("USER_REJECTED");
+      expect(dispatchMock).not.toHaveBeenCalled();
+
+      const records = readAuditRecords(service);
+      expect(records).toHaveLength(1);
+      expect(records[0].errorCode).toBe("USER_REJECTED");
+      expect(records[0].confirmationDecision).toBe("rejected");
+    });
+
+    it("returns CONFIRMATION_TIMEOUT without dispatching when the client cancels", async () => {
+      const dispatchMock = createDestructiveDispatchMock();
+      const onElicit = vi.fn(
+        async (): Promise<ElicitResult> => ({
+          action: "cancel",
+        })
+      );
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "worktree.delete" as ActionId,
+            title: "Delete Worktree",
+            description: "Delete a worktree",
+            danger: "confirm",
+          }),
+        ],
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, undefined, {
+        capabilities: { elicitation: { form: {} } },
+        onElicit,
+      });
+      transports.push(transport);
+
+      const result = getTextResult(
+        await client.callTool({
+          name: "worktree.delete",
+          arguments: { worktreeId: "wt-123" },
+        })
+      );
+
+      expect(onElicit).toHaveBeenCalledTimes(1);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("CONFIRMATION_TIMEOUT");
+      expect(dispatchMock).not.toHaveBeenCalled();
+
+      const records = readAuditRecords(service);
+      expect(records).toHaveLength(1);
+      expect(records[0].errorCode).toBe("CONFIRMATION_TIMEOUT");
+      expect(records[0].confirmationDecision).toBe("timeout");
+    });
+
+    it("treats accept-with-confirmed=false as a rejection", async () => {
+      const dispatchMock = createDestructiveDispatchMock();
+      const onElicit = vi.fn(
+        async (): Promise<ElicitResult> => ({
+          action: "accept",
+          content: { confirmed: false },
+        })
+      );
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "worktree.delete" as ActionId,
+            title: "Delete Worktree",
+            description: "Delete a worktree",
+            danger: "confirm",
+          }),
+        ],
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, undefined, {
+        capabilities: { elicitation: { form: {} } },
+        onElicit,
+      });
+      transports.push(transport);
+
+      const result = getTextResult(
+        await client.callTool({
+          name: "worktree.delete",
+          arguments: { worktreeId: "wt-123" },
+        })
+      );
+
+      expect(onElicit).toHaveBeenCalledTimes(1);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("USER_REJECTED");
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("does not invoke elicitation for non-destructive tools", async () => {
+      const dispatchMock = vi.fn(
+        (): ActionDispatchResult => ({
+          ok: true,
+          result: ["a", "b"],
+        })
+      );
+      const onElicit = vi.fn();
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "actions.list" as ActionId,
+            title: "List Actions",
+            description: "Read the action registry",
+            kind: "query",
+          }),
+        ],
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, undefined, {
+        capabilities: { elicitation: { form: {} } },
+        onElicit,
+      });
+      transports.push(transport);
+
+      const result = getTextResult(await client.callTool({ name: "actions.list", arguments: {} }));
+
+      expect(onElicit).not.toHaveBeenCalled();
+      expect(result.isError).not.toBe(true);
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("persists the rotated api key to electron-store", async () => {
@@ -3055,7 +3345,7 @@ describe("McpServerService", () => {
       expect(result.content[0]?.text).toContain('"foo": "bar"');
     });
 
-    it("does not emit structuredContent when callTool runs without a prior listTools (cache cold)", async () => {
+    it("warms the manifest cache and emits structuredContent on a cold callTool (no prior listTools)", async () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
@@ -3073,6 +3363,10 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
+      // The destructive-action gate requires the manifest, so the call
+      // handler now lazy-fetches it on first use. As a side effect, the
+      // structured output schema is also resolved without requiring the
+      // client to call `tools/list` beforehand.
       const result = (await client.callTool({
         name: "actions.list",
         arguments: {},
@@ -3081,7 +3375,7 @@ describe("McpServerService", () => {
         structuredContent?: Record<string, unknown>;
       };
 
-      expect(result.structuredContent).toBeUndefined();
+      expect(result.structuredContent).toEqual({ count: 1, label: "cold" });
       expect(result.content[0]?.text).toContain('"label": "cold"');
     });
 
