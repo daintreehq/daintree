@@ -357,6 +357,27 @@ interface PromptDefinition {
   render(args: Record<string, string>, context: PromptRenderContext): string;
 }
 
+const PROMPT_TERMINAL_OUTPUT_MAX_CHARS = 16_000;
+
+/**
+ * Pick a backtick run that does not appear inside the supplied content so a
+ * fenced code block embedding `content` cannot be terminated early by a
+ * matching backtick run inside the content itself. Starts at 3 backticks
+ * (the markdown minimum) and grows until a non-colliding marker is found.
+ */
+function pickFenceMarker(content: string): string {
+  let length = 3;
+  // Reasonable cap — content with 12+ consecutive backticks is pathological.
+  while (length < 12) {
+    const candidate = "`".repeat(length);
+    if (!content.includes(candidate)) {
+      return candidate;
+    }
+    length += 1;
+  }
+  return "`".repeat(length);
+}
+
 /**
  * Static set of slash commands surfaced by Claude Code as
  * `/mcp__daintree__<name>`. Bodies are plain markdown so the assistant
@@ -376,7 +397,7 @@ const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
       },
     ],
     render(args, context) {
-      const issueNumber = args.issue_number;
+      const issueNumber = args.issue_number.trim();
       const worktree = context.worktreePath ?? "(no active worktree detected)";
       const branch = context.worktreeBranch ?? "(unknown branch)";
       return [
@@ -420,11 +441,20 @@ const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
       if (terminalId) {
         lines.push(`- Failed terminal: ${terminalId}`);
         lines.push("");
-        if (context.terminalOutput) {
-          lines.push("Recent terminal output (most recent lines):");
-          lines.push("```");
-          lines.push(context.terminalOutput);
-          lines.push("```");
+        if (context.terminalOutput !== undefined) {
+          if (context.terminalOutput.length === 0) {
+            lines.push(
+              `Terminal output for ${terminalId} was fetched but is empty — the terminal may have just started or been cleared.`
+            );
+          } else {
+            // Use a fence marker that cannot collide with any backtick run in
+            // the terminal output. Picks the smallest backtick run not present.
+            const fence = pickFenceMarker(context.terminalOutput);
+            lines.push("Recent terminal output (most recent lines):");
+            lines.push(fence);
+            lines.push(context.terminalOutput);
+            lines.push(fence);
+          }
         } else {
           lines.push(
             `Terminal output for ${terminalId} could not be fetched — call \`terminal.getOutput\` directly to retrieve it.`
@@ -1497,13 +1527,13 @@ export class McpServerService {
         throw new McpError(ErrorCode.InvalidParams, `Unknown prompt: ${name}`);
       }
 
-      const rawArgs = request.params.arguments ?? {};
-      const args: Record<string, string> = {};
-      for (const [key, value] of Object.entries(rawArgs)) {
-        if (typeof value === "string") {
-          args[key] = value;
-        }
-      }
+      // The SDK's GetPromptRequestSchema already validates `arguments` as
+      // Record<string, string>, so any non-string value is rejected before
+      // reaching this handler.
+      const args: Record<string, string> = (request.params.arguments ?? {}) as Record<
+        string,
+        string
+      >;
 
       for (const arg of definition.arguments) {
         if (arg.required && !args[arg.name]?.trim()) {
@@ -1784,8 +1814,17 @@ export class McpServerService {
         });
         if (result && typeof result === "object") {
           const r = result as Record<string, unknown>;
-          if (typeof r.content === "string" && r.content.length > 0) {
-            context.terminalOutput = r.content;
+          if (typeof r.content === "string") {
+            // Cap the embedded slice so a single very long line cannot blow
+            // up the prompt response; keep the tail since recency matters
+            // most when triaging a failed agent.
+            const content = r.content;
+            if (content.length > PROMPT_TERMINAL_OUTPUT_MAX_CHARS) {
+              const tail = content.slice(-PROMPT_TERMINAL_OUTPUT_MAX_CHARS);
+              context.terminalOutput = `… [truncated to last ${PROMPT_TERMINAL_OUTPUT_MAX_CHARS} chars]\n${tail}`;
+            } else {
+              context.terminalOutput = content;
+            }
           }
         }
       }

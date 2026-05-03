@@ -3052,6 +3052,120 @@ describe("McpServerService", () => {
       expect(text).toContain("(unknown branch)");
       expect(text).toContain("#1");
     });
+
+    it("uses a fence marker that does not collide with backtick runs in terminal output", async () => {
+      const { window } = createMockWindow({
+        dispatchAction: (payload) => {
+          if (payload.actionId === "worktree.getCurrent") {
+            return { ok: true, result: { id: "wt", path: "/wt", branch: "b", isMain: false } };
+          }
+          if (payload.actionId === "terminal.getOutput") {
+            return {
+              ok: true,
+              result: {
+                terminalId: "t",
+                content: "before\n```\nadversarial markdown\n```\nafter",
+                lineCount: 5,
+                truncated: false,
+              },
+            };
+          }
+          return { ok: true, result: null };
+        },
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = await client.getPrompt({
+        name: "triage_failed_agent",
+        arguments: { terminal_id: "t" },
+      });
+      const text = (result.messages[0].content as { type: "text"; text: string }).text;
+
+      // Outer fence must be 4 backticks so the embedded ``` runs can't
+      // terminate it early. The exact-match toContain proves the wrapping
+      // marker is wider than any backtick run inside the content.
+      expect(text).toContain("````\nbefore\n```\nadversarial markdown\n```\nafter\n````");
+    });
+
+    it("distinguishes a fetched-but-empty terminal from a fetch failure", async () => {
+      const { window } = createMockWindow({
+        dispatchAction: (payload) => {
+          if (payload.actionId === "worktree.getCurrent") {
+            return { ok: true, result: { id: "wt", path: "/wt", branch: "b", isMain: false } };
+          }
+          if (payload.actionId === "terminal.getOutput") {
+            return {
+              ok: true,
+              result: { terminalId: "t-empty", content: "", lineCount: 0, truncated: false },
+            };
+          }
+          return { ok: true, result: null };
+        },
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = await client.getPrompt({
+        name: "triage_failed_agent",
+        arguments: { terminal_id: "t-empty" },
+      });
+      const text = (result.messages[0].content as { type: "text"; text: string }).text;
+
+      expect(text).toContain("fetched but is empty");
+      expect(text).not.toContain("could not be fetched");
+    });
+
+    it("preserves worktree context when only terminal.getOutput fails", async () => {
+      const { window } = createMockWindow({
+        dispatchAction: (payload) => {
+          if (payload.actionId === "worktree.getCurrent") {
+            return {
+              ok: true,
+              result: { id: "wt", path: "/proj/wt-x", branch: "feat/x", isMain: false },
+            };
+          }
+          if (payload.actionId === "terminal.getOutput") {
+            return { ok: false, error: { code: "RENDERER_FAIL", message: "boom" } };
+          }
+          return { ok: true, result: null };
+        },
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = await client.getPrompt({
+        name: "triage_failed_agent",
+        arguments: { terminal_id: "t" },
+      });
+      const text = (result.messages[0].content as { type: "text"; text: string }).text;
+
+      expect(text).toContain("/proj/wt-x");
+      expect(text).toContain("feat/x");
+      expect(text).toContain("could not be fetched");
+    });
+
+    it("rejects non-string argument values via the SDK schema validator", async () => {
+      const { window } = createMockWindow();
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      // The SDK's GetPromptRequestSchema enforces Record<string, string> on
+      // arguments. Numeric values are rejected (the SDK surfaces this as a
+      // request-level error) before our handler runs — the surface signal
+      // for client authors that the MCP spec requires string-valued prompt
+      // arguments.
+      await expect(
+        client.getPrompt({
+          name: "start_issue",
+          arguments: { issue_number: 6610 as unknown as string },
+        })
+      ).rejects.toThrow();
+    });
   });
 
   describe("resources", () => {
