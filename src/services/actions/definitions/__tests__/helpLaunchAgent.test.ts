@@ -265,6 +265,8 @@ describe("help.launchAgent", () => {
     const dispatchArg = firstCall?.[1] as Record<string, unknown> | undefined;
     expect(dispatchArg).toBeDefined();
     expect(dispatchArg).not.toHaveProperty("model");
+    expect(dispatchArg).not.toHaveProperty("modelId");
+    expect(dispatchArg).not.toHaveProperty("agentModelId");
   });
 
   it("provisions a help session and threads sessionPath as cwd with full DAINTREE_* env when a project is active", async () => {
