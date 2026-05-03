@@ -3656,4 +3656,228 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
   });
+
+  describe("Background-tier recovery (#6641)", () => {
+    // The background polling tier (500ms) was unable to escape "waiting" when
+    // an agent resumed producing output: the AND-gated volume detector with a
+    // 1000ms window required two frames within the same window, which 500ms
+    // polling rarely satisfies, and the 1500ms debouncer required three
+    // consecutive cycles. Spinner ticks were also short-circuited by the
+    // cosmetic-redraw early-return, so they never reached any recovery path.
+    // The fix applies tier-aware thresholds (2500ms window, 600ms debouncer)
+    // when polling is throttled and adds an idle-state recovery path through
+    // the cosmetic-redraw branch of onData().
+
+    it("recovers idle→busy from sustained spinner ticks at background tier", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("bg-1", 1000, onStateChange, {
+        getVisibleLines: () => [],
+        getCursorLine: () => null,
+        pollingIntervalMs: 500,
+        bootCompletePatterns: [/booted/i],
+        backgroundOutputWindowMs: 2500,
+        backgroundWorkingRecoveryDelayMs: 600,
+        idleDebounceMs: 4000,
+      });
+
+      // Mark boot complete so the recovery path is reachable.
+      monitor.onData("\nbooted\n");
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      // First spinner tick starts the debouncer; not yet sustained.
+      monitor.onData("\r⠙ Working (esc to interrupt)");
+      expect(monitor.getState()).toBe("idle");
+
+      // 700ms elapsed > 600ms debouncer — next tick triggers recovery.
+      vi.advanceTimersByTime(700);
+      monitor.onData("\r⠙ Working (esc to interrupt)");
+
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "bg-1",
+        1000,
+        "busy",
+        expect.objectContaining({ trigger: "output" })
+      );
+
+      monitor.dispose();
+    });
+
+    it("does not regress active-tier #3189 — single spinner burst stays idle", () => {
+      // Active tier (50ms polling) keeps the original 1500ms debouncer, so a
+      // sub-1500ms spinner burst on a non-busy agent must not escalate to busy.
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("active-1", 1000, onStateChange, {
+        getVisibleLines: () => [],
+        getCursorLine: () => null,
+        pollingIntervalMs: 50,
+        bootCompletePatterns: [/booted/i],
+        backgroundOutputWindowMs: 2500,
+        backgroundWorkingRecoveryDelayMs: 600,
+        idleDebounceMs: 4000,
+      });
+
+      monitor.onData("\nbooted\n");
+      onStateChange.mockClear();
+
+      // 1000ms of spinner output — well below the 1500ms active debouncer.
+      for (let i = 0; i < 10; i++) {
+        monitor.onData("\r⠙ Working (esc to interrupt)");
+        vi.advanceTimersByTime(100);
+      }
+
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).not.toHaveBeenCalledWith("active-1", 1000, "busy", expect.anything());
+
+      monitor.dispose();
+    });
+
+    it("recovers active-tier idle→busy after the full 1500ms debouncer", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("active-2", 1000, onStateChange, {
+        getVisibleLines: () => [],
+        getCursorLine: () => null,
+        pollingIntervalMs: 50,
+        bootCompletePatterns: [/booted/i],
+        idleDebounceMs: 4000,
+      });
+
+      monitor.onData("\nbooted\n");
+      onStateChange.mockClear();
+
+      // First spinner starts the debouncer.
+      monitor.onData("\r⠙ Working (esc to interrupt)");
+      expect(monitor.getState()).toBe("idle");
+
+      // 1600ms elapsed > 1500ms default active debouncer.
+      vi.advanceTimersByTime(1600);
+      monitor.onData("\r⠙ Working (esc to interrupt)");
+
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("does not recover when getVisibleLines is not provided (non-agent terminal)", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("plain-1", 1000, onStateChange, {
+        pollingIntervalMs: 500,
+        backgroundOutputWindowMs: 2500,
+        backgroundWorkingRecoveryDelayMs: 600,
+        idleDebounceMs: 4000,
+      });
+
+      // Even with sustained spinner output, a non-agent terminal must not
+      // false-positive into busy from cosmetic redraws alone.
+      for (let i = 0; i < 6; i++) {
+        monitor.onData("\r⠙ Working (esc to interrupt)");
+        vi.advanceTimersByTime(500);
+      }
+
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("preserves #6365: busy-state spinner ticks still reset the debounce timer", () => {
+      // When the agent is already busy, the cosmetic-redraw branch must still
+      // call resetDebounceTimer() — the new idle-recovery path is additive,
+      // not a replacement for the busy-keepalive path.
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("bg-busy", 1000, onStateChange, {
+        getVisibleLines: () => [],
+        getCursorLine: () => null,
+        pollingIntervalMs: 500,
+        backgroundOutputWindowMs: 2500,
+        backgroundWorkingRecoveryDelayMs: 600,
+        idleDebounceMs: 300,
+      });
+
+      monitor.onInput("run\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      for (let i = 0; i < 10; i++) {
+        monitor.onData("\r⠙ Working (esc to interrupt)");
+        vi.advanceTimersByTime(100);
+      }
+
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("widens output volume window for sparse background streaming", () => {
+      // At 500ms polling with the old 1000ms window, two frames 1700ms apart
+      // would reset the window and never trigger recovery. With the widened
+      // 2500ms window, the same frames now satisfy the AND-gate.
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("bg-vol", 1000, onStateChange, {
+        getVisibleLines: () => [],
+        getCursorLine: () => null,
+        pollingIntervalMs: 500,
+        bootCompletePatterns: [/ready/i],
+        outputActivityDetection: {
+          enabled: true,
+          windowMs: 1000,
+          minFrames: 2,
+          minBytes: 1,
+        },
+        backgroundOutputWindowMs: 2500,
+        backgroundWorkingRecoveryDelayMs: 600,
+        idleDebounceMs: 4000,
+      });
+
+      monitor.onData("\nready\n");
+      // Drain the volume detector's window (boot data already filled frame 1).
+      vi.advanceTimersByTime(3000);
+      onStateChange.mockClear();
+
+      // Frame 1 of the actual scenario: starts a fresh volume window.
+      monitor.onData("a");
+      expect(monitor.getState()).toBe("idle");
+
+      // Frame 2, 1700ms later — would have expired the 1000ms window but fits
+      // inside the widened 2500ms window, satisfying the AND-gate.
+      vi.advanceTimersByTime(1700);
+      monitor.onData("b");
+
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("restores active thresholds when polling switches back to active", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("tier-switch", 1000, onStateChange, {
+        getVisibleLines: () => [],
+        getCursorLine: () => null,
+        pollingIntervalMs: 50,
+        bootCompletePatterns: [/booted/i],
+        backgroundOutputWindowMs: 2500,
+        backgroundWorkingRecoveryDelayMs: 600,
+        idleDebounceMs: 4000,
+      });
+
+      // Switch to background then back to active. Pre-fix, the volume window
+      // would have been left at 2500ms; the tier setter must restore it.
+      monitor.setPollingInterval(500);
+      monitor.setPollingInterval(50);
+
+      monitor.onData("\nbooted\n");
+      onStateChange.mockClear();
+
+      // 700ms elapsed — would fire on background's 600ms debouncer but must
+      // NOT fire on active's 1500ms debouncer.
+      monitor.onData("\r⠙ Working (esc to interrupt)");
+      vi.advanceTimersByTime(700);
+      monitor.onData("\r⠙ Working (esc to interrupt)");
+
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+  });
 });

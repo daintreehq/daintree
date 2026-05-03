@@ -202,5 +202,11 @@ export function buildActivityMonitorOptions(
     idleDebounceMs: effectiveAgentId ? (detection?.debounceMs ?? 4000) : undefined,
     promptFastPathMinQuietMs: detection?.promptFastPathMinQuietMs,
     maxWaitingSilenceMs: 600_000,
+    // Background polling (500ms) widens the volume window and shortens the
+    // recovery debouncer so backgrounded agents can escape "waiting" when
+    // output resumes (#6641). Active polling (50ms) keeps the existing
+    // outputActivityDetection.windowMs (1000ms) and 1500ms debouncer.
+    backgroundOutputWindowMs: 2500,
+    backgroundWorkingRecoveryDelayMs: 600,
   };
 }

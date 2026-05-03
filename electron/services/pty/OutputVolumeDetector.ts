@@ -7,7 +7,7 @@ export interface OutputVolumeConfig {
 
 export class OutputVolumeDetector {
   readonly enabled: boolean;
-  readonly windowMs: number;
+  private _windowMs: number;
   private readonly minFrames: number;
   private readonly minBytes: number;
   private windowStart = 0;
@@ -18,9 +18,21 @@ export class OutputVolumeDetector {
     const defaults = { enabled: false, windowMs: 500, minFrames: 3, minBytes: 2048 };
     const c = { ...defaults, ...config };
     this.enabled = c.enabled;
-    this.windowMs = c.windowMs;
+    this._windowMs = c.windowMs;
     this.minFrames = c.minFrames;
     this.minBytes = c.minBytes;
+  }
+
+  get windowMs(): number {
+    return this._windowMs;
+  }
+
+  // Background polling tier (500ms) widens this window so consecutive frames
+  // stop straddling the 1000ms boundary and pinning framesInWindow at 1.
+  reconfigureWindow(windowMs: number): void {
+    if (this._windowMs === windowMs) return;
+    this._windowMs = windowMs;
+    this.resetWindow();
   }
 
   update(dataLength: number, now: number): boolean {
@@ -28,7 +40,7 @@ export class OutputVolumeDetector {
       return false;
     }
 
-    if (this.windowStart === 0 || now - this.windowStart > this.windowMs) {
+    if (this.windowStart === 0 || now - this.windowStart > this._windowMs) {
       this.windowStart = now;
       this.framesInWindow = 1;
       this.bytesInWindow = dataLength;

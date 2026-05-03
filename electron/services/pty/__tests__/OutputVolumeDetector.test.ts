@@ -81,4 +81,52 @@ describe("OutputVolumeDetector", () => {
       expect(detector.update(100, 1050)).toBe(false);
     });
   });
+
+  describe("reconfigureWindow", () => {
+    it("widens window so frames that straddled the old boundary are detectable", () => {
+      const d = new OutputVolumeDetector({
+        enabled: true,
+        windowMs: 1000,
+        minFrames: 2,
+        minBytes: 1,
+      });
+      d.reconfigureWindow(2500);
+      d.update(1, 1000);
+      // 1700ms later — would have expired the 1000ms window, fits inside 2500ms.
+      expect(d.update(1, 2700)).toBe(true);
+    });
+
+    it("clears in-flight frame accumulation on reconfigure", () => {
+      const d = new OutputVolumeDetector({
+        enabled: true,
+        windowMs: 1000,
+        minFrames: 2,
+        minBytes: 1,
+      });
+      d.update(1, 1000);
+      d.reconfigureWindow(2500);
+      // Prior frame was discarded — first frame after reconfigure cannot trigger.
+      expect(d.update(1, 1050)).toBe(false);
+    });
+
+    it("is a no-op when called with the current window size", () => {
+      const d = new OutputVolumeDetector({
+        enabled: true,
+        windowMs: 1000,
+        minFrames: 2,
+        minBytes: 1,
+      });
+      d.update(1, 1000);
+      d.reconfigureWindow(1000);
+      // Same value should preserve in-flight state.
+      expect(d.update(1, 1050)).toBe(true);
+    });
+
+    it("exposes the current windowMs through the getter", () => {
+      const d = new OutputVolumeDetector({ enabled: true, windowMs: 1000 });
+      expect(d.windowMs).toBe(1000);
+      d.reconfigureWindow(2500);
+      expect(d.windowMs).toBe(2500);
+    });
+  });
 });

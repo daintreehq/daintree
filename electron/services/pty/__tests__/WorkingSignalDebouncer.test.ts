@@ -36,4 +36,26 @@ describe("WorkingSignalDebouncer", () => {
     debouncer.reset();
     expect(debouncer.shouldTriggerRecovery(2500, true)).toBe(false);
   });
+
+  describe("setDelay", () => {
+    it("shortens the gate so recovery fires sooner", () => {
+      debouncer.setDelay(600);
+      debouncer.shouldTriggerRecovery(1000, true);
+      expect(debouncer.shouldTriggerRecovery(1599, true)).toBe(false);
+      expect(debouncer.shouldTriggerRecovery(1600, true)).toBe(true);
+    });
+
+    it("preserves sustainedSince when changing delay mid-flight", () => {
+      debouncer.shouldTriggerRecovery(1000, true);
+      debouncer.setDelay(600);
+      // Signal started at t=1000; with 600ms delay it should fire at t>=1600.
+      expect(debouncer.shouldTriggerRecovery(1600, true)).toBe(true);
+    });
+
+    it("exposes the current delay through the getter", () => {
+      expect(debouncer.delayMs).toBe(1500);
+      debouncer.setDelay(600);
+      expect(debouncer.delayMs).toBe(600);
+    });
+  });
 });
