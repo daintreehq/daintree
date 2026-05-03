@@ -73,6 +73,8 @@ export function registerWorkflowActions(
             ),
           pullRequestNumber: z
             .number()
+            .int()
+            .positive()
             .optional()
             .describe(
               "GitHub pull request number to check out. Resolves the PR's head branch automatically and creates the worktree on it. Mutually exclusive with issueNumber."
@@ -187,12 +189,26 @@ export function registerWorkflowActions(
 
         let recipeLaunched = false;
         if (recipeId) {
-          await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, {
-            worktreePath: path,
-            branchName: effectiveBranch,
-            issueNumber,
-          });
-          recipeLaunched = true;
+          try {
+            await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, {
+              worktreePath: path,
+              branchName: effectiveBranch,
+              issueNumber,
+              prNumber: pullRequestNumber,
+            });
+            recipeLaunched = true;
+          } catch (err) {
+            throw partialSuccessError(
+              `Recipe ${recipeId} failed to run: ${formatErrorMessage(err, "unknown error")}`,
+              {
+                worktreeId,
+                worktreePath: path,
+                branch: effectiveBranch,
+                recipeLaunched: false,
+                assignedToSelf: false,
+              }
+            );
+          }
         }
 
         let assignedToSelf = false;

@@ -251,7 +251,7 @@ describe("worktree.createWithRecipe", () => {
     await expect(def.run({}, {} as never)).rejects.toThrow(/branchName is required/);
   });
 
-  it("recipe runs with the PR's branch name when pullRequestNumber is provided", async () => {
+  it("recipe context carries prNumber (not issueNumber) when pullRequestNumber is provided", async () => {
     githubClientMock.getPRByNumber.mockResolvedValue({
       number: 42,
       headRefName: "contrib/feature-x",
@@ -269,13 +269,44 @@ describe("worktree.createWithRecipe", () => {
       { pullRequestNumber: 42, recipeId: "recipe-1" },
       {} as never
     )) as Record<string, unknown>;
-    expect(runRecipe).toHaveBeenCalledWith(
-      "recipe-1",
-      "/repo/contrib/feature-x",
-      "wt-new",
-      expect.objectContaining({ branchName: "contrib/feature-x" })
-    );
+    expect(runRecipe).toHaveBeenCalledWith("recipe-1", "/repo/contrib/feature-x", "wt-new", {
+      worktreePath: "/repo/contrib/feature-x",
+      branchName: "contrib/feature-x",
+      issueNumber: undefined,
+      prNumber: 42,
+    });
     expect(result.recipeLaunched).toBe(true);
+  });
+
+  it("recipe failure after worktree creation throws PARTIAL_SUCCESS with worktree info", async () => {
+    setRecipe("recipe-1", async () => {
+      throw new Error("recipe boom");
+    });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    try {
+      await def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {} as never);
+      throw new Error("expected throw");
+    } catch (err) {
+      const message = (err as Error).message;
+      expect(message).toMatch(/^PARTIAL_SUCCESS:\s+\{/);
+      const payload = JSON.parse(message.slice(message.indexOf("{")));
+      expect(payload.message).toContain("recipe boom");
+      expect(payload.partialResult.worktreeId).toBe("wt-new");
+      expect(payload.partialResult.recipeLaunched).toBe(false);
+    }
+    expect(worktreeClientMock.create).toHaveBeenCalled();
+  });
+
+  it("treats empty-string headRefName the same as missing", async () => {
+    githubClientMock.getPRByNumber.mockResolvedValue({
+      number: 42,
+      headRefName: "",
+      title: "x",
+      url: "u",
+    });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await expect(def.run({ pullRequestNumber: 42 }, {} as never)).rejects.toThrow(/no head branch/);
+    expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
   });
 });
 

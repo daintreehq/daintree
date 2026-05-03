@@ -1325,7 +1325,7 @@ describe("McpServerService", () => {
       const ids = [
         "actions.list",
         "worktree.list",
-        "worktree.create",
+        "worktree.createWithRecipe",
         "worktree.delete",
         "terminal.list",
         "terminal.inject",
@@ -1368,7 +1368,10 @@ describe("McpServerService", () => {
 
       // Mutation denied — workbench cannot create worktrees
       const denied = getTextResult(
-        await client.callTool({ name: "worktree.create", arguments: { name: "x" } })
+        await client.callTool({
+          name: "worktree.createWithRecipe",
+          arguments: { branchName: "x" },
+        })
       );
       expect(denied.isError).toBe(true);
       expect(denied.content[0].text).toContain("TIER_NOT_PERMITTED");
@@ -1399,6 +1402,7 @@ describe("McpServerService", () => {
       expect(ids).toContain("terminal.list");
       // Mutations and destructive operations are absent.
       expect(ids).not.toContain("worktree.create");
+      expect(ids).not.toContain("worktree.createWithRecipe");
       expect(ids).not.toContain("worktree.delete");
       expect(ids).not.toContain("terminal.inject");
       expect(ids).not.toContain("terminal.sendCommand");
@@ -1425,6 +1429,10 @@ describe("McpServerService", () => {
       // External tier inherits the legacy MCP_TOOL_ALLOWLIST — destructive
       // actions in that list (e.g. terminal.sendCommand, worktree.delete)
       // remain callable so existing user-facing clients keep working.
+      const ids = (await client.listTools()).tools.map((t) => t.name);
+      expect(ids).toContain("worktree.createWithRecipe");
+      expect(ids).not.toContain("worktree.create");
+
       const result = getTextResult(
         await client.callTool({
           name: "terminal.sendCommand",
