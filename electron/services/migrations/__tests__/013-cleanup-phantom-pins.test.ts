@@ -38,7 +38,7 @@ describe("migration013 — cleanup phantom pinned entries", () => {
       ["customFlags", { pinned: true, customFlags: "" }],
       ["dangerousEnabled", { pinned: true, dangerousEnabled: false }],
       ["primaryModelId null", { pinned: true, primaryModelId: null }],
-      ["assistantModelId", { pinned: true, assistantModelId: "claude-opus-4-6" }],
+      ["shareClipboardDirectory", { pinned: true, shareClipboardDirectory: false }],
       ["inlineMode", { pinned: true, inlineMode: false }],
     ];
 

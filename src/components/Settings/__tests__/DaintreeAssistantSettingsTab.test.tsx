@@ -19,46 +19,6 @@ vi.mock("@/components/icons", () => ({
   ),
 }));
 
-const updateAgentMock = vi.fn().mockResolvedValue(undefined);
-
-const claudeEntry = {
-  enabled: true,
-  customPresets: [],
-  presetId: undefined,
-  worktreePresets: {},
-  pinned: true,
-  shareClipboardDirectory: true,
-  inlineMode: false,
-  dangerousEnabled: false,
-  assistantModelId: undefined,
-} as Record<string, unknown>;
-
-vi.mock("@/store", () => ({
-  useAgentSettingsStore: (
-    selector: (s: { settings: unknown; updateAgent: typeof updateAgentMock }) => unknown
-  ) => selector({ settings: { agents: { claude: claudeEntry } }, updateAgent: updateAgentMock }),
-}));
-
-vi.mock("@shared/types", () => ({
-  getAgentSettingsEntry: () => claudeEntry,
-}));
-
-vi.mock("@/config/agents", () => ({
-  getAgentConfig: () => ({
-    id: "claude",
-    name: "Claude",
-    models: [
-      { id: "claude-haiku-4-5", name: "Haiku" },
-      { id: "claude-sonnet-4-6", name: "Sonnet" },
-      { id: "claude-opus-4-7", name: "Opus" },
-    ],
-  }),
-}));
-
-vi.mock("@shared/config/agentRegistry", () => ({
-  ASSISTANT_FAST_MODELS: { claude: "claude-haiku-4-5" },
-}));
-
 interface SettingsSelectStubOption {
   value: string;
   label: string;
@@ -148,7 +108,6 @@ describe("DaintreeAssistantSettingsTab", () => {
       writable: true,
       configurable: true,
     });
-    claudeEntry.assistantModelId = undefined;
     installApi();
   });
 
@@ -239,31 +198,12 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(screen.queryByRole("button", { name: /copy mcp config/i })).toBeNull();
   });
 
-  it("changing the model select calls updateAgent on the claude agent", async () => {
+  it("does not render a Preferred model section", async () => {
     const { container } = render(<DaintreeAssistantSettingsTab />);
-    await waitForContent(container, "Preferred model");
+    await waitForContent(container, "Search documentation");
 
-    const select = screen.getByLabelText("Model") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "claude-sonnet-4-6" } });
-
-    await waitFor(() => {
-      expect(updateAgentMock).toHaveBeenCalledWith("claude", {
-        assistantModelId: "claude-sonnet-4-6",
-      });
-    });
-  });
-
-  it("resetting the model select calls updateAgent with undefined", async () => {
-    claudeEntry.assistantModelId = "claude-opus-4-7";
-    const { container } = render(<DaintreeAssistantSettingsTab />);
-    await waitForContent(container, "Preferred model");
-
-    const select = screen.getByLabelText("Model") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "__default__" } });
-
-    await waitFor(() => {
-      expect(updateAgentMock).toHaveBeenCalledWith("claude", { assistantModelId: undefined });
-    });
+    expect(container.textContent).not.toContain("Preferred model");
+    expect(screen.queryByLabelText("Model")).toBeNull();
   });
 
   it("keeps settings visible when MCP status load fails", async () => {

@@ -19,7 +19,6 @@ import { FALLBACK_CHAIN_MAX } from "../../../shared/config/agentRegistry";
 import { Plug } from "@/components/icons";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
-import { SettingsSelect } from "./SettingsSelect";
 import { PresetSelector } from "./PresetSelector";
 import { PresetColorPicker } from "./PresetColorPicker";
 import { EnvVarEditor } from "./EnvVarEditor";
@@ -1142,41 +1141,6 @@ export function AgentSettings({
                 />
               </div>
             )}
-
-            {/* Assistant Model — agent-level */}
-            {(() => {
-              const agentCfg = getAgentConfig(activeAgent.id);
-              if (!agentCfg?.models || agentCfg.models.length <= 1) return null;
-              return (
-                <div id="agents-assistant-model">
-                  <SettingsSelect
-                    label="Assistant Model"
-                    description="Model used when this agent is launched from the help panel or assistant shortcut"
-                    value={(activeEntry.assistantModelId as string) || "__default__"}
-                    onValueChange={(v) => {
-                      void (async () => {
-                        await updateAgent(activeAgent.id, {
-                          assistantModelId: v === "__default__" ? undefined : v,
-                        });
-                        onSettingsChange?.();
-                      })();
-                    }}
-                    isModified={!!activeEntry.assistantModelId}
-                    onReset={() => {
-                      void (async () => {
-                        await updateAgent(activeAgent.id, { assistantModelId: undefined });
-                        onSettingsChange?.();
-                      })();
-                    }}
-                    resetAriaLabel={`Reset ${activeAgent.name} assistant model to default`}
-                    options={[
-                      { value: "__default__", label: "Default (fast model)" },
-                      ...agentCfg.models.map((m) => ({ value: m.id, label: m.name })),
-                    ]}
-                  />
-                </div>
-              );
-            })()}
 
             {/* Help Output */}
             <AgentHelpOutput

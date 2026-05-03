@@ -111,22 +111,6 @@ vi.mock("@/config/agents", () => ({
   getAssistantSupportedAgentIds: () => mockGetAssistantSupportedAgentIds(),
 }));
 
-vi.mock("@shared/types", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    getAgentSettingsEntry: () => ({}),
-  };
-});
-
-vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    ASSISTANT_FAST_MODELS: {} as Record<string, string>,
-  };
-});
-
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => mockDispatch(...args) },
 }));

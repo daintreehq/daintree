@@ -13,7 +13,6 @@ import {
   getAgentDisplayTitle,
   getAgentPreset,
   setAgentPresets,
-  ASSISTANT_FAST_MODELS,
   type AgentConfig,
 } from "../agentRegistry.js";
 import {
@@ -1226,22 +1225,6 @@ describe("all built-in agents have Windows or generic install", () => {
     const hasWindows = (config?.install?.byOs?.windows?.length ?? 0) > 0;
     const hasGeneric = (config?.install?.byOs?.generic?.length ?? 0) > 0;
     expect(hasWindows || hasGeneric).toBe(true);
-  });
-});
-
-describe("ASSISTANT_FAST_MODELS", () => {
-  it("has entries for claude, gemini, and codex", () => {
-    expect(ASSISTANT_FAST_MODELS).toHaveProperty("claude");
-    expect(ASSISTANT_FAST_MODELS).toHaveProperty("gemini");
-    expect(ASSISTANT_FAST_MODELS).toHaveProperty("codex");
-  });
-
-  it("each fast model ID exists in the agent's models array", () => {
-    for (const [agentId, modelId] of Object.entries(ASSISTANT_FAST_MODELS)) {
-      const config = getAgentConfig(agentId);
-      const modelIds = config?.models?.map((m) => m.id) ?? [];
-      expect(modelIds).toContain(modelId);
-    }
   });
 });
 

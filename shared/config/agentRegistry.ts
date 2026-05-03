@@ -560,16 +560,6 @@ export function getAssistantSupportedAgentIds(): string[] {
   return BUILT_IN_AGENT_IDS.filter((id) => AGENT_REGISTRY[id]?.supportsAssistant === true);
 }
 
-/**
- * Default fast/cost-efficient model IDs for the assistant (HelpPanel) use case.
- * Used as fallback when no user-configured assistantModelId is stored.
- */
-export const ASSISTANT_FAST_MODELS: Record<string, string> = {
-  claude: "claude-sonnet-4-6",
-  gemini: "gemini-2.5-flash",
-  codex: "gpt-5.3-codex-spark",
-};
-
 export function getAgentDisplayTitle(agentId: string, modelId?: string): string {
   const config = getEffectiveAgentConfig(agentId);
   const baseName = config?.name ?? agentId;

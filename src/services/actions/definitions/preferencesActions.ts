@@ -20,8 +20,6 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { logError } from "@/utils/logger";
-import { ASSISTANT_FAST_MODELS, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import { getAgentSettingsEntry } from "@shared/types";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -711,19 +709,6 @@ export function registerPreferencesActions(
         agentId = resolved ?? "claude";
       }
 
-      // Resolve assistant model override from agent settings
-      const agentSettings = useAgentSettingsStore.getState().settings;
-      const agentEntry = getAgentSettingsEntry(agentSettings, agentId);
-      const storedModel = agentEntry.assistantModelId as string | undefined;
-      const agentCfg = getEffectiveAgentConfig(agentId);
-      let model: string | undefined;
-      if (storedModel && agentCfg?.models?.some((m) => m.id === storedModel)) {
-        model = storedModel;
-      } else {
-        const fast = ASSISTANT_FAST_MODELS[agentId];
-        model = fast && agentCfg?.models?.some((m) => m.id === fast) ? fast : undefined;
-      }
-
       const helpPrompt =
         "I need help with Daintree, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
 
@@ -758,7 +743,6 @@ export function registerPreferencesActions(
           location: "dock",
           prompt: helpPrompt,
           ephemeral: true,
-          ...(model && { model }),
           ...(env && { env }),
         },
         { source: "user" }

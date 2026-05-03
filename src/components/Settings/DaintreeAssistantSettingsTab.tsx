@@ -8,7 +8,6 @@ import {
   KeyRound,
   RefreshCw,
   ShieldAlert,
-  Sparkles,
   Wrench,
 } from "lucide-react";
 import { DaintreeIcon, McpServerIcon } from "@/components/icons";
@@ -16,10 +15,6 @@ import { cn } from "@/lib/utils";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
-import { useAgentSettingsStore } from "@/store";
-import { getAgentSettingsEntry } from "@shared/types";
-import { getAgentConfig } from "@/config/agents";
-import { ASSISTANT_FAST_MODELS } from "@shared/config/agentRegistry";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
@@ -40,8 +35,6 @@ interface McpStatusSnapshot {
   apiKey: string;
 }
 
-const HELP_ASSISTANT_AGENT_ID = "claude";
-
 const RETENTION_OPTIONS = [
   { value: "7", label: "7 days (default)" },
   { value: "30", label: "30 days" },
@@ -56,13 +49,6 @@ export function DaintreeAssistantSettingsTab() {
   const [copied, setCopied] = useState(false);
   const [enablingMcp, setEnablingMcp] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const agentSettings = useAgentSettingsStore((s) => s.settings);
-  const updateAgent = useAgentSettingsStore((s) => s.updateAgent);
-  const claudeEntry = getAgentSettingsEntry(agentSettings, HELP_ASSISTANT_AGENT_ID);
-  const claudeConfig = getAgentConfig(HELP_ASSISTANT_AGENT_ID);
-  const fastDefaultId = ASSISTANT_FAST_MODELS[HELP_ASSISTANT_AGENT_ID];
-  const assistantModelId = (claudeEntry.assistantModelId as string | undefined) ?? undefined;
 
   useEffect(() => {
     let cancelled = false;
@@ -191,32 +177,6 @@ export function DaintreeAssistantSettingsTab() {
     [persist]
   );
 
-  const handleModelChange = useCallback(
-    (value: string) => {
-      void (async () => {
-        try {
-          await updateAgent(HELP_ASSISTANT_AGENT_ID, {
-            assistantModelId: value === "__default__" ? undefined : value,
-          });
-        } catch (err) {
-          setError(formatErrorMessage(err, "Couldn't save model preference"));
-          logError("Failed to save assistant model preference", err);
-        }
-      })();
-    },
-    [updateAgent]
-  );
-
-  const handleResetModel = useCallback(() => {
-    void (async () => {
-      try {
-        await updateAgent(HELP_ASSISTANT_AGENT_ID, { assistantModelId: undefined });
-      } catch (err) {
-        logError("Failed to reset assistant model preference", err);
-      }
-    })();
-  }, [updateAgent]);
-
   const handleRotateKey = useCallback(async () => {
     try {
       const key = await window.electron.mcpServer.rotateApiKey();
@@ -252,15 +212,6 @@ export function DaintreeAssistantSettingsTab() {
     }
   }, []);
 
-  const modelOptions = (() => {
-    if (!claudeConfig?.models?.length) return [];
-    const fastLabel = claudeConfig.models.find((m) => m.id === fastDefaultId)?.name ?? "fast model";
-    return [
-      { value: "__default__", label: `Default (${fastLabel})` },
-      ...claudeConfig.models.map((m) => ({ value: m.id, label: m.name })),
-    ];
-  })();
-
   return (
     <div className="space-y-6" id="settings-panel-assistant-content">
       <header className="flex items-start gap-3 pb-4 border-b border-daintree-border">
@@ -268,35 +219,11 @@ export function DaintreeAssistantSettingsTab() {
         <div>
           <h3 className="text-base font-medium text-daintree-text">Daintree Assistant</h3>
           <p className="text-xs text-daintree-text/60 mt-1 select-text">
-            Controls the help assistant launched from the dock — its preferred model, the tools it
-            can call, and how its activity is recorded. Changes apply to new help sessions.
+            Controls the help assistant launched from the dock — the tools it can call and how its
+            activity is recorded. Changes apply to new help sessions.
           </p>
         </div>
       </header>
-
-      {/* Preferred model */}
-      <SettingsSection
-        icon={Sparkles}
-        title="Preferred model"
-        description="Model used when the help assistant launches. Defaults to a fast model so quick answers stay snappy."
-      >
-        {modelOptions.length > 1 ? (
-          <SettingsSelect
-            label="Model"
-            description="The selection is stored on the Claude agent and is also used by the assistant shortcut."
-            value={assistantModelId ?? "__default__"}
-            onValueChange={handleModelChange}
-            isModified={!!assistantModelId}
-            onReset={handleResetModel}
-            resetAriaLabel="Reset assistant model to default"
-            options={modelOptions}
-          />
-        ) : (
-          <p className="text-xs text-daintree-text/50 select-text">
-            Claude isn't configured yet. Add it in CLI Agents to choose a model.
-          </p>
-        )}
-      </SettingsSection>
 
       {/* Behavior */}
       <SettingsSection
