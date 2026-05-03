@@ -151,7 +151,6 @@ const ACTION_TIER_ADDONS: ReadonlySet<string> = new Set([
   "terminal.inject",
   "terminal.new",
   "terminal.sendCommand",
-  "terminal.bulkCommand",
   "terminal.close",
   "terminal.closeAll",
 
@@ -165,11 +164,8 @@ const ACTION_TIER_ADDONS: ReadonlySet<string> = new Set([
 
   "agent.launch",
   "agent.terminal",
-  "agent.focusNextWaiting",
-  "agent.focusNextWorking",
 
   "workflow.startWorkOnIssue",
-  "workflow.focusNextAttention",
 ]);
 
 /**
@@ -218,8 +214,6 @@ const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
 
   "agent.launch",
   "agent.terminal",
-  "agent.focusNextWaiting",
-  "agent.focusNextWorking",
 
   "git.getProjectPulse",
   "git.getFileDiff",
@@ -245,7 +239,6 @@ const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   "terminal.list",
   "terminal.getOutput",
   "terminal.sendCommand",
-  "terminal.bulkCommand",
   "terminal.inject",
   "terminal.new",
 
@@ -263,7 +256,6 @@ const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
 
   "workflow.startWorkOnIssue",
   "workflow.prepBranchForReview",
-  "workflow.focusNextAttention",
 
   "files.search",
   "file.view",
