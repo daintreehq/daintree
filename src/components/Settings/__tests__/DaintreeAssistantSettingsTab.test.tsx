@@ -235,7 +235,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     const { container } = render(<DaintreeAssistantSettingsTab />);
     await waitForContent(container, "MCP server is off");
 
-    expect(screen.queryByRole("button", { name: /regenerate mcp key/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /rotate mcp key/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /copy mcp config/i })).toBeNull();
   });
 
@@ -389,6 +389,35 @@ describe("DaintreeAssistantSettingsTab", () => {
     fireEvent.click(screen.getByRole("button", { name: /turn on mcp server/i }));
 
     await waitForContent(container, "port in use");
+    expect(container.textContent).toContain("can't call Daintree actions yet");
+  });
+
+  it("shows an inline error when setEnabled resolves but the server stays off", async () => {
+    const setEnabled = vi.fn().mockResolvedValue({
+      enabled: false,
+      port: null,
+      configuredPort: null,
+      apiKey: "",
+    });
+    installApi(
+      {},
+      {
+        getStatus: vi.fn().mockResolvedValue({
+          enabled: false,
+          port: null,
+          configuredPort: null,
+          apiKey: "",
+        }),
+        setEnabled,
+      }
+    );
+
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "can't call Daintree actions yet");
+
+    fireEvent.click(screen.getByRole("button", { name: /turn on mcp server/i }));
+
+    await waitForContent(container, "Couldn't start the MCP server");
     expect(container.textContent).toContain("can't call Daintree actions yet");
   });
 

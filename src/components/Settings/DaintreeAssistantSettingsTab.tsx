@@ -54,6 +54,7 @@ export function DaintreeAssistantSettingsTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [enablingMcp, setEnablingMcp] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const agentSettings = useAgentSettingsStore((s) => s.settings);
@@ -154,6 +155,8 @@ export function DaintreeAssistantSettingsTab() {
   }, [persist, settings.skipPermissions]);
 
   const handleEnableMcpServer = useCallback(async () => {
+    if (enablingMcp) return;
+    setEnablingMcp(true);
     try {
       setError(null);
       const next = await window.electron.mcpServer.setEnabled(true);
@@ -162,6 +165,9 @@ export function DaintreeAssistantSettingsTab() {
         port: next.port,
         apiKey: next.apiKey,
       });
+      if (!next.enabled) {
+        setError("Couldn't start the MCP server. Check the MCP Server tab for details.");
+      }
     } catch (err) {
       setError(formatErrorMessage(err, "Couldn't enable MCP server"));
       notify({
@@ -171,8 +177,10 @@ export function DaintreeAssistantSettingsTab() {
         priority: "low",
       });
       logError("Failed to enable MCP server from assistant tab", err);
+    } finally {
+      setEnablingMcp(false);
     }
-  }, []);
+  }, [enablingMcp]);
 
   const setRetention = useCallback(
     (value: string) => {
@@ -316,7 +324,7 @@ export function DaintreeAssistantSettingsTab() {
           ariaLabel="Allow the assistant to call Daintree control tools"
           disabled={loading}
         />
-        {settings.daintreeControl && mcpStatus && !mcpStatus.enabled && (
+        {!loading && settings.daintreeControl && mcpStatus && !mcpStatus.enabled && (
           <div
             className={cn(
               "flex items-start gap-3 p-3 rounded-[var(--radius-md)]",
@@ -331,10 +339,12 @@ export function DaintreeAssistantSettingsTab() {
             <button
               type="button"
               onClick={() => void handleEnableMcpServer()}
+              disabled={enablingMcp}
               className={cn(
                 "shrink-0 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                 "border border-daintree-border text-daintree-text/80",
-                "hover:bg-overlay-soft hover:text-daintree-text"
+                "hover:bg-overlay-soft hover:text-daintree-text",
+                "disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
               )}
             >
               Turn on MCP server
