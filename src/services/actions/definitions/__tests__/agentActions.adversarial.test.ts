@@ -230,6 +230,124 @@ describe("agentActions adversarial", () => {
     await expect(callAction(actions, "agent.claude")).rejects.toThrow("generator boom");
   });
 
+  it("agent.getState returns matching panel data when launchAgentId matches", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["term-a", "term-b"],
+      panelsById: {
+        "term-a": {
+          id: "term-a",
+          launchAgentId: "claude",
+          agentState: "working",
+          lastStateChange: 1717000000000,
+        },
+        "term-b": {
+          id: "term-b",
+          launchAgentId: "codex",
+          agentState: "idle",
+          lastStateChange: 1717000005000,
+        },
+      },
+    });
+
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    const result = await callAction(actions, "agent.getState", { agentId: "codex" });
+
+    expect(result).toEqual({
+      agentId: "codex",
+      state: "idle",
+      lastTransitionAt: 1717000005000,
+      terminalId: "term-b",
+      found: true,
+    });
+  });
+
+  it("agent.getState returns found:false with null fields when no panel matches", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["term-a"],
+      panelsById: {
+        "term-a": { id: "term-a", launchAgentId: "claude", agentState: "working" },
+      },
+    });
+
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    const result = await callAction(actions, "agent.getState", { agentId: "gemini" });
+
+    expect(result).toEqual({
+      agentId: "gemini",
+      state: null,
+      lastTransitionAt: null,
+      terminalId: null,
+      found: false,
+    });
+  });
+
+  it("agent.getState returns the first matching panel when multiple share an agentId", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["term-first", "term-second"],
+      panelsById: {
+        "term-first": {
+          id: "term-first",
+          launchAgentId: "claude",
+          agentState: "waiting",
+          lastStateChange: 100,
+        },
+        "term-second": {
+          id: "term-second",
+          launchAgentId: "claude",
+          agentState: "working",
+          lastStateChange: 200,
+        },
+      },
+    });
+
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    const result = await callAction(actions, "agent.getState", { agentId: "claude" });
+
+    expect(result).toMatchObject({ terminalId: "term-first", state: "waiting" });
+  });
+
+  it("agent.getState tolerates panels missing agentState/lastStateChange", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["term-a"],
+      panelsById: {
+        "term-a": { id: "term-a", launchAgentId: "claude" },
+      },
+    });
+
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    const result = await callAction(actions, "agent.getState", { agentId: "claude" });
+
+    expect(result).toEqual({
+      agentId: "claude",
+      state: null,
+      lastTransitionAt: null,
+      terminalId: "term-a",
+      found: true,
+    });
+  });
+
+  it("agent.getState rejects empty agentId at the schema layer", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const result = await service.dispatch("agent.getState", { agentId: "" }, { source: "user" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("VALIDATION_ERROR");
+    }
+  });
+
   it("focusNextAgent builds the Set from both map keys and nested worktreeIds (aliases added)", async () => {
     const focusNextAgent = vi.fn();
     setPanelState({ focusNextAgent });

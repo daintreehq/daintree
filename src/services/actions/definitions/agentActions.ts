@@ -189,6 +189,46 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     },
   }));
 
+  actions.set("agent.getState", () => ({
+    id: "agent.getState",
+    title: "Get Agent State",
+    description:
+      "Look up the current state of an agent by agentId. Returns { agentId, state, lastTransitionAt, terminalId, found }. State is a point-in-time read; if multiple terminals share the same agentId, the first match wins.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({
+      agentId: z
+        .string()
+        .min(1)
+        .describe("Agent ID to look up (e.g., 'claude', 'codex'). From terminal.list[].agentId."),
+    }),
+    run: async (args: unknown) => {
+      const { agentId } = args as { agentId: string };
+      const state = usePanelStore.getState();
+      for (const id of state.panelIds) {
+        const panel = state.panelsById[id];
+        if (panel?.launchAgentId === agentId) {
+          return {
+            agentId,
+            state: panel.agentState ?? null,
+            lastTransitionAt: panel.lastStateChange ?? null,
+            terminalId: panel.id,
+            found: true,
+          };
+        }
+      }
+      return {
+        agentId,
+        state: null,
+        lastTransitionAt: null,
+        terminalId: null,
+        found: false,
+      };
+    },
+  }));
+
   actions.set("agent.focusPreviousAgent", () => ({
     id: "agent.focusPreviousAgent",
     title: "Focus Previous Agent",

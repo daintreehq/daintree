@@ -197,6 +197,7 @@ export type BuiltInActionId =
   | "panel.palette"
   | "worktree.switchIndex"
   | "agent.launch"
+  | "agent.getState"
   | "app.settings.openTab"
   | "worktree.quickCreate"
   | "worktree.createDialog.open"
