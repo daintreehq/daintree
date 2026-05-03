@@ -2975,7 +2975,7 @@ describe("McpServerService", () => {
       const dispatchMock = vi.fn(
         (_payload: DispatchRequest): ActionDispatchResult => ({
           ok: false,
-          error: { code: "DISPATCH_FAILED", message: "no view" },
+          error: { code: "EXECUTION_ERROR", message: "no view" },
         })
       );
       const { window } = createMockWindow({
@@ -3092,8 +3092,9 @@ describe("McpServerService", () => {
         agentId: "agent-xyz",
         state: "working",
         previousState: "idle",
-        trigger: "stdout-pattern",
+        trigger: "output",
         confidence: 1,
+        timestamp: Date.now(),
       });
 
       const { window } = createMockWindow({ getManifest: manifestForResources });
@@ -3140,7 +3141,7 @@ describe("McpServerService", () => {
     it("listResources returns terminals when worktree.list fails partially", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
         if (payload.actionId === "worktree.list") {
-          return { ok: false, error: { code: "X", message: "boom" } };
+          return { ok: false, error: { code: "EXECUTION_ERROR", message: "boom" } };
         }
         if (payload.actionId === "terminal.list") {
           return {
@@ -3235,15 +3236,17 @@ describe("McpServerService", () => {
         agentId: "agent-7",
         state: "working",
         previousState: "idle",
-        trigger: "stdout-pattern",
+        trigger: "output",
         confidence: 1,
+        timestamp: Date.now(),
       });
       events.emit("agent:state-changed", {
         agentId: "different-agent",
         state: "working",
         previousState: "idle",
-        trigger: "stdout-pattern",
+        trigger: "output",
         confidence: 1,
+        timestamp: Date.now(),
       });
 
       await new Promise((r) => setTimeout(r, 50));
@@ -3269,8 +3272,9 @@ describe("McpServerService", () => {
         agentId: "agent-9",
         state: "working",
         previousState: "idle",
-        trigger: "stdout-pattern",
+        trigger: "output",
         confidence: 1,
+        timestamp: Date.now(),
       });
       await new Promise((r) => setTimeout(r, 30));
       expect(updated.length).toBe(1);
@@ -3280,8 +3284,9 @@ describe("McpServerService", () => {
         agentId: "agent-9",
         state: "idle",
         previousState: "working",
-        trigger: "stdout-pattern",
+        trigger: "output",
         confidence: 1,
+        timestamp: Date.now(),
       });
       await new Promise((r) => setTimeout(r, 30));
       expect(updated.length).toBe(1);
@@ -3330,8 +3335,9 @@ describe("McpServerService", () => {
           agentId: "agent-x",
           state: "idle",
           previousState: "working",
-          trigger: "stdout-pattern",
+          trigger: "output",
           confidence: 1,
+          timestamp: Date.now(),
         })
       ).not.toThrow();
     });
