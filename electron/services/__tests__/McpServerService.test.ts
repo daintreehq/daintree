@@ -1623,11 +1623,6 @@ describe("McpServerService", () => {
         description: "Macro: inspect staging status and detected runners",
         kind: "query",
       }),
-      createManifestEntry({
-        id: "workflow.focusNextAttention" as ActionId,
-        title: "Focus Next Attention",
-        description: "Macro: focus next waiting/working agent with priority",
-      }),
     ];
 
     // Spawning terminals/agents, driving them via sent commands, and trashing
@@ -1640,7 +1635,6 @@ describe("McpServerService", () => {
       "agent.terminal",
       "agent.launch",
       "workflow.startWorkOnIssue",
-      "workflow.focusNextAttention",
     ] as const;
 
     const WORKBENCH_TIER_TOOLS = ["workflow.prepBranchForReview"] as const;
@@ -1650,6 +1644,16 @@ describe("McpServerService", () => {
       "git.push",
       "worktree.delete",
       "terminal.kill",
+    ] as const;
+
+    // Fleet-broadcast and focus-shift primitives are renderer-only — they
+    // remain available via keybindings, palette, and menus, but are NOT
+    // exposed through the MCP control plane on any tier.
+    const NEVER_EXPOSED_VIA_MCP = [
+      "terminal.bulkCommand",
+      "agent.focusNextWaiting",
+      "agent.focusNextWorking",
+      "workflow.focusNextAttention",
     ] as const;
 
     it("workbench tier exposes only read-only introspection tools", async () => {
@@ -1671,7 +1675,9 @@ describe("McpServerService", () => {
       expect(ids).not.toContain("worktree.create");
       expect(ids).not.toContain("git.commit");
       expect(ids).not.toContain("workflow.startWorkOnIssue");
-      expect(ids).not.toContain("workflow.focusNextAttention");
+      for (const id of NEVER_EXPOSED_VIA_MCP) {
+        expect(ids).not.toContain(id);
+      }
     });
 
     it("action tier adds non-destructive mutations and terminal/agent spawning, but excludes irreversible ones", async () => {
@@ -1691,6 +1697,9 @@ describe("McpServerService", () => {
         expect(ids).toContain(id);
       }
       for (const id of SYSTEM_ONLY_TOOLS) {
+        expect(ids).not.toContain(id);
+      }
+      for (const id of NEVER_EXPOSED_VIA_MCP) {
         expect(ids).not.toContain(id);
       }
     });
@@ -1713,6 +1722,9 @@ describe("McpServerService", () => {
       }
       for (const id of SYSTEM_ONLY_TOOLS) {
         expect(ids).toContain(id);
+      }
+      for (const id of NEVER_EXPOSED_VIA_MCP) {
+        expect(ids).not.toContain(id);
       }
     });
 
