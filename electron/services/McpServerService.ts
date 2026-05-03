@@ -41,12 +41,96 @@ import { summarizeMcpArgs } from "../../shared/utils/mcpArgsSummary.js";
 import { mcpPaneConfigService } from "./McpPaneConfigService.js";
 import { events } from "./events.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
+import type { AgentState } from "../../shared/types/agent.js";
 
 const MCP_SERVER_KEY = "daintree";
 
 const DEFAULT_PORT = 45454;
 const MAX_PORT_RETRIES = 10;
 const MCP_SSE_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
+/**
+ * Native MCP tool — implemented entirely in this service rather than backed by
+ * a renderer action. Used as the assistant's await primitive: long-poll a
+ * terminal until its agent transitions out of `working` (or times out, or the
+ * client cancels).
+ */
+const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
+
+/** Default ceiling on how long a single waitUntilIdle call may block. */
+const DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** Hard upper bound; clients that pass higher values are clamped silently. */
+const MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+
+type WaitUntilIdleResult = {
+  terminalId: string;
+  agentId?: string;
+  busyState: "working" | "idle";
+  idleReason?: "idle" | "waiting_for_user" | "completed" | "exited" | "unknown";
+  previousBusyState?: "working" | "idle";
+  lastTransitionAt?: number;
+  timedOut: boolean;
+};
+
+const WAIT_UNTIL_IDLE_INPUT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    terminalId: {
+      type: "string",
+      description: "Panel UUID returned by `terminal.list` (the `id` field).",
+    },
+    timeoutMs: {
+      type: "integer",
+      minimum: 0,
+      maximum: MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
+      description: `Maximum time to block in milliseconds. Defaults to ${DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS} ms (${DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS / 60_000} minutes); clamped to ${MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS} ms (${MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS / 60_000 / 60} hours). Use 0 for an immediate snapshot.`,
+    },
+  },
+  required: ["terminalId"],
+  additionalProperties: false,
+};
+
+const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    terminalId: { type: "string" },
+    agentId: { type: "string" },
+    busyState: { type: "string", enum: ["working", "idle"] },
+    idleReason: {
+      type: "string",
+      enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
+    },
+    previousBusyState: { type: "string", enum: ["working", "idle"] },
+    lastTransitionAt: { type: "number" },
+    timedOut: { type: "boolean" },
+  },
+  required: ["terminalId", "busyState", "timedOut"],
+};
+
+const WAIT_UNTIL_IDLE_DESCRIPTION =
+  "[terminal] Wait until idle: blocks until the agent in the given terminal transitions out of the `working` state, or until the timeout elapses. Resolves immediately if the agent is already non-working or no agent is attached. Honours client cancellation.";
+
+function mapAgentStateToBusyState(state: AgentState | undefined): "working" | "idle" {
+  return state === "working" ? "working" : "idle";
+}
+
+function mapAgentStateToIdleReason(
+  state: AgentState | undefined
+): WaitUntilIdleResult["idleReason"] {
+  switch (state) {
+    case "idle":
+      return "idle";
+    case "waiting":
+      return "waiting_for_user";
+    case "completed":
+      return "completed";
+    case "exited":
+      return "exited";
+    default:
+      return "unknown";
+  }
+}
 
 const AUDIT_FLUSH_DEBOUNCE_MS = 2000;
 const CONFIRMATION_REQUIRED_CODE = "CONFIRMATION_REQUIRED";
@@ -153,6 +237,7 @@ const ACTION_TIER_ADDONS: ReadonlySet<string> = new Set([
   "terminal.sendCommand",
   "terminal.close",
   "terminal.closeAll",
+  TERMINAL_WAIT_UNTIL_IDLE_TOOL,
 
   "recipe.list",
   "recipe.run",
@@ -241,6 +326,7 @@ const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   "terminal.sendCommand",
   "terminal.inject",
   "terminal.new",
+  TERMINAL_WAIT_UNTIL_IDLE_TOOL,
 
   "worktree.list",
   "worktree.getCurrent",
@@ -1332,6 +1418,196 @@ export class McpServerService {
     });
   }
 
+  /**
+   * Native handler for `terminal.waitUntilIdle`. Long-polls until the agent
+   * attached to `terminalId` transitions out of `working`, the configured
+   * timeout elapses, or the client cancels via `extra.signal`.
+   *
+   * Subscribe-then-read ordering is mandatory: if the read happens first and
+   * the transition fires before the listener is wired, the wait would hang
+   * until timeout.
+   */
+  private async handleWaitUntilIdle(
+    rawArgs: unknown,
+    signal: AbortSignal
+  ): Promise<WaitUntilIdleResult> {
+    const argsObj =
+      rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
+        ? (rawArgs as Record<string, unknown>)
+        : null;
+    if (!argsObj) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        "terminal.waitUntilIdle requires an object argument with a `terminalId` field."
+      );
+    }
+    const terminalIdRaw = argsObj["terminalId"];
+    if (typeof terminalIdRaw !== "string" || terminalIdRaw.trim() === "") {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        "terminal.waitUntilIdle requires a non-empty `terminalId` string."
+      );
+    }
+    const terminalId = terminalIdRaw;
+
+    let timeoutMs = DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS;
+    const rawTimeout = argsObj["timeoutMs"];
+    if (rawTimeout !== undefined) {
+      if (
+        typeof rawTimeout !== "number" ||
+        !Number.isFinite(rawTimeout) ||
+        rawTimeout < 0 ||
+        Math.floor(rawTimeout) !== rawTimeout
+      ) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          "terminal.waitUntilIdle `timeoutMs` must be a non-negative integer."
+        );
+      }
+      timeoutMs = Math.min(rawTimeout, MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS);
+    }
+
+    if (signal.aborted) {
+      throw new McpError(ErrorCode.RequestTimeout, "Request was cancelled.");
+    }
+
+    const store = getAgentAvailabilityStore();
+    const agentId = store.getAgentIdForTerminal(terminalId);
+
+    // Plain shell terminals (no spawned agent) have no tracked state — treat
+    // them as idle so callers don't need to special-case the absence of an
+    // agent.
+    if (!agentId) {
+      return {
+        terminalId,
+        busyState: "idle",
+        idleReason: "unknown",
+        timedOut: false,
+      };
+    }
+
+    let unsubscribe: (() => void) | undefined;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let abortListener: (() => void) | undefined;
+    let settled = false;
+
+    const cleanup = () => {
+      if (unsubscribe) {
+        try {
+          unsubscribe();
+        } catch (err) {
+          console.error("[MCP] waitUntilIdle: unsubscribe failed:", err);
+        }
+        unsubscribe = undefined;
+      }
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle);
+        timeoutHandle = undefined;
+      }
+      if (abortListener) {
+        signal.removeEventListener("abort", abortListener);
+        abortListener = undefined;
+      }
+    };
+
+    type Settlement =
+      | {
+          kind: "transition";
+          state: AgentState;
+          previousState: AgentState;
+          timestamp: number;
+        }
+      | { kind: "already-idle"; state: AgentState }
+      | { kind: "timeout" }
+      | { kind: "abort" };
+
+    const previousState = store.getState(agentId);
+
+    try {
+      const settlement = await new Promise<Settlement>((resolve) => {
+        const settle = (value: Settlement) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        };
+
+        // 1. Subscribe BEFORE reading current state to avoid losing a
+        //    transition that fires between read and subscribe. Filter on
+        //    `terminalId` because `agentId` is the agent *type* (e.g.
+        //    "claude") and is shared across every terminal running that
+        //    agent — without the per-terminal filter another Claude
+        //    terminal completing would falsely satisfy this wait.
+        unsubscribe = events.on("agent:state-changed", (payload) => {
+          if (payload.terminalId !== terminalId) return;
+          if (payload.state === "working") return;
+          settle({
+            kind: "transition",
+            state: payload.state,
+            previousState: payload.previousState,
+            timestamp: payload.timestamp,
+          });
+        });
+
+        // 2. Read current state. Anything other than `working` resolves now.
+        const currentState = store.getState(agentId);
+        if (currentState !== "working") {
+          settle({ kind: "already-idle", state: currentState ?? "idle" });
+          return;
+        }
+
+        // 3. Race against client cancellation and the configured timeout.
+        if (signal.aborted) {
+          settle({ kind: "abort" });
+          return;
+        }
+        abortListener = () => settle({ kind: "abort" });
+        signal.addEventListener("abort", abortListener, { once: true });
+
+        timeoutHandle = setTimeout(() => settle({ kind: "timeout" }), timeoutMs);
+      });
+
+      if (settlement.kind === "abort") {
+        throw new McpError(ErrorCode.RequestTimeout, "Request was cancelled.");
+      }
+
+      if (settlement.kind === "timeout") {
+        return {
+          terminalId,
+          agentId,
+          busyState: "working",
+          previousBusyState: mapAgentStateToBusyState(previousState),
+          lastTransitionAt: store.getLastStateChange(agentId),
+          timedOut: true,
+        };
+      }
+
+      if (settlement.kind === "transition") {
+        return {
+          terminalId,
+          agentId,
+          busyState: mapAgentStateToBusyState(settlement.state),
+          idleReason: mapAgentStateToIdleReason(settlement.state),
+          previousBusyState: mapAgentStateToBusyState(settlement.previousState),
+          lastTransitionAt: settlement.timestamp,
+          timedOut: false,
+        };
+      }
+
+      // already-idle
+      return {
+        terminalId,
+        agentId,
+        busyState: mapAgentStateToBusyState(settlement.state),
+        idleReason: mapAgentStateToIdleReason(settlement.state),
+        previousBusyState: mapAgentStateToBusyState(previousState),
+        lastTransitionAt: store.getLastStateChange(agentId),
+        timedOut: false,
+      };
+    } finally {
+      cleanup();
+    }
+  }
+
   private createSessionServer(sessionId: string): Server {
     const server = new Server(
       { name: "Daintree", version: "1.0.0" },
@@ -1347,23 +1623,41 @@ export class McpServerService {
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       const manifest = await this.requestManifest();
       const tier = this.getSessionTier(sessionId);
-      return {
-        tools: manifest
-          .filter((entry) => this.shouldExposeTool(entry, tier))
-          .map((entry) => {
-            const outputSchema = this.buildToolOutputSchema(entry);
-            return {
-              name: entry.id,
-              description: this.buildToolDescription(entry),
-              inputSchema: this.buildToolInputSchema(entry),
-              annotations: this.buildAnnotations(entry),
-              ...(outputSchema ? { outputSchema } : {}),
-            };
-          }),
-      };
+      const tools = manifest
+        .filter((entry) => this.shouldExposeTool(entry, tier))
+        .map((entry) => {
+          const outputSchema = this.buildToolOutputSchema(entry);
+          return {
+            name: entry.id,
+            description: this.buildToolDescription(entry),
+            inputSchema: this.buildToolInputSchema(entry),
+            annotations: this.buildAnnotations(entry),
+            ...(outputSchema ? { outputSchema } : {}),
+          };
+        });
+
+      // Native tools live outside the renderer action manifest. Append them
+      // after the manifest-backed tools so existing ordering is preserved.
+      if (this.isTierPermitted(tier, TERMINAL_WAIT_UNTIL_IDLE_TOOL)) {
+        tools.push({
+          name: TERMINAL_WAIT_UNTIL_IDLE_TOOL,
+          description: WAIT_UNTIL_IDLE_DESCRIPTION,
+          inputSchema: WAIT_UNTIL_IDLE_INPUT_SCHEMA,
+          annotations: {
+            title: "Wait until terminal idle",
+            readOnlyHint: true,
+            idempotentHint: false,
+            destructiveHint: false,
+            openWorldHint: false,
+          },
+          outputSchema: WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
+        });
+      }
+
+      return { tools };
     });
 
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const actionId = request.params.name;
       const { args, confirmed } = this.parseToolArguments(request.params.arguments);
       const startedAt = Date.now();
@@ -1391,6 +1685,50 @@ export class McpServerService {
           ],
           isError: true,
         };
+      }
+
+      // Native tools intercept BEFORE the renderer dispatch path — they have
+      // no manifest entry and dispatchAction would reject them.
+      if (actionId === TERMINAL_WAIT_UNTIL_IDLE_TOOL) {
+        let nativeOutcome:
+          | { kind: "result"; value: ActionDispatchResult }
+          | { kind: "throw"; error: unknown }
+          | undefined;
+        try {
+          const result = await this.handleWaitUntilIdle(args, extra.signal);
+          nativeOutcome = { kind: "result", value: { ok: true, result } };
+          return {
+            content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+            structuredContent: result as unknown as Record<string, unknown>,
+          };
+        } catch (err) {
+          nativeOutcome = { kind: "throw", error: err };
+          if (err instanceof McpError) {
+            throw err;
+          }
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error: ${formatErrorMessage(err, "waitUntilIdle failed")}`,
+              },
+            ],
+            isError: true,
+          };
+        } finally {
+          try {
+            this.appendAuditRecord({
+              toolId: actionId,
+              sessionId,
+              tier,
+              args,
+              durationMs: Date.now() - startedAt,
+              outcome: nativeOutcome ?? { kind: "throw", error: new Error("unknown") },
+            });
+          } catch (auditErr) {
+            console.error("[MCP] Failed to append audit record:", auditErr);
+          }
+        }
       }
 
       let outcome:

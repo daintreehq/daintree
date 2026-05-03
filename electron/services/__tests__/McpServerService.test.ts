@@ -3720,4 +3720,380 @@ describe("McpServerService", () => {
       ).not.toThrow();
     });
   });
+
+  describe("terminal.waitUntilIdle native tool", () => {
+    let uniqueCounter = 0;
+    const nextIds = () => {
+      uniqueCounter += 1;
+      return {
+        terminalId: `wait-term-${uniqueCounter}-${Math.random().toString(36).slice(2, 6)}`,
+        agentId: `wait-agent-${uniqueCounter}-${Math.random().toString(36).slice(2, 6)}`,
+      };
+    };
+
+    const seedTerminalAgent = async (
+      terminalId: string,
+      agentId: string,
+      state: "idle" | "working" | "waiting" | "completed" | "exited" = "idle"
+    ) => {
+      const { events } = await import("../events.js");
+      const { getAgentAvailabilityStore } = await import("../AgentAvailabilityStore.js");
+      // Force singleton wiring before any emit.
+      getAgentAvailabilityStore();
+      events.emit("agent:spawned", {
+        agentId,
+        terminalId,
+        timestamp: Date.now(),
+      });
+      events.emit("agent:state-changed", {
+        agentId,
+        terminalId,
+        state,
+        previousState: state === "working" ? "idle" : "working",
+        trigger: "output",
+        confidence: 1,
+        timestamp: Date.now(),
+      });
+    };
+
+    it("listTools advertises the native tool with the documented schema for the action tier", async () => {
+      paneTokenTiers.set("token-wait-action", "action");
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-wait-action",
+      });
+      transports.push(transport);
+
+      const result = await client.listTools();
+      const tool = result.tools.find((t) => t.name === "terminal.waitUntilIdle");
+      expect(tool).toBeDefined();
+      expect(tool?.inputSchema.required).toEqual(["terminalId"]);
+      expect(tool?.inputSchema.additionalProperties).toBe(false);
+      expect(tool?.annotations?.readOnlyHint).toBe(true);
+      expect(tool?.annotations?.destructiveHint).toBe(false);
+    });
+
+    it("listTools hides the native tool from the workbench tier", async () => {
+      paneTokenTiers.set("token-wait-wb", "workbench");
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-wait-wb",
+      });
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((t) => t.name);
+      expect(ids).not.toContain("terminal.waitUntilIdle");
+    });
+
+    it("returns immediately for a terminal that is already idle", async () => {
+      const { terminalId, agentId } = nextIds();
+      await seedTerminalAgent(terminalId, agentId, "idle");
+
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const startedAt = Date.now();
+      const result = (await client.callTool({
+        name: "terminal.waitUntilIdle",
+        arguments: { terminalId },
+      })) as TextToolResult & { structuredContent?: Record<string, unknown> };
+      const elapsed = Date.now() - startedAt;
+
+      expect(result.isError).toBeFalsy();
+      expect(elapsed).toBeLessThan(1000);
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload).toMatchObject({
+        terminalId,
+        agentId,
+        busyState: "idle",
+        idleReason: "idle",
+        timedOut: false,
+      });
+      expect(result.structuredContent).toMatchObject({
+        terminalId,
+        busyState: "idle",
+        timedOut: false,
+      });
+    });
+
+    it("returns immediately as idle for a terminal with no spawned agent", async () => {
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = (await client.callTool({
+        name: "terminal.waitUntilIdle",
+        arguments: { terminalId: "plain-shell-term" },
+      })) as TextToolResult;
+
+      expect(result.isError).toBeFalsy();
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload).toMatchObject({
+        terminalId: "plain-shell-term",
+        busyState: "idle",
+        idleReason: "unknown",
+        timedOut: false,
+      });
+      expect(payload.agentId).toBeUndefined();
+    });
+
+    it("blocks on a working terminal and resolves when state transitions to idle", async () => {
+      const { events } = await import("../events.js");
+      const { terminalId, agentId } = nextIds();
+      await seedTerminalAgent(terminalId, agentId, "working");
+
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const callPromise = client.callTool({
+        name: "terminal.waitUntilIdle",
+        arguments: { terminalId },
+      }) as Promise<TextToolResult>;
+
+      // Give the call time to register its listener.
+      await new Promise((r) => setTimeout(r, 30));
+
+      const transitionTs = Date.now();
+      events.emit("agent:state-changed", {
+        agentId,
+        terminalId,
+        state: "completed",
+        previousState: "working",
+        trigger: "output",
+        confidence: 1,
+        timestamp: transitionTs,
+      });
+
+      const result = await callPromise;
+      expect(result.isError).toBeFalsy();
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload).toMatchObject({
+        terminalId,
+        agentId,
+        busyState: "idle",
+        idleReason: "completed",
+        previousBusyState: "working",
+        lastTransitionAt: transitionTs,
+        timedOut: false,
+      });
+    });
+
+    it("ignores agent:state-changed events that stay in working state", async () => {
+      const { events } = await import("../events.js");
+      const { terminalId, agentId } = nextIds();
+      await seedTerminalAgent(terminalId, agentId, "working");
+
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const callPromise = client.callTool({
+        name: "terminal.waitUntilIdle",
+        arguments: { terminalId, timeoutMs: 200 },
+      }) as Promise<TextToolResult>;
+
+      await new Promise((r) => setTimeout(r, 30));
+
+      // working → working is a no-op for the tool — the listener must not resolve.
+      events.emit("agent:state-changed", {
+        agentId,
+        terminalId,
+        state: "working",
+        previousState: "working",
+        trigger: "output",
+        confidence: 1,
+        timestamp: Date.now(),
+      });
+
+      const result = await callPromise;
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload.timedOut).toBe(true);
+      expect(payload.busyState).toBe("working");
+    });
+
+    it("returns timedOut:true when the timeout elapses without a transition", async () => {
+      const { terminalId, agentId } = nextIds();
+      await seedTerminalAgent(terminalId, agentId, "working");
+
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = (await client.callTool({
+        name: "terminal.waitUntilIdle",
+        arguments: { terminalId, timeoutMs: 80 },
+      })) as TextToolResult;
+
+      expect(result.isError).toBeFalsy();
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload).toMatchObject({
+        terminalId,
+        agentId,
+        busyState: "working",
+        timedOut: true,
+      });
+      expect(payload.previousBusyState).toBe("working");
+    });
+
+    it("filters state-change events by the resolved agentId", async () => {
+      const { events } = await import("../events.js");
+      const { terminalId, agentId } = nextIds();
+      const otherAgent = `other-${Math.random().toString(36).slice(2)}`;
+      await seedTerminalAgent(terminalId, agentId, "working");
+
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const callPromise = client.callTool({
+        name: "terminal.waitUntilIdle",
+        arguments: { terminalId, timeoutMs: 150 },
+      }) as Promise<TextToolResult>;
+
+      await new Promise((r) => setTimeout(r, 30));
+
+      // Unrelated agent transitions must not satisfy the wait.
+      events.emit("agent:state-changed", {
+        agentId: otherAgent,
+        state: "idle",
+        previousState: "working",
+        trigger: "output",
+        confidence: 1,
+        timestamp: Date.now(),
+      });
+
+      const result = await callPromise;
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload.timedOut).toBe(true);
+      expect(payload.agentId).toBe(agentId);
+    });
+
+    it("does not resolve when another terminal sharing the same agent type transitions", async () => {
+      const { events } = await import("../events.js");
+      // Two Claude terminals — same `agentId` ("claude"), different terminalIds.
+      // A transition for terminal B must NOT satisfy a wait on terminal A.
+      const sharedAgentId = "claude";
+      const terminalA = `share-A-${Math.random().toString(36).slice(2)}`;
+      const terminalB = `share-B-${Math.random().toString(36).slice(2)}`;
+      await seedTerminalAgent(terminalA, sharedAgentId, "working");
+      // Note: emitting agent:spawned for terminalB overwrites the
+      // agentToTerminal mapping for sharedAgentId; this is a known
+      // AgentAvailabilityStore limitation and not something this tool can fix.
+      events.emit("agent:spawned", {
+        agentId: sharedAgentId,
+        terminalId: terminalB,
+        timestamp: Date.now(),
+      });
+
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const callPromise = client.callTool({
+        name: "terminal.waitUntilIdle",
+        arguments: { terminalId: terminalA, timeoutMs: 120 },
+      }) as Promise<TextToolResult>;
+
+      await new Promise((r) => setTimeout(r, 30));
+
+      // Terminal B finishes — must NOT resolve the wait on terminal A.
+      events.emit("agent:state-changed", {
+        agentId: sharedAgentId,
+        terminalId: terminalB,
+        state: "completed",
+        previousState: "working",
+        trigger: "output",
+        confidence: 1,
+        timestamp: Date.now(),
+      });
+
+      const result = await callPromise;
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload.timedOut).toBe(true);
+      expect(payload.terminalId).toBe(terminalA);
+    });
+
+    it("rejects calls with a missing or empty terminalId", async () => {
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await expect(
+        client.callTool({
+          name: "terminal.waitUntilIdle",
+          arguments: { terminalId: "" },
+        })
+      ).rejects.toThrow(/non-empty/);
+    });
+
+    it("rejects calls with an invalid timeoutMs", async () => {
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await expect(
+        client.callTool({
+          name: "terminal.waitUntilIdle",
+          arguments: { terminalId: "any", timeoutMs: -1 },
+        })
+      ).rejects.toThrow(/non-negative integer/);
+    });
+
+    it("rejects callTool from a workbench-tier session before invoking the handler", async () => {
+      paneTokenTiers.set("token-wait-deny", "workbench");
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-wait-deny",
+      });
+      transports.push(transport);
+
+      const result = (await client.callTool({
+        name: "terminal.waitUntilIdle",
+        arguments: { terminalId: "anything" },
+      })) as TextToolResult;
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain("TIER_NOT_PERMITTED");
+    });
+
+    it("releases its event listener after resolving so repeated calls do not leak", async () => {
+      const { events } = await import("../events.js");
+      const innerBus = (events as unknown as { bus: import("node:events").EventEmitter }).bus;
+      const { terminalId, agentId } = nextIds();
+      await seedTerminalAgent(terminalId, agentId, "idle");
+
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const baseline = innerBus.listenerCount("agent:state-changed");
+
+      for (let i = 0; i < 3; i += 1) {
+        const result = (await client.callTool({
+          name: "terminal.waitUntilIdle",
+          arguments: { terminalId },
+        })) as TextToolResult;
+        expect(result.isError).toBeFalsy();
+      }
+
+      // Listener count should not grow per call — the handler must remove its
+      // subscription on every exit path.
+      expect(innerBus.listenerCount("agent:state-changed")).toBe(baseline);
+    });
+  });
 });

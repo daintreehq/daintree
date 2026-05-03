@@ -157,6 +157,22 @@ export class AgentAvailabilityStore {
   }
 
   /**
+   * Resolve the agentId associated with a terminal, if any.
+   * Returns undefined for terminals that have never spawned an agent (e.g. plain shells).
+   */
+  getAgentIdForTerminal(terminalId: string): string | undefined {
+    return this.terminalToAgent.get(terminalId);
+  }
+
+  /**
+   * Timestamp (ms) of the most recent state transition for an agent, sourced from the
+   * canonical event payload rather than wall-clock time.
+   */
+  getLastStateChange(agentId: string): number | undefined {
+    return this.lastStateChange.get(agentId);
+  }
+
+  /**
    * Get the number of concurrent tasks assigned to an agent.
    */
   getConcurrentTaskCount(agentId: string): number {
