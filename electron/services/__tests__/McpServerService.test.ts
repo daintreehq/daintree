@@ -1610,6 +1610,22 @@ describe("McpServerService", () => {
         title: "Launch Agent",
         description: "Spawn a registered agent CLI",
       }),
+      createManifestEntry({
+        id: "workflow.startWorkOnIssue" as ActionId,
+        title: "Start Work on Issue",
+        description: "Macro: fetch issue, create worktree, launch agent, inject context",
+      }),
+      createManifestEntry({
+        id: "workflow.prepBranchForReview" as ActionId,
+        title: "Prep Branch for Review",
+        description: "Macro: inspect staging status and detected runners",
+        kind: "query",
+      }),
+      createManifestEntry({
+        id: "workflow.focusNextAttention" as ActionId,
+        title: "Focus Next Attention",
+        description: "Macro: focus next waiting/working agent with priority",
+      }),
     ];
 
     // Spawning terminals/agents, driving them via sent commands, and trashing
@@ -1621,7 +1637,11 @@ describe("McpServerService", () => {
       "terminal.close",
       "agent.terminal",
       "agent.launch",
+      "workflow.startWorkOnIssue",
+      "workflow.focusNextAttention",
     ] as const;
+
+    const WORKBENCH_TIER_TOOLS = ["workflow.prepBranchForReview"] as const;
 
     const SYSTEM_ONLY_TOOLS = [
       "git.commit",
@@ -1643,8 +1663,13 @@ describe("McpServerService", () => {
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("actions.list");
       expect(ids).toContain("worktree.list");
+      for (const id of WORKBENCH_TIER_TOOLS) {
+        expect(ids).toContain(id);
+      }
       expect(ids).not.toContain("worktree.create");
       expect(ids).not.toContain("git.commit");
+      expect(ids).not.toContain("workflow.startWorkOnIssue");
+      expect(ids).not.toContain("workflow.focusNextAttention");
     });
 
     it("action tier adds non-destructive mutations and terminal/agent spawning, but excludes irreversible ones", async () => {

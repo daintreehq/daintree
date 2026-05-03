@@ -62,7 +62,7 @@ export function createActionDefinitions(
   registerBrowserActions(actions, callbacks);
   registerIntrospectionActions(actions, callbacks);
   registerDevServerActions(actions, callbacks);
-  registerWorkflowActions(actions);
+  registerWorkflowActions(actions, callbacks);
   registerFileActions(actions, callbacks);
   registerVoiceActions(actions);
   registerActionActions(actions);
