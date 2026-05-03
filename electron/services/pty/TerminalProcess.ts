@@ -1059,6 +1059,13 @@ export class TerminalProcess {
       return null;
     }
 
+    // Don't inject quit into terminals whose agent already exited — e.g.
+    // user typed /quit and the terminal demoted to a plain shell. The
+    // launchAgentId persists for identity, but the agent is gone.
+    if (!this.isAgentLive) {
+      return null;
+    }
+
     const liveAgentId = getLiveAgentId(terminal);
     const agentConfig = liveAgentId ? getEffectiveAgentConfig(liveAgentId) : undefined;
     const resume = agentConfig?.resume;
@@ -1150,6 +1157,16 @@ export class TerminalProcess {
         await new Promise<void>((r) => setTimeout(r, GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS));
 
         if (resolved) return;
+
+        // Re-check liveness: if the agent demoted during the clear-delay
+        // window (e.g. user typed /quit milliseconds before shutdown), the
+        // pending write would land in a plain shell.
+        if (!this.isAgentLive) {
+          origOnData.dispose();
+          origOnExit.dispose();
+          finish(null);
+          return;
+        }
 
         try {
           if (shutdownKeySequence) {

@@ -246,6 +246,63 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
     expect(handles.writeMock).not.toHaveBeenCalled();
   });
 
+  it("skips quit injection when agent already exited via /quit (issue #6605)", async () => {
+    // Repro #6605: user types /quit, terminal demotes to plain shell (agentState
+    // becomes "exited", detectedAgentId clears) but launchAgentId persists. On
+    // app shutdown, gracefulShutdown must NOT inject /quit into what is now a
+    // plain interactive shell.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles);
+
+    terminal.getInfo().agentState = "exited";
+    terminal.getInfo().detectedAgentId = undefined;
+
+    await expect(terminal.gracefulShutdown()).resolves.toBeNull();
+    expect(handles.writeMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the quit write when the agent demotes during the clear-delay window", async () => {
+    // Race-guard companion to the #6605 fix: if the agent exits between the
+    // prelude write and the clear-delay timeout, the post-delay write must
+    // also short-circuit — otherwise /quit lands in a plain shell.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles);
+
+    const shutdownPromise = terminal.gracefulShutdown();
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    // Demote mid-flight — same mutation the demotion path performs.
+    terminal.getInfo().agentState = "exited";
+    terminal.getInfo().detectedAgentId = undefined;
+
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+
+    await expect(shutdownPromise).resolves.toBeNull();
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+    expect(handles.writeMock.mock.calls[0]?.[0]).toBe("\x05\x15");
+  });
+
+  it("still injects quit for a live launched agent that has not been detected yet", async () => {
+    // Regression guard: the new isAgentLive gate must NOT block cold-launched
+    // agents that haven't yet been detected by the process tree scan
+    // (launchAgentId set, detectedAgentId undefined, agentState !== "exited").
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles);
+
+    const shutdownPromise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+
+    expect(handles.writeMock).toHaveBeenCalledTimes(2);
+    expect(handles.writeMock.mock.calls[0]?.[0]).toBe("\x05\x15");
+    expect(handles.writeMock.mock.calls[1]?.[0]).toBe("/quit\r");
+
+    handles.emitData("claude --resume live-agent\n");
+    await expect(shutdownPromise).resolves.toBe("live-agent");
+  });
+
   it("project-scoped (Kiro) skips the session-ID capture loop and resolves null", async () => {
     // Lesson #4781: agents with directory-based sessions never emit session
     // IDs. The capture regex must NOT run for `project-scoped` resume kinds
