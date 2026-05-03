@@ -38,7 +38,7 @@ export function registerWorkflowActions(
       id: "worktree.createWithRecipe",
       title: "Create Worktree with Recipe",
       description:
-        "Create a worktree with branch and path setup, optionally check out a PR's head branch, optionally run a recipe, and optionally assign the linked issue.",
+        "Create a worktree with branch setup, optionally from a PR, with recipe and issue assignment.",
       category: "worktree",
       kind: "command",
       danger: "safe",
