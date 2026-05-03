@@ -3026,16 +3026,16 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
-      await expect(
-        client.getPrompt({ name: "start_issue", arguments: {} })
-      ).rejects.toMatchObject({ code: -32602 });
+      await expect(client.getPrompt({ name: "start_issue", arguments: {} })).rejects.toMatchObject({
+        code: -32602,
+      });
     });
 
     it("falls back to placeholder text when the renderer dispatch fails", async () => {
       const { window } = createMockWindow({
         dispatchAction: () => ({
           ok: false,
-          error: { code: "RENDERER_DEAD", message: "renderer is gone" },
+          error: { code: "EXECUTION_ERROR", message: "renderer is gone" },
         }),
       });
       await service.start(window);
@@ -3128,7 +3128,7 @@ describe("McpServerService", () => {
             };
           }
           if (payload.actionId === "terminal.getOutput") {
-            return { ok: false, error: { code: "RENDERER_FAIL", message: "boom" } };
+            return { ok: false, error: { code: "EXECUTION_ERROR", message: "boom" } };
           }
           return { ok: true, result: null };
         },

@@ -470,7 +470,9 @@ const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
       lines.push("");
       lines.push("Please:");
       lines.push("1. Read the current git status (`git.getStagingStatus`) to see what changed.");
-      lines.push("2. Identify the root cause (error message, missing prerequisite, infinite loop, etc.).");
+      lines.push(
+        "2. Identify the root cause (error message, missing prerequisite, infinite loop, etc.)."
+      );
       lines.push(
         "3. Recommend a concrete next step: retry, kill and restart, hand back to me, or escalate."
       );
