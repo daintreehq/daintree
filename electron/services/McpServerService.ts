@@ -2001,7 +2001,7 @@ export class McpServerService {
           };
 
     if (entry.danger !== "confirm") {
-      return baseSchema;
+      return { ...baseSchema, additionalProperties: false };
     }
 
     const properties =
@@ -2026,6 +2026,7 @@ export class McpServerService {
     return {
       ...baseSchema,
       properties,
+      additionalProperties: false,
     };
   }
 
