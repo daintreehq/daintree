@@ -316,7 +316,10 @@ export function AppLayout({
 
   useEffect(() => {
     const portalOffset = layout.portalOpen ? layout.portalWidth : 0;
-    const totalOffset = portalOffset + effectiveAssistantWidth;
+    // Portal overlays the Assistant when both are open, so the rightmost fixed
+    // obstruction is the wider of the two — not their sum. Toaster, popovers,
+    // dropdowns, ReEntrySummary, and GettingStartedChecklist all read this var.
+    const totalOffset = Math.max(portalOffset, effectiveAssistantWidth);
     document.body.style.setProperty("--portal-right-offset", `${totalOffset}px`);
 
     return () => {
@@ -383,13 +386,6 @@ export function AppLayout({
               <div className="flex-1 overflow-hidden min-h-0">{children}</div>
               {/* Terminal Dock Region - manages dock visibility and overlays */}
               <TerminalDockRegion />
-              {layout.portalOpen && (
-                <ErrorBoundary variant="section" componentName="PortalDock">
-                  <div className="absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border">
-                    <PortalDock />
-                  </div>
-                </ErrorBoundary>
-              )}
             </main>
           </ErrorBoundary>
           <ErrorBoundary variant="section" componentName="HelpPanel">
@@ -421,13 +417,22 @@ export function AppLayout({
               <div
                 className="fixed inset-y-0 z-40 pointer-events-auto"
                 style={{
-                  right: layout.portalOpen ? `${layout.portalWidth}px` : "0px",
+                  right: "var(--portal-right-offset, 0px)",
                 }}
               >
                 <ThemeBrowser />
               </div>
             </ErrorBoundary>
           </>,
+          document.body
+        )}
+      {layout.portalOpen &&
+        createPortal(
+          <ErrorBoundary variant="section" componentName="PortalDock">
+            <div className="fixed top-0 right-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border">
+              <PortalDock />
+            </div>
+          </ErrorBoundary>,
           document.body
         )}
       {window.electron?.demo && (

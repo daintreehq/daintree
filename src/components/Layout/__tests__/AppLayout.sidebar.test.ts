@@ -71,9 +71,37 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
     expect(source).toContain("[showAssistant]");
   });
 
-  it("sums portal and assistant widths into --portal-right-offset", () => {
-    expect(source).toContain("portalOffset + effectiveAssistantWidth");
+  it("uses max of portal and assistant widths for --portal-right-offset (issue #6629)", () => {
+    // Portal overlays Assistant when both are open, so the rightmost fixed
+    // obstruction is max(portal, assistant), not their sum. The previous sum
+    // logic over-displaced toasts/popovers when both panels were open.
+    expect(source).toContain("Math.max(portalOffset, effectiveAssistantWidth)");
     expect(source).toContain("--portal-right-offset");
     expect(source).toMatch(/\[layout\.portalOpen, layout\.portalWidth, effectiveAssistantWidth\]/);
+    // The old sum semantics must not be reintroduced.
+    expect(source).not.toMatch(/portalOffset \+ effectiveAssistantWidth/);
+  });
+});
+
+describe("AppLayout portal viewport coverage — issue #6629", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("renders PortalDock via body portal so it covers the full viewport width", () => {
+    // Issue #6629: when the Assistant became a flex sibling of <main> in
+    // PR #6620, the Portal (rendered as `absolute right-0` inside <main>)
+    // stopped at the Assistant's left edge. Body-portaling with `position:
+    // fixed` lets the Portal escape <main>'s width and overlay the Assistant.
+    expect(source).toMatch(/\{layout\.portalOpen &&\s*\n\s*createPortal\(/);
+    expect(source).toContain(
+      '"fixed top-0 right-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border"'
+    );
+    // The old in-<main> absolute wrapper must not be reintroduced.
+    expect(source).not.toContain(
+      '"absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border"'
+    );
   });
 });
