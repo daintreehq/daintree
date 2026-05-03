@@ -66,6 +66,7 @@ describe("terminal.list isFocused field", () => {
     });
 
     const items = await callList(setupActions());
+    expect(items).toHaveLength(2);
     expect(items.every((t) => t.isFocused === false)).toBe(true);
   });
 

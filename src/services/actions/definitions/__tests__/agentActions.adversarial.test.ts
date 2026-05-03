@@ -330,6 +330,32 @@ describe("agentActions adversarial", () => {
     });
   });
 
+  it("agent.getState skips ephemeral panels even when their launchAgentId matches", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["term-ephemeral", "term-real"],
+      panelsById: {
+        "term-ephemeral": {
+          id: "term-ephemeral",
+          launchAgentId: "claude",
+          agentState: "working",
+          ephemeral: true,
+        },
+        "term-real": {
+          id: "term-real",
+          launchAgentId: "claude",
+          agentState: "idle",
+          lastStateChange: 999,
+        },
+      },
+    });
+
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    const result = await callAction(actions, "agent.getState", { agentId: "claude" });
+
+    expect(result).toMatchObject({ terminalId: "term-real", state: "idle", found: true });
+  });
+
   it("agent.getState rejects empty agentId at the schema layer", async () => {
     const { ActionService } = await import("../../../ActionService");
     const service = new ActionService();

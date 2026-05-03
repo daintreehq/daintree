@@ -1446,6 +1446,7 @@ describe("McpServerService", () => {
         "terminal.sendCommand",
         "recipe.run",
         "git.commit",
+        "agent.getState",
       ];
       return ids.map((id) =>
         createManifestEntry({
@@ -1514,6 +1515,7 @@ describe("McpServerService", () => {
       expect(ids).toContain("actions.list");
       expect(ids).toContain("worktree.list");
       expect(ids).toContain("terminal.list");
+      expect(ids).toContain("agent.getState");
       // Mutations and destructive operations are absent.
       expect(ids).not.toContain("worktree.create");
       expect(ids).not.toContain("worktree.createWithRecipe");
