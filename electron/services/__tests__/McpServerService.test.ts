@@ -2831,7 +2831,7 @@ describe("McpServerService", () => {
         ],
         dispatchAction: () => ({
           ok: false,
-          error: { code: "internal_error", message: "boom" },
+          error: { code: "EXECUTION_ERROR", message: "boom" },
         }),
       });
 
