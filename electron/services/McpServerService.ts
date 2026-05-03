@@ -112,6 +112,9 @@ const WORKBENCH_TOOLS: ReadonlySet<string> = new Set([
   "github.getRepoStats",
   "github.listIssues",
   "github.listPullRequests",
+  "github.getIssueByNumber",
+
+  "workflow.prepBranchForReview",
 
   "system.checkCommand",
   "system.checkDirectory",
@@ -150,6 +153,9 @@ const ACTION_TIER_ADDONS: ReadonlySet<string> = new Set([
   "agent.terminal",
   "agent.focusNextWaiting",
   "agent.focusNextWorking",
+
+  "workflow.startWorkOnIssue",
+  "workflow.focusNextAttention",
 ]);
 
 /**
@@ -218,6 +224,7 @@ const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   "github.getRepoStats",
   "github.listIssues",
   "github.listPullRequests",
+  "github.getIssueByNumber",
   "github.openIssue",
   "github.openPR",
 
@@ -239,6 +246,10 @@ const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   "worktree.delete",
   "worktree.setActive",
   "worktree.resource.status",
+
+  "workflow.startWorkOnIssue",
+  "workflow.prepBranchForReview",
+  "workflow.focusNextAttention",
 
   "files.search",
   "file.view",

@@ -10,6 +10,7 @@ const githubClientMock = vi.hoisted(() => ({
   getRepoStats: vi.fn(),
   listIssues: vi.fn(),
   listPullRequests: vi.fn(),
+  getIssueByNumber: vi.fn(),
   checkCli: vi.fn(),
   getConfig: vi.fn(),
   setToken: vi.fn(),
@@ -135,5 +136,13 @@ describe("githubActions adversarial", () => {
     const def = setupActions()("github.checkCli");
     const result = await def.run(undefined, {} as never);
     expect(result).toEqual({ available: true });
+  });
+
+  it("getIssueByNumber forwards cwd + issueNumber and returns null when issue is missing", async () => {
+    githubClientMock.getIssueByNumber.mockResolvedValue(null);
+    const def = setupActions()("github.getIssueByNumber");
+    const result = await def.run({ cwd: "/repo", issueNumber: 42 }, {} as never);
+    expect(githubClientMock.getIssueByNumber).toHaveBeenCalledWith("/repo", 42);
+    expect(result).toBeNull();
   });
 });

@@ -164,6 +164,25 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
     })
   );
 
+  actions.set("github.getIssueByNumber", () =>
+    defineAction({
+      id: "github.getIssueByNumber",
+      title: "Get GitHub Issue",
+      description: "Fetch a single GitHub issue by number, including title, labels, and assignees.",
+      category: "github",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z.string().describe("Working directory of the git repo"),
+        issueNumber: z.number().int().positive().describe("Issue number to fetch"),
+      }),
+      run: async ({ cwd, issueNumber }) => {
+        return await githubClient.getIssueByNumber(cwd, issueNumber);
+      },
+    })
+  );
+
   actions.set("github.listPullRequests", () =>
     defineAction({
       id: "github.listPullRequests",
