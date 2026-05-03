@@ -227,7 +227,6 @@ const WORKBENCH_TOOLS: ReadonlySet<string> = new Set([
  * GitHub URLs.
  */
 const ACTION_TIER_ADDONS: ReadonlySet<string> = new Set([
-  "worktree.create",
   "worktree.createWithRecipe",
   "worktree.setActive",
   "worktree.refresh",
@@ -331,7 +330,6 @@ const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   "worktree.list",
   "worktree.getCurrent",
   "worktree.refresh",
-  "worktree.create",
   "worktree.createWithRecipe",
   "worktree.listBranches",
   "worktree.getDefaultPath",

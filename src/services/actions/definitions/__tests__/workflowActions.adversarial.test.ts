@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-type-assertion */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
@@ -5,10 +6,12 @@ const worktreeClientMock = vi.hoisted(() => ({
   getAvailableBranch: vi.fn(),
   getDefaultPath: vi.fn(),
   create: vi.fn(),
+  fetchPRBranch: vi.fn(),
 }));
 
 const githubClientMock = vi.hoisted(() => ({
   getIssueByNumber: vi.fn(),
+  getPRByNumber: vi.fn(),
   assignIssue: vi.fn(),
 }));
 
@@ -44,6 +47,7 @@ vi.mock("@/store/createWorktreeStore", () => currentViewStoreMock);
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/slices/panelRegistry", () => selectorMock);
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 (globalThis as unknown as { window: { electron: { git: { getStagingStatus: unknown } } } }).window =
   { electron: { git: { getStagingStatus: gitGetStagingStatusMock } } };
 
@@ -61,11 +65,13 @@ function makeCallbacks(): MockCallbacks & Pick<ActionCallbacks, "onLaunchAgent">
 
 function setupActions(callbacks: MockCallbacks) {
   const actions: ActionRegistry = new Map();
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   registerWorkflowActions(actions, callbacks as unknown as Pick<ActionCallbacks, "onLaunchAgent">);
   return (id: string) => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
-    return factory() as AnyActionDefinition;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    return factory() as unknown as AnyActionDefinition;
   };
 }
 
@@ -122,6 +128,7 @@ beforeEach(() => {
   worktreeClientMock.getAvailableBranch.mockResolvedValue("feature/issue-6609-add-tools");
   worktreeClientMock.getDefaultPath.mockResolvedValue("/repo/feature/issue-6609-add-tools");
   worktreeClientMock.create.mockResolvedValue("wt-new");
+  worktreeClientMock.fetchPRBranch.mockResolvedValue(undefined);
   githubClientMock.assignIssue.mockResolvedValue(undefined);
   copyTreeClientMock.injectToTerminal.mockResolvedValue(undefined);
   setProject({ id: "p1", path: "/repo" });
@@ -136,6 +143,174 @@ beforeEach(() => {
     isInTrash: vi.fn().mockReturnValue(false),
     focusNextWaiting: vi.fn(),
     focusNextWorking: vi.fn(),
+  });
+});
+
+describe("worktree.createWithRecipe", () => {
+  it("happy path: resolves available branch, creates worktree, returns identifiers", async () => {
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    const result = (await def.run({ branchName: "feature/foo" }, {} as never)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(worktreeClientMock.getAvailableBranch).toHaveBeenCalledWith("/repo", "feature/foo");
+    expect(worktreeClientMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseBranch: "main",
+        newBranch: "feature/issue-6609-add-tools",
+        path: "/repo/feature/issue-6609-add-tools",
+        fromRemote: false,
+        useExistingBranch: false,
+      }),
+      "/repo"
+    );
+    expect(githubClientMock.getPRByNumber).not.toHaveBeenCalled();
+    expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
+    expect(result.worktreeId).toBe("wt-new");
+    expect(result.branch).toBe("feature/issue-6609-add-tools");
+    expect(result.recipeLaunched).toBe(false);
+  });
+
+  it("PR path: resolves head branch, fetches PR, creates worktree on existing local branch", async () => {
+    githubClientMock.getPRByNumber.mockResolvedValue({
+      number: 42,
+      headRefName: "contrib/feature-x",
+      title: "Some PR",
+      url: "https://github.com/x/y/pull/42",
+    });
+    worktreeClientMock.getDefaultPath.mockResolvedValue("/repo/contrib/feature-x");
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const result = (await def.run({ pullRequestNumber: 42 }, {} as never)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(githubClientMock.getPRByNumber).toHaveBeenCalledWith("/repo", 42);
+    expect(worktreeClientMock.fetchPRBranch).toHaveBeenCalledWith("/repo", 42, "contrib/feature-x");
+    // PR path uses the head ref directly — must not call getAvailableBranch (which would suffix on conflict).
+    expect(worktreeClientMock.getAvailableBranch).not.toHaveBeenCalled();
+    expect(worktreeClientMock.getDefaultPath).toHaveBeenCalledWith("/repo", "contrib/feature-x");
+    expect(worktreeClientMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseBranch: "contrib/feature-x",
+        newBranch: "contrib/feature-x",
+        path: "/repo/contrib/feature-x",
+        fromRemote: false,
+        useExistingBranch: true,
+      }),
+      "/repo"
+    );
+    expect(result.branch).toBe("contrib/feature-x");
+    expect(result.worktreeId).toBe("wt-new");
+  });
+
+  it("PR path throws when the PR is not found", async () => {
+    githubClientMock.getPRByNumber.mockResolvedValue(null);
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await expect(def.run({ pullRequestNumber: 999 }, {} as never)).rejects.toThrow(
+      /Pull request #999 not found/
+    );
+    expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
+    expect(worktreeClientMock.create).not.toHaveBeenCalled();
+  });
+
+  it("PR path throws when headRefName is missing on the resolved PR", async () => {
+    githubClientMock.getPRByNumber.mockResolvedValue({
+      number: 42,
+      title: "x",
+      url: "u",
+    });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await expect(def.run({ pullRequestNumber: 42 }, {} as never)).rejects.toThrow(/no head branch/);
+    expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
+    expect(worktreeClientMock.create).not.toHaveBeenCalled();
+  });
+
+  it("PR path surfaces fetchPRBranch failures (no worktree created)", async () => {
+    githubClientMock.getPRByNumber.mockResolvedValue({
+      number: 42,
+      headRefName: "contrib/x",
+      title: "x",
+      url: "u",
+    });
+    worktreeClientMock.fetchPRBranch.mockRejectedValue(new Error("git fetch failed"));
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await expect(def.run({ pullRequestNumber: 42 }, {} as never)).rejects.toThrow(
+      /git fetch failed/
+    );
+    expect(worktreeClientMock.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects calls that supply both issueNumber and pullRequestNumber", async () => {
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await expect(
+      def.run({ branchName: "feature/foo", issueNumber: 1, pullRequestNumber: 2 }, {} as never)
+    ).rejects.toThrow(/mutually exclusive/);
+  });
+
+  it("non-PR path requires branchName at runtime", async () => {
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await expect(def.run({}, {} as never)).rejects.toThrow(/branchName is required/);
+  });
+
+  it("recipe context carries prNumber (not issueNumber) when pullRequestNumber is provided", async () => {
+    githubClientMock.getPRByNumber.mockResolvedValue({
+      number: 42,
+      headRefName: "contrib/feature-x",
+      title: "x",
+      url: "u",
+    });
+    worktreeClientMock.getDefaultPath.mockResolvedValue("/repo/contrib/feature-x");
+    const runRecipe = vi.fn().mockResolvedValue(undefined);
+    recipeStoreMock.getState.mockReturnValue({
+      getRecipeById: vi.fn().mockReturnValue({ id: "recipe-1" }),
+      runRecipe,
+    });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    const result = (await def.run(
+      { pullRequestNumber: 42, recipeId: "recipe-1" },
+      {} as never
+    )) as Record<string, unknown>;
+    expect(runRecipe).toHaveBeenCalledWith("recipe-1", "/repo/contrib/feature-x", "wt-new", {
+      worktreePath: "/repo/contrib/feature-x",
+      branchName: "contrib/feature-x",
+      issueNumber: undefined,
+      prNumber: 42,
+    });
+    expect(result.recipeLaunched).toBe(true);
+  });
+
+  it("recipe failure after worktree creation throws PARTIAL_SUCCESS with worktree info", async () => {
+    setRecipe("recipe-1", async () => {
+      throw new Error("recipe boom");
+    });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    try {
+      await def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {} as never);
+      throw new Error("expected throw");
+    } catch (err) {
+      const message = (err as Error).message;
+      expect(message).toMatch(/^PARTIAL_SUCCESS:\s+\{/);
+      const payload = JSON.parse(message.slice(message.indexOf("{")));
+      expect(payload.message).toContain("recipe boom");
+      expect(payload.partialResult.worktreeId).toBe("wt-new");
+      expect(payload.partialResult.recipeLaunched).toBe(false);
+    }
+    expect(worktreeClientMock.create).toHaveBeenCalled();
+  });
+
+  it("treats empty-string headRefName the same as missing", async () => {
+    githubClientMock.getPRByNumber.mockResolvedValue({
+      number: 42,
+      headRefName: "",
+      title: "x",
+      url: "u",
+    });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await expect(def.run({ pullRequestNumber: 42 }, {} as never)).rejects.toThrow(/no head branch/);
+    expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
   });
 });
 

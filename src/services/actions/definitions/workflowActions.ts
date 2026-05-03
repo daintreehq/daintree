@@ -38,38 +38,55 @@ export function registerWorkflowActions(
       id: "worktree.createWithRecipe",
       title: "Create Worktree with Recipe",
       description:
-        "Create a worktree with branch and path setup, optionally run a recipe, and optionally assign the linked issue.",
+        "Create a worktree with branch setup, optionally from a PR, with recipe and issue assignment.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        branchName: z
-          .string()
-          .trim()
-          .min(1)
-          .describe("Name for the new branch (will be sanitized for git compatibility)"),
-        baseBranch: z
-          .string()
-          .trim()
-          .min(1)
-          .optional()
-          .describe("Branch to base the worktree on (defaults to main worktree's branch)"),
-        recipeId: z.string().optional().describe("Recipe ID to run after creation"),
-        fromRemote: z.boolean().optional().describe("Set true if baseBranch is a remote branch"),
-        useExistingBranch: z
-          .boolean()
-          .optional()
-          .describe("Use an existing branch instead of creating a new one"),
-        issueNumber: z
-          .number()
-          .optional()
-          .describe("GitHub issue number to link with the worktree"),
-        assignToSelf: z
-          .boolean()
-          .optional()
-          .describe("Explicitly assign the linked issue to the current user (default: false)"),
-      }),
+      argsSchema: z
+        .object({
+          branchName: z
+            .string()
+            .trim()
+            .min(1)
+            .optional()
+            .describe(
+              "Name for the new branch (will be sanitized for git compatibility). Required unless pullRequestNumber is provided — the PR's head branch is used in that case."
+            ),
+          baseBranch: z
+            .string()
+            .trim()
+            .min(1)
+            .optional()
+            .describe("Branch to base the worktree on (defaults to main worktree's branch)"),
+          recipeId: z.string().optional().describe("Recipe ID to run after creation"),
+          fromRemote: z.boolean().optional().describe("Set true if baseBranch is a remote branch"),
+          useExistingBranch: z
+            .boolean()
+            .optional()
+            .describe("Use an existing branch instead of creating a new one"),
+          issueNumber: z
+            .number()
+            .optional()
+            .describe(
+              "GitHub issue number to link with the worktree. Mutually exclusive with pullRequestNumber."
+            ),
+          pullRequestNumber: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe(
+              "GitHub pull request number to check out. Resolves the PR's head branch automatically and creates the worktree on it. Mutually exclusive with issueNumber."
+            ),
+          assignToSelf: z
+            .boolean()
+            .optional()
+            .describe("Explicitly assign the linked issue to the current user (default: false)"),
+        })
+        .refine((d) => !(d.issueNumber !== undefined && d.pullRequestNumber !== undefined), {
+          message: "issueNumber and pullRequestNumber are mutually exclusive",
+        }),
       resultSchema: z.object({
         worktreeId: z.string(),
         worktreePath: z.string(),
@@ -84,30 +101,19 @@ export function registerWorkflowActions(
         fromRemote,
         useExistingBranch,
         issueNumber,
+        pullRequestNumber,
         assignToSelf,
       }) => {
+        if (issueNumber !== undefined && pullRequestNumber !== undefined) {
+          throw new Error("issueNumber and pullRequestNumber are mutually exclusive");
+        }
+
         const currentProject = useProjectStore.getState().currentProject;
         if (!currentProject) {
           throw new Error("No active project");
         }
 
         const rootPath = currentProject.path;
-
-        let baseRef: string | undefined = baseBranch;
-        if (!baseRef) {
-          const mainWorktree = Array.from(getCurrentViewStore().getState().worktrees.values()).find(
-            (w) => w.isMainWorktree
-          );
-          if (!mainWorktree) {
-            throw new Error(
-              "No base branch specified and no main worktree found. Please specify baseBranch parameter."
-            );
-          }
-          baseRef = mainWorktree.branch;
-        }
-        if (!baseRef) {
-          throw new Error("Base branch is required but was not determined");
-        }
 
         if (recipeId) {
           const recipe = useRecipeStore.getState().getRecipeById(recipeId);
@@ -118,16 +124,61 @@ export function registerWorkflowActions(
           }
         }
 
-        const availableBranch = await worktreeClient.getAvailableBranch(rootPath, branchName);
-        const path = await worktreeClient.getDefaultPath(rootPath, availableBranch);
+        let effectiveBranch: string;
+        let effectiveBase: string;
+        let effectiveUseExisting: boolean;
+        let effectiveFromRemote: boolean;
+
+        if (pullRequestNumber !== undefined) {
+          const pr = await githubClient.getPRByNumber(rootPath, pullRequestNumber);
+          if (!pr) {
+            throw new Error(`Pull request #${pullRequestNumber} not found in ${rootPath}`);
+          }
+          if (!pr.headRefName) {
+            throw new Error(
+              `Pull request #${pullRequestNumber} has no head branch — cannot create worktree`
+            );
+          }
+          // fetchPRBranch uses pull/N/head:branch refspec so fork PR branches resolve too.
+          await worktreeClient.fetchPRBranch(rootPath, pullRequestNumber, pr.headRefName);
+          effectiveBranch = pr.headRefName;
+          effectiveBase = pr.headRefName;
+          effectiveUseExisting = true;
+          effectiveFromRemote = false;
+        } else {
+          if (!branchName) {
+            throw new Error("branchName is required when pullRequestNumber is not provided");
+          }
+          let baseRef: string | undefined = baseBranch;
+          if (!baseRef) {
+            const mainWorktree = Array.from(
+              getCurrentViewStore().getState().worktrees.values()
+            ).find((w) => w.isMainWorktree);
+            if (!mainWorktree) {
+              throw new Error(
+                "No base branch specified and no main worktree found. Please specify baseBranch parameter."
+              );
+            }
+            baseRef = mainWorktree.branch;
+          }
+          if (!baseRef) {
+            throw new Error("Base branch is required but was not determined");
+          }
+          effectiveBranch = await worktreeClient.getAvailableBranch(rootPath, branchName);
+          effectiveBase = baseRef;
+          effectiveUseExisting = useExistingBranch ?? false;
+          effectiveFromRemote = fromRemote ?? false;
+        }
+
+        const path = await worktreeClient.getDefaultPath(rootPath, effectiveBranch);
 
         const worktreeId = await worktreeClient.create(
           {
-            baseBranch: baseRef,
-            newBranch: availableBranch,
+            baseBranch: effectiveBase,
+            newBranch: effectiveBranch,
             path,
-            fromRemote: fromRemote ?? false,
-            useExistingBranch: useExistingBranch ?? false,
+            fromRemote: effectiveFromRemote,
+            useExistingBranch: effectiveUseExisting,
           },
           rootPath
         );
@@ -138,12 +189,26 @@ export function registerWorkflowActions(
 
         let recipeLaunched = false;
         if (recipeId) {
-          await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, {
-            worktreePath: path,
-            branchName: availableBranch,
-            issueNumber,
-          });
-          recipeLaunched = true;
+          try {
+            await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, {
+              worktreePath: path,
+              branchName: effectiveBranch,
+              issueNumber,
+              prNumber: pullRequestNumber,
+            });
+            recipeLaunched = true;
+          } catch (err) {
+            throw partialSuccessError(
+              `Recipe ${recipeId} failed to run: ${formatErrorMessage(err, "unknown error")}`,
+              {
+                worktreeId,
+                worktreePath: path,
+                branch: effectiveBranch,
+                recipeLaunched: false,
+                assignedToSelf: false,
+              }
+            );
+          }
         }
 
         let assignedToSelf = false;
@@ -162,7 +227,7 @@ export function registerWorkflowActions(
         return {
           worktreeId,
           worktreePath: path,
-          branch: availableBranch,
+          branch: effectiveBranch,
           recipeLaunched,
           assignedToSelf,
         };
