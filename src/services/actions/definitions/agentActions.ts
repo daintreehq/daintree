@@ -193,7 +193,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.getState",
     title: "Get Agent State",
     description:
-      "Look up the current state of an agent by agentId. Returns { agentId, state, lastTransitionAt, terminalId, found }. State is a point-in-time read; if multiple terminals share the same agentId, the first match wins.",
+      "Query agent state by agentId; returns agentId, state, lastTransitionAt, terminalId, found",
     category: "agent",
     kind: "query",
     danger: "safe",
