@@ -477,6 +477,99 @@ describe("project action hardening", () => {
     expect(dispatchEvent).toHaveBeenCalledWith(expect.any(CustomEvent));
     expect(dispatchEvent.mock.calls.at(-1)?.[0].type).toBe("daintree:open-settings-tab");
   });
+
+  it("project.saveSettings merges partial input over current settings", async () => {
+    mocks.projectClient.getSettings.mockResolvedValueOnce({
+      runCommands: [{ id: "r1", label: "dev", command: "npm run dev" }],
+      devServerCommand: "npm run dev",
+    });
+    mocks.projectClient.saveSettings.mockResolvedValueOnce(undefined);
+    const { service } = buildService(registerProjectActions);
+
+    const result = await service.dispatch(
+      "project.saveSettings",
+      { projectId: "project-1", settings: { devServerCommand: "vite" } },
+      { source: "user" }
+    );
+
+    expect(result).toEqual({ ok: true, result: undefined });
+    expect(mocks.projectClient.saveSettings).toHaveBeenCalledWith("project-1", {
+      runCommands: [{ id: "r1", label: "dev", command: "npm run dev" }],
+      devServerCommand: "vite",
+    });
+  });
+
+  it("project.saveSettings strips daintreeMcpTier and exposeDaintreeMcpToAgents to block self-elevation", async () => {
+    mocks.projectClient.getSettings.mockResolvedValueOnce({
+      runCommands: [],
+      daintreeMcpTier: "workbench",
+    });
+    mocks.projectClient.saveSettings.mockResolvedValueOnce(undefined);
+    const { service } = buildService(registerProjectActions);
+
+    const result = await service.dispatch(
+      "project.saveSettings",
+      {
+        projectId: "project-1",
+        settings: {
+          devServerCommand: "vite",
+          daintreeMcpTier: "system",
+          exposeDaintreeMcpToAgents: true,
+        },
+      },
+      { source: "user" }
+    );
+
+    expect(result).toEqual({ ok: true, result: undefined });
+    const saved = mocks.projectClient.saveSettings.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(saved.daintreeMcpTier).toBe("workbench");
+    expect(saved.exposeDaintreeMcpToAgents).toBeUndefined();
+    expect(saved.devServerCommand).toBe("vite");
+  });
+
+  it("project.muteNotifications surfaces saveSettings failures as { ok: false }", async () => {
+    mocks.projectClient.getSettings.mockResolvedValueOnce({
+      runCommands: [],
+      notificationOverrides: { completedEnabled: true },
+    });
+    mocks.projectClient.saveSettings.mockRejectedValueOnce(new Error("disk full"));
+    const { service } = buildService(registerProjectActions);
+
+    const result = await service.dispatch(
+      "project.muteNotifications",
+      { projectId: "project-1" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("EXECUTION_ERROR");
+      expect(result.error.message).toBe("disk full");
+    }
+  });
+
+  it("project.update strips fields outside the allowlist before reaching the store", async () => {
+    const updateProject = vi.fn().mockResolvedValue(undefined);
+    useProjectStore.setState({ updateProject });
+    const { service } = buildService(registerProjectActions);
+
+    const result = await service.dispatch(
+      "project.update",
+      {
+        projectId: "project-1",
+        updates: {
+          name: "Renamed",
+          status: "missing",
+          inRepoSettings: true,
+          frecencyScore: 9999,
+        } as never,
+      },
+      { source: "user" }
+    );
+
+    expect(result).toEqual({ ok: true, result: undefined });
+    expect(updateProject).toHaveBeenCalledWith("project-1", { name: "Renamed" });
+  });
 });
 
 describe("system action hardening", () => {

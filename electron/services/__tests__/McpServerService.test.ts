@@ -1844,6 +1844,9 @@ describe("McpServerService", () => {
       expect(ids).not.toContain("worktree.create");
       expect(ids).not.toContain("git.commit");
       expect(ids).not.toContain("workflow.startWorkOnIssue");
+      expect(ids).not.toContain("project.update");
+      expect(ids).not.toContain("project.saveSettings");
+      expect(ids).not.toContain("project.muteNotifications");
       for (const id of NEVER_EXPOSED_VIA_MCP) {
         expect(ids).not.toContain(id);
       }
