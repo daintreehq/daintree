@@ -49,6 +49,10 @@ vi.mock("@/utils/logger", () => ({
   logError: (...args: unknown[]) => mockLogError(...args),
 }));
 
+vi.mock("@/lib/sidebarToggle", () => ({
+  suppressSidebarResizes: vi.fn(),
+}));
+
 vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@shared/config/agentRegistry")>();
   return {

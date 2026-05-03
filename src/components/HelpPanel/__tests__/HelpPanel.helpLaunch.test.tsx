@@ -169,14 +169,35 @@ vi.mock("@/store", () => {
     selector ? selector(projectStoreState) : projectStoreState;
   projectStore.getState = () => projectStoreState;
 
+  const preferencesState = { reduceAnimations: false };
+  const preferencesStore = (selector?: (state: typeof preferencesState) => unknown) =>
+    selector ? selector(preferencesState) : preferencesState;
+  preferencesStore.getState = () => preferencesState;
+
   return {
     usePanelStore: panelStore,
     useCliAvailabilityStore: cliStore,
     useAgentSettingsStore: agentSettingsStore,
     useProjectStore: projectStore,
+    usePreferencesStore: preferencesStore,
     getTerminalRefreshTier: () => 0,
   };
 });
+
+vi.mock("@/store/macroFocusStore", () => {
+  const state = { focusedRegion: null, setRegionRef: vi.fn(), setVisibility: vi.fn() };
+  const store = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state);
+  store.getState = () => state;
+  return { useMacroFocusStore: store };
+});
+
+vi.mock("@/lib/sidebarToggle", () => ({
+  suppressSidebarResizes: vi.fn(),
+}));
+
+vi.mock("@/hooks/useEscapeStack", () => ({
+  useEscapeStack: vi.fn(),
+}));
 
 vi.mock("@/types", () => ({
   TerminalRefreshTier: { BACKGROUND: 0, ACTIVE: 1 },
