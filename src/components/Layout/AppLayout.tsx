@@ -76,6 +76,8 @@ export function AppLayout({
   const themeBrowserOpen = useThemeBrowserStore((s) => s.isOpen);
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
   const showSidebar = !layout.isFocusMode && currentProject != null;
+  const showAssistant = !layout.isFocusMode && layout.helpPanelOpen;
+  const effectiveAssistantWidth = showAssistant ? layout.helpPanelWidth : 0;
 
   useEffect(() => {
     if (layout.performanceMode) {
@@ -277,6 +279,10 @@ export function AppLayout({
     useMacroFocusStore.getState().setVisibility("portal", layout.portalOpen);
   }, [layout.portalOpen]);
 
+  useEffect(() => {
+    useMacroFocusStore.getState().setVisibility("assistant", showAssistant);
+  }, [showAssistant]);
+
   // Clear macro focus on mouse interaction
   useEffect(() => {
     const handleMouseDown = () => useMacroFocusStore.getState().clearFocus();
@@ -309,13 +315,14 @@ export function AppLayout({
   const effectiveSidebarWidth = layout.isFocusMode ? 0 : sidebarWidth;
 
   useEffect(() => {
-    const offset = layout.portalOpen ? `${layout.portalWidth}px` : "0px";
-    document.body.style.setProperty("--portal-right-offset", offset);
+    const portalOffset = layout.portalOpen ? layout.portalWidth : 0;
+    const totalOffset = portalOffset + effectiveAssistantWidth;
+    document.body.style.setProperty("--portal-right-offset", `${totalOffset}px`);
 
     return () => {
       document.body.style.removeProperty("--portal-right-offset");
     };
-  }, [layout.portalOpen, layout.portalWidth]);
+  }, [layout.portalOpen, layout.portalWidth, effectiveAssistantWidth]);
 
   return (
     <div
@@ -376,18 +383,6 @@ export function AppLayout({
               <div className="flex-1 overflow-hidden min-h-0">{children}</div>
               {/* Terminal Dock Region - manages dock visibility and overlays */}
               <TerminalDockRegion />
-              {layout.helpPanelOpen && (
-                <ErrorBoundary variant="section" componentName="HelpPanel">
-                  <div
-                    className="absolute top-0 bottom-0 z-40"
-                    style={{
-                      right: layout.portalOpen ? `${layout.portalWidth}px` : "0px",
-                    }}
-                  >
-                    <HelpPanel />
-                  </div>
-                </ErrorBoundary>
-              )}
               {layout.portalOpen && (
                 <ErrorBoundary variant="section" componentName="PortalDock">
                   <div className="absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border">
@@ -396,6 +391,9 @@ export function AppLayout({
                 </ErrorBoundary>
               )}
             </main>
+          </ErrorBoundary>
+          <ErrorBoundary variant="section" componentName="HelpPanel">
+            <HelpPanel />
           </ErrorBoundary>
         </div>
         {/* Unified diagnostics dock replaces LogsPanel, EventInspectorPanel, and ProblemsPanel */}

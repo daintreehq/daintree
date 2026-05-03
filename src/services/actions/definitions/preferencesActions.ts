@@ -10,6 +10,7 @@ import {
   worktreeConfigClient,
 } from "@/clients";
 import { dispatchEscape } from "@/lib/escapeStack";
+import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
@@ -768,7 +769,10 @@ export function registerPreferencesActions(
         useHelpPanelStore
           .getState()
           .setTerminal(result.result.terminalId, agentId, session?.sessionId ?? null);
-        useHelpPanelStore.getState().setOpen(true);
+        if (!useHelpPanelStore.getState().isOpen) {
+          suppressSidebarResizes();
+          useHelpPanelStore.getState().setOpen(true);
+        }
         window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
       } else if (session) {
         window.electron.help.revokeSession(session.sessionId).catch((err) => {
@@ -788,6 +792,7 @@ export function registerPreferencesActions(
     scope: "renderer",
     keywords: ["docs", "support", "guide", "assistant"],
     run: async () => {
+      suppressSidebarResizes();
       useHelpPanelStore.getState().toggle();
     },
   }));

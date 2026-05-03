@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useHelpPanelStore, usePaletteStore, useThemeBrowserStore } from "@/store";
+import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 
 export function useAppEventListeners() {
   useEffect(() => {
@@ -14,7 +15,10 @@ export function useAppEventListeners() {
       // stacking two right-edge panels, and open the browser itself. Settings
       // close/reopen is coordinated separately by a Settings-scoped effect
       // (see App.tsx) because `setIsSettingsOpen` lives in useSettingsDialog.
-      useHelpPanelStore.getState().setOpen(false);
+      if (useHelpPanelStore.getState().isOpen) {
+        suppressSidebarResizes();
+        useHelpPanelStore.getState().setOpen(false);
+      }
       useThemeBrowserStore.getState().open();
     };
 

@@ -123,7 +123,7 @@ describe("helpPanelStore persistence migration", () => {
     expect(store.getState().preferredAgentId).toBeNull();
   });
 
-  it("writes version: 1 with a cleared preferredAgentId after rehydrating an unsupported v0 agent", async () => {
+  it("writes version: 2 with a cleared preferredAgentId after rehydrating an unsupported v0 agent", async () => {
     const legacyBlob = JSON.stringify({
       state: { width: 420, preferredAgentId: "gemini" },
     });
@@ -136,9 +136,14 @@ describe("helpPanelStore persistence migration", () => {
     expect(written).toBeDefined();
     const parsed = JSON.parse(written!) as {
       version: number;
-      state: { width: number; preferredAgentId: string | null; introDismissed: boolean };
+      state: {
+        isOpen: boolean;
+        width: number;
+        preferredAgentId: string | null;
+        introDismissed: boolean;
+      };
     };
-    expect(parsed.version).toBe(1);
+    expect(parsed.version).toBe(2);
     expect(parsed.state.width).toBe(450);
     expect(parsed.state.preferredAgentId).toBeNull();
   });
@@ -200,8 +205,70 @@ describe("helpPanelStore persistence migration", () => {
     expect(written).toBeDefined();
     const parsed: unknown = JSON.parse(written!);
     expect(parsed).toMatchObject({
-      version: 1,
+      version: 2,
       state: { introDismissed: true },
     });
+  });
+
+  it("defaults isOpen to false when migrating a v1 blob without it (issue #6619)", async () => {
+    const v1Blob = JSON.stringify({
+      version: 1,
+      state: { width: 400, preferredAgentId: "claude", introDismissed: true },
+    });
+    installLocalStorage({ [STORAGE_KEY]: v1Blob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().isOpen).toBe(false);
+    expect(store.getState().preferredAgentId).toBe("claude");
+    expect(store.getState().introDismissed).toBe(true);
+  });
+
+  it("preserves isOpen: true from a v2 blob across rehydration", async () => {
+    const v2Blob = JSON.stringify({
+      version: 2,
+      state: { isOpen: true, width: 400, preferredAgentId: null, introDismissed: false },
+    });
+    installLocalStorage({ [STORAGE_KEY]: v2Blob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().isOpen).toBe(true);
+  });
+
+  it("falls back to false when persisted isOpen has a non-boolean type", async () => {
+    const malformed = JSON.stringify({
+      version: 2,
+      state: { isOpen: "yes", width: 400, preferredAgentId: null, introDismissed: false },
+    });
+    installLocalStorage({ [STORAGE_KEY]: malformed });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().isOpen).toBe(false);
+  });
+
+  it("setOpen(true) persists isOpen to localStorage", async () => {
+    const backing = installLocalStorage({});
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    store.getState().setOpen(true);
+
+    const written = backing.get(STORAGE_KEY);
+    expect(written).toBeDefined();
+    const parsed = JSON.parse(written!) as {
+      version: number;
+      state: { isOpen: boolean };
+    };
+    expect(parsed.version).toBe(2);
+    expect(parsed.state.isOpen).toBe(true);
+  });
+
+  it("starts with isOpen: false on a fresh install", async () => {
+    installLocalStorage({});
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().isOpen).toBe(false);
   });
 });

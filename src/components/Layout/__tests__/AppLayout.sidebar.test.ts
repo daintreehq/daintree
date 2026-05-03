@@ -33,3 +33,41 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
     expect(source).not.toMatch(/setVisibility\("sidebar",\s*!layout\.isFocusMode\)/);
   });
 });
+
+describe("AppLayout assistant push sidebar — issue #6619", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("derives showAssistant from isFocusMode and helpPanelOpen", () => {
+    expect(source).toContain("const showAssistant = !layout.isFocusMode && layout.helpPanelOpen");
+  });
+
+  it("computes effectiveAssistantWidth so focus mode collapses the panel without unmounting", () => {
+    expect(source).toContain(
+      "const effectiveAssistantWidth = showAssistant ? layout.helpPanelWidth : 0"
+    );
+  });
+
+  it("mounts HelpPanel unconditionally as a flex sibling so the xterm PTY survives close (issue #6619)", () => {
+    // The old conditional-render guard (which destroyed the PTY on every
+    // toggle) must not be reintroduced.
+    expect(source).not.toMatch(/\{layout\.helpPanelOpen && \(\s*\n\s*<ErrorBoundary[^>]*HelpPanel/);
+    expect(source).toMatch(
+      /<ErrorBoundary[^>]*componentName="HelpPanel"[^>]*>\s*\n\s*<HelpPanel\s*\/>/
+    );
+  });
+
+  it("uses showAssistant for the macro-focus assistant visibility effect", () => {
+    expect(source).toContain('setVisibility("assistant", showAssistant)');
+    expect(source).toContain("[showAssistant]");
+  });
+
+  it("sums portal and assistant widths into --portal-right-offset", () => {
+    expect(source).toContain("portalOffset + effectiveAssistantWidth");
+    expect(source).toContain("--portal-right-offset");
+    expect(source).toMatch(/\[layout\.portalOpen, layout\.portalWidth, effectiveAssistantWidth\]/);
+  });
+});

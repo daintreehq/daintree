@@ -17,9 +17,13 @@ import {
   useCliAvailabilityStore,
   useProjectStore,
 } from "@/store";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { usePreferencesStore } from "@/store";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { actionService } from "@/services/ActionService";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { TerminalRefreshTier } from "@/types";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
@@ -84,9 +88,12 @@ function revokeHelpSession(sessionId: string | null): void {
 }
 
 export function HelpPanel() {
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isResizing, setIsResizing] = useState(false);
+  const isMacroFocused = useMacroFocusStore((s) => s.focusedRegion === "assistant");
+  const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
+  const animateWidth = !isResizing && !reduceAnimations;
 
   const {
     isOpen,
@@ -252,17 +259,12 @@ export function HelpPanel() {
     }
   }, [isOpen]);
 
-  // Click-away handler
+  // Register the panel root with the macro-focus store so the assistant
+  // participates in cross-region cycling.
   useEffect(() => {
-    if (!isOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (panelRef.current?.contains(e.target as Node)) return;
-      if ((e.target as HTMLElement).closest('[aria-label="Help Agent"]')) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [isOpen, setOpen]);
+    useMacroFocusStore.getState().setRegionRef("assistant", panelRef.current);
+    return () => useMacroFocusStore.getState().setRegionRef("assistant", null);
+  }, []);
 
   // Resize via mouse drag
   const handleResizeStart = useCallback(
@@ -421,8 +423,19 @@ export function HelpPanel() {
     }
     revokeHelpSession(sessionId);
     revokePendingSession();
+    suppressSidebarResizes();
     setOpen(false);
   }, [terminalId, removePanel, clearTerminal, setOpen, revokePendingSession]);
+
+  // Esc-to-close. The xterm-helper-textarea check lets Escape reach the
+  // running PTY (Codex/Claude/etc.) when the assistant terminal has focus
+  // instead of closing the panel out from under the user.
+  const handleEscape = useCallback(() => {
+    const active = document.activeElement as HTMLElement | null;
+    if (active?.closest(".xterm-helper-textarea")) return;
+    handleClose();
+  }, [handleClose]);
+  useEscapeStack(isOpen, handleEscape);
 
   const handleIntroLinkClick = useCallback(() => {
     dismissIntro();
@@ -506,22 +519,32 @@ export function HelpPanel() {
 
   const showTerminal = terminalId && terminal;
   const isMissingCli = showTerminal && terminal?.spawnStatus === "missing-cli";
+  const effectiveWidth = isOpen ? width : 0;
 
   return (
-    <div
+    <aside
       ref={panelRef}
+      tabIndex={-1}
+      aria-label="Daintree Assistant"
+      aria-hidden={!isOpen}
+      data-macro-focus={isMacroFocused ? "true" : undefined}
       className={cn(
-        "flex flex-col h-full bg-daintree-bg relative",
-        "border-l border-daintree-border shadow-2xl"
+        "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
+        "bg-daintree-bg border-l border-daintree-border",
+        "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
+        animateWidth &&
+          "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+        !isOpen && "pointer-events-none"
       )}
-      style={{ width }}
+      style={{ width: effectiveWidth }}
     >
       {/* Resize handle */}
       <div
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize help panel"
-        tabIndex={0}
+        tabIndex={isOpen ? 0 : -1}
+        aria-hidden={!isOpen}
         className={cn(
           "absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10",
           "hover:bg-overlay-soft active:bg-overlay-medium transition-colors",
@@ -612,6 +635,6 @@ export function HelpPanel() {
           </a>
         </div>
       )}
-    </div>
+    </aside>
   );
 }

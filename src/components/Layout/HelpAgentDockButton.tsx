@@ -4,12 +4,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 
 export function HelpAgentDockButton() {
   const isOpen = useHelpPanelStore((s) => s.isOpen);
   const toggle = useHelpPanelStore((s) => s.toggle);
 
   const handleClick = useCallback(() => {
+    suppressSidebarResizes();
     toggle();
   }, [toggle]);
 

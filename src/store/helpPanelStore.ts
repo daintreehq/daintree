@@ -69,9 +69,10 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
     {
       name: "help-panel-storage",
       storage: createSafeJSONStorage(),
-      version: 1,
+      version: 2,
       migrate: (persistedState) => persistedState as HelpPanelState & HelpPanelActions,
       partialize: (state) => ({
+        isOpen: state.isOpen,
         width: state.width,
         preferredAgentId: state.preferredAgentId,
         introDismissed: state.introDismissed,
@@ -80,6 +81,7 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
         const persisted = persistedState as Partial<HelpPanelState>;
         return {
           ...currentState,
+          isOpen: typeof persisted.isOpen === "boolean" ? persisted.isOpen : currentState.isOpen,
           width:
             typeof persisted.width === "number"
               ? Math.min(Math.max(persisted.width, HELP_PANEL_MIN_WIDTH), HELP_PANEL_MAX_WIDTH)
@@ -100,5 +102,6 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
 registerPersistedStore({
   storeId: "helpPanelStore",
   store: useHelpPanelStore,
-  persistedStateType: "Pick<HelpPanelState, 'width' | 'preferredAgentId' | 'introDismissed'>",
+  persistedStateType:
+    "Pick<HelpPanelState, 'isOpen' | 'width' | 'preferredAgentId' | 'introDismissed'>",
 });
