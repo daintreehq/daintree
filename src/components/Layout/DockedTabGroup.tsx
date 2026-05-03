@@ -104,8 +104,10 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // Derive isOpen from store state - open if ANY panel in this group is active
   const isOpen = panels.some((p) => p.id === activeDockTerminalId);
 
-  // Track when popover was just programmatically opened
-  const wasJustOpenedRef = useRef(false);
+  // Track when popover was just programmatically opened. Initialized to `isOpen` so a group
+  // that mounts already-open is armed before Radix's DismissableLayer can fire a spurious
+  // mount-time onOpenChange(false).
+  const wasJustOpenedRef = useRef(isOpen);
   const prevIsOpenRef = useRef(isOpen);
   const [tabListEl, setTabListEl] = useState<HTMLDivElement | null>(null);
 
