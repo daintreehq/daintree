@@ -29,9 +29,13 @@ export function registerTerminalQueryActions(
         location?: "grid" | "dock" | "trash" | "background";
       };
       const state = usePanelStore.getState();
+      // Ephemeral panels (e.g. the Daintree Assistant's own dock terminal)
+      // are tooling-internal and must not appear in the MCP-visible list,
+      // or the assistant ends up enumerating itself and acting on its own
+      // process during bulk operations.
       let terminals = state.panelIds
         .map((id) => state.panelsById[id])
-        .filter((t): t is TerminalInstance => t !== undefined);
+        .filter((t): t is TerminalInstance => t !== undefined && t.ephemeral !== true);
 
       // Filter by worktree if specified
       if (worktreeId) {
