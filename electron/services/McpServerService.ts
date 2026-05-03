@@ -136,6 +136,7 @@ const AUDIT_FLUSH_DEBOUNCE_MS = 2000;
 const CONFIRMATION_REQUIRED_CODE = "CONFIRMATION_REQUIRED";
 const USER_REJECTED_CODE = "USER_REJECTED";
 const CONFIRMATION_TIMEOUT_CODE = "CONFIRMATION_TIMEOUT";
+const ELICITATION_FAILED_CODE = "ELICITATION_FAILED";
 
 const OPEN_WORLD_CATEGORIES: ReadonlySet<string> = new Set([
   "browser",
@@ -900,11 +901,15 @@ export class McpServerService {
 
   /**
    * Resolve the confirmation decision stored alongside an audit record.
-   * Trusts the renderer-supplied hint for `"approved"` (the only case main
-   * cannot infer — a successful dispatch may be a directly-authorized agent
-   * call or a modal-approved one), but always derives `"rejected"` and
-   * `"timeout"` from the canonical error codes so a renderer that forgets
-   * to set the hint still gets the right outcome recorded.
+   * Trusts the supplied hint for `"approved"` (the only case main cannot
+   * infer from error codes — a successful dispatch may be a directly-
+   * authorized agent call, a modal-approved one, or an elicitation-approved
+   * one), but always derives `"rejected"` and `"timeout"` from the canonical
+   * error codes so callers that forget to set the hint still get the right
+   * outcome recorded. The approved hint is preserved even when the
+   * subsequent dispatch fails for non-confirmation reasons, so the audit
+   * trail records that the user explicitly approved before the action
+   * failed.
    */
   private deriveConfirmationDecision(
     outcome:
@@ -917,7 +922,7 @@ export class McpServerService {
       if (outcome.value.error.code === USER_REJECTED_CODE) return "rejected";
       if (outcome.value.error.code === CONFIRMATION_TIMEOUT_CODE) return "timeout";
     }
-    if (hint === "approved" && outcome.kind === "result" && outcome.value.ok) {
+    if (hint === "approved") {
       return "approved";
     }
     return undefined;
@@ -1758,14 +1763,25 @@ export class McpServerService {
         if (!dispatchConfirmed && entry?.danger === "confirm") {
           const supportsForm = server.getClientCapabilities()?.elicitation?.form !== undefined;
           if (supportsForm) {
-            const elicitationOutcome = await this.runElicitationConfirmation(server, entry);
+            const elicitationOutcome = await this.runElicitationConfirmation(server, entry, args);
             if (elicitationOutcome.kind === "throw") {
-              outcome = elicitationOutcome;
+              const failureMessage = formatErrorMessage(
+                elicitationOutcome.error,
+                "Elicitation request failed"
+              );
+              const value: ActionDispatchResult = {
+                ok: false,
+                error: {
+                  code: ELICITATION_FAILED_CODE,
+                  message: failureMessage,
+                },
+              };
+              outcome = { kind: "result", value };
               return {
                 content: [
                   {
                     type: "text" as const,
-                    text: `Error: ${formatErrorMessage(elicitationOutcome.error, "Elicitation request failed")}`,
+                    text: `Error [${ELICITATION_FAILED_CODE}]: ${failureMessage}`,
                   },
                 ],
                 isError: true,
@@ -2404,16 +2420,23 @@ export class McpServerService {
    */
   private async runElicitationConfirmation(
     server: Server,
-    entry: ActionManifestEntry
+    entry: ActionManifestEntry,
+    args: unknown
   ): Promise<
     | { kind: "approved" }
     | { kind: "rejected"; value: ActionDispatchResult }
     | { kind: "throw"; error: unknown }
   > {
+    const argsSummary = summarizeMcpArgs(args);
+    const message =
+      argsSummary && argsSummary !== "{}"
+        ? `Confirm ${entry.title}: ${entry.description}\n\nArguments: ${argsSummary}`
+        : `Confirm ${entry.title}: ${entry.description}`;
+
     let result;
     try {
       result = await server.elicitInput({
-        message: `Confirm ${entry.title}: ${entry.description}`,
+        message,
         requestedSchema: {
           type: "object",
           properties: {

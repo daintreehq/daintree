@@ -1074,6 +1074,139 @@ describe("McpServerService", () => {
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
+    it("includes a summary of tool arguments in the elicitation message", async () => {
+      const dispatchMock = createDestructiveDispatchMock();
+      const onElicit = vi.fn(
+        async (): Promise<ElicitResult> => ({
+          action: "accept",
+          content: { confirmed: true },
+        })
+      );
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "worktree.delete" as ActionId,
+            title: "Delete Worktree",
+            description: "Delete a worktree",
+            danger: "confirm",
+          }),
+        ],
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, undefined, {
+        capabilities: { elicitation: { form: {} } },
+        onElicit,
+      });
+      transports.push(transport);
+
+      await client.callTool({
+        name: "worktree.delete",
+        arguments: { worktreeId: "wt-very-specific-id" },
+      });
+
+      const captured = onElicit.mock.calls[0]?.[0] as { params: { message: string } } | undefined;
+      expect(captured?.params.message).toContain("Delete Worktree");
+      // The args summary must appear in the prompt so a user reviewing
+      // the elicitation form can tell which entity is being affected.
+      expect(captured?.params.message).toContain("wt-very-specific-id");
+    });
+
+    it("returns ELICITATION_FAILED without dispatching when the elicit handler throws", async () => {
+      const dispatchMock = createDestructiveDispatchMock();
+      const onElicit = vi.fn(async () => {
+        throw new Error("elicit handler exploded");
+      });
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "worktree.delete" as ActionId,
+            title: "Delete Worktree",
+            description: "Delete a worktree",
+            danger: "confirm",
+          }),
+        ],
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, undefined, {
+        capabilities: { elicitation: { form: {} } },
+        onElicit,
+      });
+      transports.push(transport);
+
+      const result = getTextResult(
+        await client.callTool({
+          name: "worktree.delete",
+          arguments: { worktreeId: "wt-1" },
+        })
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("ELICITATION_FAILED");
+      expect(dispatchMock).not.toHaveBeenCalled();
+
+      const records = readAuditRecords(service);
+      expect(records).toHaveLength(1);
+      expect(records[0].errorCode).toBe("ELICITATION_FAILED");
+    });
+
+    it("preserves the approved confirmationDecision when dispatch fails after elicitation accepts", async () => {
+      const dispatchMock = vi.fn(
+        (): ActionDispatchResult => ({
+          ok: false,
+          error: { code: "EXECUTION_ERROR", message: "action exploded" },
+        })
+      );
+      const onElicit = vi.fn(
+        async (): Promise<ElicitResult> => ({
+          action: "accept",
+          content: { confirmed: true },
+        })
+      );
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "worktree.delete" as ActionId,
+            title: "Delete Worktree",
+            description: "Delete a worktree",
+            danger: "confirm",
+          }),
+        ],
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, undefined, {
+        capabilities: { elicitation: { form: {} } },
+        onElicit,
+      });
+      transports.push(transport);
+
+      const result = getTextResult(
+        await client.callTool({
+          name: "worktree.delete",
+          arguments: { worktreeId: "wt-1" },
+        })
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("EXECUTION_ERROR");
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ confirmed: true }));
+
+      const records = readAuditRecords(service);
+      expect(records).toHaveLength(1);
+      expect(records[0].result).toBe("error");
+      expect(records[0].errorCode).toBe("EXECUTION_ERROR");
+      // The user explicitly approved via elicitation — the fact that the
+      // subsequent dispatch failed must not erase that decision from the
+      // audit trail.
+      expect(records[0].confirmationDecision).toBe("approved");
+    });
+
     it("does not invoke elicitation for non-destructive tools", async () => {
       const dispatchMock = vi.fn(
         (): ActionDispatchResult => ({
