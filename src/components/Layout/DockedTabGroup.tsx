@@ -438,13 +438,14 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     exitCode: activePanel.exitCode,
     presetColor: brandColor,
   });
-  const agentState = activeChrome.isAgent ? getDockDisplayAgentState(activePanel) : undefined;
+  const agentState = getDockDisplayAgentState(activePanel);
   const isWorking = agentState === "working";
   const isWaiting = agentState === "waiting";
   const isActive = isWorking || isWaiting;
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
   const displayTitle = getBaseTitle(activePanel.title);
-  const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
+  const showStateIcon =
+    agentState && agentState !== "idle" && agentState !== "completed" && agentState !== "exited";
   const StateIcon = showStateIcon
     ? getEffectiveStateIcon(agentState, activePanel.waitingReason)
     : null;
@@ -603,9 +604,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                           title={getBaseTitle(panel.title)}
                           chrome={tabChrome}
                           kind={panel.kind ?? "terminal"}
-                          agentState={
-                            tabChrome.isAgent ? getDockDisplayAgentState(panel) : undefined
-                          }
+                          agentState={getDockDisplayAgentState(panel)}
                           isActive={panel.id === activeTabId}
                           presetColor={panelPresetColors.get(panel.id)}
                           isUsingFallback={panel.isUsingFallback}

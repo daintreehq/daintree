@@ -16,6 +16,45 @@ export interface UseWorktreeTerminalsResult {
   dominantAgentState: AgentState | null;
 }
 
+/**
+ * Pure aggregator over a worktree's terminal list, exposed for unit tests.
+ *
+ * Active states (working/waiting/directing) are credited to byState even when
+ * agent identity hasn't committed yet — the backend only emits these from
+ * agent-sourced events, so they're trustworthy during the boot window (#6650).
+ * Plain terminals and demoted ex-agents (idle/completed/exited without
+ * identity) fall back to "idle" so stale states don't bleed into badges.
+ */
+export function aggregateAgentStates(terminals: TerminalInstance[]): {
+  byState: Record<AgentState, number>;
+  agentStates: (AgentState | undefined)[];
+} {
+  const byState: Record<AgentState, number> = {
+    idle: 0,
+    working: 0,
+    waiting: 0,
+    directing: 0,
+    completed: 0,
+    exited: 0,
+  };
+  const agentStates: (AgentState | undefined)[] = [];
+
+  terminals.forEach((terminal) => {
+    const isLiveAgent = deriveTerminalChrome(terminal).isAgent;
+    const rawState = terminal.agentState;
+    const isActiveState =
+      rawState === "working" || rawState === "waiting" || rawState === "directing";
+    const state = isLiveAgent ? (rawState ?? "idle") : isActiveState ? rawState : "idle";
+    byState[state] = (byState[state] || 0) + 1;
+
+    if (rawState && (isLiveAgent || isActiveState)) {
+      agentStates.push(rawState);
+    }
+  });
+
+  return { byState, agentStates };
+}
+
 function useDebouncedValue<T>(value: T, delay: number): T {
   const [debouncedValue, setDebouncedValue] = useState(value);
   const isFirstRender = useRef(true);
@@ -57,28 +96,7 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
   );
 
   const result = useMemo(() => {
-    const byState: Record<AgentState, number> = {
-      idle: 0,
-      working: 0,
-      waiting: 0,
-      directing: 0,
-      completed: 0,
-      exited: 0,
-    };
-
-    const agentStates: (AgentState | undefined)[] = [];
-    terminals.forEach((terminal) => {
-      const isLiveAgent = deriveTerminalChrome(terminal).isAgent;
-      // Plain terminals and demoted ex-agents are counted as sessions, but
-      // they must not contribute stale agent states to sidebar badges.
-      const state = isLiveAgent ? (terminal.agentState ?? "idle") : "idle";
-      byState[state] = (byState[state] || 0) + 1;
-
-      if (isLiveAgent && terminal.agentState) {
-        agentStates.push(terminal.agentState);
-      }
-    });
-
+    const { byState, agentStates } = aggregateAgentStates(terminals);
     const dominantAgentState = getDominantAgentState(agentStates);
 
     return {
