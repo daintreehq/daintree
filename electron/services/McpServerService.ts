@@ -377,6 +377,7 @@ export class McpServerService {
   private sessionTierMap = new Map<string, McpTier>();
   private pendingManifests = new Map<string, PendingRequest<ActionManifestEntry[]>>();
   private pendingDispatches = new Map<string, PendingRequest<DispatchEnvelope>>();
+  private cachedManifest: ActionManifestEntry[] | null = null;
   private cleanupListeners: Array<() => void> = [];
   private statusListeners = new Set<(running: boolean) => void>();
   private auditRecords: McpAuditRecord[] = [];
@@ -908,9 +909,11 @@ export class McpServerService {
       clearTimeout(pending.timer);
       pending.destroyedCleanup?.();
       this.pendingManifests.delete(payload.requestId);
-      pending.resolve(
-        Array.isArray(payload.manifest) ? (payload.manifest as ActionManifestEntry[]) : []
-      );
+      const manifest = Array.isArray(payload.manifest)
+        ? (payload.manifest as ActionManifestEntry[])
+        : [];
+      this.cachedManifest = manifest;
+      pending.resolve(manifest);
     };
 
     const dispatchHandler = (
@@ -1077,12 +1080,16 @@ export class McpServerService {
       return {
         tools: manifest
           .filter((entry) => this.shouldExposeTool(entry, tier))
-          .map((entry) => ({
-            name: entry.id,
-            description: this.buildToolDescription(entry),
-            inputSchema: this.buildToolInputSchema(entry),
-            annotations: this.buildAnnotations(entry),
-          })),
+          .map((entry) => {
+            const outputSchema = this.buildToolOutputSchema(entry);
+            return {
+              name: entry.id,
+              description: this.buildToolDescription(entry),
+              inputSchema: this.buildToolInputSchema(entry),
+              annotations: this.buildAnnotations(entry),
+              ...(outputSchema ? { outputSchema } : {}),
+            };
+          }),
       };
     });
 
@@ -1140,6 +1147,8 @@ export class McpServerService {
         }
 
         if (outcome.value.ok) {
+          const entry = this.cachedManifest?.find((e) => e.id === actionId);
+          const structuredContent = this.buildStructuredContent(entry, outcome.value.result);
           return {
             content: [
               {
@@ -1150,6 +1159,7 @@ export class McpServerService {
                     : "OK",
               },
             ],
+            ...(structuredContent ? { structuredContent } : {}),
           };
         }
 
@@ -1366,6 +1376,30 @@ export class McpServerService {
       destructiveHint: entry.danger === "confirm",
       openWorldHint: OPEN_WORLD_CATEGORIES.has(entry.category),
     };
+  }
+
+  private buildToolOutputSchema(entry: ActionManifestEntry): Record<string, unknown> | undefined {
+    const schema = entry.outputSchema;
+    if (!schema || typeof schema !== "object" || Array.isArray(schema)) return undefined;
+    if (schema["type"] !== "object") return undefined;
+    return schema;
+  }
+
+  private buildStructuredContent(
+    entry: ActionManifestEntry | undefined,
+    result: unknown
+  ): Record<string, unknown> | undefined {
+    if (!entry || !this.buildToolOutputSchema(entry)) return undefined;
+    if (
+      result === null ||
+      result === undefined ||
+      typeof result !== "object" ||
+      Array.isArray(result) ||
+      result instanceof Error
+    ) {
+      return undefined;
+    }
+    return result as Record<string, unknown>;
   }
 
   private parseToolArguments(rawArgs: unknown): { args: unknown; confirmed: boolean } {

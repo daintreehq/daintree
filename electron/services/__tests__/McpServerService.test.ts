@@ -2632,4 +2632,193 @@ describe("McpServerService", () => {
       Authorization: `Bearer ${service.getStatus().apiKey}`,
     });
   });
+
+  describe("outputSchema and structuredContent", () => {
+    const objectSchema = {
+      type: "object",
+      properties: {
+        count: { type: "number" },
+        label: { type: "string" },
+      },
+      required: ["count", "label"],
+    };
+
+    const primitiveSchema = {
+      type: "string",
+    };
+
+    it("advertises outputSchema in listTools for actions with an object resultSchema", async () => {
+      storeState.mcpServer.fullToolSurface = true;
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "log.getEntries" as ActionId,
+            title: "Get Log Entries",
+            description: "Returns log entries",
+            kind: "query",
+            outputSchema: objectSchema,
+          }),
+          createManifestEntry({
+            id: "worktree.create" as ActionId,
+            title: "Create Worktree",
+            description: "Create a worktree",
+            kind: "command",
+            outputSchema: primitiveSchema,
+          }),
+          createManifestEntry({
+            id: "actions.list" as ActionId,
+            title: "List Actions",
+            description: "Read the action registry",
+            kind: "query",
+          }),
+        ],
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = await client.listTools();
+      const objectTool = result.tools.find((t) => t.name === "log.getEntries");
+      const primitiveTool = result.tools.find((t) => t.name === "worktree.create");
+      const noSchemaTool = result.tools.find((t) => t.name === "actions.list");
+
+      expect(objectTool?.outputSchema).toEqual(objectSchema);
+      expect(primitiveTool?.outputSchema).toBeUndefined();
+      expect(noSchemaTool?.outputSchema).toBeUndefined();
+    });
+
+    it("emits structuredContent on callTool when the action has an object outputSchema and an object result", async () => {
+      storeState.mcpServer.fullToolSurface = true;
+      const objectResult = { count: 7, label: "ok" };
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "log.getEntries" as ActionId,
+            title: "Get Log Entries",
+            description: "Returns log entries",
+            kind: "query",
+            outputSchema: objectSchema,
+          }),
+        ],
+        dispatchAction: () => ({ ok: true, result: objectResult }),
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await client.listTools();
+      const result = (await client.callTool({
+        name: "log.getEntries",
+        arguments: {},
+      })) as {
+        content: Array<{ type: string; text: string }>;
+        structuredContent?: Record<string, unknown>;
+      };
+
+      expect(result.structuredContent).toEqual(objectResult);
+      expect(result.content[0]?.type).toBe("text");
+      expect(JSON.parse(result.content[0]!.text)).toEqual(objectResult);
+    });
+
+    it("omits structuredContent when the action has a primitive resultSchema", async () => {
+      storeState.mcpServer.fullToolSurface = true;
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "worktree.create" as ActionId,
+            title: "Create Worktree",
+            description: "Create a worktree",
+            kind: "command",
+            outputSchema: primitiveSchema,
+          }),
+        ],
+        dispatchAction: () => ({ ok: true, result: "wt-123" }),
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await client.listTools();
+      const result = (await client.callTool({
+        name: "worktree.create",
+        arguments: {},
+      })) as {
+        content: Array<{ type: string; text: string }>;
+        structuredContent?: Record<string, unknown>;
+      };
+
+      expect(result.structuredContent).toBeUndefined();
+      expect(result.content[0]?.text).toContain("wt-123");
+    });
+
+    it("omits structuredContent when the action has no resultSchema", async () => {
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "actions.list" as ActionId,
+            title: "List Actions",
+            description: "Read the action registry",
+            kind: "query",
+          }),
+        ],
+        dispatchAction: () => ({ ok: true, result: { foo: "bar" } }),
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await client.listTools();
+      const result = (await client.callTool({
+        name: "actions.list",
+        arguments: {},
+      })) as {
+        content: Array<{ type: string; text: string }>;
+        structuredContent?: Record<string, unknown>;
+      };
+
+      expect(result.structuredContent).toBeUndefined();
+      expect(result.content[0]?.text).toContain('"foo": "bar"');
+    });
+
+    it("does not emit structuredContent on failed tool calls", async () => {
+      storeState.mcpServer.fullToolSurface = true;
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "log.getEntries" as ActionId,
+            title: "Get Log Entries",
+            description: "Returns log entries",
+            kind: "query",
+            outputSchema: objectSchema,
+          }),
+        ],
+        dispatchAction: () => ({
+          ok: false,
+          error: { code: "internal_error", message: "boom" },
+        }),
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await client.listTools();
+      const result = (await client.callTool({
+        name: "log.getEntries",
+        arguments: {},
+      })) as {
+        content: Array<{ type: string; text: string }>;
+        structuredContent?: Record<string, unknown>;
+        isError?: boolean;
+      };
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+      expect(result.content[0]?.text).toContain("boom");
+    });
+  });
 });
