@@ -1571,6 +1571,11 @@ describe("McpServerService", () => {
         title: "Create Worktree",
         description: "Create a new worktree",
       }),
+      createManifestEntry({
+        id: "worktree.createWithRecipe" as ActionId,
+        title: "Create Worktree with Recipe",
+        description: "Create worktree, optionally check out a PR, optionally run a recipe",
+      }),
       // System-only tools — irreversible or externally-visible mutations.
       createManifestEntry({
         id: "git.commit" as ActionId,
@@ -1716,7 +1721,8 @@ describe("McpServerService", () => {
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
-      expect(ids).toContain("worktree.create");
+      expect(ids).not.toContain("worktree.create");
+      expect(ids).toContain("worktree.createWithRecipe");
       for (const id of ACTION_TIER_TOOLS) {
         expect(ids).toContain(id);
       }
@@ -1740,7 +1746,8 @@ describe("McpServerService", () => {
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
-      expect(ids).toContain("worktree.create");
+      expect(ids).not.toContain("worktree.create");
+      expect(ids).toContain("worktree.createWithRecipe");
       for (const id of ACTION_TIER_TOOLS) {
         expect(ids).toContain(id);
       }
