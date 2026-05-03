@@ -250,6 +250,10 @@ const ACTION_TIER_ADDONS: ReadonlySet<string> = new Set([
   "agent.terminal",
 
   "workflow.startWorkOnIssue",
+
+  "project.update",
+  "project.saveSettings",
+  "project.muteNotifications",
 ]);
 
 /**
@@ -357,6 +361,9 @@ const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   "project.getSettings",
   "project.getStats",
   "project.detectRunners",
+  "project.update",
+  "project.saveSettings",
+  "project.muteNotifications",
 
   "recipe.list",
   "recipe.run",

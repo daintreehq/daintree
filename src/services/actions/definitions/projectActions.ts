@@ -138,13 +138,21 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "command",
     danger: "confirm",
     scope: "renderer",
-    argsSchema: z.object({ projectId: z.string(), updates: z.record(z.string(), z.unknown()) }),
+    argsSchema: z.object({
+      projectId: z.string(),
+      updates: z.object({
+        name: z.string().optional(),
+        emoji: z.string().optional(),
+        color: z.string().optional(),
+        pinned: z.boolean().optional(),
+      }),
+    }),
     run: async (args: unknown) => {
       const { projectId, updates } = args as {
         projectId: string;
-        updates: Record<string, unknown>;
+        updates: { name?: string; emoji?: string; color?: string; pinned?: boolean };
       };
-      await useProjectStore.getState().updateProject(projectId, updates as any);
+      await useProjectStore.getState().updateProject(projectId, updates);
     },
   }));
 
