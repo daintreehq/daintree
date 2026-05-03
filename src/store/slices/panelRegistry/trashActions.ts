@@ -31,6 +31,14 @@ export const createTrashActions = (
     const terminal = get().panelsById[id];
     if (!terminal) return;
 
+    // Ephemeral panels (e.g. the help-panel assistant terminal) are bound to
+    // a transient UI surface and must never linger in trash for the TTL window
+    // — they bypass the trash flow and are removed outright.
+    if (terminal.ephemeral === true) {
+      get().removePanel(id);
+      return;
+    }
+
     const expiresAt = Date.now() + TRASH_TTL_MS;
 
     if (terminal.kind === "dev-preview") {

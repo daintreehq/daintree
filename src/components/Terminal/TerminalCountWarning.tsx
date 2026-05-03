@@ -17,7 +17,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       let completed = 0;
       for (const id of state.panelIds) {
         const t = state.panelsById[id];
-        if (t && t.location !== "trash") {
+        if (t && t.location !== "trash" && t.ephemeral !== true) {
           active++;
           if (t.agentState === "completed" || t.agentState === "exited") completed++;
         }
@@ -89,7 +89,8 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
         if (
           t &&
           (t.agentState === "completed" || t.agentState === "exited") &&
-          t.location !== "trash"
+          t.location !== "trash" &&
+          t.ephemeral !== true
         ) {
           usePanelStore.getState().trashPanel(t.id);
         }

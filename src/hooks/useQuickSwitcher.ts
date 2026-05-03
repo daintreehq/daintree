@@ -78,6 +78,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
       const t = panelsById[id];
       if (!t) continue;
       if (t.location === "trash") continue;
+      if (t.ephemeral === true) continue;
       if (t.hasPty === false) continue;
       if (!isPtyPanel(t)) continue;
       const worktreeName = t.worktreeId ? worktreeMap.get(t.worktreeId)?.name : undefined;

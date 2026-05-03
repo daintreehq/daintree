@@ -19,6 +19,7 @@ export function isTerminalVisible(
   if (isInTrash(terminal.id)) return false;
   if (terminal.location === "trash") return false;
   if (terminal.location === "background") return false;
+  if (terminal.ephemeral === true) return false;
   if (isTerminalOrphaned(terminal, worktreeIds)) return false;
   return true;
 }

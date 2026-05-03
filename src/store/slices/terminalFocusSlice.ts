@@ -20,6 +20,7 @@ function isTerminalVisible(
   if (isInTrash(terminal.id)) return false;
   if (terminal.location === "trash") return false;
   if (terminal.location === "background") return false;
+  if (terminal.ephemeral === true) return false;
   if (isTerminalOrphaned(terminal, worktreeIds)) return false;
   return true;
 }
@@ -551,6 +552,7 @@ export const createTerminalFocusSlice =
         const dockTerminals = terminals.filter(
           (t) =>
             t.location === "dock" &&
+            t.ephemeral !== true &&
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined) &&
             t.agentState === "waiting"
         );

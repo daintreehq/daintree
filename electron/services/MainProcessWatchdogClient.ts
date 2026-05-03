@@ -15,6 +15,10 @@
 
 import { app, utilityProcess, type UtilityProcess } from "electron";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const PING_INTERVAL_MS = 5000;
 const SERVICE_NAME = "daintree-watchdog";

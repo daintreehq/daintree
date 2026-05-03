@@ -268,6 +268,14 @@ export function setupLifecycleListeners(): DisposableStore {
           return;
         }
 
+        // Ephemeral panels (e.g. the help-panel assistant) are bound to a
+        // transient UI surface — on any exit, remove rather than preserve
+        // so they don't linger in the dock as "exited" agents.
+        if (terminal.ephemeral === true) {
+          state.removePanel(id);
+          return;
+        }
+
         // Non-zero exit codes always preserve terminal for debugging, regardless of exitBehavior
         // This ensures failures are visible for review
         if (exitCode !== 0) {

@@ -48,7 +48,10 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
         .map((id) => state.panelsById[id])
         .filter(
           (t): t is TerminalInstance =>
-            t !== undefined && t.worktreeId === worktreeId && t.location !== "trash"
+            t !== undefined &&
+            t.worktreeId === worktreeId &&
+            t.location !== "trash" &&
+            t.ephemeral !== true
         )
     )
   );
