@@ -198,11 +198,10 @@ describe("helpPanelStore persistence migration", () => {
 
     const written = backing.get(STORAGE_KEY);
     expect(written).toBeDefined();
-    const parsed = JSON.parse(written!) as {
-      version: number;
-      state: { introDismissed: boolean };
-    };
-    expect(parsed.version).toBe(1);
-    expect(parsed.state.introDismissed).toBe(true);
+    const parsed: unknown = JSON.parse(written!);
+    expect(parsed).toMatchObject({
+      version: 1,
+      state: { introDismissed: true },
+    });
   });
 });

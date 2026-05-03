@@ -70,13 +70,7 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
       name: "help-panel-storage",
       storage: createSafeJSONStorage(),
       version: 1,
-      migrate: (persistedState, version) => {
-        const s = (persistedState ?? {}) as Partial<HelpPanelState>;
-        if (version < 1) {
-          return { ...s, introDismissed: false } as HelpPanelState & HelpPanelActions;
-        }
-        return s as HelpPanelState & HelpPanelActions;
-      },
+      migrate: (persistedState) => persistedState as HelpPanelState & HelpPanelActions,
       partialize: (state) => ({
         width: state.width,
         preferredAgentId: state.preferredAgentId,
