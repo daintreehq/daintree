@@ -549,6 +549,71 @@ describe("ActionService", () => {
       expect(manifest[0]!.keywords).toBeUndefined();
     });
 
+    it("should propagate mcpAnnotations to manifest entries", () => {
+      const action: ActionDefinition = {
+        id: "actions.annotated" as ActionId,
+        title: "Annotated Action",
+        description: "An action with explicit MCP overrides",
+        category: "test",
+        kind: "query",
+        danger: "confirm",
+        scope: "renderer",
+        mcpAnnotations: { destructiveHint: false, readOnlyHint: true, idempotentHint: false },
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(action);
+      const manifest = service.list();
+
+      expect(manifest[0]!.mcpAnnotations).toEqual({
+        destructiveHint: false,
+        readOnlyHint: true,
+        idempotentHint: false,
+      });
+    });
+
+    it("should omit mcpAnnotations when not defined", () => {
+      const action: ActionDefinition = {
+        id: "actions.unannotated" as ActionId,
+        title: "Unannotated Action",
+        description: "An action without explicit MCP overrides",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(action);
+      const manifest = service.list();
+
+      expect(manifest[0]!.mcpAnnotations).toBeUndefined();
+    });
+
+    it("should isolate mcpAnnotations from caller mutations", () => {
+      // Returned manifest entries must not share references with the
+      // registered definition, so a caller that mutates entry.mcpAnnotations
+      // can't poison subsequent list() reads.
+      const action: ActionDefinition = {
+        id: "actions.isolated" as ActionId,
+        title: "Isolated Action",
+        description: "Mutation-isolation guard",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        mcpAnnotations: { destructiveHint: false },
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(action);
+      const first = service.list()[0]!;
+      first.mcpAnnotations!.destructiveHint = true;
+
+      const second = service.list()[0]!;
+      expect(second.mcpAnnotations).toEqual({ destructiveHint: false });
+    });
+
     it("normalizes undefined title/description to empty strings on manifest entries", () => {
       // Regression: #6120 — IPC-sourced plugin actions could arrive with
       // undefined title or description even though the type system says

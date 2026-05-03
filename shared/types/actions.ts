@@ -9,6 +9,22 @@ export type ActionDanger = "safe" | "confirm" | "restricted";
 
 export type ActionScope = "renderer";
 
+/**
+ * Explicit MCP tool annotation overrides. Only the hints that can be
+ * meaningfully decoupled from `kind`/`danger` are exposed here — `title` is
+ * always sourced from the action title and `openWorldHint` is derived from the
+ * action category. Provide an override only when the heuristic from `kind` and
+ * `danger` doesn't reflect the action's true semantics for an MCP client (for
+ * example, a query that requires UX confirmation, or a status command that is
+ * read-only). Defined inline (no `@modelcontextprotocol/sdk` import) so this
+ * type stays usable from the renderer.
+ */
+export interface ActionMcpAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+}
+
 export type BuiltInActionId =
   | BuiltInKeyAction
   // Query actions for App Agent
@@ -369,6 +385,11 @@ export interface ActionDefinition<
   nonRepeatable?: boolean;
   /** Synonyms and alternative mental-model terms for palette search. */
   keywords?: string[];
+  /**
+   * Per-action MCP tool annotation overrides. Use sparingly — only when the
+   * defaults derived from `kind` and `danger` would mislead an MCP client.
+   */
+  mcpAnnotations?: ActionMcpAnnotations;
 }
 
 export interface ActionManifestEntry {
@@ -389,6 +410,8 @@ export interface ActionManifestEntry {
   disabledReason?: string;
   requiresArgs: boolean;
   keywords?: string[];
+  /** Per-action MCP tool annotation overrides. */
+  mcpAnnotations?: ActionMcpAnnotations;
   /** Set when this action was registered by a plugin (not a built-in). */
   pluginId?: string;
 }

@@ -2359,11 +2359,13 @@ export class McpServerService {
   }
 
   private buildAnnotations(entry: ActionManifestEntry): ToolAnnotations {
+    const overrides = entry.mcpAnnotations;
+    const isQuery = entry.kind === "query";
     return {
       title: entry.title,
-      readOnlyHint: entry.kind === "query",
-      idempotentHint: entry.kind === "query",
-      destructiveHint: entry.danger === "confirm",
+      readOnlyHint: overrides?.readOnlyHint ?? isQuery,
+      idempotentHint: overrides?.idempotentHint ?? isQuery,
+      destructiveHint: overrides?.destructiveHint ?? entry.danger === "confirm",
       openWorldHint: OPEN_WORLD_CATEGORIES.has(entry.category),
     };
   }

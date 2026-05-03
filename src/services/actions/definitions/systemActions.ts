@@ -210,6 +210,9 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       danger: "confirm",
       scope: "renderer",
       keywords: ["context", "dump", "snapshot", "tree"],
+      // `danger: "confirm"` gates the UI on a token-cost confirmation, but the
+      // operation itself is read-only and not destructive.
+      mcpAnnotations: { destructiveHint: false },
       argsSchema: z.object({ worktreeId: z.string(), options: CopyTreeOptionsSchema.optional() }),
       run: async ({ worktreeId, options }) => {
         return await copyTreeClient.generate(worktreeId, options);
@@ -226,6 +229,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       kind: "command",
       danger: "confirm",
       scope: "renderer",
+      // Writes to clipboard only; not a destructive world-state mutation.
+      mcpAnnotations: { destructiveHint: false },
       argsSchema: z.object({ worktreeId: z.string(), options: CopyTreeOptionsSchema.optional() }),
       run: async ({ worktreeId, options }) => {
         return await copyTreeClient.generateAndCopyFile(worktreeId, options);

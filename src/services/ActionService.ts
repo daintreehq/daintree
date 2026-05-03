@@ -326,6 +326,7 @@ export class ActionService {
           !definition.argsSchema.safeParse({}).success
         : rawSchemaRequiresArgs(definition.rawInputSchema),
       keywords: definition.keywords?.slice(),
+      ...(definition.mcpAnnotations ? { mcpAnnotations: { ...definition.mcpAnnotations } } : {}),
       ...(definition.pluginId ? { pluginId: definition.pluginId } : {}),
     };
   }
