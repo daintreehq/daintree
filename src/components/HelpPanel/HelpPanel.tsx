@@ -692,7 +692,7 @@ export function HelpPanel({ width: effectiveWidth }: HelpPanelProps) {
         description={
           pendingAction === "back"
             ? "The agent is currently working. Switching agents will stop it."
-            : "The agent is currently working. Closing this tab will stop it."
+            : "The agent is currently working. Closing the assistant panel will stop it."
         }
         confirmLabel={pendingAction === "back" ? "Stop and switch" : "Stop and close"}
         onConfirm={handleConfirmPendingAction}

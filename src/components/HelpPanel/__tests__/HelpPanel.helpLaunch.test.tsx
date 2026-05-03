@@ -254,6 +254,7 @@ vi.mock("../HelpAgentPicker", () => ({
 }));
 
 import { HelpPanel } from "../HelpPanel";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 
 function resetState() {
   helpPanelState.isOpen = true;
@@ -1116,7 +1117,7 @@ describe("HelpPanel — close/back confirmation guard (issue #6623)", () => {
     expect(helpPanelState.setOpen).not.toHaveBeenCalled();
     expect(getByTestId("dialog-title").textContent).toBe("Stop this agent?");
     expect(getByTestId("dialog-description").textContent).toContain(
-      "Closing this tab will stop it"
+      "Closing the assistant panel will stop it"
     );
     expect(getByTestId("dialog-confirm").textContent).toBe("Stop and close");
   });
@@ -1143,9 +1144,10 @@ describe("HelpPanel — close/back confirmation guard (issue #6623)", () => {
     expect(helpPanelState.setOpen).not.toHaveBeenCalled();
   });
 
-  it("runs the close cleanup when the user confirms", () => {
+  it("runs the close cleanup and revokes the bound session when the user confirms", () => {
     helpPanelState.terminalId = "term-1";
     helpPanelState.agentId = "claude";
+    helpPanelState.sessionId = "sess-bound";
     panelStoreState.panelsById = {
       "term-1": {
         id: "term-1",
@@ -1164,6 +1166,7 @@ describe("HelpPanel — close/back confirmation guard (issue #6623)", () => {
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
     expect(helpPanelState.clearPreferredAgent).not.toHaveBeenCalled();
+    expect(mockRevokeSession).toHaveBeenCalledWith("sess-bound");
   });
 
   it("shows the back-specific copy when Back is clicked during an in-flight turn", () => {
@@ -1240,7 +1243,7 @@ describe("HelpPanel — close/back confirmation guard (issue #6623)", () => {
     expect(helpPanelState.clearPreferredAgent).not.toHaveBeenCalled();
   });
 
-  it.each(["waiting", "directing"] as const)(
+  it.each(["waiting", "directing", "completed", "exited"] as const)(
     "closes immediately for %s agent state (only 'working' triggers confirm)",
     (state) => {
       helpPanelState.terminalId = "term-1";
@@ -1284,5 +1287,38 @@ describe("HelpPanel — close/back confirmation guard (issue #6623)", () => {
     expect(queryByTestId("confirm-dialog")).toBeNull();
     expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-1");
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
+  });
+
+  it("Escape inherits the guard via handleClose (working state shows dialog, no cleanup)", () => {
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    panelStoreState.panelsById = {
+      "term-1": {
+        id: "term-1",
+        kind: "terminal",
+        spawnStatus: "ready",
+        cwd: "/help",
+        agentState: "working",
+      },
+    };
+
+    const { getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
+
+    // Capture the callback registered with useEscapeStack and invoke it
+    // directly — equivalent to a real Escape press hitting the LIFO stack
+    // when no xterm-helper-textarea has focus.
+    const escapeMock = vi.mocked(useEscapeStack);
+    const lastCall = escapeMock.mock.calls.at(-1);
+    const callback = lastCall?.[1];
+    expect(callback).toBeTypeOf("function");
+
+    act(() => {
+      callback?.();
+    });
+
+    expect(queryByTestId("confirm-dialog")).not.toBeNull();
+    expect(getByTestId("dialog-confirm").textContent).toBe("Stop and close");
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(helpPanelState.setOpen).not.toHaveBeenCalled();
   });
 });
