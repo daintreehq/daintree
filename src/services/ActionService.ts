@@ -195,7 +195,10 @@ export class ActionService {
     if (!isEnabled) {
       const reasonText = definition.disabledReason?.(context);
       const disabledReason = reasonText ?? "Action is currently disabled";
-      if (reasonText) {
+      // Suppress the toast for agent-sourced dispatches — MCP introspection
+      // probes shouldn't surface as user-visible warnings. The DISABLED error
+      // is still returned to the caller.
+      if (reasonText && source !== "agent") {
         notify({
           type: "warning",
           title: `'${definition.title}' disabled`,

@@ -315,7 +315,7 @@ describe("ActionService", () => {
       expect(notifyMock).not.toHaveBeenCalled();
     });
 
-    it("should show toast for disabled action from any source", async () => {
+    it("should show toast for disabled action from non-agent sources", async () => {
       const action: ActionDefinition = {
         id: "actions.list" as ActionId,
         title: "Test Action",
@@ -331,7 +331,7 @@ describe("ActionService", () => {
 
       service.register(action);
 
-      for (const source of ["keybinding", "menu", "context-menu", "user", "agent"] as const) {
+      for (const source of ["keybinding", "menu", "context-menu", "user"] as const) {
         notifyMock.mockClear();
         const result = await service.dispatch("actions.list", undefined, { source });
         expect(result.ok).toBe(false);
@@ -341,6 +341,33 @@ describe("ActionService", () => {
           message: "Disabled for test",
         });
       }
+    });
+
+    it("should suppress disabled-action toast for agent source but still return DISABLED", async () => {
+      const action: ActionDefinition = {
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description: "A test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isEnabled: () => false,
+        disabledReason: () => "Disabled for test",
+        run: vi.fn(),
+      };
+
+      service.register(action);
+      notifyMock.mockClear();
+
+      const result = await service.dispatch("actions.list", undefined, { source: "agent" });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("DISABLED");
+        expect(result.error.message).toBe("Disabled for test");
+      }
+      expect(notifyMock).not.toHaveBeenCalled();
     });
 
     it("should NOT show toast for enabled actions", async () => {

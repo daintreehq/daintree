@@ -1104,28 +1104,22 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
-      isEnabled: (ctx: ActionContext) => {
-        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        if (!worktreeId) return false;
-        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
-        return !!worktree?.hasStatusCommand;
-      },
-      disabledReason: (ctx: ActionContext) => {
-        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        if (!worktreeId) return "No worktree selected";
-        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
-        if (!worktree?.hasStatusCommand) return "Worktree has no status command configured";
-        return undefined;
-      },
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         if (!targetWorktreeId) throw new Error("No worktree selected");
+        const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
+        if (!worktree?.hasStatusCommand) {
+          return { configured: false, status: null } as const;
+        }
         try {
           await worktreeClient.resourceAction(targetWorktreeId, "status");
         } catch (err) {
           notifyWorktreeResourceError(err, "Status check failed", "Resource status check failed");
+          return { configured: true, status: null } as const;
         }
+        const updated = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
+        return { configured: true, status: updated?.resourceStatus ?? null } as const;
       },
     })
   );
