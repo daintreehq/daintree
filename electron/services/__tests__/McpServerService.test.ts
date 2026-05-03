@@ -2880,7 +2880,6 @@ describe("McpServerService", () => {
     });
   });
 
-
   describe("prompts", () => {
     it("advertises the prompts capability and lists the starter prompts with argument metadata", async () => {
       const { window } = createMockWindow();
