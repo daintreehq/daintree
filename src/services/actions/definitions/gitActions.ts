@@ -12,15 +12,30 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({
-      worktreeId: z.string(),
-      rangeDays: PulseRangeDaysSchema,
-      includeDelta: z.boolean().optional(),
-      includeRecentCommits: z.boolean().optional(),
-      forceRefresh: z.boolean().optional(),
-    }),
-    run: async (args: unknown) => {
-      return await window.electron.git.getProjectPulse(args as any);
+    argsSchema: z
+      .object({
+        worktreeId: z.string().optional().describe("Worktree ID. Defaults to the active worktree."),
+        rangeDays: PulseRangeDaysSchema,
+        includeDelta: z.boolean().optional(),
+        includeRecentCommits: z.boolean().optional(),
+        forceRefresh: z.boolean().optional(),
+      })
+      .optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const merged = (args ?? {}) as {
+        worktreeId?: string;
+        rangeDays?: 60 | 120 | 180;
+        includeDelta?: boolean;
+        includeRecentCommits?: boolean;
+        forceRefresh?: boolean;
+      };
+      const resolvedWorktreeId = merged.worktreeId ?? ctx.activeWorktreeId;
+      if (!resolvedWorktreeId) throw new Error("No active worktree");
+      return await window.electron.git.getProjectPulse({
+        ...merged,
+        worktreeId: resolvedWorktreeId,
+        rangeDays: merged.rangeDays ?? 60,
+      } as any);
     },
   }));
 
@@ -33,17 +48,22 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
-      cwd: z.string(),
+      cwd: z
+        .string()
+        .optional()
+        .describe("Repository working directory. Defaults to the active worktree path."),
       filePath: z.string(),
       status: GitStatusSchema,
     }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx: ActionContext) => {
       const { cwd, filePath, status } = args as {
-        cwd: string;
+        cwd?: string;
         filePath: string;
         status: z.infer<typeof GitStatusSchema>;
       };
-      return await window.electron.git.getFileDiff(cwd, filePath, status as any);
+      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+      if (!resolvedCwd) throw new Error("No active worktree");
+      return await window.electron.git.getFileDiff(resolvedCwd, filePath, status as any);
     },
   }));
 
@@ -55,15 +75,29 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({
-      cwd: z.string(),
-      search: z.string().optional(),
-      branch: z.string().optional(),
-      skip: z.number().int().nonnegative().optional(),
-      limit: z.number().int().positive().optional(),
-    }),
-    run: async (args: unknown) => {
-      return await window.electron.git.listCommits(args as any);
+    argsSchema: z
+      .object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Repository working directory. Defaults to the active worktree path."),
+        search: z.string().optional(),
+        branch: z.string().optional(),
+        skip: z.number().int().nonnegative().optional(),
+        limit: z.number().int().positive().optional(),
+      })
+      .optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const merged = (args ?? {}) as {
+        cwd?: string;
+        search?: string;
+        branch?: string;
+        skip?: number;
+        limit?: number;
+      };
+      const resolvedCwd = merged.cwd ?? ctx.activeWorktreePath;
+      if (!resolvedCwd) throw new Error("No active worktree");
+      return await window.electron.git.listCommits({ ...merged, cwd: resolvedCwd } as any);
     },
   }));
 
@@ -75,10 +109,18 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ cwd: z.string(), filePath: z.string() }),
-    run: async (args: unknown) => {
-      const { cwd, filePath } = args as { cwd: string; filePath: string };
-      await window.electron.git.stageFile(cwd, filePath);
+    argsSchema: z.object({
+      cwd: z
+        .string()
+        .optional()
+        .describe("Repository working directory. Defaults to the active worktree path."),
+      filePath: z.string(),
+    }),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { cwd, filePath } = args as { cwd?: string; filePath: string };
+      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+      if (!resolvedCwd) throw new Error("No active worktree");
+      await window.electron.git.stageFile(resolvedCwd, filePath);
     },
   }));
 
@@ -90,10 +132,18 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ cwd: z.string(), filePath: z.string() }),
-    run: async (args: unknown) => {
-      const { cwd, filePath } = args as { cwd: string; filePath: string };
-      await window.electron.git.unstageFile(cwd, filePath);
+    argsSchema: z.object({
+      cwd: z
+        .string()
+        .optional()
+        .describe("Repository working directory. Defaults to the active worktree path."),
+      filePath: z.string(),
+    }),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { cwd, filePath } = args as { cwd?: string; filePath: string };
+      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+      if (!resolvedCwd) throw new Error("No active worktree");
+      await window.electron.git.unstageFile(resolvedCwd, filePath);
     },
   }));
 
@@ -122,10 +172,12 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ cwd: z.string() }),
-    run: async (args: unknown) => {
-      const { cwd } = args as { cwd: string };
-      await window.electron.git.unstageAll(cwd);
+    argsSchema: z.object({ cwd: z.string().optional() }).optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { cwd } = (args ?? {}) as { cwd?: string };
+      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+      if (!resolvedCwd) throw new Error("No active worktree");
+      await window.electron.git.unstageAll(resolvedCwd);
     },
   }));
 
@@ -177,10 +229,12 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ cwd: z.string() }),
-    run: async (args: unknown) => {
-      const { cwd } = args as { cwd: string };
-      return await window.electron.git.getStagingStatus(cwd);
+    argsSchema: z.object({ cwd: z.string().optional() }).optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { cwd } = (args ?? {}) as { cwd?: string };
+      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+      if (!resolvedCwd) throw new Error("No active worktree");
+      return await window.electron.git.getStagingStatus(resolvedCwd);
     },
   }));
 
@@ -192,10 +246,12 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ worktreeId: z.string() }),
-    run: async (args: unknown) => {
-      const { worktreeId } = args as { worktreeId: string };
-      return await window.electron.git.snapshotGet(worktreeId);
+    argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
+      const resolvedWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      if (!resolvedWorktreeId) throw new Error("No active worktree");
+      return await window.electron.git.snapshotGet(resolvedWorktreeId);
     },
   }));
 

@@ -146,4 +146,86 @@ describe("gitActions adversarial", () => {
     await expect(run("git.commit", { cwd: "/repo" })).rejects.toThrow(/Commit message is required/);
     expect(git.commit).not.toHaveBeenCalled();
   });
+
+  it("git.getStagingStatus falls back to ctx.activeWorktreePath when no args", async () => {
+    const { run, git } = setupActions();
+    await run("git.getStagingStatus", undefined, { activeWorktreePath: "/repo" });
+    expect(git.getStagingStatus).toHaveBeenCalledWith("/repo");
+  });
+
+  it("git.getStagingStatus prefers explicit cwd over ctx", async () => {
+    const { run, git } = setupActions();
+    await run("git.getStagingStatus", { cwd: "/explicit" }, { activeWorktreePath: "/ctx" });
+    expect(git.getStagingStatus).toHaveBeenCalledWith("/explicit");
+  });
+
+  it("git.getStagingStatus throws when no cwd and no ctx", async () => {
+    const { run } = setupActions();
+    await expect(run("git.getStagingStatus")).rejects.toThrow("No active worktree");
+  });
+
+  it("git.getFileDiff falls back to ctx.activeWorktreePath", async () => {
+    const { run, git } = setupActions();
+    await run(
+      "git.getFileDiff",
+      { filePath: "x.ts", status: "modified" },
+      { activeWorktreePath: "/repo" }
+    );
+    expect(git.getFileDiff).toHaveBeenCalledWith("/repo", "x.ts", "modified");
+  });
+
+  it("git.listCommits falls back to ctx.activeWorktreePath and forwards filters", async () => {
+    const { run, git } = setupActions();
+    await run("git.listCommits", { search: "fix", limit: 5 }, { activeWorktreePath: "/repo" });
+    expect(git.listCommits).toHaveBeenCalledWith({ cwd: "/repo", search: "fix", limit: 5 });
+  });
+
+  it("git.stageFile falls back to ctx.activeWorktreePath", async () => {
+    const { run, git } = setupActions();
+    await run("git.stageFile", { filePath: "a.ts" }, { activeWorktreePath: "/repo" });
+    expect(git.stageFile).toHaveBeenCalledWith("/repo", "a.ts");
+  });
+
+  it("git.unstageFile falls back to ctx.activeWorktreePath", async () => {
+    const { run, git } = setupActions();
+    await run("git.unstageFile", { filePath: "a.ts" }, { activeWorktreePath: "/repo" });
+    expect(git.unstageFile).toHaveBeenCalledWith("/repo", "a.ts");
+  });
+
+  it("git.unstageAll falls back to ctx.activeWorktreePath", async () => {
+    const { run, git } = setupActions();
+    await run("git.unstageAll", undefined, { activeWorktreePath: "/repo" });
+    expect(git.unstageAll).toHaveBeenCalledWith("/repo");
+  });
+
+  it("git.getProjectPulse falls back to ctx.activeWorktreeId and defaults rangeDays to 60", async () => {
+    const { run, git } = setupActions();
+    await run("git.getProjectPulse", undefined, { activeWorktreeId: "wt-1" });
+    expect(git.getProjectPulse).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeId: "wt-1", rangeDays: 60 })
+    );
+  });
+
+  it("git.getProjectPulse preserves explicit rangeDays and forwards include flags", async () => {
+    const { run, git } = setupActions();
+    await run(
+      "git.getProjectPulse",
+      { worktreeId: "wt-2", rangeDays: 180, includeDelta: true },
+      { activeWorktreeId: "wt-ctx" }
+    );
+    expect(git.getProjectPulse).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeId: "wt-2", rangeDays: 180, includeDelta: true })
+    );
+  });
+
+  it("git.snapshotGet falls back to ctx.activeWorktreeId", async () => {
+    const { run, git } = setupActions();
+    await run("git.snapshotGet", undefined, { activeWorktreeId: "wt-1" });
+    expect(git.snapshotGet).toHaveBeenCalledWith("wt-1");
+  });
+
+  it("git.snapshotGet throws when no worktreeId and no ctx", async () => {
+    const { run } = setupActions();
+    await expect(run("git.snapshotGet")).rejects.toThrow("No active worktree");
+  });
 });

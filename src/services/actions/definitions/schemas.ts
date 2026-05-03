@@ -52,10 +52,18 @@ export const GitStatusSchema = z.enum([
   "copied",
 ]);
 
-export const PulseRangeDaysSchema = z.union([z.literal(60), z.literal(120), z.literal(180)]);
+export const PulseRangeDaysSchema = z
+  .union([z.literal(60), z.literal(120), z.literal(180)])
+  .optional()
+  .default(60);
 
 export const FileSearchPayloadSchema = z.object({
-  cwd: z.string().describe("Working directory to search in (project root path)"),
+  cwd: z
+    .string()
+    .optional()
+    .describe(
+      "Working directory to search in (project root path). Defaults to the active worktree path."
+    ),
   query: z.string().describe("File name search query"),
   limit: z.number().int().positive().optional().describe("Max results to return"),
 });

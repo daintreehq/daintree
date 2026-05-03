@@ -1,4 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
@@ -240,10 +241,12 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ projectId: z.string() }),
-    run: async (args: unknown) => {
-      const { projectId } = args as { projectId: string };
-      return await projectClient.getSettings(projectId);
+    argsSchema: z.object({ projectId: z.string().optional() }).optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { projectId } = (args ?? {}) as { projectId?: string };
+      const resolvedProjectId = projectId ?? ctx.projectId;
+      if (!resolvedProjectId) throw new Error("No active project");
+      return await projectClient.getSettings(resolvedProjectId);
     },
   }));
 
@@ -320,10 +323,12 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ projectId: z.string() }),
-    run: async (args: unknown) => {
-      const { projectId } = args as { projectId: string };
-      return await projectClient.detectRunners(projectId);
+    argsSchema: z.object({ projectId: z.string().optional() }).optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { projectId } = (args ?? {}) as { projectId?: string };
+      const resolvedProjectId = projectId ?? ctx.projectId;
+      if (!resolvedProjectId) throw new Error("No active project");
+      return await projectClient.detectRunners(resolvedProjectId);
     },
   }));
 
@@ -335,10 +340,12 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ projectId: z.string() }),
-    run: async (args: unknown) => {
-      const { projectId } = args as { projectId: string };
-      return await projectClient.getStats(projectId);
+    argsSchema: z.object({ projectId: z.string().optional() }).optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { projectId } = (args ?? {}) as { projectId?: string };
+      const resolvedProjectId = projectId ?? ctx.projectId;
+      if (!resolvedProjectId) throw new Error("No active project");
+      return await projectClient.getStats(resolvedProjectId);
     },
   }));
 

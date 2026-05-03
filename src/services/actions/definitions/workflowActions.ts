@@ -1,4 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { worktreeClient, githubClient, projectClient, copyTreeClient } from "@/clients";
@@ -498,7 +499,10 @@ export function registerWorkflowActions(
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z.string().describe("Worktree path to inspect"),
+        cwd: z
+          .string()
+          .optional()
+          .describe("Worktree path to inspect. Defaults to the active worktree path when omitted."),
         projectId: z
           .string()
           .optional()
@@ -528,11 +532,13 @@ export function registerWorkflowActions(
           })
         ),
       }),
-      run: async ({ cwd, projectId }) => {
+      run: async ({ cwd, projectId }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
         const resolvedProjectId =
-          projectId ?? useProjectStore.getState().currentProject?.id ?? null;
+          projectId ?? ctx.projectId ?? useProjectStore.getState().currentProject?.id ?? null;
 
-        const status = await window.electron.git.getStagingStatus(cwd);
+        const status = await window.electron.git.getStagingStatus(resolvedCwd);
 
         const detectedRunners = resolvedProjectId
           ? (await projectClient.detectRunners(resolvedProjectId)).map((r) => ({

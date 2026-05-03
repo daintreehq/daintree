@@ -814,6 +814,25 @@ describe("workflow.prepBranchForReview", () => {
     expect(result.detectedRunners).toEqual([]);
     expect(result.verdict).toBe("no_runners_detected");
   });
+
+  it("falls back to ctx.activeWorktreePath when cwd is omitted", async () => {
+    gitGetStagingStatusMock.mockResolvedValue({
+      staged: [],
+      unstaged: [],
+      conflictedFiles: [],
+      currentBranch: "feature/x",
+      repoState: "CLEAN",
+    });
+    projectClientMock.detectRunners.mockResolvedValue([]);
+    const def = setupActions(makeCallbacks())("workflow.prepBranchForReview");
+    await def.run({} as never, { activeWorktreePath: "/repo/active" } as never);
+    expect(gitGetStagingStatusMock).toHaveBeenCalledWith("/repo/active");
+  });
+
+  it("throws when cwd is omitted and no active worktree in ctx", async () => {
+    const def = setupActions(makeCallbacks())("workflow.prepBranchForReview");
+    await expect(def.run({} as never, {} as never)).rejects.toThrow("No active worktree");
+  });
 });
 
 describe("workflow.focusNextAttention", () => {
