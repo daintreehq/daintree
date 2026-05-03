@@ -2880,6 +2880,180 @@ describe("McpServerService", () => {
     });
   });
 
+
+  describe("prompts", () => {
+    it("advertises the prompts capability and lists the starter prompts with argument metadata", async () => {
+      const { window } = createMockWindow();
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      expect(client.getServerCapabilities()?.prompts).toBeDefined();
+
+      const result = await client.listPrompts();
+      const startIssue = result.prompts.find((p) => p.name === "start_issue");
+      const triage = result.prompts.find((p) => p.name === "triage_failed_agent");
+
+      expect(startIssue).toBeDefined();
+      expect(startIssue?.description).toContain("issue");
+      expect(startIssue?.arguments).toEqual([
+        expect.objectContaining({ name: "issue_number", required: true }),
+      ]);
+
+      expect(triage).toBeDefined();
+      expect(triage?.arguments).toEqual([
+        expect.objectContaining({ name: "terminal_id", required: false }),
+      ]);
+    });
+
+    it("renders start_issue with the issue number and live worktree context", async () => {
+      const { window } = createMockWindow({
+        dispatchAction: (payload) => {
+          if (payload.actionId === "worktree.getCurrent") {
+            return {
+              ok: true,
+              result: {
+                id: "wt-1",
+                path: "/Users/test/proj/feature-foo",
+                branch: "feature/foo",
+                isMain: false,
+                issueNumber: 42,
+              },
+            };
+          }
+          return { ok: true, result: null };
+        },
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = await client.getPrompt({
+        name: "start_issue",
+        arguments: { issue_number: "6610" },
+      });
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].role).toBe("user");
+      const content = result.messages[0].content;
+      expect(content.type).toBe("text");
+      const text = (content as { type: "text"; text: string }).text;
+      expect(text).toContain("6610");
+      expect(text).toContain("/Users/test/proj/feature-foo");
+      expect(text).toContain("feature/foo");
+    });
+
+    it("renders triage_failed_agent without arguments and falls back to placeholder copy", async () => {
+      const { window } = createMockWindow({
+        dispatchAction: (payload) => {
+          if (payload.actionId === "worktree.getCurrent") {
+            return {
+              ok: true,
+              result: {
+                id: "wt-1",
+                path: "/wt",
+                branch: "develop",
+                isMain: true,
+              },
+            };
+          }
+          return { ok: true, result: null };
+        },
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = await client.getPrompt({ name: "triage_failed_agent" });
+      const text = (result.messages[0].content as { type: "text"; text: string }).text;
+
+      expect(text).toContain("/wt");
+      expect(text).toContain("terminal.list");
+    });
+
+    it("renders triage_failed_agent with terminal output when terminal_id is supplied", async () => {
+      const { window } = createMockWindow({
+        dispatchAction: (payload) => {
+          if (payload.actionId === "worktree.getCurrent") {
+            return {
+              ok: true,
+              result: { id: "wt-1", path: "/wt", branch: "feat/x", isMain: false },
+            };
+          }
+          if (payload.actionId === "terminal.getOutput") {
+            return {
+              ok: true,
+              result: {
+                terminalId: "term-7",
+                content: "ERROR: agent crashed\nstack trace line 1",
+                lineCount: 2,
+                truncated: false,
+              },
+            };
+          }
+          return { ok: true, result: null };
+        },
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = await client.getPrompt({
+        name: "triage_failed_agent",
+        arguments: { terminal_id: "term-7" },
+      });
+      const text = (result.messages[0].content as { type: "text"; text: string }).text;
+
+      expect(text).toContain("term-7");
+      expect(text).toContain("ERROR: agent crashed");
+      expect(text).toContain("stack trace line 1");
+    });
+
+    it("throws InvalidParams for an unknown prompt name", async () => {
+      const { window } = createMockWindow();
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await expect(client.getPrompt({ name: "no_such_prompt" })).rejects.toMatchObject({
+        code: -32602,
+      });
+    });
+
+    it("throws InvalidParams when a required argument is missing", async () => {
+      const { window } = createMockWindow();
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await expect(
+        client.getPrompt({ name: "start_issue", arguments: {} })
+      ).rejects.toMatchObject({ code: -32602 });
+    });
+
+    it("falls back to placeholder text when the renderer dispatch fails", async () => {
+      const { window } = createMockWindow({
+        dispatchAction: () => ({
+          ok: false,
+          error: { code: "RENDERER_DEAD", message: "renderer is gone" },
+        }),
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = await client.getPrompt({
+        name: "start_issue",
+        arguments: { issue_number: "1" },
+      });
+      const text = (result.messages[0].content as { type: "text"; text: string }).text;
+
+      expect(text).toContain("(no active worktree detected)");
+      expect(text).toContain("(unknown branch)");
+      expect(text).toContain("#1");
+    });
+  });
+
   describe("resources", () => {
     function manifestForResources(): ActionManifestEntry[] {
       return [
