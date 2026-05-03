@@ -562,6 +562,36 @@ describe("workflow.startWorkOnIssue", () => {
     expect(result.terminalId).toBe("term-1");
   });
 
+  it("preference fallback also surfaces 'No GitHub username configured' when assignToSelf is omitted", async () => {
+    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+    setGithubUser(null);
+    setAssignPreference(true);
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+    const result = (await def.run({ issueNumber: 6609, agentId: "claude" }, {} as never)) as Record<
+      string,
+      unknown
+    >;
+    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(result.assignedToSelf).toBe(false);
+    expect(result.assignmentError).toBe("No GitHub username configured");
+  });
+
+  it("assignment failure does not clobber other result fields", async () => {
+    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+    setGithubUser("ada");
+    githubClientMock.assignIssue.mockRejectedValue(new Error("rate limit"));
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+    const result = (await def.run(
+      { issueNumber: 6609, agentId: "claude", assignToSelf: true },
+      {} as never
+    )) as Record<string, unknown>;
+    expect(result.worktreeId).toBe("wt-new");
+    expect(result.terminalId).toBe("term-1");
+    expect(result.contextInjected).toBe(true);
+    expect(result.assignedToSelf).toBe(false);
+    expect(result.assignmentError).toBe("rate limit");
+  });
+
   it("derives a sane branch name from the issue title when none is provided", async () => {
     githubClientMock.getIssueByNumber.mockResolvedValue({
       number: 42,

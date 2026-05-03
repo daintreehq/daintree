@@ -141,7 +141,8 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
             {
               branchName,
               recipeId: recipe.id,
-              issueNumber: shouldAssign ? issueNumber : undefined,
+              issueNumber,
+              assignToSelf: shouldAssign,
             },
             { source: "user", confirmed: true }
           );
