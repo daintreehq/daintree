@@ -413,8 +413,7 @@ export function McpServerSettingsTab() {
                 </button>
 
                 <p className="text-xs text-daintree-text/50 leading-relaxed select-text">
-                  Paste the copied config into your MCP client (e.g. Claude Code, Cursor,{" "}
-                  <code className="text-daintree-text/70">~/.daintree/mcp.json</code>).
+                  Paste the copied config into your MCP client (e.g. Claude Code, Cursor).
                   {status.apiKey && " The config includes the authorization header."}
                 </p>
               </div>
@@ -467,7 +466,7 @@ export function McpServerSettingsTab() {
           <SettingsSection
             icon={Shield}
             title="Authentication"
-            description="Every MCP connection must present this bearer token. The key is held in memory while Daintree runs and written only to ~/.daintree/mcp.json (0600). Rotate it if you suspect it has leaked."
+            description="Every MCP connection must present this bearer token. The key persists across restarts. Rotate it if you suspect it has leaked — external clients holding the old key in their config will need to re-paste."
           >
             {status.apiKey ? (
               <div className="contents">
@@ -724,19 +723,6 @@ export function McpServerSettingsTab() {
           </SettingsSection>
         </>
       )}
-
-      {/* Auto-Discovery — always visible */}
-      <SettingsSection
-        icon={McpServerIcon}
-        title="Auto-Discovery"
-        description={
-          status.enabled
-            ? "The server address is written to ~/.daintree/mcp.json while Daintree is running. Agents started from Daintree terminals can read this file to connect automatically. The file is removed when Daintree quits."
-            : "When enabled, the server address is written to ~/.daintree/mcp.json for automatic discovery by agents."
-        }
-      >
-        <></>
-      </SettingsSection>
 
       {error && (
         <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">

@@ -212,25 +212,37 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     let spawnEnv: Record<string, string> | undefined = validatedOptions.env;
 
     // Help-assistant launches arrive with a pre-provisioned session dir whose
-    // .mcp.json is already in cwd. The renderer threads DAINTREE_MCP_TOKEN
-    // through spawnEnv; presence of a valid token signals a help launch.
-    // Skip per-pane MCP config injection (the session dir owns it) and append
-    // --strict-mcp-config so Claude Code ignores any global ~/.claude config.
-    // When the session was provisioned with skipPermissions, also append the
-    // dangerous flag so the agent runs without the per-tool prompt.
+    // .mcp.json is already in cwd, baked with the literal session token, and
+    // a .claude/settings.json that sets `enableAllProjectMcpServers: true` so
+    // Claude Code auto-trusts the project-scoped servers without prompting.
+    // Skip per-pane MCP config injection (the session dir owns it) and let
+    // Claude's normal cwd discovery do its thing. For `system`-tier sessions
+    // (skipPermissions), append the dangerous flag.
     const helpToken = spawnEnv?.DAINTREE_MCP_TOKEN ?? "";
     const helpTier = helpToken ? helpSessionService.validateToken(helpToken) : false;
     const isHelpLaunch = helpTier !== false && launchAgentId === "claude" && safeCommand.length > 0;
 
     if (isHelpLaunch) {
-      if (!safeCommand.includes("--strict-mcp-config")) {
-        safeCommand = `${safeCommand} --strict-mcp-config`;
-      }
+      const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
       if (helpTier === "system") {
-        const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
         if (dangerous && !safeCommand.includes(dangerous)) {
           safeCommand = `${safeCommand} ${dangerous}`;
         }
+      } else if (dangerous) {
+        // The help-tier classification is the source of truth for whether the
+        // assistant runs in dangerous mode — `helpAssistant.skipPermissions`
+        // governs it, not the global Claude agent settings. Strip the flag if
+        // it leaked in via `entry.dangerousEnabled` from the agent registry,
+        // otherwise an `action`-tier session would silently skip permission
+        // prompts despite the assistant config saying otherwise.
+        const stripPattern = new RegExp(
+          `(^|\\s)${dangerous.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}(?=\\s|$)`,
+          "g"
+        );
+        safeCommand = safeCommand
+          .replace(stripPattern, "$1")
+          .replace(/\s{2,}/g, " ")
+          .trim();
       }
     } else if (
       launchAgentId === "claude" &&

@@ -296,10 +296,13 @@ export function registerTerminalLifecycleActions(
     run: async () => {
       const state = usePanelStore.getState();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
+      // Skip ephemeral panels — the Daintree Assistant's own dock terminal
+      // shouldn't get swept up by a "close all" command.
       const idsToClose = state.panelIds.filter((id) => {
         const t = state.panelsById[id];
         return (
           t &&
+          t.ephemeral !== true &&
           t.location !== "trash" &&
           (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
@@ -318,7 +321,15 @@ export function registerTerminalLifecycleActions(
     scope: "renderer",
     keywords: ["terminate", "stop", "remove", "delete"],
     run: async () => {
-      usePanelStore.getState().bulkCloseAll();
+      // Don't reuse bulkCloseAll() — it indiscriminately removes every panel,
+      // including the ephemeral assistant terminal. Filter ephemerals out
+      // before issuing per-panel removes.
+      const state = usePanelStore.getState();
+      const idsToKill = state.panelIds.filter((id) => {
+        const t = state.panelsById[id];
+        return t && t.ephemeral !== true;
+      });
+      idsToKill.forEach((id) => state.removePanel(id));
     },
   }));
 

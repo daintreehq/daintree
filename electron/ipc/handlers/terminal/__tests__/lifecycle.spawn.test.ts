@@ -543,7 +543,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     mockCurrentPort.mockReturnValue(null);
   });
 
-  it("appends --strict-mcp-config and skips per-pane MCP injection when DAINTREE_MCP_TOKEN is a valid help token", async () => {
+  it("skips per-pane MCP injection when DAINTREE_MCP_TOKEN is a valid help token (session-dir owns the .mcp.json)", async () => {
     mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -564,9 +564,10 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
 
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.command).toContain("--strict-mcp-config");
-    expect(spawnArgs.command).not.toContain("--mcp-config ");
-    expect(spawnArgs.command).not.toContain("--dangerously-skip-permissions");
+    // No flag rewriting on action-tier help launches — Claude Code's normal
+    // cwd discovery loads the session-dir .mcp.json that HelpSessionService
+    // already wrote.
+    expect(spawnArgs.command).toBe("claude");
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
@@ -590,12 +591,18 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     );
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.command).toContain("--strict-mcp-config");
     expect(spawnArgs.command).toContain("--dangerously-skip-permissions");
+    expect(spawnArgs.command).not.toContain("--strict-mcp-config");
+    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
-  it("does not append --strict-mcp-config twice on a re-spawn whose command already carries it", async () => {
-    mockValidateToken.mockReturnValue("action");
+  it("strips --dangerously-skip-permissions from action-tier help launches even if it leaked in via agent settings", async () => {
+    // The help-tier classification — driven by `helpAssistant.skipPermissions`
+    // — is the source of truth. If a user has Claude's global
+    // `dangerousEnabled` on, the renderer's command generator may include
+    // `--dangerously-skip-permissions`, and the action-tier help session must
+    // strip it so the assistant doesn't silently bypass permission prompts.
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -607,15 +614,15 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
         cols: 80,
         rows: 24,
         cwd: tmpDir,
-        command: "claude --strict-mcp-config",
+        command: "claude --dangerously-skip-permissions",
         launchAgentId: "claude",
         env: { DAINTREE_MCP_TOKEN: "help-token" },
       } as unknown as Parameters<typeof handler>[1]
     );
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    const matches = spawnArgs.command.match(/--strict-mcp-config/g) ?? [];
-    expect(matches.length).toBe(1);
+    expect(spawnArgs.command).toBe("claude");
+    expect(spawnArgs.command).not.toContain("--dangerously-skip-permissions");
   });
 
   it("falls back to per-pane MCP injection when DAINTREE_MCP_TOKEN is not a valid help token", async () => {

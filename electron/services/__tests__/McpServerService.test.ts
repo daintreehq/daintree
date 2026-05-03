@@ -65,6 +65,7 @@ const storeState = vi.hoisted(() => ({
   mcpServer: {
     enabled: true,
     port: 0,
+    apiKey: "",
     fullToolSurface: false,
     auditEnabled: true,
     auditMaxRecords: 500,
@@ -305,29 +306,6 @@ function getServiceApiKey(): string {
   return key;
 }
 
-async function seedDiscoveryFile(apiKey: string): Promise<void> {
-  const discoveryDir = path.join(testHomeDir, ".daintree");
-  const discoveryFile = path.join(discoveryDir, "mcp.json");
-  await fs.mkdir(discoveryDir, { recursive: true });
-  await fs.writeFile(
-    discoveryFile,
-    JSON.stringify(
-      {
-        mcpServers: {
-          daintree: {
-            type: "http",
-            url: "http://127.0.0.1:0/mcp",
-            headers: { Authorization: `Bearer ${apiKey}` },
-          },
-        },
-      },
-      null,
-      2
-    ),
-    "utf-8"
-  );
-}
-
 async function connectClient(
   port: number,
   headers?: Record<string, string>
@@ -487,6 +465,7 @@ describe("McpServerService", () => {
     storeState.mcpServer = {
       enabled: true,
       port: 0,
+      apiKey: "",
       fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: 500,
@@ -724,49 +703,28 @@ describe("McpServerService", () => {
     expect(webContents.send).toHaveBeenCalledTimes(2);
   });
 
-  it("refreshes the discovery file on rotateApiKey while running", async () => {
+  it("persists the rotated api key to electron-store", async () => {
     const { window } = createMockWindow();
-    const discoveryFile = path.join(testHomeDir, ".daintree", "mcp.json");
-
     await service.start(window);
 
-    const initial = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
-      mcpServers: Record<
-        string,
-        { type?: string; url?: string; headers?: { Authorization: string } }
-      >;
-    };
     const initialKey = service.getStatus().apiKey;
     expect(initialKey).toMatch(/^daintree_[a-f0-9]+$/);
-    expect(initial.mcpServers.daintree.type).toBe("http");
-    expect(initial.mcpServers.daintree.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
-    expect(initial.mcpServers.daintree.headers).toEqual({
-      Authorization: `Bearer ${initialKey}`,
-    });
+    expect(storeState.mcpServer.apiKey).toBe(initialKey);
 
     const rotatedKey = await service.rotateApiKey();
     expect(rotatedKey).not.toBe(initialKey);
     expect(service.getStatus().apiKey).toBe(rotatedKey);
-    const rotated = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
-      mcpServers: Record<string, { headers?: { Authorization: string } }>;
-    };
-    expect(rotated.mcpServers.daintree.headers).toEqual({
-      Authorization: `Bearer ${rotatedKey}`,
-    });
+    expect(storeState.mcpServer.apiKey).toBe(rotatedKey);
   });
 
-  it("does not persist the api key in electron-store", async () => {
+  it("persists the freshly generated api key to electron-store on first start", async () => {
     const { window } = createMockWindow();
+    expect(storeState.mcpServer.apiKey).toBe("");
 
     await service.start(window);
-    expect(service.getStatus().apiKey).toMatch(/^daintree_[a-f0-9]+$/);
-
-    expect(storeState.mcpServer).not.toHaveProperty("apiKey");
-    for (const call of storeMocks.set.mock.calls) {
-      const [key, value] = call as [string, Record<string, unknown>];
-      if (key !== "mcpServer") continue;
-      expect(value).not.toHaveProperty("apiKey");
-    }
+    const generatedKey = service.getStatus().apiKey;
+    expect(generatedKey).toMatch(/^daintree_[a-f0-9]+$/);
+    expect(storeState.mcpServer.apiKey).toBe(generatedKey);
   });
 
   it("auto-generates a bearer token on first start and keeps it across stop/start", async () => {
@@ -784,9 +742,9 @@ describe("McpServerService", () => {
     expect(service.getStatus().apiKey).toBe(generatedKey);
   });
 
-  it("recovers the api key from the discovery file when a fresh service instance starts", async () => {
+  it("recovers the api key from electron-store when a fresh service instance starts", async () => {
     const seededKey = "daintree_seeded12345";
-    await seedDiscoveryFile(seededKey);
+    storeState.mcpServer.apiKey = seededKey;
 
     const fresh = new McpServerService();
     currentService = fresh;
@@ -864,56 +822,6 @@ describe("McpServerService", () => {
     expect(correct.status).toBe(401);
   });
 
-  it("sets POSIX 0700/0600 mode on the discovery directory and file", async () => {
-    if (process.platform === "win32") return;
-
-    const { window } = createMockWindow();
-    const discoveryDir = path.join(testHomeDir, ".daintree");
-    const discoveryFile = path.join(discoveryDir, "mcp.json");
-
-    await service.start(window);
-
-    const dirStat = await fs.stat(discoveryDir);
-    const fileStat = await fs.stat(discoveryFile);
-    expect(dirStat.mode & 0o777).toBe(0o700);
-    expect(fileStat.mode & 0o777).toBe(0o600);
-  });
-
-  it("preserves 0600 mode on partial discovery file removal", async () => {
-    if (process.platform === "win32") return;
-
-    const { window } = createMockWindow();
-    const discoveryDir = path.join(testHomeDir, ".daintree");
-    const discoveryFile = path.join(discoveryDir, "mcp.json");
-
-    // Pre-populate with another MCP entry that should survive removal.
-    await fs.mkdir(discoveryDir, { recursive: true });
-    await fs.writeFile(
-      discoveryFile,
-      JSON.stringify(
-        {
-          mcpServers: {
-            other: { type: "sse", url: "http://other.local/sse" },
-          },
-        },
-        null,
-        2
-      ),
-      "utf8"
-    );
-
-    await service.start(window);
-    await service.stop();
-
-    const fileStat = await fs.stat(discoveryFile);
-    expect(fileStat.mode & 0o777).toBe(0o600);
-    const remaining = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
-      mcpServers: Record<string, unknown>;
-    };
-    expect(remaining.mcpServers.other).toBeDefined();
-    expect(remaining.mcpServers.daintree).toBeUndefined();
-  });
-
   it("invalidates the old bearer immediately after rotation", async () => {
     const { window } = createMockWindow();
     await service.start(window);
@@ -953,30 +861,23 @@ describe("McpServerService", () => {
     expect(newStatus).toBe(200);
   });
 
-  it("rolls back to the old key when rotation's discovery-file write fails", async () => {
+  it("rolls back to the old key when rotation's store persist fails", async () => {
     const { window } = createMockWindow();
     await service.start(window);
 
     const oldKey = service.getStatus().apiKey;
     expect(oldKey).toMatch(/^daintree_[a-f0-9]+$/);
 
-    // Stub the private writeDiscoveryFile to throw on the next call so we
-    // exercise rotateApiKey's rollback path without relying on filesystem
-    // permission quirks (which differ across platforms).
-    const writeStub = vi
-      .spyOn(
-        service as unknown as { writeDiscoveryFile: () => Promise<void> },
-        "writeDiscoveryFile"
-      )
-      .mockRejectedValueOnce(new Error("disk full"));
+    // Force the next mcpServer store write to throw so we exercise
+    // rotateApiKey's rollback path. Rotation must not leak the half-applied
+    // new key — getStatus and the live HTTP server must still answer with
+    // the old bearer.
+    storeMocks.set.mockImplementationOnce((key: string) => {
+      if (key === "mcpServer") throw new Error("store write failed");
+    });
 
-    try {
-      await expect(service.rotateApiKey()).rejects.toThrow("disk full");
-    } finally {
-      writeStub.mockRestore();
-    }
+    await expect(service.rotateApiKey()).rejects.toThrow("store write failed");
 
-    // Old key must still authenticate; getStatus reflects the rollback.
     expect(service.getStatus().apiKey).toBe(oldKey);
     const port = service.currentPort!;
     const oldStatus = await new Promise<number>((resolve, reject) => {
@@ -1003,25 +904,6 @@ describe("McpServerService", () => {
     expect(oldStatus).toBe(200);
   });
 
-  it("preserves a pre-existing mcpServers array in the discovery file without dropping the daintree entry", async () => {
-    const discoveryDir = path.join(testHomeDir, ".daintree");
-    const discoveryFile = path.join(discoveryDir, "mcp.json");
-    await fs.mkdir(discoveryDir, { recursive: true });
-    // A manually-malformed file where mcpServers is an array, not an object.
-    await fs.writeFile(discoveryFile, JSON.stringify({ mcpServers: [] }), "utf-8");
-
-    const { window } = createMockWindow();
-    await service.start(window);
-
-    const written = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
-      mcpServers: Record<string, { headers?: { Authorization: string } }>;
-    };
-    expect(written.mcpServers.daintree).toBeDefined();
-    expect(written.mcpServers.daintree.headers?.Authorization).toMatch(
-      /^Bearer daintree_[a-f0-9]+$/
-    );
-  });
-
   it("collapses concurrent rotateApiKey calls into a single in-flight rotation", async () => {
     const { window } = createMockWindow();
     await service.start(window);
@@ -1033,12 +915,7 @@ describe("McpServerService", () => {
     expect(a).toBe(b);
     expect(a).not.toBe(oldKey);
     expect(service.getStatus().apiKey).toBe(a);
-
-    const discoveryFile = path.join(testHomeDir, ".daintree", "mcp.json");
-    const written = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
-      mcpServers: Record<string, { headers?: { Authorization: string } }>;
-    };
-    expect(written.mcpServers.daintree.headers).toEqual({ Authorization: `Bearer ${a}` });
+    expect(storeState.mcpServer.apiKey).toBe(a);
   });
 
   it("rejects POST /messages with a non-loopback Origin header", async () => {
@@ -1156,7 +1033,7 @@ describe("McpServerService", () => {
   });
 
   it("rejects unauthorized requests and invalid host headers", async () => {
-    await seedDiscoveryFile("secret");
+    storeState.mcpServer.apiKey = "secret";
     const { window } = createMockWindow();
 
     await service.start(window);
@@ -1174,7 +1051,7 @@ describe("McpServerService", () => {
   });
 
   it("authorizes requests carrying a valid help-session bearer token alongside the external key", async () => {
-    await seedDiscoveryFile("external-secret");
+    storeState.mcpServer.apiKey = "external-secret";
     const { window } = createMockWindow();
     await service.start(window);
 
@@ -1197,7 +1074,7 @@ describe("McpServerService", () => {
   });
 
   it("rejects help-session tokens once the validator says they are revoked", async () => {
-    await seedDiscoveryFile("external-secret");
+    storeState.mcpServer.apiKey = "external-secret";
     const { window } = createMockWindow();
     await service.start(window);
 
@@ -1714,18 +1591,43 @@ describe("McpServerService", () => {
         description: "Run an arbitrary command in a terminal",
       }),
       createManifestEntry({
+        id: "terminal.close" as ActionId,
+        title: "Close Terminal",
+        description: "Move a terminal to trash",
+      }),
+      createManifestEntry({
+        id: "terminal.kill" as ActionId,
+        title: "Kill Terminal",
+        description: "Permanently remove a terminal",
+      }),
+      createManifestEntry({
         id: "agent.terminal" as ActionId,
         title: "Agent Terminal",
         description: "Drive a running agent",
       }),
+      createManifestEntry({
+        id: "agent.launch" as ActionId,
+        title: "Launch Agent",
+        description: "Spawn a registered agent CLI",
+      }),
     ];
+
+    // Spawning terminals/agents, driving them via sent commands, and trashing
+    // terminals are intentionally action-tier — see ACTION_TIER_ADDONS in
+    // McpServerService. System tier is reserved for destructive or
+    // externally-visible ops, including permanent terminal kills.
+    const ACTION_TIER_TOOLS = [
+      "terminal.sendCommand",
+      "terminal.close",
+      "agent.terminal",
+      "agent.launch",
+    ] as const;
 
     const SYSTEM_ONLY_TOOLS = [
       "git.commit",
       "git.push",
       "worktree.delete",
-      "terminal.sendCommand",
-      "agent.terminal",
+      "terminal.kill",
     ] as const;
 
     it("workbench tier exposes only read-only introspection tools", async () => {
@@ -1745,7 +1647,7 @@ describe("McpServerService", () => {
       expect(ids).not.toContain("git.commit");
     });
 
-    it("action tier adds non-destructive mutations but excludes irreversible ones", async () => {
+    it("action tier adds non-destructive mutations and terminal/agent spawning, but excludes irreversible ones", async () => {
       paneTokenTiers.set("token-action", "action");
       const { window } = createMockWindow({ getManifest: tierManifest });
 
@@ -1758,6 +1660,9 @@ describe("McpServerService", () => {
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
       expect(ids).toContain("worktree.create");
+      for (const id of ACTION_TIER_TOOLS) {
+        expect(ids).toContain(id);
+      }
       for (const id of SYSTEM_ONLY_TOOLS) {
         expect(ids).not.toContain(id);
       }
@@ -1776,6 +1681,9 @@ describe("McpServerService", () => {
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
       expect(ids).toContain("worktree.create");
+      for (const id of ACTION_TIER_TOOLS) {
+        expect(ids).toContain(id);
+      }
       for (const id of SYSTEM_ONLY_TOOLS) {
         expect(ids).toContain(id);
       }
@@ -2603,7 +2511,7 @@ describe("McpServerService", () => {
   });
 
   it("rejects /mcp requests that fail auth, host, or origin checks", async () => {
-    await seedDiscoveryFile("secret");
+    storeState.mcpServer.apiKey = "secret";
     const { window } = createMockWindow();
     await service.start(window);
 

@@ -578,7 +578,7 @@ describe("HelpPanel — session provisioning", () => {
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-1", "claude", "sess-1");
   });
 
-  it("omits DAINTREE_MCP_URL when mcpUrl is null (localMcpEnabled=false)", async () => {
+  it("omits DAINTREE_MCP_URL when mcpUrl is null (daintreeControl=false)", async () => {
     projectStoreState.currentProject = { id: "proj-2", path: "/repo2" };
     mockGetFolderPath.mockResolvedValue("/help");
     mockProvisionSession.mockResolvedValue({

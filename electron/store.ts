@@ -189,6 +189,7 @@ export interface StoreSchema {
   mcpServer: {
     enabled: boolean;
     port: number | null;
+    apiKey: string;
     fullToolSurface: boolean;
     auditEnabled: boolean;
     auditMaxRecords: number;
@@ -206,8 +207,6 @@ export interface StoreSchema {
     daintreeControl: boolean;
     skipPermissions: boolean;
     auditRetention: 7 | 30 | 0;
-    localMcpEnabled?: boolean;
-    docsServerEnabled?: boolean;
   };
   pendingErrors: ErrorRecord[];
   gpu: {
@@ -344,6 +343,7 @@ const storeOptions = {
     mcpServer: {
       enabled: false,
       port: 45454,
+      apiKey: "",
       fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: MCP_AUDIT_DEFAULT_MAX_RECORDS,
@@ -353,8 +353,6 @@ const storeOptions = {
       daintreeControl: true,
       skipPermissions: false,
       auditRetention: 7 as const,
-      localMcpEnabled: true,
-      docsServerEnabled: true,
     },
     pendingErrors: [],
     gpu: {

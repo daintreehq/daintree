@@ -48,7 +48,6 @@ import { migration010 } from "../migrations/010-add-working-pulse-setting.js";
 import { migration011 } from "../migrations/011-minimal-soundscape-defaults.js";
 import { migration018 } from "../migrations/018-archive-notes.js";
 import { migration019 } from "../migrations/019-remove-fleet-deck-open.js";
-import { migration021 } from "../migrations/021-drop-mcp-api-key.js";
 
 type MockStoreData = Record<string, unknown>;
 
@@ -669,63 +668,6 @@ describe("MigrationRunner", () => {
       expect("fleetDeckAlwaysPreview" in after).toBe(false);
       expect("fleetDeckQuorumThreshold" in after).toBe(false);
       expect(after.sidebarWidth).toBe(350);
-    });
-  });
-
-  describe("migration 021 — drop persistent MCP api key", () => {
-    it("removes apiKey from mcpServer and preserves siblings", () => {
-      const store = createMockStore(storePath, {
-        mcpServer: {
-          enabled: true,
-          port: 45454,
-          apiKey: "daintree_oldsecret",
-          fullToolSurface: false,
-          auditEnabled: true,
-          auditMaxRecords: 500,
-        },
-      });
-      migration021.up(store as never);
-      const after = store.data.mcpServer as Record<string, unknown>;
-      expect("apiKey" in after).toBe(false);
-      expect(after.enabled).toBe(true);
-      expect(after.port).toBe(45454);
-      expect(after.fullToolSurface).toBe(false);
-      expect(after.auditEnabled).toBe(true);
-      expect(after.auditMaxRecords).toBe(500);
-    });
-
-    it("is a no-op when mcpServer has no apiKey", () => {
-      const store = createMockStore(storePath, {
-        mcpServer: { enabled: false, port: 45454 },
-      });
-      migration021.up(store as never);
-      expect(store.data.mcpServer).toEqual({ enabled: false, port: 45454 });
-    });
-
-    it("skips when mcpServer is missing entirely", () => {
-      const store = createMockStore(storePath, {});
-      migration021.up(store as never);
-      expect(store.data.mcpServer).toBeUndefined();
-    });
-
-    it("runs end-to-end through MigrationRunner on a v20 store", async () => {
-      const store = createMockStore(storePath, {
-        _schemaVersion: 20,
-        mcpServer: {
-          enabled: true,
-          port: 45454,
-          apiKey: "daintree_legacy",
-          fullToolSurface: false,
-          auditEnabled: true,
-          auditMaxRecords: 500,
-        },
-      });
-      const runner = new MigrationRunner(store as never);
-      await runner.runMigrations([migration021]);
-      const after = store.data.mcpServer as Record<string, unknown>;
-      expect(store.data._schemaVersion).toBe(21);
-      expect("apiKey" in after).toBe(false);
-      expect(after.enabled).toBe(true);
     });
   });
 

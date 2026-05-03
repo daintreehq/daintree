@@ -110,8 +110,8 @@ describe("HelpSessionService", () => {
     expect(result.windowId).toBe(7);
   });
 
-  it("returns mcpUrl=null when localMcpEnabled is false", async () => {
-    mockStoreGet.mockReturnValue({ localMcpEnabled: false });
+  it("returns mcpUrl=null when daintreeControl is false", async () => {
+    mockStoreGet.mockReturnValue({ daintreeControl: false });
 
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
@@ -120,7 +120,10 @@ describe("HelpSessionService", () => {
     expect(result.windowId).toBe(7);
   });
 
-  it("creates a session dir with a .mcp.json that uses bare Bearer ${DAINTREE_MCP_TOKEN}", async () => {
+  it("creates a session dir with a .mcp.json that bakes the literal session token into the Authorization header", async () => {
+    // Claude Code's `${VAR}` substitution in `headers` is broken (sends the
+    // literal placeholder, gets 401) — must bake the literal token. Same
+    // reason as McpPaneConfigService.ts.
     const result = await service.provisionSession(provisionInput());
     expect(result).not.toBeNull();
     if (!result) throw new Error("expected result");
@@ -130,12 +133,23 @@ describe("HelpSessionService", () => {
     expect(mcp.mcpServers.daintree).toEqual({
       type: "sse",
       url: "http://127.0.0.1:45454/sse",
-      headers: { Authorization: "Bearer ${DAINTREE_MCP_TOKEN}" },
+      headers: { Authorization: `Bearer ${result.token}` },
     });
+    expect(mcp.mcpServers.daintree.headers.Authorization).not.toContain("${");
     expect(mcp.mcpServers["daintree-docs"]).toBeDefined();
   });
 
-  it("appends mcp__daintree__* to the bundled allowlist when localMcpEnabled", async () => {
+  it("sets enableAllProjectMcpServers in .claude/settings.json so Claude auto-trusts the bundled servers", async () => {
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    expect(settings.enableAllProjectMcpServers).toBe(true);
+  });
+
+  it("appends mcp__daintree__* to the bundled allowlist when daintreeControl is enabled", async () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
@@ -162,8 +176,8 @@ describe("HelpSessionService", () => {
     expect(settings.defaultMode).toBe("bypassPermissions");
   });
 
-  it("omits the daintree MCP server when localMcpEnabled is false", async () => {
-    mockStoreGet.mockReturnValue({ localMcpEnabled: false });
+  it("omits the daintree MCP server when daintreeControl is false", async () => {
+    mockStoreGet.mockReturnValue({ daintreeControl: false });
 
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
@@ -189,20 +203,42 @@ describe("HelpSessionService", () => {
     expect(service.validateToken(result.token)).toBe(false);
   });
 
-  it("removes the session dir on revoke", async () => {
+  it("preserves the per-project session dir on revoke so Claude's workspace-trust acceptance carries across launches", async () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
     await fs.access(result.sessionPath);
     await service.revokeSession(result.sessionId);
 
-    let exists = true;
-    try {
-      await fs.access(result.sessionPath);
-    } catch {
-      exists = false;
-    }
-    expect(exists).toBe(false);
+    // Bearer is invalidated in-memory, but the dir stays — next launch
+    // overwrites the .mcp.json with a fresh token rather than triggering a
+    // new "Do you trust this folder?" prompt for the same project.
+    expect(service.validateToken(result.token)).toBe(false);
+    await fs.access(result.sessionPath);
+  });
+
+  it("reuses the same per-project session dir across consecutive launches with a freshly rotated bearer", async () => {
+    const first = await service.provisionSession(provisionInput());
+    if (!first) throw new Error("expected first provision");
+    await service.revokeSession(first.sessionId);
+
+    const second = await service.provisionSession(provisionInput());
+    if (!second) throw new Error("expected second provision");
+
+    expect(second.sessionPath).toBe(first.sessionPath);
+    expect(second.token).not.toBe(first.token);
+
+    const mcp = JSON.parse(await fs.readFile(path.join(second.sessionPath, ".mcp.json"), "utf-8"));
+    expect(mcp.mcpServers.daintree.headers.Authorization).toBe(`Bearer ${second.token}`);
+    expect(service.validateToken(first.token)).toBe(false);
+    expect(service.validateToken(second.token)).toBe("action");
+  });
+
+  it("derives different session dirs for different project paths", async () => {
+    const a = await service.provisionSession({ ...provisionInput(), projectPath: "/tmp/proj-a" });
+    const b = await service.provisionSession({ ...provisionInput(), projectPath: "/tmp/proj-b" });
+    if (!a || !b) throw new Error("expected provisions");
+    expect(a.sessionPath).not.toBe(b.sessionPath);
   });
 
   it("revokeByWebContentsId removes only sessions bound to the matching webContents", async () => {
@@ -225,46 +261,36 @@ describe("HelpSessionService", () => {
     expect(service.validateToken(b.token)).toBe(false);
   });
 
-  it("gcStaleSessions removes dirs whose meta.json is missing or expired", async () => {
-    // Pre-create a stale session dir on disk (no meta.json)
-    const staleDir = path.join(userData, "help-sessions", "stale-session");
-    await fs.mkdir(staleDir, { recursive: true });
+  it("gcStaleSessions sweeps legacy UUID-named dirs from the old per-launch model and preserves per-project dirs", async () => {
+    // Per-project dirs (16-hex-char path-hash names) persist across launches
+    // so the user's Claude workspace-trust acceptance carries over. GC only
+    // removes dirs whose names don't match the per-project naming scheme —
+    // i.e. legacy UUID-named dirs from the old per-launch model.
 
-    // Pre-create an expired session dir with meta.json
-    const expiredDir = path.join(userData, "help-sessions", "expired-session");
-    await fs.mkdir(expiredDir, { recursive: true });
-    await fs.writeFile(
-      path.join(expiredDir, "meta.json"),
-      JSON.stringify({
-        sessionId: "expired-session",
-        createdAt: 0,
-        expiresAt: 1,
-        windowId: 0,
-        projectId: "x",
-      })
+    const legacyUuidDir = path.join(
+      userData,
+      "help-sessions",
+      "550e8400-e29b-41d4-a716-446655440000"
     );
+    await fs.mkdir(legacyUuidDir, { recursive: true });
 
-    // A fresh, live session should NOT be touched
+    const arbitraryNamedDir = path.join(userData, "help-sessions", "stale-session");
+    await fs.mkdir(arbitraryNamedDir, { recursive: true });
+
     const fresh = await service.provisionSession(provisionInput());
     if (!fresh) throw new Error("expected fresh provision");
 
     await service.gcStaleSessions();
 
-    let staleExists = true;
-    try {
-      await fs.access(staleDir);
-    } catch {
-      staleExists = false;
+    for (const dir of [legacyUuidDir, arbitraryNamedDir]) {
+      let exists = true;
+      try {
+        await fs.access(dir);
+      } catch {
+        exists = false;
+      }
+      expect(exists).toBe(false);
     }
-    expect(staleExists).toBe(false);
-
-    let expiredExists = true;
-    try {
-      await fs.access(expiredDir);
-    } catch {
-      expiredExists = false;
-    }
-    expect(expiredExists).toBe(false);
 
     await fs.access(fresh.sessionPath);
   });
@@ -275,7 +301,7 @@ describe("HelpSessionService", () => {
     expect(result).toBeNull();
   });
 
-  it("starts the MCP server when localMcpEnabled is true and registry is set", async () => {
+  it("starts the MCP server when daintreeControl is true and registry is set", async () => {
     mockMcpServerService.isRunning = false;
     const fakeRegistry = {} as never;
     service.setMcpRegistry(fakeRegistry);

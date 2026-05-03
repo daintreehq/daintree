@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
@@ -10,12 +10,15 @@ import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
 
 const SESSIONS_DIR_NAME = "help-sessions";
 const META_FILE_NAME = "meta.json";
-const GC_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
 const SESSION_TOKEN_BYTES = 32;
+// SHA-256 → 16-char hex slice. Stable per absolute project path; collisions
+// in 64 bits of project-path-derived entropy are not a real concern for a
+// machine-local set of projects.
+const PROJECT_HASH_LEN = 16;
 
 const DEFAULT_TIER: HelpAssistantTier = "action";
-const DEFAULT_LOCAL_MCP_ENABLED = true;
-const DEFAULT_DOCS_SERVER_ENABLED = true;
+const DEFAULT_DAINTREE_CONTROL = true;
+const DEFAULT_DOC_SEARCH = true;
 const DEFAULT_SKIP_PERMISSIONS = false;
 
 interface ProvisionInput {
@@ -44,16 +47,13 @@ interface HelpSessionRecord {
   sessionPath: string;
   tier: HelpAssistantTier;
   createdAt: number;
-  expiresAt: number;
   revoked: boolean;
 }
 
 interface SessionMeta {
-  sessionId: string;
-  createdAt: number;
-  expiresAt: number;
-  windowId: number;
   projectId: string;
+  projectPath: string;
+  lastUsedAt: number;
 }
 
 interface BundledClaudeSettings {
@@ -62,6 +62,7 @@ interface BundledClaudeSettings {
     deny?: string[];
   };
   defaultMode?: string;
+  enableAllProjectMcpServers?: boolean;
   [key: string]: unknown;
 }
 
@@ -69,9 +70,18 @@ function deepClonePlainJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function projectPathHash(projectPath: string): string {
+  return createHash("sha256").update(projectPath).digest("hex").slice(0, PROJECT_HASH_LEN);
+}
+
 export class HelpSessionService {
   private readonly sessionsByToken = new Map<string, HelpSessionRecord>();
   private readonly sessionsById = new Map<string, HelpSessionRecord>();
+  // Per-project-path serialization — concurrent provisions for the same
+  // project (e.g. two windows opening the assistant simultaneously) would
+  // otherwise race the .mcp.json overwrite, producing a Claude instance
+  // authenticating with the wrong session record.
+  private readonly provisionLocks = new Map<string, Promise<void>>();
   private mcpRegistry: WindowRegistry | null = null;
   private disposed = false;
 
@@ -84,15 +94,21 @@ export class HelpSessionService {
     const record = this.sessionsByToken.get(token);
     if (!record) return false;
     if (record.revoked) return false;
-    if (Date.now() > record.expiresAt) return false;
     return record.tier;
   }
 
   /**
-   * Provisions a new help-session directory under userData/help-sessions/<sessionId>/
-   * containing a generated .mcp.json (with `Bearer ${DAINTREE_MCP_TOKEN}`) and an
-   * extended .claude/settings.json. Returns the token to inject as DAINTREE_MCP_TOKEN
-   * in the spawned terminal's environment.
+   * Provisions the per-project session directory for the Daintree Assistant
+   * under userData/help-sessions/<projectPathHash>/. The dir is reused across
+   * launches so Claude Code's per-folder workspace-trust prompt only fires
+   * once per project; the .mcp.json bearer is rotated on every provision.
+   *
+   * On every call:
+   *   1. Copy the bundled help/ template into the dir (overwrites — picks up
+   *      bundled-asset updates without losing the trust acceptance).
+   *   2. Overwrite .mcp.json with a fresh literal-token Authorization header.
+   *   3. Overlay .claude/settings.json with current `helpAssistant` settings.
+   *   4. Stamp meta.json with the project identity for GC.
    */
   async provisionSession(input: ProvisionInput): Promise<ProvisionResult | null> {
     if (this.disposed) return null;
@@ -104,22 +120,57 @@ export class HelpSessionService {
       return null;
     }
 
+    const pathHash = projectPathHash(input.projectPath);
+    const previous = this.provisionLocks.get(pathHash);
+    let resolveLock!: () => void;
+    const next = new Promise<void>((resolve) => {
+      resolveLock = resolve;
+    });
+    this.provisionLocks.set(
+      pathHash,
+      (previous ?? Promise.resolve()).then(() => next)
+    );
+    if (previous) await previous;
+
+    try {
+      return await this.doProvision(input, helpFolder, pathHash);
+    } finally {
+      resolveLock();
+      // Drop the lock entry once it resolves so the map doesn't grow without
+      // bound. Anyone awaiting `previous` already has the resolved promise.
+      if (this.provisionLocks.get(pathHash) === next) {
+        this.provisionLocks.delete(pathHash);
+      }
+    }
+  }
+
+  private async doProvision(
+    input: ProvisionInput,
+    helpFolder: string,
+    pathHash: string
+  ): Promise<ProvisionResult | null> {
     const settings = this.readSettings();
     const tier = this.resolveTier(settings.skipPermissions);
     const sessionId = randomUUID();
     const token = randomBytes(SESSION_TOKEN_BYTES).toString("hex");
     const sessionsRoot = this.getSessionsRoot();
-    const sessionPath = path.join(sessionsRoot, sessionId);
+    const sessionPath = path.join(sessionsRoot, pathHash);
 
-    if (settings.localMcpEnabled) {
+    if (settings.daintreeControl) {
       await this.ensureMcpServerRunning();
     }
 
-    await fs.mkdir(sessionsRoot, { recursive: true });
+    await fs.mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
+    await fs.chmod(sessionsRoot, 0o700).catch(() => {});
+    // `force: true` is the default — overwrites existing files in the dir
+    // with the bundled template, picking up any updates to CLAUDE.md /
+    // settings baseline / etc. without losing Claude Code's per-folder trust
+    // acceptance (which lives in ~/.claude.json, not here).
     await fs.cp(helpFolder, sessionPath, { recursive: true });
+    await fs.chmod(sessionPath, 0o700).catch(() => {});
 
-    const port = await this.getMcpPort(settings.localMcpEnabled);
-    await this.writeMcpConfig(sessionPath, settings, port);
+    const port = await this.getMcpPort(settings.daintreeControl);
+    await this.writeMcpConfig(sessionPath, settings, port, token);
     await this.writeClaudeSettings(sessionPath, helpFolder, settings);
 
     const now = Date.now();
@@ -133,26 +184,36 @@ export class HelpSessionService {
       sessionPath,
       tier,
       createdAt: now,
-      expiresAt: now + GC_THRESHOLD_MS,
       revoked: false,
     };
 
-    await this.writeSessionMeta(sessionPath, record);
+    await this.writeSessionMeta(sessionPath, {
+      projectId: input.projectId,
+      projectPath: input.projectPath,
+      lastUsedAt: now,
+    });
 
     this.sessionsByToken.set(token, record);
     this.sessionsById.set(sessionId, record);
 
-    const mcpUrl = settings.localMcpEnabled && port ? `http://127.0.0.1:${port}/sse` : null;
+    const mcpUrl = settings.daintreeControl && port ? `http://127.0.0.1:${port}/sse` : null;
     return { sessionId, sessionPath, token, tier, mcpUrl, windowId: input.windowId };
   }
 
+  /**
+   * Invalidates the in-memory bearer for this session. The on-disk dir is
+   * intentionally preserved across launches so the user's one-time Claude
+   * Code workspace-trust acceptance for this project carries over to the
+   * next assistant open. The literal bearer in .mcp.json becomes dead the
+   * moment it's removed from `sessionsByToken` (the auth gate is in-memory)
+   * and is overwritten on the next provision.
+   */
   async revokeSession(sessionId: string): Promise<void> {
     const record = this.sessionsById.get(sessionId);
     if (!record || record.revoked) return;
     record.revoked = true;
     this.sessionsById.delete(sessionId);
     this.sessionsByToken.delete(record.token);
-    await this.removeSessionDir(record.sessionPath);
   }
 
   async revokeByWebContentsId(webContentsId: number): Promise<void> {
@@ -175,9 +236,11 @@ export class HelpSessionService {
   }
 
   /**
-   * Sweeps stale session dirs left over from a crash. Reads each meta.json and
-   * deletes dirs whose `expiresAt` is in the past or whose meta is missing /
-   * unreadable. Live sessions are protected by their in-memory record.
+   * Sweeps legacy per-launch session dirs left over from the old model
+   * (UUID-named — no longer match the per-project path-hash naming). The
+   * current per-project dirs persist indefinitely so the user's workspace-
+   * trust acceptance carries across launches; we'll add a project-deletion
+   * hook later when projects can be removed from Daintree.
    */
   async gcStaleSessions(): Promise<void> {
     const sessionsRoot = this.getSessionsRoot();
@@ -190,27 +253,10 @@ export class HelpSessionService {
       return;
     }
 
-    const liveSessionIds = new Set(this.sessionsById.keys());
-    const now = Date.now();
-
     await Promise.all(
       entries.map(async (entry) => {
-        if (liveSessionIds.has(entry)) return;
-        const dir = path.join(sessionsRoot, entry);
-        const metaPath = path.join(dir, META_FILE_NAME);
-        let stale = true;
-        try {
-          const raw = await fs.readFile(metaPath, "utf-8");
-          const meta = JSON.parse(raw) as Partial<SessionMeta>;
-          if (typeof meta?.expiresAt === "number" && meta.expiresAt > now) {
-            stale = false;
-          }
-        } catch {
-          stale = true;
-        }
-        if (stale) {
-          await this.removeSessionDir(dir);
-        }
+        if (this.isProjectHashDirName(entry)) return;
+        await this.removeSessionDir(path.join(sessionsRoot, entry));
       })
     );
   }
@@ -218,6 +264,10 @@ export class HelpSessionService {
   dispose(): void {
     this.disposed = true;
     void this.revokeAll();
+  }
+
+  private isProjectHashDirName(name: string): boolean {
+    return name.length === PROJECT_HASH_LEN && /^[0-9a-f]+$/.test(name);
   }
 
   private validateProvisionInput(input: ProvisionInput): void {
@@ -230,6 +280,9 @@ export class HelpSessionService {
     if (typeof input.projectPath !== "string" || !input.projectPath.trim()) {
       throw new Error("projectPath is required");
     }
+    if (!path.isAbsolute(input.projectPath)) {
+      throw new Error("projectPath must be absolute");
+    }
     if (!Number.isInteger(input.windowId) || input.windowId < 0) {
       throw new Error("windowId must be a non-negative integer");
     }
@@ -239,20 +292,17 @@ export class HelpSessionService {
   }
 
   private readSettings(): {
-    localMcpEnabled: boolean;
-    docsServerEnabled: boolean;
+    daintreeControl: boolean;
+    docSearch: boolean;
     skipPermissions: boolean;
   } {
     const stored = (store.get("helpAssistant") as Record<string, unknown> | undefined) ?? {};
     return {
-      localMcpEnabled:
-        typeof stored.localMcpEnabled === "boolean"
-          ? stored.localMcpEnabled
-          : DEFAULT_LOCAL_MCP_ENABLED,
-      docsServerEnabled:
-        typeof stored.docsServerEnabled === "boolean"
-          ? stored.docsServerEnabled
-          : DEFAULT_DOCS_SERVER_ENABLED,
+      daintreeControl:
+        typeof stored.daintreeControl === "boolean"
+          ? stored.daintreeControl
+          : DEFAULT_DAINTREE_CONTROL,
+      docSearch: typeof stored.docSearch === "boolean" ? stored.docSearch : DEFAULT_DOC_SEARCH,
       skipPermissions:
         typeof stored.skipPermissions === "boolean"
           ? stored.skipPermissions
@@ -280,8 +330,8 @@ export class HelpSessionService {
     }
   }
 
-  private async getMcpPort(localMcpEnabled: boolean): Promise<number | null> {
-    if (!localMcpEnabled) return null;
+  private async getMcpPort(daintreeControl: boolean): Promise<number | null> {
+    if (!daintreeControl) return null;
     try {
       const { mcpServerService } = await import("./McpServerService.js");
       return mcpServerService.currentPort;
@@ -292,21 +342,29 @@ export class HelpSessionService {
 
   private async writeMcpConfig(
     sessionPath: string,
-    settings: { localMcpEnabled: boolean; docsServerEnabled: boolean },
-    port: number | null
+    settings: { daintreeControl: boolean; docSearch: boolean },
+    port: number | null,
+    token: string
   ): Promise<void> {
     const mcpServers: Record<string, unknown> = {};
-    if (settings.docsServerEnabled) {
+    if (settings.docSearch) {
       mcpServers["daintree-docs"] = {
         type: "http",
         url: "https://daintree.org/api/mcp",
       };
     }
-    if (settings.localMcpEnabled && port) {
+    if (settings.daintreeControl && port) {
+      // Bake the literal token into the file rather than `${DAINTREE_MCP_TOKEN}`
+      // substitution. Claude Code's env substitution in `headers` is broken
+      // (sends the literal placeholder, gets 401). Same reason as
+      // McpPaneConfigService.ts. The session dir is 0o700 and the file is
+      // 0o600. Token rotates on every provision; the in-memory map is the
+      // auth boundary, so the literal on disk is dead the moment its session
+      // is revoked.
       mcpServers["daintree"] = {
         type: "sse",
         url: `http://127.0.0.1:${port}/sse`,
-        headers: { Authorization: "Bearer ${DAINTREE_MCP_TOKEN}" },
+        headers: { Authorization: `Bearer ${token}` },
       };
     }
     const target = path.join(sessionPath, ".mcp.json");
@@ -321,7 +379,7 @@ export class HelpSessionService {
   private async writeClaudeSettings(
     sessionPath: string,
     bundledHelpFolder: string,
-    settings: { localMcpEnabled: boolean; skipPermissions: boolean }
+    settings: { daintreeControl: boolean; skipPermissions: boolean }
   ): Promise<void> {
     const bundledSettingsPath = path.join(bundledHelpFolder, ".claude", "settings.json");
     const baseline = await this.readBundledSettings(bundledSettingsPath);
@@ -330,9 +388,14 @@ export class HelpSessionService {
     if (!merged.permissions) merged.permissions = {};
     if (!Array.isArray(merged.permissions.allow)) merged.permissions.allow = [];
 
-    if (settings.localMcpEnabled && !merged.permissions.allow.includes("mcp__daintree__*")) {
+    if (settings.daintreeControl && !merged.permissions.allow.includes("mcp__daintree__*")) {
       merged.permissions.allow.push("mcp__daintree__*");
     }
+
+    // Auto-trust the project-scoped MCP servers we wrote into the session-dir
+    // .mcp.json. Without this, Claude Code prompts the user to approve each
+    // server interactively on first launch, which would block the assistant.
+    merged.enableAllProjectMcpServers = true;
 
     if (settings.skipPermissions) {
       merged.defaultMode = "bypassPermissions";
@@ -361,14 +424,7 @@ export class HelpSessionService {
     };
   }
 
-  private async writeSessionMeta(sessionPath: string, record: HelpSessionRecord): Promise<void> {
-    const meta: SessionMeta = {
-      sessionId: record.sessionId,
-      createdAt: record.createdAt,
-      expiresAt: record.expiresAt,
-      windowId: record.windowId,
-      projectId: record.projectId,
-    };
+  private async writeSessionMeta(sessionPath: string, meta: SessionMeta): Promise<void> {
     const target = path.join(sessionPath, META_FILE_NAME);
     await resilientAtomicWriteFile(target, JSON.stringify(meta, null, 2) + "\n", "utf-8", {
       mode: 0o600,

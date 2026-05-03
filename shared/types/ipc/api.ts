@@ -1256,9 +1256,10 @@ export interface ElectronAPI {
       apiKey: string;
     }>;
     /**
-     * Mint a fresh bearer token, rewrite `~/.daintree/mcp.json`, and return
-     * the new key. Clients pick up the new key on their next request — no
-     * server restart is needed.
+     * Mint a fresh bearer token, persist it to electron-store, and return the
+     * new key. Clients pick up the new key on their next request — no server
+     * restart is needed. External clients holding the old bearer in their own
+     * config break and must re-paste from Settings.
      */
     rotateApiKey(): Promise<string>;
     /** Get the JSON config snippet to paste into an MCP client config */
