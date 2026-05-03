@@ -136,10 +136,72 @@ describe("helpPanelStore persistence migration", () => {
     expect(written).toBeDefined();
     const parsed = JSON.parse(written!) as {
       version: number;
-      state: { width: number; preferredAgentId: string | null };
+      state: { width: number; preferredAgentId: string | null; introDismissed: boolean };
     };
     expect(parsed.version).toBe(1);
     expect(parsed.state.width).toBe(450);
     expect(parsed.state.preferredAgentId).toBeNull();
+  });
+
+  it("migrates a v0 blob to v1 with introDismissed defaulted to false", async () => {
+    const v0Blob = JSON.stringify({
+      version: 0,
+      state: { width: 400, preferredAgentId: "claude" },
+    });
+    installLocalStorage({ [STORAGE_KEY]: v0Blob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().introDismissed).toBe(false);
+    expect(store.getState().preferredAgentId).toBe("claude");
+  });
+
+  it("preserves introDismissed: true from a v1 blob across rehydration", async () => {
+    const v1Blob = JSON.stringify({
+      version: 1,
+      state: { width: 400, preferredAgentId: null, introDismissed: true },
+    });
+    installLocalStorage({ [STORAGE_KEY]: v1Blob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().introDismissed).toBe(true);
+  });
+
+  it("starts with introDismissed: false on a fresh install", async () => {
+    installLocalStorage({});
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().introDismissed).toBe(false);
+  });
+
+  it("falls back to false when persisted introDismissed has a non-boolean type", async () => {
+    const malformed = JSON.stringify({
+      version: 1,
+      state: { width: 400, preferredAgentId: null, introDismissed: "true" },
+    });
+    installLocalStorage({ [STORAGE_KEY]: malformed });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().introDismissed).toBe(false);
+  });
+
+  it("dismissIntro() sets introDismissed: true and persists it", async () => {
+    const backing = installLocalStorage({});
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    store.getState().dismissIntro();
+
+    expect(store.getState().introDismissed).toBe(true);
+
+    const written = backing.get(STORAGE_KEY);
+    expect(written).toBeDefined();
+    const parsed: unknown = JSON.parse(written!);
+    expect(parsed).toMatchObject({
+      version: 1,
+      state: { introDismissed: true },
+    });
   });
 });

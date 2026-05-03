@@ -5,6 +5,7 @@ import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
 import { HelpAgentPicker } from "./HelpAgentPicker";
+import { HelpIntroBanner } from "./HelpIntroBanner";
 import {
   useHelpPanelStore,
   HELP_PANEL_MIN_WIDTH,
@@ -26,7 +27,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 const RESIZE_STEP = 10;
 
-const HELP_PROMPT = "Briefly tell me what you can do.";
+const ASSISTANT_DOCS_URL = "https://daintree.org/assistant";
 
 function notifyLaunchFailed(agentId: string, reason: string): void {
   const cfg = getAgentConfig(agentId);
@@ -93,10 +94,12 @@ export function HelpPanel() {
     terminalId,
     agentId,
     preferredAgentId,
+    introDismissed,
     setWidth,
     setOpen,
     clearTerminal,
     clearPreferredAgent,
+    dismissIntro,
   } = useHelpPanelStore();
 
   const terminal = usePanelStore((s) => (terminalId ? s.panelsById[terminalId] : undefined));
@@ -189,7 +192,6 @@ export function HelpPanel() {
             agentId: launchAgentId,
             location: "dock",
             cwd,
-            prompt: HELP_PROMPT,
             ephemeral: true,
             ...(env && { env }),
           },
@@ -338,7 +340,6 @@ export function HelpPanel() {
             agentId: selectedAgentId,
             location: "dock",
             cwd,
-            prompt: HELP_PROMPT,
             ephemeral: true,
             ...(env && { env }),
           },
@@ -422,6 +423,15 @@ export function HelpPanel() {
     revokePendingSession();
     setOpen(false);
   }, [terminalId, removePanel, clearTerminal, setOpen, revokePendingSession]);
+
+  const handleIntroLinkClick = useCallback(() => {
+    dismissIntro();
+    void actionService.dispatch(
+      "system.openExternal",
+      { url: ASSISTANT_DOCS_URL },
+      { source: "user" }
+    );
+  }, [dismissIntro]);
 
   const handleRunAnyway = useCallback(() => {
     if (!terminalId || !agentId) return;
@@ -559,16 +569,21 @@ export function HelpPanel() {
               onRunAnyway={handleRunAnyway}
             />
           ) : (
-            <div className="absolute inset-0">
-              <Suspense fallback={null}>
-                <XtermAdapter
-                  terminalId={terminalId}
-                  launchAgentId={agentId ?? undefined}
-                  getRefreshTier={getRefreshTier}
-                  cwd={terminal.cwd}
-                />
-              </Suspense>
-            </div>
+            <>
+              {!introDismissed && (
+                <HelpIntroBanner onDismiss={dismissIntro} onLinkClick={handleIntroLinkClick} />
+              )}
+              <div className="flex-1 relative min-h-0">
+                <Suspense fallback={null}>
+                  <XtermAdapter
+                    terminalId={terminalId}
+                    launchAgentId={agentId ?? undefined}
+                    getRefreshTier={getRefreshTier}
+                    cwd={terminal.cwd}
+                  />
+                </Suspense>
+              </div>
+            </>
           )
         ) : (
           <HelpAgentPicker

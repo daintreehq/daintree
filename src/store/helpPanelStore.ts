@@ -19,6 +19,7 @@ interface HelpPanelState {
   agentId: string | null;
   preferredAgentId: string | null;
   sessionId: string | null;
+  introDismissed: boolean;
 }
 
 interface HelpPanelActions {
@@ -28,6 +29,7 @@ interface HelpPanelActions {
   setTerminal: (terminalId: string, agentId: string, sessionId: string | null) => void;
   clearTerminal: () => void;
   clearPreferredAgent: () => void;
+  dismissIntro: () => void;
 }
 
 const initialState: HelpPanelState = {
@@ -37,6 +39,7 @@ const initialState: HelpPanelState = {
   agentId: null,
   preferredAgentId: null,
   sessionId: null,
+  introDismissed: false,
 };
 
 export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
@@ -60,19 +63,18 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
 
       clearPreferredAgent: () =>
         set({ terminalId: null, agentId: null, sessionId: null, preferredAgentId: null }),
+
+      dismissIntro: () => set({ introDismissed: true }),
     }),
     {
       name: "help-panel-storage",
       storage: createSafeJSONStorage(),
       version: 1,
-      // v1 marks that the `preferredAgentId` rehydration guard (issue #6612)
-      // is in effect. The cleanup itself runs in `merge` below — it fires on
-      // every rehydration, so a v0 blob with `preferredAgentId: "gemini"`
-      // becomes `null` before any subscriber sees it.
       migrate: (persistedState) => persistedState as HelpPanelState & HelpPanelActions,
       partialize: (state) => ({
         width: state.width,
         preferredAgentId: state.preferredAgentId,
+        introDismissed: state.introDismissed,
       }),
       merge: (persistedState: unknown, currentState) => {
         const persisted = persistedState as Partial<HelpPanelState>;
@@ -85,6 +87,10 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           preferredAgentId: isAssistantSupportedAgentId(persisted.preferredAgentId)
             ? persisted.preferredAgentId
             : null,
+          introDismissed:
+            typeof persisted.introDismissed === "boolean"
+              ? persisted.introDismissed
+              : currentState.introDismissed,
         };
       },
     }
@@ -94,5 +100,5 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
 registerPersistedStore({
   storeId: "helpPanelStore",
   store: useHelpPanelStore,
-  persistedStateType: "Pick<HelpPanelState, 'width' | 'preferredAgentId'>",
+  persistedStateType: "Pick<HelpPanelState, 'width' | 'preferredAgentId' | 'introDismissed'>",
 });

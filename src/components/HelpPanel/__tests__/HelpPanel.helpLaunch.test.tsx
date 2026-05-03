@@ -32,11 +32,13 @@ const {
     agentId: null as string | null,
     preferredAgentId: null as string | null,
     sessionId: null as string | null,
+    introDismissed: true,
     setWidth: vi.fn(),
     setOpen: vi.fn(),
     clearTerminal: vi.fn(),
     clearPreferredAgent: vi.fn(),
     setTerminal: vi.fn(),
+    dismissIntro: vi.fn(),
   },
   panelStoreState: {
     panelsById: {} as Record<string, unknown>,
@@ -206,11 +208,13 @@ function resetState() {
   helpPanelState.agentId = null;
   helpPanelState.preferredAgentId = null;
   helpPanelState.sessionId = null;
+  helpPanelState.introDismissed = true;
   helpPanelState.setTerminal = vi.fn();
   helpPanelState.setOpen = vi.fn();
   helpPanelState.setWidth = vi.fn();
   helpPanelState.clearTerminal = vi.fn();
   helpPanelState.clearPreferredAgent = vi.fn();
+  helpPanelState.dismissIntro = vi.fn();
 
   panelStoreState.panelsById = {};
   panelStoreState.removePanel = vi.fn();
@@ -274,6 +278,23 @@ describe("HelpPanel — manual select agent (handleSelectAgent)", () => {
 
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-1", "claude", null);
     expect(mockNotify).not.toHaveBeenCalled();
+  });
+
+  it("dispatches agent.launch without a prompt field (regression: auto-greeting removed)", async () => {
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
+
+    const { getByTestId } = render(<HelpPanel />);
+
+    await act(async () => {
+      fireEvent.click(getByTestId("pick-claude"));
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.not.objectContaining({ prompt: expect.anything() }),
+      { source: "user" }
+    );
   });
 
   it("notifies and does not commit terminal when result.ok is false", async () => {
@@ -370,6 +391,22 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith("auto-term-1", "claude", null);
   });
 
+  it("dispatches auto-launch agent.launch without a prompt field", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "auto-term-1" } });
+
+    await act(async () => {
+      render(<HelpPanel />);
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.not.objectContaining({ prompt: expect.anything() }),
+      { source: "user" }
+    );
+  });
+
   it("does not commit terminal and cleans up if user navigated away (preferredAgentId cleared) during in-flight launch", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");
@@ -409,6 +446,96 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", title: "Assistant launch failed" })
     );
+  });
+});
+
+describe("HelpPanel — intro banner visibility", () => {
+  it("renders the banner when the terminal is healthy and introDismissed=false", () => {
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.introDismissed = false;
+    panelStoreState.panelsById = {
+      "term-1": { id: "term-1", kind: "terminal", spawnStatus: "ready", cwd: "/help" },
+    };
+
+    const { container } = render(<HelpPanel />);
+
+    expect(container.querySelector('button[aria-label="Dismiss"]')).toBeTruthy();
+  });
+
+  it("hides the banner when introDismissed=true", () => {
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.introDismissed = true;
+    panelStoreState.panelsById = {
+      "term-1": { id: "term-1", kind: "terminal", spawnStatus: "ready", cwd: "/help" },
+    };
+
+    const { container } = render(<HelpPanel />);
+
+    expect(container.querySelector('button[aria-label="Dismiss"]')).toBeNull();
+  });
+
+  it("does not render the banner on the picker view (no terminal)", () => {
+    helpPanelState.terminalId = null;
+    helpPanelState.introDismissed = false;
+
+    const { container } = render(<HelpPanel />);
+
+    expect(container.querySelector('button[aria-label="Dismiss"]')).toBeNull();
+  });
+
+  it("dismisses the banner and opens the docs URL when the link is clicked", () => {
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.introDismissed = false;
+    panelStoreState.panelsById = {
+      "term-1": { id: "term-1", kind: "terminal", spawnStatus: "ready", cwd: "/help" },
+    };
+    mockDispatch.mockResolvedValue({ ok: true });
+
+    const { getByText } = render(<HelpPanel />);
+
+    fireEvent.click(getByText("See what the Daintree Assistant can do"));
+
+    expect(helpPanelState.dismissIntro).toHaveBeenCalled();
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://daintree.org/assistant" },
+      { source: "user" }
+    );
+  });
+
+  it("renders the banner above the XtermAdapter (DOM order protects flex layout)", () => {
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.introDismissed = false;
+    panelStoreState.panelsById = {
+      "term-1": { id: "term-1", kind: "terminal", spawnStatus: "ready", cwd: "/help" },
+    };
+
+    const { container, getByTestId } = render(<HelpPanel />);
+
+    const dismissBtn = container.querySelector('button[aria-label="Dismiss"]')!;
+    const xterm = getByTestId("xterm-adapter");
+    const order = dismissBtn.compareDocumentPosition(xterm);
+    expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("dismisses the banner when the X button is clicked", () => {
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.introDismissed = false;
+    panelStoreState.panelsById = {
+      "term-1": { id: "term-1", kind: "terminal", spawnStatus: "ready", cwd: "/help" },
+    };
+
+    const { container } = render(<HelpPanel />);
+    const dismissBtn = container.querySelector('button[aria-label="Dismiss"]');
+    expect(dismissBtn).toBeTruthy();
+    fireEvent.click(dismissBtn!);
+
+    expect(helpPanelState.dismissIntro).toHaveBeenCalled();
   });
 });
 
