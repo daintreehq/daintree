@@ -26,24 +26,14 @@ test.describe.serial("Core: Terminal Context Menu", () => {
     if (ctx?.app) await closeApp(ctx.app);
   });
 
-  // ── Project Onboarding ─────────────────────────────────────
+  // ── Project Open ───────────────────────────────────────────
 
-  test.describe.serial("Project Onboarding", () => {
-    test("open folder and complete onboarding", async () => {
+  test.describe.serial("Project Open", () => {
+    test("open folder and switch to project view", async () => {
       await openProject(ctx.app, ctx.window, fixtureDir);
 
-      const heading = ctx.window.locator("h2", { hasText: "Set up your project" });
-      await expect(heading).toBeVisible({ timeout: T_LONG });
-
-      const nameInput = ctx.window.getByRole("textbox", { name: "Project Name" });
-      await nameInput.fill("Context Menu Test");
-
-      await ctx.window.getByRole("button", { name: "Finish" }).click();
-      await expect(heading).not.toBeVisible({ timeout: T_MEDIUM });
-
-      await dismissTelemetryConsent(ctx.window);
-
       ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
+      await dismissTelemetryConsent(ctx.window);
     });
 
     test("worktree dashboard appears", async () => {

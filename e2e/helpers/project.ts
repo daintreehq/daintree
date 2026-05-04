@@ -1,6 +1,6 @@
 import type { ElectronApplication, Page } from "@playwright/test";
 import { expect } from "@playwright/test";
-import { mockOpenDialog, getActiveAppWindow, refreshActiveWindow } from "./launch";
+import { mockOpenDialog, refreshActiveWindow } from "./launch";
 
 export async function openProject(
   app: ElectronApplication,
@@ -22,40 +22,14 @@ export async function dismissTelemetryConsent(window: Page): Promise<void> {
   }
 }
 
-export async function completeOnboarding(window: Page, name: string): Promise<void> {
-  const isWindowsCI = process.env.CI && process.platform === "win32";
-  const visibleTimeout = isWindowsCI ? 45_000 : process.env.CI ? 20_000 : 10_000;
-  const closeTimeout = isWindowsCI ? 20_000 : 5_000;
-
-  const heading = window.locator("h2", { hasText: "Set up your project" });
-  await expect(heading).toBeVisible({ timeout: visibleTimeout });
-
-  const nameInput = window.getByRole("textbox", { name: "Project Name" });
-  await nameInput.fill(name);
-
-  await window.getByRole("button", { name: "Finish", exact: true }).click();
-  await expect(heading).not.toBeVisible({ timeout: closeTimeout });
-
-  await dismissTelemetryConsent(window);
-}
-
 export async function openAndOnboardProject(
   app: ElectronApplication,
   window: Page,
   projectPath: string,
-  name: string
+  _name?: string
 ): Promise<Page> {
   await openProject(app, window, projectPath);
-  // The onboarding wizard may appear on the initial view or the new project view.
-  // Try the initial view first, then fall back to the new active view.
-  const activeWindow = await getActiveAppWindow(app);
-  const onboardingWindow = (await window
-    .locator("h2", { hasText: "Set up your project" })
-    .isVisible({ timeout: 2000 })
-    .catch(() => false))
-    ? window
-    : activeWindow;
-  await completeOnboarding(onboardingWindow, name);
-
-  return await refreshActiveWindow(app, window);
+  const newWindow = await refreshActiveWindow(app, window);
+  await dismissTelemetryConsent(newWindow);
+  return newWindow;
 }

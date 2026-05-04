@@ -21,32 +21,16 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
     if (ctx?.app) await closeApp(ctx.app);
   });
 
-  // ── Project Onboarding ─────────────────────────────────
+  // ── Project Open ───────────────────────────────────────
 
-  test.describe.serial("Project Onboarding", () => {
-    test("open folder via mocked dialog shows onboarding wizard", async () => {
+  test.describe.serial("Project Open", () => {
+    test("open folder via mocked dialog and switch to project view", async () => {
       await openProject(ctx.app, ctx.window, fixtureDir);
 
-      const heading = ctx.window.locator("h2", { hasText: "Set up your project" });
-      await expect(heading).toBeVisible({ timeout: T_LONG });
-    });
-
-    test("fill project name and finish onboarding", async () => {
-      const { window } = ctx;
-
-      const nameInput = window.getByRole("textbox", { name: "Project Name" });
-      await nameInput.fill("Terminal Search Test");
-
-      await window.getByRole("button", { name: "Finish", exact: true }).click();
-
-      const heading = window.locator("h2", { hasText: "Set up your project" });
-      await expect(heading).not.toBeVisible({ timeout: T_MEDIUM });
-
-      await dismissTelemetryConsent(window);
-
-      // After onboarding, the ProjectViewManager creates a new WebContentsView.
-      // Re-acquire the active page so subsequent tests use the correct view.
+      // Adding a project switches to its WebContentsView; re-acquire the
+      // active page so subsequent locator queries hit the right view.
       ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
+      await dismissTelemetryConsent(ctx.window);
     });
 
     test("worktree dashboard appears", async () => {

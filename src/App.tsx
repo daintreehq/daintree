@@ -41,8 +41,6 @@ import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
 import { useHeldShortcutReveal } from "./hooks/useHeldShortcutReveal";
 import { removeStartupSkeleton } from "./utils/removeStartupSkeleton";
-import { logWarn } from "./utils/logger";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
 import { SafeModeBanner } from "./components/Recovery/SafeModeBanner";
@@ -85,12 +83,7 @@ import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
 import { buildResumeCommand } from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import {
-  GitInitDialog,
-  CloneRepoDialog,
-  ProjectOnboardingWizard,
-  WelcomeScreen,
-} from "./components/Project";
+import { GitInitDialog, CloneRepoDialog, WelcomeScreen } from "./components/Project";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { CreateProjectFolderDialog } from "./components/Project/CreateProjectFolderDialog";
@@ -129,15 +122,11 @@ import {
   useWorktreeSelectionStore,
   useProjectStore,
   useErrorStore,
-  useAgentPreferencesStore,
   usePaletteStore,
   useNotificationSettingsStore,
   usePreferencesStore,
 } from "./store";
 import { useGitHubConfigStore } from "./store/githubConfigStore";
-import { useAgentSettingsStore } from "./store/agentSettingsStore";
-import { isAgentLaunchable } from "../shared/utils/agentAvailability";
-import { isAgentPinned } from "../shared/utils/agentPinned";
 import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
@@ -235,11 +224,6 @@ function App() {
   const gitInitDirectoryPath = useProjectStore((state) => state.gitInitDirectoryPath);
   const closeGitInitDialog = useProjectStore((state) => state.closeGitInitDialog);
   const handleGitInitSuccess = useProjectStore((state) => state.handleGitInitSuccess);
-  const onboardingWizardOpen = useProjectStore((state) => state.onboardingWizardOpen);
-  const onboardingProjectId = useProjectStore((state) => state.onboardingProjectId);
-  const closeOnboardingWizard = useProjectStore((state) => state.closeOnboardingWizard);
-  const switchProject = useProjectStore((state) => state.switchProject);
-
   const createFolderDialogOpen = useProjectStore((state) => state.createFolderDialogOpen);
   const closeCreateFolderDialog = useProjectStore((state) => state.closeCreateFolderDialog);
 
@@ -335,51 +319,6 @@ function App() {
       await launchAgent(type);
     },
     [launchAgent]
-  );
-
-  const handleWizardFinish = useCallback(
-    (finishedProjectId: string) => {
-      // Switch to the newly-onboarded project. Opening the wizard on the
-      // current view (rather than pre-switching) avoids stranding it in a
-      // throttled background view; we complete the switch here instead.
-      if (finishedProjectId && finishedProjectId !== currentProject?.id) {
-        void switchProject(finishedProjectId);
-      }
-
-      // In e2e mode, skip the automatic primary-agent launch — it leaves an
-      // extra panel in the grid that breaks panel-count assertions in tests
-      // that expect a clean post-onboarding state. The behaviour is locally
-      // observable only when an agent CLI (e.g., Claude) is installed, so
-      // tests pass on CI but fail on dev machines without this guard.
-      if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__) {
-        return;
-      }
-
-      const defaultAgent = useAgentPreferencesStore.getState().defaultAgent;
-      const normalized = useAgentSettingsStore.getState().settings;
-      const selected = normalized?.agents
-        ? Object.entries(normalized.agents)
-            .filter(([, entry]) => isAgentPinned(entry))
-            .map(([id]) => id)
-        : [];
-      const primaryAgent = defaultAgent ?? selected[0];
-
-      if (primaryAgent && isAgentLaunchable(availability[primaryAgent])) {
-        launchAgent(primaryAgent, {
-          worktreeId: activeWorktreeId ?? undefined,
-        }).catch((err) => {
-          // Log only — auto-launch fires on every project switch; a toast
-          // would be too noisy. The user can see the agent failed to start
-          // from the panel itself.
-          logWarn("Default agent auto-launch failed", {
-            primaryAgent,
-            worktreeId: activeWorktreeId ?? null,
-            error: formatErrorMessage(err, "Auto-launch failed"),
-          });
-        });
-      }
-    },
-    [launchAgent, activeWorktreeId, availability, switchProject, currentProject?.id]
   );
 
   const closeThemePalette = useCallback(() => {
@@ -863,15 +802,6 @@ function App() {
                 directoryPath={gitInitDirectoryPath}
                 onSuccess={handleGitInitSuccess}
                 onCancel={closeGitInitDialog}
-              />
-            )}
-
-            {onboardingProjectId && (
-              <ProjectOnboardingWizard
-                isOpen={onboardingWizardOpen}
-                projectId={onboardingProjectId}
-                onClose={closeOnboardingWizard}
-                onFinish={handleWizardFinish}
               />
             )}
 

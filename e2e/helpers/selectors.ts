@@ -165,11 +165,6 @@ export const SEL = {
     agentSetupBannerCta: '[data-testid="agent-setup-banner-cta"]',
     agentSetupBannerDismiss: '[data-testid="agent-setup-banner-dismiss"]',
   },
-  onboarding: {
-    heading: 'h2:has-text("Set up your project")',
-    projectNameInput: '[aria-label="Project Name"]',
-    finishButton: 'button:has-text("Finish")',
-  },
   agent: {
     panel: '[aria-label^="Claude agent:"]',
     startButton: '[aria-label="Start Claude Agent"]',

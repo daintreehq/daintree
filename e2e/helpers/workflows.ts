@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { ElectronApplication, Locator, Page } from "@playwright/test";
 import { mockOpenDialog, refreshActiveWindow } from "./launch";
-import { completeOnboarding } from "./project";
+import { dismissTelemetryConsent } from "./project";
 import { waitForTerminalText } from "./terminal";
 import { getGridPanelCount, openTerminal } from "./panels";
 import { SEL } from "./selectors";
@@ -25,12 +25,12 @@ export async function addAndSwitchToProject(
       const addBtn = window.locator(SEL.projectSwitcher.addButton);
       await expect(addBtn).toBeVisible({ timeout: T_SHORT });
       await addBtn.click({ force: true });
-
-      await completeOnboarding(window, projectName);
     },
     { box: true }
   );
-  return await refreshActiveWindow(app, window);
+  const newWindow = await refreshActiveWindow(app, window);
+  await dismissTelemetryConsent(newWindow);
+  return newWindow;
 }
 
 /**

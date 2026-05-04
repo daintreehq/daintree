@@ -8,15 +8,15 @@ import {
   type AppContext,
 } from "../helpers/launch";
 import { createFixtureRepos } from "../helpers/fixtures";
-import { openAndOnboardProject, completeOnboarding } from "../helpers/project";
+import { openAndOnboardProject, dismissTelemetryConsent } from "../helpers/project";
 import { injectDelay, clearAllFaults } from "../helpers/ipcFaults";
 import { getGridPanelCount, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
 let ctx: AppContext;
-const PROJECT_A_NAME = "Race Project A";
-const PROJECT_B_NAME = "Race Project B";
+const PROJECT_A_NAME = "project-A";
+const PROJECT_B_NAME = "project-B";
 
 interface TerminalInfo {
   id: string;
@@ -100,10 +100,10 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     await expect(palette).toBeVisible({ timeout: T_MEDIUM });
     await ctx.window.locator(SEL.projectSwitcher.addButton).click({ force: true });
 
-    await completeOnboarding(ctx.window, PROJECT_B_NAME);
-
-    // Re-acquire window after onboarding may have created a new WebContentsView
+    // Re-acquire window after the WebContentsView swap, then dismiss the
+    // telemetry consent dialog if it appears.
     ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
+    await dismissTelemetryConsent(ctx.window);
 
     // Switch back to Project A as the starting baseline
     await switchToProject(ctx.window, PROJECT_A_NAME);

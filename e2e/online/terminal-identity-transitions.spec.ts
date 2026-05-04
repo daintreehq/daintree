@@ -405,17 +405,10 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
       const { app, window } = ctx;
       await mockOpenDialog(app, fixtureDir);
       await window.getByRole("button", { name: "Open Folder" }).click();
-
-      const heading = window.locator("h2", { hasText: "Set up your project" });
-      await expect(heading).toBeVisible({ timeout: 15_000 });
-      await window.getByRole("textbox", { name: "Project Name" }).fill("Identity Transitions");
-      await window.getByRole("button", { name: "Finish", exact: true }).click();
-      await expect(heading).not.toBeVisible({ timeout: 10_000 });
-      await dismissTelemetryConsent(window);
-      await diagnostics.captureSnapshot("project ready", window);
     });
 
     ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
+    await dismissTelemetryConsent(ctx.window);
     diagnostics?.attachPage(ctx.window);
     await diagnostics?.captureSnapshot("active project window refreshed", ctx.window);
 

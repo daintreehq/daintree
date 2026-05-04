@@ -111,8 +111,6 @@ interface ProjectState {
   error: string | null;
   gitInitDialogOpen: boolean;
   gitInitDirectoryPath: string | null;
-  onboardingWizardOpen: boolean;
-  onboardingProjectId: string | null;
   createFolderDialogOpen: boolean;
   cloneRepoDialogOpen: boolean;
 
@@ -140,8 +138,6 @@ interface ProjectState {
   openGitInitDialog: (directoryPath: string) => void;
   closeGitInitDialog: () => void;
   handleGitInitSuccess: () => Promise<void>;
-  closeOnboardingWizard: () => void;
-  openOnboardingWizard: (projectId: string) => void;
   openCreateFolderDialog: () => void;
   closeCreateFolderDialog: () => void;
   openCloneRepoDialog: () => void;
@@ -250,8 +246,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   isLoading: false,
   gitInitDialogOpen: false,
   gitInitDirectoryPath: null,
-  onboardingWizardOpen: false,
-  onboardingProjectId: null,
   createFolderDialogOpen: false,
   cloneRepoDialogOpen: false,
   error: null,
@@ -266,25 +260,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         return;
       }
 
-      const existingProjectIds = new Set(get().projects.map((p) => p.id));
       const newProject = await projectClient.add(resolvedPath);
-      const isNewProject = !existingProjectIds.has(newProject.id);
 
       await get().loadProjects();
-
-      if (isNewProject) {
-        // Open the onboarding wizard on the current view; the switch to the
-        // new project happens when the wizard finishes. Swapping views first
-        // strands the wizard in the deactivated (background-throttled) view,
-        // where React state updates stall and the Finish button stays disabled.
-        set({
-          isLoading: false,
-          onboardingWizardOpen: true,
-          onboardingProjectId: newProject.id,
-        });
-      } else {
-        await get().switchProject(newProject.id);
-      }
+      await get().switchProject(newProject.id);
     } catch (error) {
       logErrorWithContext(error, {
         operation: "add_project",
@@ -522,9 +501,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       if (get().currentProject?.id === id) {
         set({ currentProject: null });
       }
-      if (get().onboardingProjectId === id) {
-        set({ onboardingWizardOpen: false, onboardingProjectId: null });
-      }
       useUrlHistoryStore.getState().removeProjectHistory(id);
       set({ isLoading: false });
     } catch (error) {
@@ -679,14 +655,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     if (directoryPath) {
       await get().addProjectByPath(directoryPath);
     }
-  },
-
-  closeOnboardingWizard: () => {
-    set({ onboardingWizardOpen: false, onboardingProjectId: null });
-  },
-
-  openOnboardingWizard: (projectId) => {
-    set({ onboardingWizardOpen: true, onboardingProjectId: projectId });
   },
 
   openCreateFolderDialog: () => {

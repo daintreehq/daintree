@@ -8,7 +8,7 @@ import {
   type AppContext,
 } from "../helpers/launch";
 import { createFixtureRepos } from "../helpers/fixtures";
-import { openAndOnboardProject, completeOnboarding } from "../helpers/project";
+import { openAndOnboardProject, dismissTelemetryConsent } from "../helpers/project";
 import { selectExistingProjectAndRefresh, spawnTerminalAndVerify } from "../helpers/workflows";
 import { waitForTerminalText } from "../helpers/terminal";
 import { getGridPanelCount, getGridPanelIds, getPanelById } from "../helpers/panels";
@@ -16,9 +16,9 @@ import { SEL } from "../helpers/selectors";
 import { T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 import type { Locator, Page } from "@playwright/test";
 
-const PROJECT_A = "Cross Project A";
-const PROJECT_B = "Cross Project B";
-const PROJECT_C = "Cross Project C";
+const PROJECT_A = "project-A";
+const PROJECT_B = "project-B";
+const PROJECT_C = "project-C";
 
 let ctx: AppContext;
 let panelIdsA: string[] = [];
@@ -55,8 +55,8 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
     const palette = ctx.window.locator(SEL.projectSwitcher.palette);
     await expect(palette).toBeVisible({ timeout: T_MEDIUM });
     await ctx.window.locator(SEL.projectSwitcher.addButton).click({ force: true });
-    await completeOnboarding(ctx.window, PROJECT_B);
     ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
+    await dismissTelemetryConsent(ctx.window);
 
     // Switch back to A, then add Project C
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
@@ -66,8 +66,8 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
     const palette2 = ctx.window.locator(SEL.projectSwitcher.palette);
     await expect(palette2).toBeVisible({ timeout: T_MEDIUM });
     await ctx.window.locator(SEL.projectSwitcher.addButton).click({ force: true });
-    await completeOnboarding(ctx.window, PROJECT_C);
     ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
+    await dismissTelemetryConsent(ctx.window);
 
     // Return to A as baseline
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);

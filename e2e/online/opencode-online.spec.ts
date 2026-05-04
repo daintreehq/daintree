@@ -28,27 +28,18 @@ test.describe("OpenCode Online Flow", () => {
       ctx = await launchApp();
     });
 
-    await test.step("open folder and complete onboarding", async () => {
+    await test.step("open folder", async () => {
       const { app, window } = ctx;
 
       await mockOpenDialog(app, fixtureDir);
       await window.getByRole("button", { name: "Open Folder" }).click();
-
-      const heading = window.locator("h2", { hasText: "Set up your project" });
-      await expect(heading).toBeVisible({ timeout: 10_000 });
-
-      const nameInput = window.getByRole("textbox", { name: "Project Name" });
-      await nameInput.fill("OpenCode Online Test");
-
-      await window.getByRole("button", { name: "Finish", exact: true }).click();
-      await expect(heading).not.toBeVisible({ timeout: 5_000 });
-
-      await dismissTelemetryConsent(window);
     });
 
-    // Re-acquire window after onboarding — ProjectViewManager may have
-    // created a new WebContentsView for the project.
+    // Re-acquire window after open — ProjectViewManager creates a new
+    // WebContentsView for the project — then dismiss the telemetry consent
+    // dialog if it appears.
     ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
+    await dismissTelemetryConsent(ctx.window);
 
     await test.step("launch OpenCode agent", async () => {
       const { window } = ctx;
