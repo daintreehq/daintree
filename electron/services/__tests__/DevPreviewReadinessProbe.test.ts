@@ -1,7 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type IncomingMessage = { statusCode: number; resume: () => void };
+type RequestCallback = (res: IncomingMessage) => void;
+type MockRequest = {
+  on: (event: string, handler: (...args: unknown[]) => void) => MockRequest;
+  end: () => void;
+  destroy: () => void;
+};
+
 const { mockRequest } = vi.hoisted(() => ({
-  mockRequest: vi.fn(),
+  mockRequest:
+    vi.fn<
+      (url: string, options: Record<string, unknown>, callback: RequestCallback) => MockRequest
+    >(),
 }));
 
 vi.mock("node:http", () => ({
@@ -16,26 +27,30 @@ vi.mock("node:https", () => ({
 import { waitForServerReady, READINESS_TIMEOUT_MS } from "../DevPreviewReadinessProbe.js";
 
 function mockSuccessResponse() {
-  const req = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
-  mockRequest.mockImplementation((_url: string, _options: any, callback: (res: any) => void) => {
-    callback({ statusCode: 200, resume: vi.fn() });
-    return req;
-  });
+  const req: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
+  mockRequest.mockImplementation(
+    (_url: string, _options: Record<string, unknown>, callback: RequestCallback) => {
+      callback({ statusCode: 200, resume: vi.fn() });
+      return req;
+    }
+  );
   return req;
 }
 
 function mockConnectionRefused() {
-  const req = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
-  // error on next tick to fall through to poll interval
-  mockRequest.mockImplementation((_url: string, _options: any, _callback: any) => {
-    const r = { ...req };
-    // emit error after the request is set up
-    setTimeout(() => {
-      const errorHandler = r.on.mock.calls.find((c: any[]) => c[0] === "error")?.[1];
-      if (errorHandler) errorHandler(new Error("ECONNREFUSED"));
-    }, 10);
-    return r;
-  });
+  const req: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
+  mockRequest.mockImplementation(
+    (_url: string, _options: Record<string, unknown>, _callback: RequestCallback) => {
+      const r = { ...req };
+      setTimeout(() => {
+        const errorHandler = r.on.mock.calls.find((c: unknown[]) => c[0] === "error")?.[1] as
+          | ((err: Error) => void)
+          | undefined;
+        if (errorHandler) errorHandler(new Error("ECONNREFUSED"));
+      }, 10);
+      return r;
+    }
+  );
   return req;
 }
 

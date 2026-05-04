@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type {
+  DevPreviewEnsureRequest,
+  DevPreviewSessionRequest,
+  DevPreviewStopByPanelRequest,
+} from "../../../shared/types/ipc/devPreview.js";
 import {
   createSessionKey,
   sanitizeToken,
@@ -129,13 +134,15 @@ describe("validateEnsureRequest", () => {
   };
 
   it("throws for null", () => {
-    expect(() => validateEnsureRequest(null as any)).toThrow("Invalid dev preview request");
+    expect(() => validateEnsureRequest(null as unknown as DevPreviewEnsureRequest)).toThrow(
+      "Invalid dev preview request"
+    );
   });
 
   it("throws for missing panelId", () => {
-    expect(() => validateEnsureRequest({ ...valid, panelId: undefined } as any)).toThrow(
-      "panelId is required"
-    );
+    expect(() =>
+      validateEnsureRequest({ ...valid, panelId: undefined } as unknown as DevPreviewEnsureRequest)
+    ).toThrow("panelId is required");
   });
 
   it("throws for empty panelId", () => {
@@ -143,57 +150,66 @@ describe("validateEnsureRequest", () => {
   });
 
   it("throws for missing projectId", () => {
-    expect(() => validateEnsureRequest({ ...valid, projectId: undefined } as any)).toThrow(
-      "projectId is required"
-    );
+    expect(() =>
+      validateEnsureRequest({
+        ...valid,
+        projectId: undefined,
+      } as unknown as DevPreviewEnsureRequest)
+    ).toThrow("projectId is required");
   });
 
   it("throws for missing cwd", () => {
-    expect(() => validateEnsureRequest({ ...valid, cwd: undefined } as any)).toThrow(
-      "cwd is required"
-    );
+    expect(() =>
+      validateEnsureRequest({ ...valid, cwd: undefined } as unknown as DevPreviewEnsureRequest)
+    ).toThrow("cwd is required");
   });
 
   it("throws for non-string devCommand", () => {
-    expect(() => validateEnsureRequest({ ...valid, devCommand: 123 } as any)).toThrow(
-      "devCommand must be a string"
-    );
+    expect(() =>
+      validateEnsureRequest({ ...valid, devCommand: 123 } as unknown as DevPreviewEnsureRequest)
+    ).toThrow("devCommand must be a string");
   });
 
   it("throws for invalid worktreeId type", () => {
-    expect(() => validateEnsureRequest({ ...valid, worktreeId: 123 } as any)).toThrow(
-      "worktreeId must be a string if provided"
-    );
+    expect(() =>
+      validateEnsureRequest({ ...valid, worktreeId: 123 } as unknown as DevPreviewEnsureRequest)
+    ).toThrow("worktreeId must be a string if provided");
   });
 
   it("throws for non-plain env", () => {
-    expect(() => validateEnsureRequest({ ...valid, env: [] } as any)).toThrow(
-      "env must be a plain object if provided"
-    );
+    expect(() =>
+      validateEnsureRequest({ ...valid, env: [] } as unknown as DevPreviewEnsureRequest)
+    ).toThrow("env must be a plain object if provided");
   });
 
   it("throws for env with empty key", () => {
-    expect(() => validateEnsureRequest({ ...valid, env: { "": "x" } } as any)).toThrow(
-      "env contains invalid key"
-    );
+    expect(() =>
+      validateEnsureRequest({ ...valid, env: { "": "x" } } as unknown as DevPreviewEnsureRequest)
+    ).toThrow("env contains invalid key");
   });
 
   it("throws for env with constructor key", () => {
-    expect(() => validateEnsureRequest({ ...valid, env: { constructor: "x" } } as any)).toThrow(
-      "env contains invalid key"
-    );
+    expect(() =>
+      validateEnsureRequest({
+        ...valid,
+        env: { constructor: "x" },
+      } as unknown as DevPreviewEnsureRequest)
+    ).toThrow("env contains invalid key");
   });
 
   it("throws for env with non-string value", () => {
-    expect(() => validateEnsureRequest({ ...valid, env: { FOO: 123 } } as any)).toThrow(
-      "env values must be strings"
-    );
+    expect(() =>
+      validateEnsureRequest({ ...valid, env: { FOO: 123 } } as unknown as DevPreviewEnsureRequest)
+    ).toThrow("env values must be strings");
   });
 
   it("throws for non-boolean turbopackEnabled", () => {
-    expect(() => validateEnsureRequest({ ...valid, turbopackEnabled: "yes" } as any)).toThrow(
-      "turbopackEnabled must be a boolean if provided"
-    );
+    expect(() =>
+      validateEnsureRequest({
+        ...valid,
+        turbopackEnabled: "yes",
+      } as unknown as DevPreviewEnsureRequest)
+    ).toThrow("turbopackEnabled must be a boolean if provided");
   });
 
   it("accepts a valid request", () => {
@@ -219,21 +235,27 @@ describe("validateSessionRequest", () => {
   };
 
   it("throws for null", () => {
-    expect(() => validateSessionRequest(null as any)).toThrow(
+    expect(() => validateSessionRequest(null as unknown as DevPreviewSessionRequest)).toThrow(
       "Invalid dev preview session request"
     );
   });
 
   it("throws for missing panelId", () => {
-    expect(() => validateSessionRequest({ ...valid, panelId: undefined } as any)).toThrow(
-      "panelId is required"
-    );
+    expect(() =>
+      validateSessionRequest({
+        ...valid,
+        panelId: undefined,
+      } as unknown as DevPreviewSessionRequest)
+    ).toThrow("panelId is required");
   });
 
   it("throws for missing projectId", () => {
-    expect(() => validateSessionRequest({ ...valid, projectId: undefined } as any)).toThrow(
-      "projectId is required"
-    );
+    expect(() =>
+      validateSessionRequest({
+        ...valid,
+        projectId: undefined,
+      } as unknown as DevPreviewSessionRequest)
+    ).toThrow("projectId is required");
   });
 
   it("accepts a valid request", () => {
@@ -247,15 +269,18 @@ describe("validateStopByPanelRequest", () => {
   };
 
   it("throws for null", () => {
-    expect(() => validateStopByPanelRequest(null as any)).toThrow(
-      "Invalid dev preview stop-by-panel request"
-    );
+    expect(() =>
+      validateStopByPanelRequest(null as unknown as DevPreviewStopByPanelRequest)
+    ).toThrow("Invalid dev preview stop-by-panel request");
   });
 
   it("throws for missing panelId", () => {
-    expect(() => validateStopByPanelRequest({ ...valid, panelId: undefined } as any)).toThrow(
-      "panelId is required"
-    );
+    expect(() =>
+      validateStopByPanelRequest({
+        ...valid,
+        panelId: undefined,
+      } as unknown as DevPreviewStopByPanelRequest)
+    ).toThrow("panelId is required");
   });
 
   it("accepts a valid request", () => {
