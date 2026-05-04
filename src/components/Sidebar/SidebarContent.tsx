@@ -1,10 +1,9 @@
-import React, {
+import {
   Suspense,
   lazy,
   useCallback,
   useDeferredValue,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -22,26 +21,15 @@ import {
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Kbd } from "@/components/ui/Kbd";
-import {
-  WorktreeCard,
-  type WorktreeCardProps,
-  WorktreeSidebarSearchBar,
-  QuickStateFilterBar,
-} from "@/components/Worktree";
+import { WorktreeSidebarSearchBar, QuickStateFilterBar } from "@/components/Worktree";
 import { BulkCreateWorktreeDialog } from "@/components/GitHub/BulkCreateWorktreeDialog";
 import { FleetPickerPalette } from "@/components/Fleet/FleetPickerPalette";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { WorktreeCardErrorFallback } from "@/components/Worktree/WorktreeCardErrorFallback";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import {
-  SortableWorktreeCard,
-  getWorktreeSortDragId,
-} from "@/components/DragDrop/SortableWorktreeCard";
-import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
+import { getWorktreeSortDragId } from "@/components/DragDrop/SortableWorktreeCard";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useShallow } from "zustand/react/shallow";
-import type { RecipeTerminal } from "@/types";
 import { systemClient } from "@/clients";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import {
@@ -60,10 +48,10 @@ import { computeChipState } from "@/components/Worktree/utils/computeChipState";
 import { parseExactNumber } from "@/lib/parseExactNumber";
 import type { WorktreeState } from "@/types";
 import { actionService } from "@/services/ActionService";
-import { useWorktreeStore } from "@/hooks/useWorktreeStore";
-import { useRecipeStore } from "@/store/recipeStore";
-import type { WorktreeActions } from "@/hooks/useWorktreeActions";
-import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
+import { SidebarWorktreeRow } from "./SidebarWorktreeRow";
+import { StaticWorktreeRow } from "./StaticWorktreeRow";
+import { useScrollIndicator } from "./useScrollIndicator";
+import { useRecipeDialogState } from "./useRecipeDialogState";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
 import { RecipeManager } from "@/components/TerminalRecipe/RecipeManager";
 import { isAgentTerminal } from "@/utils/terminalType";
@@ -76,267 +64,6 @@ export function preloadNewWorktreeDialog() {
 const LazyNewWorktreeDialog = lazy(() =>
   preloadNewWorktreeDialog().then((m) => ({ default: m.NewWorktreeDialog }))
 );
-
-interface SidebarWorktreeRowProps {
-  worktreeId: string;
-  activeWorktreeId: string | null;
-  focusedWorktreeId: string | null;
-  totalWorktreeCount: number;
-  selectWorktree: (id: string) => void;
-  worktreeActions: WorktreeActions;
-  availability: UseAgentLauncherReturn["availability"];
-  agentSettings: UseAgentLauncherReturn["agentSettings"];
-  homeDir: string | undefined;
-  dragStartOrder: string[];
-  isSortDisabled: boolean;
-  isPinned: boolean;
-  rowIndex: number;
-}
-
-const SidebarWorktreeRow = React.memo(function SidebarWorktreeRow({
-  worktreeId,
-  activeWorktreeId,
-  focusedWorktreeId,
-  totalWorktreeCount,
-  selectWorktree,
-  worktreeActions,
-  availability,
-  agentSettings,
-  homeDir,
-  dragStartOrder,
-  isSortDisabled,
-  isPinned,
-  rowIndex,
-}: SidebarWorktreeRowProps) {
-  const worktreeSnap = useWorktreeStore((state) => state.worktrees.get(worktreeId));
-  const worktree = useMemo(
-    () =>
-      worktreeSnap
-        ? ({
-            ...worktreeSnap,
-            worktreeChanges: worktreeSnap.worktreeChanges ?? null,
-            lastActivityTimestamp: worktreeSnap.lastActivityTimestamp ?? null,
-          } as WorktreeState)
-        : undefined,
-    [worktreeSnap]
-  );
-
-  const onSelect = useCallback(() => selectWorktree(worktreeId), [selectWorktree, worktreeId]);
-  const onCopyTree = useCallback(
-    () => worktree && worktreeActions.handleCopyTree(worktree),
-    [worktree, worktreeActions]
-  );
-  const onOpenEditor = useCallback(
-    () => worktree && worktreeActions.handleOpenEditor(worktree),
-    [worktree, worktreeActions]
-  );
-  const onSaveLayout = useCallback(
-    () => worktree && worktreeActions.handleSaveLayout(worktree),
-    [worktree, worktreeActions]
-  );
-  const onLaunchAgent = useCallback(
-    (agentId: string) => worktreeActions.handleLaunchAgent(worktreeId, agentId),
-    [worktreeActions, worktreeId]
-  );
-
-  const showDragHandle = !isSortDisabled && !isPinned;
-
-  // Move up/down menu items mirror the drag pathway and provide a single-pointer
-  // alternative for users who can't perform the drag gesture (WCAG 2.5.7). They
-  // operate on the visible (filtered) order — `applyManualWorktreeReorder`
-  // merges that subset back into `manualOrder` so positions of filter-hidden
-  // worktrees are preserved, and `setOrderBy("manual")` matches the auto-switch
-  // performed at drag end.
-  const handleMoveBy = useCallback(
-    (delta: -1 | 1) => {
-      const targetIndex = rowIndex + delta;
-      if (targetIndex < 0 || targetIndex >= dragStartOrder.length) return;
-      const filterStore = useWorktreeFilterStore.getState();
-      const merged = applyManualWorktreeReorder(
-        filterStore.manualOrder,
-        dragStartOrder,
-        rowIndex,
-        targetIndex
-      );
-      filterStore.setManualOrder(merged);
-      filterStore.setOrderBy("manual");
-    },
-    [dragStartOrder, rowIndex]
-  );
-  const onMoveUp = useCallback(() => handleMoveBy(-1), [handleMoveBy]);
-  const onMoveDown = useCallback(() => handleMoveBy(1), [handleMoveBy]);
-
-  if (!worktree) return null;
-
-  const isActive = worktreeId === activeWorktreeId;
-  const isFocused = worktreeId === focusedWorktreeId;
-  const isSingleWorktree = totalWorktreeCount === 1;
-  const moveUpHandler = showDragHandle ? onMoveUp : undefined;
-  const moveDownHandler = showDragHandle ? onMoveDown : undefined;
-  const canMoveUp = showDragHandle && rowIndex > 0;
-  const canMoveDown = showDragHandle && rowIndex < dragStartOrder.length - 1;
-
-  if (showDragHandle) {
-    return (
-      <SortableWorktreeCard
-        worktreeId={worktreeId}
-        dragStartOrder={dragStartOrder}
-        disabled={isSortDisabled || isPinned}
-      >
-        {({ isDraggingSort, dragHandleListeners, dragHandleActivatorRef }) => (
-          <ErrorBoundary
-            variant="component"
-            componentName="WorktreeCard"
-            fallback={WorktreeCardErrorFallback}
-            resetKeys={[worktreeId]}
-            context={{ worktreeId }}
-          >
-            <WorktreeCard
-              worktree={worktree}
-              isActive={isActive}
-              isFocused={isFocused}
-              isSingleWorktree={isSingleWorktree}
-              onSelect={onSelect}
-              onCopyTree={onCopyTree}
-              onOpenEditor={onOpenEditor}
-              onSaveLayout={onSaveLayout}
-              onLaunchAgent={onLaunchAgent}
-              agentAvailability={availability}
-              agentSettings={agentSettings}
-              homeDir={homeDir}
-              dragHandleListeners={dragHandleListeners}
-              dragHandleActivatorRef={dragHandleActivatorRef}
-              isDraggingSort={isDraggingSort}
-              onMoveUp={moveUpHandler}
-              onMoveDown={moveDownHandler}
-              canMoveUp={canMoveUp}
-              canMoveDown={canMoveDown}
-            />
-          </ErrorBoundary>
-        )}
-      </SortableWorktreeCard>
-    );
-  }
-
-  return (
-    <SortableWorktreeCard worktreeId={worktreeId} dragStartOrder={dragStartOrder} disabled={true}>
-      {({ isDraggingSort }) => (
-        <ErrorBoundary
-          variant="component"
-          componentName="WorktreeCard"
-          fallback={WorktreeCardErrorFallback}
-          resetKeys={[worktreeId]}
-          context={{ worktreeId }}
-        >
-          <WorktreeCard
-            worktree={worktree}
-            isActive={isActive}
-            isFocused={isFocused}
-            isSingleWorktree={isSingleWorktree}
-            onSelect={onSelect}
-            onCopyTree={onCopyTree}
-            onOpenEditor={onOpenEditor}
-            onSaveLayout={onSaveLayout}
-            onLaunchAgent={onLaunchAgent}
-            agentAvailability={availability}
-            agentSettings={agentSettings}
-            homeDir={homeDir}
-            isDraggingSort={isDraggingSort}
-          />
-        </ErrorBoundary>
-      )}
-    </SortableWorktreeCard>
-  );
-});
-
-interface StaticWorktreeRowProps {
-  worktreeId: string;
-  activeWorktreeId: string | null;
-  focusedWorktreeId: string | null;
-  totalWorktreeCount: number;
-  selectWorktree: (id: string) => void;
-  worktreeActions: WorktreeActions;
-  availability: UseAgentLauncherReturn["availability"];
-  agentSettings: UseAgentLauncherReturn["agentSettings"];
-  homeDir: string | undefined;
-  aggregateCounts?: WorktreeCardProps["aggregateCounts"];
-}
-
-const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
-  worktreeId,
-  activeWorktreeId,
-  focusedWorktreeId,
-  totalWorktreeCount,
-  selectWorktree,
-  worktreeActions,
-  availability,
-  agentSettings,
-  homeDir,
-  aggregateCounts,
-}: StaticWorktreeRowProps) {
-  const worktreeSnap = useWorktreeStore((state) => state.worktrees.get(worktreeId));
-  const worktree = useMemo(
-    () =>
-      worktreeSnap
-        ? ({
-            ...worktreeSnap,
-            worktreeChanges: worktreeSnap.worktreeChanges ?? null,
-            lastActivityTimestamp: worktreeSnap.lastActivityTimestamp ?? null,
-          } as WorktreeState)
-        : undefined,
-    [worktreeSnap]
-  );
-
-  const onSelect = useCallback(() => selectWorktree(worktreeId), [selectWorktree, worktreeId]);
-  const onCopyTree = useCallback(
-    () => worktree && worktreeActions.handleCopyTree(worktree),
-    [worktree, worktreeActions]
-  );
-  const onOpenEditor = useCallback(
-    () => worktree && worktreeActions.handleOpenEditor(worktree),
-    [worktree, worktreeActions]
-  );
-  const onSaveLayout = useCallback(
-    () => worktree && worktreeActions.handleSaveLayout(worktree),
-    [worktree, worktreeActions]
-  );
-  const onLaunchAgent = useCallback(
-    (agentId: string) => worktreeActions.handleLaunchAgent(worktreeId, agentId),
-    [worktreeActions, worktreeId]
-  );
-
-  if (!worktree) return null;
-
-  return (
-    <div role="row" data-worktree-row={worktreeId} tabIndex={-1}>
-      <div role="gridcell">
-        <ErrorBoundary
-          variant="component"
-          componentName="WorktreeCard"
-          fallback={WorktreeCardErrorFallback}
-          resetKeys={[worktreeId]}
-          context={{ worktreeId }}
-        >
-          <WorktreeCard
-            worktree={worktree}
-            isActive={worktreeId === activeWorktreeId}
-            isFocused={worktreeId === focusedWorktreeId}
-            isSingleWorktree={totalWorktreeCount === 1}
-            aggregateCounts={aggregateCounts}
-            onSelect={onSelect}
-            onCopyTree={onCopyTree}
-            onOpenEditor={onOpenEditor}
-            onSaveLayout={onSaveLayout}
-            onLaunchAgent={onLaunchAgent}
-            agentAvailability={availability}
-            agentSettings={agentSettings}
-            homeDir={homeDir}
-          />
-        </ErrorBoundary>
-      </div>
-    </div>
-  );
-});
 
 interface SidebarContentProps {
   onOpenOverview: () => void;
@@ -428,26 +155,22 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const panelIds = usePanelStore(useShallow((state) => state.panelIds));
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [recipeManagerEdit, setRecipeManagerEdit] = useState<
-    import("@/types").TerminalRecipe | undefined
-  >(undefined);
   const scrollContentRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const [hiddenAbove, setHiddenAbove] = useState(0);
-  const [hiddenBelow, setHiddenBelow] = useState(0);
 
-  const [isRecipeEditorOpen, setIsRecipeEditorOpen] = useState(false);
-  const [recipeEditorWorktreeId, setRecipeEditorWorktreeId] = useState<string | undefined>(
-    undefined
-  );
-  const [recipeEditorInitialTerminals, setRecipeEditorInitialTerminals] = useState<
-    RecipeTerminal[] | undefined
-  >(undefined);
-  const [recipeEditorDefaultScope, setRecipeEditorDefaultScope] = useState<
-    "global" | "project" | undefined
-  >(undefined);
-
-  const [isRecipeManagerOpen, setIsRecipeManagerOpen] = useState(false);
+  const {
+    isRecipeEditorOpen,
+    recipeEditorWorktreeId,
+    recipeEditorInitialTerminals,
+    recipeEditorDefaultScope,
+    recipeManagerEdit,
+    isRecipeManagerOpen,
+    handleOpenRecipeEditor,
+    handleCloseRecipeEditor,
+    handleCloseRecipeManager,
+    handleRecipeManagerEdit,
+    handleRecipeManagerCreate,
+  } = useRecipeDialogState();
 
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
 
@@ -703,173 +426,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     quickStateFilter,
   ]);
 
-  const updateScrollIndicators = useCallback(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    const { scrollTop, scrollHeight, clientHeight } = container;
-    const totalItems = filteredWorktrees.length;
-
-    if (scrollHeight <= clientHeight + 1) {
-      setHiddenAbove(0);
-      setHiddenBelow(0);
-      return;
-    }
-
-    const scrollableHeight = scrollHeight - clientHeight;
-    if (scrollableHeight <= 0) {
-      setHiddenAbove(0);
-      setHiddenBelow(0);
-      return;
-    }
-
-    const scrollFraction = Math.min(1, Math.max(0, scrollTop / scrollableHeight));
-    const visibleFraction = clientHeight / scrollHeight;
-    const approxVisible = Math.max(1, Math.round(totalItems * visibleFraction));
-    const totalHidden = Math.max(0, totalItems - approxVisible);
-
-    const above = Math.round(totalHidden * scrollFraction);
-    const below = totalHidden - above;
-
-    setHiddenAbove(above);
-    setHiddenBelow(below);
-  }, [filteredWorktrees.length]);
-
-  useLayoutEffect(() => {
-    updateScrollIndicators();
-  }, [updateScrollIndicators, filteredWorktrees, groupedSections]);
-
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    const content = scrollContentRef.current;
-    if (!container) return;
-
-    let rafId: number | null = null;
-    const handleScroll = () => {
-      if (rafId !== null) return;
-      rafId = requestAnimationFrame(() => {
-        updateScrollIndicators();
-        rafId = null;
-      });
-    };
-
-    container.addEventListener("scroll", handleScroll, { passive: true });
-    const resizeObserver = new ResizeObserver(() => updateScrollIndicators());
-    resizeObserver.observe(container);
-    if (content) resizeObserver.observe(content);
-
-    return () => {
-      container.removeEventListener("scroll", handleScroll);
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      resizeObserver.disconnect();
-    };
-  }, [updateScrollIndicators]);
-
-  const scrollToTop = useCallback(() => {
-    scrollContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-  }, []);
-
-  const scrollToBottom = useCallback(() => {
-    const container = scrollContainerRef.current;
-    if (container) {
-      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-    }
-  }, []);
-
-  const handleOpenRecipeEditor = useCallback(
-    (worktreeId: string, initialTerminals?: RecipeTerminal[]) => {
-      setRecipeEditorWorktreeId(worktreeId);
-      setRecipeEditorInitialTerminals(initialTerminals);
-      setIsRecipeEditorOpen(true);
-    },
-    []
-  );
-
-  useEffect(() => {
-    const handleOpenRecipeEditorEvent = (event: Event) => {
-      if (!(event instanceof CustomEvent)) return;
-      const detail = event.detail as unknown;
-      if (!detail) return;
-      const d = detail as { worktreeId?: unknown; recipeId?: unknown; initialTerminals?: unknown };
-
-      // If recipeId is provided, open the editor for that recipe
-      if (typeof d.recipeId === "string") {
-        const recipe = useRecipeStore.getState().getRecipeById(d.recipeId);
-        if (recipe) {
-          setIsRecipeManagerOpen(false);
-          setRecipeEditorWorktreeId(recipe.worktreeId);
-          setRecipeEditorDefaultScope(recipe.projectId === undefined ? "global" : "project");
-          setRecipeEditorInitialTerminals(undefined);
-          setRecipeManagerEdit(recipe);
-          setIsRecipeEditorOpen(true);
-          return;
-        }
-      }
-
-      if (typeof d.worktreeId !== "string") return;
-      const worktreeId = d.worktreeId;
-      const initialTerminals = Array.isArray(d.initialTerminals)
-        ? (d.initialTerminals as RecipeTerminal[])
-        : undefined;
-      handleOpenRecipeEditor(worktreeId, initialTerminals);
-    };
-
-    const controller = new AbortController();
-    window.addEventListener("daintree:open-recipe-editor", handleOpenRecipeEditorEvent, {
-      signal: controller.signal,
-    });
-    return () => controller.abort();
-  }, [handleOpenRecipeEditor]);
-
-  useEffect(() => {
-    const handleOpenRecipeManagerEvent = () => {
-      setIsRecipeManagerOpen(true);
-    };
-    const controller = new AbortController();
-    window.addEventListener("daintree:open-recipe-manager", handleOpenRecipeManagerEvent, {
-      signal: controller.signal,
-    });
-    return () => controller.abort();
-  }, []);
-
-  const handleCloseRecipeManager = useCallback(() => {
-    setIsRecipeManagerOpen(false);
-  }, []);
-
-  const handleRecipeManagerEdit = useCallback((recipe: import("@/types").TerminalRecipe) => {
-    setIsRecipeManagerOpen(false);
-    setRecipeEditorWorktreeId(recipe.worktreeId);
-    setRecipeEditorDefaultScope(recipe.projectId === undefined ? "global" : "project");
-    setRecipeEditorInitialTerminals(undefined);
-    // Small delay to let the manager dialog close first
-    setTimeout(() => {
-      setIsRecipeEditorOpen(true);
-    }, 100);
-    setRecipeManagerEdit(recipe);
-  }, []);
-
-  const handleRecipeManagerCreate = useCallback((scope: "global" | "project") => {
-    setIsRecipeManagerOpen(false);
-    setRecipeEditorDefaultScope(scope);
-    setRecipeEditorWorktreeId(undefined);
-    setRecipeEditorInitialTerminals(undefined);
-    setRecipeManagerEdit(undefined);
-    setTimeout(() => {
-      setIsRecipeEditorOpen(true);
-    }, 100);
-  }, []);
+  const { hiddenAbove, hiddenBelow, scrollToTop, scrollToBottom } = useScrollIndicator({
+    scrollContainerRef,
+    scrollContentRef,
+    itemCount: filteredWorktrees.length,
+  });
 
   const worktreeActions = useWorktreeActions({
     onOpenRecipeEditor: handleOpenRecipeEditor,
   });
-
-  const handleCloseRecipeEditor = useCallback(() => {
-    setIsRecipeEditorOpen(false);
-    setRecipeEditorWorktreeId(undefined);
-    setRecipeEditorInitialTerminals(undefined);
-    setRecipeEditorDefaultScope(undefined);
-    setRecipeManagerEdit(undefined);
-  }, []);
 
   const sortableIds = useMemo(
     () => filteredWorktrees.map((w) => getWorktreeSortDragId(w.id)),
