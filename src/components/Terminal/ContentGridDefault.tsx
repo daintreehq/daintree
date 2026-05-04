@@ -45,7 +45,7 @@ export function ContentGridDefault({
       <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
       <div className="relative flex-1 min-h-0">
         <SortableContext id="grid-container" items={ctx.panelIds} strategy={rectSortingStrategy}>
-          <GridShell ctx={ctx} showTerminalCountWarning={false}>
+          <GridShell ctx={ctx} showTerminalCountWarning={false} className="relative h-full min-h-0">
             <div
               ref={ctx.combinedGridRef}
               className={cn(

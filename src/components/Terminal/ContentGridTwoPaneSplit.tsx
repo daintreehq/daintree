@@ -36,7 +36,7 @@ export function ContentGridTwoPaneSplit({
         <div
           ref={ctx.combinedGridRef}
           className={cn(
-            "relative flex-1 min-h-0",
+            "relative h-full min-h-0",
             ctx.isOver && "ring-2 ring-daintree-accent/30 ring-inset"
           )}
         >
