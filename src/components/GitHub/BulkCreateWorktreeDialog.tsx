@@ -16,9 +16,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { worktreeClient, githubClient, agentSettingsClient, systemClient } from "@/clients";
-import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { resolveIssuePrequeries } from "./bulkCreatePrequery";
-import { generateBranchSlug } from "@/utils/textParsing";
 import { notify } from "@/lib/notify";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
@@ -30,9 +28,23 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useRecipePicker, CLONE_LAYOUT_ID } from "@/components/Worktree/hooks/useRecipePicker";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
+import { spawnPanelsFromRecipe } from "@/components/Worktree/panelSpawning";
+import { progressReducer, getStageLabel } from "./bulkCreateReducer";
+import {
+  planIssueWorktrees,
+  planPRWorktrees,
+  isTransientError,
+  normalizeError,
+  delay,
+  nextBackoffDelay,
+  MAX_AUTO_RETRIES,
+  QUEUE_CONCURRENCY,
+  BACKOFF_BASE_MS,
+  VERIFICATION_SETTLE_MS,
+} from "./bulkCreateUtils";
+import type { PlannedWorktree } from "./bulkCreateUtils";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 import type { BranchInfo } from "@shared/types";
-import { spawnPanelsFromRecipe } from "@/components/Worktree/panelSpawning";
 
 type BulkCreateMode = "issue" | "pr";
 
@@ -43,331 +55,6 @@ interface BulkCreateWorktreeDialogProps {
   selectedIssues: GitHubIssue[];
   selectedPRs: GitHubPR[];
   onComplete: () => void;
-}
-
-type ItemStage =
-  | "pending"
-  | "worktree-creating"
-  | "worktree-created"
-  | "terminals-spawning"
-  | "terminals-error"
-  | "worktree-error"
-  | "assigning"
-  | "verifying"
-  | "succeeded"
-  | "failed";
-
-interface ItemStatus {
-  stage: ItemStage;
-  attempt: number;
-  error?: string;
-  worktreeId?: string;
-  worktreePath?: string;
-  resolvedBranch?: string;
-  failedTerminalIndices?: number[];
-  spawnedTerminalIds?: string[];
-  failedStep?: "worktree" | "terminals" | "verification";
-}
-
-interface ProgressState {
-  phase: "idle" | "executing" | "done";
-  total: number;
-  items: Map<number, ItemStatus>;
-}
-
-type ProgressAction =
-  | { type: "START"; issueNumbers: number[] }
-  | { type: "ITEM_WORKTREE_CREATING"; issueNumber: number; attempt: number }
-  | {
-      type: "ITEM_WORKTREE_CREATED";
-      issueNumber: number;
-      worktreeId: string;
-      worktreePath: string;
-      branch: string;
-    }
-  | { type: "ITEM_TERMINALS_SPAWNING"; issueNumber: number }
-  | {
-      type: "ITEM_TERMINALS_RESULT";
-      issueNumber: number;
-      spawnedTerminalIds: string[];
-      failedTerminalIndices: number[];
-    }
-  | { type: "ITEM_ASSIGNING"; issueNumber: number }
-  | { type: "ITEM_VERIFYING"; issueNumber: number }
-  | { type: "ITEM_SUCCEEDED"; issueNumber: number }
-  | {
-      type: "ITEM_FAILED";
-      issueNumber: number;
-      error: string;
-      attempts: number;
-      failedStep?: "worktree" | "terminals" | "verification";
-    }
-  | { type: "DONE" }
-  | { type: "RETRY_FAILED" }
-  | { type: "RESET" };
-
-function progressReducer(state: ProgressState, action: ProgressAction): ProgressState {
-  switch (action.type) {
-    case "START": {
-      const items = new Map<number, ItemStatus>();
-      for (const n of action.issueNumbers) {
-        const existing = state.items.get(n);
-        items.set(n, existing?.stage === "succeeded" ? existing : { stage: "pending", attempt: 0 });
-      }
-      return { phase: "executing", total: action.issueNumbers.length, items };
-    }
-    case "ITEM_WORKTREE_CREATING": {
-      const items = new Map(state.items);
-      const prev = items.get(action.issueNumber);
-      items.set(action.issueNumber, {
-        ...prev,
-        stage: "worktree-creating",
-        attempt: action.attempt,
-      });
-      return { ...state, items };
-    }
-    case "ITEM_WORKTREE_CREATED": {
-      const items = new Map(state.items);
-      const prev = items.get(action.issueNumber);
-      items.set(action.issueNumber, {
-        ...prev,
-        stage: "worktree-created",
-        attempt: prev?.attempt ?? 1,
-        worktreeId: action.worktreeId,
-        worktreePath: action.worktreePath,
-        resolvedBranch: action.branch,
-      });
-      return { ...state, items };
-    }
-    case "ITEM_TERMINALS_SPAWNING": {
-      const items = new Map(state.items);
-      const prev = items.get(action.issueNumber);
-      items.set(action.issueNumber, {
-        ...prev,
-        stage: "terminals-spawning",
-        attempt: prev?.attempt ?? 1,
-      });
-      return { ...state, items };
-    }
-    case "ITEM_TERMINALS_RESULT": {
-      const items = new Map(state.items);
-      const prev = items.get(action.issueNumber);
-      if (action.failedTerminalIndices.length > 0) {
-        items.set(action.issueNumber, {
-          ...prev,
-          stage: "terminals-error",
-          attempt: prev?.attempt ?? 1,
-          failedTerminalIndices: action.failedTerminalIndices,
-          spawnedTerminalIds: [...(prev?.spawnedTerminalIds ?? []), ...action.spawnedTerminalIds],
-          error: `${action.failedTerminalIndices.length} terminal(s) failed to spawn`,
-        });
-      } else {
-        items.set(action.issueNumber, {
-          ...prev,
-          stage: "worktree-created",
-          attempt: prev?.attempt ?? 1,
-          spawnedTerminalIds: [...(prev?.spawnedTerminalIds ?? []), ...action.spawnedTerminalIds],
-          failedTerminalIndices: [],
-        });
-      }
-      return { ...state, items };
-    }
-    case "ITEM_ASSIGNING": {
-      const items = new Map(state.items);
-      const prev = items.get(action.issueNumber);
-      items.set(action.issueNumber, { ...prev, stage: "assigning", attempt: prev?.attempt ?? 1 });
-      return { ...state, items };
-    }
-    case "ITEM_VERIFYING": {
-      const items = new Map(state.items);
-      const prev = items.get(action.issueNumber);
-      items.set(action.issueNumber, { ...prev, stage: "verifying", attempt: prev?.attempt ?? 1 });
-      return { ...state, items };
-    }
-    case "ITEM_SUCCEEDED": {
-      const items = new Map(state.items);
-      const prev = items.get(action.issueNumber);
-      items.set(action.issueNumber, { ...prev, stage: "succeeded", attempt: prev?.attempt ?? 1 });
-      return { ...state, items };
-    }
-    case "ITEM_FAILED": {
-      const items = new Map(state.items);
-      const prev = items.get(action.issueNumber);
-      items.set(action.issueNumber, {
-        ...prev,
-        stage: "failed",
-        error: action.error,
-        attempt: action.attempts,
-        failedStep: action.failedStep,
-      });
-      return { ...state, items };
-    }
-    case "DONE":
-      return { ...state, phase: "done" };
-    case "RETRY_FAILED": {
-      const items = new Map(state.items);
-      let retryCount = 0;
-      for (const [key, val] of items) {
-        if (
-          val.stage === "failed" ||
-          val.stage === "terminals-error" ||
-          val.stage === "worktree-error"
-        ) {
-          items.set(key, { ...val, stage: "pending", error: undefined });
-          retryCount++;
-        }
-      }
-      return { ...state, phase: "executing", total: retryCount, items };
-    }
-    case "RESET":
-      return { phase: "idle", total: 0, items: new Map() };
-  }
-}
-
-const MAX_AUTO_RETRIES = 2;
-// Cap in-flight creation requests at a small parallel fan-out. The backend
-// leaky-bucket rate limiter remains the primary throttle — pacing at the
-// producer side would only create a conflicting secondary rate limiter and
-// re-introduce the feast/famine burst pattern (see #5098). Raised from 2 to
-// 3 now that `--no-track` (see #5163, PR #5165) avoids `install_branch_config`
-// and its `.git/config.lock` write, eliminating the contention that
-// previously justified the tighter cap (see #3807).
-const QUEUE_CONCURRENCY = 3;
-const BACKOFF_BASE_MS = 3000;
-const BACKOFF_CAP_MS = 30000;
-const VERIFICATION_SETTLE_MS = 800;
-
-const TRANSIENT_ERROR_RE =
-  /\.lock['"]?:.*(?:File exists|exists)|Another git process|Resource temporarily unavailable|cannot lock ref|could not lock config file|Rate limit exceeded|Spawn queue full|ETIMEDOUT|ECONNRESET|ECONNREFUSED/i;
-
-function isTransientError(message: string, code?: string): boolean {
-  if (code === "VALIDATION_ERROR" || code === "NOT_FOUND") return false;
-  return TRANSIENT_ERROR_RE.test(message);
-}
-
-function normalizeError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  return String(error);
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function nextBackoffDelay(prevDelay: number): number {
-  const min = BACKOFF_BASE_MS;
-  const max = prevDelay * 3;
-  return Math.min(BACKOFF_CAP_MS, min + Math.random() * (max - min));
-}
-
-interface PlannedWorktree {
-  item: GitHubIssue | GitHubPR;
-  mode: BulkCreateMode;
-  branchName: string;
-  prefix: string;
-  skipped: boolean;
-  skipReason?: string;
-  headRefName?: string;
-}
-
-function planIssueWorktrees(
-  issues: GitHubIssue[],
-  existingIssueNumbers: Set<number>
-): PlannedWorktree[] {
-  return issues.map((issue) => {
-    if (issue.state !== "OPEN") {
-      return {
-        item: issue,
-        mode: "issue",
-        branchName: "",
-        prefix: "",
-        skipped: true,
-        skipReason: "Closed",
-      };
-    }
-    if (existingIssueNumbers.has(issue.number)) {
-      return {
-        item: issue,
-        mode: "issue",
-        branchName: "",
-        prefix: "",
-        skipped: true,
-        skipReason: "Has worktree",
-      };
-    }
-
-    const prefix = detectPrefixFromIssue(issue) ?? "feature";
-    const slug = generateBranchSlug(issue.title);
-    const issuePrefix = `issue-${issue.number}-`;
-    const branchName = buildBranchName(prefix, `${issuePrefix}${slug || "worktree"}`);
-
-    return { item: issue, mode: "issue", branchName, prefix, skipped: false };
-  });
-}
-
-function planPRWorktrees(prs: GitHubPR[], existingPRNumbers: Set<number>): PlannedWorktree[] {
-  return prs.map((pr) => {
-    if (pr.state !== "OPEN") {
-      return {
-        item: pr,
-        mode: "pr",
-        branchName: "",
-        prefix: "",
-        skipped: true,
-        skipReason: pr.state === "MERGED" ? "Merged" : "Closed",
-      };
-    }
-    if (!pr.headRefName) {
-      return {
-        item: pr,
-        mode: "pr",
-        branchName: "",
-        prefix: "",
-        skipped: true,
-        skipReason: "No branch info",
-      };
-    }
-    if (existingPRNumbers.has(pr.number)) {
-      return {
-        item: pr,
-        mode: "pr",
-        branchName: "",
-        prefix: "",
-        skipped: true,
-        skipReason: "Has worktree",
-      };
-    }
-
-    return {
-      item: pr,
-      mode: "pr",
-      branchName: pr.headRefName,
-      prefix: "",
-      skipped: false,
-      headRefName: pr.headRefName,
-    };
-  });
-}
-
-function getStageLabel(status: ItemStatus | undefined): string | null {
-  if (!status) return null;
-  switch (status.stage) {
-    case "worktree-creating":
-      return "Creating worktree\u2026";
-    case "terminals-spawning":
-      return "Spawning terminals\u2026";
-    case "assigning":
-      return "Assigning issue\u2026";
-    case "verifying":
-      return "Verifying\u2026";
-    case "failed":
-      if (status.failedStep === "terminals") return "Terminal spawn failed";
-      if (status.failedStep === "verification") return "Missing terminals";
-      return null;
-    default:
-      return null;
-  }
 }
 
 export function BulkCreateWorktreeDialog({
