@@ -1,3 +1,4 @@
+import { app } from "electron";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   ListToolsRequestSchema,
@@ -93,7 +94,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   } = deps;
 
   const server = new Server(
-    { name: "Daintree", version: "1.0.0" },
+    { name: "Daintree", version: app.getVersion() },
     {
       capabilities: {
         tools: {},
@@ -755,14 +756,7 @@ async function runElicitationConfirmation(
       message,
       requestedSchema: {
         type: "object",
-        properties: {
-          confirmed: {
-            type: "boolean",
-            title: "Confirm destructive action",
-            default: false,
-          },
-        },
-        required: ["confirmed"],
+        properties: {},
       },
     });
   } catch (err) {
@@ -782,7 +776,7 @@ async function runElicitationConfirmation(
     };
   }
 
-  if (result.action === "decline" || result.content?.["confirmed"] !== true) {
+  if (result.action !== "accept") {
     return {
       kind: "rejected",
       value: {
