@@ -228,20 +228,20 @@ describe("buildActivityMonitorOptions", () => {
     const result = buildActivityMonitorOptions("claude", {});
     expect(result.outputActivityDetection).toEqual({
       enabled: true,
-      windowMs: 1000,
-      minFrames: 2,
-      minBytes: 1,
+      leakRatePerMs: 0.1,
+      activationThreshold: 200,
+      maxBytesPerFrame: 120,
     });
     expect(result.patternConfig).toBeDefined();
     expect(result.bootCompletePatterns).toBeDefined();
   });
 
-  it("sets background-tier recovery thresholds (#6641)", () => {
-    // Background polling (500ms) widens the volume window and shortens the
-    // recovery debouncer so backgrounded agents can escape "waiting" when
-    // output resumes. Active polling (50ms) keeps the existing thresholds.
+  it("sets background-tier recovery threshold (#6641)", () => {
+    // Background polling (500ms) shortens the recovery debouncer so
+    // backgrounded agents can escape "waiting" when output resumes. The
+    // volume detector is sample-cadence invariant (#6666), so no tier-
+    // specific window widening is needed.
     const result = buildActivityMonitorOptions("claude", {});
-    expect(result.backgroundOutputWindowMs).toBe(2500);
     expect(result.backgroundWorkingRecoveryDelayMs).toBe(600);
   });
 });

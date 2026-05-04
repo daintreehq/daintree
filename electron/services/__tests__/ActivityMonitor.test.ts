@@ -558,20 +558,21 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("should not escalate idle→busy from idle-noise sequences with low minBytes (#6365)", () => {
+    it("should not escalate idle→busy from idle-noise sequences (#6365)", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         idleDebounceMs: 300,
         outputActivityDetection: {
           enabled: true,
-          windowMs: 1000,
-          minFrames: 2,
-          minBytes: 1,
+          activationThreshold: 200,
+          maxBytesPerFrame: 120,
+          leakRatePerMs: 0.1,
         },
       });
 
       // Monitor is idle. A stream of pure DECSET/OSC/CPR noise must not
-      // trigger volume-based idle→busy escalation now that minBytes is 1.
+      // trigger volume-based idle→busy escalation — these sequences are
+      // stripped by stripIdleTerminalSequences before reaching the detector.
       expect(monitor.getState()).toBe("idle");
       onStateChange.mockClear();
 
@@ -618,9 +619,9 @@ describe("ActivityMonitor", () => {
         idleDebounceMs: 300,
         outputActivityDetection: {
           enabled: true,
-          windowMs: 1000,
-          minFrames: 2,
-          minBytes: 1,
+          activationThreshold: 200,
+          maxBytesPerFrame: 120,
+          leakRatePerMs: 0.1,
         },
       });
 
@@ -640,15 +641,15 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("should not escalate idle→busy from a single noise frame at minBytes:1 (#6365)", () => {
+    it("should not escalate idle→busy from a single unfiltered noise frame (#6365)", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         idleDebounceMs: 300,
         outputActivityDetection: {
           enabled: true,
-          windowMs: 1000,
-          minFrames: 2,
-          minBytes: 1,
+          activationThreshold: 200,
+          maxBytesPerFrame: 120,
+          leakRatePerMs: 0.1,
         },
       });
 
@@ -656,8 +657,8 @@ describe("ActivityMonitor", () => {
       onStateChange.mockClear();
 
       // A single chunk that gets past the filter (e.g. an OSC variant we
-      // don't recognize) must not escalate idle→busy on its own — minFrames
-      // is the per-chunk guard once minBytes is lowered to 1.
+      // don't recognize) must not escalate idle→busy on its own — the
+      // maxBytesPerFrame cap is the per-chunk noise gate.
       monitor.onData("\x1b]999;some-experimental-payload\x07");
 
       expect(monitor.getState()).toBe("idle");
@@ -721,7 +722,12 @@ describe("ActivityMonitor", () => {
       };
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         processStateValidator,
-        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        outputActivityDetection: {
+          enabled: true,
+          activationThreshold: 1,
+          maxBytesPerFrame: 65536,
+          leakRatePerMs: 0.001,
+        },
       });
 
       // User types (sets recent input timestamp)
@@ -743,7 +749,12 @@ describe("ActivityMonitor", () => {
       };
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         processStateValidator,
-        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        outputActivityDetection: {
+          enabled: true,
+          activationThreshold: 1,
+          maxBytesPerFrame: 65536,
+          leakRatePerMs: 0.001,
+        },
       });
 
       // Press Enter first to set pending input
@@ -764,7 +775,12 @@ describe("ActivityMonitor", () => {
     it("should not re-emit busy when output arrives after Enter has set state to busy", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        outputActivityDetection: {
+          enabled: true,
+          activationThreshold: 1,
+          maxBytesPerFrame: 65536,
+          leakRatePerMs: 0.001,
+        },
       });
 
       monitor.onInput("\r");
@@ -783,7 +799,12 @@ describe("ActivityMonitor", () => {
     it("should NOT trigger busy from output during echo window even without validator - Issue #1476", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        outputActivityDetection: {
+          enabled: true,
+          activationThreshold: 1,
+          maxBytesPerFrame: 65536,
+          leakRatePerMs: 0.001,
+        },
       });
 
       // User types (sets recent input timestamp)
@@ -1086,7 +1107,12 @@ describe("ActivityMonitor", () => {
     it("should not fire duplicate busy from output after Enter", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        outputActivityDetection: {
+          enabled: true,
+          activationThreshold: 1,
+          maxBytesPerFrame: 65536,
+          leakRatePerMs: 0.001,
+        },
       });
 
       // Press Enter first to allow output-based busy
@@ -1214,7 +1240,12 @@ describe("ActivityMonitor", () => {
     it("should NOT re-enter busy from idle via output during echo window - Issue #1476", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        outputActivityDetection: {
+          enabled: true,
+          activationThreshold: 1,
+          maxBytesPerFrame: 65536,
+          leakRatePerMs: 0.001,
+        },
         idleDebounceMs: 2500,
       });
 
@@ -1240,7 +1271,12 @@ describe("ActivityMonitor", () => {
     it("should re-enter busy when Enter is pressed again after going idle", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        outputActivityDetection: {
+          enabled: true,
+          activationThreshold: 1,
+          maxBytesPerFrame: 65536,
+          leakRatePerMs: 0.001,
+        },
         idleDebounceMs: 2500,
       });
 
@@ -1551,7 +1587,12 @@ describe("ActivityMonitor", () => {
     it("should transition to idle on dispose when busy", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        outputActivityDetection: {
+          enabled: true,
+          activationThreshold: 1,
+          maxBytesPerFrame: 65536,
+          leakRatePerMs: 0.001,
+        },
       });
 
       // Press Enter to enter busy state
@@ -1606,7 +1647,12 @@ describe("ActivityMonitor", () => {
     it("should ignore onData and onInput calls after dispose", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1, windowMs: 500 },
+        outputActivityDetection: {
+          enabled: true,
+          activationThreshold: 1,
+          maxBytesPerFrame: 65536,
+          leakRatePerMs: 0.002,
+        },
       });
 
       monitor.dispose();
@@ -2051,7 +2097,12 @@ describe("ActivityMonitor", () => {
     it("should recover from idle when output occurs without recent user input", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        outputActivityDetection: {
+          enabled: true,
+          activationThreshold: 1,
+          maxBytesPerFrame: 65536,
+          leakRatePerMs: 0.001,
+        },
         idleDebounceMs: 2500,
       });
 
@@ -2076,7 +2127,12 @@ describe("ActivityMonitor", () => {
     it("should NOT recover from idle when output is likely a character echo", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        outputActivityDetection: {
+          enabled: true,
+          activationThreshold: 1,
+          maxBytesPerFrame: 65536,
+          leakRatePerMs: 0.001,
+        },
         idleDebounceMs: 2500,
       });
 
@@ -2182,7 +2238,12 @@ describe("ActivityMonitor", () => {
     it("should recover after echo window expires even if user typed recently", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        outputActivityDetection: {
+          enabled: true,
+          activationThreshold: 1,
+          maxBytesPerFrame: 65536,
+          leakRatePerMs: 0.001,
+        },
         idleDebounceMs: 2500,
       });
 
@@ -3892,7 +3953,6 @@ describe("ActivityMonitor", () => {
         getCursorLine: () => null,
         pollingIntervalMs: 500,
         bootCompletePatterns: [/booted/i],
-        backgroundOutputWindowMs: 2500,
         backgroundWorkingRecoveryDelayMs: 600,
         idleDebounceMs: 4000,
       });
@@ -3934,7 +3994,6 @@ describe("ActivityMonitor", () => {
         pollingIntervalMs: 500,
         initialState: "idle",
         skipInitialStateEmit: true,
-        backgroundOutputWindowMs: 2500,
         backgroundWorkingRecoveryDelayMs: 600,
         idleDebounceMs: 4000,
       });
@@ -3969,7 +4028,6 @@ describe("ActivityMonitor", () => {
         getCursorLine: () => null,
         pollingIntervalMs: 50,
         bootCompletePatterns: [/booted/i],
-        backgroundOutputWindowMs: 2500,
         backgroundWorkingRecoveryDelayMs: 600,
         idleDebounceMs: 4000,
       });
@@ -4019,7 +4077,6 @@ describe("ActivityMonitor", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("plain-1", 1000, onStateChange, {
         pollingIntervalMs: 500,
-        backgroundOutputWindowMs: 2500,
         backgroundWorkingRecoveryDelayMs: 600,
         idleDebounceMs: 4000,
       });
@@ -4046,7 +4103,6 @@ describe("ActivityMonitor", () => {
         getVisibleLines: () => [],
         getCursorLine: () => null,
         pollingIntervalMs: 500,
-        backgroundOutputWindowMs: 2500,
         backgroundWorkingRecoveryDelayMs: 600,
         idleDebounceMs: 300,
       });
@@ -4141,10 +4197,11 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("widens output volume window for sparse background streaming", () => {
-      // At 500ms polling with the old 1000ms window, two frames 1700ms apart
-      // would reset the window and never trigger recovery. With the widened
-      // 2500ms window, the same frames now satisfy the AND-gate.
+    it("triggers volume recovery on sustained background-tier output (#6666)", () => {
+      // The pre-#6666 windowed AND-gate required tier-specific window widening
+      // because frames straddled the fixed window boundary at 500ms polling.
+      // The leaky-bucket detector is sample-cadence invariant: the same byte
+      // stream fires at any tier without tier-specific tuning.
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("bg-vol", 1000, onStateChange, {
         getVisibleLines: () => [],
@@ -4153,48 +4210,49 @@ describe("ActivityMonitor", () => {
         bootCompletePatterns: [/ready/i],
         outputActivityDetection: {
           enabled: true,
-          windowMs: 1000,
-          minFrames: 2,
-          minBytes: 1,
+          activationThreshold: 200,
+          maxBytesPerFrame: 120,
+          leakRatePerMs: 0.1,
         },
-        backgroundOutputWindowMs: 2500,
         backgroundWorkingRecoveryDelayMs: 600,
         idleDebounceMs: 4000,
       });
 
       monitor.onData("\nready\n");
-      // Drain the volume detector's window (boot data already filled frame 1).
+      // Let any boot-data accumulation drain.
       vi.advanceTimersByTime(3000);
       onStateChange.mockClear();
 
-      // Frame 1 of the actual scenario: starts a fresh volume window.
-      monitor.onData("a");
+      // Three 100-byte chunks at 500ms cadence (typical batched background
+      // streaming): drain=50/cycle, fill=100/cycle. F1 level=100, F2=150,
+      // F3=200 ≥ threshold → fire.
+      monitor.onData("x".repeat(100));
       expect(monitor.getState()).toBe("idle");
-
-      // Frame 2, 1700ms later — would have expired the 1000ms window but fits
-      // inside the widened 2500ms window, satisfying the AND-gate.
-      vi.advanceTimersByTime(1700);
-      monitor.onData("b");
+      vi.advanceTimersByTime(500);
+      monitor.onData("x".repeat(100));
+      expect(monitor.getState()).toBe("idle");
+      vi.advanceTimersByTime(500);
+      monitor.onData("x".repeat(100));
 
       expect(monitor.getState()).toBe("busy");
 
       monitor.dispose();
     });
 
-    it("restores active thresholds when polling switches back to active", () => {
+    it("restores active debouncer threshold when polling switches back to active", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("tier-switch", 1000, onStateChange, {
         getVisibleLines: () => [],
         getCursorLine: () => null,
         pollingIntervalMs: 50,
         bootCompletePatterns: [/booted/i],
-        backgroundOutputWindowMs: 2500,
         backgroundWorkingRecoveryDelayMs: 600,
         idleDebounceMs: 4000,
       });
 
-      // Switch to background then back to active. Pre-fix, the volume window
-      // would have been left at 2500ms; the tier setter must restore it.
+      // Switch to background then back to active. The cosmeticRecoveryDebouncer
+      // delay must track the tier round-trip — pre-fix the 600ms background
+      // value would persist into the active tier and false-fire recovery.
       monitor.setPollingInterval(500);
       monitor.setPollingInterval(50);
 

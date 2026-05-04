@@ -14,7 +14,7 @@
 // The filter is intentionally stateless — escape sequences split across PTY
 // chunk boundaries (rare in practice, since node-pty reads at OS boundaries
 // and most idle-noise sequences are short) are not stripped. OutputVolumeDetector's
-// minFrames gate is the secondary defense for those cases.
+// maxBytesPerFrame cap is the secondary defense for those cases.
 //
 // `?2026h` / `?2026l` (DEC mode 2026 — Synchronized Output) is stripped here
 // for the renderer-bound and byte-volume paths, but the headless terminal in
