@@ -15,12 +15,28 @@ export interface RuntimeAgentIdentityInput {
 }
 
 /**
+ * A "demoted ex-agent" is a legacy record where the agent was once detected
+ * (`everDetectedAgent`) but the live detector has cleared and no agentState
+ * has been written. Chrome keeps showing the launch identity for visual
+ * continuity, but for runtime purposes (focus fallback, agent grouping,
+ * agent-targeted actions) the panel is no longer an agent.
+ */
+function isDemotedExAgent(terminal: RuntimeAgentIdentityInput): boolean {
+  if (terminal.detectedAgentId) return false;
+  if (terminal.runtimeIdentity?.kind === "agent" && terminal.runtimeIdentity.agentId) return false;
+  if (terminal.agentState) return false;
+  return Boolean(terminal.launchAgentId) && terminal.everDetectedAgent === true;
+}
+
+/**
  * Is this terminal currently agent-addressable?
  *
  * Live detection wins, but a launchAgentId is durable agent affinity while the
  * terminal has not received a strong exit signal. This keeps restored and
  * toolbar-launched agent terminals wired for agent chrome/activity before the
- * transient detector fields rehydrate.
+ * transient detector fields rehydrate. Sticky-but-cleared legacy records
+ * (`everDetectedAgent` true with no live detection or agentState) are treated
+ * as non-agent for runtime purposes.
  */
 export function isAgentTerminal(terminal: {
   detectedAgentId?: string;
@@ -32,6 +48,7 @@ export function isAgentTerminal(terminal: {
   exitCode?: number | null;
   kind?: PanelKind;
 }): boolean {
+  if (isDemotedExAgent(terminal)) return false;
   return deriveTerminalChrome(terminal).isAgent;
 }
 
@@ -41,6 +58,7 @@ export function getRuntimeAgentId(
   terminal: RuntimeAgentIdentityInput | undefined
 ): string | undefined {
   if (!terminal) return undefined;
+  if (isDemotedExAgent(terminal)) return undefined;
   return deriveTerminalChrome(terminal).agentId ?? undefined;
 }
 
