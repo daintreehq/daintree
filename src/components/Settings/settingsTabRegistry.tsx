@@ -24,6 +24,7 @@ export interface SettingsTabEntry {
   readonly scope: "global" | "project";
   readonly group: string;
   readonly label: string;
+  readonly headerTitle?: string;
   readonly icon: ReactNode;
   readonly importKind: "eager" | "lazy";
 }
@@ -149,6 +150,7 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "General",
     label: "Keyboard",
+    headerTitle: "Keyboard Shortcuts",
     icon: <Keyboard className="w-4 h-4" />,
     importKind: "lazy",
     importer: importKeyboardShortcutsTab,
@@ -196,6 +198,7 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "Terminal",
     label: "Worktree",
+    headerTitle: "Worktree Paths",
     icon: <FolderGit2 className="w-4 h-4" />,
     importKind: "lazy",
     importer: importWorktreeSettingsTab,
@@ -207,6 +210,7 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "Terminal",
     label: "Toolbar",
+    headerTitle: "Toolbar Customization",
     icon: <SettingsIcon className="w-4 h-4" />,
     importKind: "lazy",
     importer: importToolbarSettingsTab,
@@ -218,6 +222,7 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "Terminal",
     label: "Environment",
+    headerTitle: "Environment Variables",
     icon: <KeyRound className="w-4 h-4" />,
     importKind: "lazy",
     importer: importEnvironmentSettingsTab,
@@ -255,6 +260,7 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "Integrations",
     label: "GitHub",
+    headerTitle: "GitHub Integration",
     icon: <Github className="w-4 h-4" />,
     importKind: "lazy",
     importer: importGitHubSettingsTab,
@@ -288,6 +294,7 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "Integrations",
     label: "Portal",
+    headerTitle: "Portal Links",
     icon: <PanelRight className="w-4 h-4" />,
     importKind: "lazy",
     importer: importPortalSettingsTab,
@@ -345,7 +352,7 @@ export function getSettingsTabEntry(id: string): AnySettingsTabEntry | undefined
 }
 
 export const globalTabTitles = Object.fromEntries(
-  SETTINGS_REGISTRY.map((e) => [e.id, e.label])
+  SETTINGS_REGISTRY.map((e: AnySettingsTabEntry) => [e.id, e.headerTitle ?? e.label])
 ) as Record<GlobalSettingsTab, string>;
 
 export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
