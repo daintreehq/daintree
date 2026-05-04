@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 type IncomingMessage = { statusCode: number; resume: () => void };
 type RequestCallback = (res: IncomingMessage) => void;
 type MockRequest = {
-  on: (event: string, handler: (...args: unknown[]) => void) => MockRequest;
-  end: () => void;
-  destroy: () => void;
+  on: ReturnType<typeof vi.fn>;
+  end: ReturnType<typeof vi.fn>;
+  destroy: ReturnType<typeof vi.fn>;
 };
 
 const { mockRequest } = vi.hoisted(() => ({
