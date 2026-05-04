@@ -125,17 +125,19 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
   );
 
-  const isFocusMode = useFocusStore((s) => s.isFocusMode);
+  // Mirrors DockedTerminalItem: only the worktree-sidebar-hidden state
+  // changes left-side popover collision padding.
+  const sidebarHidden = useFocusStore((s) => s.gestureSidebarHidden);
 
   const collisionPadding = useMemo(() => {
     const basePadding = 32;
     return {
       top: basePadding,
-      left: isFocusMode ? 8 : basePadding,
+      left: sidebarHidden ? 8 : basePadding,
       bottom: basePadding,
       right: portalOpen ? portalWidth + basePadding : basePadding,
     };
-  }, [isFocusMode, portalOpen, portalWidth]);
+  }, [sidebarHidden, portalOpen, portalWidth]);
 
   // Toggle buffering based on popover open state
   useEffect(() => {

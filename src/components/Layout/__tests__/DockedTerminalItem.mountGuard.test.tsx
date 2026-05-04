@@ -35,8 +35,9 @@ vi.mock("@/store", () => ({
   ) => selector({ hybridInputEnabled: false, hybridInputAutoFocus: false }),
   usePortalStore: (selector: (s: { isOpen: boolean; width: number }) => unknown) =>
     selector({ isOpen: false, width: 0 }),
-  useFocusStore: (selector: (s: { isFocusMode: boolean }) => unknown) =>
-    selector({ isFocusMode: false }),
+  useFocusStore: (
+    selector: (s: { isFocusMode: boolean; gestureSidebarHidden: boolean }) => unknown
+  ) => selector({ isFocusMode: false, gestureSidebarHidden: false }),
   usePreferencesStore: (selector: (s: { showDockAgentHighlights: boolean }) => unknown) =>
     selector({ showDockAgentHighlights: false }),
 }));

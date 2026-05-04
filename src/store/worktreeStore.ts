@@ -449,8 +449,17 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     }),
 
   openCreateDialog: (initialIssue = null, options) => {
-    if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
-      window.dispatchEvent(new Event("daintree:toggle-focus-mode"));
+    // Restore the worktree sidebar (only) before opening a dialog that needs
+    // it visible. The assistant gesture is left alone — dialogs don't depend
+    // on the assistant. The sidebar's xterm resize suppression is handled by
+    // a window event so the renderer side can call into sidebarToggle without
+    // forcing a circular import (sidebarToggle reads worktree state, which
+    // would otherwise require this store to depend on the lib).
+    if (useFocusStore.getState().gestureSidebarHidden) {
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("daintree:suppress-sidebar-resizes"));
+      }
+      useFocusStore.getState().clearSidebarGesture();
     }
     set({
       createDialog: {
@@ -464,8 +473,17 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   },
 
   openCreateDialogForPR: (pr) => {
-    if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
-      window.dispatchEvent(new Event("daintree:toggle-focus-mode"));
+    // Restore the worktree sidebar (only) before opening a dialog that needs
+    // it visible. The assistant gesture is left alone — dialogs don't depend
+    // on the assistant. The sidebar's xterm resize suppression is handled by
+    // a window event so the renderer side can call into sidebarToggle without
+    // forcing a circular import (sidebarToggle reads worktree state, which
+    // would otherwise require this store to depend on the lib).
+    if (useFocusStore.getState().gestureSidebarHidden) {
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("daintree:suppress-sidebar-resizes"));
+      }
+      useFocusStore.getState().clearSidebarGesture();
     }
     set({
       createDialog: {
@@ -490,8 +508,17 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     }),
 
   openBulkCreateDialog: (selectedIssues, onComplete) => {
-    if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
-      window.dispatchEvent(new Event("daintree:toggle-focus-mode"));
+    // Restore the worktree sidebar (only) before opening a dialog that needs
+    // it visible. The assistant gesture is left alone — dialogs don't depend
+    // on the assistant. The sidebar's xterm resize suppression is handled by
+    // a window event so the renderer side can call into sidebarToggle without
+    // forcing a circular import (sidebarToggle reads worktree state, which
+    // would otherwise require this store to depend on the lib).
+    if (useFocusStore.getState().gestureSidebarHidden) {
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("daintree:suppress-sidebar-resizes"));
+      }
+      useFocusStore.getState().clearSidebarGesture();
     }
     set({
       bulkCreateDialog: {
@@ -505,8 +532,17 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   },
 
   openBulkCreateDialogForPRs: (selectedPRs, onComplete) => {
-    if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
-      window.dispatchEvent(new Event("daintree:toggle-focus-mode"));
+    // Restore the worktree sidebar (only) before opening a dialog that needs
+    // it visible. The assistant gesture is left alone — dialogs don't depend
+    // on the assistant. The sidebar's xterm resize suppression is handled by
+    // a window event so the renderer side can call into sidebarToggle without
+    // forcing a circular import (sidebarToggle reads worktree state, which
+    // would otherwise require this store to depend on the lib).
+    if (useFocusStore.getState().gestureSidebarHidden) {
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("daintree:suppress-sidebar-resizes"));
+      }
+      useFocusStore.getState().clearSidebarGesture();
     }
     set({
       bulkCreateDialog: {
@@ -525,8 +561,17 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     })),
 
   openQuickCreate: (context) => {
-    if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
-      window.dispatchEvent(new Event("daintree:toggle-focus-mode"));
+    // Restore the worktree sidebar (only) before opening a dialog that needs
+    // it visible. The assistant gesture is left alone — dialogs don't depend
+    // on the assistant. The sidebar's xterm resize suppression is handled by
+    // a window event so the renderer side can call into sidebarToggle without
+    // forcing a circular import (sidebarToggle reads worktree state, which
+    // would otherwise require this store to depend on the lib).
+    if (useFocusStore.getState().gestureSidebarHidden) {
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("daintree:suppress-sidebar-resizes"));
+      }
+      useFocusStore.getState().clearSidebarGesture();
     }
     set({
       quickCreate: {

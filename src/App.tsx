@@ -399,7 +399,17 @@ function App() {
   const electronAvailable = isElectronAvailable();
   const { inject } = useContextInjection();
 
+  // Worktree-sidebar-only toggle (Toolbar button + nav.toggleSidebar). Routed
+  // through a dedicated event so AppLayout can read the live sidebar width
+  // and diagnostics state when invoking the gesture-aware focus store.
   const handleToggleSidebar = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("daintree:toggle-sidebar"));
+  }, []);
+
+  // Double-click chrome gesture (nav.toggleFocusMode). Snapshot/revert across
+  // both sidebars — kept as a separate path so it can hide whichever sidebars
+  // are currently visible without affecting the per-sidebar toggles.
+  const handleToggleFocusMode = useCallback(() => {
     window.dispatchEvent(new CustomEvent("daintree:toggle-focus-mode"));
   }, []);
 
@@ -407,7 +417,7 @@ function App() {
     onOpenSettings: handleSettings,
     onOpenSettingsTab: handleOpenSettingsTab,
     onToggleSidebar: handleToggleSidebar,
-    onToggleFocusMode: handleToggleSidebar,
+    onToggleFocusMode: handleToggleFocusMode,
     onFocusRegionNext: () => useMacroFocusStore.getState().cycleNext(),
     onFocusRegionPrev: () => useMacroFocusStore.getState().cyclePrev(),
     onOpenActionPalette: actionPalette.open,

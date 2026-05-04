@@ -11,8 +11,13 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
     source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
   });
 
-  it("derives showSidebar from isFocusMode and currentProject", () => {
-    expect(source).toContain("const showSidebar = !layout.isFocusMode && currentProject != null");
+  it("derives showSidebar from gestureSidebarHidden and currentProject (issue #6659)", () => {
+    expect(source).toContain(
+      "const showSidebar = !layout.gestureSidebarHidden && currentProject != null"
+    );
+    // The combined isFocusMode gate must not be reintroduced — the sidebar
+    // visibility must be independent from the assistant.
+    expect(source).not.toContain("const showSidebar = !layout.isFocusMode && currentProject");
   });
 
   it("mounts the sidebar whenever a project is active so the width transition can run", () => {
@@ -41,8 +46,15 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
     source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
   });
 
-  it("derives showAssistant from isFocusMode and helpPanelOpen", () => {
-    expect(source).toContain("const showAssistant = !layout.isFocusMode && layout.helpPanelOpen");
+  it("derives showAssistant from gestureAssistantHidden and helpPanelOpen (issue #6659)", () => {
+    expect(source).toContain(
+      "const showAssistant = !layout.gestureAssistantHidden && layout.helpPanelOpen"
+    );
+    // The combined isFocusMode gate must not be reintroduced — the assistant
+    // visibility must be independent from the worktree sidebar.
+    expect(source).not.toContain(
+      "const showAssistant = !layout.isFocusMode && layout.helpPanelOpen"
+    );
   });
 
   it("computes effectiveAssistantWidth so focus mode collapses the panel without unmounting", () => {
@@ -80,6 +92,38 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
     expect(source).toMatch(/\[layout\.portalOpen, layout\.portalWidth, effectiveAssistantWidth\]/);
     // The old sum semantics must not be reintroduced.
     expect(source).not.toMatch(/portalOffset \+ effectiveAssistantWidth/);
+  });
+});
+
+describe("AppLayout independent sidebar gestures — issue #6659", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("Toolbar sidebar button drives only the worktree sidebar gesture", () => {
+    // The toolbar's sidebar toggle must reflect/control gestureSidebarHidden
+    // specifically — not the combined isFocusMode flag, which would also flip
+    // when only the assistant is suppressed.
+    expect(source).toContain("isFocusMode={layout.gestureSidebarHidden}");
+    expect(source).toContain("onToggleFocusMode={handleToggleSidebar}");
+  });
+
+  it("worktree-sidebar toggle uses setSidebarGestureHidden, not the combined toggle", () => {
+    expect(source).toContain("focus.setSidebarGestureHidden(!focus.gestureSidebarHidden");
+  });
+
+  it("listens for daintree:toggle-sidebar separately from daintree:toggle-focus-mode", () => {
+    expect(source).toContain('addEventListener("daintree:toggle-sidebar"');
+    expect(source).toContain('addEventListener("daintree:toggle-focus-mode"');
+  });
+
+  it("persists the sidebar-specific gesture flag, not the combined isFocusMode", () => {
+    // The legacy `focusMode` boolean in per-project state always meant
+    // "sidebar hidden by chrome gesture". Persisting the combined flag would
+    // leak the assistant's transient state across reloads.
+    expect(source).toContain("const persistedFocusMode = layout.gestureSidebarHidden");
   });
 });
 

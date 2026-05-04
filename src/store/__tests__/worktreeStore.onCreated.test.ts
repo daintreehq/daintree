@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const focusStateGetterMock = vi.hoisted(() => vi.fn(() => ({ isFocusMode: false })));
+const focusStateGetterMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    isFocusMode: false,
+    gestureSidebarHidden: false,
+    gestureAssistantHidden: false,
+    clearSidebarGesture: () => {},
+  }))
+);
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {

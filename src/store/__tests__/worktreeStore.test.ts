@@ -8,6 +8,7 @@ const {
   setFocusedMock,
   logErrorWithContextMock,
   focusStateGetterMock,
+  clearSidebarGestureMock,
   subscribeMock,
   panelSetStateMock,
 } = vi.hoisted(() => ({
@@ -16,7 +17,13 @@ const {
   recordMruMock: vi.fn(),
   setFocusedMock: vi.fn(),
   logErrorWithContextMock: vi.fn(),
-  focusStateGetterMock: vi.fn(() => ({ isFocusMode: false })),
+  focusStateGetterMock: vi.fn(() => ({
+    isFocusMode: false,
+    gestureSidebarHidden: false,
+    gestureAssistantHidden: false,
+    clearSidebarGesture: () => {},
+  })),
+  clearSidebarGestureMock: vi.fn(),
   subscribeMock: vi.fn(() => vi.fn()),
   panelSetStateMock: vi.fn(),
 }));
@@ -108,7 +115,13 @@ describe("worktreeStore", () => {
     panelSetStateMock.mockImplementation((patch: Record<string, unknown>) => {
       Object.assign(terminalStoreState, patch);
     });
-    focusStateGetterMock.mockReturnValue({ isFocusMode: false });
+    focusStateGetterMock.mockReturnValue({
+      isFocusMode: false,
+      gestureSidebarHidden: false,
+      gestureAssistantHidden: false,
+      clearSidebarGesture: clearSidebarGestureMock,
+    });
+    clearSidebarGestureMock.mockReset();
   });
 
   it("openCreateDialog does not throw when window is unavailable", () => {
@@ -116,7 +129,12 @@ describe("worktreeStore", () => {
     // @ts-expect-error - test intentionally removes browser global
     delete globalThis.window;
 
-    focusStateGetterMock.mockReturnValue({ isFocusMode: true });
+    focusStateGetterMock.mockReturnValue({
+      isFocusMode: true,
+      gestureSidebarHidden: true,
+      gestureAssistantHidden: false,
+      clearSidebarGesture: clearSidebarGestureMock,
+    });
 
     expect(() =>
       useWorktreeSelectionStore.getState().openCreateDialog({
@@ -277,7 +295,12 @@ describe("worktreeStore", () => {
     // @ts-expect-error - test intentionally removes browser global
     delete globalThis.window;
 
-    focusStateGetterMock.mockReturnValue({ isFocusMode: true });
+    focusStateGetterMock.mockReturnValue({
+      isFocusMode: true,
+      gestureSidebarHidden: true,
+      gestureAssistantHidden: false,
+      clearSidebarGesture: clearSidebarGestureMock,
+    });
 
     expect(() =>
       useWorktreeSelectionStore.getState().openCreateDialogForPR({

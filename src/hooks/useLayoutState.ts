@@ -12,8 +12,16 @@ import {
 } from "@/store";
 export interface LayoutState {
   isFocusMode: boolean;
-  toggleFocusMode: (currentState: PanelState) => void;
+  gestureSidebarHidden: boolean;
+  gestureAssistantHidden: boolean;
+  toggleFocusMode: (
+    currentState: PanelState,
+    visibility?: { sidebarVisible: boolean; assistantVisible: boolean }
+  ) => void;
   setFocusMode: (mode: boolean, savedState?: PanelState) => void;
+  setSidebarGestureHidden: (hidden: boolean, currentPanelState?: PanelState) => void;
+  clearSidebarGesture: () => void;
+  clearAssistantGesture: () => void;
   savedPanelState: PanelState | null;
 
   diagnosticsOpen: boolean;
@@ -36,8 +44,13 @@ export function useLayoutState(): LayoutState {
   const focusState = useFocusStore(
     useShallow((state) => ({
       isFocusMode: state.isFocusMode,
+      gestureSidebarHidden: state.gestureSidebarHidden,
+      gestureAssistantHidden: state.gestureAssistantHidden,
       toggleFocusMode: state.toggleFocusMode,
       setFocusMode: state.setFocusMode,
+      setSidebarGestureHidden: state.setSidebarGestureHidden,
+      clearSidebarGesture: state.clearSidebarGesture,
+      clearAssistantGesture: state.clearAssistantGesture,
       savedPanelState: state.savedPanelState,
     }))
   );

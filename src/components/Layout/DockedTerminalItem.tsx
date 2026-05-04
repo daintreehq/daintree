@@ -69,17 +69,21 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
   );
 
-  const isFocusMode = useFocusStore((s) => s.isFocusMode);
+  // Tracks whether the worktree sidebar is hidden by the chrome gesture, so
+  // popover collision padding can extend left when there's no sidebar there.
+  // The assistant lives on the right, so its gesture state doesn't affect
+  // left-side padding.
+  const sidebarHidden = useFocusStore((s) => s.gestureSidebarHidden);
 
   const collisionPadding = useMemo(() => {
     const basePadding = 32;
     return {
       top: basePadding,
-      left: isFocusMode ? 8 : basePadding,
+      left: sidebarHidden ? 8 : basePadding,
       bottom: basePadding,
       right: portalOpen ? portalWidth + basePadding : basePadding,
     };
-  }, [isFocusMode, portalOpen, portalWidth]);
+  }, [sidebarHidden, portalOpen, portalWidth]);
 
   // Toggle buffering based on popover open state
   useEffect(() => {

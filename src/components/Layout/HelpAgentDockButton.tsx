@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
+import { useFocusStore } from "@/store/focusStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
@@ -48,6 +49,10 @@ export function HelpAgentDockButton() {
 
   const handleClick = useCallback(() => {
     suppressSidebarResizes();
+    // Explicit toggle takes ownership of the assistant's visibility — clear
+    // any lingering gesture suppression so the next visible state matches
+    // the toggle's intent rather than staying width=0 behind the gesture.
+    useFocusStore.getState().clearAssistantGesture();
     toggle();
   }, [toggle]);
 

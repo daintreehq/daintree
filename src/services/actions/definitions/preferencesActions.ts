@@ -17,6 +17,7 @@ import { keybindingService } from "@/services/KeybindingService";
 import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { useFocusStore } from "@/store/focusStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { logError } from "@/utils/logger";
@@ -753,6 +754,10 @@ export function registerPreferencesActions(
         useHelpPanelStore
           .getState()
           .setTerminal(result.result.terminalId, agentId, session?.sessionId ?? null);
+        // Always clear the assistant gesture — a successful launch should
+        // make the panel visible regardless of whether isOpen was already
+        // true (gesture-hidden) or had to be flipped on.
+        useFocusStore.getState().clearAssistantGesture();
         if (!useHelpPanelStore.getState().isOpen) {
           suppressSidebarResizes();
           useHelpPanelStore.getState().setOpen(true);
@@ -777,6 +782,9 @@ export function registerPreferencesActions(
     keywords: ["docs", "support", "guide", "assistant"],
     run: async () => {
       suppressSidebarResizes();
+      // Clear any lingering assistant gesture suppression — this explicit
+      // toggle takes ownership of the assistant's visibility.
+      useFocusStore.getState().clearAssistantGesture();
       useHelpPanelStore.getState().toggle();
     },
   }));
