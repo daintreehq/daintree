@@ -63,7 +63,10 @@ export function DaintreeAssistantSettingsTab() {
       label: getAgentConfig(id)?.name ?? id,
     }));
   }, []);
-  const agentSelectValue = preferredAgentId ?? agentOptions[0]?.value ?? "";
+  // Track the persisted choice exactly — falling back to a default would visually
+  // suggest a value is set when it isn't, leaving onChange unfired and the help
+  // panel still in its empty state. The placeholder makes "no selection" explicit.
+  const agentSelectValue = preferredAgentId ?? "";
 
   useEffect(() => {
     let cancelled = false;
@@ -251,6 +254,7 @@ export function DaintreeAssistantSettingsTab() {
           value={agentSelectValue}
           onValueChange={handleAgentChange}
           options={agentOptions}
+          placeholder="Choose an agent"
           disabled={loading || agentOptions.length === 0}
         />
         <SettingsInput

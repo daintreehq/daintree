@@ -282,11 +282,11 @@ export function HelpPanel({ width: effectiveWidth }: HelpPanelProps) {
           { source: "user" }
         );
 
-        // Stale-launch guard: if the user navigated back to the picker or
-        // switched preferred agent while the IPC was in flight, discard
-        // this result and clean up the spawned panel rather than reviving
-        // a stale terminal. Reset hasAutoLaunched so the next preferred
-        // agent (if any) can auto-launch on the next effect tick.
+        // Stale-launch guard: if the user changed the preferred agent
+        // (via the settings tab) while the IPC was in flight, discard this
+        // result and clean up the spawned panel rather than reviving a
+        // stale terminal. Reset hasAutoLaunched so the new preferred
+        // agent can auto-launch on the next effect tick.
         const currentPreferred = useHelpPanelStore.getState().preferredAgentId;
         if (currentPreferred !== launchAgentId) {
           if (result.ok && result.result?.terminalId) {
@@ -307,9 +307,9 @@ export function HelpPanel({ width: effectiveWidth }: HelpPanelProps) {
           return;
         }
 
-        // Stale-launch guard: handleClose / handleBack revoked the pending
-        // session via revokePendingSession (clearing the ref). Drop the orphan
-        // terminal rather than binding a panel to a revoked token.
+        // Stale-launch guard: handleClose revoked the pending session via
+        // revokePendingSession (clearing the ref). Drop the orphan terminal
+        // rather than binding a panel to a revoked token.
         const expectedSessionId = session?.sessionId ?? null;
         if (expectedSessionId && pendingSessionIdRef.current !== expectedSessionId) {
           usePanelStore.getState().removePanel(result.result.terminalId);
@@ -412,7 +412,7 @@ export function HelpPanel({ width: effectiveWidth }: HelpPanelProps) {
           // Reset the auto-launch gate so a recovered MCP can re-launch on
           // the next render — the single-supported-agent useEffect uses
           // this same ref to one-shot itself, so without the reset the
-          // user is stuck on the picker until they close and reopen.
+          // panel is stuck on the empty state until close/reopen.
           hasAutoLaunched.current = false;
           if (outcome.code === "MCP_NOT_READY") {
             notifyMcpNotReady(outcome.message);
@@ -450,9 +450,9 @@ export function HelpPanel({ width: effectiveWidth }: HelpPanelProps) {
           return;
         }
 
-        // Stale-launch guard: if handleClose / handleBack revoked the pending
-        // session while dispatch was in-flight, the session is dead. Drop the
-        // orphan terminal rather than binding a panel to a revoked token.
+        // Stale-launch guard: if handleClose revoked the pending session while
+        // dispatch was in-flight, the session is dead. Drop the orphan terminal
+        // rather than binding a panel to a revoked token.
         const expectedSessionId = session?.sessionId ?? null;
         if (expectedSessionId && pendingSessionIdRef.current !== expectedSessionId) {
           usePanelStore.getState().removePanel(result.result.terminalId);
@@ -473,11 +473,12 @@ export function HelpPanel({ width: effectiveWidth }: HelpPanelProps) {
     [removePanel, clearTerminal]
   );
 
-  // Single-supported-agent auto-skip: when only one assistant-supported agent
-  // is installed and there's no persisted preference, skip the picker and
-  // launch directly. Mutually exclusive with the preferred-agent auto-launch
-  // (which only runs when `preferredAgentId` is set), so they share the same
-  // `hasAutoLaunched` ref to prevent any double-fire.
+  // Single-supported-agent auto-launch: when only one assistant-supported
+  // agent is installed and there's no persisted preference, launch it
+  // directly instead of showing the empty "open settings" state. Mutually
+  // exclusive with the preferred-agent auto-launch (which only runs when
+  // `preferredAgentId` is set), so they share the same `hasAutoLaunched`
+  // ref to prevent any double-fire.
   useEffect(() => {
     if (!isOpen || terminalId || preferredAgentId || hasAutoLaunched.current) return;
     if (supportedInstalledAgentIds.length !== 1) return;

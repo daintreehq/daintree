@@ -46,7 +46,6 @@ const {
     setOpen: vi.fn(),
     clearTerminal: vi.fn(),
     setPreferredAgent: vi.fn(),
-    clearPreferredAgent: vi.fn(),
     setTerminal: vi.fn(),
     dismissIntro: vi.fn(),
   },
@@ -245,7 +244,6 @@ function resetState() {
   helpPanelState.setWidth = vi.fn();
   helpPanelState.clearTerminal = vi.fn();
   helpPanelState.setPreferredAgent = vi.fn();
-  helpPanelState.clearPreferredAgent = vi.fn();
   helpPanelState.dismissIntro = vi.fn();
 
   panelStoreState.panelsById = {};
@@ -1258,7 +1256,6 @@ describe("HelpPanel — close confirmation guard (issue #6623)", () => {
     expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-1");
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
-    expect(helpPanelState.clearPreferredAgent).not.toHaveBeenCalled();
     expect(mockRevokeSession).toHaveBeenCalledWith("sess-bound");
   });
 
