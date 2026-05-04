@@ -42,9 +42,9 @@ export interface ActivityMonitorOptions {
   processStateValidator?: ProcessStateValidator;
   outputActivityDetection?: {
     enabled?: boolean;
-    windowMs?: number;
-    minFrames?: number;
-    minBytes?: number;
+    leakRatePerMs?: number;
+    activationThreshold?: number;
+    maxBytesPerFrame?: number;
   };
   highOutputThreshold?: {
     enabled?: boolean;
@@ -78,10 +78,9 @@ export interface ActivityMonitorOptions {
   };
   pollingIntervalMs?: number;
   workingRecoveryDelayMs?: number;
-  // Background polling tier overrides — applied automatically by setPollingInterval()
-  // when intervalMs > 50. When unset, fall back to the active values so behavior
+  // Background polling tier override — applied automatically by setPollingInterval()
+  // when intervalMs > 50. When unset, fall back to the active value so behavior
   // matches today's defaults until the call site opts in.
-  backgroundOutputWindowMs?: number;
   backgroundWorkingRecoveryDelayMs?: number;
   pollingMaxBootMs?: number;
   maxWorkingSilenceMs?: number;
@@ -198,13 +197,12 @@ export class ActivityMonitor {
   // Polling interval configuration
   private POLLING_INTERVAL_MS: number;
 
-  // Tier-aware recovery thresholds (#6641). Active values must match the
-  // pre-fix hardcoded behavior so the 50ms tier is unchanged. Background
-  // values widen the volume window and shorten the debouncer delay so
-  // backgrounded agents can escape "waiting" when output resumes.
+  // Tier-aware recovery thresholds (#6641). The output volume detector is now
+  // sample-cadence invariant (#6666), so only the working-signal debouncer
+  // needs tier-specific tuning. Active values must match the pre-fix hardcoded
+  // behavior so the 50ms tier is unchanged. Background shortens the debouncer
+  // delay so backgrounded agents can escape "waiting" when output resumes.
   private _tier: "active" | "background" = "active";
-  private readonly activeOutputWindowMs: number;
-  private readonly backgroundOutputWindowMs: number;
   private readonly activeWorkingRecoveryDelayMs: number;
   private readonly backgroundWorkingRecoveryDelayMs: number;
 
@@ -255,12 +253,10 @@ export class ActivityMonitor {
       options?.workingRecoveryDelayMs ?? 1500
     );
 
-    // Snapshot tier-aware recovery thresholds. Active values default to the
-    // detector-instantiation values so the active-tier path is identical to
-    // pre-fix behavior. Background values default to active values when the
+    // Snapshot tier-aware recovery thresholds. Active value defaults to the
+    // debouncer-instantiation value so the active-tier path is identical to
+    // pre-fix behavior. Background defaults to the active value when the
     // caller doesn't opt in, preserving compatibility for non-agent terminals.
-    this.activeOutputWindowMs = this.outputVolumeDetector.windowMs;
-    this.backgroundOutputWindowMs = options?.backgroundOutputWindowMs ?? this.activeOutputWindowMs;
     this.activeWorkingRecoveryDelayMs = this.workingSignalDebouncer.delayMs;
     this.backgroundWorkingRecoveryDelayMs =
       options?.backgroundWorkingRecoveryDelayMs ?? this.activeWorkingRecoveryDelayMs;
@@ -321,17 +317,13 @@ export class ActivityMonitor {
   private applyTier(tier: "active" | "background"): void {
     if (this._tier === tier) return;
     this._tier = tier;
-    if (tier === "background") {
-      this.outputVolumeDetector.reconfigureWindow(this.backgroundOutputWindowMs);
-      this.workingSignalDebouncer.setDelay(this.backgroundWorkingRecoveryDelayMs);
-      this.cosmeticRecoveryDebouncer.setDelay(this.backgroundWorkingRecoveryDelayMs);
-      this.structuralRecoveryDebouncer.setDelay(this.backgroundWorkingRecoveryDelayMs);
-    } else {
-      this.outputVolumeDetector.reconfigureWindow(this.activeOutputWindowMs);
-      this.workingSignalDebouncer.setDelay(this.activeWorkingRecoveryDelayMs);
-      this.cosmeticRecoveryDebouncer.setDelay(this.activeWorkingRecoveryDelayMs);
-      this.structuralRecoveryDebouncer.setDelay(this.activeWorkingRecoveryDelayMs);
-    }
+    const delay =
+      tier === "background"
+        ? this.backgroundWorkingRecoveryDelayMs
+        : this.activeWorkingRecoveryDelayMs;
+    this.workingSignalDebouncer.setDelay(delay);
+    this.cosmeticRecoveryDebouncer.setDelay(delay);
+    this.structuralRecoveryDebouncer.setDelay(delay);
   }
 
   onInput(data: string): void {
@@ -809,7 +801,7 @@ export class ActivityMonitor {
 
     const hasRecentOutputActivity =
       this.lastOutputActivityAt > 0 &&
-      now - this.lastOutputActivityAt <= this.outputVolumeDetector.windowMs;
+      now - this.lastOutputActivityAt <= this.outputVolumeDetector.recencyWindowMs;
     const isSpinnerActive = this.lineRewriteDetector.isSpinnerActive(now, this.SPINNER_ACTIVE_MS);
     const isOutputQuiet = quietForMs >= this.PROMPT_QUIET_MS;
     const promptStableForMs = this.promptStableSince === 0 ? 0 : now - this.promptStableSince;
@@ -1031,9 +1023,10 @@ export class ActivityMonitor {
       this.pollingInterval = setInterval(() => this.runPollingCycle(), this.POLLING_INTERVAL_MS);
     }
 
-    // Recovery thresholds need to track the polling cadence, otherwise the
-    // 1000ms volume window and 1500ms debouncer become impossible to satisfy
-    // at 500ms polling. See #6641.
+    // The working-signal debouncer needs to track polling cadence, otherwise
+    // the 1500ms delay becomes impossible to satisfy at 500ms polling (#6641).
+    // The output volume detector is sample-cadence invariant (#6666) and
+    // needs no tier handling here.
     this.applyTier(this.tierForInterval(intervalMs));
   }
 

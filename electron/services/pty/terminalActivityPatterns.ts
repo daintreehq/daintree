@@ -181,11 +181,17 @@ export function buildActivityMonitorOptions(
   const promptHintPatterns = buildPromptHintPatterns(detection, effectiveAgentId);
   const completionPatterns = buildCompletionPatterns(detection, effectiveAgentId);
 
+  // Sample-cadence-invariant leaky bucket (#6666). Drains at 100 bytes/sec,
+  // fires when ≥200 bytes accumulate, single chunks contribute at most 120
+  // bytes (the noise gate that prevents one oversized status-line write from
+  // tripping the gate). At 50ms tier with 50-byte chunks the bucket fills in
+  // ~5 frames; at 500ms tier with 100-byte chunks it fills in 3 frames —
+  // identical work-detection sensitivity at either polling cadence.
   const outputActivityDetection = {
     enabled: true,
-    windowMs: 1000,
-    minFrames: 2,
-    minBytes: 1,
+    leakRatePerMs: 0.1,
+    activationThreshold: 200,
+    maxBytesPerFrame: 120,
   };
 
   const getVisibleLines = effectiveAgentId ? deps.getVisibleLines : undefined;
@@ -208,11 +214,10 @@ export function buildActivityMonitorOptions(
     idleDebounceMs: effectiveAgentId ? (detection?.debounceMs ?? 4000) : undefined,
     promptFastPathMinQuietMs: detection?.promptFastPathMinQuietMs,
     maxWaitingSilenceMs: 600_000,
-    // Background polling (500ms) widens the volume window and shortens the
-    // recovery debouncer so backgrounded agents can escape "waiting" when
-    // output resumes (#6641). Active polling (50ms) keeps the existing
-    // outputActivityDetection.windowMs (1000ms) and 1500ms debouncer.
-    backgroundOutputWindowMs: 2500,
+    // Background polling (500ms) shortens the recovery debouncer so
+    // backgrounded agents can escape "waiting" when output resumes (#6641).
+    // The volume detector is now sample-cadence invariant (#6666) and needs
+    // no tier-specific override.
     backgroundWorkingRecoveryDelayMs: 600,
   };
 }

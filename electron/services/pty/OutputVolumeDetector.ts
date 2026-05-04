@@ -1,38 +1,51 @@
 export interface OutputVolumeConfig {
   enabled?: boolean;
-  windowMs?: number;
-  minFrames?: number;
-  minBytes?: number;
+  // Leaky-bucket drain in bytes/ms. Higher = bucket forgets older bytes faster.
+  leakRatePerMs?: number;
+  // Bucket level at which the detector fires.
+  activationThreshold?: number;
+  // Per-frame contribution cap. The noise gate that prevents a single oversized
+  // chunk (status-line write, bracketed status payload) from filling the bucket
+  // on its own — replaces the old minFrames AND-gate.
+  maxBytesPerFrame?: number;
 }
 
+// Sample-cadence-invariant output classifier. Bytes accumulate into a bucket
+// that drains at a constant rate; the result depends only on the underlying
+// byte stream, not on how frequently `update()` is called. This eliminates the
+// tier-specific window widening that the old fixed-window AND-gate required
+// (#6641, #6666).
 export class OutputVolumeDetector {
   readonly enabled: boolean;
-  private _windowMs: number;
-  private readonly minFrames: number;
-  private readonly minBytes: number;
-  private windowStart = 0;
-  private framesInWindow = 0;
-  private bytesInWindow = 0;
+  private readonly leakRatePerMs: number;
+  private readonly activationThreshold: number;
+  private readonly maxBytesPerFrame: number;
+  private level = 0;
+  private lastUpdateMs = 0;
 
   constructor(config?: OutputVolumeConfig) {
-    const defaults = { enabled: false, windowMs: 500, minFrames: 3, minBytes: 2048 };
+    const defaults = {
+      enabled: false,
+      leakRatePerMs: 2.048,
+      activationThreshold: 2048,
+      maxBytesPerFrame: 1024,
+    };
     const c = { ...defaults, ...config };
     this.enabled = c.enabled;
-    this._windowMs = c.windowMs;
-    this.minFrames = c.minFrames;
-    this.minBytes = c.minBytes;
+    // Defensive clamps. leakRatePerMs > 0 is required so recencyWindowMs is
+    // finite; activationThreshold and maxBytesPerFrame must be positive so the
+    // detector can ever fire and the noise gate is meaningful.
+    this.leakRatePerMs = c.leakRatePerMs > 0 ? c.leakRatePerMs : 0.001;
+    this.activationThreshold = c.activationThreshold > 0 ? c.activationThreshold : 1;
+    this.maxBytesPerFrame = c.maxBytesPerFrame > 0 ? c.maxBytesPerFrame : 1;
   }
 
-  get windowMs(): number {
-    return this._windowMs;
-  }
-
-  // Background polling tier (500ms) widens this window so consecutive frames
-  // stop straddling the 1000ms boundary and pinning framesInWindow at 1.
-  reconfigureWindow(windowMs: number): void {
-    if (this._windowMs === windowMs) return;
-    this._windowMs = windowMs;
-    this.resetWindow();
+  // Time after a fire-event that the consumer should still consider output
+  // "recent" — derived as the time it takes to drain a full bucket from the
+  // activation threshold. Replaces the old windowMs getter on line-672 of
+  // ActivityMonitor's hasRecentOutputActivity check.
+  get recencyWindowMs(): number {
+    return this.activationThreshold / this.leakRatePerMs;
   }
 
   update(dataLength: number, now: number): boolean {
@@ -40,35 +53,25 @@ export class OutputVolumeDetector {
       return false;
     }
 
-    if (this.windowStart === 0 || now - this.windowStart > this._windowMs) {
-      this.windowStart = now;
-      this.framesInWindow = 1;
-      this.bytesInWindow = dataLength;
-    } else {
-      this.framesInWindow++;
-      this.bytesInWindow += dataLength;
+    if (this.lastUpdateMs > 0) {
+      const elapsedMs = Math.max(0, now - this.lastUpdateMs);
+      this.level = Math.max(0, this.level - elapsedMs * this.leakRatePerMs);
     }
+    this.lastUpdateMs = now;
 
-    // Require BOTH frames AND bytes — minFrames is the noise gate that prevents
-    // a single unfiltered control sequence (e.g. an OSC variant we missed, or an
-    // escape split across PTY chunks) from triggering escalation. With
-    // minBytes lowered to 1 (#6365), this gate is the primary defense against
-    // false-positive idle→busy escalation from protocol noise.
-    if (this.framesInWindow >= this.minFrames && this.bytesInWindow >= this.minBytes) {
-      this.resetWindow();
+    const contribution = Math.min(Math.max(0, dataLength), this.maxBytesPerFrame);
+    this.level += contribution;
+
+    if (this.level >= this.activationThreshold) {
+      this.reset();
       return true;
     }
 
     return false;
   }
 
-  resetWindow(): void {
-    this.windowStart = 0;
-    this.framesInWindow = 0;
-    this.bytesInWindow = 0;
-  }
-
   reset(): void {
-    this.resetWindow();
+    this.level = 0;
+    this.lastUpdateMs = 0;
   }
 }
