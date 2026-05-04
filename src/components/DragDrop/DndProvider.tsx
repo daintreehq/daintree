@@ -44,6 +44,16 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
 import type { WorktreeSnapshot } from "@shared/types";
+import {
+  resolveContainerId,
+  filterTerminalsByContainer,
+  detectTargetContainer,
+  resolveTargetIndex,
+  isGridFull,
+  resolveGroupPlacementIndex,
+  findGroupIndex,
+  type OverDropData,
+} from "./dropResolution";
 
 // Placeholder ID used when dragging from dock to grid
 export const GRID_PLACEHOLDER_ID = "__grid-placeholder__";
@@ -392,13 +402,8 @@ export function DndProvider({ children }: DndProviderProps) {
     if (overData?.container) {
       detectedContainer = overData.container;
     } else if (overData?.sortable?.containerId) {
-      const containerId = overData.sortable.containerId;
-      if (containerId === "grid-container") {
-        detectedContainer = "grid";
-      } else if (containerId === "dock-container") {
-        detectedContainer = "dock";
-      }
-      // Accordion containers (worktree-*-accordion) are ignored for grid/dock detection
+      const resolved = resolveContainerId(overData.sortable.containerId);
+      if (resolved) detectedContainer = resolved;
     } else {
       const overId = over.id as string;
       // Skip accordion drop targets for non-accordion drags
@@ -601,98 +606,39 @@ export function DndProvider({ children }: DndProviderProps) {
 
       // Only process grid/dock reorder logic if this is NOT a worktree drop
       if (!isWorktreeDrop) {
-        // Priority 1: Check if dropped on a container directly
-        if (overData?.container) {
-          targetContainer = overData.container;
-        }
-        // Priority 2: Check sortable containerId
-        else if (overData?.sortable?.containerId) {
-          const containerId = overData.sortable.containerId;
-          if (containerId === "grid-container") {
-            targetContainer = "grid";
-          } else if (containerId === "dock-container") {
-            targetContainer = "dock";
-          }
-        }
-        // Priority 3: Use tracked overContainer state
-        else if (dropContainer) {
-          targetContainer = dropContainer;
-        }
-        // Priority 4: Determine from terminal location (skip accordion targets)
-        else {
-          // Skip accordion drop targets for grid/dock drags
-          const isAccordionTarget = parseAccordionDragId(overId) !== null;
-          if (!isAccordionTarget) {
-            const overTerminal = freshTerminalsById[overId];
-            if (overTerminal) {
-              targetContainer = overTerminal.location === "dock" ? "dock" : "grid";
-            }
-          }
-        }
+        const isAccordionTarget = parseAccordionDragId(overId) !== null;
+        targetContainer =
+          detectTargetContainer(
+            overData as OverDropData | undefined,
+            dropContainer,
+            overId,
+            freshTerminalsById,
+            isAccordionTarget
+          ) ??
+          sourceLocation ??
+          "grid";
 
-        // Get target index
-        let targetIndex = 0;
-        const containerTerminals: TerminalInstance[] = [];
-        for (const tid of freshTerminalIds) {
-          const t = freshTerminalsById[tid];
-          if (!t || (t.worktreeId ?? undefined) !== (activeWorktreeId ?? undefined)) continue;
-          if (targetContainer === "dock") {
-            if (t.location === "dock") containerTerminals.push(t);
-          } else {
-            if (t.location === "grid" || t.location === undefined) containerTerminals.push(t);
-          }
-        }
-
-        // Find index of item we're dropping on (skip accordion IDs)
         const isAccordionOver = parseAccordionDragId(overId) !== null;
-        const overTerminalIndex = isAccordionOver
-          ? -1
-          : containerTerminals.findIndex((t) => t.id === overId);
-        if (overTerminalIndex !== -1) {
-          targetIndex = overTerminalIndex;
-        } else if (overData?.sortable?.index !== undefined) {
-          targetIndex = overData.sortable.index;
-        } else {
-          // Dropping on empty container - append to end
-          targetIndex = containerTerminals.length;
-        }
+        const targetIndex = resolveTargetIndex(
+          freshTerminalsById,
+          freshTerminalIds,
+          activeWorktreeId,
+          targetContainer,
+          overId,
+          overData?.sortable?.index,
+          isAccordionOver
+        );
 
         // Block cross-container move from dock to grid if grid is full
-        // Count unique groups (each tab group = 1 slot)
-        const gridTerminals: TerminalInstance[] = [];
-        for (const tid of freshTerminalIds) {
-          const t = freshTerminalsById[tid];
-          if (
-            t &&
-            (t.location === "grid" || t.location === undefined) &&
-            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-          ) {
-            gridTerminals.push(t);
-          }
-        }
-        // Count groups using TabGroup data from store
-        const tabGroups = usePanelStore.getState().tabGroups;
-        const panelsInGroups = new Set<string>();
-        let explicitGroupCount = 0;
-        for (const group of tabGroups.values()) {
-          if (
-            group.location === "grid" &&
-            (group.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-          ) {
-            explicitGroupCount++;
-            group.panelIds.forEach((pid) => panelsInGroups.add(pid));
-          }
-        }
-        // Count ungrouped panels (each is its own virtual group)
-        let ungroupedCount = 0;
-        for (const t of gridTerminals) {
-          if (!panelsInGroups.has(t.id)) {
-            ungroupedCount++;
-          }
-        }
-        const isGridFull = explicitGroupCount + ungroupedCount >= getMaxGridCapacity();
+        const gridIsFull = isGridFull(
+          freshTerminalsById,
+          freshTerminalIds,
+          activeWorktreeId,
+          usePanelStore.getState().tabGroups,
+          getMaxGridCapacity()
+        );
 
-        if (sourceLocation === "dock" && targetContainer === "grid" && isGridFull) {
+        if (sourceLocation === "dock" && targetContainer === "grid" && gridIsFull) {
           // Grid is full, cancel the drop - still run stabilization below
         } else if (isGroupDrag) {
           // Group-aware drag: move the entire tab group
@@ -702,36 +648,18 @@ export function DndProvider({ children }: DndProviderProps) {
               .getState()
               .getTabGroups(targetContainer, activeWorktreeId ?? undefined);
 
-            // Derive fromGroupIndex from live tabGroups by finding the group containing
-            // the dragged terminal. activeData.sourceIndex is the panel index among all
-            // individual panels, not the group index, so it cannot be used here.
-            // Prefer groupId match (explicit groups); fall back to panel membership.
-            let fromGroupIndex = tabGroupsAtLocation.findIndex((g) => g.id === activeData.groupId);
-            if (fromGroupIndex === -1) {
-              fromGroupIndex = tabGroupsAtLocation.findIndex((g) =>
-                g.panelIds.includes(activeData.terminal.id)
-              );
-            }
+            const fromGroupIndex = findGroupIndex(
+              tabGroupsAtLocation,
+              activeData.groupId,
+              activeData.terminal.id
+            );
 
             if (fromGroupIndex !== -1) {
-              // Find target group index: match by group ID or panel membership, then
-              // fall back to sortable.index when overId is a synthetic placeholder.
-              let toGroupIndex = -1;
-              for (let i = 0; i < tabGroupsAtLocation.length; i++) {
-                if (
-                  tabGroupsAtLocation[i]!.id === overId ||
-                  tabGroupsAtLocation[i]!.panelIds.includes(overId)
-                ) {
-                  toGroupIndex = i;
-                  break;
-                }
-              }
-              if (toGroupIndex === -1) {
-                toGroupIndex =
-                  overData?.sortable?.index !== undefined
-                    ? Math.min(Math.max(0, overData.sortable.index), tabGroupsAtLocation.length - 1)
-                    : tabGroupsAtLocation.length - 1;
-              }
+              const toGroupIndex = resolveGroupPlacementIndex(
+                tabGroupsAtLocation,
+                overId,
+                overData?.sortable?.index
+              );
 
               if (fromGroupIndex !== toGroupIndex) {
                 reorderTabGroups(fromGroupIndex, toGroupIndex, targetContainer, activeWorktreeId);
@@ -754,29 +682,12 @@ export function DndProvider({ children }: DndProviderProps) {
               );
 
               if (movedGroupIndex !== -1) {
-                // Find target group index: match by group ID or panel membership, then
-                // fall back to sortable.index when overId is a synthetic placeholder.
-                let toGroupIndex = -1;
-                for (let i = 0; i < tabGroupsAtLocation.length; i++) {
-                  if (
-                    tabGroupsAtLocation[i]!.id === overId ||
-                    tabGroupsAtLocation[i]!.panelIds.includes(overId)
-                  ) {
-                    toGroupIndex = i;
-                    break;
-                  }
-                }
-                if (toGroupIndex === -1) {
-                  toGroupIndex =
-                    overData?.sortable?.index !== undefined
-                      ? Math.min(
-                          Math.max(0, overData.sortable.index),
-                          tabGroupsAtLocation.length - 1
-                        )
-                      : tabGroupsAtLocation.length - 1;
-                }
+                const toGroupIndex = resolveGroupPlacementIndex(
+                  tabGroupsAtLocation,
+                  overId,
+                  overData?.sortable?.index
+                );
 
-                // If we're not already at the target position, reorder
                 if (movedGroupIndex !== toGroupIndex) {
                   reorderTabGroups(
                     movedGroupIndex,
@@ -800,6 +711,12 @@ export function DndProvider({ children }: DndProviderProps) {
           // Same container reorder
           if (sourceLocation === targetContainer) {
             if (draggedId !== overId) {
+              const containerTerminals = filterTerminalsByContainer(
+                freshTerminalsById,
+                freshTerminalIds,
+                targetContainer,
+                activeWorktreeId
+              );
               const oldIndex = containerTerminals.findIndex((t) => t.id === draggedId);
 
               if (oldIndex !== -1 && targetIndex !== -1 && oldIndex !== targetIndex) {
