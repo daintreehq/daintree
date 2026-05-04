@@ -1501,9 +1501,9 @@ describe("McpServerService", () => {
 
       const sessions = (
         service as unknown as {
-          sessions: Map<string, { transport: { close: () => Promise<void> } }>;
+          _sessions: Map<string, { transport: { close: () => Promise<void> } }>;
         }
-      ).sessions;
+      )._sessions;
 
       const transport = {
         sessionId: "test-session",
@@ -1537,9 +1537,9 @@ describe("McpServerService", () => {
 
       const sessions = (
         service as unknown as {
-          sessions: Map<string, { transport: { close: () => Promise<void> } }>;
+          _sessions: Map<string, { transport: { close: () => Promise<void> } }>;
         }
-      ).sessions;
+      )._sessions;
 
       const transport = {
         sessionId: "active-session",
@@ -3103,8 +3103,8 @@ describe("McpServerService", () => {
     const ids = result.tools.map((tool) => tool.name);
     expect(ids).toContain("actions.list");
 
-    const httpSessions = (service as unknown as { httpSessions: Map<string, unknown> })
-      .httpSessions;
+    const httpSessions = (service as unknown as { _httpSessions: Map<string, unknown> })
+      ._httpSessions;
     expect(httpSessions.size).toBe(1);
   });
 
@@ -3134,8 +3134,8 @@ describe("McpServerService", () => {
 
     await client.callTool({ name: "actions.list", arguments: {} });
 
-    const httpSessions = (service as unknown as { httpSessions: Map<string, unknown> })
-      .httpSessions;
+    const httpSessions = (service as unknown as { _httpSessions: Map<string, unknown> })
+      ._httpSessions;
     const sessionIdsAfterFirst = Array.from(httpSessions.keys());
     expect(sessionIdsAfterFirst).toHaveLength(1);
 
@@ -3252,9 +3252,9 @@ describe("McpServerService", () => {
 
       const httpSessions = (
         service as unknown as {
-          httpSessions: Map<string, { transport: { close: () => Promise<void> } }>;
+          _httpSessions: Map<string, { transport: { close: () => Promise<void> } }>;
         }
-      ).httpSessions;
+      )._httpSessions;
 
       const transport = {
         sessionId: "http-test-session",
@@ -4255,8 +4255,8 @@ describe("McpServerService", () => {
       expect(updated.length).toBe(1);
 
       const subs = (
-        service as unknown as { resourceSubscriptions: Map<string, Map<string, () => void>> }
-      ).resourceSubscriptions;
+        service as unknown as { _resourceSubscriptions: Map<string, Map<string, () => void>> }
+      )._resourceSubscriptions;
       const allEmpty = Array.from(subs.values()).every((b) => b.size === 0);
       expect(allEmpty).toBe(true);
     });
@@ -4281,8 +4281,8 @@ describe("McpServerService", () => {
 
       await client.subscribeResource({ uri: "daintree://agent/agent-x/state" });
       const subs = (
-        service as unknown as { resourceSubscriptions: Map<string, Map<string, () => void>> }
-      ).resourceSubscriptions;
+        service as unknown as { _resourceSubscriptions: Map<string, Map<string, () => void>> }
+      )._resourceSubscriptions;
       expect(Array.from(subs.values()).some((b) => b.size > 0)).toBe(true);
 
       await transport.close();
