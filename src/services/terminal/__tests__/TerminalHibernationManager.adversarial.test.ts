@@ -76,6 +76,7 @@ vi.mock("../TerminalScrollbackController", () => ({
 
 vi.mock("@/utils/logger", () => ({
   logDebug: vi.fn(),
+  logWarn: vi.fn(),
   logError: vi.fn(),
 }));
 
@@ -208,6 +209,11 @@ describe("TerminalHibernationManager adversarial", () => {
     (window as unknown as { electron?: unknown }).electron = {
       terminal: {
         reportTitleState: vi.fn(),
+        updateObservedTitle: vi.fn(),
+      },
+      clipboard: {
+        writeSelection: vi.fn().mockResolvedValue(undefined),
+        readSelection: vi.fn().mockResolvedValue({ text: "" }),
       },
     };
 

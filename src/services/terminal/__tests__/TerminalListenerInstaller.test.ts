@@ -381,6 +381,28 @@ describe("installTerminalBoundListeners", () => {
     expect(deps.onEnterPressed).not.toHaveBeenCalled();
   });
 
+  it("fully suppresses onData when input is locked (no fleet write, no user-input notify, no escape clear)", () => {
+    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+    const terminal = makeMockTerminal(captured);
+    const managed = makeMockManaged({ isInputLocked: true });
+    const deps = makeDeps();
+
+    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+    installTerminalBoundListeners(
+      terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+      managed,
+      "t1",
+      deps
+    );
+
+    captured.onData!("hello");
+    captured.onData!("\x1b");
+
+    expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
+    expect(deps.onUserInput).not.toHaveBeenCalled();
+    expect(deps.clearDirectingState).not.toHaveBeenCalled();
+  });
+
   it("clears directing state on escape but not on regular input", () => {
     const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
     const terminal = makeMockTerminal(captured);

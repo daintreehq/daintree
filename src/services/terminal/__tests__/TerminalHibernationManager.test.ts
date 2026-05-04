@@ -62,6 +62,7 @@ vi.mock("../TerminalScrollbackController", () => ({
 
 vi.mock("@/utils/logger", () => ({
   logDebug: vi.fn(),
+  logWarn: vi.fn(),
   logError: vi.fn(),
 }));
 
