@@ -6,10 +6,6 @@ const SIDEBAR_CONTENT_PATH = path.resolve(__dirname, "../SidebarContent.tsx");
 const STATIC_ROW_PATH = path.resolve(__dirname, "../StaticWorktreeRow.tsx");
 const SORTABLE_CARD_PATH = path.resolve(__dirname, "../../DragDrop/SortableWorktreeCard.tsx");
 const WORKTREE_CARD_PATH = path.resolve(__dirname, "../../Worktree/WorktreeCard.tsx");
-const WORKTREE_HEADER_PATH = path.resolve(
-  __dirname,
-  "../../Worktree/WorktreeCard/WorktreeHeader.tsx"
-);
 const WORKTREE_ACTIONS_TOOLBAR_PATH = path.resolve(
   __dirname,
   "../../Worktree/WorktreeCard/WorktreeActionsToolbar.tsx"
