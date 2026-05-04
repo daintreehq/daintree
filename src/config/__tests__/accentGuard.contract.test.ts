@@ -157,6 +157,10 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
   "#5984": [
     "src/components/GitHub/BulkCreateWorktreeDialog.tsx",
     "src/components/Worktree/NewWorktreeDialog.tsx",
+    "src/components/Worktree/views/ExistingBranchPicker.tsx",
+    "src/components/Worktree/views/HighlightBranchText.tsx",
+    "src/components/Worktree/views/IssueSelectorView.tsx",
+    "src/components/Worktree/views/RecipePickerPopover.tsx",
   ],
 
   // #5985: [panels] Exit Focus badge competes with macro-focus ring
