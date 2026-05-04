@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
+import type { SimpleGit } from "simple-git";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
@@ -154,7 +155,7 @@ describe("WorkspaceService external worktree removal", () => {
 
     service["projectRootPath"] = "/test/root";
     service["git"] = mockSimpleGit as any;
-    service["listService"].setGit(mockSimpleGit as any, "/test/root");
+    service["listService"].setGit(mockSimpleGit as unknown as SimpleGit, "/test/root");
   });
 
   afterEach(() => {
