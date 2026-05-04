@@ -1,0 +1,11 @@
+{
+  "agentId": "claude",
+  "settleMs": 12000,
+  "maxWorkingSilenceMs": 1500,
+  "maxWaitingSilenceMs": 2000,
+  "transitions": [
+    { "state": "working", "previousState": "idle", "trigger": "heuristic" },
+    { "state": "waiting", "previousState": "working", "trigger": "timeout" },
+    { "state": "idle", "previousState": "waiting", "trigger": "timeout", "confidence": 0.6 }
+  ]
+}

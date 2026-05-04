@@ -10,6 +10,12 @@ import {
   type ProcessStateValidator,
 } from "../../ActivityMonitor.js";
 import { buildActivityMonitorOptions } from "../../pty/terminalActivityPatterns.js";
+import { AgentStateService } from "../../pty/AgentStateService.js";
+import { events } from "../../events.js";
+import type { AgentStateChanged, AgentStateChangeTrigger } from "../../../schemas/agent.js";
+import type { TerminalInfo } from "../../pty/types.js";
+import type { AgentState } from "../../../../shared/types/agent.js";
+import type { BuiltInAgentId } from "../../../../shared/config/agentIds.js";
 
 export interface RecordedTransition {
   replayMs: number;
@@ -458,6 +464,306 @@ export function matchTransitions(
         index: j,
         actual: recorded[j],
         detail: `unmatched recorded transition: ${recorded[j].state}/${recorded[j].trigger ?? "-"} at ${recorded[j].replayMs}ms`,
+      });
+    }
+  }
+
+  return failures;
+}
+
+// ---------------------------------------------------------------------------
+// FSM-driven replay
+// ---------------------------------------------------------------------------
+
+/**
+ * Recorded `agent:state-changed` payload after the cast was replayed through
+ * the full chain: ActivityMonitor → AgentStateService → events bus.
+ * Captures FSM-level state names (working/waiting/idle/completed/exited),
+ * not ActivityMonitor's internal busy/idle/completed states.
+ */
+export interface RecordedFsmTransition {
+  replayMs: number;
+  state: AgentState;
+  previousState: AgentState;
+  trigger: AgentStateChangeTrigger;
+  confidence: number;
+}
+
+export interface ExpectedFsmTransition {
+  state: AgentState;
+  /** Optional invariant on the source state of the transition. */
+  previousState?: AgentState;
+  trigger?: AgentStateChangeTrigger;
+  /** Allowed delta when matched: |actual - expected| ≤ 0.01. */
+  confidence?: number;
+}
+
+export interface ExpectedFsmFile {
+  agentId?: string;
+  pollingMaxBootMs?: number;
+  settleMs?: number;
+  maxWorkingSilenceMs?: number;
+  maxWaitingSilenceMs?: number;
+  idleDebounceMs?: number;
+  promptFastPathMinQuietMs?: number;
+  /**
+   * Default false (strict). When true, recorded FSM transitions that don't
+   * map to an expected entry are tolerated. Used by fragmented variants
+   * where intentional chunk-boundary noise can introduce extra transitions
+   * (e.g., a brief working→completed→waiting pulse) that don't change the
+   * load-bearing state-sequence invariant.
+   */
+  allowExtraTransitions?: boolean;
+  transitions: ExpectedFsmTransition[];
+}
+
+export interface ReplayCastFsmOpts {
+  agentId?: string;
+  fragmentation?: FragmentationOpts;
+  processStateValidator?: ProcessStateValidator;
+  settleMs?: number;
+  pollingIntervalMs?: number;
+  pollingMaxBootMs?: number;
+  maxWorkingSilenceMs?: number;
+  maxWaitingSilenceMs?: number;
+  idleDebounceMs?: number;
+  promptFastPathMinQuietMs?: number;
+  /**
+   * When true (default), each cast `x` event drives a synthetic
+   * `exit` → `respawn` pair so a fresh agent restarting in the same PTY can
+   * re-enter `working` via the natural busy path. Set false to exercise the
+   * pure `exited` terminal state (no respawn) — the FSM stays in `exited`
+   * and subsequent output cannot advance it.
+   */
+  injectRespawnOnExit?: boolean;
+}
+
+const FSM_REPLAY_TERMINAL_ID = "fsm-replay-terminal";
+
+/**
+ * Replay an asciicast through the full ActivityMonitor → AgentStateService →
+ * events bus chain and record the resulting `agent:state-changed` payloads.
+ *
+ * Handles the cast's `x` (exit) events by driving a synthetic exit→respawn
+ * sequence into the FSM — production wires these from the PTY's `onExit`
+ * callback and from agent re-detection, neither of which run in the replay
+ * environment. The harness owns the events-bus subscription (subscribes
+ * before `monitor.startPolling()`, unsubscribes after dispose) so callers
+ * never need to clean up listener state.
+ */
+export async function replayCastFsm(
+  castPath: string,
+  opts: ReplayCastFsmOpts = {}
+): Promise<RecordedFsmTransition[]> {
+  const cast = parseCast(castPath);
+  const term = createHeadlessTerminal(cast.cols, cast.rows);
+  const getVisibleLines = makeGetVisibleLines(term);
+  const getCursorLine = makeGetCursorLine(term);
+
+  const baseOptions = buildActivityMonitorOptions(opts.agentId, {
+    getVisibleLines,
+    getCursorLine,
+  });
+
+  const pollingIntervalMs = opts.pollingIntervalMs ?? DEFAULT_POLLING_INTERVAL_MS;
+  const recorded: RecordedFsmTransition[] = [];
+  const startedAt = Date.now();
+
+  // Stub TerminalInfo with the minimal fields AgentStateService and the
+  // AgentStateChangedSchema actually consume. The runtime fields are typed
+  // as never/empty so the schema validates without touching them.
+  const terminal: TerminalInfo = {
+    id: FSM_REPLAY_TERMINAL_ID,
+    cwd: "/tmp/fsm-replay",
+    shell: "/bin/sh",
+    spawnedAt: startedAt,
+    launchAgentId: opts.agentId as BuiltInAgentId | undefined,
+    agentState: "idle",
+    analysisEnabled: false,
+    lastInputTime: 0,
+    lastOutputTime: 0,
+    lastCheckTime: 0,
+    restartCount: 0,
+    ptyProcess: {} as never,
+    outputBuffer: "",
+    semanticBuffer: [],
+  };
+
+  const agentStateService = new AgentStateService();
+
+  // Filter by terminalId so events from other tests/services running on the
+  // shared singleton bus don't pollute the recorded sequence.
+  const listener = (payload: AgentStateChanged): void => {
+    if (payload.terminalId !== FSM_REPLAY_TERMINAL_ID) return;
+    recorded.push({
+      replayMs: Date.now() - startedAt,
+      state: payload.state,
+      previousState: payload.previousState,
+      trigger: payload.trigger,
+      confidence: payload.confidence,
+    });
+  };
+  const unsubscribe = events.on("agent:state-changed", listener);
+
+  const monitor = new ActivityMonitor(
+    FSM_REPLAY_TERMINAL_ID,
+    startedAt,
+    (_id, _spawnedAt, state, metadata) => {
+      agentStateService.handleActivityState(terminal, state, metadata);
+    },
+    {
+      ...baseOptions,
+      processStateValidator: opts.processStateValidator ?? NULL_PROCESS_STATE_VALIDATOR,
+      pollingIntervalMs,
+      pollingMaxBootMs: opts.pollingMaxBootMs ?? baseOptions.pollingMaxBootMs,
+      maxWorkingSilenceMs: opts.maxWorkingSilenceMs ?? baseOptions.maxWorkingSilenceMs,
+      maxWaitingSilenceMs: opts.maxWaitingSilenceMs ?? baseOptions.maxWaitingSilenceMs,
+      idleDebounceMs: opts.idleDebounceMs ?? baseOptions.idleDebounceMs,
+      promptFastPathMinQuietMs:
+        opts.promptFastPathMinQuietMs ?? baseOptions.promptFastPathMinQuietMs,
+      onWaitingTimeout: () => {
+        agentStateService.updateAgentState(terminal, { type: "watchdog-timeout" }, "timeout", 0.6);
+      },
+    }
+  );
+
+  try {
+    monitor.startPolling();
+
+    const rng = opts.fragmentation ? mulberry32(opts.fragmentation.seed) : null;
+    const maxSplits = opts.fragmentation?.maxSplits ?? DEFAULT_FRAGMENT_MAX_SPLITS;
+
+    let currentMs = 0;
+    for (const event of cast.events) {
+      const delta = Math.max(0, event.absoluteMs - currentMs);
+      if (delta > 0) {
+        vi.advanceTimersByTime(delta);
+        currentMs = event.absoluteMs;
+      }
+
+      if (event.kind === "o") {
+        const bytes = Buffer.from(event.data, "utf8");
+        const fragments = rng ? fragmentBytes(bytes, rng, maxSplits) : [bytes];
+        for (const fragment of fragments) {
+          if (fragment.length === 0) continue;
+          writeBytesToTerminal(term, fragment);
+        }
+        monitor.onData(event.data);
+      } else if (event.kind === "i") {
+        monitor.onInput(event.data);
+      } else if (event.kind === "r") {
+        const match = /^(\d+)x(\d+)$/.exec(event.data);
+        if (match) {
+          const newCols = Number(match[1]);
+          const newRows = Number(match[2]);
+          try {
+            term.resize(Math.max(1, newCols), Math.max(1, newRows));
+          } catch {
+            // Some xterm builds throw if dims unchanged — ignore.
+          }
+          monitor.notifyResize();
+        }
+      } else if (event.kind === "x") {
+        // Drive exit so the FSM reaches `exited`. Production wires this from
+        // the PTY's onExit callback. The optional respawn injection (default
+        // on) lets a fresh agent restarting in the same PTY re-enter
+        // `working` via the natural busy → working path; production fires
+        // respawn from agent re-detection. Set injectRespawnOnExit=false to
+        // exercise the pure `exited` terminal state.
+        const parsedCode = Number.parseInt(event.data, 10);
+        const code = Number.isFinite(parsedCode) ? parsedCode : 0;
+        agentStateService.updateAgentState(terminal, { type: "exit", code }, "exit", 1.0);
+        if (opts.injectRespawnOnExit ?? true) {
+          agentStateService.updateAgentState(terminal, { type: "respawn" }, "activity", 1.0);
+        }
+      }
+      // Ignore "m" (markers) — they don't drive state.
+    }
+
+    const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
+    if (settleMs > 0) {
+      vi.advanceTimersByTime(settleMs);
+    }
+  } finally {
+    monitor.dispose();
+    term.dispose();
+    unsubscribe();
+  }
+
+  return recorded;
+}
+
+export function loadExpectedFsm(expectedPath: string): ExpectedFsmFile {
+  const raw = readFileSync(expectedPath, "utf8");
+  const parsed = JSON.parse(raw) as ExpectedFsmFile;
+  if (!Array.isArray(parsed.transitions)) {
+    throw new Error(`Expected file missing 'transitions' array: ${expectedPath}`);
+  }
+  return parsed;
+}
+
+export interface FsmMatchOpts {
+  /**
+   * When true, recorded transitions that don't map to an expected entry are
+   * tolerated. Default is strict — any unmatched recorded transition fails.
+   */
+  allowExtraTransitions?: boolean;
+}
+
+export interface FsmMatchFailure {
+  kind: "missing" | "extra";
+  index: number;
+  expected?: ExpectedFsmTransition;
+  actual?: RecordedFsmTransition;
+  detail?: string;
+}
+
+/**
+ * Strict in-order match for FSM transitions. Each expected entry must match
+ * a recorded transition by `state` (required); `previousState`, `trigger`,
+ * and `confidence` are asserted only when the expected entry names them.
+ * Recorded transitions that don't map to an expected entry produce `extra`
+ * failures unless `allowExtraTransitions` is true.
+ */
+export function matchFsmTransitions(
+  recorded: RecordedFsmTransition[],
+  expected: ExpectedFsmTransition[],
+  opts: FsmMatchOpts = {}
+): FsmMatchFailure[] {
+  const failures: FsmMatchFailure[] = [];
+  const matched = new Set<number>();
+  let cursor = 0;
+
+  for (let i = 0; i < expected.length; i++) {
+    const want = expected[i];
+    let foundIndex = -1;
+    for (let j = cursor; j < recorded.length; j++) {
+      if (matched.has(j)) continue;
+      const got = recorded[j];
+      if (got.state !== want.state) continue;
+      if (want.previousState !== undefined && got.previousState !== want.previousState) continue;
+      if (want.trigger !== undefined && got.trigger !== want.trigger) continue;
+      if (want.confidence !== undefined && Math.abs(got.confidence - want.confidence) > 0.01)
+        continue;
+      foundIndex = j;
+      break;
+    }
+    if (foundIndex === -1) {
+      failures.push({ kind: "missing", index: i, expected: want });
+      continue;
+    }
+    matched.add(foundIndex);
+    cursor = foundIndex + 1;
+  }
+
+  if (!opts.allowExtraTransitions) {
+    for (let j = 0; j < recorded.length; j++) {
+      if (matched.has(j)) continue;
+      failures.push({
+        kind: "extra",
+        index: j,
+        actual: recorded[j],
+        detail: `unmatched recorded transition: ${recorded[j].previousState}→${recorded[j].state}/${recorded[j].trigger} at ${recorded[j].replayMs}ms`,
       });
     }
   }

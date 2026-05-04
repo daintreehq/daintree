@@ -1,0 +1,14 @@
+{
+  "agentId": "claude",
+  "settleMs": 6000,
+  "maxWorkingSilenceMs": 1500,
+  "_comment": "allowExtraTransitions is on because the second agent boot can fire either an output-trigger working transition followed by a separate watchdog/timeout-driven waiting pulse, or fold them together depending on activity-window timing. The load-bearing invariant is the exit/respawn lifecycle, not the post-respawn settle.",
+  "transitions": [
+    { "state": "working", "previousState": "idle", "trigger": "heuristic" },
+    { "state": "waiting", "previousState": "working", "trigger": "timeout" },
+    { "state": "exited", "previousState": "waiting", "trigger": "exit", "confidence": 1 },
+    { "state": "idle", "previousState": "exited", "trigger": "activity" },
+    { "state": "working", "previousState": "idle", "trigger": "output" }
+  ],
+  "allowExtraTransitions": true
+}
