@@ -551,6 +551,127 @@ describe("AgentStateService", () => {
       expect(terminal.agentState).toBe("working");
       expect(terminal.hysteresisLockedUntil).toBeUndefined();
     });
+
+    it("respawn (passive→passive) does not lock out a subsequent low-confidence active transition", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "exited" });
+
+      // Lifecycle respawn at confidence 1.0 — passive→passive (exited→idle).
+      // Per design, this must NOT arm the hysteresis lock; otherwise a fresh
+      // agent session detected within 500ms would have its first low-confidence
+      // busy/start signal silently suppressed.
+      service.updateAgentState(terminal, { type: "respawn" });
+      expect(terminal.agentState).toBe("idle");
+      expect(terminal.hysteresisLockedUntil).toBeUndefined();
+
+      vi.setSystemTime(Date.now() + 100);
+      const changed = service.handleActivityState(terminal, "busy", {
+        trigger: "pattern",
+        patternConfidence: 0.7,
+      });
+
+      expect(changed).toBeUndefined();
+      expect(terminal.agentState).toBe("working");
+    });
+
+    it("passive→passive high-confidence transition does not arm the lock", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "completed" });
+
+      // completed→waiting at confidence 1.0 (both PASSIVE) must not lock —
+      // the window protects active/passive boundary settling, not within-group
+      // movement through the FSM.
+      service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0);
+      expect(terminal.agentState).toBe("waiting");
+      expect(terminal.hysteresisLockedUntil).toBeUndefined();
+    });
+
+    it("suppression leaves all terminal state and emitted events untouched", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "idle" });
+      const stateChanges: unknown[] = [];
+      const activityEvents: unknown[] = [];
+
+      service.updateAgentState(terminal, { type: "input" });
+      const lockSnapshot = terminal.hysteresisLockedUntil;
+      const lastChangeSnapshot = terminal.lastStateChange;
+      const stateSnapshot = terminal.agentState;
+      const waitingReasonSnapshot = terminal.waitingReason;
+
+      // Subscribe AFTER the priming transition to isolate the suppressed case.
+      events.on("agent:state-changed", (payload) => stateChanges.push(payload));
+      events.on("terminal:activity", (payload) => activityEvents.push(payload));
+
+      vi.setSystemTime(Date.now() + 100);
+      const changed = service.handleActivityState(terminal, "idle", { trigger: "timeout" });
+
+      expect(changed).toBeUndefined();
+      expect(terminal.agentState).toBe(stateSnapshot);
+      expect(terminal.lastStateChange).toBe(lastChangeSnapshot);
+      expect(terminal.waitingReason).toBe(waitingReasonSnapshot);
+      expect(terminal.hysteresisLockedUntil).toBe(lockSnapshot);
+      expect(stateChanges).toHaveLength(0);
+      expect(activityEvents).toHaveLength(0);
+    });
+
+    it("guard boundary: suppression at 499ms, pass-through at 500ms", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "idle" });
+
+      service.updateAgentState(terminal, { type: "input" });
+      const lockedUntil = terminal.hysteresisLockedUntil;
+      expect(lockedUntil).toBeDefined();
+
+      // Strictly inside the window — `now < lockedUntil` is true.
+      vi.setSystemTime((lockedUntil ?? 0) - 1);
+      let changed = service.handleActivityState(terminal, "idle", { trigger: "timeout" });
+      expect(changed).toBeUndefined();
+      expect(terminal.agentState).toBe("working");
+
+      // At the boundary — `now < lockedUntil` is false, transition allowed.
+      vi.setSystemTime(lockedUntil ?? 0);
+      changed = service.handleActivityState(terminal, "idle", { trigger: "timeout" });
+      expect(changed).toBeUndefined();
+      expect(terminal.agentState).toBe("waiting");
+    });
+
+    it("threshold boundary: confidence 0.85 passes guard and arms lock; 0.849 is suppressed", () => {
+      // 0.85 sets the lock — armed transition through a passive→active boundary.
+      const a = new AgentStateService();
+      const t1 = createTerminal({ agentState: "idle" });
+      a.transitionState(t1, { type: "busy" }, "ai-classification", 0.85, t1.spawnedAt);
+      expect(t1.agentState).toBe("working");
+      expect(t1.hysteresisLockedUntil).toBeDefined();
+
+      // 0.849 is below threshold — passes ONLY when no lock is active. Use a
+      // fresh terminal so the guard does not fire on the first transition;
+      // then verify a second 0.849 cross-direction event would be suppressed
+      // by the lock that 0.85 just armed on the first terminal.
+      const t2 = createTerminal({ agentState: "idle" });
+      const changedFresh = a.transitionState(
+        t2,
+        { type: "busy" },
+        "heuristic",
+        0.849,
+        t2.spawnedAt
+      );
+      expect(changedFresh).toBe(true);
+      expect(t2.agentState).toBe("working");
+      expect(t2.hysteresisLockedUntil).toBeUndefined();
+
+      // Within the lock armed by t1's 0.85 transition, an opposite-direction
+      // 0.849 event MUST be suppressed.
+      vi.setSystemTime(Date.now() + 100);
+      const changedSuppressed = a.transitionState(
+        t1,
+        { type: "prompt" },
+        "heuristic",
+        0.849,
+        t1.spawnedAt
+      );
+      expect(changedSuppressed).toBe(false);
+      expect(t1.agentState).toBe("working");
+    });
   });
 
   it("emits completed event with non-negative duration", () => {

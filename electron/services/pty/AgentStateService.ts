@@ -26,7 +26,12 @@ const ACTIVE_GROUP: ReadonlySet<AgentState> = new Set(["working", "directing"]);
 const PASSIVE_GROUP: ReadonlySet<AgentState> = new Set(["idle", "waiting", "completed", "exited"]);
 
 function getStateGroup(state: AgentState): "active" | "passive" {
-  return ACTIVE_GROUP.has(state) ? "active" : "passive";
+  if (ACTIVE_GROUP.has(state)) return "active";
+  if (PASSIVE_GROUP.has(state)) return "passive";
+  // Exhaustiveness — TypeScript errors here if AgentState gains a new
+  // variant that hasn't been classified into either group.
+  const _exhaustive: never = state;
+  return _exhaustive;
 }
 
 function isOppositeDirectionTransition(from: AgentState, to: AgentState): boolean {
@@ -220,9 +225,16 @@ export class AgentStateService {
     terminal.agentState = newState;
     terminal.lastStateChange = getStateChangeTimestamp();
 
-    // Refresh the hysteresis lock on every high-confidence transition so the
-    // most recent strong signal always anchors the window.
-    if (inferredConfidence >= HIGH_CONFIDENCE_THRESHOLD) {
+    // Refresh the hysteresis lock only when a high-confidence transition
+    // actually crosses the active/passive boundary. Passive→passive shifts
+    // (e.g., respawn exited→idle, or the FSM's working→completed→waiting
+    // chain) shouldn't lock out a subsequent low-confidence active signal —
+    // the window protects fresh active/passive settling, not session resets
+    // or sequential passive-state observations.
+    if (
+      inferredConfidence >= HIGH_CONFIDENCE_THRESHOLD &&
+      isOppositeDirectionTransition(previousState, newState)
+    ) {
       terminal.hysteresisLockedUntil = Date.now() + HYSTERESIS_WINDOW_MS;
     }
 
