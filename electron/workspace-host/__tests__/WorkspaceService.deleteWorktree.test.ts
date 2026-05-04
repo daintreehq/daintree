@@ -143,6 +143,10 @@ describe("WorkspaceService.deleteWorktree", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    // Reset implementations too — `clearAllMocks` only wipes call history, so
+    // a custom `mockImplementation` from a prior test would leak otherwise.
+    mockSimpleGit.raw.mockReset().mockResolvedValue(undefined);
+    mockSimpleGit.branch.mockReset().mockResolvedValue({ current: "main" });
     mockSendEvent = vi.fn();
 
     const WorkspaceServiceModule = await import("../WorkspaceService.js");
@@ -178,6 +182,12 @@ describe("WorkspaceService.deleteWorktree", () => {
   }
 
   it("sends delete-worktree-result success after removing monitor", async () => {
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+      if (n(p as string) === "/test/worktree") return undefined;
+      throw new Error("ENOENT");
+    });
+
     createAndRegisterMonitor();
 
     await service.deleteWorktree("req-1", "/test/worktree");
@@ -190,6 +200,10 @@ describe("WorkspaceService.deleteWorktree", () => {
       })
     );
     expect(service["monitors"].has("/test/worktree")).toBe(false);
+    const removeCalls = mockSimpleGit.raw.mock.calls.filter(
+      (c) => Array.isArray(c[0]) && c[0][0] === "worktree" && c[0][1] === "remove"
+    );
+    expect(removeCalls.length).toBe(1);
   });
 
   it("sends error result for unknown worktreeId", async () => {
@@ -225,7 +239,9 @@ describe("WorkspaceService.deleteWorktree", () => {
     const mockReadFile = vi.mocked(fsModule.readFile);
 
     mockAccess.mockImplementation(async (p: unknown) => {
-      if (n(p as string).endsWith("/test/root/.daintree/config.json")) return undefined;
+      const norm = n(p as string);
+      if (norm.endsWith("/test/root/.daintree/config.json")) return undefined;
+      if (norm === "/test/worktree") return undefined;
       throw new Error("ENOENT");
     });
     mockReadFile.mockResolvedValue(JSON.stringify(teardownConfig));
@@ -377,6 +393,137 @@ describe("WorkspaceService.deleteWorktree", () => {
         error: expect.stringContaining("uncommitted changes and untracked files"),
       })
     );
+  });
+
+  it("prunes instead of removing when worktree directory is missing (#6669)", async () => {
+    const fsModule = await import("fs/promises");
+    const mockAccess = vi.mocked(fsModule.access);
+    const enoent: NodeJS.ErrnoException = Object.assign(new Error("ENOENT"), {
+      code: "ENOENT",
+    });
+    mockAccess.mockRejectedValue(enoent);
+
+    const gitCalls: string[][] = [];
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+      gitCalls.push(args);
+      return undefined;
+    });
+
+    createAndRegisterMonitor();
+
+    await service.deleteWorktree("req-missing", "/test/worktree");
+
+    const removeCalls = gitCalls.filter((c) => c[0] === "worktree" && c[1] === "remove");
+    const pruneCalls = gitCalls.filter((c) => c[0] === "worktree" && c[1] === "prune");
+    expect(removeCalls.length).toBe(0);
+    expect(pruneCalls.length).toBe(1);
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "delete-worktree-result",
+        requestId: "req-missing",
+        success: true,
+      })
+    );
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "worktree-removed", worktreeId: "/test/worktree" })
+    );
+    expect(service["monitors"].has("/test/worktree")).toBe(false);
+  });
+
+  it("succeeds when missing path triggers prune even if prune itself fails (#6669)", async () => {
+    const fsModule = await import("fs/promises");
+    const mockAccess = vi.mocked(fsModule.access);
+    const enoent: NodeJS.ErrnoException = Object.assign(new Error("ENOENT"), {
+      code: "ENOENT",
+    });
+    mockAccess.mockRejectedValue(enoent);
+
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "prune") {
+        throw new Error("fatal: prune failed (unrelated)");
+      }
+      return undefined;
+    });
+
+    createAndRegisterMonitor();
+
+    await service.deleteWorktree("req-prune-fail", "/test/worktree");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "delete-worktree-result",
+        requestId: "req-prune-fail",
+        success: true,
+      })
+    );
+    expect(service["monitors"].has("/test/worktree")).toBe(false);
+  });
+
+  it("falls back to prune when remove returns 'is not a working tree' (#6669)", async () => {
+    const fsModule = await import("fs/promises");
+    const mockAccess = vi.mocked(fsModule.access);
+    mockAccess.mockImplementation(async (p: unknown) => {
+      if (n(p as string) === "/test/worktree") return undefined;
+      throw new Error("ENOENT");
+    });
+
+    const gitCalls: string[][] = [];
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+      gitCalls.push(args);
+      if (args[0] === "worktree" && args[1] === "remove") {
+        throw new Error("fatal: '/test/worktree' is not a working tree");
+      }
+      return undefined;
+    });
+
+    createAndRegisterMonitor();
+
+    await service.deleteWorktree("req-stale", "/test/worktree");
+
+    const removeCalls = gitCalls.filter((c) => c[0] === "worktree" && c[1] === "remove");
+    const pruneCalls = gitCalls.filter((c) => c[0] === "worktree" && c[1] === "prune");
+    expect(removeCalls.length).toBe(1);
+    expect(pruneCalls.length).toBe(1);
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "delete-worktree-result",
+        requestId: "req-stale",
+        success: true,
+      })
+    );
+    expect(service["monitors"].has("/test/worktree")).toBe(false);
+  });
+
+  it("propagates non-stale git errors from worktree remove", async () => {
+    const fsModule = await import("fs/promises");
+    const mockAccess = vi.mocked(fsModule.access);
+    mockAccess.mockImplementation(async (p: unknown) => {
+      if (n(p as string) === "/test/worktree") return undefined;
+      throw new Error("ENOENT");
+    });
+
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "remove") {
+        throw new Error("fatal: locked working tree");
+      }
+      return undefined;
+    });
+
+    createAndRegisterMonitor();
+
+    await service.deleteWorktree("req-locked", "/test/worktree");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "delete-worktree-result",
+        requestId: "req-locked",
+        success: false,
+        error: expect.stringContaining("locked"),
+      })
+    );
+    expect(service["monitors"].has("/test/worktree")).toBe(true);
   });
 
   it("skips teardown when no config file exists", async () => {
