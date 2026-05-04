@@ -230,28 +230,58 @@ describe("WatcherController", () => {
     expect(ctrl.currentMode).toBe("recursive");
   });
 
-  it("stop(true) resets the retry budget; stop(false) preserves it", () => {
+  it("stop(true) resets the retry budget — restart allows a full 5-retry budget", () => {
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
     const host = makeHost({ isCurrent: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
+    // Burn 3 retries on the first run.
     ctrl.start();
-    // Stop with reset.
-    ctrl.stop(true);
-    expect(ctrl.hasWatcher).toBe(false);
-    expect(ctrl.currentMode).toBe("none");
+    vi.advanceTimersByTime(31_000);
+    vi.advanceTimersByTime(31_000);
+    vi.advanceTimersByTime(31_000);
 
-    // Restart — fresh 5-retry budget.
+    ctrl.stop(true);
+
+    // Restart — fresh budget should mean recursive can succeed within budget.
     ctrl.start();
-    for (let i = 0; i < 5; i++) {
+    // Now allow recursive to succeed at the next retry — budget was reset
+    // so retryCount=1 at this point. If reset failed and budget was still
+    // close to MAX_RETRIES, recursive might never get an upgrade.
+    mockRecursiveStartResult = true;
+    vi.advanceTimersByTime(31_000);
+    expect(ctrl.currentMode).toBe("recursive");
+  });
+
+  it("stop(false) preserves the retry budget — exhausted budget stays exhausted across rotation", () => {
+    mockRecursiveStartResult = false;
+    mockGitOnlyStartResult = true;
+    const host = makeHost({ isCurrent: true });
+    const ctrl = new WatcherController(host as WatcherControllerHost);
+
+    // Exhaust the entire 5-retry budget on the first run.
+    ctrl.start();
+    for (let i = 0; i < 6; i++) {
       vi.advanceTimersByTime(31_000);
     }
-    // Should have used 6 starts: 1 initial fail + 5 retry attempts (each fails).
-    // Budget exhaust check.
+
+    // Capture starts after exhaustion — confirm we hit the cap.
+    const startsAtExhaustion = watcherStartCallCount;
+    vi.advanceTimersByTime(120_000);
+    expect(watcherStartCallCount).toBe(startsAtExhaustion);
+
+    // Rotation should NOT grant a fresh budget — stop(false) preserves count.
+    ctrl.stop(false);
+    ctrl.start();
+    const startsAfterRotation = watcherStartCallCount;
+
+    // Even if recursive could succeed now, no retry should fire because
+    // the budget was already exhausted before rotation.
     mockRecursiveStartResult = true;
     vi.advanceTimersByTime(120_000);
-    // After exhaustion, no further escalation.
+    expect(watcherStartCallCount).toBe(startsAfterRotation);
+    expect(ctrl.currentMode).toBe("git-only");
   });
 
   it("ensureState() stops the watcher when gitWatchEnabled flips off", () => {

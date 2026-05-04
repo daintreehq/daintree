@@ -268,6 +268,23 @@ describe("FetchScheduler", () => {
     expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
   });
 
+  it("recovers from a rejected onExecuteFetch — emits update + reschedules", async () => {
+    const host = makeHost({
+      onExecuteFetch: vi.fn().mockRejectedValue(new Error("network down")),
+    });
+    const scheduler = new FetchScheduler(host as FetchSchedulerHost);
+
+    await scheduler.triggerNow();
+    // Two update emits: in-flight start, and post-completion.
+    expect(host.onUpdate).toHaveBeenCalledTimes(2);
+    // No throw escapes — failure is swallowed.
+
+    // After the rejected fetch resolves, the next-cadence timer is armed.
+    // (Focused tier 30-45s.)
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("clearTimer() cancels an armed timer without disposing", async () => {
     const host = makeHost();
     const scheduler = new FetchScheduler(host as FetchSchedulerHost);
