@@ -48,7 +48,6 @@ import { projectStore } from "../services/ProjectStore.js";
 import { store } from "../store.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import {
-  getCcrConfigService,
   setCcrConfigService,
   getResourceProfileService,
   setResourceProfileService,
