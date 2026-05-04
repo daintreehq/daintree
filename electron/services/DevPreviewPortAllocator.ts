@@ -24,6 +24,7 @@ export async function allocatePort(
   }
   return new Promise<number>((resolve, reject) => {
     const srv = net.createServer();
+    srv.once("error", (err) => reject(err));
     srv.listen(0, "127.0.0.1", () => {
       const addr = srv.address();
       const port = typeof addr === "object" && addr ? addr.port : 0;
