@@ -622,12 +622,7 @@ export async function replayCastFsm(
       promptFastPathMinQuietMs:
         opts.promptFastPathMinQuietMs ?? baseOptions.promptFastPathMinQuietMs,
       onWaitingTimeout: () => {
-        agentStateService.updateAgentState(
-          terminal,
-          { type: "watchdog-timeout" },
-          "timeout",
-          0.6
-        );
+        agentStateService.updateAgentState(terminal, { type: "watchdog-timeout" }, "timeout", 0.6);
       },
     }
   );
