@@ -1,4 +1,4 @@
-import { lazy, type ComponentType, type ReactNode } from "react";
+import { lazy, type ReactNode } from "react";
 import {
   Blocks,
   Github,
@@ -28,10 +28,13 @@ export interface SettingsTabEntry {
   readonly importKind: "eager" | "lazy";
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- heterogeneous component storage
+type AnyComponent = React.ComponentType<any>;
+
 export interface LazySettingsTabEntry extends SettingsTabEntry {
   readonly importKind: "lazy";
   readonly importer: () => Promise<unknown>;
-  readonly LazyComponent: ComponentType<Record<string, unknown>>;
+  readonly LazyComponent: AnyComponent;
   readonly needsSubtabs?: boolean;
   readonly needsOnClose?: boolean;
   readonly needsOnSettingsChange?: boolean;
@@ -39,7 +42,7 @@ export interface LazySettingsTabEntry extends SettingsTabEntry {
 
 export interface EagerSettingsTabEntry extends SettingsTabEntry {
   readonly importKind: "eager";
-  readonly Component: ComponentType<Record<string, unknown>>;
+  readonly Component: AnyComponent;
 }
 
 export type AnySettingsTabEntry = LazySettingsTabEntry | EagerSettingsTabEntry;
@@ -116,7 +119,7 @@ const LazyPrivacyDataTab = lazy(() =>
 
 // ── Registry (module-level const — stable identity for Fuse.js WeakMap) ─
 
-export const SETTINGS_REGISTRY: readonly AnySettingsTabEntry[] = [
+export const SETTINGS_REGISTRY = [
   // ═══ Global — General ═══
   {
     id: "general",
@@ -313,7 +316,7 @@ export const SETTINGS_REGISTRY: readonly AnySettingsTabEntry[] = [
     importer: importTroubleshootingTab,
     LazyComponent: LazyTroubleshootingTab,
   } satisfies LazySettingsTabEntry,
-];
+] as const satisfies readonly AnySettingsTabEntry[];
 
 // ── Project tab IDs (not in registry — rendered with unique prop patterns) ─
 

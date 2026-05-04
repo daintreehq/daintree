@@ -820,24 +820,21 @@ function SettingsDialogInner({
                       className={activeTab === entry.id ? "" : "hidden"}
                     >
                       {entry.importKind === "eager" ? (
-                        entry.id === "general" ? (
-                          <GeneralTab
-                            appVersion={appVersion}
-                            onNavigateToAgents={(agentId?: string) => {
-                              markTabVisited("agents");
-                              if (agentId) {
-                                setActiveSubtabs((prev) => ({ ...prev, agents: agentId }));
-                              }
-                              startTransition(() => setActiveTab("agents"));
-                            }}
-                            activeSubtab={activeSubtabs["general"] ?? null}
-                            onSubtabChange={(id) =>
-                              setActiveSubtabs((prev) => ({ ...prev, general: id }))
+                        // Only GeneralTab is eager — render with its specific props
+                        <GeneralTab
+                          appVersion={appVersion}
+                          onNavigateToAgents={(agentId?: string) => {
+                            markTabVisited("agents");
+                            if (agentId) {
+                              setActiveSubtabs((prev) => ({ ...prev, agents: agentId }));
                             }
-                          />
-                        ) : (
-                          <entry.Component />
-                        )
+                            startTransition(() => setActiveTab("agents"));
+                          }}
+                          activeSubtab={activeSubtabs["general"] ?? null}
+                          onSubtabChange={(id) =>
+                            setActiveSubtabs((prev) => ({ ...prev, general: id }))
+                          }
+                        />
                       ) : visitedTabs.has(tabId) ? (
                         <Suspense fallback={null}>
                           <LazyTabContent
