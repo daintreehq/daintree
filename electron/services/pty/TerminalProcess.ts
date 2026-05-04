@@ -34,6 +34,7 @@ import type { PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
 import { handleOscColorQueries } from "./OscResponder.js";
 import { classifyExitOutput, shouldTriggerFallback } from "./FallbackErrorClassifier.js";
+import { SynchronizedFrameDetector } from "./SynchronizedFrameDetector.js";
 
 // Extracted modules
 import {
@@ -167,6 +168,7 @@ export class TerminalProcess {
 
   private _scrollback: number;
   private headlessResponderDisposable: { dispose: () => void } | null = null;
+  private synchronizedFrameDetector: SynchronizedFrameDetector | null = null;
   private sessionSnapshotter!: SessionSnapshotter;
 
   private readonly terminalInfo: TerminalInfo;
@@ -331,6 +333,15 @@ export class TerminalProcess {
     const serializeAddon: SerializeAddonType = new SerializeAddon();
     headlessTerminal.loadAddon(serializeAddon);
 
+    // Structural-signal tier (#6668): hook the headless parser for DEC mode
+    // 2026 brackets so frame snapshots can drive the analyzer. Lifetime ties
+    // to the headless terminal — disposed alongside it in disposeHeadless().
+    // The callback resolves activityMonitor lazily so frame events fire even
+    // for plain terminals that are promoted to agents post-spawn.
+    this.synchronizedFrameDetector = new SynchronizedFrameDetector(headlessTerminal, (snapshot) => {
+      this.activityMonitor?.onSynchronizedFrame(snapshot);
+    });
+
     this.terminalInfo = {
       id,
       projectId: options.projectId,
@@ -494,6 +505,14 @@ export class TerminalProcess {
         // Ignore disposal errors
       }
       this.headlessResponderDisposable = null;
+    }
+    if (this.synchronizedFrameDetector) {
+      try {
+        this.synchronizedFrameDetector.dispose();
+      } catch {
+        // Ignore disposal errors
+      }
+      this.synchronizedFrameDetector = null;
     }
     try {
       terminal.headlessTerminal.dispose();
