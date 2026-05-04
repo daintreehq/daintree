@@ -1,3 +1,4 @@
+import path from "path";
 import { events } from "../events.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
@@ -37,7 +38,7 @@ export class WorkspaceHostEventRouter {
       case "worktree-update": {
         const worktree = event.worktree;
         if (worktree.path) {
-          this.worktreePathToProject.set(worktree.path, entry.projectPath);
+          this.worktreePathToProject.set(path.resolve(worktree.path), entry.projectPath);
         }
         sendToEntryWindows(entry, CHANNELS.EVENTS_PUSH, {
           name: "worktree:update",
