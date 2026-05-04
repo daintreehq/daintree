@@ -9,15 +9,15 @@ interface ScheduledCall {
 }
 
 // `node-util.promisify(execFile)` resolves with `{ stdout, stderr }` because
-// the real `child_process.execFile` carries `[util.promisify.custom]`. Mirror
-// that symbol on the mock so the probe sees the same shape.
+// the real `child_process.execFile` carries `util.promisify.custom`. Use the
+// well-known symbol directly instead of importing `node:util` — vi.hoisted
+// callbacks run before module imports complete.
 const execFileMock = vi.hoisted(() => {
-  const util = require("node:util") as typeof import("node:util");
   const calls: ScheduledCall[] = [];
   const fn = (..._args: unknown[]) => {
     throw new Error("execFile mock was called with callback form (unexpected)");
   };
-  Object.defineProperty(fn, util.promisify.custom, {
+  Object.defineProperty(fn, Symbol.for("nodejs.util.promisify.custom"), {
     value: (
       cmd: string,
       args: readonly string[] | null | undefined,

@@ -337,6 +337,7 @@ export class TerminalProcess {
 
     this.semanticBufferManager = new SemanticBufferManager(this.terminalInfo);
     this.processTreeKiller = new ProcessTreeKiller(ptyProcess, deps.processTreeCache);
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     this.foregroundProbe = new ForegroundProcessGroupProbe({
       get ptyPid() {
@@ -886,6 +887,7 @@ export class TerminalProcess {
   }
 
   gracefulShutdown(): Promise<string | null> {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     return runGracefulShutdown({
       terminalInfo: this.terminalInfo,
@@ -1381,6 +1383,7 @@ export class TerminalProcess {
   }
 
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     runHandleAgentDetection(
       {
