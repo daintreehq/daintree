@@ -233,6 +233,8 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Setup/SystemToolsStep.tsx",
     "src/components/Sidebar/SidebarContent.tsx",
     "src/components/Terminal/ContentGrid.tsx",
+    "src/components/Terminal/ContentGridDefault.tsx",
+    "src/components/Terminal/ContentGridTwoPaneSplit.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
     "src/components/Terminal/InlineStatusBanner.tsx",
     "src/components/Terminal/PromptHistoryPalette.tsx",
