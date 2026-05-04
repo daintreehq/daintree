@@ -6,7 +6,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { getThemeChromeMetrics, setAppTheme } from "../helpers/theme";
 
-const PROJECT_NAME = "Light Theme Smoke";
+const PROJECT_NAME = "light-theme-smoke";
 const LIGHT_SCHEME_IDS = BUILT_IN_APP_SCHEMES.filter((scheme) => scheme.type === "light").map(
   (scheme) => scheme.id
 );

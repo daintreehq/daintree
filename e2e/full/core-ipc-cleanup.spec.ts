@@ -108,13 +108,13 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
     try {
       const beforeRenderer = await getRendererListenerSnapshot(ctx.window, RENDERER_CHANNELS);
 
-      ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixture.repoB, "IPC Project B");
+      ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixture.repoB, "project-B");
       await ctx.window.waitForTimeout(T_SETTLE);
 
-      ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, "IPC Cleanup");
+      ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, "ipc-cleanup");
       await ctx.window.waitForTimeout(T_SETTLE);
 
-      ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, "IPC Project B");
+      ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, "project-B");
       await ctx.window.waitForTimeout(T_SETTLE);
 
       const afterRenderer = await getRendererListenerSnapshot(ctx.window, RENDERER_CHANNELS);

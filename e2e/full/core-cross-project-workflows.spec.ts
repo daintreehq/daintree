@@ -263,9 +263,9 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
         });
 
         // Find positions of each project in the option list
-        const posC = optionTexts.findIndex((t) => t.includes("Cross Project C"));
-        const posB = optionTexts.findIndex((t) => t.includes("Cross Project B"));
-        const posA = optionTexts.findIndex((t) => t.includes("Cross Project A"));
+        const posC = optionTexts.findIndex((t) => t.includes(PROJECT_C));
+        const posB = optionTexts.findIndex((t) => t.includes(PROJECT_B));
+        const posA = optionTexts.findIndex((t) => t.includes(PROJECT_A));
 
         expect(posC).toBeGreaterThanOrEqual(0);
         expect(posB).toBeGreaterThanOrEqual(0);

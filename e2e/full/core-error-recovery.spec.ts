@@ -126,10 +126,10 @@ test.describe.serial("Core: Error Recovery — Missing Project", () => {
   test.beforeAll(async () => {
     fixture = createMultiProjectFixture();
     ctx = await launchApp();
-    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.repoA, "Project A");
-    ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixture.repoB, "Project B");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.repoA, "project-A");
+    ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixture.repoB, "project-B");
     // Switch back to A so B is inactive (checkMissingProjects skips the active project)
-    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, "Project A");
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, "project-A");
   });
 
   test.afterAll(async () => {

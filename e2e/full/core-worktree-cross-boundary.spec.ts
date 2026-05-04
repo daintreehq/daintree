@@ -257,7 +257,7 @@ test.describe.serial("Core: Worktree Selection Persists Across Project Switch", 
     );
 
     ctx = await launchApp();
-    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.repoA, "Project A");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.repoA, "project-A-cross");
   });
 
   test.afterAll(async () => {
@@ -286,7 +286,7 @@ test.describe.serial("Core: Worktree Selection Persists Across Project Switch", 
 
     // Switch to Project B
     await test.step("switch to Project B", async () => {
-      await addAndSwitchToProject(ctx.app, window, fixture.repoB, "Project B");
+      await addAndSwitchToProject(ctx.app, window, fixture.repoB, "project-B-cross");
       // Verify Project B loaded
       await expect(window.locator("[data-worktree-branch]").first()).toBeVisible({
         timeout: T_LONG,
@@ -295,7 +295,7 @@ test.describe.serial("Core: Worktree Selection Persists Across Project Switch", 
 
     // Switch back to Project A
     await test.step("switch back to Project A", async () => {
-      await selectExistingProject(window, "Project A");
+      await selectExistingProject(window, "project-A-cross");
       await expect(window.locator("[data-worktree-branch]").first()).toBeVisible({
         timeout: T_LONG,
       });

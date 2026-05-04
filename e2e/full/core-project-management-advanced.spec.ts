@@ -9,8 +9,8 @@ import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
 let ctx: AppContext;
-const PRIMARY_NAME = "Primary Advanced";
-const SECONDARY_NAME = "Secondary Remove";
+const PRIMARY_NAME = "primary-advanced";
+const SECONDARY_NAME = "secondary-remove";
 
 test.describe.serial("Core: Project Management Advanced", () => {
   test.beforeAll(async () => {

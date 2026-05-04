@@ -11,8 +11,8 @@ import { getGridPanelCount } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
-const PROJECT_A = "Lifecycle Project A";
-const PROJECT_B = "Lifecycle Project B";
+const PROJECT_A = "lifecycle-a";
+const PROJECT_B = "lifecycle-b";
 const RECIPE_NAME = "Lifecycle Recipe";
 
 let ctx: AppContext;

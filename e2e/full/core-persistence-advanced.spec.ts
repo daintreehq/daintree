@@ -79,7 +79,7 @@ test.describe.serial("Persistence: Layout & Window across restart", () => {
     const { window: w2, app: app2 } = ctx;
 
     // Wait for project to restore
-    await expect(w2.locator(SEL.toolbar.projectSwitcherTrigger)).toContainText("Persist Layout", {
+    await expect(w2.locator(SEL.toolbar.projectSwitcherTrigger)).toContainText("persist-layout", {
       timeout: T_MEDIUM,
     });
 
