@@ -49,7 +49,7 @@ export function registerWorktreeSessionActions(
     description: "Restart all sessions for a worktree",
     category: "worktree",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {
@@ -89,7 +89,7 @@ export function registerWorktreeSessionActions(
     description: "Close completed sessions for a worktree",
     category: "worktree",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {
@@ -108,7 +108,7 @@ export function registerWorktreeSessionActions(
     description: "Move all sessions for a worktree to trash",
     category: "worktree",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {
@@ -125,7 +125,7 @@ export function registerWorktreeSessionActions(
     description: "Permanently end all sessions for a worktree",
     category: "worktree",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {

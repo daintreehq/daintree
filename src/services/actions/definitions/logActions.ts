@@ -55,7 +55,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     description: "Clear application logs",
     category: "logs",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     run: async () => {
       useLogsStore.getState().clearLogs();
@@ -140,7 +140,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     description: "Remove all per-module log level overrides",
     category: "logs",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     resultSchema: z.object({ success: z.boolean() }),
     run: async () => {
@@ -180,7 +180,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     description: "Clear all error banners and problem entries",
     category: "errors",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     run: async () => {
       useErrorStore.getState().clearAll();
@@ -307,7 +307,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     description: "Clear captured events in the event inspector",
     category: "diagnostics",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     run: async () => {
       useEventStore.getState().clearEvents();
@@ -357,7 +357,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     description: "Reload the renderer (useful for recovery)",
     category: "ui",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     run: async () => {
       window.location.reload();

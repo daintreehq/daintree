@@ -68,10 +68,10 @@ describe("worktree resource action definitions", () => {
   });
 
   it.each([
-    ["worktree.resource.provision", "confirm"],
-    ["worktree.resource.teardown", "confirm"],
+    ["worktree.resource.provision", "safe"],
+    ["worktree.resource.teardown", "safe"],
     ["worktree.resource.resume", "safe"],
-    ["worktree.resource.pause", "confirm"],
+    ["worktree.resource.pause", "safe"],
     ["worktree.resource.status", "safe"],
     ["worktree.resource.connect", "safe"],
   ] as const)("%s has danger=%s", (id, expectedDanger) => {

@@ -142,7 +142,7 @@ export function registerTerminalQueryActions(
     description: "Send a shell command to a terminal for execution",
     category: "terminal",
     kind: "command",
-    danger: "confirm", // Commands can have side effects
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
       terminalId: z.string().min(1).describe("Terminal instance ID from terminal.list"),

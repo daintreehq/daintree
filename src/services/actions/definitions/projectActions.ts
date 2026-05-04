@@ -122,7 +122,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     description: "Switch to another project",
     category: "project",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string() }),
     run: async (args: unknown) => {
@@ -137,7 +137,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     description: "Update project metadata",
     category: "project",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
       projectId: z.string(),
@@ -163,7 +163,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     description: "Remove a project from the list",
     category: "project",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string() }),
     run: async (args: unknown) => {
@@ -178,7 +178,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     description: "Close a project and kill its processes",
     category: "project",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string() }),
     run: async (args: unknown) => {
@@ -198,7 +198,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     description: "Close the currently active project and return to the welcome screen",
     category: "project",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     run: async () => {
       const projectId = useProjectStore.getState().currentProject?.id;
@@ -256,7 +256,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     description: "Save a project's settings",
     category: "project",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string(), settings: z.record(z.string(), z.unknown()) }),
     run: async (args: unknown) => {

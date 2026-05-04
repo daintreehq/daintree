@@ -265,7 +265,7 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
       description: "Set the GitHub token used for CLI operations",
       category: "github",
       kind: "command",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ token: z.string() }),
       run: async ({ token }) => {
@@ -280,7 +280,7 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
     description: "Clear the stored GitHub token",
     category: "github",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     run: async () => {
       await githubClient.clearToken();

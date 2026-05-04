@@ -25,3 +25,47 @@ if (typeof globalThis !== "undefined") {
     };
   }
 }
+
+// Node 25 exposes a broken native `localStorage` stub on `globalThis` (no
+// `clear`/`getItem`/etc) that shadows JSDOM's Storage and leaks the warning
+// `--localstorage-file was provided without a valid path`. JSDOM's env setup
+// skips configurable:false globals, so we install an in-memory Storage shim
+// in jsdom contexts that need a working Storage. Detect the broken stub by
+// checking for a missing `getItem` method.
+if (typeof window !== "undefined") {
+  const candidate = (globalThis as { localStorage?: Storage }).localStorage;
+  const isBroken = !candidate || typeof candidate.getItem !== "function";
+  if (isBroken) {
+    const data = new Map<string, string>();
+    const memoryStorage: Storage = {
+      get length() {
+        return data.size;
+      },
+      clear() {
+        data.clear();
+      },
+      getItem(key: string) {
+        return data.has(key) ? (data.get(key) ?? null) : null;
+      },
+      setItem(key: string, value: string) {
+        data.set(key, String(value));
+      },
+      removeItem(key: string) {
+        data.delete(key);
+      },
+      key(index: number) {
+        return Array.from(data.keys())[index] ?? null;
+      },
+    };
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      writable: true,
+      value: memoryStorage,
+    });
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      writable: true,
+      value: memoryStorage,
+    });
+  }
+}

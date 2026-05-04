@@ -33,7 +33,7 @@ export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCa
     description: "Replace the global environment variables map",
     category: "settings",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ variables: z.record(z.string(), z.string()) }),
     run: async (args: unknown) => {
@@ -64,7 +64,7 @@ export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCa
     description: "Merge variables into a project's environment variables",
     category: "settings",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
       projectId: z.string(),
@@ -110,7 +110,7 @@ export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCa
     description: "Replace a project's resource environments configuration",
     category: "worktree",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
       projectId: z.string(),

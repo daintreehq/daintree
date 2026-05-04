@@ -424,7 +424,7 @@ describe("project action hardening", () => {
     expect(onConfirmCloseActiveProject).not.toHaveBeenCalled();
   });
 
-  it("rejects unconfirmed agent project switches before mutating store state", async () => {
+  it("allows agent-driven project switches (danger:safe — agents are trusted to drive Daintree)", async () => {
     const { service } = buildService(registerProjectActions);
     const state = useProjectStore.getState();
 
@@ -434,11 +434,8 @@ describe("project action hardening", () => {
       { source: "agent" }
     );
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe("CONFIRMATION_REQUIRED");
-    }
-    expect(state.switchProject).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(state.switchProject).toHaveBeenCalledWith("project-1");
   });
 
   it("wraps project store failures as execution errors", async () => {
@@ -638,7 +635,8 @@ describe("system action hardening", () => {
     ).resolves.toEqual({ ok: true, result: [{ path: "src", type: "directory" }] });
   });
 
-  it("keeps confirmation gates on destructive system actions for agent sources", async () => {
+  it("allows agent-driven artifact patches (danger:safe — patches are an IDE primitive)", async () => {
+    mocks.artifactClient.applyPatch.mockResolvedValueOnce({ ok: true });
     const { service } = buildService(registerSystemActions);
 
     const result = await service.dispatch(
@@ -647,11 +645,11 @@ describe("system action hardening", () => {
       { source: "agent" }
     );
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe("CONFIRMATION_REQUIRED");
-    }
-    expect(mocks.artifactClient.applyPatch).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(mocks.artifactClient.applyPatch).toHaveBeenCalledWith({
+      patchContent: "--- a\n+++ b",
+      cwd: "/repo",
+    });
   });
 
   it("propagates downstream copyTree errors through ActionService", async () => {
@@ -973,7 +971,7 @@ describe("preferences action hardening", () => {
     }
   });
 
-  it("calls Electron window actions directly and keeps quit actions confirmation-gated for agents", async () => {
+  it("calls Electron window actions directly and allows agent-driven quit (danger:safe)", async () => {
     resetEscapeStack();
     const escapeHandler = vi.fn();
     registerEscape(escapeHandler);
@@ -989,10 +987,7 @@ describe("preferences action hardening", () => {
     expect(escapeHandler).toHaveBeenCalledTimes(1);
 
     const quitResult = await service.dispatch("app.quit", undefined, { source: "agent" });
-    expect(quitResult.ok).toBe(false);
-    if (!quitResult.ok) {
-      expect(quitResult.error.code).toBe("CONFIRMATION_REQUIRED");
-    }
-    expect(mocks.appClient.quit).not.toHaveBeenCalled();
+    expect(quitResult.ok).toBe(true);
+    expect(mocks.appClient.quit).toHaveBeenCalledTimes(1);
   });
 });

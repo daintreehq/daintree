@@ -60,11 +60,11 @@ describe("env action definitions", () => {
 
   it.each([
     ["env.global.get", "query", "safe", "settings"],
-    ["env.global.set", "command", "confirm", "settings"],
+    ["env.global.set", "command", "safe", "settings"],
     ["env.project.get", "query", "safe", "settings"],
-    ["env.project.set", "command", "confirm", "settings"],
+    ["env.project.set", "command", "safe", "settings"],
     ["worktree.resource.config.get", "query", "safe", "worktree"],
-    ["worktree.resource.config.set", "command", "confirm", "worktree"],
+    ["worktree.resource.config.set", "command", "safe", "worktree"],
   ] as const)("%s has expected kind/danger/category", (id, kind, danger, category) => {
     const def = registry.get(id)!();
     expect(def.kind).toBe(kind);

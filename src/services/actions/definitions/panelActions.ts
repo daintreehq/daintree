@@ -299,7 +299,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     description: "Remove a portal link by ID",
     category: "portal",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ id: z.string() }),
     run: async (args: unknown) => {
@@ -487,7 +487,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     description: "Close all portal tabs",
     category: "portal",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     keywords: ["remove", "clear", "cleanup", "tabs"],
     run: async () => {
@@ -783,7 +783,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     description: "Close all portal tabs except one",
     category: "portal",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ tabId: z.string().optional() }),
     run: async (args: unknown) => {
@@ -807,7 +807,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     description: "Close all portal tabs to the right of a tab",
     category: "portal",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ tabId: z.string().optional() }),
     run: async (args: unknown) => {

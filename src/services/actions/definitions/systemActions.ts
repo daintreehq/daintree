@@ -167,7 +167,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       description: "Save content to a file via save dialog",
       category: "artifacts",
       kind: "command",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
         content: z.string(),
@@ -187,7 +187,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       description: "Apply a unified diff patch to the filesystem",
       category: "artifacts",
       kind: "command",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
         patchContent: z.string(),
@@ -219,12 +219,9 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       description: "Generate worktree context (returns content)",
       category: "copyTree",
       kind: "query",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
       keywords: ["context", "dump", "snapshot", "tree"],
-      // `danger: "confirm"` gates the UI on a token-cost confirmation, but the
-      // operation itself is read-only and not destructive.
-      mcpAnnotations: { destructiveHint: false },
       argsSchema: z
         .object({
           worktreeId: z
@@ -249,10 +246,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       description: "Generate worktree context and copy to clipboard",
       category: "copyTree",
       kind: "command",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
-      // Writes to clipboard only; not a destructive world-state mutation.
-      mcpAnnotations: { destructiveHint: false },
       argsSchema: z
         .object({
           worktreeId: z
@@ -277,7 +272,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       description: "Inject worktree context into a terminal",
       category: "copyTree",
       kind: "command",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
       keywords: ["context", "inject", "dump"],
       argsSchema: z.object({

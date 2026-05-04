@@ -130,7 +130,7 @@ export function registerPreferencesActions(
     description: "Reload the renderer via Electron webContents",
     category: "ui",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     keywords: ["refresh", "restart", "renderer", "soft"],
     run: async () => {
@@ -144,7 +144,7 @@ export function registerPreferencesActions(
     description: "Reload the renderer ignoring cache",
     category: "ui",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     keywords: ["refresh", "cache", "hard", "renderer"],
     run: async () => {
@@ -158,7 +158,7 @@ export function registerPreferencesActions(
     description: "Toggle Electron DevTools for the current window",
     category: "ui",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     keywords: ["developer", "inspect", "console", "debug"],
     run: async () => {
@@ -214,7 +214,7 @@ export function registerPreferencesActions(
     description: "Close the current window",
     category: "ui",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     keywords: ["dismiss", "shut", "exit", "hide"],
     run: async () => {
@@ -310,7 +310,7 @@ export function registerPreferencesActions(
     description: "Update settings for an agent",
     category: "settings",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ agentId: z.string(), settings: AgentSettingsEntrySchema }),
     run: async (args: unknown) => {
@@ -332,7 +332,7 @@ export function registerPreferencesActions(
     description: "Reset settings for one agent or all agents",
     category: "settings",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     keywords: ["defaults", "restore", "clear", "agents"],
     argsSchema: z
@@ -405,7 +405,7 @@ export function registerPreferencesActions(
     description: "Reset all keybinding overrides",
     category: "settings",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     keywords: ["shortcuts", "hotkeys", "defaults", "restore"],
     run: async () => {
@@ -802,7 +802,7 @@ export function registerPreferencesActions(
     description: "Quit Daintree",
     category: "app",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     keywords: ["exit", "close", "shutdown", "leave"],
     run: async () => {
@@ -816,7 +816,7 @@ export function registerPreferencesActions(
     description: "Force quit Daintree immediately (no graceful shutdown)",
     category: "app",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     keywords: ["exit", "kill", "shutdown", "terminate"],
     run: async () => {

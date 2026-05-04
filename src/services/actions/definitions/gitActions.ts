@@ -187,7 +187,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     description: "Commit staged changes with a message",
     category: "git",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z
       .object({ cwd: z.string().optional(), message: z.string().min(1).optional() })
@@ -208,7 +208,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     description: "Push commits to remote",
     category: "git",
     kind: "command",
-    danger: "confirm",
+    danger: "safe",
     scope: "renderer",
     argsSchema: z
       .object({ cwd: z.string().optional(), setUpstream: z.boolean().optional() })

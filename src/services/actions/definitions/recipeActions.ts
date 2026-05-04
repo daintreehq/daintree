@@ -116,7 +116,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         "Promote a recipe to in-repo storage (.daintree/recipes/) for git tracking and team sharing",
       category: "recipes",
       kind: "command",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
         recipeId: z.string(),

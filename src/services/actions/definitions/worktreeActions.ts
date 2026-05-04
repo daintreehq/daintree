@@ -208,7 +208,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       description: "Create a new worktree",
       category: "worktree",
       kind: "command",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
         rootPath: z.string().describe("Root path of the git repository"),
@@ -635,7 +635,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       description: "Generate and copy context for a worktree to clipboard",
       category: "worktree",
       kind: "command",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
       argsSchema: z
         .object({
@@ -682,7 +682,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       description: "Alias for worktree.copyTree",
       category: "worktree",
       kind: "command",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
       argsSchema: z
         .object({
@@ -957,7 +957,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       description: "Run resource provisioning commands for a worktree",
       category: "worktree",
       kind: "command",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
       isEnabled: (ctx: ActionContext) => {
@@ -993,7 +993,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       description: "Run resource teardown commands for a worktree",
       category: "worktree",
       kind: "command",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
       isEnabled: (ctx: ActionContext) => {
@@ -1065,7 +1065,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       description: "Pause the resource associated with a worktree",
       category: "worktree",
       kind: "command",
-      danger: "confirm",
+      danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
       isEnabled: (ctx: ActionContext) => {
