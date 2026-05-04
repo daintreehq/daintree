@@ -13,6 +13,16 @@ import { isNonKeyboardInput } from "./inputUtils";
 import { installLinuxPrimarySelectionListeners } from "./primarySelection";
 import { writeTerminalInputOrFleet } from "./fleetInputRouter";
 
+// Debounce: coalesce a burst of OSC 0/2 title changes from agent shells
+// (which can emit many per second) into a single panel-store / main-process
+// update.
+const OBSERVED_TITLE_DEBOUNCE_MS = 150;
+
+// Hysteresis: a "waiting" title must persist this long before we report it.
+// Working titles fire immediately; the asymmetric debounce prevents flicker
+// when an agent briefly idles mid-task.
+const WAITING_TITLE_HYSTERESIS_MS = 250;
+
 /**
  * Callback surface needed by `installTerminalBoundListeners`. Both
  * `TerminalInstanceService.getOrCreate()` (create path) and
@@ -210,7 +220,7 @@ export function installTerminalBoundListeners(
             error: formatErrorMessage(err, "Failed to update panel store observed title"),
           });
         }
-      }, 150);
+      }, OBSERVED_TITLE_DEBOUNCE_MS);
     });
     managed.listeners.push(() => {
       observedTitleDisposable.dispose();
@@ -277,7 +287,7 @@ export function installTerminalBoundListeners(
               window.electron.terminal.reportTitleState(id, "waiting");
             }
           }
-        }, 250);
+        }, WAITING_TITLE_HYSTERESIS_MS);
       }
     });
     managed.listeners.push(() => {
