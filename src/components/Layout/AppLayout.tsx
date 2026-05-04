@@ -192,7 +192,13 @@ export function AppLayout({
   }, [layout.gestureSidebarHidden, layout.savedPanelState, currentProject?.id, isHydrated]);
 
   const handleToggleFocusMode = async () => {
-    if (layout.isFocusMode) {
+    // Gesture-active signal is "snapshot present", not the combined
+    // isFocusMode flag — that flag also flips when the Toolbar button hides
+    // only the worktree sidebar, and using it here would treat that single
+    // toolbar action as a gesture exit (clearing the sidebar gesture instead
+    // of entering the gesture and hiding the assistant).
+    const gestureActive = useFocusStore.getState().gestureSnapshot !== null;
+    if (gestureActive) {
       if (layout.savedPanelState) {
         setSidebarWidth((layout.savedPanelState as PanelState).sidebarWidth);
       }
@@ -311,6 +317,18 @@ export function AppLayout({
     window.addEventListener("daintree:reset-sidebar-width", handleResetSidebarWidth);
     return () =>
       window.removeEventListener("daintree:reset-sidebar-width", handleResetSidebarWidth);
+  }, []);
+
+  useEffect(() => {
+    // Bridge for stores that need to suppress xterm resize events without
+    // pulling sidebarToggle directly (avoids circular imports — sidebarToggle
+    // reads worktree state). Stores dispatch this event; AppLayout invokes
+    // the suppression helper that knows about both grid panels and the
+    // assistant terminal.
+    const handleSuppress = () => suppressSidebarResizes();
+    window.addEventListener("daintree:suppress-sidebar-resizes", handleSuppress);
+    return () =>
+      window.removeEventListener("daintree:suppress-sidebar-resizes", handleSuppress);
   }, []);
 
   // Sync macro focus region visibility from layout state

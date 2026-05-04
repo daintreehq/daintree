@@ -54,11 +54,26 @@ const createFocusStore: StateCreator<FocusState> = (set, get) => ({
 
   toggleFocusMode: (currentPanelState, visibility) =>
     set((state) => {
-      if (state.isFocusMode) {
+      // Exit only when the double-click gesture itself is active (snapshot
+      // present). The combined `isFocusMode` flag also flips for sidebar-only
+      // toggles (Toolbar button) and would otherwise poison the entry path:
+      // if the user hid the sidebar via the toolbar, then double-clicked, we
+      // want to enter the gesture and hide the assistant — not "exit" a
+      // gesture that was never started.
+      if (state.gestureSnapshot !== null) {
+        // Revert exactly what the gesture hid. Pre-existing suppression
+        // (e.g. sidebar already hidden by the Toolbar before the gesture
+        // entered) stays put — the snapshot only owns the deltas it caused.
         return {
-          gestureSidebarHidden: false,
-          gestureAssistantHidden: false,
-          isFocusMode: false,
+          gestureSidebarHidden: state.gestureSnapshot.hidSidebar
+            ? false
+            : state.gestureSidebarHidden,
+          gestureAssistantHidden: state.gestureSnapshot.hidAssistant
+            ? false
+            : state.gestureAssistantHidden,
+          isFocusMode:
+            (state.gestureSnapshot.hidSidebar ? false : state.gestureSidebarHidden) ||
+            (state.gestureSnapshot.hidAssistant ? false : state.gestureAssistantHidden),
           gestureSnapshot: null,
           savedPanelState: null,
         };
@@ -75,8 +90,8 @@ const createFocusStore: StateCreator<FocusState> = (set, get) => ({
       }
 
       return {
-        gestureSidebarHidden: sidebarVisible,
-        gestureAssistantHidden: assistantVisible,
+        gestureSidebarHidden: sidebarVisible || state.gestureSidebarHidden,
+        gestureAssistantHidden: assistantVisible || state.gestureAssistantHidden,
         isFocusMode: true,
         gestureSnapshot: { hidSidebar: sidebarVisible, hidAssistant: assistantVisible },
         savedPanelState: { ...currentPanelState },
@@ -113,26 +128,19 @@ const createFocusStore: StateCreator<FocusState> = (set, get) => ({
       return state;
     }),
 
+  // Toolbar-button path: flips sidebar suppression without recording a
+  // gesture snapshot. The snapshot is owned by the double-click gesture's
+  // Snapshot & Revert state machine; an explicit toolbar toggle is not part
+  // of that gesture and must not poison its entry/exit detection.
   setSidebarGestureHidden: (hidden, currentPanelState) =>
     set((state) => {
       if (state.gestureSidebarHidden === hidden) return state;
       const cloned = currentPanelState ? { ...currentPanelState } : null;
-      const nextSnapshot: GestureSnapshot | null =
-        hidden || state.gestureAssistantHidden
-          ? {
-              hidSidebar: hidden,
-              hidAssistant: state.gestureSnapshot?.hidAssistant ?? state.gestureAssistantHidden,
-            }
-          : null;
-      const nextSavedPanelState =
-        hidden || state.gestureAssistantHidden
-          ? (cloned ?? state.savedPanelState)
-          : null;
+      const stillActive = hidden || state.gestureAssistantHidden;
       return {
         gestureSidebarHidden: hidden,
-        isFocusMode: hidden || state.gestureAssistantHidden,
-        gestureSnapshot: nextSnapshot,
-        savedPanelState: nextSavedPanelState,
+        isFocusMode: stillActive,
+        savedPanelState: stillActive ? (cloned ?? state.savedPanelState) : null,
       };
     }),
 

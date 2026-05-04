@@ -754,9 +754,12 @@ export function registerPreferencesActions(
         useHelpPanelStore
           .getState()
           .setTerminal(result.result.terminalId, agentId, session?.sessionId ?? null);
+        // Always clear the assistant gesture — a successful launch should
+        // make the panel visible regardless of whether isOpen was already
+        // true (gesture-hidden) or had to be flipped on.
+        useFocusStore.getState().clearAssistantGesture();
         if (!useHelpPanelStore.getState().isOpen) {
           suppressSidebarResizes();
-          useFocusStore.getState().clearAssistantGesture();
           useHelpPanelStore.getState().setOpen(true);
         }
         window.electron.help.markTerminal(result.result.terminalId).catch(() => {});

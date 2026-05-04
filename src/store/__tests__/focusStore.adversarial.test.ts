@@ -246,4 +246,42 @@ describe("focusStore independent gestures (issue #6659)", () => {
       hidAssistant: false,
     });
   });
+
+  it("toolbar-hidden sidebar followed by gesture enters (not exits) the gesture", () => {
+    // Toolbar button hides only the sidebar — no gesture snapshot recorded.
+    useFocusStore.getState().setSidebarGestureHidden(true, panelState);
+    expect(useFocusStore.getState().isFocusMode).toBe(true);
+    expect(useFocusStore.getState().gestureSnapshot).toBeNull();
+
+    // Subsequent double-click gesture should ENTER and hide the assistant.
+    // Previously this branch keyed on isFocusMode, which would have falsely
+    // exited the gesture and cleared the sidebar instead.
+    useFocusStore.getState().toggleFocusMode(panelState, {
+      sidebarVisible: false,
+      assistantVisible: true,
+    });
+
+    expect(useFocusStore.getState().gestureSidebarHidden).toBe(true);
+    expect(useFocusStore.getState().gestureAssistantHidden).toBe(true);
+    expect(useFocusStore.getState().gestureSnapshot).not.toBeNull();
+  });
+
+  it("inverse gesture restores only what the gesture hid (toolbar-hidden sidebar stays hidden)", () => {
+    useFocusStore.getState().setSidebarGestureHidden(true, panelState);
+    useFocusStore.getState().toggleFocusMode(panelState, {
+      sidebarVisible: false,
+      assistantVisible: true,
+    });
+
+    // Snapshot recorded "gesture hid the assistant only" since the sidebar
+    // was already hidden when the gesture entered. The inverse gesture must
+    // therefore restore ONLY the assistant — the sidebar's pre-existing
+    // toolbar-hidden state is not part of the gesture's responsibility.
+    useFocusStore.getState().toggleFocusMode(panelState);
+
+    expect(useFocusStore.getState().gestureSnapshot).toBeNull();
+    expect(useFocusStore.getState().gestureSidebarHidden).toBe(true);
+    expect(useFocusStore.getState().gestureAssistantHidden).toBe(false);
+    expect(useFocusStore.getState().isFocusMode).toBe(true);
+  });
 });
