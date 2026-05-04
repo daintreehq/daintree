@@ -74,8 +74,8 @@ export const config: AgentConfig = {
     primaryConfidence: 0.95,
     fallbackConfidence: 0.7,
     promptConfidence: 0.85,
-    debounceMs: 4000,
-    promptFastPathMinQuietMs: 700,
+    debounceMs: 6000,
+    promptFastPathMinQuietMs: 6000,
   },
   routing: {
     capabilities: ["javascript", "typescript", "python", "react", "node", "general-purpose"],

@@ -469,10 +469,10 @@ describe("mistral configuration", () => {
     }
   });
 
-  it("relies on prompt fast-path with no completion patterns", () => {
+  it("relies on prompt fast-path with the shared 6s waiting debounce", () => {
     const detection = getAgentConfig("mistral")?.detection;
     expect(detection?.completionPatterns).toBeUndefined();
-    expect(detection?.promptFastPathMinQuietMs).toBe(700);
+    expect(detection?.promptFastPathMinQuietMs).toBe(6000);
   });
 
   it("declares the PyPI package for path synthesis", () => {

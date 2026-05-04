@@ -919,7 +919,7 @@ export class ActivityMonitor {
     // contains a prompt lexeme (?, [y/N], keyword+colon, "press enter"), detect
     // as a prompt with medium confidence. This catches interactive prompts that
     // don't match any configured promptPattern or promptHintPattern.
-    const LEXEME_STALL_MIN_QUIET_MS = 3000;
+    const LEXEME_STALL_MIN_QUIET_MS = Math.max(3000, this.IDLE_DEBOUNCE_MS);
     if (
       this.state === "busy" &&
       !this.completionTimer.emitted &&

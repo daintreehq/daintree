@@ -109,7 +109,7 @@ export const config: AgentConfig = {
     primaryConfidence: 0.95,
     fallbackConfidence: 0.7,
     promptConfidence: 0.85,
-    debounceMs: 4000,
+    debounceMs: 6000,
   },
   routing: {
     capabilities: [

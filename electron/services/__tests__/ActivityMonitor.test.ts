@@ -1479,6 +1479,42 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
+    it("resets the configured waiting quiet window on tiny output while prompt is visible", () => {
+      vi.setSystemTime(0);
+      const onStateChange = vi.fn();
+      let visibleLines: string[] = ["Working..."];
+      const monitor = new ActivityMonitor("agent-quiet-reset", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        initialState: "busy",
+        skipInitialStateEmit: true,
+        idleDebounceMs: 6000,
+        promptFastPathMinQuietMs: 6000,
+        pollingIntervalMs: 100,
+        pollingMaxBootMs: 0,
+      });
+
+      monitor.onData("initial output\n");
+      monitor.startPolling();
+      visibleLines = ["> "];
+      onStateChange.mockClear();
+
+      vi.advanceTimersByTime(5900);
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange.mock.calls.some((call) => call[2] === "idle")).toBe(false);
+
+      monitor.onData(".");
+      vi.advanceTimersByTime(5900);
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange.mock.calls.some((call) => call[2] === "idle")).toBe(false);
+
+      vi.advanceTimersByTime(200);
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange.mock.calls.some((call) => call[2] === "idle")).toBe(true);
+
+      monitor.dispose();
+    });
+
     it("should recover from idle to busy with explicit short recovery delay", () => {
       const onStateChange = vi.fn();
       let visibleLines: string[] = ["> "];
@@ -3072,7 +3108,7 @@ describe("ActivityMonitor", () => {
   });
 
   describe("prompt lexeme fallback heuristic", () => {
-    it("detects prompt lexeme after 3s stall when no pattern matches", () => {
+    it("detects prompt lexeme after the idle debounce stall when no pattern matches", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-lex", 100, onStateChange, {
         getVisibleLines: () => ["Which file should I modify?"],
@@ -3088,7 +3124,7 @@ describe("ActivityMonitor", () => {
       monitor.startPolling();
       onStateChange.mockClear();
 
-      vi.advanceTimersByTime(3100);
+      vi.advanceTimersByTime(4100);
 
       const idleCall = onStateChange.mock.calls.find(
         (c: unknown[]) =>
@@ -3116,7 +3152,7 @@ describe("ActivityMonitor", () => {
       monitor.startPolling();
       onStateChange.mockClear();
 
-      vi.advanceTimersByTime(3100);
+      vi.advanceTimersByTime(4100);
 
       const idleCall = onStateChange.mock.calls.find(
         (c: unknown[]) =>
@@ -3128,7 +3164,7 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("does NOT fire before 3s stall", () => {
+    it("does NOT fire before the prompt-lexeme stall threshold", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-lex3", 100, onStateChange, {
         getVisibleLines: () => ["Continue?"],
@@ -3226,7 +3262,7 @@ describe("ActivityMonitor", () => {
       monitor.startPolling();
       onStateChange.mockClear();
 
-      vi.advanceTimersByTime(3100);
+      vi.advanceTimersByTime(4100);
 
       const idleCall = onStateChange.mock.calls.find(
         (c: unknown[]) =>
@@ -4523,6 +4559,61 @@ describe("ActivityMonitor", () => {
       }
 
       expect(monitor.getState()).toBe("busy");
+      monitor.dispose();
+    });
+
+    it("recovers idle→busy from cosmetic-only frames at background tier with polling running", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("struct-background", 1000, onStateChange, {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        pollingIntervalMs: 500,
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        backgroundWorkingRecoveryDelayMs: 600,
+        idleDebounceMs: 2500,
+      });
+
+      monitor.startPolling();
+      // Let several background poll cycles run. The structural debouncer must
+      // survive these no-signal polls, just like the cosmetic-redraw debouncer.
+      vi.advanceTimersByTime(1500);
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      monitor.onSynchronizedFrame(
+        buildSnapshot({
+          capturedAt: Date.now(),
+          higherRows: ["upper", "middle"],
+          bottomRowText: "status ✦",
+        })
+      );
+      vi.advanceTimersByTime(700);
+      monitor.onSynchronizedFrame(
+        buildSnapshot({
+          capturedAt: Date.now(),
+          higherRows: ["upper", "middle"],
+          bottomRowText: "status ✧",
+        })
+      );
+      expect(monitor.getState()).toBe("idle");
+      vi.advanceTimersByTime(700);
+      monitor.onSynchronizedFrame(
+        buildSnapshot({
+          capturedAt: Date.now(),
+          higherRows: ["upper", "middle"],
+          bottomRowText: "status ✦",
+        })
+      );
+
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "struct-background",
+        1000,
+        "busy",
+        expect.objectContaining({ trigger: "pattern", patternConfidence: expect.any(Number) })
+      );
       monitor.dispose();
     });
 

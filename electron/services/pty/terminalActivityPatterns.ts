@@ -6,6 +6,10 @@ import type { PatternDetectionConfig } from "./AgentPatternDetector.js";
 import type { ActivityMonitorOptions, ProcessStateValidator } from "../ActivityMonitor.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 
+// Newer agents can batch long paragraphs without progress frames, so waiting
+// requires a conservative quiet window even when prompt fast-paths are present.
+const AGENT_WAITING_QUIET_MS = 6000;
+
 export function buildPatternConfig(
   detection: AgentDetectionConfig | undefined,
   agentId: string | undefined
@@ -194,6 +198,18 @@ export function buildActivityMonitorOptions(
 
   const getVisibleLines = effectiveAgentId ? deps.getVisibleLines : undefined;
   const getCursorLine = effectiveAgentId ? deps.getCursorLine : undefined;
+  let idleDebounceMs: number | undefined;
+  let promptFastPathMinQuietMs = detection?.promptFastPathMinQuietMs;
+  if (effectiveAgentId) {
+    idleDebounceMs = Math.max(
+      detection?.debounceMs ?? AGENT_WAITING_QUIET_MS,
+      AGENT_WAITING_QUIET_MS
+    );
+    promptFastPathMinQuietMs = Math.max(
+      detection?.promptFastPathMinQuietMs ?? idleDebounceMs,
+      idleDebounceMs
+    );
+  }
 
   return {
     ignoredInputSequences,
@@ -209,8 +225,8 @@ export function buildActivityMonitorOptions(
     completionConfidence: detection?.completionConfidence,
     promptScanLineCount: detection?.promptScanLineCount,
     promptConfidence: detection?.promptConfidence,
-    idleDebounceMs: effectiveAgentId ? (detection?.debounceMs ?? 4000) : undefined,
-    promptFastPathMinQuietMs: detection?.promptFastPathMinQuietMs,
+    idleDebounceMs,
+    promptFastPathMinQuietMs,
     maxWaitingSilenceMs: 600_000,
     // Background polling (500ms) shortens the recovery debouncer so
     // backgrounded agents can escape "waiting" when output resumes (#6641).

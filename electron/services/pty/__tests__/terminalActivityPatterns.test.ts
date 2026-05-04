@@ -189,8 +189,7 @@ describe("buildActivityMonitorOptions", () => {
 
   it("sets idle debounce for agent terminals", () => {
     const result = buildActivityMonitorOptions("claude", {});
-    expect(result.idleDebounceMs).toBeDefined();
-    expect(typeof result.idleDebounceMs).toBe("number");
+    expect(result.idleDebounceMs).toBe(6000);
   });
 
   it("includes universal approval hint patterns for agent terminals", () => {
@@ -209,14 +208,14 @@ describe("buildActivityMonitorOptions", () => {
     expect(result.promptHintPatterns).toBeUndefined();
   });
 
-  it("sets promptFastPathMinQuietMs for cursor agent", () => {
+  it("sets promptFastPathMinQuietMs to the 6s waiting quiet floor for cursor agent", () => {
     const result = buildActivityMonitorOptions("cursor", {});
-    expect(result.promptFastPathMinQuietMs).toBe(700);
+    expect(result.promptFastPathMinQuietMs).toBe(6000);
   });
 
-  it("leaves promptFastPathMinQuietMs undefined for claude agent", () => {
+  it("sets promptFastPathMinQuietMs to the 6s waiting quiet floor for claude agent", () => {
     const result = buildActivityMonitorOptions("claude", {});
-    expect(result.promptFastPathMinQuietMs).toBeUndefined();
+    expect(result.promptFastPathMinQuietMs).toBe(6000);
   });
 
   it("leaves promptFastPathMinQuietMs undefined for non-agent terminals", () => {
