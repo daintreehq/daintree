@@ -19,11 +19,8 @@ import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { FolderGit2 } from "@/components/icons";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
-import { worktreeClient, githubClient, agentSettingsClient } from "@/clients";
+import { worktreeClient, githubClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
-import { getAgentConfig } from "@/config/agents";
-import { generateAgentCommand } from "@shared/types";
-import type { RecipeTerminal } from "@shared/types";
 import { IssueSelector } from "@/components/GitHub/IssueSelector";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { parseBranchInput } from "./branchPrefixUtils";
@@ -47,8 +44,8 @@ import { useBranchValidation } from "./hooks/useBranchValidation";
 import { useBranchPicker } from "./hooks/useBranchPicker";
 import { usePrefixPicker } from "./hooks/usePrefixPicker";
 import { useRecipePicker, CLONE_LAYOUT_ID } from "./hooks/useRecipePicker";
-import { usePanelStore } from "@/store/panelStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { spawnPanelsFromRecipe } from "./panelSpawning";
 
 type BranchMode = "new" | "existing";
 
@@ -86,81 +83,6 @@ function HighlightBranchText({
   }
 
   return <>{nodes}</>;
-}
-
-/**
- * Spawn panels for a clone-layout operation.
- *
- * Mirrors the BulkCreateWorktreeDialog pattern: pre-fetches agent settings
- * once (only if any agent panels are present), then loops sequentially to
- * preserve panel order. For agent panels, regenerates the command from
- * current settings rather than reusing the source panel's command (which may
- * embed a path-scoped session ID — see #5179, PR #4781).
- */
-async function cloneLayoutPanels(
-  terminals: RecipeTerminal[],
-  worktreeId: string,
-  cwd: string
-): Promise<void> {
-  const addPanel = usePanelStore.getState().addPanel;
-  const hasAgent = terminals.some((t) => t.type !== "terminal" && t.type !== "dev-preview");
-  let agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>> | null = null;
-  let clipboardDirectory: string | undefined;
-
-  if (hasAgent) {
-    try {
-      const [settings, tmpDir] = await Promise.all([
-        agentSettingsClient.get(),
-        systemClient.getTmpDir().catch(() => ""),
-      ]);
-      agentSettings = settings;
-      clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
-    } catch {
-      // Non-fatal: agents fall back to generating with empty settings.
-    }
-  }
-
-  for (const t of terminals) {
-    if (t.type === "dev-preview") {
-      await addPanel({
-        kind: "dev-preview",
-        title: t.title,
-        cwd,
-        worktreeId,
-        exitBehavior: t.exitBehavior,
-        devCommand: t.devCommand?.trim() || undefined,
-      });
-    } else if (t.type === "terminal") {
-      await addPanel({
-        kind: "terminal",
-        title: t.title,
-        cwd,
-        worktreeId,
-        exitBehavior: t.exitBehavior,
-        command: t.command?.trim() || undefined,
-      });
-    } else {
-      const agentId = t.type;
-      const agentConfig = getAgentConfig(agentId);
-      const baseCommand = agentConfig?.command ?? "";
-      const entry = agentSettings?.agents?.[agentId] ?? {};
-      const command = generateAgentCommand(baseCommand, entry, agentId, {
-        clipboardDirectory,
-        modelId: t.agentModelId,
-      });
-      await addPanel({
-        kind: "terminal",
-        launchAgentId: agentId,
-        command,
-        title: t.title,
-        cwd,
-        worktreeId,
-        exitBehavior: t.exitBehavior,
-        agentModelId: t.agentModelId,
-        agentLaunchFlags: t.agentLaunchFlags,
-      });
-    }
-  }
 }
 
 interface NewWorktreeDialogProps {
@@ -610,7 +532,7 @@ export function NewWorktreeDialog({
               const terminals = useRecipeStore
                 .getState()
                 .generateRecipeFromActiveTerminals(sourceWorktreeId);
-              await cloneLayoutPanels(terminals, worktreeId, worktreePath.trim());
+              await spawnPanelsFromRecipe({ terminals, worktreeId, cwd: worktreePath.trim() });
             } catch (cloneErr) {
               const message = formatErrorMessage(cloneErr, "Failed to clone layout");
               notify({
@@ -785,7 +707,7 @@ export function NewWorktreeDialog({
             const terminals = useRecipeStore
               .getState()
               .generateRecipeFromActiveTerminals(sourceWorktreeId);
-            await cloneLayoutPanels(terminals, worktreeId, worktreePath.trim());
+            await spawnPanelsFromRecipe({ terminals, worktreeId, cwd: worktreePath.trim() });
           } catch (cloneErr) {
             const message = formatErrorMessage(cloneErr, "Failed to clone layout");
             notify({
