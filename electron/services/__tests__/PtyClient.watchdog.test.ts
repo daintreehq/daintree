@@ -43,12 +43,16 @@ interface MockUtilityProcess extends EventEmitter {
 }
 
 interface WatchdogPrivate {
-  child: MockUtilityProcess | null;
-  missedHeartbeats: number;
-  isHealthCheckPaused: boolean;
-  healthCheckInterval: NodeJS.Timeout | null;
-  isInitialized: boolean;
-  isWaitingForHandshake: boolean;
+  lifecycle: {
+    child: MockUtilityProcess | null;
+    isInitialized: boolean;
+  };
+  healthWatchdog: {
+    missedHeartbeats: number;
+    isHealthCheckPaused: boolean;
+    healthCheckInterval: NodeJS.Timeout | null;
+    isWaitingForHandshake: boolean;
+  };
 }
 
 function createMockChild(): MockUtilityProcess {
@@ -104,7 +108,7 @@ describe("PtyClient watchdog", () => {
     expect(killSpy).toHaveBeenCalledWith(321, "SIGKILL");
     expect(crashListener).toHaveBeenCalledTimes(1);
     // Watchdog resets the counter to 0 after firing so the next tick starts fresh.
-    expect((client as unknown as WatchdogPrivate).missedHeartbeats).toBe(0);
+    expect((client as unknown as WatchdogPrivate).healthWatchdog.missedHeartbeats).toBe(0);
   });
 
   it("CRASH_DETAILS_EMITTED_BEFORE_KILL_WITH_SIGNAL_PAYLOAD", () => {
@@ -136,14 +140,14 @@ describe("PtyClient watchdog", () => {
     const priv = client as unknown as WatchdogPrivate;
 
     vi.advanceTimersByTime(200);
-    expect(priv.missedHeartbeats).toBe(2);
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(2);
 
     mockChild.emit("message", { type: "pong" });
-    expect(priv.missedHeartbeats).toBe(0);
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(0);
 
     // Three more ticks bring the counter back to 3 without triggering the kill.
     vi.advanceTimersByTime(300);
-    expect(priv.missedHeartbeats).toBe(3);
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(3);
     expect(killSpy).not.toHaveBeenCalled();
 
     // The fourth tick is the one that fires the watchdog guard.
@@ -156,15 +160,15 @@ describe("PtyClient watchdog", () => {
     const priv = client as unknown as WatchdogPrivate;
 
     vi.advanceTimersByTime(200);
-    expect(priv.missedHeartbeats).toBe(2);
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(2);
 
     client.pauseHealthCheck();
-    expect(priv.isHealthCheckPaused).toBe(true);
-    expect(priv.healthCheckInterval).toBeNull();
+    expect(priv.healthWatchdog.isHealthCheckPaused).toBe(true);
+    expect(priv.healthWatchdog.healthCheckInterval).toBeNull();
 
     // With the interval cleared, advancing time has no effect on the counter.
     vi.advanceTimersByTime(10_000);
-    expect(priv.missedHeartbeats).toBe(2);
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(2);
     expect(killSpy).not.toHaveBeenCalled();
   });
 
@@ -177,9 +181,9 @@ describe("PtyClient watchdog", () => {
     // Drive the counter up to the threshold, then simulate the exit-event race:
     // the host is gone (child = null) when the 4th tick tries to fire the watchdog.
     vi.advanceTimersByTime(300);
-    expect(priv.missedHeartbeats).toBe(3);
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(3);
 
-    priv.child = null;
+    priv.lifecycle.child = null;
 
     expect(() => vi.advanceTimersByTime(100)).not.toThrow();
     expect(killSpy).not.toHaveBeenCalled();
@@ -191,21 +195,21 @@ describe("PtyClient watchdog", () => {
     const priv = client as unknown as WatchdogPrivate;
 
     vi.advanceTimersByTime(200);
-    expect(priv.missedHeartbeats).toBe(2);
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(2);
 
     // pauseHealthCheck clears the interval but leaves the counter untouched.
     client.pauseHealthCheck();
-    expect(priv.missedHeartbeats).toBe(2);
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(2);
 
     // resumeHealthCheck sends a handshake ping and arms a 5s fallback timeout.
     client.resumeHealthCheck();
-    expect(priv.isWaitingForHandshake).toBe(true);
+    expect(priv.healthWatchdog.isWaitingForHandshake).toBe(true);
 
     // A pong during the handshake window clears the counter and re-enters
     // startHealthCheckInterval(), which itself resets missedHeartbeats to 0.
     mockChild.emit("message", { type: "pong" });
-    expect(priv.isWaitingForHandshake).toBe(false);
-    expect(priv.missedHeartbeats).toBe(0);
+    expect(priv.healthWatchdog.isWaitingForHandshake).toBe(false);
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(0);
 
     // Re-armed interval takes 4 fresh ticks to reach the kill threshold.
     vi.advanceTimersByTime(300);
@@ -263,7 +267,7 @@ describe("PtyClient watchdog", () => {
 
     expect(killSpy).not.toHaveBeenCalled();
     expect(crashListener).not.toHaveBeenCalled();
-    expect(priv.missedHeartbeats).toBe(0);
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(0);
     const healthChecks = mockChild.postMessage.mock.calls.filter(
       (call: unknown[]) => (call[0] as { type?: string })?.type === "health-check"
     );
@@ -279,21 +283,56 @@ describe("PtyClient watchdog", () => {
     const priv = client as unknown as WatchdogPrivate;
 
     vi.advanceTimersByTime(200);
-    expect(priv.missedHeartbeats).toBe(2);
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(2);
 
     client.pauseHealthCheck();
     client.resumeHealthCheck();
-    expect(priv.isWaitingForHandshake).toBe(true);
+    expect(priv.healthWatchdog.isWaitingForHandshake).toBe(true);
 
     // No pong: handshake timeout (5000ms) fires and falls back to
     // startHealthCheckInterval() which resets the counter.
     vi.advanceTimersByTime(5000);
-    expect(priv.isWaitingForHandshake).toBe(false);
-    expect(priv.missedHeartbeats).toBe(0);
+    expect(priv.healthWatchdog.isWaitingForHandshake).toBe(false);
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(0);
 
     vi.advanceTimersByTime(300);
     expect(killSpy).not.toHaveBeenCalled();
     vi.advanceTimersByTime(100);
     expect(killSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("WATCHDOG_RE_ARMED_AFTER_AUTO_RESTART", () => {
+    // Regression for #6690: when the host crashes and is auto-restarted, the
+    // watchdog must restart with the new child. Previously a one-shot
+    // start-in-constructor left the watchdog dead after the first crash.
+    const client = createReadyClient({ healthCheckIntervalMs: 100 });
+    const priv = client as unknown as WatchdogPrivate;
+
+    // First host crashes — onExitSync stops the watchdog, restart timer is
+    // scheduled inside the lifecycle's setImmediate.
+    mockChild.emit("exit", 1);
+
+    // The next fork (during the restart timer) returns a fresh mock child.
+    const restartedChild = Object.assign(new EventEmitter(), {
+      postMessage: vi.fn(),
+      kill: vi.fn(),
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      pid: 654,
+    }) as MockUtilityProcess;
+    shared.forkMock.mockReturnValue(restartedChild);
+
+    // Drain the setImmediate + the random-jittered restart delay (max 2000ms
+    // for attempt 1: floor(100) + random*Math.min(2^1*1000, 10000)-100).
+    vi.advanceTimersByTime(2_001);
+    // New host emits ready
+    restartedChild.emit("message", { type: "ready" });
+
+    // Counter resets to 0 on each start; ticks 1-3 increment it; tick 4 fires.
+    vi.advanceTimersByTime(400);
+
+    expect(killSpy).toHaveBeenCalledTimes(1);
+    expect(killSpy).toHaveBeenCalledWith(654, "SIGKILL");
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(0);
   });
 });

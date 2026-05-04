@@ -400,10 +400,12 @@ describe("PtyClient Handshake Protocol", () => {
 
   describe("RTT measurement", () => {
     interface RttPrivate {
-      lastPingTime: number | null;
-      rttSamples: number[];
-      rttSamplesSinceLastLog: number;
-      lastRttLogTime: number;
+      healthWatchdog: {
+        lastPingTime: number | null;
+        rttSamples: number[];
+        rttSamplesSinceLastLog: number;
+        lastRttLogTime: number;
+      };
     }
 
     let fakeNow: number;
@@ -431,13 +433,13 @@ describe("PtyClient Handshake Protocol", () => {
       client.pauseHealthCheck();
       fakeNow = 2_000;
       client.resumeHealthCheck();
-      expect(priv.lastPingTime).toBe(2_000);
+      expect(priv.healthWatchdog.lastPingTime).toBe(2_000);
 
       fakeNow = 2_050;
       mockChild.emit("message", { type: "pong" });
 
-      expect(priv.rttSamples).toEqual([50]);
-      expect(priv.lastPingTime).toBeNull();
+      expect(priv.healthWatchdog.rttSamples).toEqual([50]);
+      expect(priv.healthWatchdog.lastPingTime).toBeNull();
     });
 
     it("does not record RTT when lastPingTime is null", () => {
@@ -447,8 +449,8 @@ describe("PtyClient Handshake Protocol", () => {
       // Pong arrives without an outstanding ping timestamp
       mockChild.emit("message", { type: "pong" });
 
-      expect(priv.rttSamples).toEqual([]);
-      expect(priv.lastPingTime).toBeNull();
+      expect(priv.healthWatchdog.rttSamples).toEqual([]);
+      expect(priv.healthWatchdog.lastPingTime).toBeNull();
     });
 
     it("does not record a sample for a late pong after handshake timeout", () => {
@@ -457,14 +459,14 @@ describe("PtyClient Handshake Protocol", () => {
 
       client.pauseHealthCheck();
       client.resumeHealthCheck();
-      expect(priv.lastPingTime).not.toBeNull();
+      expect(priv.healthWatchdog.lastPingTime).not.toBeNull();
 
       // Handshake timeout fires at 5s — clears lastPingTime
       vi.advanceTimersByTime(5000);
-      expect(priv.lastPingTime).toBeNull();
+      expect(priv.healthWatchdog.lastPingTime).toBeNull();
 
       mockChild.emit("message", { type: "pong" });
-      expect(priv.rttSamples).toEqual([]);
+      expect(priv.healthWatchdog.rttSamples).toEqual([]);
     });
 
     it("logs a summary after 10 samples and resets the counter", () => {
@@ -487,7 +489,7 @@ describe("PtyClient Handshake Protocol", () => {
       );
       expect(summaryCalls).toHaveLength(1);
       expect(summaryCalls[0][0]).toContain("samples=10");
-      expect(priv.rttSamplesSinceLastLog).toBe(0);
+      expect(priv.healthWatchdog.rttSamplesSinceLastLog).toBe(0);
     });
 
     it("emits a spike warning when RTT exceeds the threshold", () => {
@@ -521,10 +523,10 @@ describe("PtyClient Handshake Protocol", () => {
         mockChild.emit("message", { type: "pong" });
       }
 
-      expect(priv.rttSamples).toHaveLength(20);
+      expect(priv.healthWatchdog.rttSamples).toHaveLength(20);
       // Oldest 5 samples were dropped; first kept sample has RTT = 6
-      expect(priv.rttSamples[0]).toBe(6);
-      expect(priv.rttSamples[priv.rttSamples.length - 1]).toBe(25);
+      expect(priv.healthWatchdog.rttSamples[0]).toBe(6);
+      expect(priv.healthWatchdog.rttSamples[priv.healthWatchdog.rttSamples.length - 1]).toBe(25);
     });
 
     it("clears lastPingTime when health check is paused", () => {
@@ -534,10 +536,10 @@ describe("PtyClient Handshake Protocol", () => {
 
       fakeNow = 5_000;
       vi.advanceTimersByTime(1000);
-      expect(priv.lastPingTime).not.toBeNull();
+      expect(priv.healthWatchdog.lastPingTime).not.toBeNull();
 
       client.pauseHealthCheck();
-      expect(priv.lastPingTime).toBeNull();
+      expect(priv.healthWatchdog.lastPingTime).toBeNull();
     });
 
     it("clears lastPingTime when the watchdog force-kills the host", () => {
@@ -554,7 +556,7 @@ describe("PtyClient Handshake Protocol", () => {
         vi.advanceTimersByTime(1000);
       }
 
-      expect(priv.lastPingTime).toBeNull();
+      expect(priv.healthWatchdog.lastPingTime).toBeNull();
       void client;
     });
   });

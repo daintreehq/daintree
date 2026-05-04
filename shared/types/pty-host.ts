@@ -297,6 +297,20 @@ export type PtyHostEvent =
       results: BroadcastWriteTargetResult[];
     };
 
+/**
+ * Sub-union of host-to-main events that carry a `requestId` field — i.e. broker
+ * responses correlated with a `register()` call on the main side. Use this with
+ * `isPtyHostResponseEvent()` to safely call `broker.resolve(event.requestId, …)`
+ * without `as any` casts: the discriminant union of `PtyHostEvent` already types
+ * `requestId` on every response member, but a switch case can't reach it without
+ * narrowing first.
+ */
+export type PtyHostResponseEvent = Extract<PtyHostEvent, { requestId: string }>;
+
+export function isPtyHostResponseEvent(event: PtyHostEvent): event is PtyHostResponseEvent {
+  return "requestId" in event && typeof (event as { requestId?: unknown }).requestId === "string";
+}
+
 /** Terminal info sent from Host → Main for getTerminal queries */
 export interface PtyHostTerminalInfo {
   id: string;

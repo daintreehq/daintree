@@ -68,7 +68,9 @@ interface MockMessagePortMain {
 }
 
 interface PtyClientPrivateAccess {
-  child: MockUtilityProcess | null;
+  lifecycle: {
+    child: MockUtilityProcess | null;
+  };
   pendingMessagePorts: Map<number, MockMessagePortMain>;
   pendingKillCount: Map<string, number>;
   ipcDataMirrorIds: Set<string>;
@@ -175,7 +177,7 @@ describe("PtyClient adversarial", () => {
     const newPort = createMockPort();
     const restartedChild = createMockChild();
 
-    privateAccess.child = null;
+    privateAccess.lifecycle.child = null;
     client.connectMessagePort(7, oldPort as unknown as import("electron").MessagePortMain);
     client.connectMessagePort(7, newPort as unknown as import("electron").MessagePortMain);
     shared.forkMock.mockReturnValue(restartedChild);
@@ -199,7 +201,7 @@ describe("PtyClient adversarial", () => {
     const port = createMockPort();
     const restartedChild = createMockChild();
 
-    privateAccess.child = null;
+    privateAccess.lifecycle.child = null;
     client.connectMessagePort(4, port as unknown as import("electron").MessagePortMain);
     client.setActiveProject(4, "project-a", "/projects/a");
     shared.forkMock.mockReturnValue(restartedChild);
@@ -364,7 +366,7 @@ describe("PtyClient adversarial", () => {
     const privateAccess = client as unknown as PtyClientPrivateAccess;
 
     mockChild.emit("exit", 1);
-    expect(privateAccess.child).toBeNull();
+    expect(privateAccess.lifecycle.child).toBeNull();
 
     shared.tracker.removeTrashed.mockClear();
     const latePromise = client.gracefulKill("t1");
@@ -672,12 +674,16 @@ describe("PtyClient adversarial", () => {
 
   it("HOST_EXIT_RESETS_RTT_STATE_ACROSS_RESTART", () => {
     const client = createReadyClient({ healthCheckIntervalMs: 1000 });
-    const privateRtt = client as unknown as {
-      rttSamples: number[];
-      lastPingTime: number | null;
-      rttSamplesSinceLastLog: number;
-      lastRttLogTime: number;
-    };
+    const privateRtt = (
+      client as unknown as {
+        healthWatchdog: {
+          rttSamples: number[];
+          lastPingTime: number | null;
+          rttSamplesSinceLastLog: number;
+          lastRttLogTime: number;
+        };
+      }
+    ).healthWatchdog;
 
     // Seed rolling-window state so a stale carry-over would be observable.
     privateRtt.rttSamples = [10, 20, 30];
@@ -739,9 +745,9 @@ describe("PtyClient adversarial", () => {
     const privateAccess = client as unknown as PtyClientPrivateAccess;
     const pendingPort = createMockPort();
 
-    privateAccess.child = null;
+    privateAccess.lifecycle.child = null;
     client.connectMessagePort(9, pendingPort as unknown as import("electron").MessagePortMain);
-    privateAccess.child = mockChild;
+    privateAccess.lifecycle.child = mockChild;
 
     const terminalPromise = client.getTerminalAsync("t1");
     const snapshotPromise = client.getTerminalSnapshot("t1");
