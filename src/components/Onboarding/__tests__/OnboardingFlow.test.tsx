@@ -89,16 +89,39 @@ vi.mock("@/utils/env", () => ({
   isDaintreeEnvEnabled: (key: string) => isDaintreeEnvEnabledMock(key),
 }));
 
+type MockWizardStep = { type: "selection" | "cli" | "complete" };
+
 vi.mock("@/components/Setup/AgentSetupWizard", () => ({
-  AgentSetupWizard: vi.fn((props: { onClose: () => void; isFirstRun?: boolean }) => {
-    return (
-      <div data-testid="agent-setup-wizard" data-first-run={props.isFirstRun ? "true" : "false"}>
-        <button data-testid="close-wizard" onClick={props.onClose}>
-          Close
-        </button>
-      </div>
-    );
-  }),
+  AgentSetupWizard: vi.fn(
+    (props: {
+      onClose: () => void;
+      isFirstRun?: boolean;
+      onStepChange?: (step: MockWizardStep) => void;
+    }) => {
+      return (
+        <div data-testid="agent-setup-wizard" data-first-run={props.isFirstRun ? "true" : "false"}>
+          <button data-testid="close-wizard" onClick={props.onClose}>
+            Close
+          </button>
+          <button
+            data-testid="emit-step-selection"
+            onClick={() => props.onStepChange?.({ type: "selection" })}
+          >
+            selection
+          </button>
+          <button data-testid="emit-step-cli" onClick={() => props.onStepChange?.({ type: "cli" })}>
+            cli
+          </button>
+          <button
+            data-testid="emit-step-complete"
+            onClick={() => props.onStepChange?.({ type: "complete" })}
+          >
+            complete
+          </button>
+        </div>
+      );
+    }
+  ),
 }));
 
 const { dismissSetupBannerHookMock } = vi.hoisted(() => ({
@@ -338,6 +361,40 @@ describe("OnboardingFlow telemetry tracking", () => {
     expect(trackMock).toHaveBeenCalledWith("onboarding_abandoned", {
       lastStep: "agentSetup",
       lastStepIndex: 0,
+      wizardStep: null,
+    });
+  });
+
+  it("includes the latest wizardStep in onboarding_abandoned when the wizard reported progress", async () => {
+    const { getByTestId, unmount } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await act(async () => {
+      fireOpenWizard({ isFirstRun: true });
+    });
+
+    await vi.waitFor(() => {
+      expect(trackMock).toHaveBeenCalledWith("onboarding_step_viewed", expect.any(Object));
+    });
+
+    // Simulate the user advancing into the CLI sub-step.
+    await act(async () => {
+      getByTestId("emit-step-selection").click();
+      getByTestId("emit-step-cli").click();
+    });
+
+    trackMock.mockClear();
+    unmount();
+
+    expect(trackMock).toHaveBeenCalledWith("onboarding_abandoned", {
+      lastStep: "agentSetup",
+      lastStepIndex: 0,
+      wizardStep: "cli",
     });
   });
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isDaintreeEnvEnabled } from "@/utils/env";
-import { AgentSetupWizard } from "@/components/Setup/AgentSetupWizard";
+import { AgentSetupWizard, type WizardStep } from "@/components/Setup/AgentSetupWizard";
 import { actionService } from "@/services/ActionService";
 import { dismissSetupBanner as dismissSetupBannerFromHook } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import type { OnboardingState } from "@shared/types";
@@ -40,6 +40,7 @@ export function OnboardingFlow({
   const flowStartTimeRef = useRef<number>(0);
   const completedRef = useRef(false);
   const currentStepRef = useRef<OnboardingStep | null>(null);
+  const lastWizardStepRef = useRef<WizardStep | null>(null);
 
   // Hydrate state from electron-store
   useEffect(() => {
@@ -89,9 +90,14 @@ export function OnboardingFlow({
         trackOnboarding("onboarding_abandoned", {
           lastStep: currentStepRef.current,
           lastStepIndex: STEP_ORDER.indexOf(currentStepRef.current),
+          wizardStep: lastWizardStepRef.current?.type ?? null,
         });
       }
     };
+  }, []);
+
+  const handleWizardStepChange = useCallback((step: WizardStep) => {
+    lastWizardStepRef.current = step;
   }, []);
 
   const advanceStep = useCallback(
@@ -157,6 +163,7 @@ export function OnboardingFlow({
         onClose={handleManualWizardClose}
         initialAvailability={availability}
         isFirstRun={manualWizardIsFirstRun}
+        onStepChange={handleWizardStepChange}
       />
     ) : null;
   }
@@ -172,6 +179,7 @@ export function OnboardingFlow({
         onClose={handleManualWizardClose}
         initialAvailability={availability}
         isFirstRun={manualWizardIsFirstRun}
+        onStepChange={handleWizardStepChange}
       />
     );
   }
