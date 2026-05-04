@@ -979,6 +979,7 @@ export function Toolbar({
               data-toolbar-item=""
               className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden"
               data-testid="project-switcher-trigger"
+              aria-label={currentProject ? undefined : "Open project"}
               onClick={() => projectSwitcher.open("dropdown")}
             >
               {currentProject ? (
@@ -1003,10 +1004,7 @@ export function Toolbar({
               ) : (
                 <>
                   <span className="text-xs font-medium text-daintree-text tracking-wide truncate min-w-0">
-                    Daintree
-                  </span>
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info shrink-0">
-                    Beta
+                    Open project
                   </span>
                   <ChevronsUpDown className="toolbar-project-meta ml-0.5 h-3 w-3 shrink-0" />
                 </>

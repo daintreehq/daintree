@@ -139,5 +139,18 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       const chevronMatches = source.match(/ml-0\.5 h-3 w-3 shrink-0/g);
       expect(chevronMatches).not.toBeNull();
     });
+
+    it("empty-state pill displays action-verb label, not brand text", () => {
+      expect(source).toContain("Open project");
+      expect(source).not.toContain("Daintree");
+    });
+
+    it("empty-state pill has no Beta badge", () => {
+      expect(source).not.toMatch(/>Beta</);
+    });
+
+    it("empty-state button has conditional aria-label for accessibility", () => {
+      expect(source).toContain('aria-label={currentProject ? undefined : "Open project"}');
+    });
   });
 });
