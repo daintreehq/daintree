@@ -54,27 +54,27 @@ describe("Toolbar GitHub dropdown search clearing — issue #3251", () => {
   });
 
   it("clears PR search when issues button closes PRs", () => {
-    // Issues button onClick closes PRs, should also clear PR search
+    // Issues button onClick closes PRs, should also clear PR search.
+    // GitHubStatPill wraps the button in many props — widen the slice.
     const issuesButton = source.slice(
-      source.indexOf("ref={issuesButtonRef}"),
-      source.indexOf("ref={issuesButtonRef}") + 500
+      source.indexOf("buttonRef={issuesButtonRef}"),
+      source.indexOf("buttonRef={issuesButtonRef}") + 3000
     );
     expect(issuesButton).toContain('setPrSearchQuery("")');
   });
 
   it("clears issue search when PR button closes issues", () => {
-    // PR button onClick closes issues, should also clear issue search
     const prsButton = source.slice(
-      source.indexOf("ref={prsButtonRef}"),
-      source.indexOf("ref={prsButtonRef}") + 500
+      source.indexOf("buttonRef={prsButtonRef}"),
+      source.indexOf("buttonRef={prsButtonRef}") + 3000
     );
     expect(prsButton).toContain('setIssueSearchQuery("")');
   });
 
   it("clears both search queries when commits button closes both", () => {
     const commitsButton = source.slice(
-      source.indexOf("ref={commitsButtonRef}"),
-      source.indexOf("ref={commitsButtonRef}") + 500
+      source.indexOf("buttonRef={commitsButtonRef}"),
+      source.indexOf("buttonRef={commitsButtonRef}") + 3000
     );
     expect(commitsButton).toContain('setIssueSearchQuery("")');
     expect(commitsButton).toContain('setPrSearchQuery("")');
@@ -149,15 +149,15 @@ describe("Toolbar GitHub token error UX — issue #5024", () => {
     // the PR #6288 hover-prefetch handlers pushed the className block past
     // the original 1500-char window.
     const issuesButton = source.slice(
-      source.indexOf("ref={issuesButtonRef}"),
-      source.indexOf("ref={issuesButtonRef}") + 2500
+      source.indexOf("buttonRef={issuesButtonRef}"),
+      source.indexOf("buttonRef={issuesButtonRef}") + 2500
     );
     expect(issuesButton).toContain("isTokenError");
     expect(issuesButton).toContain("opacity-40");
 
     const prsButton = source.slice(
-      source.indexOf("ref={prsButtonRef}"),
-      source.indexOf("ref={prsButtonRef}") + 2500
+      source.indexOf("buttonRef={prsButtonRef}"),
+      source.indexOf("buttonRef={prsButtonRef}") + 2500
     );
     expect(prsButton).toContain("isTokenError");
     expect(prsButton).toContain("opacity-40");
@@ -165,8 +165,8 @@ describe("Toolbar GitHub token error UX — issue #5024", () => {
 
   it("does not apply token error handling to the Commits button", () => {
     const commitsButton = source.slice(
-      source.indexOf("ref={commitsButtonRef}"),
-      source.indexOf("ref={commitsButtonRef}") + 500
+      source.indexOf("buttonRef={commitsButtonRef}"),
+      source.indexOf("buttonRef={commitsButtonRef}") + 500
     );
     expect(commitsButton).not.toContain("isTokenError");
   });
@@ -184,29 +184,27 @@ describe("Toolbar keepMounted dropdowns — PR #6288", () => {
   });
 
   it("issues FixedDropdown opts into keepMounted (state preserved across open/close)", () => {
-    const issuesDropdownStart = source.indexOf('type="issue"');
-    const preceding = source.slice(Math.max(0, issuesDropdownStart - 800), issuesDropdownStart);
-    const lastFixedDropdown = preceding.lastIndexOf("<FixedDropdown");
-    const dropdownTag = preceding.slice(lastFixedDropdown);
-    expect(dropdownTag).toContain("keepMounted");
+    const issuesPill = source.slice(
+      source.indexOf("buttonRef={issuesButtonRef}"),
+      source.indexOf("buttonRef={issuesButtonRef}") + 3000
+    );
+    expect(issuesPill).toContain("keepMounted");
   });
 
   it("PRs FixedDropdown opts into keepMounted (state preserved across open/close)", () => {
-    const prDropdownStart = source.indexOf('type="pr"');
-    const preceding = source.slice(Math.max(0, prDropdownStart - 800), prDropdownStart);
-    const lastFixedDropdown = preceding.lastIndexOf("<FixedDropdown");
-    const dropdownTag = preceding.slice(lastFixedDropdown);
-    expect(dropdownTag).toContain("keepMounted");
+    const prsPill = source.slice(
+      source.indexOf("buttonRef={prsButtonRef}"),
+      source.indexOf("buttonRef={prsButtonRef}") + 3000
+    );
+    expect(prsPill).toContain("keepMounted");
   });
 
   it("commits FixedDropdown does NOT opt into keepMounted (cheaper to remount)", () => {
-    const commitsButtonRefIdx = source.indexOf("ref={commitsButtonRef}");
-    const lookahead = source.slice(commitsButtonRefIdx);
-    const fixedDropdownIdx = lookahead.indexOf("<FixedDropdown");
-    expect(fixedDropdownIdx).toBeGreaterThanOrEqual(0);
-    const tagEnd = lookahead.indexOf(">", fixedDropdownIdx);
-    const tag = lookahead.slice(fixedDropdownIdx, tagEnd + 1);
-    expect(tag).not.toContain("keepMounted");
+    const commitsPill = source.slice(
+      source.indexOf("buttonRef={commitsButtonRef}"),
+      source.indexOf("buttonRef={commitsButtonRef}") + 3000
+    );
+    expect(commitsPill).not.toContain("keepMounted");
   });
 });
 
@@ -217,17 +215,19 @@ describe("Toolbar persistThroughChildOverlays — issue #3556", () => {
     source = await fs.readFile(GITHUB_STATS_PATH, "utf-8");
   });
 
-  it("issues FixedDropdown has persistThroughChildOverlays", () => {
-    const issuesDropdownStart = source.indexOf('type="issue"');
-    const preceding = source.slice(Math.max(0, issuesDropdownStart - 500), issuesDropdownStart);
-    expect(preceding).toContain("persistThroughChildOverlays");
+  it("issues GitHubStatPill has persistThroughChildOverlays", () => {
+    const issuesPill = source.slice(
+      source.indexOf("buttonRef={issuesButtonRef}"),
+      source.indexOf("buttonRef={issuesButtonRef}") + 3000
+    );
+    expect(issuesPill).toContain("persistThroughChildOverlays");
   });
 
-  it("PRs FixedDropdown does NOT have persistThroughChildOverlays", () => {
-    const prDropdownStart = source.indexOf('type="pr"');
-    const preceding = source.slice(Math.max(0, prDropdownStart - 500), prDropdownStart);
-    const lastFixedDropdown = preceding.lastIndexOf("<FixedDropdown");
-    const prDropdownBlock = preceding.slice(lastFixedDropdown);
-    expect(prDropdownBlock).not.toContain("persistThroughChildOverlays");
+  it("PRs GitHubStatPill does NOT have persistThroughChildOverlays", () => {
+    const prsPill = source.slice(
+      source.indexOf("buttonRef={prsButtonRef}"),
+      source.indexOf("buttonRef={prsButtonRef}") + 3000
+    );
+    expect(prsPill).not.toContain("persistThroughChildOverlays");
   });
 });

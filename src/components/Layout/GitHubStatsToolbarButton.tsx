@@ -11,16 +11,14 @@ import {
   memo,
   forwardRef,
 } from "react";
-import { Button } from "@/components/ui/button";
-import { FixedDropdown } from "@/components/ui/fixed-dropdown";
-import { CircleDot, Clock, GitPullRequest, GitCommit, WifiOff } from "lucide-react";
+import { CircleDot, GitPullRequest, GitCommit, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useGitHubFilterStore } from "@/store/githubFilterStore";
-import { useRepositoryStats, type FreshnessLevel } from "@/hooks/useRepositoryStats";
+import { useRepositoryStats } from "@/hooks/useRepositoryStats";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { useGitHubTokenExpiryNotification } from "@/hooks/useGitHubTokenExpiryNotification";
 import {
@@ -33,6 +31,13 @@ import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
 import type { Project } from "@shared/types";
 import type { GitHubRateLimitDetails, RepositoryStats } from "@shared/types";
+import { freshnessOpacityClass, FreshnessGlyph, freshnessSuffix } from "./FreshnessUtils";
+import {
+  formatRateLimitCountdown,
+  msUntilNextLabelChange,
+  RateLimitDetailsPanel,
+} from "./RateLimitDetails";
+import { GitHubStatPill } from "./GitHubStatPill";
 
 // Hover-to-prefetch tuning. 150ms matches the codebase's Tier 1 state-change
 // timing and is long enough to filter mouse traversal across the toolbar pill
@@ -57,201 +62,8 @@ const OPEN_FORCE_REFRESH_STALENESS_MS = 2 * 60 * 1000;
 // during normal task flow without lingering past the moment of relevance.
 const ACTIVITY_CHIP_TTL_MS = 3 * 60 * 1000;
 
-// Per-tier opacity so the badge no longer conflates fresh, in-session aging,
-// disk-cached, and errored data into a single `opacity-60` tint. `aging` stays
-// closest to full opacity since the data is in-session and probably fine; the
-// remaining tiers step down so a glance distinguishes them. WCAG 1.4.11 means
-// opacity alone isn't sufficient, so the count icon below pairs an explicit
-// glyph with each non-fresh tier.
-function freshnessOpacityClass(level: FreshnessLevel): string {
-  switch (level) {
-    case "aging":
-      return "opacity-75";
-    case "stale-disk":
-      return "opacity-60";
-    case "errored":
-      return "opacity-50";
-    case "fresh":
-    default:
-      return "";
-  }
-}
-
-// Returns a small lucide glyph rendered after the count to give a non-color
-// signal for non-fresh tiers. `aging` returns null because the data is still
-// in-session — the opacity step is enough and the row should not be cluttered
-// with an icon for a state the user encounters most often. `aria-hidden`
-// because the freshness state is already announced via the per-button
-// `aria-label`.
-function FreshnessGlyph({ level }: { level: FreshnessLevel }) {
-  if (level === "stale-disk") {
-    return <Clock className="h-3 w-3 text-muted-foreground" aria-hidden="true" />;
-  }
-  if (level === "errored") {
-    return <WifiOff className="h-3 w-3 text-muted-foreground" aria-hidden="true" />;
-  }
-  return null;
-}
-
-function formatTimeSince(timestamp: number | null, now: number): string {
-  if (timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0) {
-    return "unknown";
-  }
-  const seconds = Math.floor((now - timestamp) / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
-function freshnessSuffix(level: FreshnessLevel, lastUpdated: number | null, now: number): string {
-  switch (level) {
-    case "aging":
-      return ` · updated ${formatTimeSince(lastUpdated, now)}`;
-    case "stale-disk":
-      return " · cached from previous session";
-    case "errored":
-      return " · couldn't reach GitHub";
-    case "fresh":
-    default:
-      return "";
-  }
-}
-
-function formatRateLimitCountdown(remainingMs: number): string {
-  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
-  const pad2 = (n: number) => String(n).padStart(2, "0");
-  if (totalSeconds < 60) return `${pad2(totalSeconds)}s`;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes < 60) {
-    return seconds > 0 ? `${minutes}m ${pad2(seconds)}s` : `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remMinutes = minutes % 60;
-  return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
-}
-
-// Returns the milliseconds until `formatRateLimitCountdown` next produces a
-// different string. Used to schedule the countdown's next tick exactly at the
-// label-change boundary instead of polling every second.
-//
-// In the hours range the label only includes minutes (e.g. "1h 5m"), so the
-// next change happens when `Math.ceil(remainingMs / 1000)` drops below the
-// current minute boundary. In the seconds and minutes ranges the seconds
-// component is part of the label, so cadence stays at 1Hz.
-export function msUntilNextLabelChange(remainingMs: number): number {
-  if (remainingMs <= 0) return 0;
-  const totalSeconds = Math.ceil(remainingMs / 1000);
-  if (totalSeconds < 3600) {
-    return remainingMs % 1000 || 1000;
-  }
-  const minutes = Math.floor(totalSeconds / 60);
-  return remainingMs - (60_000 * minutes - 1000);
-}
-
-interface RateLimitDetailsPanelProps {
-  kind: "primary" | "secondary" | null;
-  details: GitHubRateLimitDetails | null;
-  now: number;
-  fallbackResetAt: number | null;
-}
-
-function RateLimitDetailsPanel({
-  kind,
-  details,
-  now,
-  fallbackResetAt,
-}: RateLimitDetailsPanelProps) {
-  const heading =
-    kind === "secondary"
-      ? "Secondary rate limit"
-      : kind === "primary"
-        ? "Rate limit reached"
-        : "GitHub API quota";
-  const subheading =
-    kind === "secondary"
-      ? "GitHub paused requests for abuse protection. Polling resumes automatically."
-      : "Polling resumes when the bucket resets.";
-
-  const buckets: Array<{ label: string; bucket: GitHubRateLimitDetails["core"] | null }> = details
-    ? [
-        { label: "GraphQL", bucket: details.graphql },
-        { label: "REST core", bucket: details.core },
-        { label: "Search", bucket: details.search },
-      ]
-    : [];
-
-  return (
-    <div className="w-[260px] px-3.5 py-3.5">
-      <div className="pb-5">
-        <div className="text-text-primary text-sm font-semibold leading-tight">{heading}</div>
-        <div className="text-muted-foreground mt-1 text-[11px] leading-snug">{subheading}</div>
-      </div>
-      {details ? (
-        <div className="flex flex-col gap-4">
-          {buckets.map(({ label, bucket }) =>
-            bucket ? (
-              <RateLimitBucketRow key={label} label={label} bucket={bucket} now={now} />
-            ) : null
-          )}
-        </div>
-      ) : (
-        <div className="text-muted-foreground text-[11px] tabular-nums">
-          {fallbackResetAt && fallbackResetAt > now
-            ? formatRateLimitCountdown(fallbackResetAt - now)
-            : "Loading…"}
-        </div>
-      )}
-    </div>
-  );
-}
-
-interface RateLimitBucketRowProps {
-  label: string;
-  bucket: GitHubRateLimitDetails["core"];
-  now: number;
-}
-
-function RateLimitBucketRow({ label, bucket, now }: RateLimitBucketRowProps) {
-  const remainingMs = Math.max(0, bucket.resetAt - now);
-  const exhausted = bucket.remaining <= 0;
-  const ratio = bucket.limit > 0 ? Math.min(1, bucket.used / bucket.limit) : 0;
-  const timeLabel = remainingMs > 0 ? formatRateLimitCountdown(remainingMs) : "Reset due";
-  const aria = `${label}: ${bucket.remaining.toLocaleString()} of ${bucket.limit.toLocaleString()} remaining. ${
-    remainingMs > 0 ? `Resets in ${timeLabel}` : "Reset available"
-  }.`;
-
-  return (
-    <div className="flex flex-col gap-2" aria-label={aria}>
-      <div className="flex items-baseline justify-between gap-3">
-        <span
-          className={cn(
-            "text-[13px] font-medium leading-none",
-            exhausted ? "text-text-primary" : "text-daintree-text"
-          )}
-        >
-          {label}
-        </span>
-        <span className="text-muted-foreground text-[11px] leading-none tabular-nums">
-          {timeLabel}
-        </span>
-      </div>
-      <div className="bg-overlay-subtle h-1.5 overflow-hidden rounded-full">
-        <div
-          className={cn(
-            "h-full rounded-full transition-[width] duration-300 ease-out",
-            exhausted ? "bg-github-closed" : "bg-daintree-text/60"
-          )}
-          style={{ width: `${ratio * 100}%` }}
-        />
-      </div>
-    </div>
-  );
-}
+// Re-exported for external consumers (tests, rate-limit math)
+export { msUntilNextLabelChange } from "./RateLimitDetails";
 
 // Two-tier loading: the toolbar uses lazy()/Suspense for the cold-click case
 // (user clicks before the eager preload finishes), AND eagerly resolves the
@@ -791,129 +603,36 @@ export const GitHubStatsToolbarButton = memo(
             "var(--toolbar-stats-divider,var(--theme-border-subtle))",
         }}
       >
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={issuesButtonRef}
-              variant="ghost"
-              data-toolbar-item=""
-              onPointerEnter={(e) => handlePrefetchPointerEnter("issue", e)}
-              onPointerLeave={(e) => handlePrefetchPointerLeave("issue", e)}
-              onClick={() => {
-                setPrsOpen(false);
-                setPrSearchQuery("");
-                setCommitsOpen(false);
-                if (isTokenError) {
-                  setIssuesOpen(false);
-                  setIssueSearchQuery("");
-                  void actionService.dispatch(
-                    "app.settings.openTab",
-                    { tab: "github", sectionId: "github-token" },
-                    { source: "user" }
-                  );
-                  return;
-                }
-                const willOpen = !issuesOpen;
-                setIssuesOpen(willOpen);
-                if (!willOpen) setIssueSearchQuery("");
-                // Clear the corner activity chip the moment the user opens
-                // the dropdown — it's served its purpose. The next pulse
-                // requires another strict count increase.
-                if (willOpen) setIssuesPulseAt(null);
-                // Only force-refresh on open if the polled stats are stale
-                // enough to be visibly out of date. Within the freshness
-                // window, the 30s poll has the cache hot and the dropdown
-                // reads from it instantly with no spinner.
-                if (
-                  willOpen &&
-                  (lastUpdated == null ||
-                    Date.now() - lastUpdated > OPEN_FORCE_REFRESH_STALENESS_MS)
-                ) {
-                  refreshStats({ force: true });
-                }
-              }}
-              className={cn(
-                "relative h-full gap-2 rounded-none px-3 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
-                isTokenError && "opacity-40",
-                !isTokenError && stats?.issueCount === 0 && "opacity-50",
-                !isTokenError && freshnessOpacityClass(freshnessLevel),
-                issuesOpen &&
-                  "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-open/20"
-              )}
-              aria-label={
-                isTokenError
-                  ? "Configure GitHub token to see issues"
-                  : `${issueCount ?? "\u2014"} open issues${
-                      showIssuesChip ? " (new since last view)" : ""
-                    }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
-              }
-            >
-              <CircleDot
-                className={cn(
-                  "h-4 w-4",
-                  isTokenError ? "text-muted-foreground" : "text-github-open"
-                )}
-              />
-              <span
-                key={issueAnimKey}
-                className={cn(
-                  "text-xs font-medium tabular-nums",
-                  issueAnimKey > 0 && "animate-badge-bump"
-                )}
-              >
-                {issueCount ?? "\u2014"}
-              </span>
-              {!isTokenError ? <FreshnessGlyph level={freshnessLevel} /> : null}
-              {showIssuesChip && (
-                <span
-                  aria-hidden="true"
-                  className="bg-github-open pointer-events-none absolute right-0 top-0 h-2 w-2"
-                  style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
-                />
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {isTokenError
+        <GitHubStatPill
+          buttonRef={issuesButtonRef}
+          open={issuesOpen}
+          count={issueCount}
+          animKey={issueAnimKey}
+          ariaLabel={
+            isTokenError
+              ? "Configure GitHub token to see issues"
+              : `${issueCount ?? "—"} open issues${
+                  showIssuesChip ? " (new since last view)" : ""
+                }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+          }
+          tooltipContent={
+            isTokenError
               ? "Configure GitHub token to see issues"
               : freshnessLevel === "fresh"
                 ? "Browse GitHub Issues"
-                : `${issueCount ?? "\u2014"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
-          </TooltipContent>
-        </Tooltip>
-        <FixedDropdown
-          open={issuesOpen}
-          onOpenChange={(open) => {
-            setIssuesOpen(open);
-            if (!open) {
-              setIssueSearchQuery("");
-              issuesButtonRef.current?.focus();
-            }
-          }}
-          anchorRef={issuesButtonRef}
-          className="p-0 w-[450px]"
-          persistThroughChildOverlays
-          keepMounted
-        >
-          {ResourceListComponent ? (
-            <ResourceListComponent
-              type="issue"
-              projectPath={currentProject.path}
-              onClose={() => {
-                setIssuesOpen(false);
-                setIssueSearchQuery("");
-                issuesButtonRef.current?.focus();
-              }}
-              initialCount={stats?.issueCount}
-              onFreshFetch={handleListFreshFetch}
-            />
-          ) : (
-            <Suspense
-              fallback={
-                <GitHubResourceListSkeleton count={stats?.issueCount} immediate type="issue" />
-              }
-            >
-              <LazyGitHubResourceList
+                : `${issueCount ?? "—"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+          }
+          icon={CircleDot}
+          iconClassName={isTokenError ? "text-muted-foreground" : "text-github-open"}
+          openRingClassName="ring-1 ring-github-open/20"
+          className={cn(
+            isTokenError && "opacity-40",
+            !isTokenError && stats?.issueCount === 0 && "opacity-50",
+            !isTokenError && freshnessOpacityClass(freshnessLevel)
+          )}
+          dropdownContent={
+            ResourceListComponent ? (
+              <ResourceListComponent
                 type="issue"
                 projectPath={currentProject.path}
                 onClose={() => {
@@ -924,126 +643,103 @@ export const GitHubStatsToolbarButton = memo(
                 initialCount={stats?.issueCount}
                 onFreshFetch={handleListFreshFetch}
               />
-            </Suspense>
-          )}
-        </FixedDropdown>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={prsButtonRef}
-              variant="ghost"
-              data-toolbar-item=""
-              onPointerEnter={(e) => handlePrefetchPointerEnter("pr", e)}
-              onPointerLeave={(e) => handlePrefetchPointerLeave("pr", e)}
-              onClick={() => {
-                setIssuesOpen(false);
-                setIssueSearchQuery("");
-                setCommitsOpen(false);
-                if (isTokenError) {
-                  setPrsOpen(false);
-                  setPrSearchQuery("");
-                  void actionService.dispatch(
-                    "app.settings.openTab",
-                    { tab: "github", sectionId: "github-token" },
-                    { source: "user" }
-                  );
-                  return;
+            ) : (
+              <Suspense
+                fallback={
+                  <GitHubResourceListSkeleton count={stats?.issueCount} immediate type="issue" />
                 }
-                const willOpen = !prsOpen;
-                setPrsOpen(willOpen);
-                if (!willOpen) setPrSearchQuery("");
-                if (willOpen) setPrsPulseAt(null);
-                // Only force-refresh on open if the polled stats are stale
-                // enough to be visibly out of date. Within the freshness
-                // window, the 30s poll has the cache hot and the dropdown
-                // reads from it instantly with no spinner.
-                if (
-                  willOpen &&
-                  (lastUpdated == null ||
-                    Date.now() - lastUpdated > OPEN_FORCE_REFRESH_STALENESS_MS)
-                ) {
-                  refreshStats({ force: true });
-                }
-              }}
-              className={cn(
-                "relative h-full gap-2 rounded-none px-3 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
-                isTokenError && "opacity-40",
-                !isTokenError && stats?.prCount === 0 && "opacity-50",
-                !isTokenError && freshnessOpacityClass(freshnessLevel),
-                prsOpen &&
-                  "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-merged/20"
-              )}
-              aria-label={
-                isTokenError
-                  ? "Configure GitHub token to see pull requests"
-                  : `${prCount ?? "\u2014"} open pull requests${
-                      showPrsChip ? " (new since last view)" : ""
-                    }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
-              }
-            >
-              <GitPullRequest
-                className={cn(
-                  "h-4 w-4",
-                  isTokenError ? "text-muted-foreground" : "text-github-merged"
-                )}
-              />
-              <span
-                key={prAnimKey}
-                className={cn(
-                  "text-xs font-medium tabular-nums",
-                  prAnimKey > 0 && "animate-badge-bump"
-                )}
               >
-                {prCount ?? "\u2014"}
-              </span>
-              {!isTokenError ? <FreshnessGlyph level={freshnessLevel} /> : null}
-              {showPrsChip && (
-                <span
-                  aria-hidden="true"
-                  className="bg-github-merged pointer-events-none absolute right-0 top-0 h-2 w-2"
-                  style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
+                <LazyGitHubResourceList
+                  type="issue"
+                  projectPath={currentProject.path}
+                  onClose={() => {
+                    setIssuesOpen(false);
+                    setIssueSearchQuery("");
+                    issuesButtonRef.current?.focus();
+                  }}
+                  initialCount={stats?.issueCount}
+                  onFreshFetch={handleListFreshFetch}
                 />
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {isTokenError
+              </Suspense>
+            )
+          }
+          persistThroughChildOverlays
+          keepMounted
+          onClick={() => {
+            setPrsOpen(false);
+            setPrSearchQuery("");
+            setCommitsOpen(false);
+            if (isTokenError) {
+              setIssuesOpen(false);
+              setIssueSearchQuery("");
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "github", sectionId: "github-token" },
+                { source: "user" }
+              );
+              return;
+            }
+            const willOpen = !issuesOpen;
+            setIssuesOpen(willOpen);
+            if (!willOpen) setIssueSearchQuery("");
+            if (willOpen) setIssuesPulseAt(null);
+            if (
+              willOpen &&
+              (lastUpdated == null || Date.now() - lastUpdated > OPEN_FORCE_REFRESH_STALENESS_MS)
+            ) {
+              refreshStats({ force: true });
+            }
+          }}
+          onOpenChange={(open) => {
+            setIssuesOpen(open);
+            if (!open) {
+              setIssueSearchQuery("");
+              issuesButtonRef.current?.focus();
+            }
+          }}
+          onPointerEnter={(e) => handlePrefetchPointerEnter("issue", e)}
+          onPointerLeave={(e) => handlePrefetchPointerLeave("issue", e)}
+          activityChip={
+            showIssuesChip ? (
+              <span
+                aria-hidden="true"
+                className="bg-github-open pointer-events-none absolute right-0 top-0 h-2 w-2"
+                style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
+              />
+            ) : null
+          }
+          freshnessGlyph={!isTokenError ? <FreshnessGlyph level={freshnessLevel} /> : null}
+        />
+        <GitHubStatPill
+          buttonRef={prsButtonRef}
+          open={prsOpen}
+          count={prCount}
+          animKey={prAnimKey}
+          ariaLabel={
+            isTokenError
+              ? "Configure GitHub token to see pull requests"
+              : `${prCount ?? "—"} open pull requests${
+                  showPrsChip ? " (new since last view)" : ""
+                }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+          }
+          tooltipContent={
+            isTokenError
               ? "Configure GitHub token to see pull requests"
               : freshnessLevel === "fresh"
                 ? "Browse GitHub Pull Requests"
-                : `${prCount ?? "\u2014"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
-          </TooltipContent>
-        </Tooltip>
-        <FixedDropdown
-          open={prsOpen}
-          onOpenChange={(open) => {
-            setPrsOpen(open);
-            if (!open) {
-              setPrSearchQuery("");
-              prsButtonRef.current?.focus();
-            }
-          }}
-          anchorRef={prsButtonRef}
-          className="p-0 w-[450px]"
-          keepMounted
-        >
-          {ResourceListComponent ? (
-            <ResourceListComponent
-              type="pr"
-              projectPath={currentProject.path}
-              onClose={() => {
-                setPrsOpen(false);
-                setPrSearchQuery("");
-                prsButtonRef.current?.focus();
-              }}
-              initialCount={stats?.prCount}
-              onFreshFetch={handleListFreshFetch}
-            />
-          ) : (
-            <Suspense
-              fallback={<GitHubResourceListSkeleton count={stats?.prCount} immediate type="pr" />}
-            >
-              <LazyGitHubResourceList
+                : `${prCount ?? "—"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+          }
+          icon={GitPullRequest}
+          iconClassName={isTokenError ? "text-muted-foreground" : "text-github-merged"}
+          openRingClassName="ring-1 ring-github-merged/20"
+          className={cn(
+            isTokenError && "opacity-40",
+            !isTokenError && stats?.prCount === 0 && "opacity-50",
+            !isTokenError && freshnessOpacityClass(freshnessLevel)
+          )}
+          dropdownContent={
+            ResourceListComponent ? (
+              <ResourceListComponent
                 type="pr"
                 projectPath={currentProject.path}
                 onClose={() => {
@@ -1054,72 +750,90 @@ export const GitHubStatsToolbarButton = memo(
                 initialCount={stats?.prCount}
                 onFreshFetch={handleListFreshFetch}
               />
-            </Suspense>
-          )}
-        </FixedDropdown>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={commitsButtonRef}
-              variant="ghost"
-              data-toolbar-item=""
-              onClick={() => {
-                setIssuesOpen(false);
-                setIssueSearchQuery("");
-                setPrsOpen(false);
-                setPrSearchQuery("");
-                setCommitsOpen((p) => !p);
-              }}
-              className={cn(
-                "h-full gap-2 rounded-none px-3 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
-                stats?.commitCount === 0 && "opacity-50",
-                freshnessOpacityClass(freshnessLevel),
-                commitsOpen &&
-                  "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-border-strong"
-              )}
-              aria-label={`${commitCount ?? "\u2014"} commits${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
-            >
-              <GitCommit className="h-4 w-4" />
-              <span
-                key={commitAnimKey}
-                className={cn(
-                  "text-xs font-medium tabular-nums",
-                  commitAnimKey > 0 && "animate-badge-bump"
-                )}
+            ) : (
+              <Suspense
+                fallback={<GitHubResourceListSkeleton count={stats?.prCount} immediate type="pr" />}
               >
-                {commitCount ?? "\u2014"}
-              </span>
-              <FreshnessGlyph level={freshnessLevel} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {freshnessLevel === "fresh"
-              ? "Browse Git Commits"
-              : `${commitCount ?? "\u2014"} commits${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
-          </TooltipContent>
-        </Tooltip>
-        <FixedDropdown
-          open={commitsOpen}
-          onOpenChange={(open) => {
-            setCommitsOpen(open);
-            if (!open) commitsButtonRef.current?.focus();
+                <LazyGitHubResourceList
+                  type="pr"
+                  projectPath={currentProject.path}
+                  onClose={() => {
+                    setPrsOpen(false);
+                    setPrSearchQuery("");
+                    prsButtonRef.current?.focus();
+                  }}
+                  initialCount={stats?.prCount}
+                  onFreshFetch={handleListFreshFetch}
+                />
+              </Suspense>
+            )
+          }
+          keepMounted
+          onClick={() => {
+            setIssuesOpen(false);
+            setIssueSearchQuery("");
+            setCommitsOpen(false);
+            if (isTokenError) {
+              setPrsOpen(false);
+              setPrSearchQuery("");
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "github", sectionId: "github-token" },
+                { source: "user" }
+              );
+              return;
+            }
+            const willOpen = !prsOpen;
+            setPrsOpen(willOpen);
+            if (!willOpen) setPrSearchQuery("");
+            if (willOpen) setPrsPulseAt(null);
+            if (
+              willOpen &&
+              (lastUpdated == null || Date.now() - lastUpdated > OPEN_FORCE_REFRESH_STALENESS_MS)
+            ) {
+              refreshStats({ force: true });
+            }
           }}
-          anchorRef={commitsButtonRef}
-          className="p-0 w-[450px]"
-        >
-          {CommitListComponent ? (
-            <CommitListComponent
-              projectPath={activeWorktree?.path ?? currentProject.path}
-              branch={activeWorktree?.branch}
-              onClose={() => {
-                setCommitsOpen(false);
-                commitsButtonRef.current?.focus();
-              }}
-              initialCount={stats?.commitCount}
-            />
-          ) : (
-            <Suspense fallback={<CommitListSkeleton count={stats?.commitCount} immediate />}>
-              <LazyCommitList
+          onOpenChange={(open) => {
+            setPrsOpen(open);
+            if (!open) {
+              setPrSearchQuery("");
+              prsButtonRef.current?.focus();
+            }
+          }}
+          onPointerEnter={(e) => handlePrefetchPointerEnter("pr", e)}
+          onPointerLeave={(e) => handlePrefetchPointerLeave("pr", e)}
+          activityChip={
+            showPrsChip ? (
+              <span
+                aria-hidden="true"
+                className="bg-github-merged pointer-events-none absolute right-0 top-0 h-2 w-2"
+                style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
+              />
+            ) : null
+          }
+          freshnessGlyph={!isTokenError ? <FreshnessGlyph level={freshnessLevel} /> : null}
+        />
+        <GitHubStatPill
+          buttonRef={commitsButtonRef}
+          open={commitsOpen}
+          count={commitCount}
+          animKey={commitAnimKey}
+          ariaLabel={`${commitCount ?? "—"} commits${freshnessSuffix(freshnessLevel, lastUpdated, now)}`}
+          tooltipContent={
+            freshnessLevel === "fresh"
+              ? "Browse Git Commits"
+              : `${commitCount ?? "—"} commits${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+          }
+          icon={GitCommit}
+          openRingClassName="ring-1 ring-border-strong"
+          className={cn(
+            stats?.commitCount === 0 && "opacity-50",
+            freshnessOpacityClass(freshnessLevel)
+          )}
+          dropdownContent={
+            CommitListComponent ? (
+              <CommitListComponent
                 projectPath={activeWorktree?.path ?? currentProject.path}
                 branch={activeWorktree?.branch}
                 onClose={() => {
@@ -1128,9 +842,33 @@ export const GitHubStatsToolbarButton = memo(
                 }}
                 initialCount={stats?.commitCount}
               />
-            </Suspense>
-          )}
-        </FixedDropdown>
+            ) : (
+              <Suspense fallback={<CommitListSkeleton count={stats?.commitCount} immediate />}>
+                <LazyCommitList
+                  projectPath={activeWorktree?.path ?? currentProject.path}
+                  branch={activeWorktree?.branch}
+                  onClose={() => {
+                    setCommitsOpen(false);
+                    commitsButtonRef.current?.focus();
+                  }}
+                  initialCount={stats?.commitCount}
+                />
+              </Suspense>
+            )
+          }
+          onClick={() => {
+            setIssuesOpen(false);
+            setIssueSearchQuery("");
+            setPrsOpen(false);
+            setPrSearchQuery("");
+            setCommitsOpen((p) => !p);
+          }}
+          onOpenChange={(open) => {
+            setCommitsOpen(open);
+            if (!open) commitsButtonRef.current?.focus();
+          }}
+          freshnessGlyph={<FreshnessGlyph level={freshnessLevel} />}
+        />
         <GitHubStatusIndicator
           status={getGitHubIndicatorStatus()}
           error={statsError ?? undefined}
