@@ -3553,8 +3553,9 @@ describe("ActivityMonitor", () => {
         maxWaitingSilenceMs: 1000,
       });
 
-      // Advance past the 5s watchdog interval + 1s silence threshold
-      vi.advanceTimersByTime(5100);
+      // Default WATCHDOG_FAIL_THRESHOLD is 3 — fires only after 3 consecutive
+      // dead-looking watchdog ticks (≈15s at the 5s cadence).
+      vi.advanceTimersByTime(16000);
 
       expect(onWaitingTimeout).toHaveBeenCalledWith("test-wd-1", 100);
 
@@ -3673,8 +3674,8 @@ describe("ActivityMonitor", () => {
         maxWaitingSilenceMs: 1000,
       });
 
-      // Fire first watchdog
-      vi.advanceTimersByTime(5100);
+      // Fire first watchdog (3 consecutive ticks at the 5s cadence).
+      vi.advanceTimersByTime(16000);
       expect(onWaitingTimeout).toHaveBeenCalledTimes(1);
 
       // Transition to busy
@@ -3682,7 +3683,7 @@ describe("ActivityMonitor", () => {
       onWaitingTimeout.mockClear();
 
       // Still busy, watchdog shouldn't fire
-      vi.advanceTimersByTime(5100);
+      vi.advanceTimersByTime(16000);
       expect(onWaitingTimeout).not.toHaveBeenCalled();
 
       monitor.dispose();
@@ -3738,6 +3739,133 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("idle");
       expect(onWaitingTimeout).toHaveBeenCalledTimes(1);
       expect(onWaitingTimeout).toHaveBeenCalledWith("test-wd-9", 100);
+
+      monitor.dispose();
+    });
+
+    it("requires WATCHDOG_FAIL_THRESHOLD consecutive dead-looking ticks (#6667)", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+      };
+      const monitor = new ActivityMonitor("test-wd-threshold", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      // After 1 watchdog tick (5000ms): ceiling met, count=1 — not yet fired.
+      vi.advanceTimersByTime(5100);
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      // After 2 ticks (10100ms total): count=2 — still not fired.
+      vi.advanceTimersByTime(5000);
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      // After 3 ticks (15100ms total): count=3 → fires.
+      vi.advanceTimersByTime(5000);
+      expect(onWaitingTimeout).toHaveBeenCalledTimes(1);
+
+      monitor.dispose();
+    });
+
+    it("ambiguous probe result resets the consecutive-fail streak (#6667)", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      let callCount = 0;
+      const processStateValidator = {
+        // Sequence: false, false, throws (→ null/true via safe), false, false, false.
+        // After the throw, the streak resets so we need 3 more dead ticks.
+        hasActiveChildren: vi.fn().mockImplementation(() => {
+          callCount += 1;
+          if (callCount === 3) {
+            throw new Error("validator transient failure");
+          }
+          return false;
+        }),
+      };
+      const monitor = new ActivityMonitor("test-wd-ambiguous", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      // Ticks 1, 2 = false (count 1, 2). Tick 3 throws → safe returns true →
+      // alive-veto-equivalent path resets count to 0. Ticks 4, 5 = false
+      // (count 1, 2). Tick 6 = false (count 3 → fires).
+      vi.advanceTimersByTime(31000);
+      expect(onWaitingTimeout).toHaveBeenCalledTimes(1);
+
+      monitor.dispose();
+    });
+
+    it("recent PTY data resets the streak (#6667)", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+      };
+      const monitor = new ActivityMonitor("test-wd-data", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      // Two ticks accumulate (count=2 after 10s).
+      vi.advanceTimersByTime(10100);
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      // Refreshes lastDataTimestamp without flipping state to busy.
+      // OutputVolumeDetector defaults to disabled, so a single small frame
+      // doesn't trigger becomeBusyFromOutput.
+      monitor.onData("a");
+
+      // Tick at 15000ms: now-lastDataTimestamp ≈ 4900ms < 5000ms → veto resets
+      // count to 0. Three more ticks at 20000/25000/30000 each see
+      // now-lastDataTimestamp ≥ 5000ms — no veto, count rebuilds to 3, fires.
+      vi.advanceTimersByTime(20000);
+      expect(onWaitingTimeout).toHaveBeenCalledTimes(1);
+
+      monitor.dispose();
+    });
+
+    it("respects waitingWatchdogFailThreshold = 1 (single-tick fire) (#6667)", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+      };
+      const monitor = new ActivityMonitor("test-wd-thresh1", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+        waitingWatchdogFailThreshold: 1,
+      });
+
+      // One tick post-ceiling fires immediately at threshold=1.
+      vi.advanceTimersByTime(5100);
+      expect(onWaitingTimeout).toHaveBeenCalledTimes(1);
+
+      monitor.dispose();
+    });
+
+    it("clamps waitingWatchdogFailThreshold = 0 to 1 (no logic hole) (#6667)", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+      };
+      const monitor = new ActivityMonitor("test-wd-thresh0", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+        waitingWatchdogFailThreshold: 0,
+      });
+
+      // Clamped to 1 — fires after the first dead tick, just like threshold=1.
+      vi.advanceTimersByTime(5100);
+      expect(onWaitingTimeout).toHaveBeenCalledTimes(1);
 
       monitor.dispose();
     });

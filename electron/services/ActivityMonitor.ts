@@ -82,6 +82,12 @@ export interface ActivityMonitorOptions {
   maxWorkingSilenceMs?: number;
   maxCpuHighEscapeMs?: number;
   maxWaitingSilenceMs?: number;
+  // Consecutive watchdog ticks that must all observe a dead-looking probe
+  // result before onWaitingTimeout fires. Defaults to 3 (≈15s of sustained
+  // consensus at the 5s watchdog cadence) to ride through transient false
+  // negatives during LLM API waits. Clamped to >= 1 to keep the fire path
+  // reachable.
+  waitingWatchdogFailThreshold?: number;
   onWaitingTimeout?: (id: string, spawnedAt: number) => void;
 }
 
@@ -108,6 +114,7 @@ export class ActivityMonitor {
   private readonly WORKING_INDICATOR_TTL_MS = 5000;
   private readonly MAX_WORKING_SILENCE_MS: number;
   private readonly MAX_WAITING_SILENCE_MS: number;
+  private readonly WATCHDOG_FAIL_THRESHOLD: number;
   // CPU is a bounded busy-state backstop only. It never creates activity by
   // itself; output, visible redraws, patterns, or input must put the monitor
   // into busy first.
@@ -118,6 +125,7 @@ export class ActivityMonitor {
   private cpuHighSince = 0;
   private idleSince = 0;
   private waitingWatchdogFired = false;
+  private watchdogFailCount = 0;
   private lastPatternResultAt = 0;
   private workingHoldUntil = 0;
 
@@ -196,6 +204,7 @@ export class ActivityMonitor {
     this.MAX_WORKING_SILENCE_MS = options?.maxWorkingSilenceMs ?? 180000;
     this.MAX_CPU_HIGH_ESCAPE_MS = options?.maxCpuHighEscapeMs ?? 60000;
     this.MAX_WAITING_SILENCE_MS = options?.maxWaitingSilenceMs ?? 600000;
+    this.WATCHDOG_FAIL_THRESHOLD = Math.max(1, options?.waitingWatchdogFailThreshold ?? 3);
 
     this.idleSince = Date.now();
 
@@ -497,6 +506,7 @@ export class ActivityMonitor {
       }
     }
     this.waitingWatchdogFired = false;
+    this.watchdogFailCount = 0;
     this.idleSince = 0;
     if (this.watchdogInterval) {
       clearInterval(this.watchdogInterval);
@@ -944,6 +954,7 @@ export class ActivityMonitor {
     this.recordWorkingSignal(now);
     this.resetDebounceTimer();
     this.waitingWatchdogFired = false;
+    this.watchdogFailCount = 0;
     // Clear any in-flight cosmetic-redraw accumulator so the next idle cycle
     // starts fresh — otherwise a single spinner tick after busy→idle would
     // immediately re-trigger recovery without sustained signal.
@@ -1053,8 +1064,51 @@ export class ActivityMonitor {
     if (now - this.idleSince < this.MAX_WAITING_SILENCE_MS) return;
     if (!this.onWaitingTimeout) return;
 
+    // Alive-veto probes — any positive signal that the agent is still alive
+    // resets the consecutive-fail streak. Order matters only insofar as the
+    // cheapest checks come first. A single lenient veto here is preferable
+    // to a stuck dead-vote streak: the 10-minute ceiling has already elapsed,
+    // so any fresh evidence of life genuinely should restart the consensus.
+    if (this.lineRewriteDetector.isSpinnerActive(now, this.SPINNER_ACTIVE_MS)) {
+      this.watchdogFailCount = 0;
+      return;
+    }
+    if (
+      this.lastPatternResult?.isWorking &&
+      now - this.lastPatternResultAt < this.WORKING_INDICATOR_TTL_MS
+    ) {
+      this.watchdogFailCount = 0;
+      return;
+    }
+    // Veto when PTY data arrived during the current waiting period AND the
+    // arrival was recent. The `> idleSince` guard rejects the field's
+    // construction-time default (set equal to idleSince) and any stale value
+    // carried over from a prior busy cycle; the recency window
+    // (WORKING_INDICATOR_TTL_MS, matched to the 5s watchdog cadence) decays so
+    // a single mid-cycle data event doesn't pin the streak open forever.
+    if (
+      this.lastDataTimestamp > this.idleSince &&
+      now - this.lastDataTimestamp < this.WORKING_INDICATOR_TTL_MS
+    ) {
+      this.watchdogFailCount = 0;
+      return;
+    }
+    if (this.isCpuHighAndNotDeadlined(now)) {
+      this.watchdogFailCount = 0;
+      return;
+    }
+
+    // Process-tree probe is the sole dead-vote signal. `null` (validator
+    // unavailable or threw) is ambiguous and resets the streak — silence
+    // alone, without an affirmative dead vote, must never fire the watchdog.
     const hasChildren = this.hasActiveChildrenSafe();
-    if (hasChildren !== false) return;
+    if (hasChildren !== false) {
+      this.watchdogFailCount = 0;
+      return;
+    }
+
+    this.watchdogFailCount += 1;
+    if (this.watchdogFailCount < this.WATCHDOG_FAIL_THRESHOLD) return;
 
     this.waitingWatchdogFired = true;
     this.onWaitingTimeout(this.terminalId, this.spawnedAt);
