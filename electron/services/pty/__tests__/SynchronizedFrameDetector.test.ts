@@ -116,4 +116,19 @@ describe("SynchronizedFrameDetector", () => {
     await flushTerminal(terminal);
     expect(frames).toHaveLength(3);
   });
+
+  it("matches 2026 in combined DEC params (e.g. ?25;2026h)", async () => {
+    // Many TUIs collapse cursor-visibility + sync-output into a single CSI:
+    // \x1b[?25;2026h ... \x1b[?25;2026l. xterm delivers `params = [25, 2026]`
+    // — the detector must scan all params, not just params[0].
+    terminal.write("\x1b[?25;2026h frame body \x1b[?25;2026l");
+    await flushTerminal(terminal);
+    expect(frames).toHaveLength(1);
+  });
+
+  it("matches 2026 in reversed combined DEC params (e.g. ?2026;25h)", async () => {
+    terminal.write("\x1b[?2026;25h frame body \x1b[?2026;25l");
+    await flushTerminal(terminal);
+    expect(frames).toHaveLength(1);
+  });
 });

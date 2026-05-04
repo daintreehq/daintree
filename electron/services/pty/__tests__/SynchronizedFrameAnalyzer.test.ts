@@ -150,11 +150,13 @@ describe("SynchronizedFrameAnalyzer", () => {
 
   describe("spinner classifier", () => {
     it("returns spinner when one cell cycles through codepoints at 100ms cadence", () => {
-      const cycle = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+      // 4-item cycle iterated twice — each codepoint is revisited, which
+      // satisfies the revisitation requirement (rejects monotonic counters).
+      const cycle = ["⠋", "⠙", "⠹", "⠸"];
       let lastResult = analyzer.classify(
         snapshot({ rows: ["", "  static text"], cols: 40, capturedAt: 1000 })
       );
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < 8; i++) {
         const ch = cycle[i % cycle.length];
         const row = `${ch} static text`;
         lastResult = analyzer.classify(
@@ -189,6 +191,39 @@ describe("SynchronizedFrameAnalyzer", () => {
         );
       }
       expect(result.signal).not.toBe("spinner");
+    });
+
+    it("does NOT classify monotonic counter cell as spinner", () => {
+      // A digit cell incrementing 0→1→2→3→… without repeats has the right
+      // distinct-count and cadence, but no revisitation. Real spinners
+      // return to previously-seen codepoints.
+      const chars = ["0", "1", "2", "3", "4", "5", "6"];
+      let result = analyzer.classify(
+        snapshot({ rows: ["", `${chars[0]} progress`], cols: 40, capturedAt: 1000 })
+      );
+      for (let i = 0; i < 6; i++) {
+        const row = `${chars[i + 1]} progress`;
+        result = analyzer.classify(
+          snapshot({ rows: ["", row], cols: 40, capturedAt: 1100 + i * 100 })
+        );
+      }
+      expect(result.signal).not.toBe("spinner");
+    });
+
+    it("returns spinner when cell revisits codepoints", () => {
+      // 4-frame braille cycle revisited across 8 frames — each codepoint
+      // appears twice, satisfying the revisitation requirement.
+      const cycle = ["⠋", "⠙", "⠹", "⠸"];
+      let result = analyzer.classify(
+        snapshot({ rows: ["", "  static"], cols: 40, capturedAt: 1000 })
+      );
+      for (let i = 0; i < 8; i++) {
+        const ch = cycle[i % cycle.length];
+        result = analyzer.classify(
+          snapshot({ rows: ["", `${ch} static`], cols: 40, capturedAt: 1100 + i * 100 })
+        );
+      }
+      expect(result.signal).toBe("spinner");
     });
 
     it("does NOT return spinner when interval is too slow", () => {

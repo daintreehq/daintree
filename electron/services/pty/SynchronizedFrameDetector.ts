@@ -176,10 +176,16 @@ export class SynchronizedFrameDetector {
 }
 
 function matchesParam(params: (number | number[])[], target: number): boolean {
-  if (params.length === 0) return false;
-  const head = params[0];
-  if (Array.isArray(head)) {
-    return head.length > 0 && head[0] === target;
+  // xterm groups CSI params separated by `;` as flat entries (e.g.
+  // `\x1b[?25;2026h` arrives as `params = [25, 2026]`). Scan all entries so
+  // combined private-mode sequences still trigger the handler. Sub-param
+  // arrays (colon-separated, e.g. `\x1b[?2026:1h`) are matched on the head.
+  for (const param of params) {
+    if (Array.isArray(param)) {
+      if (param.length > 0 && param[0] === target) return true;
+    } else if (param === target) {
+      return true;
+    }
   }
-  return head === target;
+  return false;
 }

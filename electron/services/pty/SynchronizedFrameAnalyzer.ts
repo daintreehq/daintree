@@ -306,24 +306,32 @@ function evaluateCycleStrength(ring: CycleRingEntry[]): number {
     return 0;
   }
 
-  // Inter-frame interval must fall in spinner range.
-  let totalInterval = 0;
-  let intervalCount = 0;
+  // Require revisitation: a real glyph cycle returns to previously-seen
+  // codepoints (⠋→⠙→⠹→⠸→⠋), whereas a monotonically-incrementing counter
+  // (0→1→2→3) would otherwise pass distinct-count + interval checks. Once
+  // the ring is longer than the distinct-codepoint count, at least one
+  // codepoint has been revisited.
+  if (ring.length <= distinctCodes.size) return 0;
+
+  // Inter-frame interval must fall in spinner range. Tolerate a single
+  // out-of-range interval (e.g. user input pause or PTY backpressure) before
+  // rejecting; exclude that outlier from the average so a slow chunk of
+  // frames doesn't drag a real spinner past the upper bound.
+  let totalIntervalInRange = 0;
+  let inRangeCount = 0;
   let outOfRangeIntervals = 0;
   for (let i = 1; i < ring.length; i++) {
     const dt = ring[i].capturedAt - ring[i - 1].capturedAt;
-    totalInterval += dt;
-    intervalCount += 1;
     if (dt < MIN_CELL_INTERVAL_MS || dt > MAX_CELL_INTERVAL_MS) {
       outOfRangeIntervals += 1;
+    } else {
+      totalIntervalInRange += dt;
+      inRangeCount += 1;
     }
   }
-  if (intervalCount === 0) return 0;
-  // Tolerate a single out-of-range interval (e.g. user input pause) before
-  // rejecting outright. The remaining intervals must still average inside
-  // the spinner window.
   if (outOfRangeIntervals > 1) return 0;
-  const avgInterval = totalInterval / intervalCount;
+  if (inRangeCount === 0) return 0;
+  const avgInterval = totalIntervalInRange / inRangeCount;
   if (avgInterval < MIN_CELL_INTERVAL_MS || avgInterval > MAX_CELL_INTERVAL_MS) {
     return 0;
   }

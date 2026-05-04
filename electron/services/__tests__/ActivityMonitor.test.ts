@@ -4318,13 +4318,13 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("idle");
       onStateChange.mockClear();
 
-      // Build a spinner cycle at col 0 across 12 frames — the cell cycles
-      // through 4 distinct codepoints at 100ms intervals while the rest of
-      // the row stays static. 12 × 100ms = 1200ms spans the 800ms recovery
-      // debounce (with the spinner classifier needing 3 frames to identify
-      // the cycle, leaving ~900ms of sustained signal).
+      // 4-item cycle × 4 = 16 frames at 100ms → 1600ms total. The spinner
+      // classifier needs the ring to satisfy `length > distinct`, which
+      // requires at least 5 frames (cycle revisits index 0 on frame 5).
+      // After detection, the structural-recovery debouncer needs 800ms of
+      // sustained signal — so recovery fires around frame 13.
       const cycle = [0x280b, 0x2819, 0x2839, 0x2838];
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 16; i++) {
         vi.advanceTimersByTime(100);
         monitor.onSynchronizedFrame(
           buildSnapshot({
@@ -4411,6 +4411,55 @@ describe("ActivityMonitor", () => {
         );
       }
 
+      expect(monitor.getState()).toBe("idle");
+      monitor.dispose();
+    });
+
+    it("cosmetic-only also blocks the lineRewriteDetector → isSpinnerActive bypass", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("struct-bypass", 1000, onStateChange, {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        workingRecoveryDelayMs: 1500,
+        idleDebounceMs: 2500,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(2500);
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      // Two frames classified cosmetic-only set the structural TTL.
+      monitor.onSynchronizedFrame(
+        buildSnapshot({
+          capturedAt: Date.now(),
+          higherRows: ["upper", "middle"],
+          bottomRowText: "spinner ✦",
+        })
+      );
+      vi.advanceTimersByTime(100);
+      monitor.onSynchronizedFrame(
+        buildSnapshot({
+          capturedAt: Date.now(),
+          higherRows: ["upper", "middle"],
+          bottomRowText: "spinner ✧",
+        })
+      );
+
+      // Drive cosmetic redraws through onData. Without the structural
+      // suppression, lineRewriteDetector would latch and runPollingCycle's
+      // isSpinnerActive() would feed workingSignalDebouncer → becomeBusy
+      // within SPINNER_ACTIVE_MS (1500ms). With the structural suppression,
+      // lineRewriteDetector.update() must not run while the TTL is hot.
+      for (let i = 0; i < 6; i++) {
+        vi.advanceTimersByTime(80);
+        monitor.onData(`\r⠙ working tick ${i}`);
+      }
+
+      // Walk forward through several poll cycles; state must remain idle.
+      vi.advanceTimersByTime(1000);
       expect(monitor.getState()).toBe("idle");
       monitor.dispose();
     });

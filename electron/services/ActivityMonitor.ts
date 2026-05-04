@@ -372,7 +372,15 @@ export class ActivityMonitor {
       // Spinner/status-line rewrite — latch lastSpinnerDetectedAt for polling's isSpinnerActive()
       // check, but do not call becomeBusy() here. Entry into working state requires pattern
       // detection or sustained output, not cosmetic line rewrites alone.
-      this.lineRewriteDetector.update(data, now);
+      //
+      // Structural cosmetic-only suppression (#6668): when the structural
+      // tier has just classified a 2026 frame as cosmetic-only,
+      // lineRewriteDetector must NOT latch — otherwise polling's
+      // isSpinnerActive() would feed the working-signal debouncer for up
+      // to SPINNER_ACTIVE_MS (1500ms) and bypass the suppression.
+      if (now >= this.lastStructuralCosmeticOnlyUntil) {
+        this.lineRewriteDetector.update(data, now);
+      }
     }
 
     // For polling-enabled terminals: check raw stream for patterns FIRST
