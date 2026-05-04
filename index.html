@@ -29,9 +29,24 @@
         }
       }
 
+      /*
+       * Container opacity timeline for #startup-skeleton (10.4s total):
+       *   0–400ms (0–3.85%):    invisible — Doherty anti-flicker gate
+       *   400ms–9.5s (4–91.35%): fully visible
+       *   9.5s–10.4s (91.35–100%): safety fade-out if React never hydrates
+       *
+       * One keyframe encodes both the gate and the safety-fade because two
+       * comma-separated animations on the same property would conflict via
+       * CSS animation composite order (later entry wins — the safety-fade
+       * would immediately override the gate).
+       */
       @keyframes skeleton-safety-fade {
         0%,
-        99% {
+        3.85% {
+          opacity: 0;
+        }
+        4%,
+        91.35% {
           opacity: 1;
         }
         100% {
@@ -50,6 +65,19 @@
         }
       }
 
+      /* Stuck-state reveal — animates pointer-events as a discrete property
+         so the overlay can't intercept clicks during the 6s delay window. */
+      @keyframes skeleton-stuck-reveal {
+        from {
+          opacity: 0;
+          pointer-events: none;
+        }
+        to {
+          opacity: 1;
+          pointer-events: auto;
+        }
+      }
+
       /* ── Base skeleton container ── */
       #startup-skeleton {
         position: fixed;
@@ -58,7 +86,8 @@
         display: flex;
         flex-direction: column;
         background: var(--theme-surface-grid, #0e0e0d);
-        animation: skeleton-safety-fade 10s forwards;
+        opacity: 0;
+        animation: skeleton-safety-fade 10.4s ease-out forwards;
         transition: opacity 120ms ease-out;
       }
       #startup-skeleton.fade-out {
@@ -395,6 +424,79 @@
         animation: skeleton-shimmer 1.5s linear infinite;
       }
 
+      /* ── Tagline (real text — synced with WelcomeScreen.tsx) ── */
+      .skeleton-tagline {
+        margin-top: 12px;
+        font-size: 13px;
+        font-weight: 500;
+        line-height: 1.5;
+        color: color-mix(
+          in oklch,
+          var(--theme-surface-grid, #0e0e0d),
+          var(--theme-text-primary, #e4e4e7) 60%
+        );
+        opacity: 0;
+        animation: skeleton-reveal 400ms ease-out forwards;
+        animation-delay: 160ms;
+      }
+
+      /* ── Stuck-state overlay (fades in at 6s if React never hydrates) ── */
+      .skeleton-stuck {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        padding: 24px;
+        background: color-mix(in oklch, var(--theme-surface-grid, #0e0e0d) 88%, transparent);
+        opacity: 0;
+        pointer-events: none;
+        animation: skeleton-stuck-reveal 200ms ease-out forwards;
+        animation-delay: 6000ms;
+      }
+      .skeleton-stuck-title {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+        line-height: 1.5;
+        color: var(--theme-text-primary, #e4e4e7);
+        text-align: center;
+      }
+      .skeleton-stuck-btn {
+        padding: 7px 14px;
+        border-radius: 6px;
+        border: 1px solid
+          color-mix(
+            in oklch,
+            var(--theme-surface-grid, #0e0e0d),
+            var(--theme-text-primary, #e4e4e7) 18%
+          );
+        background: color-mix(
+          in oklch,
+          var(--theme-surface-grid, #0e0e0d),
+          var(--theme-text-primary, #e4e4e7) 6%
+        );
+        color: var(--theme-text-primary, #e4e4e7);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 150ms ease-out;
+      }
+      .skeleton-stuck-btn:hover {
+        background: color-mix(
+          in oklch,
+          var(--theme-surface-grid, #0e0e0d),
+          var(--theme-text-primary, #e4e4e7) 10%
+        );
+      }
+      .skeleton-stuck-btn:focus-visible {
+        outline: 2px solid var(--theme-text-primary, #e4e4e7);
+        outline-offset: 2px;
+      }
+
       /* ── Recipes skeleton ── */
       .skeleton-recipes {
         margin-bottom: 24px;
@@ -710,12 +812,51 @@
             var(--theme-text-primary, #1e252e) 5%
           );
         }
+        .skeleton-tagline {
+          color: color-mix(
+            in oklch,
+            var(--theme-surface-grid, #cdd3db),
+            var(--theme-text-primary, #1e252e) 60%
+          );
+        }
+        .skeleton-stuck {
+          background: color-mix(in oklch, var(--theme-surface-grid, #cdd3db) 88%, transparent);
+        }
+        .skeleton-stuck-title {
+          color: var(--theme-text-primary, #1e252e);
+        }
+        .skeleton-stuck-btn {
+          border-color: color-mix(
+            in oklch,
+            var(--theme-surface-grid, #cdd3db),
+            var(--theme-text-primary, #1e252e) 18%
+          );
+          background: color-mix(
+            in oklch,
+            var(--theme-surface-grid, #cdd3db),
+            var(--theme-text-primary, #1e252e) 6%
+          );
+          color: var(--theme-text-primary, #1e252e);
+        }
+        .skeleton-stuck-btn:hover {
+          background: color-mix(
+            in oklch,
+            var(--theme-surface-grid, #cdd3db),
+            var(--theme-text-primary, #1e252e) 10%
+          );
+        }
+        .skeleton-stuck-btn:focus-visible {
+          outline-color: var(--theme-text-primary, #1e252e);
+        }
       }
 
       /* ── Reduced motion ── */
       @media (prefers-reduced-motion: reduce) {
         #startup-skeleton {
+          /* opacity: 1 here pairs with base opacity: 0 — without animation,
+             we need an explicit visible state so the skeleton still shows. */
           animation: none;
+          opacity: 1;
         }
         .skel-shape::after,
         .skel-recipe::after,
@@ -732,6 +873,12 @@
           animation: none;
           opacity: 1;
         }
+        .skeleton-tagline {
+          animation: none;
+          opacity: 1;
+        }
+        /* Stuck-state animation is a delay mechanism, not decoration — keep
+           the keyframe so the 6s safety threshold still gates visibility. */
       }
     </style>
   </head>
@@ -880,6 +1027,8 @@
                   />
                 </svg>
                 <div class="skeleton-title"></div>
+                <!-- Source of truth: src/components/Project/WelcomeScreen.tsx line 83 -->
+                <p class="skeleton-tagline">A habitat for your AI agents.</p>
               </div>
 
               <!-- Recipes (reveals fourth) -->
@@ -978,8 +1127,15 @@
         </div>
         <!-- /skeleton-main-col -->
       </div>
+
+      <!-- Stuck-state recovery cue (CSS animation-delay reveals it at 6s) -->
+      <div class="skeleton-stuck" role="alert" aria-live="assertive">
+        <p class="skeleton-stuck-title">Daintree is taking longer than expected</p>
+        <button type="button" class="skeleton-stuck-btn" id="skeleton-stuck-btn">Reload app</button>
+      </div>
     </div>
     <script src="/skeleton-heatmap.js"></script>
+    <script src="/skeleton-stuck.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
