@@ -197,6 +197,12 @@ export function HelpPanel({ width: effectiveWidth }: HelpPanelProps) {
   // cleanup paths revoke this ref so the token isn't leaked until 7-day GC.
   const pendingSessionIdRef = useRef<string | null>(null);
 
+  // Set true while the OS is suspended so the visibilitychange teardown below
+  // distinguishes "system slept" from "project switched / window unloaded".
+  // macOS flips document.hidden=true on display-off, which is indistinguishable
+  // from a project switch without this flag (issue #6758).
+  const isSystemSuspendedRef = useRef(false);
+
   const revokePendingSession = useCallback(() => {
     const pending = pendingSessionIdRef.current;
     if (pending) {
@@ -220,9 +226,12 @@ export function HelpPanel({ width: effectiveWidth }: HelpPanelProps) {
   // Clean up help terminal when the view becomes hidden (project switch, window close).
   // In Electron 41, beforeunload does not fire on WebContentsView detach, but
   // visibilitychange does — this covers both project switches and window unload.
+  // Skip teardown when the OS is suspended (display-off / sleep) — otherwise
+  // the assistant restarts and loses its conversation on every wake (#6758).
   useEffect(() => {
-    const handler = () => {
-      if (!document.hidden) return;
+    let cancelled = false;
+
+    const tearDown = () => {
       const state = useHelpPanelStore.getState();
       if (state.terminalId) {
         usePanelStore.getState().removePanel(state.terminalId);
@@ -231,8 +240,39 @@ export function HelpPanel({ width: effectiveWidth }: HelpPanelProps) {
       }
       revokePendingSession();
     };
+
+    const handler = () => {
+      if (!document.hidden) return;
+      if (isSystemSuspendedRef.current) return;
+      // Race: visibilitychange may fire before the suspend IPC reaches the
+      // renderer. Confirm with the main process before tearing down.
+      void window.electron.systemSleep
+        .getMetrics()
+        .then((metrics) => {
+          if (cancelled) return;
+          if (metrics.isCurrentlySleeping) return;
+          tearDown();
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          logError("HelpPanel: failed to read systemSleep metrics", err);
+          tearDown();
+        });
+    };
+
+    const offSuspend = window.electron.systemSleep.onSuspend(() => {
+      isSystemSuspendedRef.current = true;
+    });
+    const offWake = window.electron.systemSleep.onWake(() => {
+      isSystemSuspendedRef.current = false;
+    });
     document.addEventListener("visibilitychange", handler);
-    return () => document.removeEventListener("visibilitychange", handler);
+    return () => {
+      cancelled = true;
+      offSuspend();
+      offWake();
+      document.removeEventListener("visibilitychange", handler);
+    };
   }, [revokePendingSession]);
 
   // Auto-launch preferred agent when panel opens without an active terminal.
