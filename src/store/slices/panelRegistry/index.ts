@@ -3,6 +3,7 @@ import type { StateCreator } from "zustand";
 import type { PanelRegistrySlice, PanelRegistryMiddleware } from "./types";
 import { createTrashExpiryHelpers } from "./trash";
 import { createCorePanelActions } from "./core";
+import { createAddPanelActions } from "./addPanel";
 import { createTrashActions } from "./trashActions";
 import { createBackgroundActions } from "./background";
 import { createOrderingActions } from "./ordering";
@@ -24,7 +25,7 @@ export type {
 export { MAX_GRID_TERMINALS, deriveRuntimeStatus, getDefaultTitle } from "./helpers";
 export { flushPanelPersistence } from "./persistence";
 export { selectOrderedTerminals } from "./selectors";
-export { isHydrationBatchActive } from "./core";
+export { isHydrationBatchActive } from "./hydrationBatch";
 
 export const createPanelRegistrySlice =
   (
@@ -40,6 +41,7 @@ export const createPanelRegistrySlice =
       backgroundedTerminals: new Map(),
       tabGroups: new Map(),
       ...createCorePanelActions(set, get, trashHelpers, middleware),
+      ...createAddPanelActions(set, get),
       ...createTrashActions(set, get, trashHelpers),
       ...createBackgroundActions(set, get),
       ...createOrderingActions(set, get),
