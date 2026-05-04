@@ -1,14 +1,11 @@
-import { execFile } from "child_process";
-import { promisify } from "node:util";
 import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminalType } from "@xterm/headless";
 import headless from "@xterm/headless";
 const { Terminal: HeadlessTerminal } = headless;
 import serialize, { type SerializeAddon as SerializeAddonType } from "@xterm/addon-serialize";
 const { SerializeAddon } = serialize;
-import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
-import { isBuiltInAgentId, type BuiltInAgentId } from "../../../shared/config/agentIds.js";
-import { ProcessDetector, type DetectionResult, type DetectionState } from "../ProcessDetector.js";
+import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import { ActivityMonitor } from "../ActivityMonitor.js";
 import { AgentStateService } from "./AgentStateService.js";
@@ -16,24 +13,18 @@ import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import {
   type ExitReason,
   type PtySpawnOptions,
-  type PtyState,
   type TerminalInfo,
   type TerminalPublicState,
   type TerminalSnapshot,
   OUTPUT_BUFFER_SIZE,
   DEFAULT_SCROLLBACK,
-  GRACEFUL_SHUTDOWN_TIMEOUT_MS,
-  GRACEFUL_SHUTDOWN_BUFFER_SIZE,
-  GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS,
 } from "./types.js";
 import { WriteQueue } from "./WriteQueue.js";
-import { getTerminalSerializerService } from "./TerminalSerializerService.js";
 import { events } from "../events.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import type { PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
 import { handleOscColorQueries } from "./OscResponder.js";
-import { classifyExitOutput, shouldTriggerFallback } from "./FallbackErrorClassifier.js";
 import { SynchronizedFrameDetector } from "./SynchronizedFrameDetector.js";
 
 // Extracted modules
@@ -61,7 +52,6 @@ import { SessionSnapshotter, type SessionSnapshotterHost } from "./SessionSnapsh
 import {
   createProcessStateValidator,
   buildActivityMonitorOptions,
-  buildPatternConfig,
 } from "./terminalActivityPatterns.js";
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import { SemanticBufferManager } from "./SemanticBufferManager.js";
@@ -71,59 +61,25 @@ import {
   normalizeShellCommandText,
   type IdentityWatcherDelegate,
 } from "./IdentityWatcher.js";
-import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
 import type { SpawnContext } from "./terminalSpawn.js";
-
-const execFileAsync = promisify(execFile);
-
-// Soft-stale: trigger an async background refresh once the cached snapshot is
-// older than this. Hard-max: callers receive null past this age and fall back
-// to the legacy prompt path.
-const FOREGROUND_SNAPSHOT_SOFT_STALE_MS = 500;
-const FOREGROUND_SNAPSHOT_MAX_AGE_MS = 1500;
-const FOREGROUND_SNAPSHOT_PROBE_TIMEOUT_MS = 750;
-
-// Sentinel returned on POSIX before the first probe resolves. Returning null
-// during the warm-up window would drop into the IdentityWatcher's
-// "Windows / unsupported" fallback branch and falsely mark the shell idle for
-// demotion. Any value where shellPgid !== foregroundPgid (and both > 0) keeps
-// the demotion gate closed; the real probe overwrites this within a few ms.
-const INITIAL_FOREGROUND_SENTINEL = Object.freeze({
-  shellPgid: 1,
-  foregroundPgid: 2,
-});
-
 import { logIdentityDebug } from "./identityDebug.js";
+import { computeDefaultTitle, getLiveAgentId } from "./terminalTitle.js";
+import {
+  serializeTerminal,
+  serializeTerminalAsync,
+  serializeForPersistence,
+} from "./terminalSerialization.js";
+import { ForegroundProcessGroupProbe } from "./ForegroundProcessGroupProbe.js";
+import { TerminalExitObservers, type TerminalExitArgs } from "./TerminalExitObservers.js";
+import { gracefulShutdown as runGracefulShutdown } from "./TerminalGracefulShutdown.js";
+import { handleAgentDetection as runHandleAgentDetection } from "./TerminalAgentDetection.js";
+import { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
 
 type CursorBuffer = {
   cursorY?: number;
   baseY: number;
   getLine: (index: number) => { translateToString: (trimRight?: boolean) => string } | undefined;
 };
-
-// Backend-side identity for internal decisions (activity monitor pattern
-// lookup, event routing). Detection wins; during the boot window the launch
-// hint is used so cold-launched terminals start monitoring before the
-// process-tree poll has caught up.
-function getLiveAgentId(terminal: TerminalInfo): string | undefined {
-  return terminal.detectedAgentId ?? terminal.launchAgentId;
-}
-
-/**
- * Compute the default panel title for a terminal given its current chrome
- * identity. Used by the PTY host so the renderer can sync `panel.title` when
- * `titleMode === "default"`. Kept in lockstep with the renderer's
- * renderer terminal chrome rule: detection wins; launch affinity remains
- * agent-branded until an explicit exited state says the agent has ended.
- */
-function computeDefaultTitle(terminal: TerminalInfo): string {
-  const chromeId =
-    terminal.detectedAgentId ??
-    (terminal.agentState === "exited" || terminal.isExited ? undefined : terminal.launchAgentId);
-  if (!chromeId) return "Terminal";
-  const config = AGENT_REGISTRY[chromeId];
-  return config?.name ?? String(chromeId);
-}
 
 export interface TerminalProcessCallbacks {
   emitData: (id: string, data: string | Uint8Array) => void;
@@ -151,13 +107,10 @@ export class TerminalProcess {
 
   private writeQueue!: WriteQueue;
   private readonly processTreeKiller: ProcessTreeKiller;
-  private _ptyState: PtyState = { kind: "alive" };
-  private _exitEventEmitted = false;
+  private readonly lifecycle = new TerminalProcessLifecycle();
 
-  private _foregroundSnapshot: { shellPgid: number; foregroundPgid: number } | null = null;
-  private _foregroundSnapshotUpdatedAt = 0;
-  private _foregroundSnapshotRefreshing = false;
-  private _foregroundSnapshotCheckId = 0;
+  private readonly foregroundProbe: ForegroundProcessGroupProbe;
+  private exitObservers!: TerminalExitObservers;
 
   private _scrollback: number;
   private headlessResponderDisposable: { dispose: () => void } | null = null;
@@ -384,18 +337,33 @@ export class TerminalProcess {
 
     this.semanticBufferManager = new SemanticBufferManager(this.terminalInfo);
     this.processTreeKiller = new ProcessTreeKiller(ptyProcess, deps.processTreeCache);
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    this.foregroundProbe = new ForegroundProcessGroupProbe({
+      get ptyPid() {
+        return ptyProcess.pid;
+      },
+      get disposed() {
+        return self.lifecycle.isDisposed;
+      },
+    });
     this.writeQueue = new WriteQueue({
       writeToPty: (data) => {
         this.terminalInfo.ptyProcess.write(data);
       },
-      isExited: () => this._ptyState.kind !== "alive",
+      isExited: () => !this.lifecycle.isAlive,
       lastOutputTime: () => this.terminalInfo.lastOutputTime,
       performSubmit: (text) => this.performSubmit(text),
       onWriteError: (error, context) => this.logWriteError(error, context),
     });
     this.sessionSnapshotter = this.createSessionSnapshotter();
     this.identityWatcher = new IdentityWatcher(this.createIdentityWatcherDelegate());
-    this._subscribeExitObservers();
+    this.exitObservers = new TerminalExitObservers({
+      id: this.id,
+      terminalInfo: this.terminalInfo,
+      forensicsBuffer: this.forensicsBuffer,
+      agentStateService: this.deps.agentStateService,
+    });
     this.setupPtyHandlers(ptyProcess);
 
     const ptyPid = ptyProcess.pid;
@@ -517,43 +485,6 @@ export class TerminalProcess {
   }
 
   /**
-   * Replace the lifecycle state. Returns `false` (no-op) when the requested
-   * transition is illegal — most importantly when something tries to enter
-   * `shutting-down` while we are already past `alive`. This is what makes
-   * `teardown()`, `kill()`, and `dispose()` idempotent: the second caller
-   * sees `false` and returns immediately.
-   */
-  private transition(next: PtyState): boolean {
-    const current = this._ptyState;
-    if (current.kind === next.kind) {
-      return false;
-    }
-
-    let valid = false;
-    switch (current.kind) {
-      case "alive":
-        valid = next.kind === "shutting-down";
-        break;
-      case "shutting-down":
-        valid = next.kind === "exited" || next.kind === "disposed";
-        break;
-      case "exited":
-        valid = next.kind === "disposed";
-        break;
-      case "disposed":
-        valid = false;
-        break;
-    }
-
-    if (!valid) {
-      return false;
-    }
-
-    this._ptyState = next;
-    return true;
-  }
-
-  /**
    * Mechanical resource cleanup shared by `kill()`, `dispose()`, and the
    * natural PTY `onExit` handler. Idempotent — the first caller transitions
    * `alive → shutting-down` and clears collaborators/timers; later callers
@@ -573,7 +504,7 @@ export class TerminalProcess {
    *    `disposeHeadless()` call after teardown returns.
    */
   private teardown(reason: ExitReason): boolean {
-    if (!this.transition({ kind: "shutting-down", reason })) {
+    if (!this.lifecycle.transition({ kind: "shutting-down", reason })) {
       return false;
     }
 
@@ -589,123 +520,14 @@ export class TerminalProcess {
   }
 
   /**
-   * Emit `terminal:exited` exactly once per terminal lifetime. Forensics,
-   * `agent:completed`, and fallback classification subscribe to this event
-   * (see `_subscribeExitObservers`) instead of running inline inside the
-   * PTY `onExit` callback. `recentOutput` must be captured before the
-   * headless buffer is torn down — `disposeHeadless()` clears the
-   * forensics buffer, and a fallback subscriber that scans exit-time
-   * output cannot recover it once cleared.
+   * Emit `terminal:exited` exactly once per terminal lifetime. Delegates to
+   * TerminalExitObservers, which dedupes via its own `hasEmitted` flag and
+   * fans out forensics / `agent:completed` / fallback classification.
+   * `recentOutput` must be captured before `disposeHeadless()` clears the
+   * forensics buffer, since fallback classification scans the tail.
    */
-  private emitTerminalExited(args: {
-    code: number | null;
-    signal?: number;
-    reason: ExitReason;
-    recentOutput: string;
-  }): void {
-    if (this._exitEventEmitted) return;
-    this._exitEventEmitted = true;
-
-    const terminal = this.terminalInfo;
-    const liveAgentAtExit = getLiveAgentId(terminal);
-    const hadAgent = !!terminal.launchAgentId || !!terminal.everDetectedAgent;
-
-    events.emit("terminal:exited", {
-      terminalId: this.id,
-      spawnedAt: terminal.spawnedAt,
-      code: args.code,
-      signal: args.signal,
-      reason: args.reason,
-      recentOutput: args.recentOutput,
-      hadAgent,
-      liveAgentAtExit,
-      launchAgentId: terminal.launchAgentId,
-      agentPresetId: terminal.agentPresetId,
-      originalAgentPresetId: terminal.originalAgentPresetId,
-      timestamp: Date.now(),
-    });
-  }
-
-  /**
-   * Subscribe forensics logging, agent-completion emission, and fallback
-   * classification to the `terminal:exited` event. Registered once during
-   * construction and torn down when the event fires (or in `dispose()` if
-   * the terminal is destroyed without ever emitting).
-   *
-   * Filters by `terminalId` so the singleton event bus can fan out to many
-   * terminals without each subscriber re-checking.
-   */
-  private _exitObserverDisposable: { dispose: () => void } | null = null;
-  private _subscribeExitObservers(): void {
-    const sessionToken = this.terminalInfo.spawnedAt;
-    const off = events.on("terminal:exited", (payload) => {
-      // Filter on terminalId AND the session token. Without spawnedAt, an
-      // old PTY's exit (after `PtyManager.spawn(id)` killed it and
-      // respawned under the same id) would consume the new instance's
-      // listener and silence its real exit later.
-      if (payload.terminalId !== this.id || payload.spawnedAt !== sessionToken) return;
-
-      // Forensics: log abnormal exits with the tail captured at exit time.
-      // `wasKilled` is encoded in the reason — kill / graceful-shutdown
-      // paths suppress the abnormal-exit log even if the exit code was
-      // non-zero, matching the prior inline behaviour.
-      this.forensicsBuffer.logForensics(
-        this.id,
-        payload.code ?? 0,
-        this.terminalInfo,
-        payload.hadAgent,
-        payload.signal
-      );
-
-      // Agent state machine: only natural exits update agent state and
-      // emit agent:completed. kill / graceful-shutdown route through the
-      // kill path which has already emitted agent:killed before teardown.
-      if (payload.reason === "natural" && payload.hadAgent) {
-        this.deps.agentStateService.updateAgentState(this.terminalInfo, {
-          type: "exit",
-          code: payload.code ?? 0,
-          signal: payload.signal,
-        });
-      }
-
-      if (payload.reason === "natural" && payload.hadAgent && payload.liveAgentAtExit) {
-        this.deps.agentStateService.emitAgentCompleted(this.terminalInfo, payload.code ?? 0);
-      }
-
-      // Fallback classification: only fires for natural exits of agent
-      // terminals with a launched preset. Killed agents never trigger
-      // fallback (the user explicitly stopped them).
-      if (
-        payload.reason === "natural" &&
-        payload.launchAgentId &&
-        payload.agentPresetId &&
-        payload.code !== null
-      ) {
-        const cls = classifyExitOutput({
-          recentOutput: payload.recentOutput,
-          // Pass through as-is so a null/undefined code (crash, signal) does
-          // NOT short-circuit the scan. Only an explicit exit 0 skips the tail.
-          exitCode: payload.code,
-          wasKilled: false,
-        });
-        if (shouldTriggerFallback(cls)) {
-          events.emit("agent:fallback-triggered", {
-            terminalId: this.id,
-            agentId: payload.launchAgentId,
-            fromPresetId: payload.agentPresetId,
-            originalPresetId: payload.originalAgentPresetId ?? payload.agentPresetId,
-            reason: cls as "connection" | "auth",
-            exitCode: payload.code,
-            timestamp: Date.now(),
-          });
-        }
-      }
-
-      this._exitObserverDisposable?.dispose();
-      this._exitObserverDisposable = null;
-    });
-
-    this._exitObserverDisposable = { dispose: off };
+  private emitTerminalExited(args: TerminalExitArgs): void {
+    this.exitObservers.emit(args);
   }
 
   /** @deprecated Use getPublicState() for IPC-safe data */
@@ -720,7 +542,7 @@ export class TerminalProcess {
     // the legacy `wasKilled`/`isExited` flags. The legacy flags remain
     // populated where the existing code paths set them (kill, preserve)
     // and we OR them in to keep behaviour identical for those paths.
-    const state = this._ptyState;
+    const state = this.lifecycle.getState();
     const exitedState = state.kind === "exited" || state.kind === "disposed";
     const killReason =
       (state.kind === "shutting-down" || state.kind === "exited" || state.kind === "disposed") &&
@@ -1064,135 +886,15 @@ export class TerminalProcess {
     }
   }
 
-  async gracefulShutdown(): Promise<string | null> {
-    const terminal = this.terminalInfo;
-
-    if (terminal.isExited || terminal.wasKilled) {
-      return null;
-    }
-
-    // Don't inject quit into terminals whose agent already exited — e.g.
-    // user typed /quit and the terminal demoted to a plain shell. The
-    // launchAgentId persists for identity, but the agent is gone.
-    if (!this.isAgentLive) {
-      return null;
-    }
-
-    const liveAgentId = getLiveAgentId(terminal);
-    const agentConfig = liveAgentId ? getEffectiveAgentConfig(liveAgentId) : undefined;
-    const resume = agentConfig?.resume;
-
-    // Nothing to send — agent has no resume config or the config supplies
-    // neither a quit command nor a key sequence we can emit on shutdown.
-    if (!resume) {
-      return null;
-    }
-    const quitCommand = resume.quitCommand;
-    const shutdownKeySequence = resume.shutdownKeySequence;
-    if (!quitCommand && !shutdownKeySequence) {
-      return null;
-    }
-
-    // Only `session-id` triggers the post-quit pattern-match capture loop —
-    // other kinds (rolling-history, named-target, project-scoped) just send
-    // the quit signal and resolve null. Lesson from #4781: never run the
-    // capture loop for non-`session-id` agents — directory-scoped sessions
-    // (Kiro) don't emit IDs and the ghost regex would either time out or
-    // false-positive on unrelated output.
-    const pattern = resume.kind === "session-id" ? new RegExp(resume.sessionIdPattern) : null;
-
-    let shutdownBuffer = "";
-    let resolved = false;
-
-    return new Promise<string | null>((resolve) => {
-      const finish = (sessionId: string | null) => {
-        if (resolved) return;
-        resolved = true;
-        clearTimeout(timer);
-
-        if (sessionId) {
-          terminal.agentSessionId = sessionId;
-        }
-
-        this.kill("graceful-shutdown");
-        resolve(sessionId);
-      };
-
-      const timer = setTimeout(() => finish(null), GRACEFUL_SHUTDOWN_TIMEOUT_MS);
-
-      const origOnData = terminal.ptyProcess.onData((data: string) => {
-        if (resolved) return;
-        if (!pattern) return;
-
-        shutdownBuffer += data;
-        if (shutdownBuffer.length > GRACEFUL_SHUTDOWN_BUFFER_SIZE) {
-          shutdownBuffer = shutdownBuffer.slice(-GRACEFUL_SHUTDOWN_BUFFER_SIZE);
-        }
-
-        const stripped = stripAnsiCodes(shutdownBuffer);
-        const match = pattern.exec(stripped);
-        if (match?.[1]) {
-          origOnData.dispose();
-          finish(match[1]);
-        }
-      });
-
-      const origOnExit = terminal.ptyProcess.onExit(() => {
-        origOnExit.dispose();
-        origOnData.dispose();
-
-        if (!pattern) {
-          finish(null);
-          return;
-        }
-        const stripped = stripAnsiCodes(shutdownBuffer);
-        const match = pattern.exec(stripped);
-        finish(match?.[1] ?? null);
-      });
-
-      // Clear any partial user input at the agent prompt before issuing the quit command.
-      // Without this prelude, concatenated input (e.g. "half-typed/quit") is treated as a
-      // chat message by the agent and the session-ID line is never emitted. See #5785.
-      //   \x05 — Ctrl-E: move cursor to end of line
-      //   \x15 — Ctrl-U: erase from cursor to beginning of line
-      // ESC is avoided because it navigates/dismisses TUI state in bubbletea and ink CLIs.
-      (async () => {
-        try {
-          terminal.ptyProcess.write("\x05\x15");
-        } catch {
-          origOnData.dispose();
-          origOnExit.dispose();
-          finish(null);
-          return;
-        }
-
-        await new Promise<void>((r) => setTimeout(r, GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS));
-
-        if (resolved) return;
-
-        // Re-check liveness: if the agent demoted during the clear-delay
-        // window (e.g. user typed /quit milliseconds before shutdown), the
-        // pending write would land in a plain shell.
-        if (!this.isAgentLive) {
-          origOnData.dispose();
-          origOnExit.dispose();
-          finish(null);
-          return;
-        }
-
-        try {
-          if (shutdownKeySequence) {
-            terminal.ptyProcess.write(shutdownKeySequence);
-          }
-          if (quitCommand) {
-            terminal.ptyProcess.write(quitCommand + "\r");
-          }
-        } catch {
-          origOnData.dispose();
-          origOnExit.dispose();
-          finish(null);
-        }
-      })();
+  gracefulShutdown(): Promise<string | null> {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    return runGracefulShutdown({
+      terminalInfo: this.terminalInfo,
+      get isAgentLive() {
+        return self.isAgentLive;
+      },
+      kill: (reason) => this.kill(reason),
     });
   }
 
@@ -1324,139 +1026,31 @@ export class TerminalProcess {
     return this.deps.processTreeCache.getDescendantPids(ptyPid).length;
   }
 
-  /**
-   * Sync read against a per-terminal stale-while-revalidate cache. The actual
-   * `ps` probe runs asynchronously so the IdentityWatcher poll tick never
-   * blocks the pty-host event loop. Soft-stale schedules a background refresh;
-   * past the hard-max age we return null so callers fall back to the legacy
-   * prompt path (matches the pre-existing non-POSIX behavior).
-   */
+  // Thin wrapper around ForegroundProcessGroupProbe.readSnapshot(). Kept as
+  // a method on TerminalProcess so test suites that override the foreground
+  // snapshot via instance-method replacement (`agentDetection.test.ts`) keep
+  // working without rewiring the probe.
   private readForegroundProcessGroupSnapshot(): {
     shellPgid: number;
     foregroundPgid: number;
   } | null {
-    if (process.platform === "win32") {
-      return null;
-    }
-
-    const ptyPid = this.terminalInfo.ptyProcess.pid;
-    if (ptyPid === undefined) {
-      return null;
-    }
-
-    const hasEverProbed = this._foregroundSnapshotUpdatedAt > 0;
-    const age = hasEverProbed ? Date.now() - this._foregroundSnapshotUpdatedAt : 0;
-
-    if (
-      !this._foregroundSnapshotRefreshing &&
-      (!hasEverProbed || age > FOREGROUND_SNAPSHOT_SOFT_STALE_MS)
-    ) {
-      void this._refreshForegroundProcessGroupSnapshot(ptyPid);
-    }
-
-    // Probe pending: keep the demotion gate closed (see sentinel comment).
-    if (!hasEverProbed) {
-      return INITIAL_FOREGROUND_SENTINEL;
-    }
-
-    if (age > FOREGROUND_SNAPSHOT_MAX_AGE_MS) {
-      return null;
-    }
-    return this._foregroundSnapshot;
-  }
-
-  private async _refreshForegroundProcessGroupSnapshot(ptyPid: number): Promise<void> {
-    this._foregroundSnapshotRefreshing = true;
-    const checkId = ++this._foregroundSnapshotCheckId;
-    let nextSnapshot: { shellPgid: number; foregroundPgid: number } | null = null;
-    try {
-      const { stdout } = await execFileAsync("ps", ["-o", "pgid=,tpgid=", "-p", String(ptyPid)], {
-        encoding: "utf8",
-        shell: false,
-        signal: AbortSignal.timeout(FOREGROUND_SNAPSHOT_PROBE_TIMEOUT_MS),
-      });
-      const [pgidText, tpgidText] = stdout.trim().split(/\s+/);
-      const shellPgid = Number.parseInt(pgidText ?? "", 10);
-      const foregroundPgid = Number.parseInt(tpgidText ?? "", 10);
-      if (Number.isFinite(shellPgid) && Number.isFinite(foregroundPgid)) {
-        nextSnapshot = { shellPgid, foregroundPgid };
-      }
-    } catch {
-      // ps -p races (process exited) and aborts both surface here. Persisting
-      // null with a fresh timestamp prevents tight-retry and lets the caller
-      // fall back to the legacy prompt path until the next refresh window.
-      nextSnapshot = null;
-    } finally {
-      // Disposed-instance guard: never write back to a torn-down terminal.
-      // Stale-write guard via monotonic checkId is belt-and-suspenders given
-      // the in-flight boolean, but cheap and matches the repo's checkId
-      // pattern (see CliAvailabilityService).
-      if (this._ptyState.kind !== "disposed" && checkId === this._foregroundSnapshotCheckId) {
-        this._foregroundSnapshot = nextSnapshot;
-        this._foregroundSnapshotUpdatedAt = Date.now();
-      }
-      this._foregroundSnapshotRefreshing = false;
-    }
+    return this.foregroundProbe.readSnapshot();
   }
 
   getSerializedState(): string | null {
-    try {
-      return this.terminalInfo.serializeAddon!.serialize();
-    } catch (error) {
-      console.error(`[TerminalProcess] Failed to serialize terminal ${this.id}:`, error);
-      return null;
-    }
+    return serializeTerminal(this.id, this.terminalInfo);
   }
 
-  async getSerializedStateAsync(): Promise<string | null> {
-    const terminal = this.terminalInfo;
-
-    try {
-      const lineCount = terminal.headlessTerminal!.buffer.active.length;
-      const serializerService = getTerminalSerializerService();
-
-      if (serializerService.shouldUseAsync(lineCount)) {
-        return await serializerService.serializeAsync(this.id, () =>
-          terminal.serializeAddon!.serialize()
-        );
-      }
-
-      return terminal.serializeAddon!.serialize();
-    } catch (error) {
-      console.error(`[TerminalProcess] Failed to serialize terminal ${this.id}:`, error);
-      return null;
-    }
+  getSerializedStateAsync(): Promise<string | null> {
+    return serializeTerminalAsync(this.id, this.terminalInfo);
   }
 
   private _serializeForPersistence(): string | null {
-    const addon = this.terminalInfo.serializeAddon;
-    const terminal = this.terminalInfo.headlessTerminal;
-    if (!addon || !terminal) return null;
-
-    const startMarker = this._restoreBannerStart;
-    const endMarker = this._restoreBannerEnd;
-
-    if (!startMarker || !endMarker || startMarker.line < 0 || endMarker.line < 0) {
-      return addon.serialize();
-    }
-
-    try {
-      const bufLen = terminal.buffer.active.length;
-      const bannerStart = startMarker.line;
-      const bannerEnd = endMarker.line;
-
-      const beforePart =
-        bannerStart > 0 ? addon.serialize({ range: { start: 0, end: bannerStart - 1 } }) : "";
-      const afterPart =
-        bannerEnd < bufLen - 1
-          ? addon.serialize({ range: { start: bannerEnd, end: bufLen - 1 } })
-          : "";
-
-      if (beforePart && afterPart) return beforePart + "\r\n" + afterPart;
-      return beforePart || afterPart || addon.serialize();
-    } catch {
-      return addon.serialize();
-    }
+    return serializeForPersistence(
+      this.terminalInfo,
+      this._restoreBannerStart,
+      this._restoreBannerEnd
+    );
   }
 
   markChecked(): void {
@@ -1624,36 +1218,19 @@ export class TerminalProcess {
 
     // If the PTY never fired onExit (LRU eviction, app shutdown, or kill()
     // followed by dispose() before the kernel reaped the child), this is
-    // the last chance to notify subscribers. `_exitEventEmitted` makes a
-    // late natural-exit emit a no-op if onExit fires after dispose.
-    if (!this._exitEventEmitted) {
+    // the last chance to notify subscribers. The exit-observers dedupe flag
+    // makes a late natural-exit emit a no-op if onExit fires after dispose.
+    if (!this.exitObservers.hasEmitted) {
       this.emitTerminalExited({
         code: null,
-        reason: this.getExitReason() ?? "dispose",
+        reason: this.lifecycle.getExitReason() ?? "dispose",
         recentOutput,
       });
     }
 
-    if (this._ptyState.kind !== "disposed") {
-      this._ptyState = { kind: "disposed", reason: this.getExitReason() ?? "dispose" };
-    }
+    this.lifecycle.setDisposed(this.lifecycle.getExitReason() ?? "dispose");
 
-    this._exitObserverDisposable?.dispose();
-    this._exitObserverDisposable = null;
-  }
-
-  /**
-   * Read the exit reason captured by `teardown()` if available. Returns
-   * `null` for terminals that are still `alive` — primarily useful when
-   * `dispose()` runs after a prior `kill()` or natural exit and needs to
-   * preserve the original reason in the final `disposed` state.
-   */
-  private getExitReason(): ExitReason | null {
-    const s = this._ptyState;
-    if (s.kind === "shutting-down" || s.kind === "exited" || s.kind === "disposed") {
-      return s.reason;
-    }
-    return null;
+    this.exitObservers.dispose();
   }
 
   private setupPtyHandlers(ptyProcess: pty.IPty): void {
@@ -1728,7 +1305,7 @@ export class TerminalProcess {
       // the registry via callbacks.onExit. A late OS-delivered exit must
       // not double-fire either path — both downstream subscribers and
       // PtyManager are not idempotent.
-      if (this._exitEventEmitted) {
+      if (this.exitObservers.hasEmitted) {
         return;
       }
 
@@ -1740,14 +1317,14 @@ export class TerminalProcess {
       const recentOutput = this.forensicsBuffer.getRecentOutput();
 
       // teardown() returns false when kill() / dispose() got here first,
-      // in which case the prior reason is preserved in `_ptyState`. The
+      // in which case the prior reason is preserved in lifecycle state. The
       // event payload still carries the actual exit code from the PTY,
       // so subscribers see e.g. `reason: "kill"` with `code: 0`.
-      const teardownReason = this.getExitReason() ?? "natural";
+      const teardownReason = this.lifecycle.getExitReason() ?? "natural";
       this.teardown("natural");
       this.sessionSnapshotter.dispose();
 
-      const reasonForEvent = this.getExitReason() ?? teardownReason;
+      const reasonForEvent = this.lifecycle.getExitReason() ?? teardownReason;
 
       const previousAgent = terminal.detectedAgentId;
       const hadDetectedIdentity =
@@ -1787,17 +1364,12 @@ export class TerminalProcess {
       if (preserve) {
         terminal.exitCode = exitCode ?? 0;
         terminal.isExited = true;
-        this._ptyState = {
-          kind: "exited",
-          code: exitCode ?? 0,
-          signal,
-          reason: reasonForEvent,
-        };
+        this.lifecycle.setExited({ code: exitCode ?? 0, signal, reason: reasonForEvent });
         return;
       }
 
       this.disposeHeadless();
-      this._ptyState = { kind: "disposed", reason: reasonForEvent };
+      this.lifecycle.setDisposed(reasonForEvent);
     });
   }
 
@@ -1811,190 +1383,29 @@ export class TerminalProcess {
   }
 
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void {
-    if (this.terminalInfo.spawnedAt !== spawnedAt) {
-      console.warn(
-        `[TerminalProcess] Rejected stale detection from old ProcessDetector ${this.id} ` +
-          `(session ${spawnedAt} vs current ${this.terminalInfo.spawnedAt})`
-      );
-      return;
-    }
-
-    const terminal = this.terminalInfo;
-
-    if (terminal.wasKilled) {
-      return;
-    }
-
-    // Normalize legacy callers that only set `detected`. Callers that set
-    // `detectionState` win; fall back to mapping `detected: boolean` onto
-    // the four-state enum. This preserves existing test call sites while
-    // new code branches on the richer enum. #5809
-    const state: DetectionState = result.detectionState ?? (result.detected ? "agent" : "no_agent");
-
-    // `unknown` and `ambiguous` are HOLD states — no evidence change, no
-    // committed-state transition. Skip all branches so a blind `ps` cycle
-    // doesn't silently demote a confirmed agent every HYSTERESIS window,
-    // and a two-source conflict holds rather than flips. Precedent:
-    // #4153 — make uncertain events no-ops in the state machine. #5809
-    if (state === "unknown" || state === "ambiguous") {
-      return;
-    }
-
-    const isDetected = state === "agent";
-
-    // Set when we clear a runtime agent detection on this tick so the block
-    // below can suppress a same-tick shell-headline emission that would
-    // otherwise overwrite the "Exited" completion cue emitted by
-    // updateAgentState. The next detector poll emits the shell headline
-    // instead. #5773
-    let justClearedDetection = false;
-
-    if (isDetected && result.agentType && isBuiltInAgentId(result.agentType)) {
-      const detectedAgentId: BuiltInAgentId = result.agentType;
-      const previous = terminal.detectedAgentId;
-      terminal.everDetectedAgent = true;
-
-      if (previous !== detectedAgentId) {
-        if (terminal.agentState === "exited") {
-          this.deps.agentStateService.updateAgentState(terminal, { type: "respawn" });
-        }
-
-        terminal.detectedAgentId = detectedAgentId;
-
-        const detection = getEffectiveAgentConfig(detectedAgentId)?.detection;
-        const patternConfig = buildPatternConfig(detection, detectedAgentId);
-        if (this.activityMonitor) {
-          this.activityMonitor.reconfigure(detectedAgentId, patternConfig);
-        } else {
-          // Runtime promotion: plain terminal now hosts an agent. Start the
-          // activity monitor immediately so the renderer sees state
-          // transitions from the first tick forward.
-          if (terminal.agentState === undefined) {
-            terminal.agentState = "idle";
-            terminal.lastStateChange = Date.now();
-          }
-          terminal.analysisEnabled = true;
-          this.startActivityMonitor();
-        }
-
-        // Title sync: write the default-mode title so the renderer can pick
-        // it up via the agent-detected event payload. User-renamed panels
-        // (titleMode === "custom") are left alone.
-        const nextTitle = computeDefaultTitle(terminal);
-        if ((terminal.titleMode ?? "default") === "default") {
-          terminal.title = nextTitle;
-        }
-
-        this.lastDetectedProcessIconId = result.processIconId;
-        terminal.detectedProcessIconId = result.processIconId;
-        events.emit("agent:detected", {
-          terminalId: this.id,
-          agentType: detectedAgentId,
-          processIconId: result.processIconId,
-          processName: result.processName || detectedAgentId,
-          defaultTitle: nextTitle,
-          timestamp: Date.now(),
-        });
-      }
-    } else if (isDetected && !result.agentType && result.processIconId) {
-      // Non-agent process detected (npm, python, docker, etc.)
-      if (terminal.detectedAgentId) {
-        logIdentityDebug(
-          `[IdentityDebug] terminal-demote-hold term=${this.id.slice(-8)} ` +
-            `reason=agent-requires-explicit-exit agent=${terminal.detectedAgentId} ` +
-            `processIcon=${result.processIconId}`
-        );
-        return;
-      }
-      if (this.lastDetectedProcessIconId !== result.processIconId) {
-        this.lastDetectedProcessIconId = result.processIconId;
-        terminal.detectedProcessIconId = result.processIconId;
-        events.emit("agent:detected", {
-          terminalId: this.id,
-          processIconId: result.processIconId,
-          processName: result.processName || result.processIconId,
-          timestamp: Date.now(),
-        });
-      }
-    } else if (!isDetected && (terminal.detectedAgentId || this.lastDetectedProcessIconId)) {
-      const previousAgent = terminal.detectedAgentId;
-      if (previousAgent) {
-        // The "agent-requires-explicit-exit" guard exists to keep durable
-        // launch-affinity chrome stable through transient detection gaps —
-        // process-tree blindness, blind-`ps` cycles, argv rewrites. It only
-        // applies when the agent identity is anchored by `launchAgentId`
-        // (toolbar/cold-launched). Runtime-promoted agents (user typed the
-        // CLI into a plain shell) have no durable anchor: when `no_agent`
-        // arrives we must demote regardless of evidence source, otherwise
-        // a process-tree-absence tick after Ctrl+C can land here without
-        // `evidenceSource: "shell_command"` and the chrome stays stuck on
-        // `claude` until terminal teardown. Issue: v0.8.0 release E2E.
-        if (terminal.launchAgentId && result.evidenceSource !== "shell_command") {
-          logIdentityDebug(
-            `[IdentityDebug] terminal-demote-hold term=${this.id.slice(-8)} ` +
-              `reason=agent-requires-explicit-exit agent=${previousAgent}`
-          );
-          return;
-        }
-        logIdentityDebug(
-          `[IdentityDebug] terminal-demote-apply term=${this.id.slice(-8)} ` +
-            `reason=${result.evidenceSource === "shell_command" ? "prompt-return" : "no-agent-detected"} ` +
-            `agent=${previousAgent} runtime=${terminal.launchAgentId ? "launch-anchored" : "runtime-promoted"}`
-        );
-        this.deps.agentStateService.updateAgentState(terminal, { type: "exit", code: 0 });
-        terminal.detectedAgentId = undefined;
-        justClearedDetection = true;
-      }
-
-      this.lastDetectedProcessIconId = undefined;
-      terminal.detectedProcessIconId = undefined;
-      this.stopActivityMonitor();
-      if (previousAgent) {
-        terminal.analysisEnabled = false;
-      }
-      const nextTitle = computeDefaultTitle(terminal);
-      if (previousAgent && (terminal.titleMode ?? "default") === "default") {
-        terminal.title = nextTitle;
-      }
-      // Emit `agent:exited` to clear the renderer's live-detection fields
-      // (`detectedAgentId`, `detectedProcessId`). Stamp `exitKind: "subcommand"`
-      // only when an actual agent process exited so the renderer can distinguish
-      // from plain process-icon clearings (npm/vite/etc.).
-      events.emit("agent:exited", {
-        terminalId: this.id,
-        agentType: previousAgent,
-        defaultTitle: previousAgent ? nextTitle : undefined,
-        timestamp: Date.now(),
-        ...(previousAgent ? { exitKind: "subcommand" as const } : {}),
-      });
-    }
-
-    // Route to shell-style headlines when no agent is live. Covers plain
-    // terminals (no launch hint, no detection) and agent-launched terminals
-    // whose agent exited — which keep an active shell PTY and should surface
-    // shell activity rather than a stale "Agent working" headline. Skip on
-    // the exact tick we just emitted an "Exited" completion cue so it isn't
-    // overwritten.
-    const hasLiveAgent =
-      !!terminal.detectedAgentId || (!!terminal.launchAgentId && terminal.agentState !== "exited");
-    if (!justClearedDetection && !hasLiveAgent) {
-      const lastCommand = result.currentCommand || this.semanticBufferManager.getLastCommand();
-
-      const { headline, status, type } = this.headlineGenerator.generate({
-        terminalId: this.id,
-        activity: result.isBusy ? "busy" : "idle",
-        lastCommand,
-      });
-
-      events.emit("terminal:activity", {
-        terminalId: this.id,
-        headline,
-        status,
-        type,
-        confidence: 1.0,
-        timestamp: Date.now(),
-        lastCommand,
-      });
-    }
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    runHandleAgentDetection(
+      {
+        id: this.id,
+        terminalInfo: this.terminalInfo,
+        agentStateService: this.deps.agentStateService,
+        headlineGenerator: this.headlineGenerator,
+        semanticBufferManager: this.semanticBufferManager,
+        get activityMonitor() {
+          return self.activityMonitor;
+        },
+        get lastDetectedProcessIconId() {
+          return self.lastDetectedProcessIconId;
+        },
+        set lastDetectedProcessIconId(v) {
+          self.lastDetectedProcessIconId = v;
+        },
+        startActivityMonitor: () => this.startActivityMonitor(),
+        stopActivityMonitor: () => this.stopActivityMonitor(),
+      },
+      result,
+      spawnedAt
+    );
   }
 }
