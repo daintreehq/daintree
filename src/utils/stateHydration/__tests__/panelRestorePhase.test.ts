@@ -215,6 +215,15 @@ describe("restorePanelsPhase — saved panels", () => {
     expect(ctx.addPanel).not.toHaveBeenCalled();
   });
 
+  it("phantom-skips agent panel when _switchId is the empty string (defined-but-falsy)", async () => {
+    // Pins `_switchId !== undefined`. A regression to truthiness check (`if (_switchId)`)
+    // would silently break this case (#4973 phantom-agent guard).
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    const ctx = makeContext({ _switchId: "" });
+    await restorePanelsPhase([panel("p1", { kind: "agent", launchAgentId: "claude" })], ctx);
+    expect(ctx.addPanel).not.toHaveBeenCalled();
+  });
+
   it("does NOT phantom-skip plain terminal panels during a live switch (only agent kind is gated)", async () => {
     reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
     const ctx = makeContext({ _switchId: "switch-1" });
@@ -241,28 +250,52 @@ describe("restorePanelsPhase — saved panels", () => {
     expect(ctx.addPanel).toHaveBeenCalledTimes(1);
   });
 
-  it("aborts mid-phase when checkCurrent returns false between phases", async () => {
-    const ctx = makeContext();
-    // Two PTY panels (priority + background) — fail check after non-PTY phase
-    let calls = 0;
+  it("aborts before background-PTY phase when checkCurrent returns false after priority phase", async () => {
+    // Cancellation pin: priority PTY restored, background PTY skipped, orphan skipped.
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    let priorityRan = false;
     ctx.checkCurrent.mockImplementation(() => {
-      calls++;
-      return calls < 2; // returns false on the second call
+      // Returns true initially (entering priority phase) and false after the
+      // priority panel is restored (between priority and background PTY phases).
+      if (priorityRan) return false;
+      return true;
     });
-    ctx.backendTerminalMap.set("t1", backend("t1"));
-    ctx.backendTerminalMap.set("t2", backend("t2"));
-    await restorePanelsPhase([panel("t1", { worktreeId: "wA" }), panel("t2")], ctx);
-    // We can't easily assert how many panels were restored without timing,
-    // but the test confirms checkCurrent is consulted (no throw, no orphan ran).
-    expect(ctx.checkCurrent).toHaveBeenCalled();
+    ctx.backendTerminalMap.set("t-prio", backend("t-prio"));
+    ctx.backendTerminalMap.set("t-bg", backend("t-bg"));
+    ctx.backendTerminalMap.set("orphan", backend("orphan"));
+
+    // Track when the priority panel is restored so the next checkCurrent call returns false.
+    const originalAddPanel = ctx.addPanel.getMockImplementation();
+    ctx.addPanel.mockImplementation(async (args: { existingId?: string; requestedId?: string }) => {
+      const id = await (originalAddPanel ?? (() => Promise.resolve("x")))(args);
+      if (args.existingId === "t-prio") priorityRan = true;
+      return id;
+    });
+
+    await restorePanelsPhase(
+      [panel("t-prio", { worktreeId: "wA" }), panel("t-bg", { worktreeId: "wB" })],
+      ctx
+    );
+
+    // Priority panel was restored; background and orphan were aborted.
+    const addPanelArgs = ctx.addPanel.mock.calls.map(
+      ([a]: [{ existingId?: string }]) => a.existingId
+    );
+    expect(addPanelArgs).toEqual(["t-prio"]);
   });
 
-  it("calls restoreTerminalOrder with sorted ids matching saved order", async () => {
+  it("calls restoreTerminalOrder with addPanel-returned IDs in saved order (not saved IDs)", async () => {
     const restoreTerminalOrder = vi.fn();
     const ctx = makeContext({
       restoreTerminalOrder,
       activeWorktreeId: "wA",
     });
+    // Differentiate returned IDs from saved IDs so a regression that passes
+    // saved IDs would surface immediately.
+    ctx.addPanel.mockImplementation(
+      async (args: { existingId?: string; requestedId?: string }) =>
+        `new-${args.existingId ?? args.requestedId}`
+    );
     ctx.backendTerminalMap.set("t1", backend("t1"));
     ctx.backendTerminalMap.set("t2", backend("t2"));
     ctx.backendTerminalMap.set("t3", backend("t3"));
@@ -275,7 +308,7 @@ describe("restorePanelsPhase — saved panels", () => {
       ctx
     );
     expect(restoreTerminalOrder).toHaveBeenCalledTimes(1);
-    expect(restoreTerminalOrder.mock.calls[0][0]).toEqual(["t1", "t2", "t3"]);
+    expect(restoreTerminalOrder.mock.calls[0][0]).toEqual(["new-t1", "new-t2", "new-t3"]);
   });
 
   it("does not call restoreTerminalOrder when no panels were restored", async () => {
@@ -358,12 +391,33 @@ describe("restorePanelsPhase — orphan reconnection", () => {
 });
 
 describe("restorePanelsPhase — withHydrationBatch wrapper", () => {
-  it("wraps each phase in a hydration batch (begin/flush) when provided", async () => {
-    const ctx = makeContext();
+  it("wraps the WHOLE batch (one withHydrationBatch per stagger batch, not per task)", async () => {
+    // RESTORE_SPAWN_BATCH_SIZE=2 (mocked) — 2 background PTY tasks fit in one batch.
+    // If a regression wrapped each task individually, this would fire twice.
+    const ctx = makeContext({ activeWorktreeId: "wA" });
     ctx.backendTerminalMap.set("t1", backend("t1"));
     ctx.backendTerminalMap.set("t2", backend("t2"));
-    await restorePanelsPhase([panel("t1"), panel("t2")], ctx);
-    // At minimum, withHydrationBatch is called for each non-empty phase.
-    expect(ctx.withHydrationBatch).toHaveBeenCalled();
+    await restorePanelsPhase(
+      [panel("t1", { worktreeId: "wB" }), panel("t2", { worktreeId: "wB" })],
+      ctx
+    );
+    // Both panels are background priority (worktreeId !== activeWorktreeId).
+    // Expect exactly one withHydrationBatch call covering the whole batch.
+    expect(ctx.withHydrationBatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("restorePanelsPhase — matched backend not re-appended as orphan", () => {
+  it("matched backend terminals are removed from the map before orphan scan (no double restore)", async () => {
+    // Pins backendTerminalMap.delete() inside the saved-panels execute() — if the
+    // delete is moved after orphan collection, "matched" would also appear as an orphan.
+    const ctx = makeContext();
+    ctx.backendTerminalMap.set("matched", backend("matched"));
+    ctx.backendTerminalMap.set("orphan", backend("orphan"));
+    await restorePanelsPhase([panel("matched")], ctx);
+    // Exactly two addPanel calls: matched (saved) + orphan — never three.
+    expect(ctx.addPanel).toHaveBeenCalledTimes(2);
+    const ids = ctx.addPanel.mock.calls.map(([a]: [{ existingId?: string }]) => a.existingId);
+    expect(ids.sort()).toEqual(["matched", "orphan"]);
   });
 });
