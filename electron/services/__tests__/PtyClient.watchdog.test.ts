@@ -300,4 +300,39 @@ describe("PtyClient watchdog", () => {
     vi.advanceTimersByTime(100);
     expect(killSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("WATCHDOG_RE_ARMED_AFTER_AUTO_RESTART", () => {
+    // Regression for #6690: when the host crashes and is auto-restarted, the
+    // watchdog must restart with the new child. Previously a one-shot
+    // start-in-constructor left the watchdog dead after the first crash.
+    const client = createReadyClient({ healthCheckIntervalMs: 100 });
+    const priv = client as unknown as WatchdogPrivate;
+
+    // First host crashes — onExitSync stops the watchdog, restart timer is
+    // scheduled inside the lifecycle's setImmediate.
+    mockChild.emit("exit", 1);
+
+    // The next fork (during the restart timer) returns a fresh mock child.
+    const restartedChild = Object.assign(new EventEmitter(), {
+      postMessage: vi.fn(),
+      kill: vi.fn(),
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      pid: 654,
+    }) as MockUtilityProcess;
+    shared.forkMock.mockReturnValue(restartedChild);
+
+    // Drain the setImmediate + the random-jittered restart delay (max 2000ms
+    // for attempt 1: floor(100) + random*Math.min(2^1*1000, 10000)-100).
+    vi.advanceTimersByTime(2_001);
+    // New host emits ready
+    restartedChild.emit("message", { type: "ready" });
+
+    // Counter resets to 0 on each start; ticks 1-3 increment it; tick 4 fires.
+    vi.advanceTimersByTime(400);
+
+    expect(killSpy).toHaveBeenCalledTimes(1);
+    expect(killSpy).toHaveBeenCalledWith(654, "SIGKILL");
+    expect(priv.healthWatchdog.missedHeartbeats).toBe(0);
+  });
 });

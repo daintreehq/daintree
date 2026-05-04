@@ -298,9 +298,6 @@ export class PtyClient extends EventEmitter {
 
     this.lifecycle.start();
 
-    // Start health check (only if not already paused — initial start is never paused)
-    this.healthWatchdog.start();
-
     console.log("[PtyClient] Pty Host started");
   }
 
@@ -326,6 +323,14 @@ export class PtyClient extends EventEmitter {
       type: "set-log-level-overrides",
       overrides: this.logLevelOverridesCache,
     });
+    // Re-arm the watchdog on every successful ready — covers both the initial
+    // boot and every auto-restart cycle. The original code armed it inside
+    // startHost() before ready arrived, but the tick was a no-op until
+    // isInitialized=true anyway, so deferring to ready is equivalent and
+    // avoids a leaked timer when fork itself fails.
+    if (!this.healthWatchdog.isHealthCheckPaused) {
+      this.healthWatchdog.start();
+    }
     if (this.needsRespawn) {
       this.needsRespawn = false;
       this.respawnPending();
