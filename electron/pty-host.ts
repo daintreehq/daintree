@@ -48,7 +48,6 @@ import {
   BackpressureManager,
   IpcQueueManager,
   PortQueueManager,
-  PortBatcher,
   metricsEnabled,
   MAX_PACKET_PAYLOAD,
   BACKPRESSURE_SAFETY_TIMEOUT_MS,

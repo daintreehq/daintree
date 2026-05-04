@@ -22,6 +22,7 @@ import { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
 import type { RollupContextNode } from "./prRequiredCIStatus.js";
 import type {
   GitHubPR,
+  GitHubPRCIStatus,
   GitHubListOptions,
   GitHubListResponse,
   PRTooltipData,
