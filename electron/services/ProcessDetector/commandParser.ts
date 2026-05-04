@@ -1,4 +1,3 @@
-import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { CommandIdentity } from "./types.js";
 import { AGENT_CLI_NAMES, PROCESS_ICON_MAP } from "./registries.js";
 

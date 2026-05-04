@@ -9,13 +9,10 @@ import {
   makeUnknownResult,
   makeAmbiguousResult,
 } from "./types.js";
-import type { DetectionResult, DetectionCallback } from "./types.js";
+import type { DetectionCallback } from "./types.js";
+import type { DetectionResult, DetectionEvidenceSource } from "./types.js";
 import { redactArgv } from "./commandParser.js";
-import {
-  normalizeProcessName,
-  buildDetectedCandidate,
-  selectPreferredCandidate,
-} from "./candidateHelpers.js";
+import { buildDetectedCandidate, selectPreferredCandidate } from "./candidateHelpers.js";
 
 export { type DetectionResult } from "./types.js";
 
@@ -43,7 +40,7 @@ export class ProcessDetector {
   private lastProcessIconId: string | null = null;
   private lastBusyState: boolean | null = null;
   private lastCurrentCommand: string | undefined;
-  private lastEvidenceSource: DetectionResult["evidenceSource"] = null;
+  private lastEvidenceSource: DetectionEvidenceSource | null = null;
   private cache: ProcessTreeCache;
   private unsubscribe: (() => void) | null = null;
   private isStarted: boolean = false;
