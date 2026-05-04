@@ -201,6 +201,11 @@ export class WorktreeMonitor {
 
     this.noteReader = new NoteFileReader(worktree.path);
 
+    // Each controller's host is a thin live-getter view onto monitor state.
+    // Aliasing `this` keeps the getter syntax compact (object-literal
+    // getters can't be arrow functions, and we need a fresh read on each
+    // access).
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const monitor = this;
     const fetchHost: FetchSchedulerHost = {
       get isRunning() {

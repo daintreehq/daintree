@@ -9,13 +9,10 @@ let mockWatcherStartResult = false;
 let mockRecursiveStartResult: boolean | undefined;
 let mockGitOnlyStartResult: boolean | undefined;
 let mockWatcherStartFiresFailure = false;
-let capturedOnWatcherFailed: (() => void) | undefined;
 let capturedOnInotifyLimitReached: (() => void) | undefined;
 let capturedOnEmfileLimitReached: (() => void) | undefined;
 let capturedWatcherOptions: Record<string, unknown> | undefined;
-const capturedWatcherOptionsHistory: Record<string, unknown>[] = [];
 let watcherStartCallCount = 0;
-let watcherDisposeCallCount = 0;
 
 vi.mock("../../utils/gitFileWatcher.js", () => {
   return {
@@ -32,11 +29,9 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
       ) {
         this.onWatcherFailed = opts.onWatcherFailed;
         this.watchWorktree = opts.watchWorktree === true;
-        capturedOnWatcherFailed = opts.onWatcherFailed;
         capturedOnInotifyLimitReached = opts.onInotifyLimitReached;
         capturedOnEmfileLimitReached = opts.onEmfileLimitReached;
         capturedWatcherOptions = opts;
-        capturedWatcherOptionsHistory.push(opts);
       }
       start() {
         watcherStartCallCount++;
@@ -48,9 +43,7 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
         }
         return result;
       }
-      dispose() {
-        watcherDisposeCallCount++;
-      }
+      dispose() {}
     },
   };
 });
@@ -98,12 +91,9 @@ describe("WatcherController", () => {
     mockGitOnlyStartResult = undefined;
     mockWatcherStartFiresFailure = false;
     watcherStartCallCount = 0;
-    watcherDisposeCallCount = 0;
-    capturedOnWatcherFailed = undefined;
     capturedOnInotifyLimitReached = undefined;
     capturedOnEmfileLimitReached = undefined;
     capturedWatcherOptions = undefined;
-    capturedWatcherOptionsHistory.length = 0;
   });
 
   afterEach(() => {
@@ -331,8 +321,8 @@ describe("WatcherController", () => {
 
     // Advance Date.now beyond the 1s cooldown.
     vi.setSystemTime(2_000);
-    capturedOnWatcherFailed = undefined; // Just ensure unrelated mock state
-    capturedWatcherOptions?.onChange && (capturedWatcherOptions.onChange as () => void)();
+    const onChange = capturedWatcherOptions?.onChange as (() => void) | undefined;
+    onChange?.();
 
     expect(host.onTriggerUpdate).toHaveBeenCalledTimes(1);
   });
