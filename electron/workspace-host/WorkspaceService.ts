@@ -36,7 +36,6 @@ import { waitForPathExists } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import {
   probeGitLfsAvailable,
-  escapeBranchRegex,
   isGitHubRemoteUrl,
   parseCheckedOutBranches,
   nextAvailableBranchName,
