@@ -108,6 +108,7 @@ vi.mock("node:os", async (importOriginal) => {
 vi.mock("electron", () => ({
   ipcMain: electronMocks.ipcMain,
   BrowserWindow: class BrowserWindow {},
+  app: { getVersion: () => "0.0.0-test" },
 }));
 
 vi.mock("../../store.js", () => ({

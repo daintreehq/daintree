@@ -233,9 +233,11 @@ export class HelpSessionService {
    * Invalidates the in-memory bearer for this session. The on-disk dir is
    * intentionally preserved across launches so the user's one-time Claude
    * Code workspace-trust acceptance for this project carries over to the
-   * next assistant open. The literal bearer in .mcp.json becomes dead the
-   * moment it's removed from `sessionsByToken` (the auth gate is in-memory)
-   * and is overwritten on the next provision.
+   * next assistant open — but the literal bearer is stripped from
+   * `.mcp.json` so a `claude` started outside the help-panel flow (e.g. a
+   * stray terminal `cd`-ed into the session dir) can't keep authenticating
+   * against the now-revoked record. The next provision rewrites a fresh
+   * entry into the same file.
    */
   async revokeSession(sessionId: string): Promise<void> {
     const record = this.sessionsById.get(sessionId);
@@ -243,6 +245,7 @@ export class HelpSessionService {
     record.revoked = true;
     this.sessionsById.delete(sessionId);
     this.sessionsByToken.delete(record.token);
+    await this.stripStaleDaintreeMcpEntry(record.sessionPath);
   }
 
   async revokeByWebContentsId(webContentsId: number): Promise<void> {
@@ -270,6 +273,12 @@ export class HelpSessionService {
    * current per-project dirs persist indefinitely so the user's workspace-
    * trust acceptance carries across launches; we'll add a project-deletion
    * hook later when projects can be removed from Daintree.
+   *
+   * Project-hash dirs are kept, but their `.mcp.json` is checked for a
+   * `daintree` entry whose Bearer token isn't in `sessionsByToken`. Tokens
+   * never rehydrate across restarts, so any literal token left from a
+   * previous boot is dead — strip it before a `claude` started in that
+   * cwd (outside the help-panel flow) reads it and 401s.
    */
   async gcStaleSessions(): Promise<void> {
     const sessionsRoot = this.getSessionsRoot();
@@ -284,8 +293,12 @@ export class HelpSessionService {
 
     await Promise.all(
       entries.map(async (entry) => {
-        if (this.isProjectHashDirName(entry)) return;
-        await this.removeSessionDir(path.join(sessionsRoot, entry));
+        const entryPath = path.join(sessionsRoot, entry);
+        if (this.isProjectHashDirName(entry)) {
+          await this.stripStaleDaintreeMcpEntry(entryPath);
+          return;
+        }
+        await this.removeSessionDir(entryPath);
       })
     );
   }
@@ -498,6 +511,55 @@ export class HelpSessionService {
       await fs.rm(sessionPath, { recursive: true, force: true });
     } catch (err) {
       console.warn("[HelpSessionService] Failed to remove session dir:", sessionPath, err);
+    }
+  }
+
+  /**
+   * Removes the `daintree` MCP entry from `<sessionPath>/.mcp.json` if its
+   * Bearer token isn't in `sessionsByToken`. Race-safe against a concurrent
+   * provision: a fresh provision writes a *different* token which IS in
+   * the map, so the "missing from map" check skips it.
+   */
+  private async stripStaleDaintreeMcpEntry(sessionPath: string): Promise<void> {
+    const target = path.join(sessionPath, ".mcp.json");
+    let raw: string;
+    try {
+      raw = await fs.readFile(target, "utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      console.warn(
+        "[HelpSessionService] Failed to read .mcp.json for stale-token strip:",
+        target,
+        err
+      );
+      return;
+    }
+    let parsed: { mcpServers?: Record<string, unknown> };
+    try {
+      parsed = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
+    } catch {
+      return;
+    }
+    const servers = parsed.mcpServers;
+    if (!servers || typeof servers !== "object") return;
+    const entry = servers["daintree"] as { headers?: { Authorization?: string } } | undefined;
+    if (!entry) return;
+    const auth = entry.headers?.Authorization ?? "";
+    const match = /^Bearer\s+(.+)$/.exec(auth);
+    const token = match?.[1]?.trim();
+    if (token && this.sessionsByToken.has(token)) return;
+
+    delete servers["daintree"];
+    try {
+      await resilientAtomicWriteFile(target, JSON.stringify(parsed, null, 2) + "\n", "utf-8", {
+        mode: 0o600,
+      });
+    } catch (err) {
+      console.warn(
+        "[HelpSessionService] Failed to strip stale daintree entry from .mcp.json:",
+        target,
+        err
+      );
     }
   }
 }

@@ -30,7 +30,10 @@ const serviceMock = vi.hoisted(() => ({
   onRuntimeStateChange: vi.fn(() => () => {}),
 }));
 
-vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
+vi.mock("electron", () => ({
+  ipcMain: ipcMainMock,
+  app: { getVersion: () => "0.0.0-test" },
+}));
 vi.mock("../../../services/McpServerService.js", () => ({ mcpServerService: serviceMock }));
 
 import { registerMcpServerHandlers } from "../mcpServer.js";

@@ -241,6 +241,23 @@ describe("HelpSessionService", () => {
     await fs.access(result.sessionPath);
   });
 
+  it("strips the daintree entry from .mcp.json on revoke so a stray claude in that cwd can't auth with the dead token", async () => {
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    const target = path.join(result.sessionPath, ".mcp.json");
+    const before = JSON.parse(await fs.readFile(target, "utf-8"));
+    expect(before.mcpServers.daintree).toBeDefined();
+    expect(before.mcpServers["daintree-docs"]).toBeDefined();
+
+    await service.revokeSession(result.sessionId);
+
+    const after = JSON.parse(await fs.readFile(target, "utf-8"));
+    expect(after.mcpServers.daintree).toBeUndefined();
+    // daintree-docs entry must remain — it doesn't depend on a live session.
+    expect(after.mcpServers["daintree-docs"]).toBeDefined();
+  });
+
   it("reuses the same per-project session dir across consecutive launches with a freshly rotated bearer", async () => {
     const first = await service.provisionSession(provisionInput());
     if (!first) throw new Error("expected first provision");
@@ -283,6 +300,52 @@ describe("HelpSessionService", () => {
     await service.revokeAll();
     expect(service.validateToken(a.token)).toBe(false);
     expect(service.validateToken(b.token)).toBe(false);
+  });
+
+  it("gcStaleSessions strips the daintree entry from project-hash dirs whose token isn't in memory (post-restart cleanup)", async () => {
+    // Models the post-restart state: a previous run left a .mcp.json with
+    // a literal Bearer token whose in-memory record didn't survive boot.
+    // The dir must stay (workspace-trust survives), but the entry has to
+    // go before a stray `claude` in that cwd reads it and 401s.
+    const sessionsRoot = path.join(userData, "help-sessions");
+    const staleDir = path.join(sessionsRoot, "deadbeefdeadbeef");
+    await fs.mkdir(staleDir, { recursive: true });
+    await fs.writeFile(
+      path.join(staleDir, ".mcp.json"),
+      JSON.stringify(
+        {
+          mcpServers: {
+            daintree: {
+              type: "sse",
+              url: "http://127.0.0.1:45454/sse",
+              headers: { Authorization: "Bearer dead-token-from-prior-boot" },
+            },
+            "daintree-docs": { type: "http", url: "https://daintree.org/api/mcp" },
+          },
+        },
+        null,
+        2
+      )
+    );
+
+    await service.gcStaleSessions();
+
+    await fs.access(staleDir);
+    const cleaned = JSON.parse(await fs.readFile(path.join(staleDir, ".mcp.json"), "utf-8"));
+    expect(cleaned.mcpServers.daintree).toBeUndefined();
+    expect(cleaned.mcpServers["daintree-docs"]).toBeDefined();
+  });
+
+  it("gcStaleSessions leaves a live session's daintree entry untouched", async () => {
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    await service.gcStaleSessions();
+
+    const after = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".mcp.json"), "utf-8")
+    );
+    expect(after.mcpServers.daintree.headers.Authorization).toBe(`Bearer ${result.token}`);
   });
 
   it("gcStaleSessions sweeps legacy UUID-named dirs from the old per-launch model and preserves per-project dirs", async () => {

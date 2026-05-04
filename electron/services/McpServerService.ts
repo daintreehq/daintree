@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { ipcMain, app } from "electron";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { getProjectViewManager } from "../window/windowRef.js";
 import http from "node:http";
@@ -1922,7 +1922,7 @@ export class McpServerService {
 
   private createSessionServer(sessionId: string): Server {
     const server = new Server(
-      { name: "Daintree", version: "1.0.0" },
+      { name: "Daintree", version: app.getVersion() },
       {
         capabilities: {
           tools: {},
