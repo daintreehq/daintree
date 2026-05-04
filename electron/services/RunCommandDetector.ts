@@ -32,6 +32,7 @@ export class RunCommandDetector {
       this.detectTaskfile(projectPath),
       this.detectDjango(projectPath),
       this.detectComposer(projectPath),
+      this.detectDevContainer(projectPath),
     ]);
 
     const commands = results.flat();
@@ -279,6 +280,93 @@ export class RunCommandDetector {
       console.warn(`[RunCommandDetector] Failed to parse ${composerPath}:`, error);
       return [];
     }
+  }
+  private async detectDevContainer(root: string): Promise<RunCommand[]> {
+    const devcontainerPath = path.join(root, ".devcontainer", "devcontainer.json");
+    if (!existsSync(devcontainerPath)) return [];
+
+    try {
+      const content = await fs.readFile(devcontainerPath, "utf-8");
+      const config = JSON.parse(content);
+      const postStart = config.postStartCommand;
+      if (postStart === undefined || postStart === null) return [];
+
+      let command: string | undefined;
+
+      if (typeof postStart === "string") {
+        command = postStart.trim();
+      } else if (Array.isArray(postStart)) {
+        command = postStart
+          .filter((item): item is string => typeof item === "string")
+          .join(" ")
+          .trim();
+      } else if (typeof postStart === "object" && postStart !== null) {
+        const keys = Object.keys(postStart as Record<string, unknown>);
+        if (keys.length > 0) {
+          const keyPriority = ["server", "dev", "start", "app"];
+          const bestKey =
+            keyPriority.find((k) => {
+              const v = (postStart as Record<string, unknown>)[k];
+              return typeof v === "string" || Array.isArray(v);
+            }) ??
+            keys.find((k) => {
+              const v = (postStart as Record<string, unknown>)[k];
+              return typeof v === "string" || Array.isArray(v);
+            });
+          if (bestKey) {
+            const val = (postStart as Record<string, unknown>)[bestKey];
+            if (typeof val === "string") {
+              command = val.trim();
+            } else if (Array.isArray(val)) {
+              command = val
+                .filter((item): item is string => typeof item === "string")
+                .join(" ")
+                .trim();
+            }
+          }
+        }
+      }
+
+      if (!command || command.length === 0) return [];
+
+      command = this.stripShellWrappers(command);
+      if (!command || command.length === 0) return [];
+
+      return [
+        {
+          id: "devcontainer-poststart",
+          name: "postStartCommand",
+          command,
+          icon: "terminal",
+          description: "from .devcontainer/devcontainer.json",
+        },
+      ];
+    } catch (error) {
+      console.warn(`[RunCommandDetector] Failed to parse ${devcontainerPath}:`, error);
+      return [];
+    }
+  }
+
+  private stripShellWrappers(command: string): string {
+    let result = command.trim();
+
+    if (result.startsWith("nohup ")) {
+      result = result.slice(6).trim();
+    }
+
+    if (result.endsWith(" &")) {
+      result = result.slice(0, -2).trim();
+    }
+
+    const bashCMatch = result.match(/^(?:bash|sh)\s+-c\s+'([^']*)'$/);
+    if (bashCMatch) {
+      result = bashCMatch[1].trim();
+      if (result.endsWith(" &")) {
+        result = result.slice(0, -2).trim();
+      }
+    }
+
+    return result;
   }
 }
 

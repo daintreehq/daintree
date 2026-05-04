@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
   Image,
   Upload,
@@ -9,6 +9,7 @@ import {
   Copy,
   Palette,
   AlertTriangle,
+  WandSparkles,
 } from "lucide-react";
 import { FolderGit2, McpServerIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,8 @@ import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
 import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { DaintreeMcpTier, Project } from "@shared/types/project";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { findDevServerCandidate } from "@/utils/devServerDetection";
 
 const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
   {
@@ -135,6 +138,28 @@ export function GeneralTab({
   const [inRepoError, setInRepoError] = useState<string | null>(null);
   const [gitignoreCopied, setGitignoreCopied] = useState(false);
   const gitignoreCopyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const allDetectedRunners = useProjectSettingsStore((s) => s.allDetectedRunners);
+
+  const detectedCandidate = useMemo(() => {
+    const candidate = findDevServerCandidate(allDetectedRunners, turbopackEnabled);
+    if (candidate) return candidate;
+    return allDetectedRunners?.find((r) => r.id === "devcontainer-poststart");
+  }, [allDetectedRunners, turbopackEnabled]);
+
+  const handleApplyDetected = useCallback(() => {
+    const candidate =
+      findDevServerCandidate(
+        useProjectSettingsStore.getState().allDetectedRunners,
+        turbopackEnabled
+      ) ??
+      useProjectSettingsStore
+        .getState()
+        .allDetectedRunners.find((r) => r.id === "devcontainer-poststart");
+    if (candidate) {
+      onDevServerCommandChange(candidate.command);
+    }
+  }, [turbopackEnabled, onDevServerCommandChange]);
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => {
@@ -430,6 +455,29 @@ export function GeneralTab({
           Command to start the development server (e.g., npm run dev). When configured, a button
           will appear in the toolbar to start the dev server.
         </p>
+
+        {devServerCommand === "" && detectedCandidate && (
+          <div
+            className={cn(
+              "flex items-center gap-2 mb-3 px-3 py-2 rounded-[var(--radius-md)]",
+              "bg-overlay-subtle border border-daintree-border"
+            )}
+          >
+            <span className="text-xs text-daintree-text/60">
+              Detected:{" "}
+              <code className="font-mono text-daintree-text/80">{detectedCandidate.command}</code>
+            </span>
+            <Button
+              onClick={handleApplyDetected}
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 px-2.5 py-1 h-auto text-daintree-accent"
+            >
+              <WandSparkles className="h-3.5 w-3.5" />
+              Use command
+            </Button>
+          </div>
+        )}
 
         <input
           id="dev-server-command"
