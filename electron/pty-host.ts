@@ -33,25 +33,13 @@ nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";
-import { stripAnsi } from "./services/pty/AgentPatternDetector.js";
-import type { SemanticSearchMatch } from "../shared/types/ipc/terminal.js";
 import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
 import { TerminalResourceMonitor } from "./services/pty/TerminalResourceMonitor.js";
-import { RESOURCE_PROFILE_CONFIGS, type ResourceProfile } from "../shared/types/resourceProfile.js";
 import { events } from "./services/events.js";
 import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer.js";
 import { selectShard } from "../shared/utils/shardSelection.js";
-import { setLogLevelOverrides } from "./utils/logger.js";
-import type { AgentEvent } from "./services/AgentStateMachine.js";
-import type {
-  PtyHostEvent,
-  SpawnResult,
-  BroadcastWriteTargetResult,
-} from "../shared/types/pty-host.js";
-import { normalizeScrollbackLines } from "../shared/config/scrollback.js";
-import { isBuiltInAgentId, type BuiltInAgentId } from "../shared/config/agentIds.js";
-import { setSessionPersistSuppressed } from "./services/pty/terminalSessionPersistence.js";
+import type { PtyHostEvent } from "../shared/types/pty-host.js";
 import {
   appendEmergencyLog,
   emergencyLogFatal,
@@ -62,11 +50,14 @@ import {
   PortQueueManager,
   PortBatcher,
   metricsEnabled,
-  parseSpawnError,
-  toHostSnapshot,
   MAX_PACKET_PAYLOAD,
   BACKPRESSURE_SAFETY_TIMEOUT_MS,
 } from "./pty-host/index.js";
+import {
+  createPtyHostMessageDispatcher,
+  type HostContext,
+  type RendererConnection,
+} from "./pty-host/handlers/index.js";
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 
@@ -153,12 +144,6 @@ function getOrCreatePauseCoordinator(id: string): PtyPauseCoordinator | undefine
 }
 
 // Per-window MessagePort connections for direct Renderer ↔ Pty Host communication
-interface RendererConnection {
-  port: MessagePort;
-  handler: (e: MessageEvent) => void;
-  portQueueManager: PortQueueManager;
-  batcher: PortBatcher;
-}
 const rendererConnections = new Map<number, RendererConnection>();
 const windowProjectMap = new Map<number, string | null>();
 
@@ -255,11 +240,6 @@ const resourceGovernor = new ResourceGovernor({
 // Helper to convert data to string for IPC fallback (IPC events expect string)
 function toStringForIpc(data: string | Uint8Array): string {
   return typeof data === "string" ? data : textDecoder.decode(data);
-}
-
-/** Narrow a backend TerminalType-valued detection field to BuiltInAgentId for IPC. */
-function narrowDetectedAgentId(value: unknown): BuiltInAgentId | undefined {
-  return isBuiltInAgentId(value) ? value : undefined;
 }
 
 // Wire up PtyManager events
@@ -722,6 +702,59 @@ function resumePausedTerminal(id: string): void {
   backpressureManager.stats.resumeCount++;
 }
 
+// Build the message dispatcher with a stable HostContext that exposes the
+// reassignable buffer/pool fields via getter/setter pairs. Handler modules
+// always read the current value through the getter, so `init-buffers` and
+// `initialize()` reassignments propagate without each module having to
+// re-bind a local snapshot.
+const hostContext: HostContext = {
+  ptyManager,
+  processTreeCache,
+  terminalResourceMonitor,
+  backpressureManager,
+  ipcQueueManager,
+  resourceGovernor,
+  packetFramer,
+  pauseCoordinators,
+  rendererConnections,
+  windowProjectMap,
+  ipcDataMirrorTerminals,
+  get visualBuffers() {
+    return visualBuffers;
+  },
+  set visualBuffers(value: SharedRingBuffer[]) {
+    visualBuffers = value;
+  },
+  get visualSignalView() {
+    return visualSignalView;
+  },
+  set visualSignalView(value: Int32Array | null) {
+    visualSignalView = value;
+  },
+  get analysisBuffer() {
+    return analysisBuffer;
+  },
+  set analysisBuffer(value: SharedRingBuffer | null) {
+    analysisBuffer = value;
+  },
+  get ptyPool() {
+    return ptyPool;
+  },
+  set ptyPool(value: PtyPool | null) {
+    ptyPool = value;
+  },
+  sendEvent,
+  getPauseCoordinator,
+  getOrCreatePauseCoordinator,
+  disconnectWindow,
+  recomputeActivityTiers,
+  tryReplayAndResume,
+  resumePausedTerminal,
+  createPortQueueManager,
+};
+
+const dispatchMessage = createPtyHostMessageDispatcher(hostContext);
+
 // Handle requests from Main
 port.on("message", async (rawMsg: any) => {
   // Electron/Node might wrap the message in { data: ..., ports: [] }
@@ -729,974 +762,11 @@ port.on("message", async (rawMsg: any) => {
   const ports = rawMsg?.ports || [];
 
   try {
-    switch (msg.type) {
-      case "connect-port": {
-        // Receive MessagePort for direct Renderer ↔ Pty Host communication (per-window)
-        const windowId: number | undefined = msg.windowId;
-        if (typeof windowId !== "number") {
-          console.warn("[PtyHost] connect-port missing windowId, ignoring");
-          break;
-        }
-
-        if (ports && ports.length > 0) {
-          const receivedPort = ports[0] as MessagePort;
-          const existing = rendererConnections.get(windowId);
-
-          // Duplicate port check
-          if (existing?.port === receivedPort) {
-            try {
-              receivedPort.start();
-            } catch {
-              // ignore
-            }
-            console.log(
-              `[PtyHost] MessagePort already connected for window ${windowId}, ignoring duplicate`
-            );
-            break;
-          }
-
-          // Replace existing connection for this window
-          if (existing) {
-            disconnectWindow(windowId, "port-replace");
-          }
-
-          const perWindowQueueManager = createPortQueueManager(windowId);
-          const perWindowBatcher = new PortBatcher({
-            portQueueManager: perWindowQueueManager,
-            postMessage: (id, data, bytes) => {
-              // Transfer the backing ArrayBuffer to the renderer instead of
-              // structured-cloning. The batcher allocates `data` fresh per
-              // flush, so it is safe to detach here.
-              receivedPort.postMessage({ type: "data", id, data, bytes }, [
-                data.buffer as ArrayBuffer,
-              ]);
-            },
-            onError: () => {
-              disconnectWindow(windowId, "postMessage-error");
-            },
-          });
-          receivedPort.start();
-          console.log(
-            `[PtyHost] MessagePort received from Main for window ${windowId}, starting listener...`
-          );
-
-          const handler = (event: MessageEvent) => {
-            const portMsg = event?.data ? event.data : event;
-
-            if (!portMsg || typeof portMsg !== "object") {
-              console.warn("[PtyHost] Invalid MessagePort message:", portMsg);
-              return;
-            }
-
-            try {
-              if (
-                portMsg.type === "write" &&
-                typeof portMsg.id === "string" &&
-                typeof portMsg.data === "string"
-              ) {
-                ptyManager.write(portMsg.id, portMsg.data, portMsg.traceId);
-              } else if (
-                portMsg.type === "resize" &&
-                typeof portMsg.id === "string" &&
-                typeof portMsg.cols === "number" &&
-                typeof portMsg.rows === "number"
-              ) {
-                ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows);
-              } else if (
-                portMsg.type === "ack" &&
-                typeof portMsg.id === "string" &&
-                typeof portMsg.bytes === "number"
-              ) {
-                perWindowQueueManager.removeBytes(portMsg.id, portMsg.bytes);
-                perWindowQueueManager.tryResume(portMsg.id);
-              } else {
-                console.warn(
-                  "[PtyHost] Unknown or invalid MessagePort message type:",
-                  portMsg.type
-                );
-              }
-            } catch (error) {
-              console.error("[PtyHost] Error handling MessagePort message:", error);
-            }
-          };
-
-          receivedPort.on("message", handler);
-
-          receivedPort.on("close", () => {
-            // Guard: only disconnect if this port is still the active one for this window
-            const current = rendererConnections.get(windowId);
-            if (current?.port === receivedPort) {
-              disconnectWindow(windowId, "port-close");
-            }
-          });
-
-          rendererConnections.set(windowId, {
-            port: receivedPort,
-            handler,
-            portQueueManager: perWindowQueueManager,
-            batcher: perWindowBatcher,
-          });
-          console.log(`[PtyHost] MessagePort listener installed for window ${windowId}`);
-        } else {
-          console.warn("[PtyHost] connect-port message received but no ports provided");
-        }
-        break;
-      }
-
-      case "init-buffers": {
-        const visualOk =
-          Array.isArray(msg.visualBuffers) &&
-          msg.visualBuffers.every((b: unknown) => b instanceof SharedArrayBuffer);
-        const analysisOk = msg.analysisBuffer instanceof SharedArrayBuffer;
-        const signalOk = msg.visualSignalBuffer instanceof SharedArrayBuffer;
-
-        if (visualOk) {
-          visualBuffers = msg.visualBuffers.map(
-            (buf: SharedArrayBuffer) => new SharedRingBuffer(buf)
-          );
-          ptyManager.setSabMode(true);
-        } else {
-          console.warn("[PtyHost] init-buffers: visualBuffers missing or invalid (IPC mode)");
-        }
-
-        if (signalOk) {
-          visualSignalView = new Int32Array(msg.visualSignalBuffer);
-        } else {
-          console.warn("[PtyHost] init-buffers: visualSignalBuffer missing or invalid");
-        }
-
-        if (analysisOk) {
-          analysisBuffer = new SharedRingBuffer(msg.analysisBuffer);
-        } else {
-          console.warn("[PtyHost] init-buffers: analysisBuffer is not SharedArrayBuffer");
-        }
-
-        console.log(
-          `[PtyHost] Buffers initialized: visual=${visualOk ? `${visualBuffers.length} shards` : "IPC"} signal=${signalOk ? "SAB" : "disabled"} analysis=${
-            analysisOk ? "SAB" : "disabled"
-          } sabMode=${ptyManager.isSabMode()}`
-        );
-        break;
-      }
-
-      case "set-active-project": {
-        windowProjectMap.set(msg.windowId, msg.projectId);
-        recomputeActivityTiers();
-        if (msg.projectPath && ptyPool) {
-          ptyPool.drainAndRefill(msg.projectPath).catch((err) => {
-            console.error("[PtyHost] drainAndRefill failed:", err);
-          });
-        }
-        break;
-      }
-
-      case "project-switch": {
-        windowProjectMap.set(msg.windowId, msg.projectId);
-        recomputeActivityTiers();
-        if (msg.projectPath && ptyPool) {
-          ptyPool.drainAndRefill(msg.projectPath).catch((err) => {
-            console.error("[PtyHost] drainAndRefill failed:", err);
-          });
-        }
-        break;
-      }
-
-      case "disconnect-port": {
-        disconnectWindow(msg.windowId, "explicit-disconnect");
-        break;
-      }
-
-      case "spawn": {
-        let spawnResult: SpawnResult;
-        try {
-          // Remove stale coordinator before spawn (handles ID respawn)
-          const staleCoord = pauseCoordinators.get(msg.id);
-          if (staleCoord) {
-            staleCoord.forceReleaseAll();
-            pauseCoordinators.delete(msg.id);
-          }
-
-          ptyManager.spawn(msg.id, msg.options);
-          spawnResult = { success: true, id: msg.id };
-
-          // Eagerly create coordinator so all subsystems can pause from the start
-          getOrCreatePauseCoordinator(msg.id);
-
-          const terminalInfo = ptyManager.getTerminal(msg.id);
-          const pid = terminalInfo?.ptyProcess?.pid;
-          if (pid !== undefined) {
-            sendEvent({ type: "terminal-pid", id: msg.id, pid });
-          }
-        } catch (error) {
-          console.error(`[PtyHost] Spawn failed for terminal ${msg.id}:`, error);
-          spawnResult = {
-            success: false,
-            id: msg.id,
-            error: parseSpawnError(error),
-          };
-        }
-
-        sendEvent({ type: "spawn-result", id: msg.id, result: spawnResult });
-        break;
-      }
-
-      case "write":
-        ptyManager.write(msg.id, msg.data, msg.traceId);
-        break;
-
-      case "broadcast-write": {
-        // Fleet broadcast: fan one data payload to every armed PTY in a
-        // tight loop inside the pty-host event loop. Avoids N per-keystroke
-        // MessagePort/IPC hops from the renderer when a fleet types.
-        //
-        // Each target write goes through `ptyManager.tryWrite()` rather than
-        // `ptyManager.write()` because the regular write path swallows
-        // dead-pipe errors via `logWriteError` and returns void. The throwing
-        // variant returns `{ ok, error? }` per call so a dead target produces
-        // an actionable result the renderer can use to auto-disarm the pane.
-        const ids: string[] = Array.isArray(msg.ids) ? msg.ids : [];
-        const data: string = typeof msg.data === "string" ? msg.data : "";
-        if (!data) break;
-        const results: BroadcastWriteTargetResult[] = [];
-        for (const id of ids) {
-          if (typeof id !== "string" || !id) continue;
-          const terminal = ptyManager.getTerminal(id);
-          if (!terminal || terminal.wasKilled || terminal.isExited) {
-            results.push({
-              id,
-              ok: false,
-              error: { code: "EBADF", message: "terminal not available" },
-            });
-            continue;
-          }
-          const outcome = ptyManager.tryWrite(id, data);
-          if (outcome.ok) {
-            results.push({ id, ok: true });
-          } else {
-            const err = outcome.error;
-            const code = typeof err?.code === "string" ? err.code : undefined;
-            const message = err?.message ?? "unknown write error";
-            console.error(
-              `[PtyHost] broadcast-write failed for ${id}${code ? ` (${code})` : ""}: ${message}`
-            );
-            results.push({ id, ok: false, error: { code, message } });
-          }
-        }
-        if (results.length > 0) {
-          sendEvent({ type: "broadcast-write-result", results });
-        }
-        break;
-      }
-
-      case "submit":
-        ptyManager.submit(msg.id, msg.text);
-        break;
-
-      case "batch-double-escape": {
-        // Fan out an ESC, 50ms per-PTY gap, then a second ESC. Scheduling the
-        // gap inside the utility-process event loop is load-bearing — doing
-        // it in the renderer or Main process lets IPC batching collapse the
-        // two writes into a single Meta-Escape on the receiving terminal.
-        const ESC = "\u001b";
-        const INTER_ESC_DELAY_MS = 50;
-        const ids: string[] = Array.isArray(msg.ids) ? msg.ids : [];
-        for (const id of ids) {
-          if (typeof id !== "string" || !id) continue;
-          const terminal = ptyManager.getTerminal(id);
-          if (!terminal || terminal.wasKilled || terminal.isExited) continue;
-          ptyManager.write(id, ESC);
-          setTimeout(() => {
-            const t = ptyManager.getTerminal(id);
-            if (!t || t.wasKilled || t.isExited) return;
-            ptyManager.write(id, ESC);
-          }, INTER_ESC_DELAY_MS);
-        }
-        break;
-      }
-
-      case "resize":
-        ptyManager.resize(msg.id, msg.cols, msg.rows);
-        break;
-
-      case "kill": {
-        const termInfo = ptyManager.getTerminal(msg.id);
-        const killedPid = termInfo?.ptyProcess.pid;
-        ptyManager.kill(msg.id, msg.reason);
-        if (killedPid !== undefined) {
-          resourceGovernor.trackKilledPid(killedPid);
-        }
-        break;
-      }
-
-      case "trash":
-        ptyManager.trash(msg.id);
-        break;
-
-      case "restore":
-        ptyManager.restore(msg.id);
-        break;
-
-      case "set-activity-tier": {
-        const tier = msg.tier === "background" ? "background" : "active";
-        backpressureManager.setActivityTier(msg.id, tier);
-
-        // Clear any stall suspension and unblock the PTY
-        backpressureManager.clearSuspended(msg.id);
-        backpressureManager.clearPendingVisual(msg.id);
-
-        const checkInterval = backpressureManager.getPausedInterval(msg.id);
-        const wasPaused = checkInterval !== undefined;
-        if (checkInterval) {
-          clearTimeout(checkInterval);
-          backpressureManager.deletePausedInterval(msg.id);
-        }
-
-        const pauseStart = backpressureManager.getPauseStartTime(msg.id);
-        const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
-        backpressureManager.deletePauseStartTime(msg.id);
-
-        // Release backpressure hold (respects other holds like resource-governor or system-sleep)
-        const atCoordinator = getPauseCoordinator(msg.id);
-        atCoordinator?.resume("backpressure");
-
-        const terminal = ptyManager.getTerminal(msg.id);
-        if (terminal) {
-          // Apply tier-driven ActivityMonitor polling: 50ms active, 500ms background
-          const pollingInterval = tier === "active" ? 50 : 500;
-          ptyManager.setActivityMonitorTier(msg.id, pollingInterval);
-        }
-
-        if (!atCoordinator?.isPaused) {
-          backpressureManager.emitTerminalStatus(msg.id, "running");
-        }
-
-        // Emit metrics for pause-end (set-activity-tier unpause path)
-        if (wasPaused && pauseDuration !== undefined) {
-          backpressureManager.emitReliabilityMetric({
-            terminalId: msg.id,
-            metricType: "pause-end",
-            timestamp: Date.now(),
-            durationMs: pauseDuration,
-          });
-        }
-        break;
-      }
-
-      case "wake-terminal": {
-        const wakeStartTime = Date.now();
-
-        // Wake implies we want a faithful snapshot + resume streaming.
-        backpressureManager.setActivityTier(msg.id, "active");
-        backpressureManager.clearSuspended(msg.id);
-        backpressureManager.clearPendingVisual(msg.id);
-
-        // Clear any active pause interval and timing, and resume the PTY
-        const checkInterval = backpressureManager.getPausedInterval(msg.id);
-        const wasPaused = checkInterval !== undefined;
-        if (checkInterval) {
-          clearTimeout(checkInterval);
-          backpressureManager.deletePausedInterval(msg.id);
-        }
-        backpressureManager.deletePauseStartTime(msg.id);
-
-        // Release backpressure hold via coordinator (respects other holds)
-        const wakeCoordinator = getPauseCoordinator(msg.id);
-        if (wasPaused) {
-          wakeCoordinator?.resume("backpressure");
-        }
-
-        // Apply active tier polling (50ms) when waking
-        const terminal = ptyManager.getTerminal(msg.id);
-        if (terminal) {
-          ptyManager.setActivityMonitorTier(msg.id, 50);
-        }
-
-        // Best-effort warning: cwd missing
-        const warnings: string[] = [];
-        try {
-          const terminal = ptyManager.getTerminal(msg.id);
-          if (terminal?.cwd && typeof terminal.cwd === "string") {
-            const fs = await import("node:fs");
-            if (!fs.existsSync(terminal.cwd)) {
-              warnings.push("cwd-missing");
-            }
-          }
-        } catch {
-          // ignore
-        }
-
-        let state: string | null = null;
-        try {
-          state = await ptyManager.getSerializedStateAsync(msg.id);
-        } catch {
-          state = ptyManager.getSerializedState(msg.id);
-        }
-
-        const wakeLatencyMs = Date.now() - wakeStartTime;
-
-        if (!wakeCoordinator?.isPaused) {
-          backpressureManager.emitTerminalStatus(msg.id, "running");
-        }
-
-        // Emit wake latency metrics (only if enabled to avoid overhead)
-        if (metricsEnabled() && state) {
-          const { Buffer } = await import("node:buffer");
-          const serializedStateBytes = Buffer.byteLength(state, "utf8");
-          backpressureManager.emitReliabilityMetric({
-            terminalId: msg.id,
-            metricType: "wake-latency",
-            timestamp: Date.now(),
-            wakeLatencyMs,
-            serializedStateBytes,
-          });
-        }
-
-        sendEvent({
-          type: "wake-result",
-          requestId: msg.requestId,
-          id: msg.id,
-          state,
-          warnings: warnings.length > 0 ? warnings : undefined,
-        });
-        break;
-      }
-
-      case "kill-by-project": {
-        const killed = ptyManager.killByProject(msg.projectId);
-        sendEvent({ type: "kill-by-project-result", requestId: msg.requestId, killed });
-        break;
-      }
-
-      case "graceful-kill": {
-        const agentSessionId = await ptyManager.gracefulKill(msg.id);
-        sendEvent({
-          type: "graceful-kill-result",
-          requestId: msg.requestId,
-          id: msg.id,
-          agentSessionId,
-        });
-        break;
-      }
-
-      case "graceful-kill-by-project": {
-        const results = await ptyManager.gracefulKillByProject(msg.projectId);
-        sendEvent({
-          type: "graceful-kill-by-project-result",
-          requestId: msg.requestId,
-          results,
-        });
-        break;
-      }
-
-      case "get-project-stats": {
-        const rawStats = ptyManager.getProjectStats(msg.projectId);
-        sendEvent({
-          type: "project-stats",
-          requestId: msg.requestId,
-          stats: {
-            terminalCount: rawStats.terminalCount,
-            processIds: rawStats.processIds,
-            detectedAgents: rawStats.terminalTypes,
-          },
-        });
-        break;
-      }
-
-      case "acknowledge-data": {
-        const acknowledgedBytes = msg.charCount ?? 0;
-        ipcQueueManager.removeBytes(msg.id, acknowledgedBytes);
-        ipcQueueManager.tryResume(msg.id);
-
-        // SAB ack-driven resume: try replaying pending segments or just resume if none left
-        if (backpressureManager.isPaused(msg.id)) {
-          if (backpressureManager.hasPendingSegments(msg.id)) {
-            tryReplayAndResume(msg.id);
-          } else {
-            resumePausedTerminal(msg.id);
-          }
-        }
-
-        ptyManager.acknowledgeData(msg.id, acknowledgedBytes);
-        break;
-      }
-
-      case "set-analysis-enabled":
-        if (typeof msg.id === "string" && typeof msg.enabled === "boolean") {
-          ptyManager.setAnalysisEnabled(msg.id, msg.enabled);
-        } else {
-          console.warn("[PtyHost] Invalid set-analysis-enabled message:", msg);
-        }
-        break;
-
-      case "set-ipc-data-mirror":
-        if (typeof msg.id === "string" && typeof msg.enabled === "boolean") {
-          if (msg.enabled) {
-            ipcDataMirrorTerminals.add(msg.id);
-          } else {
-            ipcDataMirrorTerminals.delete(msg.id);
-          }
-        }
-        break;
-
-      case "trim-state": {
-        const targetLines = normalizeScrollbackLines(msg.targetLines);
-        ptyManager.trimScrollback(targetLines);
-        setTimeout(() => {
-          if (global.gc) global.gc();
-        }, 100);
-        break;
-      }
-
-      case "set-session-persist-suppressed": {
-        setSessionPersistSuppressed(msg.suppressed);
-        break;
-      }
-
-      case "get-snapshot":
-        sendEvent({
-          type: "snapshot",
-          id: msg.id,
-          requestId: msg.requestId,
-          snapshot: toHostSnapshot(ptyManager, msg.id),
-        });
-        break;
-
-      case "get-all-snapshots":
-        sendEvent({
-          type: "all-snapshots",
-          requestId: msg.requestId,
-          snapshots: ptyManager.getAllTerminalSnapshots().map((s) => ({
-            id: s.id,
-            lines: s.lines,
-            lastInputTime: s.lastInputTime,
-            lastOutputTime: s.lastOutputTime,
-            lastCheckTime: s.lastCheckTime,
-
-            launchAgentId: s.launchAgentId,
-            agentState: s.agentState,
-            lastStateChange: s.lastStateChange,
-            spawnedAt: s.spawnedAt,
-          })),
-        });
-        break;
-
-      case "mark-checked":
-        ptyManager.markChecked(msg.id);
-        break;
-
-      case "update-observed-title":
-        ptyManager.updateObservedTitle(msg.id, msg.title);
-        break;
-
-      case "transition-state": {
-        const success = ptyManager.transitionState(
-          msg.id,
-          msg.event as AgentEvent,
-          msg.trigger as
-            | "input"
-            | "output"
-            | "heuristic"
-            | "ai-classification"
-            | "timeout"
-            | "exit"
-            | "title",
-          msg.confidence,
-          msg.spawnedAt
-        );
-        sendEvent({ type: "transition-result", id: msg.id, requestId: msg.requestId, success });
-        break;
-      }
-
-      case "health-check":
-        sendEvent({ type: "pong" });
-        break;
-
-      case "pause-all": {
-        console.log("[PtyHost] Pausing all PTY processes for system sleep");
-        const terminals = ptyManager.getAll();
-        let pausedCount = 0;
-
-        for (const terminal of terminals) {
-          const coordinator = getOrCreatePauseCoordinator(terminal.id);
-          if (coordinator) {
-            coordinator.pause("system-sleep");
-            pausedCount++;
-          }
-        }
-
-        console.log(`[PtyHost] Paused ${pausedCount}/${terminals.length} PTY processes`);
-        break;
-      }
-
-      case "resume-all": {
-        console.log("[PtyHost] Resuming all PTY processes after system wake");
-        const terminals = ptyManager.getAll();
-
-        if (terminals.length === 0) {
-          console.log("[PtyHost] No PTY processes to resume");
-          break;
-        }
-
-        // Resume incrementally to prevent thundering herd
-        // Stagger by 50ms to spread disk/CPU load
-        const RESUME_STAGGER_MS = 50;
-        let i = 0;
-
-        const resumeInterval = setInterval(() => {
-          if (i >= terminals.length) {
-            clearInterval(resumeInterval);
-            console.log(`[PtyHost] Resumed all ${terminals.length} PTY processes`);
-            return;
-          }
-
-          const terminal = terminals[i++];
-          getPauseCoordinator(terminal.id)?.resume("system-sleep");
-        }, RESUME_STAGGER_MS);
-        break;
-      }
-
-      case "get-terminals-for-project":
-        sendEvent({
-          type: "terminals-for-project",
-          requestId: msg.requestId,
-          terminalIds: ptyManager.getTerminalsForProject(msg.projectId),
-        });
-        break;
-
-      case "get-terminal": {
-        const terminal = ptyManager.getTerminal(msg.id);
-        // Compute hasPty dynamically since it's not stored on TerminalInfo.
-        // A terminal has an active PTY when it hasn't been killed and hasn't exited.
-        const hasPty = terminal ? !terminal.wasKilled && !terminal.isExited : false;
-        sendEvent({
-          type: "terminal-info",
-          requestId: msg.requestId,
-          terminal: terminal
-            ? {
-                id: terminal.id,
-                projectId: terminal.projectId,
-                kind: terminal.kind,
-
-                launchAgentId: terminal.launchAgentId,
-                title: terminal.title,
-                cwd: terminal.cwd,
-                agentState: terminal.agentState,
-                waitingReason: terminal.waitingReason,
-                lastStateChange: terminal.lastStateChange,
-                spawnedAt: terminal.spawnedAt,
-                isTrashed: terminal.isTrashed,
-                trashExpiresAt: terminal.trashExpiresAt,
-                activityTier: ptyManager.getActivityTier(msg.id),
-                hasPty,
-                agentSessionId: terminal.agentSessionId,
-                agentLaunchFlags: terminal.agentLaunchFlags,
-                agentModelId: terminal.agentModelId,
-                agentPresetId: terminal.agentPresetId,
-                agentPresetColor: terminal.agentPresetColor,
-                originalAgentPresetId: terminal.originalAgentPresetId,
-                everDetectedAgent: terminal.everDetectedAgent,
-                detectedAgentId: narrowDetectedAgentId(terminal.detectedAgentId),
-                detectedProcessId: terminal.detectedProcessIconId,
-              }
-            : null,
-        });
-        break;
-      }
-
-      case "replay-history": {
-        const replayed = ptyManager.replayHistory(msg.id, msg.maxLines);
-        sendEvent({
-          type: "replay-history-result",
-          requestId: msg.requestId,
-          replayed,
-        });
-        break;
-      }
-
-      case "get-serialized-state": {
-        (async () => {
-          try {
-            const serializedState = await ptyManager.getSerializedStateAsync(msg.id);
-            sendEvent({
-              type: "serialized-state",
-              requestId: msg.requestId,
-              id: msg.id,
-              state: serializedState,
-            });
-          } catch (error) {
-            console.error(`[PtyHost] Failed to serialize terminal ${msg.id}:`, error);
-            sendEvent({
-              type: "serialized-state",
-              requestId: msg.requestId,
-              id: msg.id,
-              state: null,
-            });
-          }
-        })();
-        break;
-      }
-
-      case "get-terminal-info": {
-        const info = ptyManager.getTerminalInfo(msg.id);
-        sendEvent({
-          type: "terminal-diagnostic-info",
-          requestId: msg.requestId,
-          info,
-        });
-        break;
-      }
-
-      case "force-resume": {
-        const coordinator = getPauseCoordinator(msg.id);
-        if (coordinator) {
-          coordinator.forceReleaseAll();
-          console.log(`[PtyHost] Force resumed PTY ${msg.id} via user request`);
-
-          // Clean up any pending backpressure monitoring
-          const checkInterval = backpressureManager.getPausedInterval(msg.id);
-          if (checkInterval) {
-            clearTimeout(checkInterval);
-            backpressureManager.deletePausedInterval(msg.id);
-          }
-          backpressureManager.clearPendingVisual(msg.id);
-
-          // Calculate pause duration if we have a start time
-          const pauseStart = backpressureManager.getPauseStartTime(msg.id);
-          const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
-          backpressureManager.deletePauseStartTime(msg.id);
-
-          // Clear suspended flag to allow output to flow again
-          backpressureManager.clearSuspended(msg.id);
-
-          // Also clear IPC queue backpressure state
-          ipcQueueManager.clearQueue(msg.id);
-
-          // Emit resume status
-          const utilization =
-            visualBuffers.length > 0
-              ? visualBuffers[selectShard(msg.id, visualBuffers.length)].getUtilization()
-              : undefined;
-          backpressureManager.emitTerminalStatus(msg.id, "running", utilization, pauseDuration);
-
-          // Emit metrics for pause-end (user force-resume path)
-          if (pauseDuration !== undefined) {
-            backpressureManager.emitReliabilityMetric({
-              terminalId: msg.id,
-              metricType: "pause-end",
-              timestamp: Date.now(),
-              durationMs: pauseDuration,
-              bufferUtilization: utilization,
-            });
-          }
-        } else {
-          console.warn(`[PtyHost] Cannot force resume - terminal ${msg.id} not found`);
-        }
-        break;
-      }
-
-      case "get-available-terminals": {
-        const terminals = ptyManager.getAvailableTerminals();
-        sendEvent({
-          type: "available-terminals",
-          requestId: msg.requestId,
-          terminals: terminals.map((t) => ({
-            id: t.id,
-            projectId: t.projectId,
-            kind: t.kind,
-
-            launchAgentId: t.launchAgentId,
-            title: t.title,
-            cwd: t.cwd,
-            agentState: t.agentState,
-            waitingReason: t.waitingReason,
-            lastStateChange: t.lastStateChange,
-            spawnedAt: t.spawnedAt,
-            isTrashed: t.isTrashed,
-            trashExpiresAt: t.trashExpiresAt,
-            activityTier: ptyManager.getActivityTier(t.id),
-            hasPty: !t.wasKilled && !t.isExited,
-            agentSessionId: t.agentSessionId,
-            agentLaunchFlags: t.agentLaunchFlags,
-            agentModelId: t.agentModelId,
-            agentPresetId: t.agentPresetId,
-            agentPresetColor: t.agentPresetColor,
-            originalAgentPresetId: t.originalAgentPresetId,
-            everDetectedAgent: t.everDetectedAgent,
-            detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
-            detectedProcessId: t.detectedProcessIconId,
-          })),
-        });
-        break;
-      }
-
-      case "get-terminals-by-state": {
-        const terminals = ptyManager.getTerminalsByState(msg.state);
-        sendEvent({
-          type: "terminals-by-state",
-          requestId: msg.requestId,
-          terminals: terminals.map((t) => ({
-            id: t.id,
-            projectId: t.projectId,
-            kind: t.kind,
-
-            launchAgentId: t.launchAgentId,
-            title: t.title,
-            cwd: t.cwd,
-            agentState: t.agentState,
-            waitingReason: t.waitingReason,
-            lastStateChange: t.lastStateChange,
-            spawnedAt: t.spawnedAt,
-            isTrashed: ptyManager.isInTrash(t.id),
-            trashExpiresAt: t.trashExpiresAt,
-            activityTier: ptyManager.getActivityTier(t.id),
-            hasPty: !t.wasKilled && !t.isExited,
-            agentSessionId: t.agentSessionId,
-            agentLaunchFlags: t.agentLaunchFlags,
-            agentModelId: t.agentModelId,
-            agentPresetId: t.agentPresetId,
-            agentPresetColor: t.agentPresetColor,
-            originalAgentPresetId: t.originalAgentPresetId,
-            everDetectedAgent: t.everDetectedAgent,
-            detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
-            detectedProcessId: t.detectedProcessIconId,
-          })),
-        });
-        break;
-      }
-
-      case "get-all-terminals": {
-        const terminals = ptyManager.getAll();
-        sendEvent({
-          type: "all-terminals",
-          requestId: msg.requestId,
-          terminals: terminals.map((t) => ({
-            id: t.id,
-            projectId: t.projectId,
-            kind: t.kind,
-
-            launchAgentId: t.launchAgentId,
-            title: t.title,
-            cwd: t.cwd,
-            agentState: t.agentState,
-            waitingReason: t.waitingReason,
-            lastStateChange: t.lastStateChange,
-            spawnedAt: t.spawnedAt,
-            isTrashed: ptyManager.isInTrash(t.id),
-            trashExpiresAt: t.trashExpiresAt,
-            activityTier: ptyManager.getActivityTier(t.id),
-            hasPty: !t.wasKilled && !t.isExited,
-            agentSessionId: t.agentSessionId,
-            agentLaunchFlags: t.agentLaunchFlags,
-            agentModelId: t.agentModelId,
-            agentPresetId: t.agentPresetId,
-            agentPresetColor: t.agentPresetColor,
-            originalAgentPresetId: t.originalAgentPresetId,
-            everDetectedAgent: t.everDetectedAgent,
-            detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
-            detectedProcessId: t.detectedProcessIconId,
-          })),
-        });
-        break;
-      }
-
-      case "search-semantic-buffers": {
-        const matches: SemanticSearchMatch[] = [];
-        let regex: RegExp | null = null;
-        if (msg.isRegex) {
-          try {
-            regex = new RegExp(msg.query, "i");
-          } catch {
-            sendEvent({
-              type: "semantic-search-result",
-              requestId: msg.requestId,
-              matches: [],
-              error: "invalid-regex",
-            });
-            break;
-          }
-        }
-        const needle = msg.isRegex ? null : msg.query.toLowerCase();
-        for (const t of ptyManager.getAll()) {
-          const buffer = t.semanticBuffer;
-          if (!buffer || buffer.length === 0) continue;
-          for (let i = buffer.length - 1; i >= 0; i--) {
-            const cleaned = stripAnsi(buffer[i] ?? "").trim();
-            if (!cleaned) continue;
-            let start = -1;
-            let end = -1;
-            if (regex) {
-              const m = regex.exec(cleaned);
-              if (m && m[0].length > 0) {
-                start = m.index;
-                end = m.index + m[0].length;
-              }
-            } else if (needle !== null && needle.length > 0) {
-              const idx = cleaned.toLowerCase().indexOf(needle);
-              if (idx !== -1) {
-                start = idx;
-                end = idx + needle.length;
-              }
-            }
-            if (start !== -1 && end !== -1) {
-              matches.push({
-                terminalId: t.id,
-                line: cleaned,
-                matchStart: start,
-                matchEnd: end,
-              });
-              break;
-            }
-          }
-        }
-        sendEvent({
-          type: "semantic-search-result",
-          requestId: msg.requestId,
-          matches,
-        });
-        break;
-      }
-
-      case "set-resource-monitoring":
-        terminalResourceMonitor.setEnabled(msg.enabled === true);
-        break;
-
-      case "set-resource-profile": {
-        const profileConfig = RESOURCE_PROFILE_CONFIGS[msg.profile as ResourceProfile];
-        if (profileConfig) {
-          processTreeCache.setPollInterval(profileConfig.processTreePollInterval);
-          console.log(
-            `[PtyHost] Resource profile set to: ${msg.profile} (processTree poll: ${profileConfig.processTreePollInterval}ms)`
-          );
-        }
-        break;
-      }
-
-      case "set-process-tree-poll-interval": {
-        if (typeof msg.ms === "number" && msg.ms > 0) {
-          processTreeCache.setPollInterval(msg.ms);
-        }
-        break;
-      }
-
-      case "dispose":
-        cleanup();
-        break;
-
-      case "set-log-level-overrides": {
-        const overrides = (msg.overrides ?? {}) as Record<string, unknown>;
-        const sanitized: Record<string, string> = {};
-        for (const [key, value] of Object.entries(overrides)) {
-          if (typeof key === "string" && typeof value === "string") {
-            sanitized[key] = value;
-          }
-        }
-        setLogLevelOverrides(sanitized);
-        break;
-      }
-
-      default:
-        console.warn("[PtyHost] Unknown message type:", (msg as { type: string }).type);
+    if (msg?.type === "dispose") {
+      cleanup();
+      return;
     }
+    await dispatchMessage(msg, ports);
   } catch (error) {
     console.error("[PtyHost] Error handling message:", error);
   }
