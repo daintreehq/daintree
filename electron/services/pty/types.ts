@@ -128,6 +128,13 @@ export interface TerminalInfo extends TerminalPublicState {
   semanticBuffer: string[];
   /** @deprecated Use serialization methods */
   rawOutputBuffer?: string;
+  /**
+   * Runtime-only hysteresis bookkeeping. Timestamp (`Date.now()`) until which
+   * opposite-direction low-confidence transitions are suppressed after a
+   * recent high-confidence transition. Not persisted, not crossed over IPC.
+   * See `AgentStateService` for the suppression policy.
+   */
+  hysteresisLockedUntil?: number;
 }
 
 export interface PtyManagerEvents {
