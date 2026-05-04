@@ -68,7 +68,9 @@ interface MockMessagePortMain {
 }
 
 interface PtyClientPrivateAccess {
-  child: MockUtilityProcess | null;
+  lifecycle: {
+    child: MockUtilityProcess | null;
+  };
   pendingMessagePorts: Map<number, MockMessagePortMain>;
   pendingKillCount: Map<string, number>;
   ipcDataMirrorIds: Set<string>;
