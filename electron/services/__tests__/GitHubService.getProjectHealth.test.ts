@@ -21,8 +21,8 @@ vi.mock("../ProjectStore.js", () => ({
   },
 }));
 
-vi.mock("../github/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../github/index.js")>();
+vi.mock("../github/GitHubAuth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../github/GitHubAuth.js")>();
   return {
     ...actual,
     GitHubAuth: {
@@ -31,6 +31,22 @@ vi.mock("../github/index.js", async (importOriginal) => {
       hasToken: () => true,
       getConfig: () => ({ token: "fake-token" }),
       getConfigAsync: () => Promise.resolve({ token: "fake-token" }),
+      setToken: () => {},
+      clearToken: () => {},
+      validate: () => Promise.resolve({ valid: true, scopes: [] }),
+    },
+  };
+});
+
+vi.mock("../github/GitHubRateLimitService.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../github/GitHubRateLimitService.js")>();
+  return {
+    ...actual,
+    gitHubRateLimitService: {
+      shouldBlockRequest: () => ({ blocked: false }),
+      update: () => {},
+      getState: () => ({ blocked: false }),
+      onStateChange: () => () => {},
     },
   };
 });
@@ -45,7 +61,7 @@ vi.mock("../GitHubStatsCache.js", () => ({
   },
 }));
 
-import { getProjectHealth, clearGitHubCaches } from "../GitHubService.js";
+import { getProjectHealth, clearGitHubCaches } from "../github/index.js";
 
 beforeEach(() => {
   clearGitHubCaches();
