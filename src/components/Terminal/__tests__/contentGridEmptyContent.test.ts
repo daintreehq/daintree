@@ -3,18 +3,20 @@ import { readFile } from "fs/promises";
 import { resolve } from "path";
 
 const GRID_PATH = resolve(__dirname, "../ContentGrid.tsx");
+const CONTEXT_PATH = resolve(__dirname, "../useContentGridContext.tsx");
+const DEFAULT_PATH = resolve(__dirname, "../ContentGridDefault.tsx");
 
 describe("ContentGrid emptyContent prop (issue #4254)", () => {
   it("ContentGridProps includes emptyContent prop", async () => {
-    const content = await readFile(GRID_PATH, "utf-8");
+    const content = await readFile(CONTEXT_PATH, "utf-8");
     expect(content).toContain("emptyContent?: React.ReactNode");
   });
 
   it("renders emptyContent instead of EmptyState when provided", async () => {
-    const content = await readFile(GRID_PATH, "utf-8");
+    const content = await readFile(DEFAULT_PATH, "utf-8");
     // The grid should use nullish coalescing to prefer emptyContent over EmptyState
     expect(content).toContain("emptyContent ?? (");
-    expect(content).toContain("<EmptyState");
+    expect(content).toContain("<ContentGridEmptyState");
   });
 
   it("destructures emptyContent from props", async () => {

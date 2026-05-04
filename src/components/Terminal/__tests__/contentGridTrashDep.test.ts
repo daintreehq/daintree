@@ -13,22 +13,22 @@ import { describe, it, expect } from "vitest";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
 
-const GRID_PATH = resolve(__dirname, "../ContentGrid.tsx");
+const CONTEXT_PATH = resolve(__dirname, "../useContentGridContext.tsx");
 const DOCK_PATH = resolve(__dirname, "../../Layout/ContentDock.tsx");
 
 describe("ContentGrid tabGroups memo includes trashedTerminals dep (trash-visibility regression)", () => {
   it("selects trashedTerminals from the store", async () => {
-    const content = await readFile(GRID_PATH, "utf-8");
+    const content = await readFile(CONTEXT_PATH, "utf-8");
     expect(content).toContain("trashedTerminals: state.trashedTerminals");
   });
 
   it("destructures trashedTerminals from the useShallow selector", async () => {
-    const content = await readFile(GRID_PATH, "utf-8");
+    const content = await readFile(CONTEXT_PATH, "utf-8");
     expect(content).toMatch(/const\s*\{[^}]*trashedTerminals[^}]*\}\s*=\s*usePanelStore/s);
   });
 
   it("includes trashedTerminals in the tabGroups memo dependency array", async () => {
-    const content = await readFile(GRID_PATH, "utf-8");
+    const content = await readFile(CONTEXT_PATH, "utf-8");
     // Find the tabGroups memo block and verify trashedTerminals is in its dep array
     const tabGroupsBlock = content.slice(content.indexOf("const tabGroups = useMemo("));
     const depsArrayMatch = tabGroupsBlock.match(/\[([^\]]+)\]/s);
