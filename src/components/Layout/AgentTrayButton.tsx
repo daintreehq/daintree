@@ -563,7 +563,7 @@ export function AgentTrayButton({
     ? null
     : showFallback
       ? "Set up agents"
-      : hasAnyContent
+      : launchable.length > 0
         ? "Pin agents"
         : null;
 
@@ -600,7 +600,13 @@ export function AgentTrayButton({
               size={emptyTrayLabel ? "sm" : "icon"}
               data-toolbar-item={dataToolbarItem}
               className={`toolbar-agent-button transition-colors${emptyTrayLabel ? "" : " text-daintree-text"}`}
-              aria-label={showDiscoveryBadge ? "Agent tray — new agents detected" : "Agent tray"}
+              aria-label={
+                emptyTrayLabel
+                  ? `Agent tray — ${emptyTrayLabel}`
+                  : showDiscoveryBadge
+                    ? "Agent tray — new agents detected"
+                    : "Agent tray"
+              }
               onPointerEnter={clearFocusRestoreSuppression}
             >
               <span className="relative inline-flex items-center justify-center">

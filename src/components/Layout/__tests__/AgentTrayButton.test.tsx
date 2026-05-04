@@ -278,9 +278,15 @@ vi.mock("@/components/ui/tooltip", () => ({
 vi.mock("@/components/ui/button", () => ({
   Button: ({
     children,
+    size,
     ...props
-  }: { children: React.ReactNode } & React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button {...props}>{children}</button>
+  }: {
+    children: React.ReactNode;
+    size?: string;
+  } & React.ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button data-size={size} {...props}>
+      {children}
+    </button>
   ),
 }));
 
@@ -1210,15 +1216,16 @@ describe("AgentTrayButton", () => {
         gemini: { pinned: false },
         codex: { pinned: false },
       });
-      // Suppress the discovery badge so aria-label stays "Agent tray".
       mockSeenAgentIds = ["claude", "gemini", "codex"];
 
-      const { getByText, container, getAllByTestId } = render(
+      const { container, getAllByTestId } = render(
         <AgentTrayButton agentAvailability={availability} />
       );
 
-      expect(getByText("Pin agents")).toBeTruthy();
-      expect(container.querySelector('[aria-label="Agent tray"]')).toBeTruthy();
+      const button = container.querySelector("button")!;
+      expect(button.textContent).toContain("Pin agents");
+      expect(button.getAttribute("aria-label")).toBe("Agent tray — Pin agents");
+      expect(button.getAttribute("data-size")).toBe("sm");
       expect(getAllByTestId("plug-icon").length).toBeGreaterThan(0);
     });
 
@@ -1230,12 +1237,14 @@ describe("AgentTrayButton", () => {
         codex: "missing",
       } as unknown as CliAvailability;
 
-      const { getByText, container, getAllByTestId } = render(
+      const { container, getAllByTestId } = render(
         <AgentTrayButton agentAvailability={availability} />
       );
 
-      expect(getByText("Set up agents")).toBeTruthy();
-      expect(container.querySelector('[aria-label="Agent tray"]')).toBeTruthy();
+      const button = container.querySelector("button")!;
+      expect(button.textContent).toContain("Set up agents");
+      expect(button.getAttribute("aria-label")).toBe("Agent tray — Set up agents");
+      expect(button.getAttribute("data-size")).toBe("sm");
       expect(getAllByTestId("plug-icon").length).toBeGreaterThan(0);
     });
 
@@ -1252,6 +1261,45 @@ describe("AgentTrayButton", () => {
       expect(queryByText("Pin agents")).toBeNull();
       expect(queryByText("Set up agents")).toBeNull();
       expect(container.querySelector('[aria-label="Agent tray"]')).toBeTruthy();
+    });
+
+    it("shows neither label when only needs-setup agents exist", () => {
+      mockHasRealData = true;
+      const availability = {
+        claude: "installed",
+        codex: "blocked",
+      } as unknown as CliAvailability;
+      mockSettings = settingsWith({
+        claude: { pinned: false },
+        codex: { pinned: false },
+      });
+
+      const { queryByText, container } = render(
+        <AgentTrayButton agentAvailability={availability} />
+      );
+
+      expect(queryByText("Pin agents")).toBeNull();
+      expect(queryByText("Set up agents")).toBeNull();
+      expect(container.querySelector("button")!.getAttribute("data-size")).toBe("icon");
+    });
+
+    it("suppresses label when at least one agent is pinned", () => {
+      const availability = {
+        claude: "ready",
+        gemini: "ready",
+      } as unknown as CliAvailability;
+      mockSettings = settingsWith({
+        claude: { pinned: true },
+        gemini: { pinned: false },
+      });
+
+      const { queryByText, container } = render(
+        <AgentTrayButton agentAvailability={availability} />
+      );
+
+      expect(queryByText("Pin agents")).toBeNull();
+      expect(queryByText("Set up agents")).toBeNull();
+      expect(container.querySelector("button")!.getAttribute("data-size")).toBe("icon");
     });
   });
 
