@@ -49,7 +49,6 @@ vi.mock("@/store/createWorktreeStore", () => currentViewStoreMock);
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/slices/panelRegistry", () => selectorMock);
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 (globalThis as unknown as { window: { electron: { git: { getStagingStatus: unknown } } } }).window =
   { electron: { git: { getStagingStatus: gitGetStagingStatusMock } } };
 
@@ -67,12 +66,12 @@ function makeCallbacks(): MockCallbacks & Pick<ActionCallbacks, "onLaunchAgent">
 
 function setupActions(callbacks: MockCallbacks) {
   const actions: ActionRegistry = new Map();
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+
   registerWorkflowActions(actions, callbacks as unknown as Pick<ActionCallbacks, "onLaunchAgent">);
   return (id: string) => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+
     return factory() as unknown as AnyActionDefinition;
   };
 }

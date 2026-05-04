@@ -1,7 +1,7 @@
 import os from "os";
 import PQueue from "p-queue";
 import { execFile } from "child_process";
-import { mkdir, writeFile, stat, readFile } from "fs/promises";
+import { mkdir, writeFile, stat, readFile, access } from "fs/promises";
 import { join as pathJoin, dirname, resolve as pathResolve, isAbsolute } from "path";
 import { generateProjectId, settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
@@ -320,6 +320,18 @@ export class WorkspaceService {
       this.projectEnvVars = { ...(globalEnvVars ?? {}), ...projectEnvVars };
       this.git = createHardenedGit(projectRootPath, this._shutdownController.signal);
       this.listService.setGit(this.git, projectRootPath);
+
+      // #6669: prune at startup so externally-deleted worktrees (kept in
+      // `worktree list --porcelain` as `prunable` since Git 2.31+) don't
+      // re-appear in the sidebar after restart. Best-effort — a prune
+      // failure must not block project load.
+      try {
+        await this.git.raw(["worktree", "prune"]);
+      } catch (pruneError) {
+        console.warn(
+          `[WorkspaceHost] worktree prune at load failed for ${projectRootPath}: ${(pruneError as Error).message}`
+        );
+      }
 
       const rawWorktrees = await this.listService.list();
       const worktrees = this.listService.mapToWorktrees(rawWorktrees);
@@ -995,6 +1007,22 @@ export class WorkspaceService {
       return;
     }
 
+    // #6669: prune before listing so externally-deleted worktrees (which Git
+    // 2.31+ keeps in `worktree list --porcelain` with a `prunable` marker)
+    // are dropped from the list. Without this, `syncMonitors` re-creates a
+    // monitor for the phantom path and the sidebar entry never clears.
+    // `prune` skips locked worktrees, so this is safe to run on every refresh.
+    // Best-effort: if prune fails (e.g. EPERM on .git/worktrees/), don't block
+    // the rest of the refresh — that would recreate the original "refresh is a
+    // no-op" symptom under a different trigger.
+    try {
+      await this.git.raw(["worktree", "prune"]);
+    } catch (pruneError) {
+      console.warn(
+        `[WorkspaceHost] worktree prune during refresh failed: ${(pruneError as Error).message}`
+      );
+    }
+
     const rawWorktrees = await this.listService.list({ forceRefresh: true });
     const worktrees = this.listService.mapToWorktrees(rawWorktrees);
 
@@ -1629,12 +1657,60 @@ export class WorkspaceService {
       await this.runLifecycleTeardown(worktreeId, monitor, force);
 
       if (this.git) {
-        const args = ["worktree", "remove"];
-        if (force) {
-          args.push("--force");
+        // #6669: if the directory is already gone (deleted externally), skip
+        // `git worktree remove` (which fails with `is not a working tree`)
+        // and run `git worktree prune` instead to clean up the leftover
+        // metadata. This is the only UI recovery path for a phantom entry.
+        // Only ENOENT routes to prune — other access errors (EPERM, EACCES,
+        // ENOTDIR) fall through so we don't skip the remove on transient
+        // permission issues; the remove call's own errors will surface.
+        let pathMissing = false;
+        try {
+          await access(monitor.path);
+        } catch (accessError) {
+          if ((accessError as NodeJS.ErrnoException).code === "ENOENT") {
+            pathMissing = true;
+          }
         }
-        args.push(monitor.path);
-        await this.git.raw(args);
+
+        if (pathMissing) {
+          try {
+            await this.git.raw(["worktree", "prune"]);
+          } catch (pruneError) {
+            // Best-effort: the directory is already gone, so failing to clean
+            // up the metadata shouldn't block the UI from removing the entry.
+            console.warn(
+              `[WorkspaceHost] worktree prune failed for missing path ${monitor.path}: ${(pruneError as Error).message}`
+            );
+          }
+        } else {
+          const args = ["worktree", "remove"];
+          if (force) {
+            args.push("--force");
+          }
+          args.push(monitor.path);
+          try {
+            await this.git.raw(args);
+          } catch (removeError) {
+            // Race: the directory disappeared between our access check and
+            // the remove call, or git's metadata is already inconsistent.
+            // Both surface as `fatal: '<path>' is not a working tree`. Fall
+            // back to prune so the UI cleanup path still runs.
+            const message = (removeError as Error).message || "";
+            if (message.includes("is not a working tree")) {
+              try {
+                await this.git.raw(["worktree", "prune"]);
+              } catch (pruneError) {
+                console.warn(
+                  `[WorkspaceHost] worktree prune failed after stale remove for ${monitor.path}: ${(pruneError as Error).message}`
+                );
+              }
+            } else {
+              throw removeError;
+            }
+          }
+        }
+
         clearGitDirCache(monitor.path);
 
         const cacheKey = this.listService.getCacheKey();

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
+import type { SimpleGit } from "simple-git";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
@@ -142,6 +143,8 @@ describe("WorkspaceService external worktree removal", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockSimpleGit.raw.mockReset().mockResolvedValue(undefined);
+    mockSimpleGit.branch.mockReset().mockResolvedValue({ current: "main" });
     mockSendEvent = vi.fn();
 
     const WorkspaceServiceModule = await import("../WorkspaceService.js");
@@ -152,6 +155,7 @@ describe("WorkspaceService external worktree removal", () => {
 
     service["projectRootPath"] = "/test/root";
     service["git"] = mockSimpleGit as any;
+    service["listService"].setGit(mockSimpleGit as unknown as SimpleGit, "/test/root");
   });
 
   afterEach(() => {
@@ -175,6 +179,83 @@ describe("WorkspaceService external worktree removal", () => {
     service["monitors"].set(wt.id, monitor);
     return monitor;
   }
+
+  describe("discoverAndSyncWorktrees() prune-before-list (#6669)", () => {
+    it("prunes before listing so externally-deleted worktrees clear from the sidebar", async () => {
+      createAndRegisterMonitor();
+      expect(service["monitors"].has("/test/worktree")).toBe(true);
+
+      const callOrder: string[] = [];
+      mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+        callOrder.push(args.join(" "));
+        if (args[0] === "worktree" && args[1] === "list") {
+          // Post-prune list: phantom worktree is gone, only main remains.
+          return [
+            "worktree /test/root",
+            "HEAD aaaaaaaaaaaaaaaaaaaa",
+            "branch refs/heads/main",
+            "",
+          ].join("\n");
+        }
+        return undefined;
+      });
+
+      // Force the list cache to be re-fetched (forceRefresh: true bypasses
+      // it anyway, but ensure no stale entry leaks through).
+      service["listService"].invalidateCache();
+
+      await service["discoverAndSyncWorktrees"]();
+
+      const pruneIdx = callOrder.findIndex((c) => c.startsWith("worktree prune"));
+      const listIdx = callOrder.findIndex((c) => c.startsWith("worktree list"));
+      expect(pruneIdx).toBeGreaterThanOrEqual(0);
+      expect(listIdx).toBeGreaterThanOrEqual(0);
+      expect(pruneIdx).toBeLessThan(listIdx);
+
+      expect(service["monitors"].has("/test/worktree")).toBe(false);
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "worktree-removed",
+          worktreeId: "/test/worktree",
+        })
+      );
+    });
+  });
+
+  describe("discoverAndSyncWorktrees() prune failure handling (#6669)", () => {
+    it("continues refresh when 'git worktree prune' itself fails", async () => {
+      createAndRegisterMonitor();
+
+      let listCalled = false;
+      mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+        if (args[0] === "worktree" && args[1] === "prune") {
+          throw new Error("fatal: failed to prune (EPERM)");
+        }
+        if (args[0] === "worktree" && args[1] === "list") {
+          listCalled = true;
+          // List still includes the registered monitor — refresh succeeds,
+          // sync runs, monitor remains registered (no phantom to clean up).
+          return [
+            "worktree /test/root",
+            "HEAD aaaaaaaaaaaaaaaaaaaa",
+            "branch refs/heads/main",
+            "",
+            "worktree /test/worktree",
+            "HEAD bbbbbbbbbbbbbbbbbbbb",
+            "branch refs/heads/feature/test",
+            "",
+          ].join("\n");
+        }
+        return undefined;
+      });
+
+      service["listService"].invalidateCache();
+
+      await expect(service["discoverAndSyncWorktrees"]()).resolves.not.toThrow();
+      expect(listCalled).toBe(true);
+      expect(service["monitors"].has("/test/worktree")).toBe(true);
+    });
+  });
 
   describe("handleExternalWorktreeRemoval()", () => {
     it("removes non-main worktree and emits removal event", () => {
