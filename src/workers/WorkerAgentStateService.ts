@@ -5,16 +5,9 @@
 
 import type { AgentState, AgentStateChangeTrigger } from "../../shared/types/agent.js";
 import type { WorkerTerminalState } from "../../shared/types/worker-messages.js";
+import { type AgentEvent, nextAgentState } from "../../shared/utils/agentFsm.js";
 
-/** Event types for agent state transitions */
-export type AgentEvent =
-  | { type: "start" }
-  | { type: "output"; data: string }
-  | { type: "busy" }
-  | { type: "prompt" }
-  | { type: "input" }
-  | { type: "exit"; code: number }
-  | { type: "error"; error: string };
+export type { AgentEvent } from "../../shared/utils/agentFsm.js";
 
 /** Result of a state change calculation */
 export interface StateChangeResult {
@@ -29,49 +22,10 @@ export interface StateChangeResult {
   traceId?: string;
 }
 
-/** Calculate the next agent state based on current state and event */
-function nextAgentState(current: AgentState, event: AgentEvent): AgentState {
-  switch (event.type) {
-    case "start":
-      if (current === "idle") {
-        return "working";
-      }
-      break;
-
-    case "busy":
-      if (current === "waiting" || current === "idle" || current === "completed") {
-        return "working";
-      }
-      break;
-
-    case "output":
-      // Output events no longer trigger state changes directly
-      break;
-
-    case "prompt":
-      if (current === "working" || current === "completed") {
-        return "waiting";
-      }
-      break;
-
-    case "input":
-      if (current === "waiting" || current === "idle" || current === "completed") {
-        return "working";
-      }
-      break;
-
-    case "exit":
-      if (current !== "idle" && current !== "exited") {
-        return "exited";
-      }
-      break;
-  }
-
-  return current;
-}
-
 /**
  * Infer the trigger type from an agent event.
+ * Mirrors `AgentStateService.inferTrigger` in the main process so worker- and
+ * main-side state-change events carry consistent trigger metadata.
  */
 function inferTrigger(event: AgentEvent): AgentStateChangeTrigger {
   switch (event.type) {
@@ -85,55 +39,34 @@ function inferTrigger(event: AgentEvent): AgentStateChangeTrigger {
       return "activity";
     case "exit":
       return "exit";
+    case "kill":
+      return "exit";
     case "start":
       return "activity";
     case "error":
       return "activity";
+    case "completion":
+      return "activity";
+    case "respawn":
+      return "activity";
+    case "watchdog-timeout":
+      return "timeout";
     default:
       return "output";
   }
 }
 
 /**
- * Infer confidence level based on event type and trigger.
+ * Infer confidence level based on trigger. The worker's `inferTrigger` never
+ * returns "heuristic" or "ai-classification" (those are produced only by
+ * main-process pattern/AI detection paths), so this only covers the triggers
+ * the worker can actually emit.
  */
-function inferConfidence(event: AgentEvent, trigger: AgentStateChangeTrigger): number {
-  if (trigger === "input" || trigger === "exit") {
-    return 1.0;
-  }
-
-  if (trigger === "output") {
-    return 1.0;
-  }
-
-  if (trigger === "activity") {
-    return 1.0;
-  }
-
-  if (trigger === "heuristic") {
-    if (event.type === "busy") {
-      return 0.9;
-    }
-    if (event.type === "prompt") {
-      return 0.75;
-    }
-    if (event.type === "start") {
-      return 0.7;
-    }
-    if (event.type === "error") {
-      return 0.65;
-    }
-  }
-
-  if (trigger === "ai-classification") {
-    return 0.85;
-  }
-
+function inferConfidence(_event: AgentEvent, trigger: AgentStateChangeTrigger): number {
   if (trigger === "timeout") {
     return 0.6;
   }
-
-  return 0.5;
+  return 1.0;
 }
 
 /**
