@@ -1,10 +1,22 @@
 import { existsSync } from "node:fs";
-import fs from "node:fs/promises";
-import http from "node:http";
-import https from "node:https";
-import net from "node:net";
 import path from "node:path";
-import { resolveNextMajorVersion } from "../utils/resolveNextVersion.js";
+import {
+  getInvalidCommandMessage,
+  normalizeNextjsDevCommand,
+} from "./DevPreviewCommandNormalizer.js";
+import { allocatePort, releasePort } from "./DevPreviewPortAllocator.js";
+import { waitForServerReady, READINESS_TIMEOUT_MS } from "./DevPreviewReadinessProbe.js";
+import {
+  createSessionKey,
+  sanitizeToken,
+  cloneEnv,
+  envEquals,
+  validateEnsureRequest,
+  validateSessionRequest,
+  validateStopByPanelRequest,
+} from "./DevPreviewRequestValidators.js";
+
+export { normalizeNextjsDevCommand } from "./DevPreviewCommandNormalizer.js";
 import type { PtyClient } from "./PtyClient.js";
 import { UrlDetector } from "./UrlDetector.js";
 import type {
@@ -44,99 +56,6 @@ const DEFAULT_TIMEOUT_MS = 8000;
 const STALE_START_RECOVERY_MS = 10000;
 const STARTUP_REPLAY_DELAY_MS = 1500;
 const REPLAY_HISTORY_MAX_LINES = 300;
-const READINESS_TIMEOUT_MS = 30000;
-const READINESS_POLL_INTERVAL_MS = 500;
-const READINESS_REQUEST_TIMEOUT_MS = 5000;
-
-function createSessionKey(projectId: string, panelId: string): string {
-  return `${projectId}\u0000${panelId}`;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== "object") return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function sanitizeToken(input: string): string {
-  return input.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 24) || "x";
-}
-
-function cloneEnv(env?: Record<string, string>): Record<string, string> | undefined {
-  if (!env) return undefined;
-  return { ...env };
-}
-
-function envEquals(left?: Record<string, string>, right?: Record<string, string>): boolean {
-  if (!left && !right) return true;
-  if (!left || !right) return false;
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-  if (leftKeys.length !== rightKeys.length) return false;
-  for (const key of leftKeys) {
-    if (left[key] !== right[key]) return false;
-  }
-  return true;
-}
-
-function getInvalidCommandMessage(command: string): string | null {
-  const trimmed = command.trim();
-  if (!trimmed) return "No dev command configured";
-  if (trimmed.includes("\n") || trimmed.includes("\r")) {
-    return "Multi-line commands are not allowed";
-  }
-  return null;
-}
-
-const NEXT_DEV_DIRECT_RE = /\bnext\s+dev\b/;
-const TURBOPACK_FLAG_RE = /--turbo(?:pack)?\b/;
-const PKG_SCRIPT_RE = /^(?:npm\s+run|pnpm(?:\s+run)?|yarn(?:\s+run)?|bun(?:\s+run)?)\s+(\S+)$/;
-// Compound/piped/commented commands can't be safely rewritten — appending
-// --turbopack to `next dev && echo done` attaches the flag to echo, not next.
-const SHELL_CONTROL_RE = /[;&|#]|<|>|\$\(/;
-
-function stripTurbopackFlag(command: string): string {
-  return command
-    .replace(/\s+--\s+--turbo(?:pack)?\b/, "") // " -- --turbopack" (pkg manager form)
-    .replace(/\s+--turbo(?:pack)?\b/, "") // " --turbopack" (direct form)
-    .trim();
-}
-
-export async function normalizeNextjsDevCommand(
-  command: string,
-  cwd: string,
-  turbopackEnabled = true
-): Promise<string> {
-  if (!turbopackEnabled) return stripTurbopackFlag(command);
-  const nextMajor = await resolveNextMajorVersion(cwd);
-  if (nextMajor === null || nextMajor < 15) return stripTurbopackFlag(command);
-
-  if (TURBOPACK_FLAG_RE.test(command)) return command;
-  if (SHELL_CONTROL_RE.test(command)) return command;
-
-  if (NEXT_DEV_DIRECT_RE.test(command)) {
-    return `${command} --turbopack`;
-  }
-
-  const scriptMatch = PKG_SCRIPT_RE.exec(command);
-  if (!scriptMatch) return command;
-
-  const scriptName = scriptMatch[1];
-  try {
-    const pkgRaw = await fs.readFile(path.join(cwd, "package.json"), "utf-8");
-    const pkg = JSON.parse(pkgRaw);
-    const scriptBody = pkg?.scripts?.[scriptName];
-    if (typeof scriptBody === "string" && NEXT_DEV_DIRECT_RE.test(scriptBody)) {
-      if (TURBOPACK_FLAG_RE.test(scriptBody)) return command;
-      const sep = command.trimStart().startsWith("bun ") ? " " : " -- ";
-      return `${command}${sep}--turbopack`;
-    }
-  } catch {
-    // No package.json or invalid — leave command unchanged
-  }
-
-  return command;
-}
 
 export class DevPreviewSessionService {
   private readonly detector = new UrlDetector();
@@ -158,46 +77,6 @@ export class DevPreviewSessionService {
     this.onExitListener = this.handleExit.bind(this);
     this.ptyClient.on("data", this.onDataListener);
     this.ptyClient.on("exit", this.onExitListener);
-  }
-
-  private async allocatePort(sessionKey: string): Promise<number> {
-    const existing = this.portRegistry.get(sessionKey);
-    if (existing !== undefined) return existing;
-
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const candidate = 3000 + Math.floor(Math.random() * 7000);
-      const usedPorts = new Set(this.portRegistry.values());
-      if (usedPorts.has(candidate)) continue;
-      // Reserve before the async probe so concurrent allocatePort() calls for
-      // different session keys can't pick the same candidate between probe and registration.
-      this.portRegistry.set(sessionKey, candidate);
-      const available = await new Promise<boolean>((resolve) => {
-        const srv = net.createServer();
-        srv.once("error", () => resolve(false));
-        srv.listen(candidate, "127.0.0.1", () => srv.close(() => resolve(true)));
-      });
-      if (available) return candidate;
-      this.portRegistry.delete(sessionKey);
-    }
-    return new Promise<number>((resolve, reject) => {
-      const srv = net.createServer();
-      srv.listen(0, "127.0.0.1", () => {
-        const addr = srv.address();
-        const port = typeof addr === "object" && addr ? addr.port : 0;
-        srv.close(() => {
-          if (port) {
-            this.portRegistry.set(sessionKey, port);
-            resolve(port);
-          } else {
-            reject(new Error("Failed to allocate port"));
-          }
-        });
-      });
-    });
-  }
-
-  private releasePort(sessionKey: string): void {
-    this.portRegistry.delete(sessionKey);
   }
 
   /**
@@ -251,7 +130,7 @@ export class DevPreviewSessionService {
   }
 
   async ensure(request: DevPreviewEnsureRequest): Promise<DevPreviewSessionState> {
-    this.validateEnsureRequest(request);
+    validateEnsureRequest(request);
     if (this.disposed) return this.getSessionState(request.projectId, request.panelId);
     markPerformance(PERF_MARKS.DEVPREVIEW_ENSURE_START, {
       panelId: request.panelId,
@@ -314,7 +193,7 @@ export class DevPreviewSessionService {
   }
 
   async restart(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> {
-    this.validateSessionRequest(request);
+    validateSessionRequest(request);
     const restartStartedAt = Date.now();
     markPerformance(PERF_MARKS.DEVPREVIEW_RESTART_START, {
       panelId: request.panelId,
@@ -363,7 +242,7 @@ export class DevPreviewSessionService {
   }
 
   async stop(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> {
-    this.validateSessionRequest(request);
+    validateSessionRequest(request);
     const key = createSessionKey(request.projectId, request.panelId);
     await this.runLocked(key, async () => {
       const session = this.sessions.get(key);
@@ -383,7 +262,7 @@ export class DevPreviewSessionService {
   }
 
   async stopByPanel(request: DevPreviewStopByPanelRequest): Promise<void> {
-    this.validateStopByPanelRequest(request);
+    validateStopByPanelRequest(request);
     const targets = [...this.sessions.values()].filter(
       (session) => session.panelId === request.panelId
     );
@@ -403,7 +282,7 @@ export class DevPreviewSessionService {
               isRestarting: false,
             });
             this.sessions.delete(key);
-            this.releasePort(key);
+            releasePort(this.portRegistry, key);
             this.restoreWorktreeMapping(session.worktreeId, key);
           } catch (err) {
             const message = formatErrorMessage(err, "Failed to stop dev preview");
@@ -445,7 +324,7 @@ export class DevPreviewSessionService {
               isRestarting: false,
             });
             this.sessions.delete(key);
-            this.releasePort(key);
+            releasePort(this.portRegistry, key);
             this.restoreWorktreeMapping(session.worktreeId, key);
           } catch (err) {
             const message = formatErrorMessage(err, "Failed to stop dev preview");
@@ -461,69 +340,8 @@ export class DevPreviewSessionService {
   }
 
   getState(request: DevPreviewSessionRequest): DevPreviewSessionState {
-    this.validateSessionRequest(request);
+    validateSessionRequest(request);
     return this.getSessionState(request.projectId, request.panelId);
-  }
-
-  private validateEnsureRequest(request: DevPreviewEnsureRequest): void {
-    if (!request || typeof request !== "object") {
-      throw new Error("Invalid dev preview request");
-    }
-    if (typeof request.panelId !== "string" || !request.panelId.trim()) {
-      throw new Error("panelId is required");
-    }
-    if (typeof request.projectId !== "string" || !request.projectId.trim()) {
-      throw new Error("projectId is required");
-    }
-    if (typeof request.cwd !== "string" || !request.cwd.trim()) {
-      throw new Error("cwd is required");
-    }
-    if (typeof request.devCommand !== "string") {
-      throw new Error("devCommand must be a string");
-    }
-    if (request.worktreeId !== undefined && typeof request.worktreeId !== "string") {
-      throw new Error("worktreeId must be a string if provided");
-    }
-    if (request.env !== undefined) {
-      if (!isPlainRecord(request.env)) {
-        throw new Error("env must be a plain object if provided");
-      }
-
-      for (const [key, value] of Object.entries(request.env)) {
-        const isReserved = key === "__proto__" || key === "constructor" || key === "prototype";
-        const isValidEnvKey = /^[A-Za-z_][A-Za-z0-9_]*$/.test(key);
-        if (!key || isReserved || !isValidEnvKey) {
-          throw new Error("env contains invalid key");
-        }
-        if (typeof value !== "string") {
-          throw new Error("env values must be strings");
-        }
-      }
-    }
-    if (request.turbopackEnabled !== undefined && typeof request.turbopackEnabled !== "boolean") {
-      throw new Error("turbopackEnabled must be a boolean if provided");
-    }
-  }
-
-  private validateSessionRequest(request: DevPreviewSessionRequest): void {
-    if (!request || typeof request !== "object") {
-      throw new Error("Invalid dev preview session request");
-    }
-    if (typeof request.panelId !== "string" || !request.panelId.trim()) {
-      throw new Error("panelId is required");
-    }
-    if (typeof request.projectId !== "string" || !request.projectId.trim()) {
-      throw new Error("projectId is required");
-    }
-  }
-
-  private validateStopByPanelRequest(request: DevPreviewStopByPanelRequest): void {
-    if (!request || typeof request !== "object") {
-      throw new Error("Invalid dev preview stop-by-panel request");
-    }
-    if (typeof request.panelId !== "string" || !request.panelId.trim()) {
-      throw new Error("panelId is required");
-    }
   }
 
   private getOrCreateSession(projectId: string, panelId: string): DevPreviewSession {
@@ -696,7 +514,7 @@ export class DevPreviewSessionService {
     const nextGeneration = session.generation + 1;
 
     const sessionKey = createSessionKey(session.projectId, session.panelId);
-    const port = await this.allocatePort(sessionKey);
+    const port = await allocatePort(this.portRegistry, sessionKey);
     // dispose() can fire while allocatePort awaits its net probe. Guard here
     // so we don't spawn a terminal on a disposed service; roll back the
     // reservation to avoid a stale portRegistry entry after disposal cleared it.
@@ -1087,7 +905,7 @@ export class DevPreviewSessionService {
     signal: AbortSignal,
     generation: number
   ): void {
-    void this.waitForServerReady(url, signal)
+    void waitForServerReady(url, signal)
       .then((ready) => {
         if (signal.aborted || session.generation !== generation) return;
         if (session.readinessAbort?.signal !== signal) return;
@@ -1146,100 +964,5 @@ export class DevPreviewSessionService {
           isRestarting: false,
         });
       });
-  }
-
-  private async waitForServerReady(
-    url: string,
-    signal: AbortSignal,
-    timeoutMs = READINESS_TIMEOUT_MS
-  ): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    let useHttps: boolean;
-    try {
-      useHttps = new URL(url).protocol === "https:";
-    } catch {
-      return false;
-    }
-    const requestModule = useHttps ? https : http;
-
-    while (Date.now() < deadline) {
-      if (signal.aborted) return false;
-
-      const ready = await new Promise<boolean>((resolve) => {
-        let settled = false;
-        const onAbort = () => {
-          req?.destroy();
-          settle(false);
-        };
-        const settle = (value: boolean) => {
-          if (settled) return;
-          settled = true;
-          signal.removeEventListener("abort", onAbort);
-          resolve(value);
-        };
-
-        let req: ReturnType<typeof requestModule.request> | undefined;
-        try {
-          req = requestModule.request(
-            url,
-            {
-              method: "HEAD",
-              timeout: READINESS_REQUEST_TIMEOUT_MS,
-              ...(useHttps ? { rejectUnauthorized: false } : {}),
-            },
-            (res) => {
-              res.resume();
-              const status = res.statusCode ?? 0;
-              // Any HTTP response means the server is listening and can process requests.
-              // We only keep polling on transport-level failures (connection refused, timeout, etc.).
-              if (status >= 100 && status < 600) {
-                settle(true);
-              } else {
-                settle(false);
-              }
-            }
-          );
-          req.on("error", () => settle(false));
-          req.on("timeout", () => {
-            req!.destroy();
-            settle(false);
-          });
-          if (signal.aborted) {
-            req.destroy();
-            settle(false);
-          } else {
-            signal.addEventListener("abort", onAbort, { once: true });
-            req.end();
-          }
-        } catch {
-          settle(false);
-        }
-      });
-
-      if (ready) return true;
-      if (signal.aborted) return false;
-
-      try {
-        await new Promise<void>((resolve, reject) => {
-          if (signal.aborted) {
-            reject(signal.reason);
-            return;
-          }
-          const onAbort = () => {
-            clearTimeout(timer);
-            reject(signal.reason);
-          };
-          const timer = setTimeout(() => {
-            signal.removeEventListener("abort", onAbort);
-            resolve();
-          }, READINESS_POLL_INTERVAL_MS);
-          signal.addEventListener("abort", onAbort, { once: true });
-        });
-      } catch {
-        return false;
-      }
-    }
-
-    return false;
   }
 }

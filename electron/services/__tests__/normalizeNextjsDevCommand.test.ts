@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeNextjsDevCommand } from "../DevPreviewSessionService.js";
+import { normalizeNextjsDevCommand } from "../DevPreviewCommandNormalizer.js";
 
 const mockReadFile = vi.fn<(path: string, encoding: string) => Promise<string>>();
 
