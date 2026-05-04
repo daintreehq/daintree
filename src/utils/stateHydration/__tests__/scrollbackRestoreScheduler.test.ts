@@ -31,6 +31,11 @@ vi.mock("../batchScheduler", async () => {
 
 const { scheduleScrollbackRestore } = await import("../scrollbackRestoreScheduler");
 
+function getScheduledDoRestore(callIndex = 0): () => Promise<void> {
+  const cb = scheduleBackgroundFetchAndRestoreMock.mock.calls[callIndex]?.[0];
+  return cb as () => Promise<void>;
+}
+
 interface FakeManaged {
   scrollbackRestoreState: "none" | "pending" | "in-progress" | "done";
   hostElement?: HTMLElement | null;
@@ -104,8 +109,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
     );
 
     expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(1);
-    const doRestore = scheduleBackgroundFetchAndRestoreMock.mock.calls[0][0] as () => Promise<void>;
-    await doRestore();
+    await getScheduledDoRestore()();
 
     expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1");
     expect(managed.scrollbackRestoreState).toBe("done");
@@ -121,8 +125,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
       "background"
     );
 
-    const doRestore = scheduleBackgroundFetchAndRestoreMock.mock.calls[0][0] as () => Promise<void>;
-    await doRestore();
+    await getScheduledDoRestore()();
 
     expect(fetchAndRestoreMock).not.toHaveBeenCalled();
     expect(managed.scrollbackRestoreState).toBe("pending");
@@ -142,8 +145,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
     const replacement = fakeManaged("none");
     getMock.mockReturnValueOnce(replacement);
 
-    const doRestore = scheduleBackgroundFetchAndRestoreMock.mock.calls[0][0] as () => Promise<void>;
-    await doRestore();
+    await getScheduledDoRestore()();
 
     expect(fetchAndRestoreMock).not.toHaveBeenCalled();
     expect(original.scrollbackRestoreState).toBe("pending");
@@ -162,8 +164,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
     // External code re-set state away from pending before doRestore fires
     managed.scrollbackRestoreState = "done";
 
-    const doRestore = scheduleBackgroundFetchAndRestoreMock.mock.calls[0][0] as () => Promise<void>;
-    await doRestore();
+    await getScheduledDoRestore()();
 
     expect(fetchAndRestoreMock).not.toHaveBeenCalled();
   });
@@ -179,8 +180,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
       "background"
     );
 
-    const doRestore = scheduleBackgroundFetchAndRestoreMock.mock.calls[0][0] as () => Promise<void>;
-    await doRestore();
+    await getScheduledDoRestore()();
 
     expect(managed.scrollbackRestoreState).toBe("none");
   });

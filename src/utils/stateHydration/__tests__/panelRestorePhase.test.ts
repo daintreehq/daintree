@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { Mock } from "vitest";
 import type { TerminalState, BackendTerminalInfo } from "@shared/types/ipc/terminal";
 
 // --- Module mocks ---
@@ -103,42 +104,52 @@ vi.mock("../batchScheduler", async () => {
 });
 
 // --- Fixtures ---
-function makeContext(overrides: Partial<Parameters<typeof restorePanelsPhase>[1]> = {}) {
-  const addPanel = vi.fn(
+type RawContext = Parameters<typeof restorePanelsPhase>[1];
+type MockedContext = Omit<RawContext, "addPanel" | "checkCurrent" | "withHydrationBatch"> & {
+  addPanel: Mock;
+  checkCurrent: Mock;
+  withHydrationBatch: Mock;
+};
+
+let restoredIdCounter = 0;
+
+function makeContext(overrides: Partial<RawContext> = {}): MockedContext {
+  const addPanel: Mock = vi.fn(
     async (args: { requestedId?: string; existingId?: string }) =>
-      args.requestedId ?? args.existingId ?? `restored-${Math.random()}`
+      args.requestedId ?? args.existingId ?? `restored-${++restoredIdCounter}`
   );
-  const checkCurrent = vi.fn(() => true);
-  const withHydrationBatch = vi.fn(async (run: () => Promise<void>) => {
+  const checkCurrent: Mock = vi.fn(() => true);
+  const withHydrationBatch: Mock = vi.fn(async (run: () => Promise<void>) => {
     await run();
   });
-  return {
+  const ctx: MockedContext = {
     addPanel,
     checkCurrent,
     withHydrationBatch,
     backendTerminalMap: new Map<string, BackendTerminalInfo>(),
     terminalSizes: {} as Record<string, { cols: number; rows: number }>,
-    activeWorktreeId: null as string | null,
+    activeWorktreeId: null,
     projectRoot: "/proj",
     agentSettings: undefined,
     clipboardDirectory: undefined,
     projectPresetsByAgent: {},
-    _switchId: undefined as string | undefined,
+    _switchId: undefined,
     worktreesPromise: Promise.resolve([]),
     restoreTerminalOrder: undefined,
     safeMode: false,
     logHydrationInfo: vi.fn(),
-    ...overrides,
   };
+  return Object.assign(ctx, overrides);
 }
 
 function panel(id: string, overrides: Partial<TerminalState> = {}): TerminalState {
   return {
     id,
+    title: id,
     kind: "terminal",
     cwd: "/proj",
     ...overrides,
-  } as TerminalState;
+  };
 }
 
 function backend(id: string, overrides: Partial<BackendTerminalInfo> = {}): BackendTerminalInfo {
@@ -175,7 +186,7 @@ describe("restorePanelsPhase — saved panels", () => {
 
   it("skips legacy assistant panels", async () => {
     const ctx = makeContext();
-    await restorePanelsPhase([panel("a", { kind: "assistant" } as Partial<TerminalState>)], ctx);
+    await restorePanelsPhase([panel("a", { kind: "assistant" })], ctx);
     expect(ctx.addPanel).not.toHaveBeenCalled();
   });
 
@@ -205,7 +216,7 @@ describe("restorePanelsPhase — saved panels", () => {
     const ctx = makeContext({ _switchId: undefined });
     await restorePanelsPhase([panel("p1", { kind: "agent", launchAgentId: "claude" })], ctx);
     expect(ctx.addPanel).toHaveBeenCalledTimes(1);
-    expect(ctx.addPanel.mock.calls[0][0]).toMatchObject({ requestedId: "p1" });
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ requestedId: "p1" });
   });
 
   it("phantom-skips agent panel when reconnect returns not_found during a live switch (_switchId defined)", async () => {
@@ -245,7 +256,7 @@ describe("restorePanelsPhase — saved panels", () => {
 
   it("recreates non-PTY panels (browser, dev-preview) without reconnect", async () => {
     const ctx = makeContext();
-    await restorePanelsPhase([panel("b1", { kind: "browser" } as Partial<TerminalState>)], ctx);
+    await restorePanelsPhase([panel("b1", { kind: "browser" })], ctx);
     expect(reconnectWithTimeoutMock).not.toHaveBeenCalled();
     expect(ctx.addPanel).toHaveBeenCalledTimes(1);
   });
@@ -279,7 +290,7 @@ describe("restorePanelsPhase — saved panels", () => {
 
     // Priority panel was restored; background and orphan were aborted.
     const addPanelArgs = ctx.addPanel.mock.calls.map(
-      ([a]: [{ existingId?: string }]) => a.existingId
+      (call) => (call[0] as { existingId?: string }).existingId
     );
     expect(addPanelArgs).toEqual(["t-prio"]);
   });
@@ -308,7 +319,7 @@ describe("restorePanelsPhase — saved panels", () => {
       ctx
     );
     expect(restoreTerminalOrder).toHaveBeenCalledTimes(1);
-    expect(restoreTerminalOrder.mock.calls[0][0]).toEqual(["new-t1", "new-t2", "new-t3"]);
+    expect(restoreTerminalOrder.mock.calls[0]![0]).toEqual(["new-t1", "new-t2", "new-t3"]);
   });
 
   it("does not call restoreTerminalOrder when no panels were restored", async () => {
@@ -352,7 +363,7 @@ describe("restorePanelsPhase — orphan reconnection", () => {
     const ctx = makeContext({ activeWorktreeId: "wA" });
     ctx.backendTerminalMap.set("o1", backend("o1"));
     await restorePanelsPhase([], ctx);
-    expect(ctx.addPanel.mock.calls[0][0]).toMatchObject({ worktreeId: "wA" });
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wA" });
   });
 
   it("skips startup default- terminals when there are no saved panels", async () => {
@@ -417,7 +428,9 @@ describe("restorePanelsPhase — matched backend not re-appended as orphan", () 
     await restorePanelsPhase([panel("matched")], ctx);
     // Exactly two addPanel calls: matched (saved) + orphan — never three.
     expect(ctx.addPanel).toHaveBeenCalledTimes(2);
-    const ids = ctx.addPanel.mock.calls.map(([a]: [{ existingId?: string }]) => a.existingId);
+    const ids = ctx.addPanel.mock.calls.map(
+      (call) => (call[0] as { existingId?: string }).existingId
+    );
     expect(ids.sort()).toEqual(["matched", "orphan"]);
   });
 });

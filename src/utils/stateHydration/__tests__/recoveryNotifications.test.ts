@@ -11,18 +11,19 @@ const { dispatchRecoveryNotifications, __resetGpuAccelNotifiedForTests } =
   await import("../recoveryNotifications");
 
 function makeHydrateResult(overrides: Partial<HydrateResult>): HydrateResult {
-  return {
+  // dispatchRecoveryNotifications only reads gpuHardwareAccelerationDisabled,
+  // settingsRecovery, and projectStateRecovery — the rest is fixture noise
+  // satisfied via a single boundary cast.
+  const base: Partial<HydrateResult> = {
     appState: { terminals: [], sidebarWidth: 240 },
-    terminalConfig: {} as HydrateResult["terminalConfig"],
     project: null,
-    agentSettings: {} as HydrateResult["agentSettings"],
     gpuWebGLHardware: true,
     gpuHardwareAccelerationDisabled: false,
     safeMode: false,
     settingsRecovery: null,
     projectStateRecovery: null,
-    ...overrides,
   };
+  return Object.assign(base, overrides) as HydrateResult;
 }
 
 beforeEach(() => {
@@ -48,7 +49,7 @@ describe("dispatchRecoveryNotifications", () => {
         ([arg]) => arg.title === "Hardware acceleration disabled"
       );
       expect(gpuCalls).toHaveLength(1);
-      expect(gpuCalls[0][0]).toMatchObject({
+      expect(gpuCalls[0]![0]).toMatchObject({
         type: "warning",
         priority: "watch",
         duration: 0,
@@ -70,7 +71,7 @@ describe("dispatchRecoveryNotifications", () => {
       );
 
       expect(notifyMock).toHaveBeenCalledTimes(1);
-      const arg = notifyMock.mock.calls[0][0];
+      const arg = notifyMock.mock.calls[0]![0];
       expect(arg.title).toBe("Settings restored from backup");
       expect(arg.duration).toBe(8000);
       expect(arg.message).toContain("/tmp/bad");
@@ -84,7 +85,7 @@ describe("dispatchRecoveryNotifications", () => {
       );
 
       expect(notifyMock).toHaveBeenCalledTimes(1);
-      const arg = notifyMock.mock.calls[0][0];
+      const arg = notifyMock.mock.calls[0]![0];
       expect(arg.title).toBe("Settings reset to defaults");
       expect(arg.duration).toBe(0);
       expect(arg.message).toContain("/tmp/bad2");
@@ -97,7 +98,7 @@ describe("dispatchRecoveryNotifications", () => {
         })
       );
 
-      const arg = notifyMock.mock.calls[0][0];
+      const arg = notifyMock.mock.calls[0]![0];
       expect(arg.message).not.toContain("Corrupt file preserved at");
     });
   });
@@ -111,7 +112,7 @@ describe("dispatchRecoveryNotifications", () => {
       );
 
       expect(notifyMock).toHaveBeenCalledTimes(1);
-      const arg = notifyMock.mock.calls[0][0];
+      const arg = notifyMock.mock.calls[0]![0];
       expect(arg.title).toBe("Project state corrupted");
       expect(arg.message).toContain("/tmp/proj.bad");
       expect(arg.priority).toBe("high");
