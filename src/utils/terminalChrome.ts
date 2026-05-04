@@ -26,6 +26,13 @@ export interface TerminalChromeDescriptor {
   agentId: AgentId | null;
   processId: string | null;
   runtimeKind: TerminalRuntimeIdentity["kind"] | "panel" | "none";
+  /**
+   * True when an explicit exit signal was observed during chrome derivation
+   * (`exitCode` set, `runtimeStatus` exited/error, or `agentState` exited).
+   * Distinct from `!isAgent`: chrome can be non-agent because the agent
+   * exited *or* because the agent identity hasn't committed yet.
+   */
+  hasExited: boolean;
 }
 
 const PROCESS_LABELS: Record<string, string> = {
@@ -101,7 +108,7 @@ function deriveChromeAgentIdentity(
   }
 
   const current = input?.runtimeIdentity;
-  if (current?.kind === "agent" && current.agentId) {
+  if (current?.kind === "agent" && current.agentId && !hasExplicitAgentExit(input)) {
     return makeAgentIdentity(current.agentId, current.processId);
   }
 
@@ -201,8 +208,11 @@ export function deriveTerminalChrome(input: TerminalChromeInput = {}): TerminalC
       agentId: null,
       processId: null,
       runtimeKind: "panel",
+      hasExited: false,
     };
   }
+
+  const hasExited = hasExplicitAgentExit(input);
 
   const agentIdentity = deriveChromeAgentIdentity(input);
   const agentId = agentIdentity?.agentId;
@@ -218,6 +228,7 @@ export function deriveTerminalChrome(input: TerminalChromeInput = {}): TerminalC
       agentId,
       processId: identity.processId ?? null,
       runtimeKind: "agent",
+      hasExited,
     };
   }
 
@@ -233,6 +244,7 @@ export function deriveTerminalChrome(input: TerminalChromeInput = {}): TerminalC
       agentId: null,
       processId: identity.processId ?? identity.id,
       runtimeKind: "process",
+      hasExited,
     };
   }
 
@@ -245,6 +257,7 @@ export function deriveTerminalChrome(input: TerminalChromeInput = {}): TerminalC
     agentId: null,
     processId: null,
     runtimeKind: "none",
+    hasExited,
   };
 }
 

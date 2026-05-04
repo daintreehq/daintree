@@ -150,4 +150,34 @@ describe("TerminalIcon", () => {
 
     expect(launchExited).toBe(generic);
   });
+
+  it("drops sticky runtime-identity agent chrome after explicit exit", () => {
+    const stickyExited = render(
+      <TerminalIcon
+        kind="terminal"
+        chrome={deriveTerminalChrome({
+          runtimeIdentity: { kind: "agent", id: "claude", iconId: "claude", agentId: "claude" },
+          agentState: "exited",
+        })}
+      />
+    ).container.innerHTML;
+    const generic = renderDefaultTerminalIcon();
+
+    expect(stickyExited).toBe(generic);
+  });
+
+  it("drops sticky runtime-identity agent chrome when exitCode is set", () => {
+    const stickyExited = render(
+      <TerminalIcon
+        kind="terminal"
+        chrome={deriveTerminalChrome({
+          runtimeIdentity: { kind: "agent", id: "claude", iconId: "claude", agentId: "claude" },
+          exitCode: 0,
+        })}
+      />
+    ).container.innerHTML;
+    const generic = renderDefaultTerminalIcon();
+
+    expect(stickyExited).toBe(generic);
+  });
 });

@@ -372,9 +372,21 @@ describe("TabButton", () => {
     });
   });
 
-  // #6650 — State indicator must render whenever agentState is active, even
-  // when chrome.isAgent is false (identity hasn't committed yet).
-  describe("state indicator visibility (#6650)", () => {
+  // The state indicator must rise and fall with the agent chrome, plus stay
+  // visible during the identity-boot window where state can arrive before the
+  // chrome commits (#6650). Once chrome is live, the indicator never silently
+  // disappears mid-flight: idle/missing state coerces to waiting, completed
+  // keeps its own glyph, and exit/non-agent chrome hides it.
+  describe("state indicator visibility", () => {
+    // The state icon is the only element that combines "shrink-0" with
+    // "motion-reduce:animate-none" (TabButton.tsx). That class combo is a
+    // stable identifier across all six AgentState values.
+    const queryStateIcon = (container: Element) =>
+      Array.from(container.querySelectorAll("svg")).find((svg) => {
+        const cls = svg.getAttribute("class") ?? "";
+        return cls.includes("shrink-0") && cls.includes("motion-reduce:animate-none");
+      });
+
     it("renders working spinner when agentState='working' even with non-agent chrome", () => {
       const { container } = render(
         <TabButton {...defaultProps} chrome={deriveTerminalChrome()} agentState="working" />
@@ -382,15 +394,6 @@ describe("TabButton", () => {
       const spinner = container.querySelector(".text-state-working");
       expect(spinner).not.toBeNull();
     });
-
-    // The state icon is the only element that combines "shrink-0" with
-    // "motion-reduce:animate-none" (TabButton.tsx:330-339). That class combo is
-    // a stable identifier across all six AgentState values.
-    const queryStateIcon = (container: Element) =>
-      Array.from(container.querySelectorAll("svg")).find((svg) => {
-        const cls = svg.getAttribute("class") ?? "";
-        return cls.includes("shrink-0") && cls.includes("motion-reduce:animate-none");
-      });
 
     it("does not render state icon when agentState='exited'", () => {
       const { container } = render(
@@ -403,7 +406,7 @@ describe("TabButton", () => {
       expect(queryStateIcon(container)).toBeUndefined();
     });
 
-    it("does not render state icon when agentState='idle'", () => {
+    it("renders waiting icon when agentState='idle' but agent chrome is live", () => {
       const { container } = render(
         <TabButton
           {...defaultProps}
@@ -411,10 +414,10 @@ describe("TabButton", () => {
           agentState="idle"
         />
       );
-      expect(queryStateIcon(container)).toBeUndefined();
+      expect(queryStateIcon(container)).toBeDefined();
     });
 
-    it("does not render state icon when agentState='completed'", () => {
+    it("renders completed checkmark when agentState='completed' and agent chrome is live", () => {
       const { container } = render(
         <TabButton
           {...defaultProps}
@@ -422,7 +425,15 @@ describe("TabButton", () => {
           agentState="completed"
         />
       );
-      expect(queryStateIcon(container)).toBeUndefined();
+      const completedIcon = container.querySelector(".text-status-success");
+      expect(completedIcon).not.toBeNull();
+    });
+
+    it("renders waiting icon when agentState is undefined but agent chrome is live", () => {
+      const { container } = render(
+        <TabButton {...defaultProps} chrome={deriveTerminalChrome({ launchAgentId: "claude" })} />
+      );
+      expect(queryStateIcon(container)).toBeDefined();
     });
 
     it("does not render state icon when agentState is undefined (plain shell)", () => {

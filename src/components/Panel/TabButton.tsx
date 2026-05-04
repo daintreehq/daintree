@@ -13,6 +13,7 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import { usePanelStore } from "@/store";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { UI_ANIMATION_DURATION } from "@/lib/animationUtils";
 
 export interface TabInfo {
@@ -249,9 +250,10 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
   const waitingReason = usePanelStore((state) => state.panelsById[id]?.waitingReason) as
     | WaitingReason
     | undefined;
-  const showStateIcon =
-    agentState && agentState !== "idle" && agentState !== "completed" && agentState !== "exited";
-  const StateIcon = showStateIcon ? getEffectiveStateIcon(agentState, waitingReason) : null;
+  const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
+  const StateIcon = displayAgentState
+    ? getEffectiveStateIcon(displayAgentState, waitingReason)
+    : null;
 
   return (
     <Tooltip>
@@ -324,12 +326,12 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
             </span>
           )}
 
-          {showStateIcon && StateIcon && (
+          {displayAgentState && StateIcon && (
             <StateIcon
               className={cn(
                 "w-3 h-3 shrink-0",
-                getEffectiveStateColor(agentState, waitingReason),
-                agentState === "working" && "animate-spin-slow",
+                getEffectiveStateColor(displayAgentState, waitingReason),
+                displayAgentState === "working" && "animate-spin-slow",
                 "motion-reduce:animate-none"
               )}
               aria-hidden="true"

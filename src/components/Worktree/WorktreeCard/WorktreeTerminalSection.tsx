@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
 import { getAgentConfig } from "@/config/agents";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
   STATE_LABELS,
   STATE_PRIORITY,
@@ -150,23 +151,21 @@ function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
             </span>
           )}
 
-          {agentState &&
-            agentState !== "idle" &&
-            agentState !== "completed" &&
-            agentState !== "exited" &&
-            (() => {
-              const Icon = getEffectiveStateIcon(agentState, term.waitingReason);
-              return (
-                <Icon
-                  className={cn(
-                    "w-3 h-3",
-                    getEffectiveStateColor(agentState, term.waitingReason),
-                    agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
-                  )}
-                  aria-label={STATE_LABELS[agentState]}
-                />
-              );
-            })()}
+          {(() => {
+            const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
+            if (!displayAgentState) return null;
+            const Icon = getEffectiveStateIcon(displayAgentState, term.waitingReason);
+            return (
+              <Icon
+                className={cn(
+                  "w-3 h-3",
+                  getEffectiveStateColor(displayAgentState, term.waitingReason),
+                  displayAgentState === "working" && "animate-spin-slow motion-reduce:animate-none"
+                )}
+                aria-label={STATE_LABELS[displayAgentState]}
+              />
+            );
+          })()}
 
           <Tooltip>
             <TooltipTrigger asChild>

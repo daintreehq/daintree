@@ -39,6 +39,7 @@ import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
@@ -444,10 +445,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const isActive = isWorking || isWaiting;
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
   const displayTitle = getBaseTitle(activePanel.title);
-  const showStateIcon =
-    agentState && agentState !== "idle" && agentState !== "completed" && agentState !== "exited";
-  const StateIcon = showStateIcon
-    ? getEffectiveStateIcon(agentState, activePanel.waitingReason)
+  const displayAgentState = getTerminalAgentDisplayState(activeChrome, agentState);
+  const StateIcon = displayAgentState
+    ? getEffectiveStateIcon(displayAgentState, activePanel.waitingReason)
     : null;
 
   return (
@@ -518,26 +518,26 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 </>
               )}
 
-              {showStateIcon && StateIcon && (
+              {displayAgentState && StateIcon && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <div
                       className={cn(
                         "flex items-center shrink-0",
-                        getEffectiveStateColor(agentState, activePanel.waitingReason)
+                        getEffectiveStateColor(displayAgentState, activePanel.waitingReason)
                       )}
                     >
                       <StateIcon
                         className={cn(
                           "w-3.5 h-3.5",
-                          agentState === "working" && "animate-spin-slow",
+                          displayAgentState === "working" && "animate-spin-slow",
                           "motion-reduce:animate-none"
                         )}
                         aria-hidden="true"
                       />
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
+                  <TooltipContent side="bottom">{`Agent ${displayAgentState}`}</TooltipContent>
                 </Tooltip>
               )}
             </button>

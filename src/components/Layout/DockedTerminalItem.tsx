@@ -18,6 +18,7 @@ import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
@@ -271,11 +272,11 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
   // Use shortened title without command summary for dock items
   const displayTitle = getBaseTitle(terminal.title);
-  // Only show icon for non-idle, non-completed states (reduce noise)
-  const showStateIcon =
-    agentState && agentState !== "idle" && agentState !== "completed" && agentState !== "exited";
-  const StateIcon = showStateIcon
-    ? getEffectiveStateIcon(agentState, terminal.waitingReason)
+  // Indicator stays visible for the lifetime of the agent chrome — idle/missing
+  // state coerces to waiting so it never disappears mid-flight.
+  const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
+  const StateIcon = displayAgentState
+    ? getEffectiveStateIcon(displayAgentState, terminal.waitingReason)
     : null;
   const isDeprioritized =
     !isOpen &&
@@ -342,26 +343,26 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 )}
 
                 {/* State icon (compact spacing from title) */}
-                {showStateIcon && StateIcon && (
+                {displayAgentState && StateIcon && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <div
                         className={cn(
                           "flex items-center shrink-0",
-                          getEffectiveStateColor(agentState, terminal.waitingReason)
+                          getEffectiveStateColor(displayAgentState, terminal.waitingReason)
                         )}
                       >
                         <StateIcon
                           className={cn(
                             "w-3.5 h-3.5",
-                            agentState === "working" && "animate-spin-slow",
+                            displayAgentState === "working" && "animate-spin-slow",
                             "motion-reduce:animate-none"
                           )}
                           aria-hidden="true"
                         />
                       </div>
                     </TooltipTrigger>
-                    <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
+                    <TooltipContent side="bottom">{`Agent ${displayAgentState}`}</TooltipContent>
                   </Tooltip>
                 )}
               </button>
