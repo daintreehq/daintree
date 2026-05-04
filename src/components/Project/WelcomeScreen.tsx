@@ -67,50 +67,30 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const progressTotal = 4; // 3 real items + endowed "Install Daintree"
   const progressDone = 1 + completedCount; // endowed item always complete
 
-  const setupBanner = <AgentSetupBannerCard />;
-  const welcomeCard = <AgentWelcomeCard />;
-
   return (
     <div className="flex flex-col items-center h-full w-full overflow-y-auto animate-in fade-in duration-500">
       <div className="max-w-2xl w-full flex flex-col items-center px-8 py-12 gap-10">
-        {/* Hero */}
-        <div className="flex flex-col items-center text-center">
-          <DaintreeIcon className="h-16 w-16 text-tint/50 mb-6" />
-          <h1 className="text-2xl font-semibold text-daintree-text tracking-tight mb-2">
-            Welcome to Daintree
-          </h1>
-          <p className="text-sm text-daintree-text/60 leading-relaxed font-medium">
-            A habitat for your AI agents.
-          </p>
-        </div>
-
-        {/* Adaptive layout: returning users see projects first, new users see checklist first */}
-        {hasProjects ? (
-          <>
-            <RecentProjects projects={recentProjects} onSelect={switchProject} />
-            {setupBanner}
-            {welcomeCard}
-            {showChecklist && (
-              <InlineChecklist
-                checklist={checklist}
-                progressDone={progressDone}
-                progressTotal={progressTotal}
-              />
-            )}
-          </>
-        ) : (
-          <>
-            {setupBanner}
-            {welcomeCard}
-            {showChecklist && (
-              <InlineChecklist
-                checklist={checklist}
-                progressDone={progressDone}
-                progressTotal={progressTotal}
-              />
-            )}
-          </>
+        {/* Hero — suppressed for returning users; their recent projects are the relevant first thing */}
+        {!hasProjects && (
+          <div className="flex flex-col items-center text-center">
+            <DaintreeIcon className="h-16 w-16 text-tint/50 mb-6" />
+            <h1 className="text-2xl font-semibold text-daintree-text tracking-tight mb-2">
+              Welcome to Daintree
+            </h1>
+            <p className="text-sm text-daintree-text/60 leading-relaxed font-medium">
+              A habitat for your AI agents.
+            </p>
+          </div>
         )}
+
+        {hasProjects && <RecentProjects projects={recentProjects} onSelect={switchProject} />}
+
+        <NudgeSequencer
+          showChecklist={!!showChecklist}
+          checklist={checklist}
+          progressDone={progressDone}
+          progressTotal={progressTotal}
+        />
 
         {/* Quick Actions */}
         <div className="w-full">
@@ -188,6 +168,44 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
 }
 
 /* ---------- Sub-sections ---------- */
+
+function NudgeSequencer({
+  showChecklist,
+  checklist,
+  progressDone,
+  progressTotal,
+}: {
+  showChecklist: boolean;
+  checklist: GettingStartedChecklistState["checklist"];
+  progressDone: number;
+  progressTotal: number;
+}) {
+  const { loaded, setupBannerDismissed, welcomeCardDismissed } = useAgentDiscoveryOnboarding();
+  const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
+
+  // Wait for hydration so we don't briefly render setup banner before its
+  // persisted dismiss flag arrives, then flip to a different nudge.
+  if (!loaded) return null;
+
+  if (!setupBannerDismissed) return <AgentSetupBannerCard />;
+
+  // Defer to the welcome card only when it could actually render (we have
+  // availability data). Otherwise fall through so the checklist isn't
+  // suppressed for users with no installed agents.
+  if (hasRealData && !welcomeCardDismissed) return <AgentWelcomeCard />;
+
+  if (showChecklist && checklist) {
+    return (
+      <InlineChecklist
+        checklist={checklist}
+        progressDone={progressDone}
+        progressTotal={progressTotal}
+      />
+    );
+  }
+
+  return null;
+}
 
 function RecentProjects({
   projects,
@@ -274,7 +292,7 @@ function AgentSetupBannerCard() {
           <X className="h-3.5 w-3.5" />
         </button>
         <div className="flex items-start gap-3 pr-6">
-          <Sparkles className="h-4 w-4 text-daintree-accent mt-0.5 shrink-0" aria-hidden="true" />
+          <Sparkles className="h-4 w-4 text-daintree-text/50 mt-0.5 shrink-0" aria-hidden="true" />
           <div className="flex-1 min-w-0">
             <h3 className="text-sm font-semibold text-daintree-text/90">Set up your AI agents</h3>
             <p className="text-xs text-daintree-text/60 mt-1 leading-relaxed">
@@ -368,11 +386,9 @@ function AgentWelcomeCard() {
           <X className="h-3.5 w-3.5" />
         </button>
         <div className="flex items-start gap-3 pr-6">
-          <Plug className="h-4 w-4 text-daintree-accent mt-0.5 shrink-0" aria-hidden="true" />
+          <Plug className="h-4 w-4 text-daintree-text/50 mt-0.5 shrink-0" aria-hidden="true" />
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-daintree-text/90">
-              We detected your installed agents
-            </h3>
+            <h3 className="text-sm font-semibold text-daintree-text/90">Installed agents found</h3>
             <p className="text-xs text-daintree-text/60 mt-1 leading-relaxed">
               Pin them to your toolbar for one-click launching.
             </p>

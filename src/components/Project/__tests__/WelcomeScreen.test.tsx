@@ -275,12 +275,20 @@ describe("WelcomeScreen", () => {
     cliAvailabilityState.hasRealData = false;
   });
 
-  it("renders hero section with icon, title, and tagline", () => {
+  it("renders hero section with icon, title, and tagline for first-time users", () => {
+    storeState = { ...storeState, projects: [] };
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
     expect(screen.getByTestId("daintree-icon")).toBeTruthy();
     expect(screen.getByText("Welcome to Daintree")).toBeTruthy();
     expect(screen.getByText("A habitat for your AI agents.")).toBeTruthy();
+  });
+
+  it("suppresses hero for returning users with recent projects", () => {
+    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+    expect(screen.queryByText("Welcome to Daintree")).toBeNull();
+    expect(screen.queryByText("A habitat for your AI agents.")).toBeNull();
   });
 
   // --- Recent Projects ---
@@ -524,14 +532,14 @@ describe("WelcomeScreen", () => {
       cliAvailabilityState.hasRealData = false;
       cliAvailabilityState.availability = { claude: "ready" };
       render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
-      expect(screen.queryByText(/We detected your installed agents/)).toBeNull();
+      expect(screen.queryByText(/Installed agents found/)).toBeNull();
     });
 
     it("does not render when no agents are ready", () => {
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "missing", codex: "missing" };
       render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
-      expect(screen.queryByText(/We detected your installed agents/)).toBeNull();
+      expect(screen.queryByText(/Installed agents found/)).toBeNull();
     });
 
     it("does not render when any agent is already pinned", () => {
@@ -539,7 +547,7 @@ describe("WelcomeScreen", () => {
       cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
       agentSettingsState.settings = { agents: { claude: { pinned: true } } };
       render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
-      expect(screen.queryByText(/We detected your installed agents/)).toBeNull();
+      expect(screen.queryByText(/Installed agents found/)).toBeNull();
     });
 
     it("does not render when the card has been dismissed", () => {
@@ -548,7 +556,7 @@ describe("WelcomeScreen", () => {
       agentSettingsState.settings = { agents: {} };
       agentDiscoveryState.welcomeCardDismissed = true;
       render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
-      expect(screen.queryByText(/We detected your installed agents/)).toBeNull();
+      expect(screen.queryByText(/Installed agents found/)).toBeNull();
     });
 
     it("renders with ready agent names when conditions are met", () => {
@@ -560,7 +568,7 @@ describe("WelcomeScreen", () => {
       };
       agentSettingsState.settings = { agents: {} };
       render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
-      expect(screen.getByText(/We detected your installed agents/)).toBeTruthy();
+      expect(screen.getByText(/Installed agents found/)).toBeTruthy();
       expect(screen.getByText("Claude")).toBeTruthy();
       expect(screen.getByText("Codex")).toBeTruthy();
       expect(screen.queryByText("Gemini")).toBeNull();
@@ -685,6 +693,50 @@ describe("WelcomeScreen", () => {
       } finally {
         dispatchSpy.mockRestore();
       }
+    });
+  });
+
+  // --- Nudge sequencing (#6757) ---
+
+  describe("nudge sequencing", () => {
+    it("shows only the setup banner when banner, welcome card, and checklist are all eligible", () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = false;
+      agentDiscoveryState.welcomeCardDismissed = false;
+      cliAvailabilityState.hasRealData = true;
+      cliAvailabilityState.availability = { claude: "ready" };
+      agentSettingsState.settings = { agents: {} };
+
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
+
+      expect(screen.getByTestId("agent-setup-banner")).toBeTruthy();
+      expect(screen.queryByText(/Installed agents found/)).toBeNull();
+      expect(screen.queryByText("Getting Started")).toBeNull();
+    });
+
+    it("shows the welcome card and suppresses the checklist once the setup banner is dismissed", () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = true;
+      agentDiscoveryState.welcomeCardDismissed = false;
+      cliAvailabilityState.hasRealData = true;
+      cliAvailabilityState.availability = { claude: "ready" };
+      agentSettingsState.settings = { agents: {} };
+
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
+
+      expect(screen.getByText(/Installed agents found/)).toBeTruthy();
+      expect(screen.queryByText("Getting Started")).toBeNull();
+    });
+
+    it("falls through to the checklist when no agents are installed and the banner is dismissed", () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = true;
+      agentDiscoveryState.welcomeCardDismissed = false;
+      cliAvailabilityState.hasRealData = false;
+
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
+
+      expect(screen.getByText("Getting Started")).toBeTruthy();
     });
   });
 });
