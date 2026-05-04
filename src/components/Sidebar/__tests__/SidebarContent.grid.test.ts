@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 
 const SIDEBAR_CONTENT_PATH = path.resolve(__dirname, "../SidebarContent.tsx");
+const STATIC_ROW_PATH = path.resolve(__dirname, "../StaticWorktreeRow.tsx");
 const SORTABLE_CARD_PATH = path.resolve(__dirname, "../../DragDrop/SortableWorktreeCard.tsx");
 const WORKTREE_CARD_PATH = path.resolve(__dirname, "../../Worktree/WorktreeCard.tsx");
 const WORKTREE_HEADER_PATH = path.resolve(
@@ -91,12 +92,15 @@ describe("Worktree list keyboard grid — issue #6422", () => {
       expect(source).toContain("onFocusCapture={handleGridFocusCapture}");
     });
 
-    it('wraps StaticWorktreeRow\'s WorktreeCard in role="row" + data-worktree-row + role="gridcell"', () => {
+    it('wraps StaticWorktreeRow\'s WorktreeCard in role="row" + data-worktree-row + role="gridcell"', async () => {
+      const staticSource = await fs.readFile(STATIC_ROW_PATH, "utf-8");
       // The static (pinned/grouped) rows don't go through SortableWorktreeCard,
       // so the row + gridcell roles must be added explicitly here.
-      expect(source).toContain('<div role="row" data-worktree-row={worktreeId} tabIndex={-1}>');
+      expect(staticSource).toContain(
+        '<div role="row" data-worktree-row={worktreeId} tabIndex={-1}>'
+      );
       // Ensure the static path also has a gridcell wrapper
-      const staticRowMatch = source.match(
+      const staticRowMatch = staticSource.match(
         /const StaticWorktreeRow[\s\S]*?<\/div>\s*\)\s*;\s*\}\s*\)\s*;/
       );
       expect(staticRowMatch).toBeTruthy();
