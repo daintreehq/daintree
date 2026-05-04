@@ -61,7 +61,7 @@ export class SessionStore {
     return this.sessionTierMap.get(sessionId) ?? "workbench";
   }
 
-  drain(rejectReason: string): void {
+  drain(): void {
     for (const session of this.sessions.values()) {
       clearTimeout(session.idleTimer);
       try {

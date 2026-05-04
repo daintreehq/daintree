@@ -13,7 +13,6 @@ import { isAuthorized, resolveTokenTier } from "./tierAuth.js";
 import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServer.js";
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
-import type { McpTier } from "./shared.js";
 import {
   DEFAULT_PORT,
   MAX_PORT_RETRIES,
@@ -54,7 +53,6 @@ export interface HttpLifecycleDeps {
   setupIpcListeners: () => void;
   emitStatusChange: () => void;
   emitRuntimeStateChange: () => void;
-  getConfig: () => Record<string, unknown>;
   setConfig: (patch: Record<string, unknown>) => void;
 }
 
@@ -228,7 +226,7 @@ export class HttpLifecycle {
     this.deps.auditService.flushNow();
 
     // Drain sessions
-    this.deps.sessionStore.drain("MCP server closed unexpectedly");
+    this.deps.sessionStore.drain();
 
     for (const cleanup of this.deps.cleanupListeners) {
       try {
@@ -316,7 +314,7 @@ export class HttpLifecycle {
         }
 
         this.deps.auditService.flushNow();
-        this.deps.sessionStore.drain("MCP server stopped");
+        this.deps.sessionStore.drain();
 
         for (const cleanup of this.deps.cleanupListeners) {
           try {

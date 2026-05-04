@@ -65,7 +65,6 @@ export class McpServerService {
       setupIpcListeners: () => this.bridge.setupListeners(this.cleanupListeners),
       emitStatusChange: () => this.emitStatusChange(),
       emitRuntimeStateChange: () => this.emitRuntimeStateChange(),
-      getConfig: () => this.getConfig(),
       setConfig: (patch) => this.persistConfig(patch),
     });
   }

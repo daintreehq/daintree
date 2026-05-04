@@ -1,4 +1,4 @@
-import type { ActionManifestEntry, ActionDispatchResult } from "../../../shared/types/actions.js";
+import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import type {
   McpAuditRecord,
   McpAuditResult,
