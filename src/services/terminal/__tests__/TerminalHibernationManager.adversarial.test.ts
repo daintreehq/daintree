@@ -76,6 +76,7 @@ vi.mock("../TerminalScrollbackController", () => ({
 
 vi.mock("@/utils/logger", () => ({
   logDebug: vi.fn(),
+  logWarn: vi.fn(),
   logError: vi.fn(),
 }));
 
@@ -178,9 +179,16 @@ function makeMockDeps(managed?: ManagedTerminal): HibernationManagerDeps {
     clearUnseen: vi.fn(),
     updateScrollState: vi.fn(),
     setCachedSelection: vi.fn(),
+    deleteCachedSelection: vi.fn(),
+    getCachedSelection: vi.fn(() => undefined),
+    getBracketedPasteMode: vi.fn(() => false),
+    isDisposed: vi.fn(() => false),
+    isInputLocked: vi.fn(() => false),
+    notifyUserInput: vi.fn(),
     clearDirectingState: vi.fn(),
     onUserInput: vi.fn(),
     onEnterPressed: vi.fn(),
+    updateLastObservedTitle: vi.fn(),
   };
 }
 
@@ -201,6 +209,11 @@ describe("TerminalHibernationManager adversarial", () => {
     (window as unknown as { electron?: unknown }).electron = {
       terminal: {
         reportTitleState: vi.fn(),
+        updateObservedTitle: vi.fn(),
+      },
+      clipboard: {
+        writeSelection: vi.fn().mockResolvedValue(undefined),
+        readSelection: vi.fn().mockResolvedValue({ text: "" }),
       },
     };
 

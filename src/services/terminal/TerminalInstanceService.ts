@@ -1,7 +1,6 @@
 import { Terminal, ILink, IBufferRange } from "@xterm/xterm";
-import { isMac, isLinux } from "@/lib/platform";
+import { isMac } from "@/lib/platform";
 import { terminalClient } from "@/clients";
-import { installLinuxPrimarySelectionListeners } from "./primarySelection";
 import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
 import {
@@ -29,18 +28,18 @@ import { TerminalWakeManager } from "./TerminalWakeManager";
 import { TerminalAgentStateController } from "./TerminalAgentStateController";
 import { TerminalRestoreController } from "./TerminalRestoreController";
 import { TerminalHibernationManager } from "./TerminalHibernationManager";
+import {
+  installTerminalBoundListeners,
+  type TerminalListenerInstallDeps,
+} from "./TerminalListenerInstaller";
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { usePanelStore } from "@/store/panelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { isUselessTitle, normalizeObservedTitle } from "@shared/utils/isUselessTitle";
-import { usePanelStore } from "@/store/panelStore";
-import { isNonKeyboardInput } from "./inputUtils";
-import { writeTerminalInputOrFleet } from "./fleetInputRouter";
 
 export { isNonKeyboardInput } from "./inputUtils";
 
@@ -142,17 +141,7 @@ class TerminalInstanceService {
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
       openLink: (url, id, event) => this.linkHandler.openLink(url, id, event),
       getCwdProvider: (id) => this.cwdProviders.get(id),
-      onBufferModeChange: (id, isAltBuffer) => this.handleBufferModeChange(id, isAltBuffer),
-      notifyParsed: (id) => this.dataBuffer.notifyParsed(id),
-      scrollToBottomSafe: (managed) => this.scrollToBottomSafe(managed),
-      clearUnseen: (id, fromUser) => this.unseenTracker.clearUnseen(id, fromUser),
-      updateScrollState: (id, isScrolledBack) =>
-        this.unseenTracker.updateScrollState(id, isScrolledBack),
-      setCachedSelection: (id, selection) => this.cachedSelections.set(id, selection),
-      clearDirectingState: (id) => this.agentStateController.clearDirectingState(id),
-      onUserInput: (id, data) => this.onUserInput(id, data),
-      onEnterPressed: (id) => this.onEnterPressed(id),
-      onWriteParsedReflow: (managed) => this.maybeReflowTerminal(managed),
+      ...this.makeListenerInstallDeps(),
     });
 
     // Periodic heartbeat: recovers a DOM-renderer terminal whose
@@ -303,6 +292,39 @@ class TerminalInstanceService {
 
   notifyUserInput(id: string, data = ""): void {
     this.onUserInput(id, data);
+  }
+
+  /**
+   * Builds the deps surface consumed by `installTerminalBoundListeners`. Both
+   * the create path (`getOrCreate`) and the wake path (via
+   * `TerminalHibernationManager.unhibernate`) install the same listener set
+   * by passing this through, so adding a new terminal-bound listener is a
+   * one-edit operation in `TerminalListenerInstaller.ts`.
+   */
+  private makeListenerInstallDeps(): TerminalListenerInstallDeps {
+    return {
+      onBufferModeChange: (id, isAltBuffer) => this.handleBufferModeChange(id, isAltBuffer),
+      notifyParsed: (id) => this.dataBuffer.notifyParsed(id),
+      scrollToBottomSafe: (managed) => this.scrollToBottomSafe(managed),
+      updateScrollState: (id, isScrolledBack) =>
+        this.unseenTracker.updateScrollState(id, isScrolledBack),
+      clearUnseen: (id, fromUser) => this.unseenTracker.clearUnseen(id, fromUser),
+      onWriteParsedReflow: (managed) => this.maybeReflowTerminal(managed),
+      setCachedSelection: (id, selection) => this.cachedSelections.set(id, selection),
+      deleteCachedSelection: (id) => this.cachedSelections.delete(id),
+      getCachedSelection: (id) => this.cachedSelections.get(id),
+      getBracketedPasteMode: (id) =>
+        this.instances.get(id)?.terminal.modes.bracketedPasteMode ?? false,
+      isDisposed: (id) => !this.instances.has(id),
+      isInputLocked: (id) => this.instances.get(id)?.isInputLocked ?? false,
+      notifyUserInput: (id) => this.notifyUserInput(id),
+      clearDirectingState: (id, trigger) =>
+        this.agentStateController.clearDirectingState(id, trigger),
+      onUserInput: (id, data) => this.onUserInput(id, data),
+      onEnterPressed: (id) => this.onEnterPressed(id),
+      updateLastObservedTitle: (id, title) =>
+        usePanelStore.getState().updateLastObservedTitle(id, title),
+    };
   }
 
   /**
@@ -873,258 +895,7 @@ class TerminalInstanceService {
       this.resizeController.applyDeferredResize(id);
     });
 
-    const initialIsAltBuffer = terminal.buffer.active.type === "alternate";
-    managed.isAltBuffer = initialIsAltBuffer;
-
-    const bufferDisposable = terminal.buffer.onBufferChange(() => {
-      const newIsAltBuffer = terminal.buffer.active.type === "alternate";
-      if (newIsAltBuffer !== managed.isAltBuffer) {
-        managed.isAltBuffer = newIsAltBuffer;
-        this.handleBufferModeChange(id, newIsAltBuffer);
-      }
-    });
-    listeners.push(() => bufferDisposable.dispose());
-
-    if (initialIsAltBuffer) {
-      this.handleBufferModeChange(id, true);
-    }
-
-    const oscDisposable = terminal.parser.registerOscHandler(11, () => {
-      if (managed.isAltBuffer) {
-        for (const callback of managed.altBufferListeners) {
-          try {
-            callback(true);
-          } catch (err) {
-            logError("Alt buffer callback error", err);
-          }
-        }
-      }
-      return false;
-    });
-    listeners.push(() => oscDisposable.dispose());
-
-    const writeParsedDisposable = terminal.onWriteParsed(() => {
-      this.dataBuffer.notifyParsed(id);
-      if (managed && !managed.isUserScrolledBack && !managed.isAltBuffer) {
-        if (!managed.terminal.hasSelection()) {
-          this.scrollToBottomSafe(managed);
-        } else {
-          managed.isUserScrolledBack = true;
-          this.unseenTracker.updateScrollState(id, true);
-        }
-      }
-      this.maybeReflowTerminal(managed);
-    });
-    listeners.push(() => writeParsedDisposable.dispose());
-
-    const scrollDisposable = terminal.onScroll(() => {
-      const buffer = terminal.buffer.active;
-      const isAtBottom = buffer.viewportY >= buffer.baseY;
-      managed.latestWasAtBottom = isAtBottom;
-
-      managed._userScrollIntent = false;
-      if (managed._suppressScrollTracking) return;
-
-      if (isAtBottom) {
-        managed.isUserScrolledBack = false;
-        this.unseenTracker.clearUnseen(id, false);
-        if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-          reduceScrollback(managed, SCROLLBACK_BACKGROUND);
-        }
-      } else {
-        managed.isUserScrolledBack = true;
-        this.unseenTracker.updateScrollState(id, true);
-      }
-    });
-    listeners.push(() => scrollDisposable.dispose());
-
-    const SCROLL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
-    const onWheel = () => {
-      managed._userScrollIntent = true;
-      managed.lastWheelAt = Date.now();
-    };
-    const onKeydownScroll = (e: KeyboardEvent) => {
-      if (SCROLL_KEYS.has(e.key)) managed._userScrollIntent = true;
-    };
-    hostElement.addEventListener("wheel", onWheel, { passive: true });
-    hostElement.addEventListener("keydown", onKeydownScroll);
-    listeners.push(() => {
-      hostElement.removeEventListener("wheel", onWheel);
-      hostElement.removeEventListener("keydown", onKeydownScroll);
-    });
-
-    const selectionDisposable = terminal.onSelectionChange(() => {
-      const sel = terminal.getSelection();
-      if (sel) {
-        this.cachedSelections.set(id, sel);
-      } else {
-        this.cachedSelections.delete(id);
-        if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-          reduceScrollback(managed, SCROLLBACK_BACKGROUND);
-        }
-      }
-    });
-    listeners.push(() => selectionDisposable.dispose());
-
-    if (isLinux()) {
-      const removePrimaryListeners = installLinuxPrimarySelectionListeners({
-        hostElement,
-        terminalId: id,
-        getCachedSelection: () => this.cachedSelections.get(id),
-        getBracketedPasteMode: () => {
-          const current = this.instances.get(id);
-          return current?.terminal.modes.bracketedPasteMode ?? false;
-        },
-        isDisposed: () => !this.instances.has(id),
-        isInputLocked: () => this.instances.get(id)?.isInputLocked ?? false,
-        writeToPty: (termId, data) => terminalClient.write(termId, data),
-        notifyUserInput: (termId) => this.notifyUserInput(termId),
-        writeSelection: (text) => window.electron.clipboard.writeSelection(text),
-        readSelection: () => window.electron.clipboard.readSelection(),
-      });
-      listeners.push(removePrimaryListeners);
-    }
-
-    const observedTitleDisposable = terminal.onTitleChange((title: string) => {
-      if (!managed.runtimeAgentId) return;
-      const normalized = normalizeObservedTitle(title);
-      if (!normalized || isUselessTitle(normalized)) return;
-      if (normalized === managed.lastObservedTitleSent) return;
-      managed.pendingObservedTitle = normalized;
-      if (managed.observedTitleTimer !== undefined) {
-        clearTimeout(managed.observedTitleTimer);
-      }
-      managed.observedTitleTimer = window.setTimeout(() => {
-        managed.observedTitleTimer = undefined;
-        const pending = managed.pendingObservedTitle;
-        managed.pendingObservedTitle = undefined;
-        if (!managed.runtimeAgentId) return;
-        if (!pending || pending === managed.lastObservedTitleSent) return;
-        managed.lastObservedTitleSent = pending;
-        try {
-          window.electron.terminal.updateObservedTitle(id, pending);
-        } catch (err) {
-          logWarn("[TerminalInstanceService] updateObservedTitle failed", {
-            error: formatErrorMessage(err, "Failed to update observed title"),
-          });
-        }
-        try {
-          usePanelStore.getState().updateLastObservedTitle(id, pending);
-        } catch (err) {
-          logWarn("[TerminalInstanceService] panel store title update failed", {
-            error: formatErrorMessage(err, "Failed to update panel store observed title"),
-          });
-        }
-      }, 150);
-    });
-    listeners.push(() => {
-      observedTitleDisposable.dispose();
-      if (managed.observedTitleTimer !== undefined) {
-        clearTimeout(managed.observedTitleTimer);
-        managed.observedTitleTimer = undefined;
-        managed.pendingObservedTitle = undefined;
-      }
-    });
-
-    let lastReportedTitleState: "working" | "waiting" | undefined;
-    const titleDisposable = terminal.onTitleChange((title: string) => {
-      const agentId = managed.runtimeAgentId;
-      const titlePatterns = agentId
-        ? getEffectiveAgentConfig(agentId)?.detection?.titleStatePatterns
-        : undefined;
-      if (!titlePatterns) return;
-
-      let matched: "working" | "waiting" | undefined;
-      for (const pattern of titlePatterns.working) {
-        if (title.includes(pattern)) {
-          matched = "working";
-          break;
-        }
-      }
-      if (!matched) {
-        for (const pattern of titlePatterns.waiting) {
-          if (title.includes(pattern)) {
-            matched = "waiting";
-            break;
-          }
-        }
-      }
-      if (!matched) {
-        if (managed.titleReportTimer !== undefined) {
-          clearTimeout(managed.titleReportTimer);
-          managed.titleReportTimer = undefined;
-          managed.pendingTitleState = undefined;
-        }
-        return;
-      }
-
-      if (matched === "working") {
-        if (managed.titleReportTimer !== undefined) {
-          clearTimeout(managed.titleReportTimer);
-          managed.titleReportTimer = undefined;
-          managed.pendingTitleState = undefined;
-        }
-        if (lastReportedTitleState !== "working") {
-          lastReportedTitleState = "working";
-          window.electron.terminal.reportTitleState(id, "working");
-        }
-      } else {
-        managed.pendingTitleState = "waiting";
-        if (managed.titleReportTimer !== undefined) {
-          clearTimeout(managed.titleReportTimer);
-        }
-        managed.titleReportTimer = window.setTimeout(() => {
-          managed.titleReportTimer = undefined;
-          if (managed.pendingTitleState === "waiting") {
-            managed.pendingTitleState = undefined;
-            if (lastReportedTitleState !== "waiting") {
-              lastReportedTitleState = "waiting";
-              window.electron.terminal.reportTitleState(id, "waiting");
-            }
-          }
-        }, 250);
-      }
-    });
-    listeners.push(() => {
-      titleDisposable.dispose();
-      if (managed.titleReportTimer !== undefined) {
-        clearTimeout(managed.titleReportTimer);
-        managed.titleReportTimer = undefined;
-        managed.pendingTitleState = undefined;
-      }
-    });
-
-    const inputDisposable = terminal.onData((data) => {
-      if (!managed.isInputLocked) {
-        if (isNonKeyboardInput(data)) {
-          if (data === "\x1b") {
-            this.agentStateController.clearDirectingState(id, "escape-key");
-          }
-        } else {
-          this.onUserInput(id, data);
-        }
-        writeTerminalInputOrFleet(id, data);
-        if (onInput) {
-          onInput(data);
-        }
-      }
-    });
-    listeners.push(() => inputDisposable.dispose());
-
-    const keyDisposable = terminal.onKey(({ domEvent }) => {
-      if (
-        !managed.isInputLocked &&
-        domEvent.key === "Enter" &&
-        !domEvent.isComposing &&
-        !domEvent.shiftKey &&
-        !domEvent.ctrlKey &&
-        !domEvent.altKey &&
-        !domEvent.metaKey
-      ) {
-        this.onEnterPressed(id);
-      }
-    });
-    listeners.push(() => keyDisposable.dispose());
+    installTerminalBoundListeners(terminal, managed, id, this.makeListenerInstallDeps());
 
     this.instances.set(id, managed);
 
