@@ -3,6 +3,8 @@ import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
 import { useWebviewEviction } from "@/hooks/useWebviewEviction";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
+import { useWebviewEvents } from "@/hooks/useWebviewEvents";
+import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
 import { AlertTriangle, ExternalLink, RotateCw, Square } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
@@ -29,7 +31,6 @@ import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
 import { useProjectStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
-import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import { useFindInPage } from "@/hooks/useFindInPage";
 import { logError } from "@/utils/logger";
 
@@ -281,271 +282,23 @@ export function BrowserPane({
     };
   }, [webviewElement, isWebviewReady, id, addStructuredMessage, markStale]);
 
-  // Set up webview event listeners - reattach whenever webview element changes
-  useEffect(() => {
-    const webview = webviewElement;
-    if (!webview) {
-      setIsWebviewReady(false);
-      return;
-    }
-
-    const clearAllTimers = () => {
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
-      if (loadTimeoutRef.current) {
-        clearTimeout(loadTimeoutRef.current);
-        loadTimeoutRef.current = null;
-      }
-    };
-
-    const handleDomReady = () => {
-      isInitialRestoredLoadRef.current = false;
-      setIsWebviewReady(true);
-      clearAllTimers();
-    };
-
-    const handleDidStartLoading = () => {
-      setIsLoading(true);
-      setLoadError(null);
-      setIsSlowLoad(false);
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-      }
-      if (loadTimeoutRef.current) {
-        clearTimeout(loadTimeoutRef.current);
-      }
-      slowLoadTimeoutRef.current = setTimeout(() => {
-        try {
-          if (webview.isLoading()) {
-            setIsSlowLoad(true);
-          }
-        } catch {
-          // Webview detached before timeout fired
-        }
-      }, 5000);
-      loadTimeoutRef.current = setTimeout(() => {
-        loadTimeoutRef.current = null;
-        try {
-          if (webview.isLoading()) {
-            webview.stop();
-            setIsSlowLoad(false);
-            setIsLoading(false);
-            setLoadError(
-              `Load timed out after ${Math.round(loadTimeoutMs / 1000)}s. The server at ${webview.getURL()} may be unreachable or slow to respond.`
-            );
-          }
-        } catch {
-          // Webview detached before timeout fired
-        }
-      }, loadTimeoutMs);
-    };
-
-    const handleDidStopLoading = () => {
-      setIsLoading(false);
-      setIsSlowLoad(false);
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
-      if (loadTimeoutRef.current) {
-        clearTimeout(loadTimeoutRef.current);
-        loadTimeoutRef.current = null;
-      }
-    };
-
-    const handleDidFailLoad = (event: Electron.DidFailLoadEvent) => {
-      setIsSlowLoad(false);
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
-      if (loadTimeoutRef.current) {
-        clearTimeout(loadTimeoutRef.current);
-        loadTimeoutRef.current = null;
-      }
-      // Ignore aborted loads (e.g., navigation interrupted by another navigation)
-      if (event.errorCode === -3) return;
-      // Ignore cancellations
-      if (event.errorCode === -6) return;
-      setIsLoading(false);
-      const ERR_CONNECTION_REFUSED = -102;
-      const ERR_NAME_NOT_RESOLVED = -105;
-      const ERR_INTERNET_DISCONNECTED = -106;
-      const ERR_CONNECTION_TIMED_OUT = -118;
-      if (
-        event.isMainFrame &&
-        event.errorCode === ERR_CONNECTION_REFUSED &&
-        isInitialRestoredLoadRef.current
-      ) {
-        setLoadError(
-          "The saved URL is no longer reachable. The server may have moved to a different port."
-        );
-      } else if (
-        event.isMainFrame &&
-        event.errorCode === ERR_NAME_NOT_RESOLVED &&
-        event.validatedURL
-      ) {
-        let hostname = event.validatedURL;
-        try {
-          hostname = new URL(event.validatedURL).hostname;
-        } catch {
-          // Use raw validatedURL if parsing fails
-        }
-        setLoadError(`Couldn't resolve ${hostname}. Check the URL or your connection.`);
-      } else if (event.isMainFrame && event.errorCode === ERR_INTERNET_DISCONNECTED) {
-        setLoadError("No internet connection. Check your network.");
-      } else if (
-        event.isMainFrame &&
-        event.errorCode === ERR_CONNECTION_TIMED_OUT &&
-        event.validatedURL
-      ) {
-        setLoadError(
-          `Connection to ${event.validatedURL} timed out. The server may be unreachable.`
-        );
-      } else if (event.isMainFrame) {
-        const urlContext = event.validatedURL ? ` at ${event.validatedURL}` : "";
-        setLoadError(
-          event.errorDescription
-            ? `${event.errorDescription}${urlContext}`
-            : `Failed to load page${urlContext}. The site may be unavailable.`
-        );
-      }
-    };
-
-    const handleDidNavigate = (event: Electron.DidNavigateEvent) => {
-      const newUrl = event.url;
-      // Suppress about:blank navigations triggered by eviction
-      if (newUrl === "about:blank" && evictingRef.current) return;
-      isInitialRestoredLoadRef.current = false;
-      setBlockedNav(null);
-      // Only update history if this is a new URL (not our programmatic navigation)
-      if (newUrl !== lastSetUrlRef.current) {
-        setHistory((prev) => pushBrowserHistory(prev, newUrl));
-        lastSetUrlRef.current = newUrl;
-      }
-      if (projectId) {
-        let title: string | undefined;
-        try {
-          title = webview.getTitle();
-        } catch {
-          // webview may not be ready for getTitle
-        }
-        useUrlHistoryStore.getState().recordVisit(projectId, newUrl, title);
-      }
-    };
-
-    const handleDidNavigateInPage = (event: Electron.DidNavigateInPageEvent) => {
-      if (!event.isMainFrame) return;
-      setBlockedNav(null);
-      const newUrl = event.url;
-      if (newUrl !== lastSetUrlRef.current) {
-        setHistory((prev) => pushBrowserHistory(prev, newUrl));
-        lastSetUrlRef.current = newUrl;
-      }
-      if (projectId) {
-        let title: string | undefined;
-        try {
-          title = webview.getTitle();
-        } catch {
-          // webview may not be ready for getTitle
-        }
-        useUrlHistoryStore.getState().recordVisit(projectId, newUrl, title);
-      }
-    };
-
-    const handlePageTitleUpdated = (event: Event) => {
-      const detail = event as Event & { title?: string; explicitSet?: boolean };
-      if (detail.explicitSet === false) return;
-      if (projectId && detail.title) {
-        try {
-          useUrlHistoryStore.getState().updateTitle(projectId, webview.getURL(), detail.title);
-        } catch {
-          // webview may be detached
-        }
-      }
-    };
-
-    // Debounce favicon updates to avoid store thrashing on rapid events
-    let faviconDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-    const handlePageFaviconUpdated = (event: Event) => {
-      const detail = event as Event & { favicons?: string[] };
-      if (!projectId || !detail.favicons?.length) return;
-      const favicon = detail.favicons[0]!;
-      // Skip oversized data URLs that could exceed localStorage quota
-      if (favicon.startsWith("data:") && favicon.length > 8192) return;
-      // Capture URL at event time to avoid race with navigation
-      let capturedUrl: string;
-      try {
-        capturedUrl = webview.getURL();
-      } catch {
-        return;
-      }
-      if (!capturedUrl || capturedUrl === "about:blank") return;
-      if (faviconDebounceTimer) clearTimeout(faviconDebounceTimer);
-      const url = capturedUrl;
-      faviconDebounceTimer = setTimeout(() => {
-        faviconDebounceTimer = null;
-        useUrlHistoryStore.getState().updateFavicon(projectId, url, favicon);
-      }, 200);
-    };
-
-    try {
-      const existingUrl = webview.getURL();
-      if (existingUrl && existingUrl !== "about:blank" && !webview.isLoading()) {
-        setIsWebviewReady(true);
-        setIsLoading(false);
-        const savedZoom = zoomFactor;
-        if (Number.isFinite(savedZoom)) {
-          webview.setZoomFactor(savedZoom);
-        }
-      }
-    } catch {
-      // Webview not yet attached to DOM - dom-ready handler will take over
-    }
-
-    webview.addEventListener("dom-ready", handleDomReady);
-    webview.addEventListener("did-start-loading", handleDidStartLoading);
-    webview.addEventListener("did-stop-loading", handleDidStopLoading);
-    webview.addEventListener("did-fail-load", handleDidFailLoad);
-    webview.addEventListener("did-navigate", handleDidNavigate);
-    webview.addEventListener("did-navigate-in-page", handleDidNavigateInPage);
-    webview.addEventListener("page-title-updated", handlePageTitleUpdated);
-    webview.addEventListener("page-favicon-updated", handlePageFaviconUpdated);
-
-    return () => {
-      webview.removeEventListener("dom-ready", handleDomReady);
-      webview.removeEventListener("did-start-loading", handleDidStartLoading);
-      webview.removeEventListener("did-stop-loading", handleDidStopLoading);
-      webview.removeEventListener("did-fail-load", handleDidFailLoad);
-      webview.removeEventListener("did-navigate", handleDidNavigate);
-      webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage);
-      webview.removeEventListener("page-title-updated", handlePageTitleUpdated);
-      webview.removeEventListener("page-favicon-updated", handlePageFaviconUpdated);
-      if (faviconDebounceTimer) {
-        clearTimeout(faviconDebounceTimer);
-        faviconDebounceTimer = null;
-      }
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
-      if (loadTimeoutRef.current) {
-        clearTimeout(loadTimeoutRef.current);
-        loadTimeoutRef.current = null;
-      }
-    };
-  }, [
+  useWebviewEvents({
     webviewElement,
-    hasValidUrl,
-    loadError,
-    zoomFactor,
-    id,
+    isInitialRestoredLoadRef,
+    lastSetUrlRef,
+    slowLoadTimeoutRef,
+    loadTimeoutRef,
+    evictingRef,
     projectId,
     loadTimeoutMs,
-    evictingRef,
-  ]);
+    zoomFactor,
+    setIsWebviewReady,
+    setIsLoading,
+    setLoadError,
+    setIsSlowLoad,
+    setBlockedNav,
+    setHistory,
+  });
 
   const commitNavigation = useCallback(
     (url: string) => {
@@ -769,147 +522,24 @@ export function BrowserPane({
     };
   }, []);
 
-  // Listen for action-driven browser events
-  useEffect(() => {
-    const handleReloadEvent = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const detail = e.detail as unknown;
-      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
-      if ((detail as { id: string }).id === id) {
-        handleReload();
-      }
-    };
+  const handleSetZoom = useCallback((rawZoom: number) => {
+    // Validate and clamp zoom factor to [0.25, 2.0]
+    const validZoom = Number.isFinite(rawZoom) ? Math.max(0.25, Math.min(2.0, rawZoom)) : 1.0;
+    setZoomFactor(validZoom);
+  }, []);
 
-    const handleNavigateEvent = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const detail = e.detail as unknown;
-      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
-      if (typeof (detail as { url?: unknown }).url !== "string") return;
-      if ((detail as { id: string }).id === id) {
-        handleNavigate((detail as { url: string }).url);
-      }
-    };
-
-    const handleBackEvent = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const detail = e.detail as unknown;
-      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
-      if ((detail as { id: string }).id === id) {
-        handleBack();
-      }
-    };
-
-    const handleForwardEvent = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const detail = e.detail as unknown;
-      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
-      if ((detail as { id: string }).id === id) {
-        handleForward();
-      }
-    };
-
-    const handleSetZoomEvent = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const detail = e.detail as unknown;
-      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
-      if (typeof (detail as { zoomFactor?: unknown }).zoomFactor !== "number") return;
-      if ((detail as { id: string }).id === id) {
-        const rawZoom = (detail as { zoomFactor: number }).zoomFactor;
-        // Validate and clamp zoom factor to [0.25, 2.0]
-        const validZoom = Number.isFinite(rawZoom) ? Math.max(0.25, Math.min(2.0, rawZoom)) : 1.0;
-        setZoomFactor(validZoom);
-      }
-    };
-
-    const handleCaptureScreenshotEvent = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const detail = e.detail as unknown;
-      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
-      if ((detail as { id: string }).id === id) {
-        void handleCaptureScreenshot();
-      }
-    };
-
-    const handleToggleConsoleEvent = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const detail = e.detail as unknown;
-      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
-      if ((detail as { id: string }).id === id) {
-        handleToggleConsole();
-      }
-    };
-
-    const handleClearConsoleEvent = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const detail = e.detail as unknown;
-      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
-      if ((detail as { id: string }).id === id) {
-        handleClearConsole();
-      }
-    };
-
-    const handleToggleDevToolsEvent = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const detail = e.detail as unknown;
-      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
-      if ((detail as { id: string }).id === id) {
-        handleToggleDevTools();
-      }
-    };
-
-    const handleHardReloadEvent = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const detail = e.detail as unknown;
-      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
-      if ((detail as { id: string }).id === id) {
-        handleHardReload();
-      }
-    };
-
-    const controller = new AbortController();
-    window.addEventListener("daintree:reload-browser", handleReloadEvent, {
-      signal: controller.signal,
-    });
-    window.addEventListener("daintree:browser-navigate", handleNavigateEvent, {
-      signal: controller.signal,
-    });
-    window.addEventListener("daintree:browser-back", handleBackEvent, {
-      signal: controller.signal,
-    });
-    window.addEventListener("daintree:browser-forward", handleForwardEvent, {
-      signal: controller.signal,
-    });
-    window.addEventListener("daintree:browser-set-zoom", handleSetZoomEvent, {
-      signal: controller.signal,
-    });
-    window.addEventListener("daintree:browser-capture-screenshot", handleCaptureScreenshotEvent, {
-      signal: controller.signal,
-    });
-    window.addEventListener("daintree:browser-toggle-console", handleToggleConsoleEvent, {
-      signal: controller.signal,
-    });
-    window.addEventListener("daintree:browser-clear-console", handleClearConsoleEvent, {
-      signal: controller.signal,
-    });
-    window.addEventListener("daintree:browser-toggle-devtools", handleToggleDevToolsEvent, {
-      signal: controller.signal,
-    });
-    window.addEventListener("daintree:hard-reload-browser", handleHardReloadEvent, {
-      signal: controller.signal,
-    });
-    return () => controller.abort();
-  }, [
-    id,
-    handleReload,
-    handleNavigate,
-    handleBack,
-    handleForward,
-    handleCaptureScreenshot,
-    handleToggleConsole,
-    handleClearConsole,
-    handleToggleDevTools,
-    handleHardReload,
-  ]);
+  useBrowserActionListeners(id, {
+    onReload: handleReload,
+    onNavigate: handleNavigate,
+    onBack: handleBack,
+    onForward: handleForward,
+    onSetZoom: handleSetZoom,
+    onCaptureScreenshot: handleCaptureScreenshot,
+    onToggleConsole: handleToggleConsole,
+    onClearConsole: handleClearConsole,
+    onToggleDevTools: handleToggleDevTools,
+    onHardReload: handleHardReload,
+  });
 
   // Blank the webview before React unmounts it for faster memory reclamation
   useEffect(() => {
