@@ -1,419 +1,17 @@
-import { useCallback, useMemo, useState, memo } from "react";
+import { useCallback, useMemo } from "react";
 import type { AgentState, TerminalRecipe, WorktreeState } from "@/types";
 import { cn } from "@/lib/utils";
-import { STATE_ICONS, STATE_COLORS, STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
+import { STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
 import { BranchLabel } from "../BranchLabel";
-import {
-  WorktreeMenuItems,
-  type WorktreeLaunchAgentItem,
-  type WorktreeMenuComponents,
-} from "../WorktreeMenuItems";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "../../ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
-import {
-  ChevronRight,
-  CircleDot,
-  CornerDownRight,
-  FileText,
-  GitBranch,
-  GitPullRequest,
-  Cloud,
-  MoreHorizontal,
-  RefreshCw,
-  Sprout,
-  Pin,
-  Server,
-  Container,
-  Cpu,
-  Globe,
-  Rocket,
-  Database,
-  Terminal as TerminalIcon,
-  Box,
-  Layers,
-  Trash2,
-} from "lucide-react";
+import { Sprout, Pin } from "lucide-react";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
-import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
-import {
-  IssueTooltipContent,
-  PRTooltipContent,
-  TooltipLoading,
-  TokenMissingTooltip,
-} from "./GitHubTooltipContent";
-import { actionService } from "@/services/ActionService";
-
-const ENVIRONMENT_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
-  Server,
-  Cloud,
-  Container,
-  Cpu,
-  Globe,
-  Rocket,
-  Database,
-  Terminal: TerminalIcon,
-  Box,
-  Layers,
-};
-
-const DROPDOWN_COMPONENTS: WorktreeMenuComponents = {
-  Item: DropdownMenuItem,
-  Label: DropdownMenuLabel,
-  Separator: DropdownMenuSeparator,
-  Shortcut: DropdownMenuShortcut,
-  Sub: DropdownMenuSub,
-  SubTrigger: DropdownMenuSubTrigger,
-  SubContent: DropdownMenuSubContent,
-};
-
-const RELATIVE_TIME_FORMATTER = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
-
-function formatLastFetched(epochMs: number, now: number = Date.now()): string {
-  const deltaSeconds = Math.round((epochMs - now) / 1000);
-  const absSeconds = Math.abs(deltaSeconds);
-  if (absSeconds < 60) return RELATIVE_TIME_FORMATTER.format(deltaSeconds, "second");
-  const deltaMinutes = Math.round(deltaSeconds / 60);
-  if (Math.abs(deltaMinutes) < 60) return RELATIVE_TIME_FORMATTER.format(deltaMinutes, "minute");
-  const deltaHours = Math.round(deltaMinutes / 60);
-  if (Math.abs(deltaHours) < 24) return RELATIVE_TIME_FORMATTER.format(deltaHours, "hour");
-  const deltaDays = Math.round(deltaHours / 24);
-  return RELATIVE_TIME_FORMATTER.format(deltaDays, "day");
-}
-
-interface UpstreamSyncBadgeProps {
-  aheadCount: number | undefined;
-  behindCount: number | undefined;
-  isFetchInFlight: boolean;
-  lastFetchedAt: number | null | undefined;
-  fetchAuthFailed: boolean;
-  fetchNetworkFailed: boolean;
-  isGitHubRemote: boolean;
-  /**
-   * The two render contexts use different gap sizes to align with surrounding
-   * content (`gap-1` in the main-worktree row, `gap-1.5` in the secondary row).
-   * Keep the existing spacing rather than unify it — the visual rhythm is
-   * tuned per layout.
-   */
-  containerGapClass: string;
-}
-
-function UpstreamSyncBadge({
-  aheadCount,
-  behindCount,
-  isFetchInFlight,
-  lastFetchedAt,
-  fetchAuthFailed,
-  fetchNetworkFailed,
-  isGitHubRemote,
-  containerGapClass,
-}: UpstreamSyncBadgeProps) {
-  const hasAhead = aheadCount !== undefined && aheadCount > 0;
-  const hasBehind = behindCount !== undefined && behindCount > 0;
-
-  const handleSignInClick = useCallback((event: React.MouseEvent) => {
-    event.stopPropagation();
-    void actionService.dispatch(
-      "app.settings.openTab",
-      { tab: "github", sectionId: "github-token" },
-      { source: "user" }
-    );
-  }, []);
-
-  // Auth-failed + GitHub remote: replace the count display with a sign-in CTA.
-  // Non-GitHub remotes silently fall through to the regular count display so
-  // we don't surface a useless GitHub-token CTA for GitLab/Bitbucket/etc.
-  if (fetchAuthFailed && isGitHubRemote) {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={handleSignInClick}
-            className="flex items-center text-[10px] text-status-warning/80 hover:text-status-warning transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent rounded-sm cursor-pointer"
-            data-testid="upstream-sync-auth-cta"
-          >
-            Sign in to refresh
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="right" className="text-xs">
-          <div>Couldn't reach origin — GitHub credentials failed</div>
-          {lastFetchedAt != null && (
-            <div className="text-text-muted">Last fetched {formatLastFetched(lastFetchedAt)}</div>
-          )}
-        </TooltipContent>
-      </Tooltip>
-    );
-  }
-
-  // No counts to show and no fetch state worth surfacing → render nothing.
-  // (The caller already gates on hasUpstreamDelta, so this is the no-counts
-  // path during fetch-only events that didn't move ahead/behind.)
-  if (!hasAhead && !hasBehind) return null;
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={cn(
-            "flex items-center text-[10px] font-mono tabular-nums",
-            containerGapClass,
-            isFetchInFlight && "animate-pulse-immediate"
-          )}
-          data-testid="upstream-sync-indicator"
-          data-fetch-in-flight={isFetchInFlight ? "true" : undefined}
-        >
-          {hasAhead && <span className="text-status-success">↑{aheadCount}</span>}
-          {hasBehind && <span className="text-status-warning">↓{behindCount}</span>}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="right" className="text-xs">
-        <div>
-          {hasAhead && (
-            <span>
-              {aheadCount} commit{aheadCount !== 1 ? "s" : ""} ahead
-            </span>
-          )}
-          {hasAhead && hasBehind && <span>, </span>}
-          {hasBehind && (
-            <span>
-              {behindCount} commit{behindCount !== 1 ? "s" : ""} behind
-            </span>
-          )}
-          <span> upstream</span>
-        </div>
-        {fetchNetworkFailed && (
-          <div className="text-status-warning/80" data-testid="upstream-sync-network-warning">
-            Couldn't reach origin
-          </div>
-        )}
-        {lastFetchedAt != null && (
-          <div className="text-text-muted">Last fetched {formatLastFetched(lastFetchedAt)}</div>
-        )}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-interface IssueBadgeProps {
-  issueNumber: number;
-  issueTitle?: string;
-  worktreePath: string;
-  onOpen?: () => void;
-  isHeadline?: boolean;
-  isActive?: boolean;
-  underlineOnHover?: boolean;
-}
-
-const IssueBadge = memo(function IssueBadge({
-  issueNumber,
-  issueTitle,
-  worktreePath,
-  onOpen,
-  isHeadline,
-  isActive,
-  underlineOnHover,
-}: IssueBadgeProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const { data, loading, error, missingToken, fetchTooltip, reset } = useIssueTooltip(
-    worktreePath,
-    issueNumber
-  );
-
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      setIsOpen(open);
-      if (open) {
-        void fetchTooltip();
-      } else {
-        void reset();
-      }
-    },
-    [fetchTooltip, reset]
-  );
-
-  const handleClick = useCallback(() => {
-    if (!isActive) return;
-    if (missingToken) {
-      void actionService.dispatch(
-        "app.settings.openTab",
-        { tab: "github", sectionId: "github-token" },
-        { source: "user" }
-      );
-      return;
-    }
-    onOpen?.();
-  }, [isActive, missingToken, onOpen]);
-
-  return (
-    <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={handleClick}
-          className={cn(
-            "flex items-center gap-1.5 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
-            isHeadline ? "text-[13px]" : "text-xs",
-            missingToken && "opacity-60"
-          )}
-          aria-disabled={!isActive || undefined}
-          aria-label={
-            missingToken
-              ? "Configure GitHub token to see issue details"
-              : issueTitle
-                ? `Open issue #${issueNumber}: ${issueTitle}`
-                : `Open issue #${issueNumber} on GitHub`
-          }
-        >
-          <CircleDot
-            className={cn("text-github-open shrink-0", isHeadline ? "w-3.5 h-3.5" : "w-3 h-3")}
-            aria-hidden="true"
-          />
-          <span
-            className={cn(
-              "truncate flex-1 min-w-0",
-              underlineOnHover && "hover:underline",
-              isHeadline
-                ? isActive
-                  ? "text-text-primary font-medium"
-                  : "text-text-secondary font-medium"
-                : "text-text-primary/90"
-            )}
-          >
-            {issueTitle || <span className="text-github-open font-mono">#{issueNumber}</span>}
-          </span>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="right" align="start" className="p-3">
-        {missingToken ? (
-          <TokenMissingTooltip type="issue" />
-        ) : loading ? (
-          <TooltipLoading />
-        ) : data ? (
-          <IssueTooltipContent data={data} />
-        ) : error ? (
-          <span className="text-xs text-text-secondary">Failed to load issue details</span>
-        ) : (
-          <span className="text-xs text-text-secondary">Issue #{issueNumber}</span>
-        )}
-      </TooltipContent>
-    </Tooltip>
-  );
-});
-
-interface PRBadgeProps {
-  prNumber: number;
-  prState?: "open" | "merged" | "closed";
-  isSubordinate: boolean;
-  worktreePath: string;
-  onOpen?: () => void;
-  isActive?: boolean;
-  underlineOnHover?: boolean;
-}
-
-const PRBadge = memo(function PRBadge({
-  prNumber,
-  prState,
-  isSubordinate,
-  worktreePath,
-  onOpen,
-  isActive,
-  underlineOnHover,
-}: PRBadgeProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const { data, loading, error, missingToken, fetchTooltip, reset } = usePRTooltip(
-    worktreePath,
-    prNumber
-  );
-
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      setIsOpen(open);
-      if (open) {
-        void fetchTooltip();
-      } else {
-        void reset();
-      }
-    },
-    [fetchTooltip, reset]
-  );
-
-  const handleClick = useCallback(() => {
-    if (!isActive) return;
-    if (missingToken) {
-      void actionService.dispatch(
-        "app.settings.openTab",
-        { tab: "github", sectionId: "github-token" },
-        { source: "user" }
-      );
-      return;
-    }
-    onOpen?.();
-  }, [isActive, missingToken, onOpen]);
-
-  const prStateColor =
-    prState === "merged"
-      ? "text-github-merged"
-      : prState === "closed"
-        ? "text-github-closed"
-        : "text-github-open";
-
-  const prStateLabel = prState === "merged" ? "merged" : prState === "closed" ? "closed" : "open";
-
-  return (
-    <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={handleClick}
-          className={cn(
-            "flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
-            missingToken && "opacity-60"
-          )}
-          aria-disabled={!isActive || undefined}
-          aria-label={
-            missingToken
-              ? "Configure GitHub token to see PR details"
-              : `Open ${prStateLabel} pull request #${prNumber} on GitHub`
-          }
-        >
-          {isSubordinate && (
-            <CornerDownRight className="w-3 h-3 text-text-muted shrink-0" aria-hidden="true" />
-          )}
-          <GitPullRequest className={cn("w-3 h-3 shrink-0", prStateColor)} aria-hidden="true" />
-          <span className={cn("font-mono", underlineOnHover && "hover:underline", prStateColor)}>
-            #{prNumber}
-          </span>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="right" align="start" className="p-3">
-        {missingToken ? (
-          <TokenMissingTooltip type="pr" />
-        ) : loading ? (
-          <TooltipLoading />
-        ) : data ? (
-          <PRTooltipContent data={data} />
-        ) : error ? (
-          <span className="text-xs text-text-secondary">Failed to load PR details</span>
-        ) : (
-          <span className="text-xs text-text-secondary">PR #{prNumber}</span>
-        )}
-      </TooltipContent>
-    </Tooltip>
-  );
-});
+import { IssueBadge } from "./IssueBadge";
+import { EnvironmentPopover } from "./EnvironmentPopover";
+import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
+import { WorktreeActionsToolbar } from "./WorktreeActionsToolbar";
+import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
+import { NonMainSecondaryRow } from "./NonMainSecondaryRow";
 
 export interface WorktreeHeaderProps {
   worktree: WorktreeState;
@@ -447,7 +45,7 @@ export interface WorktreeHeaderProps {
   };
 
   menu: {
-    launchAgents: WorktreeLaunchAgentItem[];
+    launchAgents: import("../WorktreeMenuItems").WorktreeLaunchAgentItem[];
     recipes: TerminalRecipe[];
     runningRecipeId: string | null;
     counts: {
@@ -548,16 +146,10 @@ export function WorktreeHeader({
 
   const hasIssueTitle = !!(worktree.issueNumber && worktree.issueTitle);
   const hasPlanFile = Boolean(worktree.hasPlanFile);
-  // In sidebar variant, badges only become actionable when the card is selected,
-  // so the hover underline is misleading on unselected cards. Grid variant has no
-  // such two-step ambiguity, so preserve its always-on hover affordance.
   const underlineOnHover = variant !== "sidebar" || isActive;
   const hasUpstreamDelta =
     (worktree.aheadCount !== undefined && worktree.aheadCount > 0) ||
     (worktree.behindCount !== undefined && worktree.behindCount > 0);
-  // Auth-failed + GitHub remote surfaces a "Sign in to refresh" CTA in place
-  // of (or alongside) the count badge — show the row even if no upstream
-  // delta is present so the user can still recover the auth state.
   const hasAuthFailedSignIn = Boolean(worktree.fetchAuthFailed && worktree.isGitHubRemote);
   const isMainStandardLayout = !!(isMainOnStandardBranch && !hasIssueTitle);
 
@@ -592,109 +184,19 @@ export function WorktreeHeader({
           )}
           {((worktree.worktreeMode && worktree.worktreeMode !== "local") ||
             resourceStatusLabel ||
-            isLifecycleRunning) &&
-            (() => {
-              const EnvironmentIcon =
-                (environmentIcon && ENVIRONMENT_ICONS[environmentIcon]) || Cloud;
-              const iconClass = cn(
-                "w-3 h-3 shrink-0",
-                isLifecycleRunning
-                  ? "animate-pulse text-activity-working"
-                  : resourceStatusColor === "green"
-                    ? "text-terminal-bright-green"
-                    : resourceStatusColor === "yellow"
-                      ? "text-status-warning"
-                      : resourceStatusColor === "red"
-                        ? "text-status-error"
-                        : resourceStatusColor === "neutral" || resourceStatusLabel
-                          ? "text-status-info/70"
-                          : "text-daintree-text/30"
-              );
-              const hasDetails =
-                resourceStatusLabel ||
-                resourceLastOutput ||
-                resourceEndpoint ||
-                resourceLastCheckedAt;
-              if (!hasDetails && !onCheckResourceStatus) {
-                return (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <EnvironmentIcon
-                        className={cn(iconClass, "pointer-events-none")}
-                        aria-label={`${worktree.worktreeMode} environment`}
-                      />
-                    </TooltipTrigger>
-                    <TooltipContent side="top">{worktree.worktreeMode}</TooltipContent>
-                  </Tooltip>
-                );
-              }
-              return (
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button
-                      className="shrink-0 rounded focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
-                      aria-label={`${worktree.worktreeMode} environment status`}
-                    >
-                      <EnvironmentIcon className={iconClass} />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent side="top" align="start" className="w-72 p-3 text-xs">
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <span className="font-semibold text-text-primary">
-                        {worktree.worktreeMode}
-                      </span>
-                      {resourceStatusLabel && (
-                        <span
-                          className={cn(
-                            "font-medium",
-                            resourceStatusColor === "green" && "text-status-success",
-                            resourceStatusColor === "yellow" && "text-status-warning",
-                            resourceStatusColor === "red" && "text-status-error",
-                            (!resourceStatusColor || resourceStatusColor === "neutral") &&
-                              "text-text-muted"
-                          )}
-                        >
-                          {resourceStatusLabel}
-                        </span>
-                      )}
-                    </div>
-                    {resourceEndpoint && (
-                      <div className="mb-2 font-mono text-[11px] text-text-secondary break-all">
-                        {resourceEndpoint}
-                      </div>
-                    )}
-                    {resourceLastOutput && (
-                      <pre className="mb-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-all rounded bg-surface-panel-elevated p-2 font-mono text-[11px] text-text-secondary">
-                        {resourceLastOutput.trim()}
-                      </pre>
-                    )}
-                    <div className="flex items-center justify-between gap-2">
-                      {resourceLastCheckedAt ? (
-                        <span className="text-text-muted">
-                          checked{" "}
-                          {new Date(resourceLastCheckedAt).toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                            second: "2-digit",
-                          })}
-                        </span>
-                      ) : (
-                        <span />
-                      )}
-                      {onCheckResourceStatus && (
-                        <button
-                          onClick={onCheckResourceStatus}
-                          className="flex items-center gap-1 text-text-muted hover:text-text-primary transition-colors"
-                        >
-                          <RefreshCw className="w-3 h-3" />
-                          Check Status
-                        </button>
-                      )}
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              );
-            })()}
+            isLifecycleRunning) && (
+            <EnvironmentPopover
+              worktreeMode={worktree.worktreeMode}
+              environmentIcon={environmentIcon}
+              isLifecycleRunning={isLifecycleRunning}
+              resourceStatusLabel={resourceStatusLabel}
+              resourceStatusColor={resourceStatusColor}
+              resourceLastOutput={resourceLastOutput}
+              resourceEndpoint={resourceEndpoint}
+              resourceLastCheckedAt={resourceLastCheckedAt}
+              onCheckResourceStatus={onCheckResourceStatus}
+            />
+          )}
           {hasIssueTitle ? (
             <IssueBadge
               issueNumber={worktree.issueNumber!}
@@ -737,256 +239,47 @@ export function WorktreeHeader({
         </div>
 
         {isCollapsed && visibleStates.length > 0 && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div
-                className="flex items-center gap-1.5 shrink-0"
-                role="img"
-                aria-label={sessionAriaLabel}
-                data-testid="collapsed-session-indicators"
-              >
-                {visibleStates.map(({ state, count }) => {
-                  const Icon = STATE_ICONS[state];
-                  return (
-                    <span
-                      key={state}
-                      aria-hidden="true"
-                      className={cn("flex items-center gap-0.5 text-[10px]", STATE_COLORS[state])}
-                    >
-                      <Icon
-                        className={cn(
-                          "w-2.5 h-2.5",
-                          state === "working" && "animate-spin-slow motion-reduce:animate-none"
-                        )}
-                      />
-                      <span className="font-mono tabular-nums">{count}</span>
-                    </span>
-                  );
-                })}
-              </div>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs">
-              {visibleStates.map((v) => `${v.count} ${STATE_LABELS[v.state]}`).join(", ")}
-            </TooltipContent>
-          </Tooltip>
+          <CollapsedSessionIndicators
+            visibleStates={visibleStates}
+            sessionAriaLabel={sessionAriaLabel}
+          />
         )}
 
-        <div
-          data-testid="worktree-actions-wrapper"
-          data-worktree-row-toolbar=""
-          role="toolbar"
-          aria-label="Worktree actions"
-          className={cn(
-            "flex items-center gap-0.5 shrink-0 transition-opacity duration-150",
-            isCollapsed
-              ? "opacity-100"
-              : isActive
-                ? "opacity-100"
-                : "opacity-50 group-hover/card:opacity-100 group-focus-within/card:opacity-100 group-has-[[data-state=open]]/card:opacity-100"
-          )}
-        >
-          {onCleanupWorktree && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onCleanupWorktree();
-                  }}
-                  className="sidebar-action-button p-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                  aria-label="Delete worktree"
-                  data-testid="worktree-cleanup-button"
-                >
-                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Delete worktree</TooltipContent>
-            </Tooltip>
-          )}
-          {canCollapse && (
-            <button
-              onClick={onToggleCollapse}
-              className="sidebar-action-button p-1.5 text-daintree-text/60 hover:text-text-primary rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-              aria-expanded={!isCollapsed}
-              aria-controls={isCollapsed ? undefined : contentId}
-              aria-label={isCollapsed ? "Expand card" : "Collapse card"}
-            >
-              <ChevronRight
-                className={cn(
-                  "w-3.5 h-3.5 transition-transform duration-150",
-                  isCollapsed ? "rotate-0" : "rotate-90"
-                )}
-                aria-hidden="true"
-              />
-            </button>
-          )}
-          <DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    onClick={(e) => e.stopPropagation()}
-                    className="sidebar-action-button p-1.5 text-daintree-text/60 hover:text-text-primary rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                    aria-label="More actions"
-                    data-testid="worktree-actions-menu"
-                  >
-                    <MoreHorizontal className="w-3.5 h-3.5" />
-                  </button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="top">More actions</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent
-              align="end"
-              side="bottom"
-              sideOffset={4}
-              collisionPadding={8}
-              onClick={(e) => e.stopPropagation()}
-              onContextMenu={(e) => e.stopPropagation()}
-              className="w-64"
-            >
-              <WorktreeMenuItems
-                worktree={worktree}
-                components={DROPDOWN_COMPONENTS}
-                launchAgents={menu.launchAgents}
-                recipes={recipeOptions}
-                runningRecipeId={menu.runningRecipeId}
-                isPinned={isPinned}
-                counts={menu.counts}
-                onLaunchAgent={menu.onLaunchAgent ? handleLaunchAgent : undefined}
-                onMoveUp={menu.onMoveUp}
-                onMoveDown={menu.onMoveDown}
-                canMoveUp={menu.canMoveUp}
-                canMoveDown={menu.canMoveDown}
-                onCopyContextFull={menu.onCopyContextFull}
-                onCopyContextModified={menu.onCopyContextModified}
-                onCopyPath={menu.onCopyPath}
-                onOpenEditor={menu.onOpenEditor}
-                onRevealInFinder={menu.onRevealInFinder}
-                onOpenIssuePortal={menu.onOpenIssuePortal}
-                onOpenIssueExternal={menu.onOpenIssueExternal}
-                onOpenPRPortal={menu.onOpenPRPortal}
-                onOpenPRExternal={menu.onOpenPRExternal}
-                onAttachIssue={menu.onAttachIssue}
-                onViewPlan={menu.onViewPlan}
-                onOpenReviewHub={menu.onOpenReviewHub}
-                onCompareDiff={menu.onCompareDiff}
-                onRunRecipe={menu.onRunRecipe}
-                onSaveLayout={menu.onSaveLayout}
-                onTogglePin={menu.onTogglePin}
-                onToggleCollapse={menu.onToggleCollapse}
-                isCollapsed={menu.isCollapsed}
-                onDockAll={menu.onDockAll}
-                onMaximizeAll={menu.onMaximizeAll}
-                onResetRenderers={menu.onResetRenderers}
-                onSelectAllAgents={menu.onSelectAllAgents}
-                onSelectWaitingAgents={menu.onSelectWaitingAgents}
-                onSelectWorkingAgents={menu.onSelectWorkingAgents}
-                onOpenPanelPalette={menu.onOpenPanelPalette}
-                onDeleteWorktree={menu.onDeleteWorktree}
-                onRevertAgentChanges={menu.onRevertAgentChanges}
-                hasSnapshot={menu.hasSnapshot}
-                hasResourceConfig={menu.hasResourceConfig}
-                worktreeMode={menu.worktreeMode}
-                resourceEnvironmentKeys={menu.resourceEnvironmentKeys}
-                onSwitchEnvironment={menu.onSwitchEnvironment}
-                resourceStatus={menu.resourceStatus}
-                onResourceProvision={menu.onResourceProvision}
-                onResourceResume={menu.onResourceResume}
-                onResourcePause={menu.onResourcePause}
-                onResourceConnect={menu.onResourceConnect}
-                onResourceStatus={menu.onResourceStatus}
-                onResourceTeardown={menu.onResourceTeardown}
-              />
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+        <WorktreeActionsToolbar
+          isCollapsed={isCollapsed ?? false}
+          isActive={isActive}
+          onCleanupWorktree={onCleanupWorktree}
+          canCollapse={canCollapse ?? false}
+          onToggleCollapse={onToggleCollapse}
+          contentId={contentId}
+          menu={{
+            ...menu,
+            recipes: recipeOptions,
+          }}
+          worktree={worktree}
+          isPinned={isPinned}
+          handleLaunchAgent={handleLaunchAgent}
+        />
       </div>
 
-      {/* Secondary row: branch + inline stats for main worktree, or badges for secondary worktrees */}
       {!isCollapsed && isMainStandardLayout && (
-        <div className="flex items-center gap-2 mt-1" data-testid="main-worktree-meta-row">
-          <BranchLabel
-            label={branchLabel}
-            isActive={isActive}
-            isMuted={isMuted}
-            isMainWorktree={false}
-          />
-          {(hasUpstreamDelta || hasAuthFailedSignIn) && (
-            <UpstreamSyncBadge
-              aheadCount={worktree.aheadCount}
-              behindCount={worktree.behindCount}
-              isFetchInFlight={Boolean(worktree.isFetchInFlight)}
-              lastFetchedAt={worktree.lastFetchedAt}
-              fetchAuthFailed={Boolean(worktree.fetchAuthFailed)}
-              fetchNetworkFailed={Boolean(worktree.fetchNetworkFailed)}
-              isGitHubRemote={Boolean(worktree.isGitHubRemote)}
-              containerGapClass="gap-1"
-            />
-          )}
-          {aggregateCounts && aggregateCounts.worktrees > 0 && (
-            <>
-              <span className="text-text-muted/40 text-[10px]" aria-hidden="true">
-                ·
-              </span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span
-                    className="flex items-center gap-1.5 text-[10px] text-daintree-text/50"
-                    data-testid="aggregate-worktree-row"
-                  >
-                    <span className="flex items-center gap-0.5">
-                      <GitBranch className="w-2.5 h-2.5" aria-hidden="true" />
-                      <span className="font-mono tabular-nums">{aggregateCounts.worktrees}</span>
-                    </span>
-                    {aggregateCounts.working > 0 && (
-                      <span className={cn("flex items-center gap-0.5", STATE_COLORS.working)}>
-                        <STATE_ICONS.working
-                          className="w-2.5 h-2.5 animate-spin-slow motion-reduce:animate-none"
-                          aria-hidden="true"
-                        />
-                        <span className="font-mono tabular-nums">{aggregateCounts.working}</span>
-                      </span>
-                    )}
-                    {aggregateCounts.waiting > 0 && (
-                      <span className={cn("flex items-center gap-0.5", STATE_COLORS.waiting)}>
-                        <STATE_ICONS.waiting className="w-2.5 h-2.5" aria-hidden="true" />
-                        <span className="font-mono tabular-nums">{aggregateCounts.waiting}</span>
-                      </span>
-                    )}
-                    {aggregateCounts.finished > 0 &&
-                      aggregateCounts.working === 0 &&
-                      aggregateCounts.waiting === 0 && (
-                        <span className={cn("flex items-center gap-0.5", STATE_COLORS.completed)}>
-                          <STATE_ICONS.completed className="w-2.5 h-2.5" aria-hidden="true" />
-                          <span className="font-mono tabular-nums">{aggregateCounts.finished}</span>
-                        </span>
-                      )}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="right" className="text-xs">
-                  {aggregateCounts.worktrees} worktree
-                  {aggregateCounts.worktrees !== 1 ? "s" : ""}
-                  {(aggregateCounts.working > 0 ||
-                    aggregateCounts.waiting > 0 ||
-                    aggregateCounts.finished > 0) &&
-                    " — "}
-                  {[
-                    aggregateCounts.working > 0 && `${aggregateCounts.working} working`,
-                    aggregateCounts.waiting > 0 && `${aggregateCounts.waiting} waiting`,
-                    aggregateCounts.finished > 0 && `${aggregateCounts.finished} done`,
-                  ]
-                    .filter(Boolean)
-                    .join(", ")}
-                </TooltipContent>
-              </Tooltip>
-            </>
-          )}
-        </div>
+        <MainWorktreeSecondaryRow
+          branchLabel={branchLabel}
+          isActive={isActive}
+          isMuted={isMuted}
+          hasUpstreamDelta={hasUpstreamDelta}
+          hasAuthFailedSignIn={hasAuthFailedSignIn}
+          aheadCount={worktree.aheadCount}
+          behindCount={worktree.behindCount}
+          isFetchInFlight={Boolean(worktree.isFetchInFlight)}
+          lastFetchedAt={worktree.lastFetchedAt}
+          fetchAuthFailed={Boolean(worktree.fetchAuthFailed)}
+          fetchNetworkFailed={Boolean(worktree.fetchNetworkFailed)}
+          isGitHubRemote={Boolean(worktree.isGitHubRemote)}
+          aggregateCounts={aggregateCounts}
+        />
       )}
 
-      {/* Secondary row for non-main-standard layouts: issue badge, PR badge, sync indicator, plan badge */}
       {!isCollapsed &&
         !isMainStandardLayout &&
         (hasIssueTitle ||
@@ -995,64 +288,18 @@ export function WorktreeHeader({
           hasUpstreamDelta ||
           hasAuthFailedSignIn ||
           hasPlanFile) && (
-          <div className="flex flex-col gap-0.5 mt-1.5">
-            {worktree.issueNumber && !hasIssueTitle && (
-              <IssueBadge
-                issueNumber={worktree.issueNumber}
-                worktreePath={worktree.path}
-                onOpen={badges.onOpenIssue}
-                isActive={isActive}
-                underlineOnHover={underlineOnHover}
-              />
-            )}
-            {worktree.prNumber && worktree.prState !== "closed" && (
-              <PRBadge
-                prNumber={worktree.prNumber}
-                prState={worktree.prState}
-                isSubordinate={!!worktree.issueNumber}
-                worktreePath={worktree.path}
-                onOpen={badges.onOpenPR}
-                isActive={isActive}
-                underlineOnHover={underlineOnHover}
-              />
-            )}
-            {(hasUpstreamDelta || hasAuthFailedSignIn) && (
-              <UpstreamSyncBadge
-                aheadCount={worktree.aheadCount}
-                behindCount={worktree.behindCount}
-                isFetchInFlight={Boolean(worktree.isFetchInFlight)}
-                lastFetchedAt={worktree.lastFetchedAt}
-                fetchAuthFailed={Boolean(worktree.fetchAuthFailed)}
-                fetchNetworkFailed={Boolean(worktree.fetchNetworkFailed)}
-                isGitHubRemote={Boolean(worktree.isGitHubRemote)}
-                containerGapClass="gap-1.5"
-              />
-            )}
-            {hasIssueTitle && (
-              <BranchLabel
-                label={branchLabel}
-                isActive={isActive}
-                isMuted={isMuted}
-                isMainWorktree={false}
-              />
-            )}
-            {hasPlanFile && badges.onOpenPlan && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (isActive) badges.onOpenPlan?.();
-                }}
-                className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors text-daintree-text/70 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                aria-disabled={!isActive || undefined}
-                aria-label="View agent plan file"
-              >
-                <FileText className="w-3 h-3 shrink-0 text-daintree-text/50" aria-hidden="true" />
-                <span className={cn("font-mono", underlineOnHover && "hover:underline")}>
-                  {worktree.planFilePath ?? "Plan"}
-                </span>
-              </button>
-            )}
-          </div>
+          <NonMainSecondaryRow
+            worktree={worktree}
+            branchLabel={branchLabel}
+            isActive={isActive}
+            isMuted={isMuted}
+            underlineOnHover={underlineOnHover}
+            hasUpstreamDelta={hasUpstreamDelta}
+            hasAuthFailedSignIn={hasAuthFailedSignIn}
+            hasIssueTitle={hasIssueTitle}
+            hasPlanFile={hasPlanFile}
+            badges={badges}
+          />
         )}
     </div>
   );
