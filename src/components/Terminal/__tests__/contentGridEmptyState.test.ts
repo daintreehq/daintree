@@ -26,6 +26,18 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
     expect(content).not.toContain('role="list"');
     expect(content).not.toContain("handleRunRecipe");
   });
+
+  it("gates RecipeRunner on hasEverLaunchedAgent so first-run users don't see it", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    expect(content).toContain("hasEverLaunchedAgent");
+    expect(content).toContain("usePanelStore");
+    expect(content).toContain("hasActiveWorktree && hasEverLaunchedAgent");
+  });
+
+  it("does not render RotatingTip — teaching content waits until after first launch", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    expect(content).not.toContain("RotatingTip");
+  });
 });
 
 describe("ContentGrid TIPS live shortcut migration — issue #6437", () => {

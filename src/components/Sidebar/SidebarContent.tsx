@@ -20,7 +20,6 @@ import {
 } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Kbd } from "@/components/ui/Kbd";
 import { WorktreeSidebarSearchBar, QuickStateFilterBar } from "@/components/Worktree";
 import { BulkCreateWorktreeDialog } from "@/components/GitHub/BulkCreateWorktreeDialog";
 import { FleetPickerPalette } from "@/components/Fleet/FleetPickerPalette";
@@ -512,31 +511,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           </div>
 
           <div className="flex flex-col items-center justify-center py-12 px-4 text-center flex-1">
-            <FolderOpen className="w-12 h-12 text-daintree-text/60 mb-3" aria-hidden="true" />
+            <FolderOpen className="w-8 h-8 text-daintree-text/60 mb-3" aria-hidden="true" />
 
             <h3 className="text-daintree-text font-medium mb-2">No worktrees yet</h3>
 
-            <p className="text-sm text-daintree-text/60 mb-4 max-w-xs">
-              Open a Git repository with worktrees to get started. Use{" "}
+            <p className="text-sm text-daintree-text/60 max-w-xs">
+              Open a Git repository to get started. Use{" "}
               <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-xs">
                 File → Open Directory
               </kbd>
             </p>
-
-            {createWorktreeShortcut && (
-              <p className="text-xs text-daintree-text/60 mb-4 max-w-xs">
-                Press <Kbd>{createWorktreeShortcut}</Kbd> to create a worktree
-              </p>
-            )}
-
-            <div className="text-xs text-daintree-text/60 text-left w-full max-w-xs">
-              <div className="font-medium mb-1">Quick Start:</div>
-              <ol className="space-y-1 list-decimal list-inside">
-                <li>Open a repository</li>
-                <li>Launch an agent</li>
-                <li>Inject context to AI agent</li>
-              </ol>
-            </div>
           </div>
         </div>
         {newWorktreeDialogElement}

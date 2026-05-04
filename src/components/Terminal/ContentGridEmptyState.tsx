@@ -3,7 +3,7 @@ import { DaintreeIcon } from "@/components/icons";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { svgToDataUrl, sanitizeSvg } from "@/lib/svg";
 import { actionService } from "@/services/ActionService";
-import { RotatingTip } from "./contentGridTips";
+import { usePanelStore } from "@/store/panelStore";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
 
 export function ContentGridEmptyState({
@@ -22,6 +22,15 @@ export function ContentGridEmptyState({
   defaultCwd?: string;
 }) {
   "use memo";
+
+  const hasEverLaunchedAgent = usePanelStore((state) =>
+    state.panelIds.some((id) => {
+      const p = state.panelsById[id];
+      return (
+        Boolean(p?.launchAgentId) || Boolean(p?.detectedAgentId) || p?.everDetectedAgent === true
+      );
+    })
+  );
 
   const handleOpenHelp = () => {
     void actionService.dispatch(
@@ -93,7 +102,7 @@ export function ContentGridEmptyState({
           </div>
         )}
 
-        {hasActiveWorktree && (
+        {hasActiveWorktree && hasEverLaunchedAgent && (
           <div className="mb-6 w-full flex justify-center">
             <RecipeRunner activeWorktreeId={activeWorktreeId} defaultCwd={defaultCwd} />
           </div>
@@ -106,8 +115,6 @@ export function ContentGridEmptyState({
         )}
 
         <div className="flex flex-col items-center gap-4 mt-4">
-          {hasActiveWorktree && <RotatingTip />}
-
           {!hasActiveWorktree && (
             <button
               type="button"
