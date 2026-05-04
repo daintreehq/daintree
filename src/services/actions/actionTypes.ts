@@ -52,6 +52,7 @@ export interface ActionCallbacks {
       activateDockOnCreate?: boolean;
       env?: Record<string, string>;
       ephemeral?: boolean;
+      agentLaunchFlags?: string[];
     }
   ) => Promise<string | null>;
   onInject: (worktreeId: string) => void;

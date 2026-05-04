@@ -58,6 +58,13 @@ export interface LaunchAgentOptions {
    * Daintree assistant terminal doesn't reappear in the dock after quit.
    */
   ephemeral?: boolean;
+  /**
+   * Extra launch flags appended after the resolved settings/preset flags.
+   * Used by the help panel to inject user-provided customArgs (e.g. `--model
+   * sonnet`) for a single assistant session without changing global agent
+   * settings.
+   */
+  agentLaunchFlags?: string[];
 }
 
 export interface UseAgentLauncherReturn {
@@ -367,6 +374,26 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               modelId: launchOptions?.modelId,
               presetArgs: preset?.args,
             });
+          }
+
+          // Append caller-supplied launch flags last so they override
+          // earlier flag values (argv parsers typically take the last
+          // occurrence, e.g. `--model sonnet` after a preset's `--model`).
+          // Mirrored into both the spawn command string and the persisted
+          // `launchFlags` array so resume reproduces the same configuration.
+          const extraFlags = launchOptions?.agentLaunchFlags;
+          if (extraFlags?.length) {
+            const appendedTokens: string[] = [];
+            for (const flag of extraFlags) {
+              if (!flag) continue;
+              appendedTokens.push(flag.startsWith("-") ? flag : escapeShellArgOptional(flag));
+            }
+            if (appendedTokens.length) {
+              command = `${command} ${appendedTokens.join(" ")}`;
+            }
+            if (isAgent) {
+              launchFlags = [...(launchFlags ?? []), ...extraFlags.filter(Boolean)];
+            }
           }
         }
 

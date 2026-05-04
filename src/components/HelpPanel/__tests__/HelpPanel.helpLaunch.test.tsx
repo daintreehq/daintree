@@ -11,6 +11,7 @@ const {
   mockProvisionSession,
   mockRevokeSession,
   mockGetAssistantSupportedAgentIds,
+  mockGetHelpAssistantSettings,
   helpPanelState,
   panelStoreState,
   cliAvailabilityState,
@@ -26,6 +27,13 @@ const {
   mockProvisionSession: vi.fn().mockResolvedValue(null),
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
   mockGetAssistantSupportedAgentIds: vi.fn(() => ["claude"]),
+  mockGetHelpAssistantSettings: vi.fn().mockResolvedValue({
+    docSearch: true,
+    daintreeControl: true,
+    skipPermissions: false,
+    auditRetention: 7,
+    customArgs: "",
+  }),
   helpPanelState: {
     isOpen: true,
     width: 380,
@@ -37,6 +45,7 @@ const {
     setWidth: vi.fn(),
     setOpen: vi.fn(),
     clearTerminal: vi.fn(),
+    setPreferredAgent: vi.fn(),
     clearPreferredAgent: vi.fn(),
     setTerminal: vi.fn(),
     dismissIntro: vi.fn(),
@@ -220,23 +229,6 @@ vi.mock("@/types", () => ({
   TerminalRefreshTier: { BACKGROUND: 0, ACTIVE: 1 },
 }));
 
-// Stub HelpAgentPicker to expose a click target tied to the onSelectAgent prop
-vi.mock("../HelpAgentPicker", () => ({
-  HelpAgentPicker: ({
-    onSelectAgent,
-    supportedAgentIds,
-  }: {
-    onSelectAgent: (id: string) => void;
-    supportedAgentIds: string[];
-  }) => (
-    <div data-testid="help-agent-picker" data-supported={supportedAgentIds.join(",")}>
-      <button type="button" data-testid="pick-claude" onClick={() => onSelectAgent("claude")}>
-        Pick Claude
-      </button>
-    </div>
-  ),
-}));
-
 import { HelpPanel } from "../HelpPanel";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 
@@ -252,6 +244,7 @@ function resetState() {
   helpPanelState.setOpen = vi.fn();
   helpPanelState.setWidth = vi.fn();
   helpPanelState.clearTerminal = vi.fn();
+  helpPanelState.setPreferredAgent = vi.fn();
   helpPanelState.clearPreferredAgent = vi.fn();
   helpPanelState.dismissIntro = vi.fn();
 
@@ -280,6 +273,14 @@ function resetState() {
   mockRevokeSession.mockResolvedValue(undefined);
   mockGetAssistantSupportedAgentIds.mockReset();
   mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
+  mockGetHelpAssistantSettings.mockReset();
+  mockGetHelpAssistantSettings.mockResolvedValue({
+    docSearch: true,
+    daintreeControl: true,
+    skipPermissions: false,
+    auditRetention: 7,
+    customArgs: "",
+  });
 }
 
 beforeEach(() => {
@@ -295,6 +296,9 @@ beforeEach(() => {
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
         },
+        helpAssistant: {
+          getSettings: mockGetHelpAssistantSettings,
+        },
       },
     },
     writable: true,
@@ -305,16 +309,14 @@ beforeEach(() => {
   Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
 });
 
-describe("HelpPanel — manual select agent (handleSelectAgent)", () => {
+describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () => {
   it("commits the terminal to helpPanelStore even when document.hidden is true", async () => {
     Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
     mockGetFolderPath.mockResolvedValue("/help");
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
 
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
     await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
+      render(<HelpPanel width={380} />);
     });
 
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-1", "claude", null);
@@ -325,10 +327,8 @@ describe("HelpPanel — manual select agent (handleSelectAgent)", () => {
     mockGetFolderPath.mockResolvedValue("/help");
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
 
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
     await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
+      render(<HelpPanel width={380} />);
     });
 
     expect(mockDispatch).toHaveBeenCalledWith(
@@ -342,10 +342,8 @@ describe("HelpPanel — manual select agent (handleSelectAgent)", () => {
     mockGetFolderPath.mockResolvedValue("/help");
     mockDispatch.mockResolvedValue({ ok: false });
 
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
     await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
+      render(<HelpPanel width={380} />);
     });
 
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
@@ -358,10 +356,8 @@ describe("HelpPanel — manual select agent (handleSelectAgent)", () => {
     mockGetFolderPath.mockResolvedValue("/help");
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: null } });
 
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
     await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
+      render(<HelpPanel width={380} />);
     });
 
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
@@ -373,10 +369,8 @@ describe("HelpPanel — manual select agent (handleSelectAgent)", () => {
   it("notifies and aborts when help folder is null", async () => {
     mockGetFolderPath.mockResolvedValue(null);
 
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
     await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
+      render(<HelpPanel width={380} />);
     });
 
     expect(mockDispatch).not.toHaveBeenCalled();
@@ -386,37 +380,6 @@ describe("HelpPanel — manual select agent (handleSelectAgent)", () => {
     );
   });
 
-  it("ignores second click while first launch is in flight (reentrancy guard)", async () => {
-    mockGetFolderPath.mockResolvedValue("/help");
-    let resolveDispatch: (v: unknown) => void = () => {};
-    mockDispatch.mockReturnValue(
-      new Promise((r) => {
-        resolveDispatch = r;
-      })
-    );
-
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
-    // First click — kicks off async launch
-    await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
-    });
-    // First click should have advanced past getFolderPath into dispatch
-    expect(mockDispatch).toHaveBeenCalledTimes(1);
-
-    // Second click while first dispatch is still pending — should be ignored
-    await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
-    });
-    expect(mockDispatch).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      resolveDispatch({ ok: true, result: { terminalId: "term-1" } });
-    });
-
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-1", "claude", null);
-  });
-
   it("surfaces a Start-MCP-failed toast and skips dispatch when provisionSession rejects with MCP_NOT_READY", async () => {
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj" };
     mockGetFolderPath.mockResolvedValue("/help");
@@ -424,10 +387,8 @@ describe("HelpPanel — manual select agent (handleSelectAgent)", () => {
     err.code = "MCP_NOT_READY";
     mockProvisionSession.mockRejectedValueOnce(err);
 
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
     await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
+      render(<HelpPanel width={380} />);
     });
 
     expect(mockDispatch).not.toHaveBeenCalled();
@@ -449,10 +410,8 @@ describe("HelpPanel — manual select agent (handleSelectAgent)", () => {
     mockGetFolderPath.mockResolvedValue("/help");
     mockProvisionSession.mockRejectedValueOnce(new Error("ipc disconnected"));
 
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
     await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
+      render(<HelpPanel width={380} />);
     });
 
     expect(mockDispatch).not.toHaveBeenCalled();
@@ -780,10 +739,8 @@ describe("HelpPanel — session provisioning", () => {
     });
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
 
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
     await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
+      render(<HelpPanel width={380} />);
     });
 
     expect(mockProvisionSession).toHaveBeenCalledWith({
@@ -819,10 +776,8 @@ describe("HelpPanel — session provisioning", () => {
     });
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-2" } });
 
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
     await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
+      render(<HelpPanel width={380} />);
     });
 
     expect(mockDispatch).toHaveBeenCalledWith(
@@ -857,19 +812,13 @@ describe("HelpPanel — session provisioning", () => {
       })
     );
 
-    const { getByTestId, container } = render(<HelpPanel width={380} />);
-
+    let container: HTMLElement;
     await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
-    });
-
-    // Wait a microtask for provisionSession promise to flush
-    await act(async () => {
-      await Promise.resolve();
+      ({ container } = render(<HelpPanel width={380} />));
     });
 
     // Close the panel while agent.launch is still in-flight
-    const closeBtn = container.querySelector('button[aria-label="Close help panel"]');
+    const closeBtn = container!.querySelector('button[aria-label="Close help panel"]');
     if (closeBtn) {
       await act(async () => {
         fireEvent.click(closeBtn);
@@ -905,17 +854,12 @@ describe("HelpPanel — session provisioning", () => {
       })
     );
 
-    const { getByTestId, container } = render(<HelpPanel width={380} />);
-
+    let container: HTMLElement;
     await act(async () => {
-      fireEvent.click(getByTestId("pick-claude"));
+      ({ container } = render(<HelpPanel width={380} />));
     });
 
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const closeBtn = container.querySelector('button[aria-label="Close help panel"]');
+    const closeBtn = container!.querySelector('button[aria-label="Close help panel"]');
     if (closeBtn) {
       await act(async () => {
         fireEvent.click(closeBtn);
@@ -1064,33 +1008,7 @@ describe("HelpPanel — single-supported-agent auto-skip (issue #6612)", () => {
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
   });
 
-  it("passes only assistant-supported installed agents to HelpAgentPicker", async () => {
-    helpPanelState.preferredAgentId = null;
-    cliAvailabilityState.availability = { claude: "ready", gemini: "ready", codex: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "should-not-fire" } });
-
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
-    expect(getByTestId("help-agent-picker").dataset.supported).toBe("claude,codex");
-  });
-
-  it("hides the Back button when only one supported agent is installed (no picker to return to)", () => {
-    helpPanelState.terminalId = "term-1";
-    helpPanelState.agentId = "claude";
-    cliAvailabilityState.availability = { claude: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
-    panelStoreState.panelsById = {
-      "term-1": { id: "term-1", kind: "terminal", spawnStatus: "ready", cwd: "/help" },
-    };
-
-    const { container } = render(<HelpPanel width={380} />);
-
-    expect(container.querySelector('button[aria-label="Back to agent picker"]')).toBeNull();
-  });
-
-  it("shows the Back button when more than one supported agent is installed", () => {
+  it("never renders a Back button (picker removed)", () => {
     helpPanelState.terminalId = "term-1";
     helpPanelState.agentId = "claude";
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
@@ -1101,11 +1019,155 @@ describe("HelpPanel — single-supported-agent auto-skip (issue #6612)", () => {
 
     const { container } = render(<HelpPanel width={380} />);
 
-    expect(container.querySelector('button[aria-label="Back to agent picker"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Back to agent picker"]')).toBeNull();
   });
 });
 
-describe("HelpPanel — close/back confirmation guard (issue #6623)", () => {
+describe("HelpPanel — empty state with no preferred agent", () => {
+  it("renders an 'Open assistant settings' button when more than one supported agent is installed and no preferred agent", async () => {
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    const { findByRole } = render(<HelpPanel width={380} />);
+
+    const button = await findByRole("button", { name: /open assistant settings/i });
+    expect(button).toBeTruthy();
+    expect(mockDispatch).not.toHaveBeenCalled();
+  });
+
+  it("dispatches app.settings.openTab with tab='assistant' when the settings button is clicked", async () => {
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    const { findByRole } = render(<HelpPanel width={380} />);
+
+    const button = await findByRole("button", { name: /open assistant settings/i });
+    fireEvent.click(button);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "assistant" },
+      { source: "user" }
+    );
+  });
+});
+
+describe("HelpPanel — customArgs threading", () => {
+  it("passes customArgs as agentLaunchFlags in the agent.launch dispatch payload", async () => {
+    mockGetHelpAssistantSettings.mockResolvedValue({
+      docSearch: true,
+      daintreeControl: true,
+      skipPermissions: false,
+      auditRetention: 7,
+      customArgs: "--model sonnet --verbose",
+    });
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        agentLaunchFlags: ["--model", "sonnet", "--verbose"],
+      }),
+      { source: "user" }
+    );
+  });
+
+  it("does not include agentLaunchFlags when customArgs is empty", async () => {
+    mockGetHelpAssistantSettings.mockResolvedValue({
+      docSearch: true,
+      daintreeControl: true,
+      skipPermissions: false,
+      auditRetention: 7,
+      customArgs: "",
+    });
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.not.objectContaining({ agentLaunchFlags: expect.anything() }),
+      { source: "user" }
+    );
+  });
+
+  it("treats whitespace-only customArgs as no flags (no agentLaunchFlags field)", async () => {
+    mockGetHelpAssistantSettings.mockResolvedValue({
+      docSearch: true,
+      daintreeControl: true,
+      skipPermissions: false,
+      auditRetention: 7,
+      customArgs: "   \t  ",
+    });
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.not.objectContaining({ agentLaunchFlags: expect.anything() }),
+      { source: "user" }
+    );
+  });
+
+  it("threads customArgs into the preferredAgentId auto-launch path too", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    mockGetHelpAssistantSettings.mockResolvedValue({
+      docSearch: true,
+      daintreeControl: true,
+      skipPermissions: false,
+      auditRetention: 7,
+      customArgs: "--model sonnet",
+    });
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "auto-term-1" } });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        agentId: "claude",
+        agentLaunchFlags: ["--model", "sonnet"],
+      }),
+      { source: "user" }
+    );
+  });
+
+  it("falls back to no flags when getSettings rejects", async () => {
+    mockGetHelpAssistantSettings.mockRejectedValueOnce(new Error("ipc down"));
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.not.objectContaining({ agentLaunchFlags: expect.anything() }),
+      { source: "user" }
+    );
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-1", "claude", null);
+  });
+});
+
+describe("HelpPanel — close confirmation guard (issue #6623)", () => {
   it("closes immediately when the assistant is idle (no dialog)", () => {
     helpPanelState.terminalId = "term-1";
     helpPanelState.agentId = "claude";
@@ -1198,80 +1260,6 @@ describe("HelpPanel — close/back confirmation guard (issue #6623)", () => {
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
     expect(helpPanelState.clearPreferredAgent).not.toHaveBeenCalled();
     expect(mockRevokeSession).toHaveBeenCalledWith("sess-bound");
-  });
-
-  it("shows the back-specific copy when Back is clicked during an in-flight turn", () => {
-    helpPanelState.terminalId = "term-1";
-    helpPanelState.agentId = "claude";
-    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
-    panelStoreState.panelsById = {
-      "term-1": {
-        id: "term-1",
-        kind: "terminal",
-        spawnStatus: "ready",
-        cwd: "/help",
-        agentState: "working",
-      },
-    };
-
-    const { container, getByTestId } = render(<HelpPanel width={380} />);
-    fireEvent.click(container.querySelector('button[aria-label="Back to agent picker"]')!);
-
-    expect(helpPanelState.clearPreferredAgent).not.toHaveBeenCalled();
-    expect(getByTestId("dialog-description").textContent).toContain(
-      "Switching agents will stop it"
-    );
-    expect(getByTestId("dialog-confirm").textContent).toBe("Stop and switch");
-  });
-
-  it("runs the back cleanup (without clearTerminal/setOpen) when the user confirms back", () => {
-    helpPanelState.terminalId = "term-1";
-    helpPanelState.agentId = "claude";
-    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
-    panelStoreState.panelsById = {
-      "term-1": {
-        id: "term-1",
-        kind: "terminal",
-        spawnStatus: "ready",
-        cwd: "/help",
-        agentState: "working",
-      },
-    };
-
-    const { container, getByTestId } = render(<HelpPanel width={380} />);
-    fireEvent.click(container.querySelector('button[aria-label="Back to agent picker"]')!);
-    fireEvent.click(getByTestId("dialog-confirm"));
-
-    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-1");
-    expect(helpPanelState.clearPreferredAgent).toHaveBeenCalled();
-    expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
-    expect(helpPanelState.setOpen).not.toHaveBeenCalled();
-  });
-
-  it("does not run back cleanup when the user cancels the back dialog", () => {
-    helpPanelState.terminalId = "term-1";
-    helpPanelState.agentId = "claude";
-    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
-    panelStoreState.panelsById = {
-      "term-1": {
-        id: "term-1",
-        kind: "terminal",
-        spawnStatus: "ready",
-        cwd: "/help",
-        agentState: "working",
-      },
-    };
-
-    const { container, getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
-    fireEvent.click(container.querySelector('button[aria-label="Back to agent picker"]')!);
-    fireEvent.click(getByTestId("dialog-cancel"));
-
-    expect(queryByTestId("confirm-dialog")).toBeNull();
-    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
-    expect(helpPanelState.clearPreferredAgent).not.toHaveBeenCalled();
   });
 
   it.each(["waiting", "directing", "completed", "exited"] as const)(

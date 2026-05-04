@@ -1477,4 +1477,6 @@ export interface HelpAssistantSettings {
   skipPermissions: boolean;
   /** How long to retain help-session audit logs. 7 = 7 days, 30 = 30 days, 0 = off. Defaults to 7. */
   auditRetention: HelpAssistantAuditRetention;
+  /** Whitespace-separated CLI flags appended at assistant launch (e.g. "--model sonnet"). Defaults to "". */
+  customArgs: string;
 }

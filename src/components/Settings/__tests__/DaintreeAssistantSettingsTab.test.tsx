@@ -49,6 +49,55 @@ vi.mock("../SettingsSelect", () => ({
   ),
 }));
 
+vi.mock("../SettingsInput", () => ({
+  SettingsInput: ({
+    label,
+    value,
+    onChange,
+    placeholder,
+    disabled,
+  }: {
+    label: string;
+    value: string;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    placeholder?: string;
+    disabled?: boolean;
+  }) => (
+    <label>
+      {label}
+      <input
+        aria-label={label}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        disabled={disabled}
+      />
+    </label>
+  ),
+}));
+
+const helpPanelState = {
+  preferredAgentId: null as string | null,
+  setPreferredAgent: vi.fn(),
+};
+
+vi.mock("@/store/helpPanelStore", () => {
+  const store = (selector?: (s: typeof helpPanelState) => unknown) =>
+    selector ? selector(helpPanelState) : helpPanelState;
+  store.getState = () => helpPanelState;
+  return {
+    useHelpPanelStore: store,
+    HELP_PANEL_MIN_WIDTH: 320,
+    HELP_PANEL_MAX_WIDTH: 800,
+    HELP_PANEL_DEFAULT_WIDTH: 380,
+  };
+});
+
+vi.mock("@/config/agents", () => ({
+  getAssistantSupportedAgentIds: () => ["claude"],
+  getAgentConfig: (id: string) => (id === "claude" ? { name: "Claude Code" } : undefined),
+}));
+
 import { DaintreeAssistantSettingsTab } from "../DaintreeAssistantSettingsTab";
 
 const writeText = vi.fn().mockResolvedValue(undefined);
@@ -76,6 +125,7 @@ function installApi(
       daintreeControl: true,
       skipPermissions: false,
       auditRetention: 7,
+      customArgs: "",
     }),
     setSettings: vi.fn().mockResolvedValue(undefined),
   };
@@ -105,6 +155,8 @@ function installApi(
 describe("DaintreeAssistantSettingsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    helpPanelState.preferredAgentId = null;
+    helpPanelState.setPreferredAgent = vi.fn();
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText },
       writable: true,
@@ -288,6 +340,81 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
         auditRetention: 30,
+      });
+    });
+  });
+
+  it("renders an agent dropdown listing assistant-supported agents", async () => {
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Agent");
+
+    const select = screen.getByRole("combobox", { name: "Agent" }) as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.label);
+    expect(labels).toContain("Claude Code");
+  });
+
+  it("calls helpPanelStore.setPreferredAgent when the agent dropdown changes", async () => {
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Agent");
+
+    const select = screen.getByRole("combobox", { name: "Agent" }) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "claude" } });
+
+    expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("claude");
+  });
+
+  it("loads customArgs from the IPC settings into the input", async () => {
+    installApi({
+      getSettings: vi.fn().mockResolvedValue({
+        docSearch: true,
+        daintreeControl: true,
+        skipPermissions: false,
+        auditRetention: 7,
+        customArgs: "--model sonnet",
+      }),
+    });
+
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Custom CLI args");
+
+    const input = screen.getByLabelText("Custom CLI args") as HTMLInputElement;
+    expect(input.value).toBe("--model sonnet");
+  });
+
+  it("persists customArgs via setSettings on input change", async () => {
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Custom CLI args");
+
+    const input = screen.getByLabelText("Custom CLI args") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "--model sonnet" } });
+
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        customArgs: "--model sonnet",
+      });
+    });
+  });
+
+  it("persists an empty customArgs string when the user clears the input", async () => {
+    installApi({
+      getSettings: vi.fn().mockResolvedValue({
+        docSearch: true,
+        daintreeControl: true,
+        skipPermissions: false,
+        auditRetention: 7,
+        customArgs: "--model sonnet",
+      }),
+    });
+
+    const { container } = render(<DaintreeAssistantSettingsTab />);
+    await waitForContent(container, "Custom CLI args");
+
+    const input = screen.getByLabelText("Custom CLI args") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "" } });
+
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        customArgs: "",
       });
     });
   });

@@ -270,11 +270,12 @@ export interface AgentConfig {
   /**
    * When `true`, this agent has the full assistant wiring required for the
    * Daintree help panel — MCP overlay, `.claude/settings.json` permission
-   * bake, bearer-token `.mcp.json`, and trust-dialog handling. Only agents
-   * with this flag are offered in `HelpAgentPicker`. Today this is Claude
+   * bake, bearer-token `.mcp.json`, and trust-dialog handling. Drives the
+   * agent dropdown in the Daintree Assistant settings tab and the
+   * single-supported-agent auto-launch in `HelpPanel`. Today this is Claude
    * only; flip the flag on another agent's config when its overlay wiring
-   * lands. Omit (or set false) to keep an agent out of the help-panel
-   * picker even when its CLI is installed.
+   * lands. Omit (or set false) to keep an agent out of the assistant
+   * settings dropdown even when its CLI is installed.
    */
   supportsAssistant?: boolean;
   shortcut?: string | null;

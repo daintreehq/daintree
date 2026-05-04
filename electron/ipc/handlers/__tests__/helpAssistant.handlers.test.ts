@@ -57,6 +57,7 @@ describe("registerHelpAssistantHandlers", () => {
       daintreeControl: true,
       skipPermissions: false,
       auditRetention: 7,
+      customArgs: "",
     });
   });
 
@@ -71,6 +72,7 @@ describe("registerHelpAssistantHandlers", () => {
       daintreeControl: true,
       skipPermissions: true,
       auditRetention: 30,
+      customArgs: "",
     });
   });
 
@@ -168,6 +170,97 @@ describe("registerHelpAssistantHandlers", () => {
       daintreeControl: true,
       skipPermissions: false,
       auditRetention: 7,
+      customArgs: "",
     });
+  });
+
+  it("persists a valid customArgs string", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { customArgs: "--model sonnet" });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
+      "helpAssistant.customArgs",
+      "--model sonnet"
+    );
+  });
+
+  it("normalizes newlines to spaces in customArgs", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { customArgs: "--model sonnet\n--verbose" });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
+      "helpAssistant.customArgs",
+      "--model sonnet --verbose"
+    );
+  });
+
+  it("strips control characters from customArgs", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { customArgs: "--model\x00sonnet\x07" });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
+      "helpAssistant.customArgs",
+      "--modelsonnet"
+    );
+  });
+
+  it("rejects customArgs containing shell metacharacters", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { customArgs: "--model sonnet; rm -rf /" });
+    await handler(null, { customArgs: "--model $(whoami)" });
+    await handler(null, { customArgs: "--model `id`" });
+    await handler(null, { customArgs: "--model | tee out" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects customArgs values that are not strings", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { customArgs: 42 as unknown as string });
+    await handler(null, { customArgs: ["--model", "sonnet"] as unknown as string });
+    await handler(null, { customArgs: null as unknown as string });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("caps customArgs length at 10000 characters", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { customArgs: "x".repeat(10500) });
+
+    const call = storeMock.set.mock.calls[0];
+    expect(call?.[0]).toBe("helpAssistant.customArgs");
+    expect((call?.[1] as string).length).toBe(10000);
+  });
+
+  it("sanitizes corrupted stored customArgs back to empty string default", async () => {
+    storeMock.get.mockReturnValue({
+      customArgs: "--model sonnet; rm -rf /" as unknown as string,
+    });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = await handler(null);
+    expect(result).toMatchObject({ customArgs: "" });
+  });
+
+  it("loads a valid stored customArgs from the store", async () => {
+    storeMock.get.mockReturnValue({ customArgs: "--model sonnet" });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = await handler(null);
+    expect(result).toMatchObject({ customArgs: "--model sonnet" });
   });
 });

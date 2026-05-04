@@ -28,6 +28,7 @@ interface HelpPanelActions {
   setWidth: (width: number) => void;
   setTerminal: (terminalId: string, agentId: string, sessionId: string | null) => void;
   clearTerminal: () => void;
+  setPreferredAgent: (agentId: string | null) => void;
   clearPreferredAgent: () => void;
   dismissIntro: () => void;
 }
@@ -60,6 +61,8 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
         set({ terminalId, agentId, sessionId, preferredAgentId: agentId }),
 
       clearTerminal: () => set({ terminalId: null, agentId: null, sessionId: null }),
+
+      setPreferredAgent: (agentId) => set({ preferredAgentId: agentId }),
 
       clearPreferredAgent: () =>
         set({ terminalId: null, agentId: null, sessionId: null, preferredAgentId: null }),

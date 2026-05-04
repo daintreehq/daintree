@@ -18,11 +18,14 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
   return cachedMcpServerService;
 }
 
+const CUSTOM_ARGS_MAX_LEN = 10000;
+
 const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   docSearch: true,
   daintreeControl: true,
   skipPermissions: false,
   auditRetention: 7,
+  customArgs: "",
 };
 
 const HELP_ASSISTANT_KEYS = [
@@ -30,12 +33,30 @@ const HELP_ASSISTANT_KEYS = [
   "daintreeControl",
   "skipPermissions",
   "auditRetention",
+  "customArgs",
 ] as const satisfies ReadonlyArray<keyof HelpAssistantSettings>;
 
 const KNOWN_KEYS: ReadonlySet<string> = new Set(HELP_ASSISTANT_KEYS);
 
 function isValidAuditRetention(value: unknown): value is HelpAssistantAuditRetention {
   return value === 0 || value === 7 || value === 30;
+}
+
+// Mirrors `customFlags` validation in src/config/agents.ts: the value is
+// whitespace-split and appended to the launch command, so any shell
+// metacharacter that could break out of the flag list is rejected.
+function sanitizeCustomArgs(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const collapsed = value.replace(/[\r\n]+/g, " ").replace(/[\x00-\x1f\x7f]/g, "");
+  if (
+    collapsed.includes(";") ||
+    collapsed.includes("|") ||
+    collapsed.includes("$(") ||
+    collapsed.includes("`")
+  ) {
+    return undefined;
+  }
+  return collapsed.slice(0, CUSTOM_ARGS_MAX_LEN);
 }
 
 function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
@@ -46,6 +67,8 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   if (typeof record.daintreeControl === "boolean") out.daintreeControl = record.daintreeControl;
   if (typeof record.skipPermissions === "boolean") out.skipPermissions = record.skipPermissions;
   if (isValidAuditRetention(record.auditRetention)) out.auditRetention = record.auditRetention;
+  const sanitizedArgs = sanitizeCustomArgs(record.customArgs);
+  if (sanitizedArgs !== undefined) out.customArgs = sanitizedArgs;
   return out;
 }
 
@@ -72,11 +95,17 @@ export function registerHelpAssistantHandlers(): () => void {
       ) {
         continue;
       }
+      let storedValue: unknown = value;
+      if (field === "customArgs") {
+        const sanitized = sanitizeCustomArgs(value);
+        if (sanitized === undefined) continue;
+        storedValue = sanitized;
+      }
       if (field === "daintreeControl" && value === true) {
         const previous = store.get("helpAssistant")?.daintreeControl ?? true;
         if (previous !== true) daintreeControlTurnedOn = true;
       }
-      store.set(`helpAssistant.${field}`, value);
+      store.set(`helpAssistant.${field}`, storedValue);
     }
 
     // Auto-couple: turning on Daintree control implies the in-process MCP
