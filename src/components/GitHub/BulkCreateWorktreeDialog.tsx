@@ -30,10 +30,9 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useRecipePicker, CLONE_LAYOUT_ID } from "@/components/Worktree/hooks/useRecipePicker";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
-import { getAgentConfig } from "@/config/agents";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 import type { BranchInfo } from "@shared/types";
-import { generateAgentCommand } from "@shared/types";
+import { spawnPanelsFromRecipe } from "@/components/Worktree/panelSpawning";
 
 type BulkCreateMode = "issue" | "pr";
 
@@ -798,62 +797,20 @@ export function BulkCreateWorktreeDialog({
                 });
                 const spawnedIds: string[] = [];
                 const failedIndices: number[] = [];
-                for (const [index, t] of cloneTerminals.entries()) {
-                  try {
-                    const isDevPreview = t.type === "dev-preview";
-                    const isAgent = !isDevPreview && t.type !== "terminal";
-
-                    let panelId: string | null;
-                    if (isDevPreview) {
-                      panelId = await usePanelStore.getState().addPanel({
-                        kind: "dev-preview",
-                        title: t.title,
-                        cwd: worktreePath,
-                        worktreeId,
-                        exitBehavior: t.exitBehavior,
-                        devCommand: t.devCommand?.trim() || undefined,
-                      });
-                    } else if (isAgent) {
-                      const agentId = t.type;
-                      const agentConfig = getAgentConfig(agentId);
-                      const baseCommand = agentConfig?.command ?? "";
-                      const entry = cloneAgentSettings?.agents?.[agentId] ?? {};
-                      const command = generateAgentCommand(baseCommand, entry, agentId, {
-                        clipboardDirectory: cloneClipboardDirectory,
-                        modelId: t.agentModelId,
-                      });
-
-                      panelId = await usePanelStore.getState().addPanel({
-                        kind: "terminal",
-                        launchAgentId: agentId,
-                        command,
-                        title: t.title,
-                        cwd: worktreePath,
-                        worktreeId,
-                        exitBehavior: t.exitBehavior,
-                        agentModelId: t.agentModelId,
-                        agentLaunchFlags: t.agentLaunchFlags,
-                      });
-                    } else {
-                      panelId = await usePanelStore.getState().addPanel({
-                        kind: "terminal",
-                        title: t.title,
-                        cwd: worktreePath,
-                        worktreeId,
-                        exitBehavior: t.exitBehavior,
-                        command: t.command?.trim() || undefined,
-                      });
-                    }
-
+                await spawnPanelsFromRecipe({
+                  terminals: cloneTerminals,
+                  worktreeId,
+                  cwd: worktreePath,
+                  agentSettings: cloneAgentSettings,
+                  clipboardDirectory: cloneClipboardDirectory,
+                  onPanelSpawned: (index, panelId, _error) => {
                     if (panelId != null) {
                       spawnedIds.push(panelId);
                     } else {
                       failedIndices.push(index);
                     }
-                  } catch {
-                    failedIndices.push(index);
-                  }
-                }
+                  },
+                });
                 const updatedTracked = tracking.get(itemNumber);
                 if (updatedTracked) {
                   updatedTracked.spawnedTerminalIds = [
