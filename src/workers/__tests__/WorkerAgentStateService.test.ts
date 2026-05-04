@@ -118,6 +118,8 @@ describe("WorkerAgentStateService", () => {
       });
 
       it("should be a no-op when exit code is missing", () => {
+        // Exercises the runtime guard for an exit event missing the required `code` field.
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const malformed = { type: "exit" } as unknown as AgentEvent;
         expect(calcState("working", malformed)).toBe("working");
       });
@@ -176,6 +178,9 @@ describe("WorkerAgentStateService", () => {
     });
 
     describe("malformed events", () => {
+      // These cases exercise the runtime guard in nextAgentState against inputs
+      // that TypeScript would normally reject. The unsafe casts are deliberate.
+      /* eslint-disable @typescript-eslint/no-unsafe-type-assertion */
       it("should be a no-op for null/undefined events", () => {
         expect(calcState("working", null as unknown as AgentEvent)).toBe("working");
         expect(calcState("working", undefined as unknown as AgentEvent)).toBe("working");
@@ -184,6 +189,7 @@ describe("WorkerAgentStateService", () => {
       it("should be a no-op when type is missing", () => {
         expect(calcState("working", {} as unknown as AgentEvent)).toBe("working");
       });
+      /* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
     });
 
     describe("error event", () => {
