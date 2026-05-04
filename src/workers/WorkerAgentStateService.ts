@@ -5,16 +5,9 @@
 
 import type { AgentState, AgentStateChangeTrigger } from "../../shared/types/agent.js";
 import type { WorkerTerminalState } from "../../shared/types/worker-messages.js";
+import { type AgentEvent, nextAgentState } from "../../shared/utils/agentFsm.js";
 
-/** Event types for agent state transitions */
-export type AgentEvent =
-  | { type: "start" }
-  | { type: "output"; data: string }
-  | { type: "busy" }
-  | { type: "prompt" }
-  | { type: "input" }
-  | { type: "exit"; code: number }
-  | { type: "error"; error: string };
+export type { AgentEvent } from "../../shared/utils/agentFsm.js";
 
 /** Result of a state change calculation */
 export interface StateChangeResult {
@@ -29,49 +22,10 @@ export interface StateChangeResult {
   traceId?: string;
 }
 
-/** Calculate the next agent state based on current state and event */
-function nextAgentState(current: AgentState, event: AgentEvent): AgentState {
-  switch (event.type) {
-    case "start":
-      if (current === "idle") {
-        return "working";
-      }
-      break;
-
-    case "busy":
-      if (current === "waiting" || current === "idle" || current === "completed") {
-        return "working";
-      }
-      break;
-
-    case "output":
-      // Output events no longer trigger state changes directly
-      break;
-
-    case "prompt":
-      if (current === "working" || current === "completed") {
-        return "waiting";
-      }
-      break;
-
-    case "input":
-      if (current === "waiting" || current === "idle" || current === "completed") {
-        return "working";
-      }
-      break;
-
-    case "exit":
-      if (current !== "idle" && current !== "exited") {
-        return "exited";
-      }
-      break;
-  }
-
-  return current;
-}
-
 /**
  * Infer the trigger type from an agent event.
+ * Mirrors `AgentStateService.inferTrigger` in the main process so worker- and
+ * main-side state-change events carry consistent trigger metadata.
  */
 function inferTrigger(event: AgentEvent): AgentStateChangeTrigger {
   switch (event.type) {
@@ -85,10 +39,18 @@ function inferTrigger(event: AgentEvent): AgentStateChangeTrigger {
       return "activity";
     case "exit":
       return "exit";
+    case "kill":
+      return "exit";
     case "start":
       return "activity";
     case "error":
       return "activity";
+    case "completion":
+      return "activity";
+    case "respawn":
+      return "activity";
+    case "watchdog-timeout":
+      return "timeout";
     default:
       return "output";
   }

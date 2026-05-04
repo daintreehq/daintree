@@ -108,12 +108,81 @@ describe("WorkerAgentStateService", () => {
         expect(calcState("completed", { type: "exit", code: 0 })).toBe("exited");
       });
 
-      it("should not transition from idle on exit", () => {
-        expect(calcState("idle", { type: "exit", code: 0 })).toBe("idle");
+      it("should transition idle → exited on exit (canonical guard)", () => {
+        // Regression for the worker's drifted guard which previously blocked idle→exited.
+        expect(calcState("idle", { type: "exit", code: 0 })).toBe("exited");
       });
 
       it("should not transition from exited on exit (terminal state)", () => {
         expect(calcState("exited", { type: "exit", code: 0 })).toBe("exited");
+      });
+
+      it("should be a no-op when exit code is missing", () => {
+        const malformed = { type: "exit" } as unknown as AgentEvent;
+        expect(calcState("working", malformed)).toBe("working");
+      });
+    });
+
+    describe("completion event", () => {
+      it("should transition working → completed on completion", () => {
+        expect(calcState("working", { type: "completion" })).toBe("completed");
+      });
+
+      it("should not transition from non-working states on completion", () => {
+        expect(calcState("idle", { type: "completion" })).toBe("idle");
+        expect(calcState("waiting", { type: "completion" })).toBe("waiting");
+        expect(calcState("completed", { type: "completion" })).toBe("completed");
+        expect(calcState("exited", { type: "completion" })).toBe("exited");
+      });
+    });
+
+    describe("kill event", () => {
+      it("should transition to idle from any non-idle state on kill", () => {
+        expect(calcState("working", { type: "kill" })).toBe("idle");
+        expect(calcState("waiting", { type: "kill" })).toBe("idle");
+        expect(calcState("completed", { type: "kill" })).toBe("idle");
+        expect(calcState("exited", { type: "kill" })).toBe("idle");
+      });
+
+      it("should remain idle when killed from idle", () => {
+        expect(calcState("idle", { type: "kill" })).toBe("idle");
+      });
+    });
+
+    describe("respawn event", () => {
+      it("should transition exited → idle on respawn", () => {
+        expect(calcState("exited", { type: "respawn" })).toBe("idle");
+      });
+
+      it("should not transition from non-exited states on respawn", () => {
+        expect(calcState("idle", { type: "respawn" })).toBe("idle");
+        expect(calcState("working", { type: "respawn" })).toBe("working");
+        expect(calcState("waiting", { type: "respawn" })).toBe("waiting");
+        expect(calcState("completed", { type: "respawn" })).toBe("completed");
+      });
+    });
+
+    describe("watchdog-timeout event", () => {
+      it("should transition waiting → idle on watchdog-timeout", () => {
+        expect(calcState("waiting", { type: "watchdog-timeout" })).toBe("idle");
+      });
+
+      it("should not transition from non-waiting states on watchdog-timeout", () => {
+        expect(calcState("idle", { type: "watchdog-timeout" })).toBe("idle");
+        expect(calcState("working", { type: "watchdog-timeout" })).toBe("working");
+        expect(calcState("completed", { type: "watchdog-timeout" })).toBe("completed");
+        expect(calcState("exited", { type: "watchdog-timeout" })).toBe("exited");
+      });
+    });
+
+    describe("malformed events", () => {
+      it("should be a no-op for null/undefined events", () => {
+        expect(calcState("working", null as unknown as AgentEvent)).toBe("working");
+        expect(calcState("working", undefined as unknown as AgentEvent)).toBe("working");
+      });
+
+      it("should be a no-op when type is missing", () => {
+        expect(calcState("working", {} as unknown as AgentEvent)).toBe("working");
       });
     });
 
