@@ -4314,13 +4314,13 @@ describe("ActivityMonitor", () => {
       };
     }
 
-    it("idles agent stays idle on cosmetic-only frames (no false-positive escalation)", () => {
+    it("recovers idle→busy on sustained cosmetic-only frames", () => {
       vi.setSystemTime(10000);
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("struct-1", 1000, onStateChange, {
         getVisibleLines: () => ["> "],
         getCursorLine: () => "> ",
-        workingRecoveryDelayMs: 1500,
+        workingRecoveryDelayMs: 800,
         idleDebounceMs: 2500,
       });
 
@@ -4330,8 +4330,8 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("idle");
       onStateChange.mockClear();
 
-      // Two structural frames classify as cosmetic-only — only the bottom
-      // row changes between them.
+      // Cosmetic-only frames are still visible output. They must not veto
+      // recovery; sustained bottom-row churn means the agent is alive.
       monitor.onSynchronizedFrame(
         buildSnapshot({
           capturedAt: Date.now(),
@@ -4347,16 +4347,24 @@ describe("ActivityMonitor", () => {
           bottomRowText: "spinner ✧",
         })
       );
+      vi.advanceTimersByTime(400);
+      monitor.onSynchronizedFrame(
+        buildSnapshot({
+          capturedAt: Date.now(),
+          higherRows: ["upper line", "middle line"],
+          bottomRowText: "spinner ✦",
+        })
+      );
+      vi.advanceTimersByTime(500);
+      monitor.onSynchronizedFrame(
+        buildSnapshot({
+          capturedAt: Date.now(),
+          higherRows: ["upper line", "middle line"],
+          bottomRowText: "spinner ✧",
+        })
+      );
 
-      // Now feed a cosmetic redraw — would normally escalate idle→busy via
-      // the line-rewrite tier's recovery debouncer, but the structural
-      // cosmetic-only flag must suppress it.
-      vi.advanceTimersByTime(100);
-      monitor.onData("\r⠙ working");
-      vi.advanceTimersByTime(100);
-      monitor.onData("\r⠹ working");
-
-      expect(monitor.getState()).toBe("idle");
+      expect(monitor.getState()).toBe("busy");
       monitor.dispose();
     });
 
@@ -4473,13 +4481,13 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("cosmetic-only also blocks the lineRewriteDetector → isSpinnerActive bypass", () => {
+    it("cosmetic-only frames do not block line-rewrite recovery", () => {
       vi.setSystemTime(10000);
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("struct-bypass", 1000, onStateChange, {
         getVisibleLines: () => ["> "],
         getCursorLine: () => "> ",
-        workingRecoveryDelayMs: 1500,
+        workingRecoveryDelayMs: 800,
         idleDebounceMs: 2500,
       });
 
@@ -4489,7 +4497,8 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("idle");
       onStateChange.mockClear();
 
-      // Two frames classified cosmetic-only set the structural TTL.
+      // Two frames classify as cosmetic-only. This used to set a suppression
+      // TTL that could keep visibly active agents stuck in waiting.
       monitor.onSynchronizedFrame(
         buildSnapshot({
           capturedAt: Date.now(),
@@ -4506,19 +4515,14 @@ describe("ActivityMonitor", () => {
         })
       );
 
-      // Drive cosmetic redraws through onData. Without the structural
-      // suppression, lineRewriteDetector would latch and runPollingCycle's
-      // isSpinnerActive() would feed workingSignalDebouncer → becomeBusy
-      // within SPINNER_ACTIVE_MS (1500ms). With the structural suppression,
-      // lineRewriteDetector.update() must not run while the TTL is hot.
-      for (let i = 0; i < 6; i++) {
-        vi.advanceTimersByTime(80);
+      // Drive cosmetic redraws through onData. Sustained status-line output
+      // should recover the agent to busy instead of being structurally vetoed.
+      for (let i = 0; i < 6 && monitor.getState() !== "busy"; i++) {
+        vi.advanceTimersByTime(200);
         monitor.onData(`\r⠙ working tick ${i}`);
       }
 
-      // Walk forward through several poll cycles; state must remain idle.
-      vi.advanceTimersByTime(1000);
-      expect(monitor.getState()).toBe("idle");
+      expect(monitor.getState()).toBe("busy");
       monitor.dispose();
     });
 

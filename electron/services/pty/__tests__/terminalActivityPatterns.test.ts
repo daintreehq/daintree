@@ -228,9 +228,9 @@ describe("buildActivityMonitorOptions", () => {
     const result = buildActivityMonitorOptions("claude", {});
     expect(result.outputActivityDetection).toEqual({
       enabled: true,
-      leakRatePerMs: 0.1,
-      activationThreshold: 200,
-      maxBytesPerFrame: 120,
+      leakRatePerMs: 0.032,
+      activationThreshold: 32,
+      maxBytesPerFrame: 64,
     });
     expect(result.patternConfig).toBeDefined();
     expect(result.bootCompletePatterns).toBeDefined();

@@ -92,14 +92,6 @@ function hasExplicitAgentExit(input: TerminalChromeInput | undefined): boolean {
   );
 }
 
-function hasClearedStickyAgentDetection(input: TerminalChromeInput | undefined): boolean {
-  return (
-    input?.everDetectedAgent === true &&
-    input.detectedAgentId === undefined &&
-    input.agentState === undefined
-  );
-}
-
 function deriveChromeAgentIdentity(
   input: TerminalChromeInput | undefined
 ): TerminalRuntimeIdentity | null {
@@ -112,11 +104,7 @@ function deriveChromeAgentIdentity(
     return makeAgentIdentity(current.agentId, current.processId);
   }
 
-  if (
-    input?.launchAgentId &&
-    !hasExplicitAgentExit(input) &&
-    !hasClearedStickyAgentDetection(input)
-  ) {
+  if (input?.launchAgentId && !hasExplicitAgentExit(input)) {
     return makeAgentIdentity(input.launchAgentId, normalizeProcessId(input.detectedProcessId));
   }
 

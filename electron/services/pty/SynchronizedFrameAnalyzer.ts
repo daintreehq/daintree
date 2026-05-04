@@ -59,9 +59,10 @@ interface CycleRingEntry {
 }
 
 const TIME_COUNTER_REGEX = /\b(\d+)\s*([smh])\b/i;
-// Bottom 3 rows are snapshotted; cosmetic-only suppression is gated on the
-// LAST row being the only changing region. The cycle detector also scans the
-// bottom 3 rows since some agents (Codex) put the spinner glyph one row up.
+// Bottom 3 rows are snapshotted; cosmetic-only classification is limited to
+// cases where the LAST row is the only changing region. The cycle detector
+// also scans the bottom 3 rows since some agents (Codex) put the spinner glyph
+// one row up.
 const RING_BUFFER_SIZE = 8;
 const MIN_DISTINCT_VALUES_FOR_CYCLE = 2;
 const MAX_DISTINCT_VALUES_FOR_CYCLE = 20;

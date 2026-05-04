@@ -154,15 +154,10 @@ export class ActivityMonitor {
   private readonly completionTimer: CompletionTimer;
   private readonly bootDetector: BootDetector;
   // Structural-signal tier (#6668). Sits above the regex-based pattern tier:
-  // classifies DEC mode 2026 frame snapshots as cosmetic-only (suppress
-  // idle→working escalation), spinner, or time-counter. Driven by
-  // SynchronizedFrameDetector in TerminalProcess via onSynchronizedFrame().
+  // classifies DEC mode 2026 frame snapshots as cosmetic-only, spinner, or
+  // time-counter. Driven by SynchronizedFrameDetector in TerminalProcess via
+  // onSynchronizedFrame().
   private readonly synchronizedFrameAnalyzer: SynchronizedFrameAnalyzer;
-  // Sticky window during which idle→working escalation from cosmetic line
-  // rewrites is suppressed. Set by onSynchronizedFrame when a structural
-  // cosmetic-only signal arrives; consulted in onData()'s recovery path.
-  private lastStructuralCosmeticOnlyUntil = 0;
-  private static readonly STRUCTURAL_COSMETIC_ONLY_TTL_MS = 600;
 
   // Resize suppression
   private resizeSuppressUntil = 0;
@@ -364,15 +359,7 @@ export class ActivityMonitor {
       // Spinner/status-line rewrite — latch lastSpinnerDetectedAt for polling's isSpinnerActive()
       // check, but do not call becomeBusy() here. Entry into working state requires pattern
       // detection or sustained output, not cosmetic line rewrites alone.
-      //
-      // Structural cosmetic-only suppression (#6668): when the structural
-      // tier has just classified a 2026 frame as cosmetic-only,
-      // lineRewriteDetector must NOT latch — otherwise polling's
-      // isSpinnerActive() would feed the working-signal debouncer for up
-      // to SPINNER_ACTIVE_MS (1500ms) and bypass the suppression.
-      if (now >= this.lastStructuralCosmeticOnlyUntil) {
-        this.lineRewriteDetector.update(data, now);
-      }
+      this.lineRewriteDetector.update(data, now);
     }
 
     // For polling-enabled terminals: check raw stream for patterns FIRST
@@ -455,29 +442,17 @@ export class ActivityMonitor {
       // through a dedicated debouncer. Gated on getVisibleLines so this only
       // applies to agent terminals, and on isResizeSuppressed so window-resize
       // redraws don't false-positive recovery.
-      //
-      // Structural cosmetic-only suppression (#6668): a recent
-      // synchronized-output frame classified as "cosmetic-only" disqualifies
-      // this recovery path. Without this guard, a spinner-only redraw inside
-      // a 2026 frame would still escalate idle→busy via the line-rewrite
-      // tier, which is exactly the false positive the structural tier exists
-      // to prevent.
       if (
         this.getVisibleLines &&
         this.state === "idle" &&
         !this.isResizeSuppressed(now) &&
         !this.inputTracker.isRecentUserInput(now) &&
-        this.bootDetector.hasExitedBootState &&
-        now >= this.lastStructuralCosmeticOnlyUntil
+        this.bootDetector.hasExitedBootState
       ) {
         if (this.cosmeticRecoveryDebouncer.shouldTriggerRecovery(now, true)) {
           this.cosmeticRecoveryDebouncer.reset();
           this.becomeBusy({ trigger: "output" }, now);
         }
-      } else if (now < this.lastStructuralCosmeticOnlyUntil) {
-        // Drop accumulated cosmetic-recovery signal so the next legitimate
-        // burst starts fresh.
-        this.cosmeticRecoveryDebouncer.reset();
       }
       return;
     }
@@ -534,10 +509,8 @@ export class ActivityMonitor {
   // classifiers (cosmetic-only, time-counter, spinner) over the snapshot and
   // applies the result:
   //
-  //   * cosmetic-only → set a sticky TTL during which idle→busy escalation
-  //     from the line-rewrite tier is suppressed
-  //   * spinner / time-counter → confirmatory working signal, recorded
-  //     through the existing workingSignalDebouncer pathway
+  //   * cosmetic-only → low-confidence visible-output signal
+  //   * spinner / time-counter → higher-confidence visible-output signal
   //
   // Frames are dropped when resize-suppressed, before boot-complete, or when
   // there's no visible-lines accessor (non-agent terminals).
@@ -557,10 +530,10 @@ export class ActivityMonitor {
 
   private applyStructuralSignal(signal: StructuralSignal, confidence: number, now: number): void {
     if (signal === "cosmetic-only") {
-      this.lastStructuralCosmeticOnlyUntil = now + ActivityMonitor.STRUCTURAL_COSMETIC_ONLY_TTL_MS;
-      // Drop in-flight cosmetic recovery accumulation: the structural tier
-      // has overruled any half-built escalation from the regex tier.
-      this.cosmeticRecoveryDebouncer.reset();
+      // A cosmetic-only 2026 frame is still visible output. The regression we
+      // are fixing here was caused by treating this signal as a veto, which let
+      // agents visibly redraw forever while remaining in `waiting`.
+      this.noteStructuralWorkingSignal(now, Math.max(confidence, 0.7));
       return;
     }
 
@@ -570,6 +543,7 @@ export class ActivityMonitor {
   }
 
   private noteStructuralWorkingSignal(now: number, confidence: number): void {
+    this.lastActivityTimestamp = now;
     if (this.inputTracker.isRecentUserInput(now)) {
       // The user just typed; require sustained signal across user input
       // before recovering (matches the regex tier's behavior).
@@ -632,7 +606,6 @@ export class ActivityMonitor {
     this.structuralRecoveryDebouncer.reset();
     this.lineRewriteDetector.reset();
     this.synchronizedFrameAnalyzer.reset();
-    this.lastStructuralCosmeticOnlyUntil = 0;
     this.patternBuf.reset();
     this.bootDetector.reset();
     this.resizeSuppressUntil = 0;
@@ -671,7 +644,6 @@ export class ActivityMonitor {
     // tied to the current agent's rendering. Swapping detectors is a strong
     // signal that the agent identity changed — discard accumulated state.
     this.synchronizedFrameAnalyzer.reset();
-    this.lastStructuralCosmeticOnlyUntil = 0;
   }
 
   notifySubmission(): void {
@@ -686,7 +658,6 @@ export class ActivityMonitor {
     // (rowOffset, col); a resize invalidates that mapping. Reset so the
     // first post-resize frame doesn't compare against pre-resize cells.
     this.synchronizedFrameAnalyzer.reset();
-    this.lastStructuralCosmeticOnlyUntil = 0;
   }
 
   private isResizeSuppressed(now: number): boolean {

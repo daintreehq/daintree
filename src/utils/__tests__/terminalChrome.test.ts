@@ -147,18 +147,18 @@ describe("deriveTerminalChrome", () => {
     });
   });
 
-  it("demotes cleared sticky detection when legacy state lacks agentState", () => {
+  it("keeps launch-agent chrome when sticky detection clears without explicit exit", () => {
     expect(
       deriveTerminalChrome({
         launchAgentId: "claude",
         everDetectedAgent: true,
       })
     ).toMatchObject({
-      iconId: null,
-      label: "Terminal",
-      isAgent: false,
-      agentId: null,
-      runtimeKind: "none",
+      iconId: "claude",
+      label: "Claude",
+      isAgent: true,
+      agentId: "claude",
+      runtimeKind: "agent",
     });
   });
 

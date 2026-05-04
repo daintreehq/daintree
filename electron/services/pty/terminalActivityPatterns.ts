@@ -181,17 +181,15 @@ export function buildActivityMonitorOptions(
   const promptHintPatterns = buildPromptHintPatterns(detection, effectiveAgentId);
   const completionPatterns = buildCompletionPatterns(detection, effectiveAgentId);
 
-  // Sample-cadence-invariant leaky bucket (#6666). Drains at 100 bytes/sec,
-  // fires when ≥200 bytes accumulate, single chunks contribute at most 120
-  // bytes (the noise gate that prevents one oversized status-line write from
-  // tripping the gate). At 50ms tier with 50-byte chunks the bucket fills in
-  // ~5 frames; at 500ms tier with 100-byte chunks it fills in 3 frames —
-  // identical work-detection sensitivity at either polling cadence.
+  // Sample-cadence-invariant leaky bucket (#6666), tuned back toward the
+  // v0.7.1 contract: small visible output should recover an agent to working,
+  // and sustained silence should return it to waiting. Idle protocol noise is
+  // stripped before this detector, so the threshold can remain low.
   const outputActivityDetection = {
     enabled: true,
-    leakRatePerMs: 0.1,
-    activationThreshold: 200,
-    maxBytesPerFrame: 120,
+    leakRatePerMs: 0.032,
+    activationThreshold: 32,
+    maxBytesPerFrame: 64,
   };
 
   const getVisibleLines = effectiveAgentId ? deps.getVisibleLines : undefined;
