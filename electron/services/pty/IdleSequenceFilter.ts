@@ -15,6 +15,14 @@
 // chunk boundaries (rare in practice, since node-pty reads at OS boundaries
 // and most idle-noise sequences are short) are not stripped. OutputVolumeDetector's
 // minFrames gate is the secondary defense for those cases.
+//
+// `?2026h` / `?2026l` (DEC mode 2026 — Synchronized Output) is stripped here
+// for the renderer-bound and byte-volume paths, but the headless terminal in
+// TerminalProcess writes the raw PTY data straight through, which lets
+// SynchronizedFrameDetector hook xterm's parser for frame-close events
+// (#6668). Removing 2026 from this list would re-introduce the false-positive
+// idle→busy escalations on cosmetic redraws that the structural tier exists
+// to prevent.
 
 // eslint-disable-next-line no-control-regex
 const DECSET_NOISE = /\x1b\[\?(?:25|1004|2004|2026|1049)[hl]/gu;

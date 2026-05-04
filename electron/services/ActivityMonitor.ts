@@ -12,6 +12,11 @@ import { WorkingSignalDebouncer } from "./pty/WorkingSignalDebouncer.js";
 import { LineRewriteDetector, isStatusLineRewrite } from "./pty/LineRewriteDetector.js";
 import { stripIdleTerminalSequences } from "./pty/IdleSequenceFilter.js";
 import {
+  SynchronizedFrameAnalyzer,
+  type FrameSnapshot,
+  type StructuralSignal,
+} from "./pty/SynchronizedFrameAnalyzer.js";
+import {
   detectPrompt,
   detectPromptLexeme,
   DEFAULT_PROMPT_PATTERNS,
@@ -140,9 +145,25 @@ export class ActivityMonitor {
   // "no working signal" branch resets sustainedSince every poll, which would
   // erase accumulated spinner-tick signal between sparse cosmetic frames.
   private readonly cosmeticRecoveryDebouncer: WorkingSignalDebouncer;
+  // Structural tier (#6668) cannot share workingSignalDebouncer because
+  // runPollingCycle's "no working signal this tick" branch calls
+  // shouldTriggerRecovery(now, false), which would zero the structural
+  // sustainedSince between sparse frame-close events (one every 80-100ms is
+  // typical, vs. the polling cycle's 50ms cadence).
+  private readonly structuralRecoveryDebouncer: WorkingSignalDebouncer;
   private readonly lineRewriteDetector: LineRewriteDetector;
   private readonly completionTimer: CompletionTimer;
   private readonly bootDetector: BootDetector;
+  // Structural-signal tier (#6668). Sits above the regex-based pattern tier:
+  // classifies DEC mode 2026 frame snapshots as cosmetic-only (suppress
+  // idle→working escalation), spinner, or time-counter. Driven by
+  // SynchronizedFrameDetector in TerminalProcess via onSynchronizedFrame().
+  private readonly synchronizedFrameAnalyzer: SynchronizedFrameAnalyzer;
+  // Sticky window during which idle→working escalation from cosmetic line
+  // rewrites is suppressed. Set by onSynchronizedFrame when a structural
+  // cosmetic-only signal arrives; consulted in onData()'s recovery path.
+  private lastStructuralCosmeticOnlyUntil = 0;
+  private static readonly STRUCTURAL_COSMETIC_ONLY_TTL_MS = 600;
 
   // Resize suppression
   private resizeSuppressUntil = 0;
@@ -230,6 +251,9 @@ export class ActivityMonitor {
     this.cosmeticRecoveryDebouncer = new WorkingSignalDebouncer(
       options?.workingRecoveryDelayMs ?? 1500
     );
+    this.structuralRecoveryDebouncer = new WorkingSignalDebouncer(
+      options?.workingRecoveryDelayMs ?? 1500
+    );
 
     // Snapshot tier-aware recovery thresholds. Active values default to the
     // detector-instantiation values so the active-tier path is identical to
@@ -242,6 +266,8 @@ export class ActivityMonitor {
       options?.backgroundWorkingRecoveryDelayMs ?? this.activeWorkingRecoveryDelayMs;
 
     this.lineRewriteDetector = new LineRewriteDetector(options?.lineRewriteDetection);
+
+    this.synchronizedFrameAnalyzer = new SynchronizedFrameAnalyzer();
 
     this.completionTimer = new CompletionTimer();
 
@@ -299,10 +325,12 @@ export class ActivityMonitor {
       this.outputVolumeDetector.reconfigureWindow(this.backgroundOutputWindowMs);
       this.workingSignalDebouncer.setDelay(this.backgroundWorkingRecoveryDelayMs);
       this.cosmeticRecoveryDebouncer.setDelay(this.backgroundWorkingRecoveryDelayMs);
+      this.structuralRecoveryDebouncer.setDelay(this.backgroundWorkingRecoveryDelayMs);
     } else {
       this.outputVolumeDetector.reconfigureWindow(this.activeOutputWindowMs);
       this.workingSignalDebouncer.setDelay(this.activeWorkingRecoveryDelayMs);
       this.cosmeticRecoveryDebouncer.setDelay(this.activeWorkingRecoveryDelayMs);
+      this.structuralRecoveryDebouncer.setDelay(this.activeWorkingRecoveryDelayMs);
     }
   }
 
@@ -427,17 +455,29 @@ export class ActivityMonitor {
       // through a dedicated debouncer. Gated on getVisibleLines so this only
       // applies to agent terminals, and on isResizeSuppressed so window-resize
       // redraws don't false-positive recovery.
+      //
+      // Structural cosmetic-only suppression (#6668): a recent
+      // synchronized-output frame classified as "cosmetic-only" disqualifies
+      // this recovery path. Without this guard, a spinner-only redraw inside
+      // a 2026 frame would still escalate idle→busy via the line-rewrite
+      // tier, which is exactly the false positive the structural tier exists
+      // to prevent.
       if (
         this.getVisibleLines &&
         this.state === "idle" &&
         !this.isResizeSuppressed(now) &&
         !this.inputTracker.isRecentUserInput(now) &&
-        this.bootDetector.hasExitedBootState
+        this.bootDetector.hasExitedBootState &&
+        now >= this.lastStructuralCosmeticOnlyUntil
       ) {
         if (this.cosmeticRecoveryDebouncer.shouldTriggerRecovery(now, true)) {
           this.cosmeticRecoveryDebouncer.reset();
           this.becomeBusy({ trigger: "output" }, now);
         }
+      } else if (now < this.lastStructuralCosmeticOnlyUntil) {
+        // Drop accumulated cosmetic-recovery signal so the next legitimate
+        // burst starts fresh.
+        this.cosmeticRecoveryDebouncer.reset();
       }
       return;
     }
@@ -489,6 +529,71 @@ export class ActivityMonitor {
     }
   }
 
+  // Structural-signal tier entry point (#6668). Called by
+  // SynchronizedFrameDetector once per DEC mode 2026 frame-close. Runs three
+  // classifiers (cosmetic-only, time-counter, spinner) over the snapshot and
+  // applies the result:
+  //
+  //   * cosmetic-only → set a sticky TTL during which idle→busy escalation
+  //     from the line-rewrite tier is suppressed
+  //   * spinner / time-counter → confirmatory working signal, recorded
+  //     through the existing workingSignalDebouncer pathway
+  //
+  // Frames are dropped when resize-suppressed, before boot-complete, or when
+  // there's no visible-lines accessor (non-agent terminals).
+  onSynchronizedFrame(snapshot: FrameSnapshot): void {
+    if (this.isDisposed) return;
+    if (!this.getVisibleLines) return;
+
+    const now = Date.now();
+    if (this.isResizeSuppressed(now)) return;
+    // Pre-boot frames are part of the agent's startup chrome — let the boot
+    // detector handle them via the regular onData path.
+    if (!this.bootDetector.hasExitedBootState) return;
+
+    const result = this.synchronizedFrameAnalyzer.classify(snapshot);
+    this.applyStructuralSignal(result.signal, result.confidence, now);
+  }
+
+  private applyStructuralSignal(signal: StructuralSignal, confidence: number, now: number): void {
+    if (signal === "cosmetic-only") {
+      this.lastStructuralCosmeticOnlyUntil = now + ActivityMonitor.STRUCTURAL_COSMETIC_ONLY_TTL_MS;
+      // Drop in-flight cosmetic recovery accumulation: the structural tier
+      // has overruled any half-built escalation from the regex tier.
+      this.cosmeticRecoveryDebouncer.reset();
+      return;
+    }
+
+    if (signal === "spinner" || signal === "time-counter") {
+      this.noteStructuralWorkingSignal(now, confidence);
+    }
+  }
+
+  private noteStructuralWorkingSignal(now: number, confidence: number): void {
+    if (this.inputTracker.isRecentUserInput(now)) {
+      // The user just typed; require sustained signal across user input
+      // before recovering (matches the regex tier's behavior).
+      this.structuralRecoveryDebouncer.shouldTriggerRecovery(now, false);
+      return;
+    }
+
+    // For an already-busy monitor, structural confirmation is a heartbeat:
+    // refresh workingHoldUntil so the idle debounce timer doesn't fire mid-
+    // thought (#6365 lesson).
+    if (this.state === "busy") {
+      this.recordWorkingSignal(now);
+      this.resetDebounceTimer();
+      return;
+    }
+
+    // Idle → busy recovery: a single blip is not enough; signal must persist
+    // across the structural-tier debounce window.
+    if (this.structuralRecoveryDebouncer.shouldTriggerRecovery(now, true)) {
+      this.structuralRecoveryDebouncer.reset();
+      this.becomeBusy({ trigger: "pattern", patternConfidence: confidence }, now);
+    }
+  }
+
   isHighOutputActivity(now: number = Date.now()): boolean {
     return this.highOutputDetector.isHighOutput(now);
   }
@@ -524,7 +629,10 @@ export class ActivityMonitor {
     this.highOutputDetector.reset();
     this.workingSignalDebouncer.reset();
     this.cosmeticRecoveryDebouncer.reset();
+    this.structuralRecoveryDebouncer.reset();
     this.lineRewriteDetector.reset();
+    this.synchronizedFrameAnalyzer.reset();
+    this.lastStructuralCosmeticOnlyUntil = 0;
     this.patternBuf.reset();
     this.bootDetector.reset();
     this.resizeSuppressUntil = 0;
@@ -559,6 +667,11 @@ export class ActivityMonitor {
     this.lastPatternResult = undefined;
     this.lastPatternResultAt = 0;
     this.lastWorkingIndicatorTimestamp = 0;
+    // Structural tier holds per-cell ring-buffer history that is implicitly
+    // tied to the current agent's rendering. Swapping detectors is a strong
+    // signal that the agent identity changed — discard accumulated state.
+    this.synchronizedFrameAnalyzer.reset();
+    this.lastStructuralCosmeticOnlyUntil = 0;
   }
 
   notifySubmission(): void {
@@ -569,6 +682,11 @@ export class ActivityMonitor {
   notifyResize(suppressionMs = 1000): void {
     this.resizeSuppressUntil = Date.now() + suppressionMs;
     this.highOutputDetector.resetWindow();
+    // Structural tier keys cell ring buffers by viewport-bottom-relative
+    // (rowOffset, col); a resize invalidates that mapping. Reset so the
+    // first post-resize frame doesn't compare against pre-resize cells.
+    this.synchronizedFrameAnalyzer.reset();
+    this.lastStructuralCosmeticOnlyUntil = 0;
   }
 
   private isResizeSuppressed(now: number): boolean {
@@ -963,6 +1081,7 @@ export class ActivityMonitor {
     // starts fresh — otherwise a single spinner tick after busy→idle would
     // immediately re-trigger recovery without sustained signal.
     this.cosmeticRecoveryDebouncer.reset();
+    this.structuralRecoveryDebouncer.reset();
 
     // Reset completion state for the new work cycle
     this.completionTimer.reset();

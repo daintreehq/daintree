@@ -4212,4 +4212,240 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
   });
+
+  describe("Structural-signal tier (Issue #6668)", () => {
+    type FrameSnapshot = import("../pty/SynchronizedFrameAnalyzer.js").FrameSnapshot;
+
+    function buildSnapshot(opts: {
+      capturedAt: number;
+      bottomRowText: string;
+      higherRows?: string[];
+      cols?: number;
+      cycleAtCol?: { col: number; codes: number[]; frameIndex: number };
+    }): FrameSnapshot {
+      const cols = opts.cols ?? 40;
+      const rows: { code: number; width: number }[][] = [];
+      const higherRows = opts.higherRows ?? [];
+
+      for (const text of higherRows) {
+        const row: { code: number; width: number }[] = [];
+        for (let i = 0; i < cols; i++) {
+          row.push({ code: i < text.length ? text.codePointAt(i)! : 0x20, width: 1 });
+        }
+        rows.push(row);
+      }
+
+      const bottomRow: { code: number; width: number }[] = [];
+      const text = opts.bottomRowText;
+      for (let i = 0; i < cols; i++) {
+        let code = i < text.length ? text.codePointAt(i)! : 0x20;
+        if (opts.cycleAtCol && i === opts.cycleAtCol.col) {
+          code = opts.cycleAtCol.codes[opts.cycleAtCol.frameIndex % opts.cycleAtCol.codes.length];
+        }
+        bottomRow.push({ code, width: 1 });
+      }
+      rows.push(bottomRow);
+
+      return {
+        capturedAt: opts.capturedAt,
+        terminalRows: 24,
+        terminalCols: cols,
+        rows,
+        bottomRowText: text,
+        secondToBottomText: higherRows.length > 0 ? higherRows[higherRows.length - 1] : "",
+      };
+    }
+
+    it("idles agent stays idle on cosmetic-only frames (no false-positive escalation)", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("struct-1", 1000, onStateChange, {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        workingRecoveryDelayMs: 1500,
+        idleDebounceMs: 2500,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(2500);
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      // Two structural frames classify as cosmetic-only — only the bottom
+      // row changes between them.
+      monitor.onSynchronizedFrame(
+        buildSnapshot({
+          capturedAt: Date.now(),
+          higherRows: ["upper line", "middle line"],
+          bottomRowText: "spinner ✦",
+        })
+      );
+      vi.advanceTimersByTime(100);
+      monitor.onSynchronizedFrame(
+        buildSnapshot({
+          capturedAt: Date.now(),
+          higherRows: ["upper line", "middle line"],
+          bottomRowText: "spinner ✧",
+        })
+      );
+
+      // Now feed a cosmetic redraw — would normally escalate idle→busy via
+      // the line-rewrite tier's recovery debouncer, but the structural
+      // cosmetic-only flag must suppress it.
+      vi.advanceTimersByTime(100);
+      monitor.onData("\r⠙ working");
+      vi.advanceTimersByTime(100);
+      monitor.onData("\r⠹ working");
+
+      expect(monitor.getState()).toBe("idle");
+      monitor.dispose();
+    });
+
+    it("recovers idle→busy on sustained spinner frames", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("struct-2", 1000, onStateChange, {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        workingRecoveryDelayMs: 800,
+        idleDebounceMs: 2500,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(2500);
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      // Build a spinner cycle at col 0 across 12 frames — the cell cycles
+      // through 4 distinct codepoints at 100ms intervals while the rest of
+      // the row stays static. 12 × 100ms = 1200ms spans the 800ms recovery
+      // debounce (with the spinner classifier needing 3 frames to identify
+      // the cycle, leaving ~900ms of sustained signal).
+      const cycle = [0x280b, 0x2819, 0x2839, 0x2838];
+      for (let i = 0; i < 12; i++) {
+        vi.advanceTimersByTime(100);
+        monitor.onSynchronizedFrame(
+          buildSnapshot({
+            capturedAt: Date.now(),
+            bottomRowText: " static text",
+            cycleAtCol: { col: 0, codes: cycle, frameIndex: i },
+          })
+        );
+      }
+
+      // After the workingRecoveryDelayMs window, recovery should have fired.
+      expect(monitor.getState()).toBe("busy");
+      monitor.dispose();
+    });
+
+    it("recovers idle→busy on monotonic time-counter frames", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("struct-3", 1000, onStateChange, {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        workingRecoveryDelayMs: 800,
+        idleDebounceMs: 2500,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(2500);
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      // First two frames establish the increment streak (signal=time-counter
+      // fires on frame 2 once counterStreak reaches 2). Subsequent frames
+      // sustain the structural signal across the 800ms debounce window.
+      monitor.onSynchronizedFrame(
+        buildSnapshot({ capturedAt: Date.now(), bottomRowText: "Working… 1s" })
+      );
+      vi.advanceTimersByTime(200);
+      monitor.onSynchronizedFrame(
+        buildSnapshot({ capturedAt: Date.now(), bottomRowText: "Working… 2s" })
+      );
+      vi.advanceTimersByTime(400);
+      monitor.onSynchronizedFrame(
+        buildSnapshot({ capturedAt: Date.now(), bottomRowText: "Working… 3s" })
+      );
+      vi.advanceTimersByTime(500);
+      monitor.onSynchronizedFrame(
+        buildSnapshot({ capturedAt: Date.now(), bottomRowText: "Working… 4s" })
+      );
+
+      expect(monitor.getState()).toBe("busy");
+      monitor.dispose();
+    });
+
+    it("ignores frames during resize suppression", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("struct-4", 1000, onStateChange, {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        workingRecoveryDelayMs: 800,
+        idleDebounceMs: 2500,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(2500);
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      monitor.notifyResize(1000);
+
+      const cycle = [0x280b, 0x2819, 0x2839, 0x2838];
+      for (let i = 0; i < 8; i++) {
+        // Stop short of the 1000ms suppression window so every frame is
+        // suppressed.
+        vi.advanceTimersByTime(100);
+        monitor.onSynchronizedFrame(
+          buildSnapshot({
+            capturedAt: Date.now(),
+            bottomRowText: " static",
+            cycleAtCol: { col: 0, codes: cycle, frameIndex: i },
+          })
+        );
+      }
+
+      expect(monitor.getState()).toBe("idle");
+      monitor.dispose();
+    });
+
+    it("ignores frames before boot completes", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("struct-5", 1000, onStateChange, {
+        getVisibleLines: () => ["", "Booting..."],
+        getCursorLine: () => "Booting...",
+        workingRecoveryDelayMs: 800,
+        idleDebounceMs: 2500,
+      });
+
+      monitor.startPolling();
+      // Don't advance enough for boot to complete; remain in boot.
+      onStateChange.mockClear();
+
+      const cycle = [0x280b, 0x2819, 0x2839, 0x2838];
+      for (let i = 0; i < 6; i++) {
+        monitor.onSynchronizedFrame(
+          buildSnapshot({
+            capturedAt: Date.now() + i * 100,
+            bottomRowText: " static",
+            cycleAtCol: { col: 0, codes: cycle, frameIndex: i },
+          })
+        );
+      }
+
+      // No state-change calls from the structural tier during boot.
+      const structuralCalls = onStateChange.mock.calls.filter(
+        ([, , , metadata]) => metadata?.trigger === "pattern"
+      );
+      expect(structuralCalls).toHaveLength(0);
+      monitor.dispose();
+    });
+  });
 });
