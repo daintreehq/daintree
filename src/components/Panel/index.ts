@@ -6,6 +6,8 @@ export { TabButton } from "./TabButton";
 export type { TabInfo, TabButtonProps } from "./TabButton";
 export { SortableTabButton } from "./SortableTabButton";
 export type { SortableTabButtonProps } from "./SortableTabButton";
+export { PanelTabList } from "./PanelTabList";
+export type { PanelTabListProps } from "./PanelTabList";
 export {
   TitleEditingProvider,
   useTitleEditing,

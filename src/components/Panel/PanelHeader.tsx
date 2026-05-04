@@ -37,7 +37,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
-import { LayoutGroup } from "framer-motion";
+import { PanelTabList } from "./PanelTabList";
 import type { PanelKind } from "@/types";
 import { cn, getBaseTitle } from "@/lib/utils";
 import { formatShortcutForTooltip } from "@/lib/platform";
@@ -256,6 +256,10 @@ function PanelHeaderComponent({
   const toggleDockShortcut = useKeybindingDisplay("terminal.toggleDock");
   const maximizeShortcut = useKeybindingDisplay("terminal.maximize");
   const closeShortcut = useKeybindingDisplay("terminal.close");
+  const addTabTooltipContent = createTooltipContent(
+    "Duplicate panel as new tab",
+    duplicateShortcut
+  );
 
   // Terminal record for overflow menu actions (single shallow selector, matching TerminalContextMenu pattern)
   const terminal = usePanelStore(useShallow((state) => state.panelsById[id]));
@@ -543,7 +547,7 @@ function PanelHeaderComponent({
       onDoubleClick={handleHeaderDoubleClick}
     >
       {/* Tab bar - shown when there are multiple tabs */}
-      {hasTabs ? (
+      {hasTabs && tabs ? (
         canReorderTabs ? (
           <DndContext
             sensors={tabSensors}
@@ -552,121 +556,63 @@ function PanelHeaderComponent({
             modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
           >
             <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
-              <div className="relative min-w-0 flex-1 flex">
-                <div
-                  ref={setTabListEl}
-                  className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
-                  role="tablist"
-                  aria-label="Panel tabs"
-                  onKeyDown={handleTabListKeyDown}
-                >
-                  <LayoutGroup id={`panel-tabs-${id}`}>
-                    <div className="flex items-center">
-                      {tabs.map((tab) => (
-                        <SortableTabButton
-                          key={tab.id}
-                          id={tab.id}
-                          title={getBaseTitle(tab.title)}
-                          chrome={tab.chrome}
-                          kind={tab.kind}
-                          agentState={tab.agentState}
-                          isActive={tab.isActive}
-                          presetColor={tab.presetColor}
-                          isUsingFallback={tab.isUsingFallback}
-                          fallbackTooltip={tab.fallbackTooltip}
-                          hasDangerousFlags={tab.hasDangerousFlags}
-                          onClick={() => onTabClick?.(tab.id)}
-                          onClose={() => onTabClose?.(tab.id)}
-                          onRename={
-                            onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined
-                          }
-                        />
-                      ))}
-                      {onAddTab && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onAddTab();
-                              }}
-                              onPointerDown={(e) => e.stopPropagation()}
-                              className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                              aria-label="Duplicate panel as new tab"
-                              type="button"
-                            >
-                              <Plus className="w-3 h-3" aria-hidden="true" />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">
-                            {createTooltipContent("Duplicate panel as new tab", duplicateShortcut)}
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
-                    </div>
-                  </LayoutGroup>
-                </div>
-                {overflowTrigger}
-              </div>
+              <PanelTabList
+                layoutGroupId={`panel-tabs-dnd-${id}`}
+                tabs={tabs}
+                tabListRef={setTabListEl}
+                onKeyDown={handleTabListKeyDown}
+                onAddTab={onAddTab}
+                addTabTooltipContent={addTabTooltipContent}
+                overflowTrigger={overflowTrigger}
+                renderTab={(tab) => (
+                  <SortableTabButton
+                    key={tab.id}
+                    id={tab.id}
+                    title={getBaseTitle(tab.title)}
+                    chrome={tab.chrome}
+                    kind={tab.kind}
+                    agentState={tab.agentState}
+                    isActive={tab.isActive}
+                    presetColor={tab.presetColor}
+                    isUsingFallback={tab.isUsingFallback}
+                    fallbackTooltip={tab.fallbackTooltip}
+                    hasDangerousFlags={tab.hasDangerousFlags}
+                    onClick={() => onTabClick?.(tab.id)}
+                    onClose={() => onTabClose?.(tab.id)}
+                    onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
+                  />
+                )}
+              />
             </SortableContext>
           </DndContext>
         ) : (
-          <div className="relative min-w-0 flex-1 flex">
-            <div
-              ref={setTabListEl}
-              className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
-              role="tablist"
-              aria-label="Panel tabs"
-              onKeyDown={handleTabListKeyDown}
-            >
-              <LayoutGroup id={`panel-tabs-${id}`}>
-                <div className="flex items-center">
-                  {tabs.map((tab) => (
-                    <TabButton
-                      key={tab.id}
-                      id={tab.id}
-                      title={getBaseTitle(tab.title)}
-                      chrome={tab.chrome}
-                      kind={tab.kind}
-                      agentState={tab.agentState}
-                      isActive={tab.isActive}
-                      presetColor={tab.presetColor}
-                      isUsingFallback={tab.isUsingFallback}
-                      fallbackTooltip={tab.fallbackTooltip}
-                      hasDangerousFlags={tab.hasDangerousFlags}
-                      onClick={() => onTabClick?.(tab.id)}
-                      onClose={() => onTabClose?.(tab.id)}
-                      onRename={
-                        onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined
-                      }
-                    />
-                  ))}
-                  {onAddTab && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onAddTab();
-                          }}
-                          onPointerDown={(e) => e.stopPropagation()}
-                          className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                          aria-label="Duplicate panel as new tab"
-                          type="button"
-                        >
-                          <Plus className="w-3 h-3" aria-hidden="true" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        {createTooltipContent("Duplicate panel as new tab", duplicateShortcut)}
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-              </LayoutGroup>
-            </div>
-            {overflowTrigger}
-          </div>
+          <PanelTabList
+            layoutGroupId={`panel-tabs-static-${id}`}
+            tabs={tabs}
+            tabListRef={setTabListEl}
+            onKeyDown={handleTabListKeyDown}
+            onAddTab={onAddTab}
+            addTabTooltipContent={addTabTooltipContent}
+            overflowTrigger={overflowTrigger}
+            renderTab={(tab) => (
+              <TabButton
+                key={tab.id}
+                id={tab.id}
+                title={getBaseTitle(tab.title)}
+                chrome={tab.chrome}
+                kind={tab.kind}
+                agentState={tab.agentState}
+                isActive={tab.isActive}
+                presetColor={tab.presetColor}
+                isUsingFallback={tab.isUsingFallback}
+                fallbackTooltip={tab.fallbackTooltip}
+                hasDangerousFlags={tab.hasDangerousFlags}
+                onClick={() => onTabClick?.(tab.id)}
+                onClose={() => onTabClose?.(tab.id)}
+                onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
+              />
+            )}
+          />
         )
       ) : (
         <div className="flex items-center gap-2 min-w-0">
