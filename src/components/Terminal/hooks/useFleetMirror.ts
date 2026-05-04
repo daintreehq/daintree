@@ -32,7 +32,7 @@ export function useFleetMirror({
 
   // Primary → followers: write our current draft to each other armed pane's draft slot
   useEffect(() => {
-    if (!isFleetPrimary) return;
+    if (!isFleetPrimary || disabled) return;
     const setDraft = useTerminalInputStore.getState().setDraftInput;
     for (const otherId of armedIds) {
       if (otherId === terminalId) continue;

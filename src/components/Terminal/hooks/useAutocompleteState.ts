@@ -53,7 +53,7 @@ export function useAutocompleteState({
         : activeMode === "selection"
           ? `selection:${selectionContext?.atStart ?? ""}`
           : activeMode === "diff"
-            ? `diff:${diffContext?.atStart ?? ""}:${diffContext?.tokenEnd ?? ""}`
+            ? `diff:${diffContext?.atStart ?? ""}:${diffContext?.tokenEnd ?? ""}:${diffContext?.diffType ?? ""}`
             : activeMode === "file"
               ? `file:${atContext?.queryForSearch ?? ""}`
               : activeMode === "command"
@@ -68,6 +68,7 @@ export function useAutocompleteState({
     atContext?.queryForSearch,
     diffContext?.atStart,
     diffContext?.tokenEnd,
+    diffContext?.diffType,
     terminalContext?.atStart,
     selectionContext?.atStart,
     slashContext?.query,

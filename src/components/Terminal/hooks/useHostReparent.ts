@@ -39,6 +39,7 @@ export function useHostReparent({
       compactHost.appendChild(view.dom);
       view.dispatch({ effects: autoSizeCompartmentRef.current.reconfigure(createAutoSize()) });
       view.dom.style.height = "";
+      view.scrollDOM.style.overflowY = "";
       requestAnimationFrame(() => {
         view.requestMeasure();
         view.focus();
