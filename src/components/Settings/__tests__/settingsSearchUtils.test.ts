@@ -127,7 +127,7 @@ describe("countMatchesPerTab", () => {
   it("aggregates counts — total equals result count", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "default");
     const counts = countMatchesPerTab(results);
-    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    const total = Object.values(counts).reduce((a, b) => (a ?? 0) + (b ?? 0), 0);
     expect(total).toBe(results.length);
   });
 

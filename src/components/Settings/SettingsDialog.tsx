@@ -1,6 +1,5 @@
 import {
   Suspense,
-  lazy,
   startTransition,
   useState,
   useEffect,
@@ -25,27 +24,18 @@ import {
 } from "@/store";
 import {
   X,
-  Blocks,
   Github,
-  LayoutGrid,
-  Mic,
-  PanelRight,
-  Keyboard,
-  SquareTerminal,
   Settings as SettingsIcon,
-  Settings2,
-  LifeBuoy,
   Bell,
   Search,
   ChevronRight,
   KeyRound,
-  Shield,
   FileCode,
   GitBranch,
   Command,
   AlertTriangle,
 } from "lucide-react";
-import { DaintreeIcon, FolderGit2, Plug, Workflow, McpServerIcon } from "@/components/icons";
+import { Workflow } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import {
@@ -58,93 +48,17 @@ import {
 import { appClient } from "@/clients";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { GeneralTab } from "./GeneralTab";
-const importAgentSettings = () => import("./AgentSettings");
-const importTerminalSettingsTab = () => import("./TerminalSettingsTab");
-const importTerminalAppearanceTab = () => import("./TerminalAppearanceTab");
-const importGitHubSettingsTab = () => import("./GitHubSettingsTab");
-const importTroubleshootingTab = () => import("./TroubleshootingTab");
-const importNotificationSettingsTab = () => import("./NotificationSettingsTab");
-const importPortalSettingsTab = () => import("./PortalSettingsTab");
-const importKeyboardShortcutsTab = () => import("./KeyboardShortcutsTab");
-const importWorktreeSettingsTab = () => import("./WorktreeSettingsTab");
-const importToolbarSettingsTab = () => import("./ToolbarSettingsTab");
-const importIntegrationsTab = () => import("./IntegrationsTab");
-const importVoiceInputSettingsTab = () => import("./VoiceInputSettingsTab");
-
-const importMcpServerSettingsTab = () => import("./McpServerSettingsTab");
-const importDaintreeAssistantSettingsTab = () => import("./DaintreeAssistantSettingsTab");
-const importEnvironmentSettingsTab = () => import("./EnvironmentSettingsTab");
-const importPrivacyDataTab = () => import("./PrivacyDataTab");
-
-const LazyAgentSettings = lazy(() =>
-  importAgentSettings().then((m) => ({ default: m.AgentSettings }))
-);
-const LazyTerminalSettingsTab = lazy(() =>
-  importTerminalSettingsTab().then((m) => ({ default: m.TerminalSettingsTab }))
-);
-const LazyTerminalAppearanceTab = lazy(() =>
-  importTerminalAppearanceTab().then((m) => ({ default: m.TerminalAppearanceTab }))
-);
-const LazyGitHubSettingsTab = lazy(() =>
-  importGitHubSettingsTab().then((m) => ({ default: m.GitHubSettingsTab }))
-);
-const LazyTroubleshootingTab = lazy(() =>
-  importTroubleshootingTab().then((m) => ({ default: m.TroubleshootingTab }))
-);
-const LazyNotificationSettingsTab = lazy(() =>
-  importNotificationSettingsTab().then((m) => ({ default: m.NotificationSettingsTab }))
-);
-const LazyPortalSettingsTab = lazy(() =>
-  importPortalSettingsTab().then((m) => ({ default: m.PortalSettingsTab }))
-);
-const LazyKeyboardShortcutsTab = lazy(() =>
-  importKeyboardShortcutsTab().then((m) => ({ default: m.KeyboardShortcutsTab }))
-);
-const LazyWorktreeSettingsTab = lazy(() =>
-  importWorktreeSettingsTab().then((m) => ({ default: m.WorktreeSettingsTab }))
-);
-const LazyToolbarSettingsTab = lazy(() =>
-  importToolbarSettingsTab().then((m) => ({ default: m.ToolbarSettingsTab }))
-);
-const LazyIntegrationsTab = lazy(() =>
-  importIntegrationsTab().then((m) => ({ default: m.IntegrationsTab }))
-);
-const LazyVoiceInputSettingsTab = lazy(() =>
-  importVoiceInputSettingsTab().then((m) => ({ default: m.VoiceInputSettingsTab }))
-);
-
-const LazyMcpServerSettingsTab = lazy(() =>
-  importMcpServerSettingsTab().then((m) => ({ default: m.McpServerSettingsTab }))
-);
-const LazyDaintreeAssistantSettingsTab = lazy(() =>
-  importDaintreeAssistantSettingsTab().then((m) => ({ default: m.DaintreeAssistantSettingsTab }))
-);
-const LazyEnvironmentSettingsTab = lazy(() =>
-  importEnvironmentSettingsTab().then((m) => ({ default: m.EnvironmentSettingsTab }))
-);
-const LazyPrivacyDataTab = lazy(() =>
-  importPrivacyDataTab().then((m) => ({ default: m.PrivacyDataTab }))
-);
-
-function preloadAllSettingsTabs() {
-  importAgentSettings();
-  importTerminalSettingsTab();
-  importTerminalAppearanceTab();
-  importGitHubSettingsTab();
-  importTroubleshootingTab();
-  importNotificationSettingsTab();
-  importPortalSettingsTab();
-  importKeyboardShortcutsTab();
-  importWorktreeSettingsTab();
-  importToolbarSettingsTab();
-  importIntegrationsTab();
-  importVoiceInputSettingsTab();
-
-  importMcpServerSettingsTab();
-  importDaintreeAssistantSettingsTab();
-  importEnvironmentSettingsTab();
-  importPrivacyDataTab();
-}
+import {
+  SETTINGS_REGISTRY,
+  globalTabTitles,
+  globalTabIcons,
+  getSettingsNavGroups,
+  preloadAllSettingsTabs,
+  scopeForTab,
+  type SettingsTab,
+  type SettingsScope,
+  type LazySettingsTabEntry,
+} from "./settingsTabRegistry";
 import { SETTINGS_SEARCH_INDEX } from "./settingsSearchIndex";
 import {
   filterSettings,
@@ -186,38 +100,10 @@ interface SettingsDialogProps {
   projectId?: string | null;
 }
 
-export type SettingsTab =
-  | "general"
-  | "keyboard"
-  | "terminal"
-  | "terminalAppearance"
-  | "worktree"
-  | "agents"
-  | "assistant"
-  | "github"
-  | "portal"
-  | "toolbar"
-  | "notifications"
-  | "integrations"
-  | "voice"
-  | "mcp"
-  | "environment"
-  | "privacy"
-  | "troubleshooting"
-  | "project:general"
-  | "project:context"
-  | "project:variables"
-  | "project:automation"
-  | "project:recipes"
-  | "project:commands"
-  | "project:notifications"
-  | "project:github";
-
-export type SettingsScope = "global" | "project";
-
-function scopeForTab(tab: SettingsTab): SettingsScope {
-  return tab.startsWith("project:") ? "project" : "global";
-}
+// SettingsTab, SettingsScope, scopeForTab imported from settingsTabRegistry.
+// Re-exported for backward compatibility.
+export type { SettingsTab, SettingsScope } from "./settingsTabRegistry";
+export { scopeForTab } from "./settingsTabRegistry";
 
 export function SettingsDialog(props: SettingsDialogProps) {
   // Provider must wrap SettingsDialogInner: the inner component reads the registry
@@ -621,24 +507,7 @@ function SettingsDialogInner({
   );
 
   const tabTitles: Record<SettingsTab, string> = {
-    general: "General",
-    keyboard: "Keyboard Shortcuts",
-    terminal: "Panel Grid",
-    terminalAppearance: "Appearance",
-    worktree: "Worktree Paths",
-    agents: "CLI Agents",
-    assistant: "Daintree Assistant",
-    github: "GitHub Integration",
-    portal: "Portal Links",
-    toolbar: "Toolbar Customization",
-    notifications: "Notifications",
-    integrations: "Integrations",
-    voice: "Voice Input",
-
-    mcp: "MCP Server",
-    environment: "Environment Variables",
-    privacy: "Privacy & Data",
-    troubleshooting: "Troubleshooting",
+    ...globalTabTitles,
     "project:general": "General",
     "project:context": "Context",
     "project:variables": "Variables",
@@ -647,27 +516,10 @@ function SettingsDialogInner({
     "project:commands": "Commands",
     "project:notifications": "Notifications",
     "project:github": "GitHub",
-  };
+  } as Record<SettingsTab, string>;
 
   const tabIcons: Record<SettingsTab, React.ReactNode> = {
-    general: <Settings2 className="w-5 h-5 text-text-secondary" />,
-    keyboard: <Keyboard className="w-5 h-5 text-text-secondary" />,
-    terminal: <LayoutGrid className="w-5 h-5 text-text-secondary" />,
-    terminalAppearance: <SquareTerminal className="w-5 h-5 text-text-secondary" />,
-    worktree: <FolderGit2 className="w-5 h-5 text-text-secondary" />,
-    agents: <Plug className="w-5 h-5 text-text-secondary" />,
-    assistant: <DaintreeIcon className="w-5 h-5 text-text-secondary" size={20} />,
-    github: <Github className="w-5 h-5 text-text-secondary" />,
-    portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
-    toolbar: <SettingsIcon className="w-5 h-5 text-text-secondary" />,
-    notifications: <Bell className="w-5 h-5 text-text-secondary" />,
-    integrations: <Blocks className="w-5 h-5 text-text-secondary" />,
-    voice: <Mic className="w-5 h-5 text-text-secondary" />,
-
-    mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
-    environment: <KeyRound className="w-5 h-5 text-text-secondary" />,
-    privacy: <Shield className="w-5 h-5 text-text-secondary" />,
-    troubleshooting: <LifeBuoy className="w-5 h-5 text-text-secondary" />,
+    ...globalTabIcons,
     "project:general": <SettingsIcon className="w-5 h-5 text-text-secondary" />,
     "project:context": <FileCode className="w-5 h-5 text-text-secondary" />,
     "project:variables": <KeyRound className="w-5 h-5 text-text-secondary" />,
@@ -676,7 +528,7 @@ function SettingsDialogInner({
     "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
     "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
     "project:github": <Github className="w-5 h-5 text-text-secondary" />,
-  };
+  } as Record<SettingsTab, React.ReactNode>;
 
   return (
     <AppDialog
@@ -765,190 +617,27 @@ function SettingsDialogInner({
           >
             {activeScope === "global" ? (
               <>
-                <NavGroup label="General">
-                  <NavItem
-                    tab="general"
-                    icon={<Settings2 className="w-4 h-4" />}
-                    label="General"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.general}
-                    modified={modifiedTabs.has("general")}
-                    hasError={tabsWithErrors.has("general")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="terminalAppearance"
-                    icon={<SquareTerminal className="w-4 h-4" />}
-                    label="Appearance"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.terminalAppearance}
-                    modified={modifiedTabs.has("terminalAppearance")}
-                    hasError={tabsWithErrors.has("terminalAppearance")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="keyboard"
-                    icon={<Keyboard className="w-4 h-4" />}
-                    label="Keyboard"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.keyboard}
-                    hasError={tabsWithErrors.has("keyboard")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="notifications"
-                    icon={<Bell className="w-4 h-4" />}
-                    label="Notifications"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.notifications}
-                    hasError={tabsWithErrors.has("notifications")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="privacy"
-                    icon={<Shield className="w-4 h-4" />}
-                    label="Privacy & Data"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.privacy}
-                    hasError={tabsWithErrors.has("privacy")}
-                    onSelect={handleNavSelect}
-                  />
-                </NavGroup>
-                <NavGroup label="Terminal">
-                  <NavItem
-                    tab="terminal"
-                    icon={<LayoutGrid className="w-4 h-4" />}
-                    label="Panel Grid"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.terminal}
-                    modified={modifiedTabs.has("terminal")}
-                    hasError={tabsWithErrors.has("terminal")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="worktree"
-                    icon={<FolderGit2 className="w-4 h-4" />}
-                    label="Worktree"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.worktree}
-                    hasError={tabsWithErrors.has("worktree")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="toolbar"
-                    icon={<SettingsIcon className="w-4 h-4" />}
-                    label="Toolbar"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.toolbar}
-                    hasError={tabsWithErrors.has("toolbar")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="environment"
-                    icon={<KeyRound className="w-4 h-4" />}
-                    label="Environment"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.environment}
-                    hasError={tabsWithErrors.has("environment")}
-                    onSelect={handleNavSelect}
-                  />
-                </NavGroup>
-                <NavGroup label="Assistant">
-                  <NavItem
-                    tab="assistant"
-                    icon={<DaintreeIcon className="w-4 h-4" size={16} />}
-                    label="Daintree Assistant"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.assistant}
-                    hasError={tabsWithErrors.has("assistant")}
-                    onSelect={handleNavSelect}
-                  />
-                </NavGroup>
-                <NavGroup label="Integrations">
-                  <NavItem
-                    tab="agents"
-                    icon={<Plug className="w-4 h-4" />}
-                    label="CLI Agents"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.agents}
-                    hasError={tabsWithErrors.has("agents")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="github"
-                    icon={<Github className="w-4 h-4" />}
-                    label="GitHub"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.github}
-                    hasError={tabsWithErrors.has("github")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="integrations"
-                    icon={<Blocks className="w-4 h-4" />}
-                    label="Integrations"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.integrations}
-                    hasError={tabsWithErrors.has("integrations")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="voice"
-                    icon={<Mic className="w-4 h-4" />}
-                    label="Voice Input"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.voice}
-                    hasError={tabsWithErrors.has("voice")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="portal"
-                    icon={<PanelRight className="w-4 h-4" />}
-                    label="Portal"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.portal}
-                    hasError={tabsWithErrors.has("portal")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="mcp"
-                    icon={<McpServerIcon className="w-4 h-4" />}
-                    label="MCP Server"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.mcp}
-                    hasError={tabsWithErrors.has("mcp")}
-                    onSelect={handleNavSelect}
-                  />
-                </NavGroup>
-
-                <NavGroup label="Support">
-                  <NavItem
-                    tab="troubleshooting"
-                    icon={<LifeBuoy className="w-4 h-4" />}
-                    label="Troubleshooting"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.troubleshooting}
-                    hasError={tabsWithErrors.has("troubleshooting")}
-                    onSelect={handleNavSelect}
-                  />
-                </NavGroup>
+                {getSettingsNavGroups("global").map((group) => (
+                  <NavGroup key={group.label} label={group.label}>
+                    {group.entries.map((entry) => {
+                      const tabId = entry.id as SettingsTab;
+                      return (
+                        <NavItem
+                          key={entry.id}
+                          tab={tabId}
+                          icon={entry.icon}
+                          label={entry.label}
+                          activeTab={activeTab}
+                          isSearching={isSearching}
+                          matchCount={matchCounts[tabId]}
+                          modified={modifiedTabs.has(tabId)}
+                          hasError={tabsWithErrors.has(tabId)}
+                          onSelect={handleNavSelect}
+                        />
+                      );
+                    })}
+                  </NavGroup>
+                ))}
               </>
             ) : (
               <NavGroup label="Project">
@@ -1119,272 +808,47 @@ function SettingsDialogInner({
                     </button>
                   </div>
                 )}
-                <div
-                  role="tabpanel"
-                  id="settings-panel-general"
-                  aria-labelledby="settings-tab-general"
-                  tabIndex={0}
-                  className={activeTab === "general" ? "" : "hidden"}
-                >
-                  <GeneralTab
-                    appVersion={appVersion}
-                    onNavigateToAgents={(agentId?: string) => {
-                      markTabVisited("agents");
-                      if (agentId) {
-                        setActiveSubtabs((prev) => ({ ...prev, agents: agentId }));
-                      }
-                      startTransition(() => setActiveTab("agents"));
-                    }}
-                    activeSubtab={activeSubtabs["general"] ?? null}
-                    onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, general: id }))}
-                  />
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-keyboard"
-                  aria-labelledby="settings-tab-keyboard"
-                  tabIndex={0}
-                  className={activeTab === "keyboard" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("keyboard") && (
-                    <Suspense fallback={null}>
-                      <LazyKeyboardShortcutsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-terminal"
-                  aria-labelledby="settings-tab-terminal"
-                  tabIndex={0}
-                  className={activeTab === "terminal" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("terminal") && (
-                    <Suspense fallback={null}>
-                      <LazyTerminalSettingsTab
-                        activeSubtab={activeSubtabs["terminal"] ?? null}
-                        onSubtabChange={(id) =>
-                          setActiveSubtabs((prev) => ({ ...prev, terminal: id }))
-                        }
-                      />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-terminalAppearance"
-                  aria-labelledby="settings-tab-terminalAppearance"
-                  tabIndex={0}
-                  className={activeTab === "terminalAppearance" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("terminalAppearance") && (
-                    <Suspense fallback={null}>
-                      <LazyTerminalAppearanceTab
-                        activeSubtab={activeSubtabs["terminalAppearance"] ?? null}
-                        onSubtabChange={(id) =>
-                          setActiveSubtabs((prev) => ({ ...prev, terminalAppearance: id }))
-                        }
-                        onClose={handleClose}
-                      />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-worktree"
-                  aria-labelledby="settings-tab-worktree"
-                  tabIndex={0}
-                  className={activeTab === "worktree" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("worktree") && (
-                    <Suspense fallback={null}>
-                      <LazyWorktreeSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-agents"
-                  aria-labelledby="settings-tab-agents"
-                  tabIndex={0}
-                  className={activeTab === "agents" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("agents") && (
-                    <Suspense fallback={null}>
-                      <LazyAgentSettings
-                        activeSubtab={activeSubtabs["agents"] ?? null}
-                        onSubtabChange={(id) =>
-                          setActiveSubtabs((prev) => ({ ...prev, agents: id }))
-                        }
-                        onSettingsChange={onSettingsChange}
-                      />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-assistant"
-                  aria-labelledby="settings-tab-assistant"
-                  tabIndex={0}
-                  className={activeTab === "assistant" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("assistant") && (
-                    <Suspense fallback={null}>
-                      <LazyDaintreeAssistantSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-github"
-                  aria-labelledby="settings-tab-github"
-                  tabIndex={0}
-                  className={activeTab === "github" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("github") && (
-                    <Suspense fallback={null}>
-                      <LazyGitHubSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-portal"
-                  aria-labelledby="settings-tab-portal"
-                  tabIndex={0}
-                  className={activeTab === "portal" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("portal") && (
-                    <Suspense fallback={null}>
-                      <LazyPortalSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-toolbar"
-                  aria-labelledby="settings-tab-toolbar"
-                  tabIndex={0}
-                  className={activeTab === "toolbar" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("toolbar") && (
-                    <Suspense fallback={null}>
-                      <LazyToolbarSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-notifications"
-                  aria-labelledby="settings-tab-notifications"
-                  tabIndex={0}
-                  className={activeTab === "notifications" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("notifications") && (
-                    <Suspense fallback={null}>
-                      <LazyNotificationSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-integrations"
-                  aria-labelledby="settings-tab-integrations"
-                  tabIndex={0}
-                  className={activeTab === "integrations" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("integrations") && (
-                    <Suspense fallback={null}>
-                      <LazyIntegrationsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-voice"
-                  aria-labelledby="settings-tab-voice"
-                  tabIndex={0}
-                  className={activeTab === "voice" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("voice") && (
-                    <Suspense fallback={null}>
-                      <LazyVoiceInputSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-mcp"
-                  aria-labelledby="settings-tab-mcp"
-                  tabIndex={0}
-                  className={activeTab === "mcp" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("mcp") && (
-                    <Suspense fallback={null}>
-                      <LazyMcpServerSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-environment"
-                  aria-labelledby="settings-tab-environment"
-                  tabIndex={0}
-                  className={activeTab === "environment" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("environment") && (
-                    <Suspense fallback={null}>
-                      <LazyEnvironmentSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-privacy"
-                  aria-labelledby="settings-tab-privacy"
-                  tabIndex={0}
-                  className={activeTab === "privacy" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("privacy") && (
-                    <Suspense fallback={null}>
-                      <LazyPrivacyDataTab
-                        activeSubtab={activeSubtabs["privacy"] ?? null}
-                        onSubtabChange={(id) =>
-                          setActiveSubtabs((prev) => ({ ...prev, privacy: id }))
-                        }
-                      />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-troubleshooting"
-                  aria-labelledby="settings-tab-troubleshooting"
-                  tabIndex={0}
-                  className={activeTab === "troubleshooting" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("troubleshooting") && (
-                    <Suspense fallback={null}>
-                      <LazyTroubleshootingTab />
-                    </Suspense>
-                  )}
-                </div>
+                {SETTINGS_REGISTRY.map((entry) => {
+                  const tabId = entry.id as SettingsTab;
+                  return (
+                    <div
+                      key={entry.id}
+                      role="tabpanel"
+                      id={`settings-panel-${entry.id}`}
+                      aria-labelledby={`settings-tab-${entry.id}`}
+                      tabIndex={0}
+                      className={activeTab === entry.id ? "" : "hidden"}
+                    >
+                      {entry.importKind === "eager" ? (
+                        // Only GeneralTab is eager — render with its specific props
+                        <GeneralTab
+                          appVersion={appVersion}
+                          onNavigateToAgents={(agentId?: string) => {
+                            markTabVisited("agents");
+                            if (agentId) {
+                              setActiveSubtabs((prev) => ({ ...prev, agents: agentId }));
+                            }
+                            startTransition(() => setActiveTab("agents"));
+                          }}
+                          activeSubtab={activeSubtabs["general"] ?? null}
+                          onSubtabChange={(id) =>
+                            setActiveSubtabs((prev) => ({ ...prev, general: id }))
+                          }
+                        />
+                      ) : visitedTabs.has(tabId) ? (
+                        <Suspense fallback={null}>
+                          <LazyTabContent
+                            entry={entry as LazySettingsTabEntry}
+                            activeSubtabs={activeSubtabs}
+                            setActiveSubtabs={setActiveSubtabs}
+                            onClose={handleClose}
+                            onSettingsChange={onSettingsChange}
+                          />
+                        </Suspense>
+                      ) : null}
+                    </div>
+                  );
+                })}
 
                 {/* Project settings panels */}
                 {activeScope === "project" && projectId && (
@@ -1611,6 +1075,41 @@ function SettingsDialogInner({
       </div>
     </AppDialog>
   );
+}
+
+function LazyTabContent({
+  entry,
+  activeSubtabs,
+  setActiveSubtabs,
+  onClose,
+  onSettingsChange,
+}: {
+  entry: LazySettingsTabEntry;
+  activeSubtabs: Partial<Record<SettingsTab, string>>;
+  setActiveSubtabs: React.Dispatch<React.SetStateAction<Partial<Record<SettingsTab, string>>>>;
+  onClose: () => void;
+  onSettingsChange?: () => void;
+}) {
+  const id = entry.id as SettingsTab;
+  const activeSubtab = activeSubtabs[id] ?? null;
+  const onSubtabChange = entry.needsSubtabs
+    ? (next: string) => setActiveSubtabs((prev) => ({ ...prev, [id]: next }))
+    : undefined;
+
+  const props: Record<string, unknown> = {};
+  if (entry.needsSubtabs) {
+    props.activeSubtab = activeSubtab;
+    props.onSubtabChange = onSubtabChange;
+  }
+  if (entry.needsOnClose) {
+    props.onClose = onClose;
+  }
+  if (entry.needsOnSettingsChange) {
+    props.onSettingsChange = onSettingsChange;
+  }
+
+  const LazyComp = entry.LazyComponent;
+  return <LazyComp {...props} />;
 }
 
 function NavGroup({ label, children }: { label: string; children: React.ReactNode }) {

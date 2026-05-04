@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SettingsTab, SettingsNavTarget } from "@/components/Settings";
+import { isSettingsTab } from "@/components/Settings/settingsTabRegistry";
 
 export function useSettingsDialog() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -15,34 +16,7 @@ export function useSettingsDialog() {
   }, []);
 
   const handleOpenSettingsTab = useCallback((target: SettingsNavTarget) => {
-    const allowedTabs: SettingsTab[] = [
-      "general",
-      "keyboard",
-      "terminal",
-      "terminalAppearance",
-      "worktree",
-      "agents",
-      "github",
-      "portal",
-      "toolbar",
-      "notifications",
-      "integrations",
-
-      "mcp",
-      "environment",
-      "privacy",
-      "troubleshooting",
-      "project:general",
-      "project:context",
-      "project:automation",
-      "project:recipes",
-      "project:commands",
-      "project:notifications",
-      "project:github",
-    ];
-    const tab = allowedTabs.includes(target.tab as SettingsTab)
-      ? (target.tab as SettingsTab)
-      : "general";
+    const tab = isSettingsTab(target.tab) ? target.tab : "general";
     setSettingsTab(tab);
     setSettingsSubtab(target.subtab);
     setSettingsSectionId(target.sectionId);
