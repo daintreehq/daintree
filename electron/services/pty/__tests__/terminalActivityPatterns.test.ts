@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ProcessInfo } from "../../ProcessTreeCache.js";
 import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
 import type { AgentDetectionConfig } from "../../../../shared/config/agentRegistry.js";
@@ -9,10 +9,16 @@ import {
   UNIVERSAL_APPROVAL_HINT_PATTERNS,
 } from "../terminalActivityPatterns.js";
 
-function createMockProcessTreeCache(childrenByPid: Map<number, ProcessInfo[]>): ProcessTreeCache {
+function createMockProcessTreeCache(
+  childrenByPid: Map<number, ProcessInfo[]>,
+  activeDescendants = false,
+  descendantsCpuUsage = 0
+): ProcessTreeCache {
   return {
     getChildren: (ppid: number) => childrenByPid.get(ppid) ?? [],
     getChildPids: (ppid: number) => (childrenByPid.get(ppid) ?? []).map((c) => c.pid),
+    hasActiveDescendants: vi.fn(() => activeDescendants),
+    getDescendantsCpuUsage: vi.fn(() => descendantsCpuUsage),
     getProcess: () => undefined,
     hasChildren: (ppid: number) => (childrenByPid.get(ppid) ?? []).length > 0,
     getLastRefreshTime: () => Date.now(),
@@ -29,6 +35,22 @@ describe("createProcessStateValidator", () => {
 
   it("returns undefined when processTreeCache is null", () => {
     expect(createProcessStateValidator(1, null)).toBeUndefined();
+  });
+
+  it("returns true when descendant CPU activity is present", () => {
+    const cache = createMockProcessTreeCache(new Map(), true);
+    const validator = createProcessStateValidator(42, cache)!;
+
+    expect(validator.hasActiveChildren()).toBe(true);
+    expect(cache.hasActiveDescendants).toHaveBeenCalledWith(42, 0.5);
+  });
+
+  it("reports descendant CPU usage", () => {
+    const cache = createMockProcessTreeCache(new Map(), false, 12.5);
+    const validator = createProcessStateValidator(42, cache)!;
+
+    expect(validator.getDescendantsCpuUsage?.()).toBe(12.5);
+    expect(cache.getDescendantsCpuUsage).toHaveBeenCalledWith(42);
   });
 
   it("returns false when no children exist", () => {

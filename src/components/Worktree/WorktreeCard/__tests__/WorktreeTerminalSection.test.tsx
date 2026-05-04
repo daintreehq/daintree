@@ -415,9 +415,8 @@ describe("WorktreeTerminalSection arming click handlers", () => {
 
 // Terminal row state icon: active states (working/waiting/directing) pass
 // through regardless of identity (#6650 boot window). Once the agent chrome is
-// live, the indicator stays visible — idle/missing state coerce to waiting and
-// completed keeps its own checkmark glyph so the indicator never silently
-// disappears mid-flight.
+// live, the indicator stays visible — idle/missing/completed state coerce to
+// waiting so the activity indicator never silently disappears mid-flight.
 describe("WorktreeTerminalSection row state icon", () => {
   beforeEach(() => {
     useFleetArmingStore.setState({
@@ -527,7 +526,7 @@ describe("WorktreeTerminalSection row state icon", () => {
     expect(stateIcons?.length ?? 0).toBe(0);
   });
 
-  it("renders completed checkmark when agentState='completed' and agent chrome is live", () => {
+  it("renders waiting icon when agentState='completed' and agent chrome is live", () => {
     const term = makeTerminal({
       id: "completed-1",
       kind: "terminal",
@@ -541,8 +540,8 @@ describe("WorktreeTerminalSection row state icon", () => {
       counts: { ...baseCounts, total: 1 },
     });
     const row = container.querySelector('[data-terminal-id="completed-1"]');
-    const completedIcon = row?.querySelector('[aria-label="done"]');
-    expect(completedIcon).not.toBeNull();
+    const waitingIcon = row?.querySelector('[aria-label="waiting"]');
+    expect(waitingIcon).not.toBeNull();
   });
 
   it("does not render state icon when agentState is undefined (plain shell)", () => {

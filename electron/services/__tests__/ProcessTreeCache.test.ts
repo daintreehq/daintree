@@ -86,6 +86,33 @@ describe("ProcessTreeCache", () => {
     expect(processTree.getChildPids(2)).toEqual([4]);
   });
 
+  it("does not mutate descendant structure when computing CPU usage", () => {
+    const processTree = createSeededCache();
+
+    expect(processTree.getDescendantsCpuUsage(1)).toBeCloseTo(1.8, 6);
+    expect(processTree.getChildPids(1)).toEqual([2, 3]);
+    expect(processTree.getChildPids(2)).toEqual([4]);
+
+    expect(processTree.getDescendantsCpuUsage(1)).toBeCloseTo(1.8, 6);
+    expect(processTree.getChildPids(1)).toEqual([2, 3]);
+  });
+
+  it("does not mutate child map when checking active descendants", () => {
+    const processTree = createSeededCache();
+
+    expect(processTree.hasActiveDescendants(1, 1.0)).toBe(true);
+    expect(processTree.getChildPids(1)).toEqual([2, 3]);
+    expect(processTree.getChildPids(2)).toEqual([4]);
+
+    expect(processTree.hasActiveDescendants(1, 1.0)).toBe(true);
+  });
+
+  it("returns false for active descendants when none exceed threshold", () => {
+    const processTree = createSeededCache();
+
+    expect(processTree.hasActiveDescendants(1, 2.0)).toBe(false);
+  });
+
   it("returns empty array for unknown pid", () => {
     const processTree = createSeededCache();
     expect(processTree.getDescendantPids(999)).toEqual([]);

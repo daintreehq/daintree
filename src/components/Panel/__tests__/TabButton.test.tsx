@@ -375,8 +375,8 @@ describe("TabButton", () => {
   // The state indicator must rise and fall with the agent chrome, plus stay
   // visible during the identity-boot window where state can arrive before the
   // chrome commits (#6650). Once chrome is live, the indicator never silently
-  // disappears mid-flight: idle/missing state coerces to waiting, completed
-  // keeps its own glyph, and exit/non-agent chrome hides it.
+  // disappears mid-flight: idle/missing/completed state coerces to waiting, and
+  // exit/non-agent chrome hides it.
   describe("state indicator visibility", () => {
     // The state icon is the only element that combines "shrink-0" with
     // "motion-reduce:animate-none" (TabButton.tsx). That class combo is a
@@ -417,7 +417,7 @@ describe("TabButton", () => {
       expect(queryStateIcon(container)).toBeDefined();
     });
 
-    it("renders completed checkmark when agentState='completed' and agent chrome is live", () => {
+    it("renders waiting icon when agentState='completed' and agent chrome is live", () => {
       const { container } = render(
         <TabButton
           {...defaultProps}
@@ -425,8 +425,8 @@ describe("TabButton", () => {
           agentState="completed"
         />
       );
-      const completedIcon = container.querySelector(".text-status-success");
-      expect(completedIcon).not.toBeNull();
+      const waitingIcon = container.querySelector(".text-state-waiting");
+      expect(waitingIcon).not.toBeNull();
     });
 
     it("renders waiting icon when agentState is undefined but agent chrome is live", () => {

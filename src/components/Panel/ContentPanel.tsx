@@ -23,6 +23,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 
 /**
  * Base props for all panel types.
@@ -267,6 +268,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     ]
   );
   const ownAgentState = agentState;
+  const headerAgentState = getTerminalAgentDisplayState(terminalChrome, ownAgentState);
   // Determine effective agent state for container border styling.
   // ambientAgentState takes priority so tab groups can surface highest-urgency
   // state from hidden live-agent tabs without affecting the active header chip.
@@ -282,7 +284,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         <TerminalHeaderContent
           id={id}
           kind={kind}
-          agentState={ownAgentState}
+          agentState={headerAgentState}
           activity={activity}
           activityStatus={activityStatus}
           lastCommand={lastCommand}
@@ -298,7 +300,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     headerContent,
     kind,
     id,
-    ownAgentState,
+    headerAgentState,
     activity,
     activityStatus,
     lastCommand,

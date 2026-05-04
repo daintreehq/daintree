@@ -442,6 +442,55 @@ export class ProcessTreeCache {
   }
 
   /**
+   * Get the total CPU usage of all descendants of a process.
+   * Returns the sum of cpuPercent for child processes recursively; the root
+   * process itself is intentionally excluded.
+   */
+  getDescendantsCpuUsage(ppid: number): number {
+    let totalCpu = 0;
+    const visited = new Set<number>();
+    const queue = this.getChildPids(ppid);
+
+    while (queue.length > 0) {
+      const pid = queue.shift()!;
+      if (visited.has(pid)) continue;
+      visited.add(pid);
+
+      const processInfo = this.cache.get(pid);
+      if (processInfo) {
+        totalCpu += processInfo.cpuPercent;
+        queue.push(...this.getChildPids(pid));
+      }
+    }
+
+    return totalCpu;
+  }
+
+  /**
+   * Check whether any descendant of a process has meaningful CPU activity.
+   */
+  hasActiveDescendants(ppid: number, threshold: number = 0.5): boolean {
+    const visited = new Set<number>();
+    const queue = this.getChildPids(ppid);
+
+    while (queue.length > 0) {
+      const pid = queue.shift()!;
+      if (visited.has(pid)) continue;
+      visited.add(pid);
+
+      const processInfo = this.cache.get(pid);
+      if (processInfo) {
+        if (processInfo.cpuPercent >= threshold) {
+          return true;
+        }
+        queue.push(...this.getChildPids(pid));
+      }
+    }
+
+    return false;
+  }
+
+  /**
    * Get aggregated resource summary for a process tree.
    * Includes the root process and all descendants.
    * Breakdown is capped at 10 entries sorted by CPU descending.

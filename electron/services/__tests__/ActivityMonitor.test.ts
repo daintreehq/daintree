@@ -3216,6 +3216,92 @@ describe("ActivityMonitor", () => {
     });
   });
 
+  describe("CPU-active quiet-agent backstop", () => {
+    it("keeps a polling agent busy while descendant CPU remains high", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(18),
+      };
+      const monitor = new ActivityMonitor("cpu-quiet-1", 100, onStateChange, {
+        getVisibleLines: () => ["$ "],
+        getCursorLine: () => "$ ",
+        pollingIntervalMs: 50,
+        pollingMaxBootMs: 0,
+        idleDebounceMs: 300,
+        processStateValidator,
+      });
+
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      vi.advanceTimersByTime(5000);
+
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange.mock.calls.some((c: unknown[]) => c[2] === "idle")).toBe(false);
+
+      processStateValidator.getDescendantsCpuUsage.mockReturnValue(1);
+      vi.advanceTimersByTime(100);
+
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("allows quiet polling agents to become idle after the CPU-high escape deadline", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(20),
+      };
+      const monitor = new ActivityMonitor("cpu-quiet-2", 100, onStateChange, {
+        getVisibleLines: () => ["$ "],
+        getCursorLine: () => "$ ",
+        pollingIntervalMs: 50,
+        pollingMaxBootMs: 0,
+        idleDebounceMs: 300,
+        maxCpuHighEscapeMs: 2000,
+        processStateValidator,
+      });
+
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      vi.advanceTimersByTime(1500);
+      expect(monitor.getState()).toBe("busy");
+
+      vi.advanceTimersByTime(2500);
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("does not transition idle agents to busy from CPU activity alone", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(30),
+      };
+      const monitor = new ActivityMonitor("cpu-quiet-3", 100, onStateChange, {
+        getVisibleLines: () => ["$ "],
+        getCursorLine: () => "$ ",
+        pollingIntervalMs: 50,
+        pollingMaxBootMs: 0,
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        processStateValidator,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(5000);
+
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange.mock.calls.some((c: unknown[]) => c[2] === "busy")).toBe(false);
+
+      monitor.dispose();
+    });
+  });
+
   describe("Dispose emits idle", () => {
     it("should emit idle with dispose trigger when busy monitor is disposed", () => {
       const onStateChange = vi.fn();
@@ -3844,6 +3930,82 @@ describe("ActivityMonitor", () => {
       }
 
       expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("keeps a polling agent busy while sparse cosmetic redraws continue", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("agent-cosmetic-keepalive", 1000, onStateChange, {
+        getVisibleLines: () => ["booted"],
+        getCursorLine: () => "booted",
+        pollingIntervalMs: 100,
+        bootCompletePatterns: [/booted/i],
+        idleDebounceMs: 400,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // These ticks are farther apart than LineRewriteDetector's 500ms
+      // multi-rewrite window, but they are visible status-line changes. While
+      // they continue, the agent should remain working; when they stop, silence
+      // should take it back to waiting/idle.
+      for (let i = 0; i < 6; i++) {
+        monitor.onData("\r⠙ Working (esc to interrupt)");
+        vi.advanceTimersByTime(300);
+        expect(monitor.getState()).toBe("busy");
+      }
+
+      expect(onStateChange).not.toHaveBeenCalledWith(
+        "agent-cosmetic-keepalive",
+        1000,
+        "idle",
+        expect.anything()
+      );
+
+      vi.advanceTimersByTime(1700);
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "agent-cosmetic-keepalive",
+        1000,
+        "idle",
+        expect.objectContaining({ trigger: "timeout" })
+      );
+
+      monitor.dispose();
+    });
+
+    it("does not keep a polling agent busy from invisible protocol noise", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("agent-protocol-noise", 1000, onStateChange, {
+        getVisibleLines: () => ["booted"],
+        getCursorLine: () => "booted",
+        pollingIntervalMs: 100,
+        bootCompletePatterns: [/booted/i],
+        idleDebounceMs: 300,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      for (let i = 0; i < 20; i++) {
+        monitor.onData("\x1b[?25h\x1b]133;A\x07\x1b[24;80R\x1b[?25l");
+        vi.advanceTimersByTime(50);
+      }
+      vi.advanceTimersByTime(600);
+
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "agent-protocol-noise",
+        1000,
+        "idle",
+        expect.objectContaining({ trigger: "timeout" })
+      );
 
       monitor.dispose();
     });

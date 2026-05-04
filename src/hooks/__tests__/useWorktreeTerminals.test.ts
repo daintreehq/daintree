@@ -335,16 +335,17 @@ describe("aggregateAgentStates (#6650)", () => {
     expect(agentStates).toEqual([]);
   });
 
-  it("counts a launchAgentId-anchored agent terminal across all states (canonical path unchanged)", () => {
+  it("coerces live-agent idle/completed states to waiting for badge display", () => {
     const { byState, agentStates } = aggregateAgentStates([
       term({ launchAgentId: "claude", agentState: "working" }),
       term({ launchAgentId: "claude", agentState: "completed" }),
       term({ launchAgentId: "claude", agentState: "idle" }),
     ]);
     expect(byState.working).toBe(1);
-    expect(byState.completed).toBe(1);
-    expect(byState.idle).toBe(1);
-    expect(agentStates).toEqual(["working", "completed", "idle"]);
+    expect(byState.waiting).toBe(2);
+    expect(byState.completed).toBe(0);
+    expect(byState.idle).toBe(0);
+    expect(agentStates).toEqual(["working", "waiting", "waiting"]);
   });
 
   it("treats a plain shell with no agentState as idle", () => {

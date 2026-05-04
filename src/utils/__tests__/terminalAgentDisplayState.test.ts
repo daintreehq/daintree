@@ -31,18 +31,15 @@ describe("getTerminalAgentDisplayState", () => {
     expect(getTerminalAgentDisplayState(bootingAgent, "completed")).toBeUndefined();
   });
 
-  it("preserves working/waiting/directing/completed glyphs when chrome is live", () => {
+  it("preserves working/waiting/directing glyphs when chrome is live", () => {
     expect(getTerminalAgentDisplayState(liveAgent, "working")).toBe("working");
     expect(getTerminalAgentDisplayState(liveAgent, "waiting")).toBe("waiting");
     expect(getTerminalAgentDisplayState(liveAgent, "directing")).toBe("directing");
-    expect(getTerminalAgentDisplayState(liveAgent, "completed")).toBe("completed");
   });
 
-  it("coerces idle to waiting when the agent chrome is live", () => {
+  it("coerces non-working live-agent states to waiting", () => {
     expect(getTerminalAgentDisplayState(liveAgent, "idle")).toBe("waiting");
-  });
-
-  it("coerces missing state to waiting when the agent chrome is live", () => {
+    expect(getTerminalAgentDisplayState(liveAgent, "completed")).toBe("waiting");
     expect(getTerminalAgentDisplayState(liveAgent, undefined)).toBe("waiting");
   });
 });

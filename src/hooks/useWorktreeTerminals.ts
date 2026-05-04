@@ -4,6 +4,7 @@ import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 import type { AgentState } from "@/types";
 import { getDominantAgentState } from "@/components/Worktree/AgentStatusIndicator";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 
 export interface WorktreeTerminalCounts {
   total: number;
@@ -19,11 +20,10 @@ export interface UseWorktreeTerminalsResult {
 /**
  * Pure aggregator over a worktree's terminal list, exposed for unit tests.
  *
- * Active states (working/waiting/directing) are credited to byState even when
- * agent identity hasn't committed yet — the backend only emits these from
- * agent-sourced events, so they're trustworthy during the boot window (#6650).
- * Plain terminals and demoted ex-agents (idle/completed/exited without
- * identity) fall back to "idle" so stale states don't bleed into badges.
+ * Uses the same display-state coercion as compact terminal indicators: active
+ * states are credited during the identity boot window, live-agent idle/missing/
+ * completed states count as waiting, and exited or plain-shell terminals count
+ * as idle so stale states don't bleed into badges.
  */
 export function aggregateAgentStates(terminals: TerminalInstance[]): {
   byState: Record<AgentState, number>;
@@ -40,15 +40,13 @@ export function aggregateAgentStates(terminals: TerminalInstance[]): {
   const agentStates: (AgentState | undefined)[] = [];
 
   terminals.forEach((terminal) => {
-    const isLiveAgent = deriveTerminalChrome(terminal).isAgent;
     const rawState = terminal.agentState;
-    const isActiveState =
-      rawState === "working" || rawState === "waiting" || rawState === "directing";
-    const state = isLiveAgent ? (rawState ?? "idle") : isActiveState ? rawState : "idle";
+    const displayState = getTerminalAgentDisplayState(deriveTerminalChrome(terminal), rawState);
+    const state = displayState ?? "idle";
     byState[state] = (byState[state] || 0) + 1;
 
-    if (rawState && (isLiveAgent || isActiveState)) {
-      agentStates.push(rawState);
+    if (displayState) {
+      agentStates.push(displayState);
     }
   });
 

@@ -18,8 +18,10 @@ import type { TerminalChromeDescriptor } from "./terminalChrome";
  *    indicator surfaces immediately and the icon catches up.
  *
  * 3. Once the agent chrome is live, the indicator stays visible for the agent's
- *    lifetime. `completed` keeps its own glyph; `idle` and missing state coerce
- *    to `waiting` so the indicator never silently disappears mid-flight.
+ *    lifetime. `idle`, `completed`, and missing state coerce to `waiting`;
+ *    monitor-derived states therefore render as working while output changes
+ *    and waiting after it goes quiet. `directing` remains distinct because it
+ *    is a renderer-side user-intervention state, not an activity signal.
  */
 export function getTerminalAgentDisplayState(
   chrome: Pick<TerminalChromeDescriptor, "isAgent" | "hasExited">,
@@ -32,7 +34,6 @@ export function getTerminalAgentDisplayState(
   }
 
   if (!chrome.isAgent) return undefined;
-  if (agentState === "completed") return "completed";
 
   return "waiting";
 }
