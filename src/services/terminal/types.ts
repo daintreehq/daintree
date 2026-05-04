@@ -160,3 +160,19 @@ export const INCREMENTAL_RESTORE_CONFIG = {
   timeBudgetMs: 10,
   indicatorThresholdBytes: 262144,
 } as const;
+
+/**
+ * Tiers eligible for a live WebGL context: the user is actively looking at
+ * the terminal (FOCUSED), it just received a typing burst (BURST), or it is
+ * visible in a non-focused split (VISIBLE). BACKGROUND/HIDDEN tiers release
+ * the WebGL context to free a pool slot. Centralised so the four call sites
+ * (renderer policy `onTierApplied`, visibility-driven restore, attach open
+ * path, agent promotion) stay in lockstep.
+ */
+export function isWebGLEligibleTier(tier: TerminalRefreshTier | undefined): boolean {
+  return (
+    tier === TerminalRefreshTier.FOCUSED ||
+    tier === TerminalRefreshTier.BURST ||
+    tier === TerminalRefreshTier.VISIBLE
+  );
+}

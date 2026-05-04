@@ -1,5 +1,6 @@
 import { Terminal } from "@xterm/xterm";
-import type { ManagedTerminal } from "./types";
+import { TerminalRefreshTier } from "@/types";
+import { HIBERNATION_DELAY_MS, type ManagedTerminal } from "./types";
 import { setupTerminalAddons } from "./TerminalAddonManager";
 import { TerminalParserHandler } from "./TerminalParserHandler";
 import { logDebug, logError } from "@/utils/logger";
@@ -183,6 +184,50 @@ export class TerminalHibernationManager {
     managed.isDetached = managed.isDetached ?? false;
     if (managed.isOpened) {
       managed.isDetached = false;
+    }
+  }
+
+  /**
+   * Eligibility for the auto-hibernation timer: only BACKGROUND-tier
+   * terminals that are either non-agent, completed, or exited. An agent
+   * terminal in working/waiting/etc. state must keep rendering even when
+   * hidden — hibernating it would lose live activity tracking.
+   */
+  isHibernationEligible(tier: TerminalRefreshTier, managed: ManagedTerminal): boolean {
+    if (tier !== TerminalRefreshTier.BACKGROUND) return false;
+    return (
+      !managed.runtimeAgentId ||
+      managed.canonicalAgentState === "completed" ||
+      managed.canonicalAgentState === "exited"
+    );
+  }
+
+  /**
+   * Arm the delayed hibernation timer. Idempotent — a second call while a
+   * timer is pending is a no-op so callers (`onTierApplied` and `setVisible`)
+   * don't have to coordinate. The fire path re-checks visibility and
+   * hibernation state because the user may have revealed the terminal
+   * between schedule and fire.
+   */
+  scheduleHibernation(id: string, managed: ManagedTerminal): void {
+    if (managed.hibernationTimer || managed.isHibernated) return;
+    managed.hibernationTimer = setTimeout(() => {
+      managed.hibernationTimer = undefined;
+      const current = this.deps.getInstance(id);
+      // A terminal that became visible (or was revived) between schedule and
+      // fire should not be hibernated — the user is looking at it.
+      if (!current || current.isVisible || current.isHibernated) return;
+      this.hibernate(id);
+    }, HIBERNATION_DELAY_MS);
+  }
+
+  /**
+   * Cancel a pending hibernation timer. Safe to call when no timer is armed.
+   */
+  cancelHibernation(managed: ManagedTerminal): void {
+    if (managed.hibernationTimer) {
+      clearTimeout(managed.hibernationTimer);
+      managed.hibernationTimer = undefined;
     }
   }
 }

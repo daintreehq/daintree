@@ -8,7 +8,7 @@ import {
   RefreshTierProvider,
   AgentStateCallback,
   PostCompleteHook,
-  HIBERNATION_DELAY_MS,
+  isWebGLEligibleTier,
 } from "./types";
 import {
   setupTerminalAddons,
@@ -28,6 +28,8 @@ import { TerminalWakeManager } from "./TerminalWakeManager";
 import { TerminalAgentStateController } from "./TerminalAgentStateController";
 import { TerminalRestoreController } from "./TerminalRestoreController";
 import { TerminalHibernationManager } from "./TerminalHibernationManager";
+import { TerminalReflowController, forceXtermReflow } from "./TerminalReflowController";
+import { TerminalWriteController } from "./TerminalWriteController";
 import {
   installTerminalBoundListeners,
   type TerminalListenerInstallDeps,
@@ -36,33 +38,13 @@ import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackControl
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { usePanelStore } from "@/store/panelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
-import { PERF_MARKS } from "@shared/perf/marks";
-import { markRendererPerformance } from "@/utils/performance";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
 
 export { isNonKeyboardInput } from "./inputUtils";
-
-/**
- * Force a synchronous reflow that triggers xterm.js's IntersectionObserver
- * re-evaluation without pausing the renderer. Using display:none would set
- * isIntersecting=false, causing xterm to set _isPaused=true and halt rendering.
- * Sub-pixel padding jitter keeps the element in the layout tree throughout.
- */
-export function forceXtermReflow(element: HTMLElement): void {
-  const prev = element.style.paddingTop;
-  element.style.paddingTop = "0.01px";
-  void element.offsetHeight;
-  element.style.paddingTop = prev;
-}
-
-// Throttle per-terminal reflows to bound layout cost under write bursts while
-// still recovering a paused DOM renderer within one write cadence window.
-const REFLOW_THROTTLE_MS = 250;
-
-// Periodic heartbeat interval — low frequency is enough to recover a paused
-// renderer that has no writes, without costing measurable CPU.
-const REFLOW_HEARTBEAT_MS = 3000;
+// Re-exported so existing consumers (notably tests) that import
+// `forceXtermReflow` from this module don't need to update their imports.
+export { forceXtermReflow };
 
 // Debounce on the visibility-driven WebGL restore path. Hide is immediate;
 // show waits this long before re-acquiring so rapid tab/panel toggles don't
@@ -81,7 +63,6 @@ class TerminalInstanceService {
   private dataBuffer = new TerminalOutputIngestService((id, data) =>
     this.writeToTerminal(id, data)
   );
-  private perfWriteSampleCounter = 0;
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
   private cwdProviders = new Map<string, () => string>();
@@ -99,18 +80,8 @@ class TerminalInstanceService {
   private agentStateController: TerminalAgentStateController;
   private restoreController: TerminalRestoreController;
   private hibernationManager: TerminalHibernationManager;
-  private reflowHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
-  private readonly _onVisibilityChange = (): void => {
-    if (typeof document === "undefined" || document.visibilityState !== "visible") return;
-    for (const managed of this.instances.values()) {
-      this.maybeReflowTerminal(managed);
-    }
-  };
-  private readonly _onWindowFocus = (): void => {
-    for (const managed of this.instances.values()) {
-      this.maybeReflowTerminal(managed);
-    }
-  };
+  private reflowController: TerminalReflowController;
+  private writeController: TerminalWriteController;
 
   constructor() {
     if (canAutoInitializeTerminalIngest()) {
@@ -131,6 +102,15 @@ class TerminalInstanceService {
       writeData: (id, data) => this.writeToTerminal(id, data),
     });
 
+    this.writeController = new TerminalWriteController({
+      getInstance: (id) => this.instances.get(id),
+      acknowledgePortData: (id, bytes) => terminalClient.acknowledgePortData(id, bytes),
+      acknowledgeData: (id, bytes) => terminalClient.acknowledgeData(id, bytes),
+      notifyWriteComplete: (id, bytes) => this.dataBuffer.notifyWriteComplete(id, bytes),
+      incrementUnseen: (id, isScrolledBack) =>
+        this.unseenTracker.incrementUnseen(id, isScrolledBack),
+    });
+
     this.hibernationManager = new TerminalHibernationManager({
       getInstance: (id) => this.instances.get(id),
       destroyRestoreState: (id) => this.restoreController.destroy(id),
@@ -144,28 +124,9 @@ class TerminalInstanceService {
       ...this.makeListenerInstallDeps(),
     });
 
-    // Periodic heartbeat: recovers a DOM-renderer terminal whose
-    // IntersectionObserver has paused rendering, even while no new writes are
-    // arriving. Cheap (~1–5ms per visible non-agent terminal). Skipped while
-    // the document is hidden — _onVisibilityChange triggers a sweep on regain.
-    if (typeof setInterval === "function") {
-      this.reflowHeartbeatTimer = setInterval(() => {
-        if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-        for (const managed of this.instances.values()) {
-          this.maybeReflowTerminal(managed);
-        }
-      }, REFLOW_HEARTBEAT_MS);
-    }
-
-    // App-level recovery: reflow visible terminals whenever the window
-    // regains focus or the tab becomes visible. These are the moments a
-    // user is most likely to notice a blank terminal.
-    if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
-      document.addEventListener("visibilitychange", this._onVisibilityChange);
-    }
-    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-      window.addEventListener("focus", this._onWindowFocus);
-    }
+    this.reflowController = new TerminalReflowController({
+      getInstances: () => this.instances.values(),
+    });
 
     this.wakeManager = new TerminalWakeManager({
       getInstance: (id) => this.instances.get(id),
@@ -268,11 +229,7 @@ class TerminalInstanceService {
         }
 
         if (managed.runtimeAgentId) {
-          if (
-            tier === TerminalRefreshTier.FOCUSED ||
-            tier === TerminalRefreshTier.BURST ||
-            tier === TerminalRefreshTier.VISIBLE
-          ) {
+          if (isWebGLEligibleTier(tier)) {
             this.webGLManager.ensureContext(id, managed);
           } else {
             const hadWebGL = this.webGLManager.isActive(id);
@@ -370,43 +327,12 @@ class TerminalInstanceService {
   }
 
   /**
-   * Force an IntersectionObserver reflow on a standard terminal if it's
-   * eligible — used by onWriteParsed, the periodic heartbeat, and
-   * visibility/focus recovery paths. All guards live here so every caller
-   * stays consistent.
-   *
-   * Skips: agent terminals (WebGL, immune), hibernated/invisible/attaching
-   * terminals, alt-buffer (TUI) sessions, and terminals without a rendered
-   * element. Throttled per terminal.
+   * Thin delegate to {@link TerminalReflowController.maybeReflow}. Kept on
+   * the service for the existing test fixtures that cast the service to a
+   * structural type containing this method.
    */
   private maybeReflowTerminal(managed: ManagedTerminal): void {
-    if (managed.runtimeAgentId) return;
-    if (managed.isHibernated) return;
-    if (!managed.isVisible) return;
-    if (managed.isAttaching) return;
-    if (managed.isAltBuffer) return;
-    const element = managed.terminal.element;
-    if (!element) return;
-    // A transiently-detached element can't be unpaused by a reflow, and
-    // stamping lastReflowAt here would throttle away the next legitimate
-    // reflow once it's reattached.
-    if (!element.isConnected) return;
-    // xterm 6 buffers row refreshes and renders them atomically at ESU when
-    // DEC mode 2026 (Synchronized Output) is active. Forcing an
-    // IntersectionObserver jitter mid-block would interleave a paint with
-    // the buffered range. Skip without stamping the throttle so we reflow
-    // on the next tick after ESU.
-    if (managed.terminal.modes?.synchronizedOutputMode === true) return;
-
-    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-    if (now - (managed.lastReflowAt ?? 0) < REFLOW_THROTTLE_MS) return;
-    managed.lastReflowAt = now;
-
-    try {
-      forceXtermReflow(element);
-    } catch (err) {
-      logWarn("forceXtermReflow failed", { error: err });
-    }
+    this.reflowController.maybeReflow(managed);
   }
 
   /**
@@ -421,12 +347,7 @@ class TerminalInstanceService {
     if (!managed.isVisible) return false;
     if (managed.isAttaching) return false;
     if (managed.isHibernated) return false;
-    const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
-    return (
-      tier === TerminalRefreshTier.FOCUSED ||
-      tier === TerminalRefreshTier.BURST ||
-      tier === TerminalRefreshTier.VISIBLE
-    );
+    return isWebGLEligibleTier(managed.lastAppliedTier ?? managed.getRefreshTier?.());
   }
 
   private onUserInput(id: string, data: string): void {
@@ -502,80 +423,13 @@ class TerminalInstanceService {
     this.dataBuffer.stopPolling();
   }
 
+  /**
+   * Thin delegate to {@link TerminalWriteController.write}. Kept on the
+   * service for the existing test fixtures that cast the service to a
+   * structural type containing this method.
+   */
   private writeToTerminal(id: string, data: string | Uint8Array): void {
-    const managed = this.instances.get(id);
-    if (!managed) return;
-
-    if (managed.isHibernated) {
-      const bytes = typeof data === "string" ? data.length : data.byteLength;
-      terminalClient.acknowledgePortData(id, bytes);
-      this.dataBuffer.notifyWriteComplete(id, bytes);
-      return;
-    }
-
-    if (managed.isSerializedRestoreInProgress) {
-      managed.deferredOutput.push(data);
-      const deferredBytes = typeof data === "string" ? data.length : data.byteLength;
-      terminalClient.acknowledgePortData(id, deferredBytes);
-      this.dataBuffer.notifyWriteComplete(id, deferredBytes);
-      return;
-    }
-
-    this.unseenTracker.incrementUnseen(id, managed.isUserScrolledBack);
-
-    this.perfWriteSampleCounter += 1;
-    const shouldSample = this.perfWriteSampleCounter % 64 === 0;
-
-    const sampledBytes = shouldSample
-      ? typeof data === "string"
-        ? data.length
-        : data.byteLength
-      : 0;
-    const acknowledgedBytes = typeof data === "string" ? data.length : data.byteLength;
-
-    if (shouldSample) {
-      markRendererPerformance(PERF_MARKS.TERMINAL_DATA_PARSED, {
-        terminalId: id,
-        bytes: sampledBytes,
-      });
-    }
-
-    const terminal = managed.terminal;
-    managed.pendingWrites = (managed.pendingWrites ?? 0) + 1;
-    const writeQueuedAt = shouldSample
-      ? typeof performance !== "undefined"
-        ? performance.now()
-        : Date.now()
-      : 0;
-    terminal.write(data, () => {
-      if (this.instances.get(id) !== managed) return;
-
-      managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);
-
-      terminalClient.acknowledgePortData(id, acknowledgedBytes);
-      terminalClient.acknowledgeData(id, acknowledgedBytes);
-      this.dataBuffer.notifyWriteComplete(id, acknowledgedBytes);
-
-      if (shouldSample) {
-        const writeDurationMs =
-          (typeof performance !== "undefined" ? performance.now() : Date.now()) - writeQueuedAt;
-        markRendererPerformance("terminal_write_duration_sample", {
-          terminalId: id,
-          bytes: sampledBytes,
-          durationMs: Number(writeDurationMs.toFixed(3)),
-          pendingWrites: managed.pendingWrites ?? 0,
-        });
-        markRendererPerformance(PERF_MARKS.TERMINAL_DATA_RENDERED, {
-          terminalId: id,
-          bytes: sampledBytes,
-        });
-      }
-
-      if (!managed.isAltBuffer) {
-        managed.lastActivityMarker?.dispose();
-        managed.lastActivityMarker = terminal.registerMarker(0);
-      }
-    });
+    this.writeController.write(id, data);
   }
 
   setVisible(id: string, isVisible: boolean, expectedGeneration?: number): void {
@@ -937,6 +791,16 @@ class TerminalInstanceService {
     return this.instances.get(id) ?? null;
   }
 
+  /**
+   * Stable accessor for E2E hooks. Avoids the bracket-notation
+   * `service["instances"]` reach-around the test harness used to do, which
+   * would silently break if the private field were renamed or refactored
+   * away. Production code should not use this — use `get(id)` instead.
+   */
+  getInstanceForE2E(id: string): ManagedTerminal | undefined {
+    return this.instances.get(id);
+  }
+
   getCachedSelection(id: string): string {
     return this.cachedSelections.get(id) ?? "";
   }
@@ -1034,12 +898,7 @@ class TerminalInstanceService {
       managed.terminal.open(managed.hostElement);
       managed.isOpened = true;
       logDebug(`[TIS.attach] Opened terminal ${id}`);
-      if (
-        managed.runtimeAgentId &&
-        (managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
-          managed.lastAppliedTier === TerminalRefreshTier.BURST ||
-          managed.lastAppliedTier === TerminalRefreshTier.VISIBLE)
-      ) {
+      if (managed.runtimeAgentId && isWebGLEligibleTier(managed.lastAppliedTier)) {
         this.webGLManager.ensureContext(id, managed);
       }
     }
@@ -1735,12 +1594,7 @@ class TerminalInstanceService {
     }
     managed.runtimeAgentId = agentId;
     restoreScrollback(managed);
-    if (
-      managed.isOpened &&
-      (managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
-        managed.lastAppliedTier === TerminalRefreshTier.BURST ||
-        managed.lastAppliedTier === TerminalRefreshTier.VISIBLE)
-    ) {
+    if (managed.isOpened && isWebGLEligibleTier(managed.lastAppliedTier)) {
       this.webGLManager.ensureContext(id, managed);
     }
   }
@@ -1788,31 +1642,15 @@ class TerminalInstanceService {
   }
 
   private isHibernationEligible(tier: TerminalRefreshTier, managed: ManagedTerminal): boolean {
-    if (tier !== TerminalRefreshTier.BACKGROUND) return false;
-    return (
-      !managed.runtimeAgentId ||
-      managed.canonicalAgentState === "completed" ||
-      managed.canonicalAgentState === "exited"
-    );
+    return this.hibernationManager.isHibernationEligible(tier, managed);
   }
 
   private scheduleHibernation(id: string, managed: ManagedTerminal): void {
-    if (managed.hibernationTimer || managed.isHibernated) return;
-    managed.hibernationTimer = setTimeout(() => {
-      managed.hibernationTimer = undefined;
-      const current = this.instances.get(id);
-      // A terminal that became visible (or was revived) between schedule and
-      // fire should not be hibernated — the user is looking at it.
-      if (!current || current.isVisible || current.isHibernated) return;
-      this.hibernate(id);
-    }, HIBERNATION_DELAY_MS);
+    this.hibernationManager.scheduleHibernation(id, managed);
   }
 
   private cancelHibernation(managed: ManagedTerminal): void {
-    if (managed.hibernationTimer) {
-      clearTimeout(managed.hibernationTimer);
-      managed.hibernationTimer = undefined;
-    }
+    this.hibernationManager.cancelHibernation(managed);
   }
 
   destroy(id: string): void {
@@ -1931,16 +1769,7 @@ class TerminalInstanceService {
 
   dispose(): void {
     this.stopPolling();
-    if (this.reflowHeartbeatTimer !== undefined) {
-      clearInterval(this.reflowHeartbeatTimer);
-      this.reflowHeartbeatTimer = undefined;
-    }
-    if (typeof document !== "undefined" && typeof document.removeEventListener === "function") {
-      document.removeEventListener("visibilitychange", this._onVisibilityChange);
-    }
-    if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
-      window.removeEventListener("focus", this._onWindowFocus);
-    }
+    this.reflowController.dispose();
     this.instances.forEach((_, id) => this.destroy(id));
     this.offscreenManager.dispose();
     this.wakeManager.dispose();
@@ -1986,7 +1815,7 @@ if (typeof window !== "undefined") {
   (window as unknown as Record<string, unknown>).__daintreeReadTerminalBuffer = (
     panelId: string
   ): string => {
-    const managed = terminalInstanceService["instances"].get(panelId);
+    const managed = terminalInstanceService.getInstanceForE2E(panelId);
     if (!managed) return "";
     const buf = managed.terminal.buffer.active;
     const lines: string[] = [];
@@ -2000,7 +1829,7 @@ if (typeof window !== "undefined") {
   (window as unknown as Record<string, unknown>).__daintreeSelectTerminalAll = (
     panelId: string
   ): boolean => {
-    const managed = terminalInstanceService["instances"].get(panelId);
+    const managed = terminalInstanceService.getInstanceForE2E(panelId);
     if (!managed) return false;
     managed.terminal.selectAll();
     return true;
@@ -2009,7 +1838,7 @@ if (typeof window !== "undefined") {
   (window as unknown as Record<string, unknown>).__daintreeGetTerminalBufferLength = (
     panelId: string
   ): number => {
-    const managed = terminalInstanceService["instances"].get(panelId);
+    const managed = terminalInstanceService.getInstanceForE2E(panelId);
     if (!managed) return 0;
     return managed.terminal.buffer.active.length;
   };
@@ -2018,7 +1847,7 @@ if (typeof window !== "undefined") {
     panelId: string,
     url: string
   ): string => {
-    const managed = terminalInstanceService["instances"].get(panelId);
+    const managed = terminalInstanceService.getInstanceForE2E(panelId);
     if (!managed) return "missing-panel";
     const mac = isMac();
     const syntheticEvent = new MouseEvent("click", {
