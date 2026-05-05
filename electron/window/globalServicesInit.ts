@@ -32,7 +32,7 @@ import {
   startProcessMemoryMonitor,
 } from "../utils/performance.js";
 import { startAppMetricsMonitor } from "../services/ProcessMemoryMonitor.js";
-import { ResourceProfileService } from "../services/ResourceProfileService.js";
+
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { exposeGc } from "../setup/environment.js";
@@ -480,8 +480,9 @@ export async function initGlobalServices(
   // read their data once its own start() fires.
   registerDeferredTask({
     name: "resource-profile-service",
-    run: () => {
+    run: async () => {
       if (getResourceProfileService()) return;
+      const { ResourceProfileService } = await import("../services/ResourceProfileService.js");
       const svc = new ResourceProfileService({
         getPtyClient: () => getPtyClient(),
         getWorkspaceClient: () => getWorkspaceClientRef(),
