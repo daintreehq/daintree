@@ -57,6 +57,7 @@ export class IdleTerminalNotificationService {
   private readonly CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
   private readonly STARTUP_QUIET_MS = 2 * 60 * 1000; // 2 minutes
   private readonly INITIAL_CHECK_DELAY_MS = 5_000;
+  private currentCheckIntervalMs = this.CHECK_INTERVAL_MS;
 
   private normalizeThreshold(value: unknown, fallback: number): number {
     if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -129,7 +130,7 @@ export class IdleTerminalNotificationService {
       void this.checkAndNotify().catch((error) => {
         logError("idle-terminal-notify-check-failed", error);
       });
-    }, this.CHECK_INTERVAL_MS);
+    }, this.currentCheckIntervalMs);
 
     if (this.initialCheckTimer) {
       clearTimeout(this.initialCheckTimer);
@@ -151,6 +152,19 @@ export class IdleTerminalNotificationService {
     if (this.initialCheckTimer) {
       clearTimeout(this.initialCheckTimer);
       this.initialCheckTimer = null;
+    }
+  }
+
+  updatePollInterval(ms: number): void {
+    if (ms === this.currentCheckIntervalMs) return;
+    this.currentCheckIntervalMs = ms;
+    if (this.checkInterval) {
+      clearInterval(this.checkInterval);
+      this.checkInterval = setInterval(() => {
+        void this.checkAndNotify().catch((error) => {
+          logError("idle-terminal-notify-check-failed", error);
+        });
+      }, this.currentCheckIntervalMs);
     }
   }
 

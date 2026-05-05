@@ -64,6 +64,8 @@ import {
   registerWindowForFocusThrottle,
 } from "./window/powerMonitor.js";
 import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
+import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotificationService.js";
+import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
 import { isSmokeTest } from "./setup/environment.js";
 import { store } from "./store.js";
 import {
@@ -325,6 +327,8 @@ if (!gotTheLock) {
         getPtyClient,
         getWorkspaceClient: getWorkspaceClientRef,
         getProjectStatsService,
+        getIdleTerminalNotificationService: () => getIdleTerminalNotificationService(),
+        getPreAgentSnapshotService: () => preAgentSnapshotService,
       });
     }
 

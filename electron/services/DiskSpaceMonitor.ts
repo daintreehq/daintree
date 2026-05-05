@@ -34,6 +34,20 @@ export function getCurrentDiskSpaceStatus(): DiskSpacePayload {
   return currentStatus;
 }
 
+let currentDiskSpacePollIntervalMs = POLL_INTERVAL_MS;
+let rearmDiskSpaceTimer: (() => void) | null = null;
+let diskSpacePollFn: (() => Promise<void>) | null = null;
+
+export function setDiskSpaceMonitorPollInterval(ms: number): void {
+  if (ms === currentDiskSpacePollIntervalMs) return;
+  currentDiskSpacePollIntervalMs = ms;
+  rearmDiskSpaceTimer?.();
+}
+
+export function refreshDiskSpaceMonitor(): void {
+  diskSpacePollFn?.();
+}
+
 export function startDiskSpaceMonitor(actions: DiskSpaceMonitorActions): () => void {
   let lastStatus: DiskSpaceStatus = "normal";
   let lastNotificationAt = 0;
@@ -111,14 +125,25 @@ export function startDiskSpaceMonitor(actions: DiskSpaceMonitorActions): () => v
     }
   }
 
-  void poll();
+  diskSpacePollFn = poll;
 
-  const clear = setAlignedInterval(() => {
-    void poll();
-  }, POLL_INTERVAL_MS);
+  let clearAlignedInterval: (() => void) | null = null;
+  const armTimer = () => {
+    clearAlignedInterval?.();
+    clearAlignedInterval = setAlignedInterval(() => {
+      void poll();
+    }, currentDiskSpacePollIntervalMs);
+  };
+  rearmDiskSpaceTimer = armTimer;
+
+  void poll();
+  armTimer();
 
   return () => {
     disposed = true;
-    clear();
+    clearAlignedInterval?.();
+    clearAlignedInterval = null;
+    diskSpacePollFn = null;
+    rearmDiskSpaceTimer = null;
   };
 }

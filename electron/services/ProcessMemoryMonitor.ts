@@ -201,6 +201,20 @@ function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
   return (proc.memory.privateBytes ?? proc.memory.workingSetSize) / 1024;
 }
 
+let currentAppMetricsPollIntervalMs = POLL_INTERVAL_MS;
+let rearmAppMetricsTimer: (() => void) | null = null;
+let appMetricsPollFn: (() => void) | null = null;
+
+export function setAppMetricsMonitorPollInterval(ms: number): void {
+  if (ms === currentAppMetricsPollIntervalMs) return;
+  currentAppMetricsPollIntervalMs = ms;
+  rearmAppMetricsTimer?.();
+}
+
+export function refreshAppMetricsMonitor(): void {
+  appMetricsPollFn?.();
+}
+
 export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => void {
   const snapshotCooldowns = new Map<number, number>();
   const trendState = new Map<number, PidTrendState>();
@@ -209,7 +223,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   let lastTier2At = 0;
   let mitigationInFlight = false;
 
-  const clear = setAlignedInterval(() => {
+  const poll = () => {
     try {
       pollCount++;
       // Kick off a Blink-memory sample fan-out for this tick. Renderer replies
@@ -371,7 +385,23 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
     } catch (err) {
       logWarn("process-memory-poll-failed", { error: String(err) });
     }
-  }, POLL_INTERVAL_MS);
+  };
 
-  return clear;
+  appMetricsPollFn = poll;
+
+  let clearAlignedInterval: (() => void) | null = null;
+  const armTimer = () => {
+    clearAlignedInterval?.();
+    clearAlignedInterval = setAlignedInterval(poll, currentAppMetricsPollIntervalMs);
+  };
+  rearmAppMetricsTimer = armTimer;
+
+  armTimer();
+
+  return () => {
+    clearAlignedInterval?.();
+    clearAlignedInterval = null;
+    appMetricsPollFn = null;
+    rearmAppMetricsTimer = null;
+  };
 }

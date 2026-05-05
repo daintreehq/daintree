@@ -8,19 +8,31 @@ const STASH_PREFIX = "daintree:pre-agent:";
 const DEFAULT_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
-class PreAgentSnapshotService {
+export class PreAgentSnapshotService {
   private snapshots = new Map<string, SnapshotInfo>();
   private unsubscribers: Array<() => void> = [];
   private pruneTimer: NodeJS.Timeout | null = null;
+  private pruneIntervalMs = PRUNE_INTERVAL_MS;
 
   initialize(): void {
+    if (this.pruneTimer) return;
+
     const unsub = events.on("agent:state-changed", (payload) => {
       this.handleStateChanged(payload);
     });
     this.unsubscribers.push(unsub);
 
     this.pruneAllWorktrees();
-    this.pruneTimer = setInterval(() => this.pruneAllWorktrees(), PRUNE_INTERVAL_MS);
+    this.pruneTimer = setInterval(() => this.pruneAllWorktrees(), this.pruneIntervalMs);
+  }
+
+  updatePollInterval(ms: number): void {
+    if (ms === this.pruneIntervalMs) return;
+    this.pruneIntervalMs = ms;
+    if (this.pruneTimer) {
+      clearInterval(this.pruneTimer);
+      this.pruneTimer = setInterval(() => this.pruneAllWorktrees(), this.pruneIntervalMs);
+    }
   }
 
   private handleStateChanged(payload: {
