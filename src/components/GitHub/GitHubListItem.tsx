@@ -128,6 +128,7 @@ export function GitHubListItem({
   const copyTimeoutRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
+    setCopied(false);
     return () => {
       if (copyTimeoutRef.current) {
         clearTimeout(copyTimeoutRef.current);

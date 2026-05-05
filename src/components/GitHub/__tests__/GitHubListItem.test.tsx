@@ -170,6 +170,26 @@ describe("GitHubListItem", () => {
     expect(checkIconAfter).toBeNull();
   });
 
+  it("resets copy state on unmount/remount so checkmark does not persist across reopen", async () => {
+    const { unmount } = render(<GitHubListItem item={baseIssue} type="issue" />);
+    const copyButton = screen.getByLabelText("Copy number 42");
+
+    await act(async () => {
+      fireEvent.click(copyButton);
+    });
+
+    const checkIcon = copyButton.querySelector(".text-status-success");
+    expect(checkIcon).not.toBeNull();
+
+    unmount();
+
+    render(<GitHubListItem item={baseIssue} type="issue" />);
+    const copyButtonAfter = screen.getByLabelText("Copy number 42");
+
+    const checkIconAfter = copyButtonAfter.querySelector(".text-status-success");
+    expect(checkIconAfter).toBeNull();
+  });
+
   it("renders ellipsis menu trigger button", () => {
     render(<GitHubListItem item={baseIssue} type="issue" />);
     expect(screen.getByLabelText("More actions")).toBeTruthy();
