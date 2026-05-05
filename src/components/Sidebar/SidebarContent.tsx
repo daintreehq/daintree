@@ -150,8 +150,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const clearQuickStateFilter = useWorktreeFilterStore((state) => state.clearQuickStateFilter);
 
   // Terminal store for derived metadata
-  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
-  const panelIds = usePanelStore(useShallow((state) => state.panelIds));
+  const panelsById = usePanelStore((state) => state.panelsById);
+  const panelIds = usePanelStore((state) => state.panelIds);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);

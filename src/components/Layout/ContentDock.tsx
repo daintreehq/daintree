@@ -1,5 +1,5 @@
 import { useMemo, useRef, useCallback } from "react";
-import { useShallow } from "zustand/react/shallow";
+
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -64,9 +64,9 @@ interface ContentDockProps {
 export function ContentDock({ density = "normal" }: ContentDockProps) {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
-  const trashedTerminals = usePanelStore(useShallow((state) => state.trashedTerminals));
-  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
-  const storeTerminalIds = usePanelStore(useShallow((state) => state.panelIds));
+  const trashedTerminals = usePanelStore((state) => state.trashedTerminals);
+  const panelsById = usePanelStore((state) => state.panelsById);
+  const storeTerminalIds = usePanelStore((state) => state.panelIds);
   const getTabGroups = usePanelStore((state) => state.getTabGroups);
   const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
   const currentProject = useProjectStore((s) => s.currentProject);

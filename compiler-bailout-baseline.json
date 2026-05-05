@@ -131,6 +131,12 @@
     "error": 2,
     "pipeline": 0
   },
+  "src/components/DevPreview/useDevPreviewLoadLifecycle.ts": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0
+  },
   "src/components/Diagnostics/DiagnosticsActions.tsx": {
     "success": 4,
     "skip": 0,
@@ -294,9 +300,15 @@
     "pipeline": 0
   },
   "src/components/Fleet/FleetArmingRibbon.tsx": {
-    "success": 6,
+    "success": 0,
     "skip": 0,
     "error": 1,
+    "pipeline": 0
+  },
+  "src/components/Fleet/FleetCountChip.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
     "pipeline": 0
   },
   "src/components/Fleet/FleetDraftingPill.tsx": {
@@ -312,6 +324,48 @@
     "pipeline": 0
   },
   "src/components/Fleet/FleetPickerPalette.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Fleet/FleetWorktreeDots.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Fleet/SaveFleetForm.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Fleet/SavedFleetRow.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Fleet/SavedFleetsSection.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Fleet/useFleetEscapeChords.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Fleet/useFleetRibbonFlashes.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Fleet/useFleetWorktreeScope.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -354,9 +408,9 @@
     "pipeline": 0
   },
   "src/components/GitHub/GitHubResourceList.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
-    "error": 2,
+    "error": 0,
     "pipeline": 0
   },
   "src/components/GitHub/IssueSelector.tsx": {
@@ -365,7 +419,13 @@
     "error": 0,
     "pipeline": 0
   },
-  "src/components/HelpPanel/HelpAgentPicker.tsx": {
+  "src/components/GitHub/useGitHubResourceListSWR.ts": {
+    "success": 0,
+    "skip": 0,
+    "error": 2,
+    "pipeline": 0
+  },
+  "src/components/HelpPanel/HelpIntroBanner.tsx": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -455,6 +515,18 @@
     "error": 1,
     "pipeline": 0
   },
+  "src/components/Layout/FreshnessUtils.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Layout/GitHubStatPill.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/Layout/GitHubStatsToolbarButton.tsx": {
     "success": 0,
     "skip": 0,
@@ -467,14 +539,14 @@
     "error": 0,
     "pipeline": 0
   },
-  "src/components/Layout/HelpAgentDockButton.tsx": {
+  "src/components/Layout/NotificationCenterToolbarButton.tsx": {
     "success": 1,
     "skip": 0,
     "error": 0,
     "pipeline": 0
   },
-  "src/components/Layout/NotificationCenterToolbarButton.tsx": {
-    "success": 1,
+  "src/components/Layout/RateLimitDetails.tsx": {
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0
@@ -501,6 +573,12 @@
     "success": 1,
     "skip": 0,
     "error": 1,
+    "pipeline": 0
+  },
+  "src/components/Layout/ToolbarAssistantButton.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
     "pipeline": 0
   },
   "src/components/Layout/ToolbarLauncherButton.tsx": {
@@ -587,6 +665,12 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/components/McpConfirmDialog.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/Notifications/NotificationCenter.tsx": {
     "success": 2,
     "skip": 0,
@@ -618,12 +702,18 @@
     "pipeline": 0
   },
   "src/components/Panel/ContentPanel.tsx": {
-    "success": 2,
+    "success": 1,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0
+  },
+  "src/components/Panel/PanelHeader.tsx": {
+    "success": 1,
     "skip": 0,
     "error": 0,
     "pipeline": 0
   },
-  "src/components/Panel/PanelHeader.tsx": {
+  "src/components/Panel/PanelTabList.tsx": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -761,12 +851,6 @@
     "error": 0,
     "pipeline": 0
   },
-  "src/components/Project/ProjectOnboardingWizard.tsx": {
-    "success": 0,
-    "skip": 0,
-    "error": 1,
-    "pipeline": 0
-  },
   "src/components/Project/ProjectResourceBadge.tsx": {
     "success": 4,
     "skip": 0,
@@ -804,7 +888,7 @@
     "pipeline": 0
   },
   "src/components/Project/WelcomeScreen.tsx": {
-    "success": 4,
+    "success": 5,
     "skip": 0,
     "error": 1,
     "pipeline": 0
@@ -881,6 +965,54 @@
     "error": 1,
     "pipeline": 0
   },
+  "src/components/Settings/AgentScopeEditor/AgentScopeEditor.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Settings/AgentScopeEditor/BehavioralControls.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Settings/AgentScopeEditor/CustomPresetChrome.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Settings/AgentScopeEditor/EnvBlock.tsx": {
+    "success": 2,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Settings/AgentScopeEditor/FallbackChainEditor.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Settings/AgentScopeEditor/ReadOnlyDetail.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Settings/AgentScopeEditor/ScopeBanner.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Settings/AgentScopeEditor/useAgentScope.ts": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0
+  },
   "src/components/Settings/AgentSelectorDropdown.tsx": {
     "success": 1,
     "skip": 0,
@@ -915,6 +1047,12 @@
     "success": 1,
     "skip": 0,
     "error": 1,
+    "pipeline": 0
+  },
+  "src/components/Settings/DaintreeAssistantSettingsTab.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
     "pipeline": 0
   },
   "src/components/Settings/DiagnosticsReviewDialog.tsx": {
@@ -1044,7 +1182,7 @@
     "pipeline": 0
   },
   "src/components/Settings/SettingsDialog.tsx": {
-    "success": 5,
+    "success": 6,
     "skip": 0,
     "error": 1,
     "pipeline": 0
@@ -1154,7 +1292,7 @@
   "src/components/Setup/AgentSetupWizard.tsx": {
     "success": 3,
     "skip": 0,
-    "error": 1,
+    "error": 2,
     "pipeline": 0
   },
   "src/components/Setup/InstallBlock.tsx": {
@@ -1175,6 +1313,12 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/components/Setup/useAgentSetupPoll.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/Setup/useSystemHealthCheck.ts": {
     "success": 0,
     "skip": 0,
@@ -1188,7 +1332,31 @@
     "pipeline": 0
   },
   "src/components/Sidebar/SidebarContent.tsx": {
-    "success": 3,
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Sidebar/SidebarWorktreeRow.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Sidebar/StaticWorktreeRow.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Sidebar/useRecipeDialogState.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Sidebar/useScrollIndicator.ts": {
+    "success": 1,
     "skip": 0,
     "error": 0,
     "pipeline": 0
@@ -1212,9 +1380,45 @@
     "pipeline": 0
   },
   "src/components/Terminal/ContentGrid.tsx": {
-    "success": 2,
+    "success": 1,
     "skip": 0,
-    "error": 3,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/ContentGridDefault.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/ContentGridEmptyState.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/ContentGridFleetScope.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/ContentGridMaximizedGroup.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/ContentGridMaximizedSingle.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/ContentGridTwoPaneSplit.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
     "pipeline": 0
   },
   "src/components/Terminal/DockedPanel.tsx": {
@@ -1236,6 +1440,12 @@
     "pipeline": 0
   },
   "src/components/Terminal/GridPanel.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/GridShell.tsx": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -1326,6 +1536,12 @@
     "pipeline": 0
   },
   "src/components/Terminal/SpawnErrorBanner.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/TerminalCloseConfirmHost.tsx": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -1439,7 +1655,37 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/components/Terminal/contentGridTips.tsx": {
+    "success": 2,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/hooks/useAutocompleteApply.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/Terminal/hooks/useAutocompleteItems.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/hooks/useAutocompletePositioning.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/hooks/useAutocompleteState.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/hooks/useCompartmentDriver.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -1463,7 +1709,37 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/components/Terminal/hooks/useEditorDomHandlers.ts": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0
+  },
+  "src/components/Terminal/hooks/useEditorFactory.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/Terminal/hooks/useEditorKeymap.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/hooks/useFleetMirror.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/hooks/useHostReparent.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Terminal/hooks/usePasteExtensions.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -1485,6 +1761,12 @@
     "success": 0,
     "skip": 0,
     "error": 1,
+    "pipeline": 0
+  },
+  "src/components/Terminal/useContentGridContext.tsx": {
+    "success": 0,
+    "skip": 0,
+    "error": 2,
     "pipeline": 0
   },
   "src/components/Terminal/useTerminalFileTransfer.ts": {
@@ -1578,9 +1860,9 @@
     "pipeline": 0
   },
   "src/components/Worktree/NewWorktreeDialog.tsx": {
-    "success": 1,
+    "success": 0,
     "skip": 0,
-    "error": 3,
+    "error": 2,
     "pipeline": 0
   },
   "src/components/Worktree/QuickCreatePalette.tsx": {
@@ -1637,13 +1919,61 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/components/Worktree/WorktreeCard/CollapsedSessionIndicators.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/WorktreeCard/EnvironmentPopover.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/Worktree/WorktreeCard/GitHubTooltipContent.tsx": {
     "success": 5,
     "skip": 0,
     "error": 0,
     "pipeline": 0
   },
+  "src/components/Worktree/WorktreeCard/IssueBadge.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/WorktreeCard/MainWorktreeSecondaryRow.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/Worktree/WorktreeCard/MainWorktreeSummaryRows.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/WorktreeCard/NonMainSecondaryRow.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/WorktreeCard/PRBadge.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/WorktreeCard/UpstreamSyncBadge.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/WorktreeCard/WorktreeActionsToolbar.tsx": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -1662,7 +1992,7 @@
     "pipeline": 0
   },
   "src/components/Worktree/WorktreeCard/WorktreeHeader.tsx": {
-    "success": 3,
+    "success": 1,
     "skip": 0,
     "error": 0,
     "pipeline": 0
@@ -1677,6 +2007,18 @@
     "success": 0,
     "skip": 0,
     "error": 2,
+    "pipeline": 0
+  },
+  "src/components/Worktree/WorktreeCard/hooks/useGitHubBadgeTooltip.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/WorktreeCard/hooks/useInputReceiptKey.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
     "pipeline": 0
   },
   "src/components/Worktree/WorktreeCard/hooks/useWorktreeActions.ts": {
@@ -1776,6 +2118,78 @@
     "pipeline": 0
   },
   "src/components/Worktree/hooks/useRecipePicker.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/hooks/useWorktreeFormErrors.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/hooks/useWorktreeFormValidation.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/views/BaseBranchCombobox.tsx": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0
+  },
+  "src/components/Worktree/views/BranchModeControl.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/views/EnvironmentRadioGroup.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/views/ExistingBranchPicker.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/views/HighlightBranchText.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/views/IssueSelectorView.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/views/NewBranchInput.tsx": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0
+  },
+  "src/components/Worktree/views/PrHeader.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/views/RecipePickerPopover.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Worktree/views/WorktreePathPicker.tsx": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -2237,12 +2651,6 @@
     "error": 0,
     "pipeline": 0
   },
-  "src/hooks/app/useContextFilesOffer.tsx": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0
-  },
   "src/hooks/app/useCrashRecoveryGate.ts": {
     "success": 1,
     "skip": 0,
@@ -2364,6 +2772,12 @@
     "pipeline": 0
   },
   "src/hooks/useBranchForPath.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/hooks/useBrowserActionListeners.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -2562,6 +2976,12 @@
     "pipeline": 0
   },
   "src/hooks/useMcpBridge.ts": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0
+  },
+  "src/hooks/useMcpReadiness.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -2835,6 +3255,12 @@
     "success": 1,
     "skip": 0,
     "error": 0,
+    "pipeline": 0
+  },
+  "src/hooks/useWebviewEvents.ts": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
     "pipeline": 0
   },
   "src/hooks/useWebviewEviction.ts": {

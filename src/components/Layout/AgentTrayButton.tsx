@@ -41,7 +41,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useShallow } from "zustand/react/shallow";
+
 import { useKeybindingDisplay } from "@/hooks";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
@@ -280,7 +280,7 @@ export function AgentTrayButton({
   const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
   const updateWorktreePreset = useAgentSettingsStore((s) => s.updateWorktreePreset);
 
-  const getSortedActionMruList = useActionMruStore(useShallow((s) => s.getSortedActionMruList));
+  const getSortedActionMruList = useActionMruStore((s) => s.getSortedActionMruList);
 
   const refreshAvailability = useCliAvailabilityStore((s) => s.refresh);
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
@@ -294,8 +294,8 @@ export function AgentTrayButton({
 
   const [open, setOpen] = useState(false);
 
-  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
-  const panelIds = usePanelStore(useShallow((s) => s.panelIds));
+  const panelsById = usePanelStore((s) => s.panelsById);
+  const panelIds = usePanelStore((s) => s.panelIds);
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
   // Before the first real availability result lands we can't distinguish

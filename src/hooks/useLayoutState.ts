@@ -81,9 +81,7 @@ export function useLayoutState(): LayoutState {
 
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
 
-  const errorCount = useErrorStore(
-    useShallow((state) => state.errors.filter((e) => !e.dismissed).length)
-  );
+  const errorCount = useErrorStore((state) => state.errors.filter((e) => !e.dismissed).length);
 
   return useMemo(
     () => ({
