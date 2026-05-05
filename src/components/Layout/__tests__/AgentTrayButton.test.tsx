@@ -278,9 +278,15 @@ vi.mock("@/components/ui/tooltip", () => ({
 vi.mock("@/components/ui/button", () => ({
   Button: ({
     children,
+    size,
     ...props
-  }: { children: React.ReactNode } & React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button {...props}>{children}</button>
+  }: {
+    children: React.ReactNode;
+    size?: string;
+  } & React.ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button data-size={size} {...props}>
+      {children}
+    </button>
   ),
 }));
 
@@ -1195,6 +1201,105 @@ describe("AgentTrayButton", () => {
       const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
       const row = getByTestId("agent-tray-row-claude");
       expect(badgeIn(row)).toBeNull();
+    });
+  });
+
+  describe("empty-state trigger label", () => {
+    it("shows 'Pin agents' label on trigger when agents are available but not pinned", () => {
+      const availability = {
+        claude: "ready",
+        gemini: "ready",
+        codex: "ready",
+      } as unknown as CliAvailability;
+      mockSettings = settingsWith({
+        claude: { pinned: false },
+        gemini: { pinned: false },
+        codex: { pinned: false },
+      });
+      mockSeenAgentIds = ["claude", "gemini", "codex"];
+
+      const { container, getAllByTestId } = render(
+        <AgentTrayButton agentAvailability={availability} />
+      );
+
+      const button = container.querySelector("button")!;
+      expect(button.textContent).toContain("Pin agents");
+      expect(button.getAttribute("aria-label")).toBe("Agent tray — Pin agents");
+      expect(button.getAttribute("data-size")).toBe("sm");
+      expect(getAllByTestId("plug-icon").length).toBeGreaterThan(0);
+    });
+
+    it("shows 'Set up agents' label on trigger when nothing is installed", () => {
+      mockHasRealData = true;
+      const availability = {
+        claude: "missing",
+        gemini: "missing",
+        codex: "missing",
+      } as unknown as CliAvailability;
+
+      const { container, getAllByTestId } = render(
+        <AgentTrayButton agentAvailability={availability} />
+      );
+
+      const button = container.querySelector("button")!;
+      expect(button.textContent).toContain("Set up agents");
+      expect(button.getAttribute("aria-label")).toBe("Agent tray — Set up agents");
+      expect(button.getAttribute("data-size")).toBe("sm");
+      expect(getAllByTestId("plug-icon").length).toBeGreaterThan(0);
+    });
+
+    it("shows no label on trigger during availability loading", () => {
+      mockHasRealData = false;
+      mockSettings = settingsWith({
+        claude: { pinned: false },
+        gemini: { pinned: false },
+        codex: { pinned: false },
+      });
+
+      const { queryByText, container } = render(<AgentTrayButton />);
+
+      expect(queryByText("Pin agents")).toBeNull();
+      expect(queryByText("Set up agents")).toBeNull();
+      expect(container.querySelector('[aria-label="Agent tray"]')).toBeTruthy();
+    });
+
+    it("shows neither label when only needs-setup agents exist", () => {
+      mockHasRealData = true;
+      const availability = {
+        claude: "installed",
+        codex: "blocked",
+      } as unknown as CliAvailability;
+      mockSettings = settingsWith({
+        claude: { pinned: false },
+        codex: { pinned: false },
+      });
+
+      const { queryByText, container } = render(
+        <AgentTrayButton agentAvailability={availability} />
+      );
+
+      expect(queryByText("Pin agents")).toBeNull();
+      expect(queryByText("Set up agents")).toBeNull();
+      expect(container.querySelector("button")!.getAttribute("data-size")).toBe("icon");
+    });
+
+    it("suppresses label when at least one agent is pinned", () => {
+      const availability = {
+        claude: "ready",
+        gemini: "ready",
+      } as unknown as CliAvailability;
+      mockSettings = settingsWith({
+        claude: { pinned: true },
+        gemini: { pinned: false },
+      });
+
+      const { queryByText, container } = render(
+        <AgentTrayButton agentAvailability={availability} />
+      );
+
+      expect(queryByText("Pin agents")).toBeNull();
+      expect(queryByText("Set up agents")).toBeNull();
+      expect(container.querySelector("button")!.getAttribute("data-size")).toBe("icon");
     });
   });
 
