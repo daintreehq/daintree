@@ -639,7 +639,6 @@ class TerminalInstanceService {
       if (launchAgentId !== undefined && !existing.isHibernated) {
         existing.terminal.options.cursorBlink = false;
         existing.terminal.options.rescaleOverlappingGlyphs = false;
-        existing.terminal.options.customGlyphs = false;
       }
       return existing;
     }
@@ -670,7 +669,6 @@ class TerminalInstanceService {
     if (launchAgentId !== undefined) {
       terminalOptions.cursorBlink = false;
       terminalOptions.rescaleOverlappingGlyphs = false;
-      terminalOptions.customGlyphs = false;
     }
 
     const terminal = new Terminal(terminalOptions);
