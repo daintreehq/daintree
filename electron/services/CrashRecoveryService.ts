@@ -11,6 +11,7 @@ import type {
 import { coerceAgentState } from "../../shared/types/agent.js";
 import { store, windowStatesStore } from "../store.js";
 import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
+import { getSystemSleepService } from "./SystemSleepService.js";
 import { getActionBreadcrumbService } from "./ActionBreadcrumbService.js";
 
 const MAX_CRASH_LOGS = 10;
@@ -31,6 +32,8 @@ export class CrashRecoveryService {
   private pendingCrash: PendingCrash | null = null;
   private backupTimer: ReturnType<typeof setInterval> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private removeSuspendListener: (() => void) | null = null;
+  private removeWakeListener: (() => void) | null = null;
   private crashRecorded = false;
   private pendingPanelFilter: string[] | null = null;
   private cachedBackupSnapshot: SessionSnapshot | null = null;
@@ -97,6 +100,7 @@ export class CrashRecoveryService {
     this.backupTimer = setInterval(() => {
       this.takeBackup();
     }, BACKUP_INTERVAL_MS);
+    this.registerSleepListeners();
   }
 
   stopBackupTimer(): void {
@@ -107,6 +111,39 @@ export class CrashRecoveryService {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
+    }
+    this.unregisterSleepListeners();
+  }
+
+  private registerSleepListeners(): void {
+    this.unregisterSleepListeners();
+    try {
+      this.removeSuspendListener = getSystemSleepService().onSuspend(() => {
+        if (this.backupTimer) {
+          clearInterval(this.backupTimer);
+          this.backupTimer = null;
+        }
+        if (this.debounceTimer) {
+          clearTimeout(this.debounceTimer);
+          this.debounceTimer = null;
+        }
+      });
+      this.removeWakeListener = getSystemSleepService().onWake(() => {
+        this.startBackupTimer();
+      });
+    } catch {
+      // SystemSleepService may not be initialized yet at early startup.
+    }
+  }
+
+  private unregisterSleepListeners(): void {
+    if (this.removeSuspendListener) {
+      this.removeSuspendListener();
+      this.removeSuspendListener = null;
+    }
+    if (this.removeWakeListener) {
+      this.removeWakeListener();
+      this.removeWakeListener = null;
     }
   }
 

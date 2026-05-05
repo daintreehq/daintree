@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { app } from "electron";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
+import { getSystemSleepService } from "./SystemSleepService.js";
 
 const POLL_INTERVAL_MS = 30_000;
 const SNAPSHOT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -218,6 +219,8 @@ export function refreshAppMetricsMonitor(): void {
 export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => void {
   const snapshotCooldowns = new Map<number, number>();
   const trendState = new Map<number, PidTrendState>();
+  let removeSuspendListener: (() => void) | null = null;
+  let removeWakeListener: (() => void) | null = null;
   let pollCount = 0;
   let consecutivePressureCount = 0;
   let lastTier2At = 0;
@@ -226,16 +229,11 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   const poll = () => {
     try {
       pollCount++;
-      // Kick off a Blink-memory sample fan-out for this tick. Renderer replies
-      // arrive asynchronously via the SYSTEM_REPORT_BLINK_MEMORY handler and
-      // populate `blinkSamples` for the next poll's diagnostics.
       try {
         actions?.sampleBlinkMemory?.();
       } catch {
         /* non-critical */
       }
-      // Kick off a renderer-ELU sample fan-out alongside Blink-memory. Replies
-      // arrive via SYSTEM_REPORT_RENDERER_ELU and populate `eluSamples`.
       try {
         actions?.sampleRendererElu?.();
       } catch {
@@ -263,7 +261,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           });
         }
 
-        // Trend detection: bucket-minimum + EMA
         let state = trendState.get(proc.pid);
         if (!state) {
           state = {
@@ -286,7 +283,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             state.emaHistory.shift();
           }
 
-          // Evaluate trend with dual suppression
           if (
             Date.now() - state.startedAt >= STARTUP_SUPPRESSION_MS &&
             state.emaHistory.length === BUCKET_WINDOW
@@ -326,7 +322,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
         }
       }
 
-      // Prune stale PID state
       for (const pid of trendState.keys()) {
         if (!activePids.has(pid)) trendState.delete(pid);
       }
@@ -398,10 +393,29 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
 
   armTimer();
 
+  try {
+    removeSuspendListener = getSystemSleepService().onSuspend(() => {
+      clearAlignedInterval?.();
+      clearAlignedInterval = null;
+      trendState.clear();
+      consecutivePressureCount = 0;
+      lastTier2At = 0;
+      mitigationInFlight = false;
+    });
+    removeWakeListener = getSystemSleepService().onWake(() => {
+      if (clearAlignedInterval !== null) return;
+      armTimer();
+    });
+  } catch {
+    // SystemSleepService may not be initialized yet at early startup.
+  }
+
   return () => {
     clearAlignedInterval?.();
     clearAlignedInterval = null;
     appMetricsPollFn = null;
     rearmAppMetricsTimer = null;
+    removeSuspendListener?.();
+    removeWakeListener?.();
   };
 }

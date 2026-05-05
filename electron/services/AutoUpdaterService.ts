@@ -7,6 +7,7 @@ import * as semver from "semver";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { getCrashRecoveryService } from "./CrashRecoveryService.js";
+import { getSystemSleepService } from "./SystemSleepService.js";
 import { store } from "../store.js";
 import { PRODUCT_NAME } from "../utils/productBranding.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
@@ -51,10 +52,15 @@ const STABLE_FEED_URL = "https://updates.daintree.org/releases/";
 const NIGHTLY_FEED_URL = "https://updates.daintree.org/nightly/";
 const { autoUpdater } = electronUpdater;
 
+const RESUME_CHECK_DELAY_MS = 7_000;
+
 class AutoUpdaterService {
   private checkInterval: NodeJS.Timeout | null = null;
   private startupJitterTimeout: NodeJS.Timeout | null = null;
   private retryTimeout: NodeJS.Timeout | null = null;
+  private resumeTimeout: NodeJS.Timeout | null = null;
+  private removeSuspendListener: (() => void) | null = null;
+  private removeWakeListener: (() => void) | null = null;
   private retryCount = 0;
   private initialized = false;
   private channelHandlersRegistered = false;
@@ -200,7 +206,7 @@ class AutoUpdaterService {
     autoUpdater.allowDowngrade = channel === "nightly";
   }
 
-  private runUpdateCheck(context: "Initial" | "Periodic" | "Retry"): void {
+  private runUpdateCheck(context: "Initial" | "Periodic" | "Retry" | "Resume"): void {
     try {
       const result = autoUpdater.checkForUpdatesAndNotify();
       Promise.resolve(result).catch((err) => {
@@ -436,6 +442,40 @@ class AutoUpdaterService {
         this.runUpdateCheck("Periodic");
       }, CHECK_INTERVAL_MS);
 
+      try {
+        this.removeSuspendListener = getSystemSleepService().onSuspend(() => {
+          if (this.checkInterval) {
+            clearInterval(this.checkInterval);
+            this.checkInterval = null;
+          }
+          if (this.startupJitterTimeout) {
+            clearTimeout(this.startupJitterTimeout);
+            this.startupJitterTimeout = null;
+          }
+          if (this.resumeTimeout) {
+            clearTimeout(this.resumeTimeout);
+            this.resumeTimeout = null;
+          }
+          this.clearRetryTimeout();
+          this.resetRetryState();
+        });
+        this.removeWakeListener = getSystemSleepService().onWake(() => {
+          if (this.resumeTimeout || this.checkInterval) return;
+          this.resumeTimeout = setTimeout(() => {
+            this.resumeTimeout = null;
+            this.runUpdateCheck("Resume");
+            if (!this.checkInterval) {
+              this.checkInterval = setInterval(() => {
+                this.runUpdateCheck("Periodic");
+              }, CHECK_INTERVAL_MS);
+            }
+          }, RESUME_CHECK_DELAY_MS);
+        });
+      } catch {
+        // SystemSleepService may not be initialized yet at early startup.
+        // The suspend hook is best-effort — periodic timer covers the gap.
+      }
+
       this.initialized = true;
       console.log("[MAIN] Auto-updater initialized");
     } catch (err) {
@@ -454,7 +494,20 @@ class AutoUpdaterService {
       this.startupJitterTimeout = null;
     }
     this.clearRetryTimeout();
+    if (this.resumeTimeout) {
+      clearTimeout(this.resumeTimeout);
+      this.resumeTimeout = null;
+    }
     this.retryCount = 0;
+
+    if (this.removeSuspendListener) {
+      this.removeSuspendListener();
+      this.removeSuspendListener = null;
+    }
+    if (this.removeWakeListener) {
+      this.removeWakeListener();
+      this.removeWakeListener = null;
+    }
 
     if (this.checkingHandler) {
       autoUpdater.off("checking-for-update", this.checkingHandler);
