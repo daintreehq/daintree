@@ -67,13 +67,16 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
     expect(source).not.toMatch(/isThemeBrowserOpen && "bg-scrim-soft\/30 backdrop-blur-\[2px\]"/);
   });
 
-  it("anchors ThemeBrowser right edge via shared --portal-right-offset (issue #6629)", () => {
+  it("anchors ThemeBrowser right edge via shared --right-obstruction-offset (issue #6629, #6800)", () => {
     // Both the Portal and the Assistant occupy the right edge of the viewport.
     // ThemeBrowser must step left of whichever is wider — and previously, when
     // only the Assistant was open, ThemeBrowser used `right: "0px"` and
     // overlapped the panel. Routing through the shared CSS var fixes both
-    // cases with a single source of truth.
-    expect(source).toContain('right: "var(--portal-right-offset, 0px)"');
+    // cases with a single source of truth. The var was renamed from
+    // --portal-right-offset to --right-obstruction-offset in #6800 so that
+    // toolbar dropdowns can keep using --portal-right-offset (portal-only)
+    // without dodging the Assistant.
+    expect(source).toContain('right: "var(--right-obstruction-offset, 0px)"');
     // The old hand-computed ternary must not be reintroduced.
     expect(source).not.toMatch(/right: layout\.portalOpen \? `\$\{layout\.portalWidth\}px` :/);
   });

@@ -497,7 +497,7 @@ export function Toaster() {
   return createPortal(
     <div
       className="fixed top-14 z-[var(--z-toast)] flex flex-col gap-3 w-full max-w-[380px] pointer-events-none p-4"
-      style={{ right: "calc(var(--portal-right-offset, 0px))" }}
+      style={{ right: "calc(var(--right-obstruction-offset, 0px))" }}
     >
       {[...toastNotifications].reverse().map((notification) => (
         <Toast key={notification.id} notification={notification} />
