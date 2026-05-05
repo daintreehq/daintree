@@ -158,6 +158,7 @@ function setLag(p99Ms: number, utilization: number): void {
 describe("ResourceProfileService adversarial", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.setSystemTime(1_830_001);
     vi.clearAllMocks();
     // Pin total RAM so MB-based test values cross the intended threshold bands
     // regardless of the CI host's actual memory.

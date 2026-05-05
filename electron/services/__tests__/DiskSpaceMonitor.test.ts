@@ -56,6 +56,7 @@ describe("DiskSpaceMonitor", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.setSystemTime(1_830_001);
     statfsMock.mockReset();
   });
 

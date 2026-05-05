@@ -3,6 +3,7 @@ import path from "node:path";
 import { mkdirSync } from "node:fs";
 import { app } from "electron";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
+import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 
 const POLL_INTERVAL_MS = 30_000;
 const SNAPSHOT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -208,7 +209,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   let lastTier2At = 0;
   let mitigationInFlight = false;
 
-  const timer = setInterval(() => {
+  const clear = setAlignedInterval(() => {
     try {
       pollCount++;
       // Kick off a Blink-memory sample fan-out for this tick. Renderer replies
@@ -372,6 +373,5 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
     }
   }, POLL_INTERVAL_MS);
 
-  timer.unref();
-  return () => clearInterval(timer);
+  return clear;
 }

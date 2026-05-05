@@ -5,6 +5,7 @@ import { projectStore } from "./ProjectStore.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
+import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEBOUNCE_MS = 200;
@@ -61,10 +62,10 @@ export class ProjectStatsService {
   }
 
   private armPollInterval(): void {
-    const id = setInterval(() => {
+    const clear = setAlignedInterval(() => {
       void this.computeAndBroadcast();
     }, this.pollIntervalMs);
-    this.intervalSlot.value = toDisposable(() => clearInterval(id));
+    this.intervalSlot.value = toDisposable(clear);
   }
 
   private debouncedCompute(): void {

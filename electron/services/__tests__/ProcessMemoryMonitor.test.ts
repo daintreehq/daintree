@@ -72,6 +72,7 @@ describe("ProcessMemoryMonitor", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.setSystemTime(1_830_001);
     vi.clearAllMocks();
     mockGetAppMetrics.mockReturnValue([]);
   });
