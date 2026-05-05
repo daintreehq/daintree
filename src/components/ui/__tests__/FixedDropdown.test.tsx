@@ -552,3 +552,86 @@ describe("FixedDropdown keepMounted behavior", () => {
     expect(document.querySelector('[data-testid="body"]')).toBeNull();
   });
 });
+
+describe("FixedDropdown right-edge anchor (issue #6800)", () => {
+  let onOpenChange: ReturnType<typeof vi.fn<(open: boolean) => void>>;
+  let anchorRef: React.RefObject<HTMLElement | null>;
+
+  beforeEach(() => {
+    _resetForTests();
+    setOverlayClaimsSize(0);
+    onOpenChange = vi.fn();
+    anchorRef = createAnchor();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
+    document.body.style.removeProperty("--portal-right-offset");
+    document.body.style.removeProperty("--right-obstruction-offset");
+  });
+
+  it("anchors right edge to --portal-right-offset, not --right-obstruction-offset", () => {
+    // Toolbar dropdowns sit above the main flex row. The Assistant is a flex
+    // sibling of <main>, not an overlay — it doesn't cover the toolbar. Only
+    // the body-portaled Portal (web chat) needs to push toolbar dropdowns
+    // left. Using --right-obstruction-offset would shift dropdowns left by
+    // Assistant width too, which is the bug from #6800.
+    render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+
+    const portal = document.querySelector('[data-testid="dropdown-body"]')?.parentElement;
+    expect(portal).not.toBeNull();
+    const rightStyle = portal?.style.right ?? "";
+    expect(rightStyle).toContain("var(--portal-right-offset");
+    expect(rightStyle).not.toContain("--right-obstruction-offset");
+  });
+
+  it("ignores --right-obstruction-offset when only the Assistant is open", () => {
+    // The actual #6800 scenario: Portal closed (--portal-right-offset = 0),
+    // Assistant open (--right-obstruction-offset = 320). The toolbar dropdown
+    // must NOT pick up the 320px shift, because only the Portal body-portals
+    // over the toolbar.
+    document.body.style.setProperty("--portal-right-offset", "0px");
+    document.body.style.setProperty("--right-obstruction-offset", "320px");
+
+    render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+
+    const portal = document.querySelector('[data-testid="dropdown-body"]')?.parentElement;
+    const rightStyle = portal?.style.right ?? "";
+    expect(rightStyle).toContain("var(--portal-right-offset");
+    expect(rightStyle).not.toContain("--right-obstruction-offset");
+    expect(rightStyle).not.toContain("320");
+  });
+});
+
+describe("FixedDropdown source-level guards (issue #6800)", () => {
+  // Cheap permanent regression scan: the toolbar-dropdown component must
+  // never reach for the obstruction var, even via a nested helper, since
+  // that would silently revert the #6800 fix.
+  let source: string;
+
+  beforeEach(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    source = await fs.readFile(path.resolve(__dirname, "../fixed-dropdown.tsx"), "utf-8");
+  });
+
+  it("references --portal-right-offset", () => {
+    expect(source).toContain("--portal-right-offset");
+  });
+
+  it("does not reference --right-obstruction-offset", () => {
+    // If a future refactor wires the obstruction var into FixedDropdown,
+    // toolbar dropdowns will start dodging the Assistant again — exactly
+    // the #6800 regression.
+    expect(source).not.toContain("--right-obstruction-offset");
+  });
+});

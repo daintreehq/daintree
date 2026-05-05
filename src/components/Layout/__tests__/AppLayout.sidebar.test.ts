@@ -83,15 +83,36 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
     expect(source).toContain("[showAssistant]");
   });
 
-  it("uses max of portal and assistant widths for --portal-right-offset (issue #6629)", () => {
+  it("publishes --portal-right-offset as portal-only (issue #6800)", () => {
+    // The Assistant is a flex sibling below the toolbar — it doesn't overlay
+    // the toolbar. Toolbar dropdowns must dodge the Portal (body-portaled web
+    // chat) but not the Assistant. The previous shared-max value pushed
+    // dropdowns left by Assistant width even when the Portal was closed.
+    expect(source).toMatch(
+      /document\.body\.style\.setProperty\("--portal-right-offset", `\$\{portalOffset\}px`\)/
+    );
+    // The portal-only var must not be re-conflated with Assistant width.
+    expect(source).not.toMatch(/setProperty\("--portal-right-offset",[^)]*Math\.max\(portalOffset/);
+  });
+
+  it("publishes --right-obstruction-offset as max(portal, assistant) (issue #6629)", () => {
     // Portal overlays Assistant when both are open, so the rightmost fixed
-    // obstruction is max(portal, assistant), not their sum. The previous sum
-    // logic over-displaced toasts/popovers when both panels were open.
+    // obstruction is max(portal, assistant), not their sum. Toaster, popovers,
+    // ReEntrySummary, GettingStartedChecklist, and the ThemeBrowser overlay
+    // all read this var — they're body-portaled fixed elements that would
+    // otherwise be hidden behind the wider of the two panels.
     expect(source).toContain("Math.max(portalOffset, effectiveAssistantWidth)");
-    expect(source).toContain("--portal-right-offset");
+    expect(source).toMatch(
+      /document\.body\.style\.setProperty\("--right-obstruction-offset", `\$\{obstructionOffset\}px`\)/
+    );
     expect(source).toMatch(/\[layout\.portalOpen, layout\.portalWidth, effectiveAssistantWidth\]/);
     // The old sum semantics must not be reintroduced.
     expect(source).not.toMatch(/portalOffset \+ effectiveAssistantWidth/);
+  });
+
+  it("removes both right-edge vars on cleanup", () => {
+    expect(source).toContain('document.body.style.removeProperty("--portal-right-offset")');
+    expect(source).toContain('document.body.style.removeProperty("--right-obstruction-offset")');
   });
 });
 

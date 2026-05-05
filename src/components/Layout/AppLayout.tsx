@@ -375,14 +375,24 @@ export function AppLayout({
 
   useEffect(() => {
     const portalOffset = layout.portalOpen ? layout.portalWidth : 0;
-    // Portal overlays the Assistant when both are open, so the rightmost fixed
-    // obstruction is the wider of the two — not their sum. Toaster, popovers,
-    // dropdowns, ReEntrySummary, and GettingStartedChecklist all read this var.
-    const totalOffset = Math.max(portalOffset, effectiveAssistantWidth);
-    document.body.style.setProperty("--portal-right-offset", `${totalOffset}px`);
+    // Two separate vars because they encode different layout truths.
+    // --portal-right-offset: width of the body-portaled Portal (web chat) only.
+    //   Used by toolbar dropdowns, which sit above the main row and only need
+    //   to dodge body-portaled overlays — the Assistant is a flex sibling
+    //   below the toolbar, not an overlay (issue #6800).
+    // --right-obstruction-offset: max of Portal and Assistant width — the
+    //   total occupied right-edge viewport space. Used by fixed body-portaled
+    //   elements (toaster, popovers, ReEntrySummary, GettingStartedChecklist,
+    //   ThemeBrowser overlay) that would otherwise be hidden behind whichever
+    //   is wider. Portal overlays the Assistant when both are open, so the
+    //   rightmost obstruction is max, not sum (issue #6629).
+    const obstructionOffset = Math.max(portalOffset, effectiveAssistantWidth);
+    document.body.style.setProperty("--portal-right-offset", `${portalOffset}px`);
+    document.body.style.setProperty("--right-obstruction-offset", `${obstructionOffset}px`);
 
     return () => {
       document.body.style.removeProperty("--portal-right-offset");
+      document.body.style.removeProperty("--right-obstruction-offset");
     };
   }, [layout.portalOpen, layout.portalWidth, effectiveAssistantWidth]);
 
@@ -476,7 +486,7 @@ export function AppLayout({
               <div
                 className="fixed inset-y-0 z-40 pointer-events-auto"
                 style={{
-                  right: "var(--portal-right-offset, 0px)",
+                  right: "var(--right-obstruction-offset, 0px)",
                 }}
               >
                 <ThemeBrowser />

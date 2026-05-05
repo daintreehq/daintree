@@ -87,7 +87,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
   return createPortal(
     <div
       className="fixed top-3 z-[var(--z-toast)] flex flex-col gap-3 w-full max-w-[380px] pointer-events-none p-4"
-      style={{ right: "calc(var(--portal-right-offset, 0px))" }}
+      style={{ right: "calc(var(--right-obstruction-offset, 0px))" }}
     >
       <div
         className={cn(

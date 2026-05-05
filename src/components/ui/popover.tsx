@@ -15,7 +15,7 @@ function getPortalBoundary() {
     position: "fixed",
     top: "0",
     left: "0",
-    width: "calc(100vw - var(--portal-right-offset, 0px))",
+    width: "calc(100vw - var(--right-obstruction-offset, 0px))",
     height: "100vh",
     pointerEvents: "none",
     visibility: "hidden",
