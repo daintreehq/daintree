@@ -60,6 +60,15 @@ const config: KnipConfig = {
     // import graph never reaches this hook. Keep it available as a public
     // API surface for plugin authors.
     "src/hooks/useActiveWorktree.ts",
+
+    // why: Barrel files only reachable via React.lazy() dynamic imports in
+    // src/App.tsx. Knip cannot trace import() calls, so these index.ts
+    // re-exports appear unused despite being public API surfaces.
+    "src/components/ActionPalette/index.ts",
+    "src/components/LogLevelPalette/index.ts",
+    "src/components/QuickSwitcher/index.ts",
+    "src/components/TerminalPalette/index.ts",
+    "src/components/ThemePalette/index.ts",
   ],
 
   // why: these packages are consumed via mechanisms Knip can't trace:
