@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { Button } from "@/components/ui/button";
-import { PanelRightOpen, PanelRightClose } from "lucide-react";
+import { BotMessageSquare } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
@@ -29,20 +29,16 @@ export const ToolbarPortalButton = memo(function ToolbarPortalButton({
           data-toolbar-item={dataToolbarItem}
           onClick={togglePortal}
           className={toolbarIconButtonClass}
-          aria-label={portalOpen ? "Close context portal" : "Open context portal"}
+          aria-label={portalOpen ? "Close web chat" : "Open web chat"}
           aria-pressed={portalOpen}
         >
-          {portalOpen ? (
-            <PanelRightClose aria-hidden="true" />
-          ) : (
-            <PanelRightOpen aria-hidden="true" />
-          )}
+          <BotMessageSquare aria-hidden="true" />
           <ShortcutRevealChip actionId="panel.togglePortal" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">
         {createTooltipContent(
-          portalOpen ? "Close Context Portal" : "Open Context Portal",
+          portalOpen ? "Close web chat" : "Web chat: Claude, ChatGPT, Gemini",
           portalShortcut
         )}
       </TooltipContent>

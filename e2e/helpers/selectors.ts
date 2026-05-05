@@ -7,7 +7,7 @@ export const SEL = {
     openDevPreview: '[aria-label="Open Dev Preview"]',
     copyContext: '[aria-label="Copy Context"]',
     projectSwitcherTrigger: '[data-testid="project-switcher-trigger"]',
-    portalToggle: '[aria-label*="context portal"]',
+    portalToggle: '[aria-label*="web chat"]',
   },
   portal: {
     region: 'aside[aria-label="Portal"]',

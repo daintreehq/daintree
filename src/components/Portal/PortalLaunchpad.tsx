@@ -69,7 +69,16 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
                 <div className="font-medium text-foreground group-hover:text-daintree-text transition-colors">
                   {link.title}
                 </div>
-                <div className="text-xs text-daintree-text/70">Open web client</div>
+                <div className="text-xs text-daintree-text/70">
+                  {(() => {
+                    try {
+                      const host = new URL(link.url).hostname;
+                      return host || "Open web client";
+                    } catch {
+                      return "Open web client";
+                    }
+                  })()}
+                </div>
               </div>
             </button>
           ))}
