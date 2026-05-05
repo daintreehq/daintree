@@ -28,6 +28,7 @@ const INTERVAL_MS = 5 * 60 * 1000;
 describe("DiskSpaceMonitor adversarial", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.setSystemTime(1_830_001);
     vi.clearAllMocks();
     appMock.getPath.mockReturnValue("/userdata");
     fsMock.statfs.mockResolvedValue(statfsFor(10_000));

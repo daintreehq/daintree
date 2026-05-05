@@ -9,6 +9,7 @@ import {
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logInfo } from "../utils/logger.js";
+import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import type { HibernationService } from "./HibernationService.js";
@@ -65,7 +66,7 @@ export class ResourceProfileService {
   private currentProfile: ResourceProfile = "balanced";
   private candidateProfile: ResourceProfile | null = null;
   private candidateFirstSeenAt: number | null = null;
-  private interval: NodeJS.Timeout | null = null;
+  private evalCleanup: (() => void) | null = null;
   private tickCount = 0;
   private disposed = false;
   private cachedWorktreeCount = 0;
@@ -116,7 +117,7 @@ export class ResourceProfileService {
   }
 
   start(): void {
-    if (this.interval) return;
+    if (this.evalCleanup) return;
     this.disposed = false;
 
     logInfo("resource-profile-service-started", { profile: this.currentProfile });
@@ -126,11 +127,10 @@ export class ResourceProfileService {
     powerMonitor.on("thermal-state-change", this.onThermalStateChange);
     powerMonitor.on("speed-limit-change", this.onSpeedLimitChange);
 
-    this.interval = setInterval(() => {
+    this.evalCleanup = setAlignedInterval(() => {
       this.refreshWorktreeCount();
       this.evaluate();
     }, EVAL_INTERVAL_MS);
-    this.interval.unref();
 
     this.startLagMonitor();
   }
@@ -263,9 +263,9 @@ export class ResourceProfileService {
     powerMonitor.removeListener("thermal-state-change", this.onThermalStateChange);
     powerMonitor.removeListener("speed-limit-change", this.onSpeedLimitChange);
 
-    if (this.interval) {
-      clearInterval(this.interval);
-      this.interval = null;
+    if (this.evalCleanup) {
+      this.evalCleanup();
+      this.evalCleanup = null;
     }
     if (this.lagInterval) {
       clearInterval(this.lagInterval);

@@ -120,6 +120,7 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDe
 describe("ResourceProfileService", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.setSystemTime(1_830_001);
     vi.clearAllMocks();
     // Pin total RAM so threshold-crossing tests behave identically across CI hosts.
     // 8 GB yields ~1229 MB HIGH / ~655 MB LOW, matching the originally-tuned constants.

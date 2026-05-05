@@ -47,6 +47,7 @@ function makePtyClient(): FakePtyClient {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
+  vi.setSystemTime(1_830_001);
   eventEmitter._reset();
   projectStoreMock.getAllProjects.mockReturnValue([]);
 });

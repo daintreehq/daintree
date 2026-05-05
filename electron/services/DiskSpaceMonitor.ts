@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { app } from "electron";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
+import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import { setWritesSuppressed } from "./diskPressureState.js";
 
 export type DiskSpaceStatus = "normal" | "warning" | "critical";
@@ -112,13 +113,12 @@ export function startDiskSpaceMonitor(actions: DiskSpaceMonitorActions): () => v
 
   void poll();
 
-  const timer = setInterval(() => {
+  const clear = setAlignedInterval(() => {
     void poll();
   }, POLL_INTERVAL_MS);
-  timer.unref();
 
   return () => {
     disposed = true;
-    clearInterval(timer);
+    clear();
   };
 }
