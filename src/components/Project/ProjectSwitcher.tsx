@@ -175,6 +175,10 @@ export function ProjectSwitcher() {
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
             isRemovingProject={projectSwitcher.isRemovingProject}
+            scratchResults={projectSwitcher.scratchResults}
+            onCreateScratch={() => void projectSwitcher.createScratch()}
+            onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
+            onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
           >
             <Button
               variant="outline"

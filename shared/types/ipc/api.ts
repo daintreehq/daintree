@@ -587,6 +587,20 @@ export interface ElectronAPI {
      */
     locate(projectId: string): Promise<Project | null>;
   };
+  scratch: {
+    getAll(): Promise<import("../scratch.js").Scratch[]>;
+    getCurrent(): Promise<import("../scratch.js").Scratch | null>;
+    create(name?: string): Promise<import("../scratch.js").Scratch>;
+    update(
+      scratchId: string,
+      updates: { name?: string; lastOpened?: number }
+    ): Promise<import("../scratch.js").Scratch>;
+    remove(scratchId: string): Promise<void>;
+    switch(scratchId: string): Promise<import("../scratch.js").Scratch>;
+    onUpdated(callback: (scratch: import("../scratch.js").Scratch) => void): () => void;
+    onRemoved(callback: (scratchId: string) => void): () => void;
+    onSwitch(callback: (payload: import("./scratch.js").ScratchSwitchPayload) => void): () => void;
+  };
   globalRecipes: {
     getRecipes(): Promise<TerminalRecipe[]>;
     addRecipe(recipe: TerminalRecipe): Promise<void>;

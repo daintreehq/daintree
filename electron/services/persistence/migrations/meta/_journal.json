@@ -8,6 +8,13 @@
       "when": 1777409077501,
       "tag": "0000_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1777962339910,
+      "tag": "0001_add_scratches",
+      "breakpoints": true
     }
   ]
 }

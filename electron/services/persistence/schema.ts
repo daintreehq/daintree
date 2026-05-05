@@ -48,7 +48,18 @@ export const appState = sqliteTable("app_state", {
   value: text("value").notNull(),
 });
 
+export const scratches = sqliteTable("scratches", {
+  id: text("id").primaryKey(),
+  path: text("path").notNull(),
+  name: text("name").notNull(),
+  createdAt: integer("created_at").notNull(),
+  lastOpened: integer("last_opened").notNull(),
+});
+
 export type TaskRow = typeof tasks.$inferInsert;
 
 export type ProjectRow = typeof projects.$inferSelect;
 export type ProjectInsertRow = typeof projects.$inferInsert;
+
+export type ScratchRow = typeof scratches.$inferSelect;
+export type ScratchInsertRow = typeof scratches.$inferInsert;

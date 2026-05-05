@@ -181,6 +181,8 @@ import type {
   DemoWaitForIdlePayload,
 } from "./demo.js";
 import type { BulkProjectStats } from "./project.js";
+import type { Scratch } from "../scratch.js";
+import type { ScratchSwitchPayload } from "./scratch.js";
 import type {
   PrerequisiteSpec,
   PrerequisiteCheckResult,
@@ -2048,6 +2050,32 @@ export interface IpcInvokeMap {
     result: ServiceConnectivitySnapshot;
   };
 
+  // Scratch (throwaway one-off agent workspace) channels
+  "scratch:get-all": {
+    args: [];
+    result: Scratch[];
+  };
+  "scratch:get-current": {
+    args: [];
+    result: Scratch | null;
+  };
+  "scratch:create": {
+    args: [name?: string];
+    result: Scratch;
+  };
+  "scratch:update": {
+    args: [scratchId: string, updates: { name?: string; lastOpened?: number }];
+    result: Scratch;
+  };
+  "scratch:remove": {
+    args: [scratchId: string];
+    result: void;
+  };
+  "scratch:switch": {
+    args: [scratchId: string];
+    result: Scratch;
+  };
+
   // Global env channels
   "global-env:get": {
     args: [];
@@ -2367,6 +2395,11 @@ export interface IpcEventMap {
   "project:stats-updated": ProjectStatusMap;
   "project:updated": Project;
   "project:removed": string;
+
+  // Scratch events
+  "scratch:on-switch": ScratchSwitchPayload;
+  "scratch:updated": Scratch;
+  "scratch:removed": string;
 
   // Agent install progress events
   "setup:agent-install-progress": AgentInstallProgressEvent;

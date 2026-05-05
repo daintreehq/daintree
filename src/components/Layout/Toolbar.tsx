@@ -982,6 +982,10 @@ export function Toolbar({
             onRemoveConfirmClose={handleRemoveConfirmClose}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
             isRemovingProject={projectSwitcher.isRemovingProject}
+            scratchResults={projectSwitcher.scratchResults}
+            onCreateScratch={() => void projectSwitcher.createScratch()}
+            onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
+            onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
           >
             <button
               data-toolbar-item=""

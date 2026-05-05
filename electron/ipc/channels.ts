@@ -647,6 +647,17 @@ export const CHANNELS = {
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
   CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",
+
+  // Scratch (throwaway one-off agent workspace) channels
+  SCRATCH_GET_ALL: "scratch:get-all",
+  SCRATCH_GET_CURRENT: "scratch:get-current",
+  SCRATCH_CREATE: "scratch:create",
+  SCRATCH_UPDATE: "scratch:update",
+  SCRATCH_REMOVE: "scratch:remove",
+  SCRATCH_SWITCH: "scratch:switch",
+  SCRATCH_UPDATED: "scratch:updated",
+  SCRATCH_REMOVED: "scratch:removed",
+  SCRATCH_ON_SWITCH: "scratch:on-switch",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

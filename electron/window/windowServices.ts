@@ -10,6 +10,7 @@ import { getWorkspaceClient, disposeWorkspaceClient } from "../services/Workspac
 import { CHANNELS } from "../ipc/channels.js";
 import { handleDirectoryOpen } from "../menu.js";
 import { projectStore } from "../services/ProjectStore.js";
+import { scratchStore } from "../services/ScratchStore.js";
 import { taskQueueService } from "../services/TaskQueueService.js";
 import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
 import {
@@ -322,10 +323,18 @@ export async function setupWindowServices(
     const results = await Promise.allSettled([
       getPtyClient()!.waitForReady(),
       projectStore.initialize(),
+      scratchStore.initialize(),
     ]);
 
     ptyReady = results[0].status === "fulfilled";
     const projectStoreReady = results[1].status === "fulfilled";
+    const scratchStoreReady = results[2].status === "fulfilled";
+    if (!scratchStoreReady) {
+      console.warn(
+        "[MAIN] Scratch store init failed:",
+        results[2].status === "rejected" ? results[2].reason : "unknown"
+      );
+    }
 
     if (ptyReady && workspaceReady && projectStoreReady) {
       console.log("[MAIN] All critical services ready");

@@ -2,13 +2,24 @@ import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { rankProjectMatches } from "@/lib/projectSwitcherSearch";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { notify } from "@/lib/notify";
-import type { Project } from "@shared/types";
+import type { Project, Scratch } from "@shared/types";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export type ProjectSwitcherMode = "modal" | "dropdown";
+
+/** Lightweight searchable scratch view-model for the palette section. */
+export interface SearchableScratch {
+  id: string;
+  name: string;
+  path: string;
+  createdAt: number;
+  lastOpened: number;
+  isActive: boolean;
+}
 
 export interface SearchableProject {
   id: string;
@@ -58,6 +69,14 @@ export interface UseProjectSwitcherPaletteReturn {
   confirmRemoveProject: () => Promise<void>;
   isRemovingProject: boolean;
   backgroundWaitingCount: number;
+  /** Scratch (one-off agent workspace) view-models, sorted by lastOpened desc. */
+  scratchResults: SearchableScratch[];
+  /** Create and immediately switch to a new scratch. Closes the palette on success. */
+  createScratch: () => Promise<void>;
+  /** Switch to an existing scratch. Closes the palette on success. */
+  selectScratch: (scratch: SearchableScratch) => Promise<void>;
+  /** Remove a scratch (deletes folder + DB row). Used by context menu. */
+  removeScratchAction: (scratchId: string) => Promise<void>;
 }
 
 const MAX_RESULTS = 15;
@@ -87,10 +106,18 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const locateProjectFn = useProjectStore((state) => state.locateProject);
   const projectStats = useProjectStatsStore((state) => state.stats);
 
+  const scratches = useScratchStore((state) => state.scratches);
+  const currentScratch = useScratchStore((state) => state.currentScratch);
+  const loadScratches = useScratchStore((state) => state.loadScratches);
+  const createScratchAction = useScratchStore((state) => state.createScratch);
+  const switchScratchAction = useScratchStore((state) => state.switchScratch);
+  const removeScratchActionStore = useScratchStore((state) => state.removeScratch);
+
   useEffect(() => {
     if (!isOpen) return;
     void loadProjects();
-  }, [isOpen, loadProjects]);
+    void loadScratches();
+  }, [isOpen, loadProjects, loadScratches]);
 
   const searchableProjects = useMemo<SearchableProject[]>(() => {
     return projects.map((p) => {
@@ -363,6 +390,82 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [searchableProjects, removeConfirmProject]
   );
 
+  const scratchResults = useMemo<SearchableScratch[]>(() => {
+    const list: SearchableScratch[] = scratches.map((s: Scratch) => ({
+      id: s.id,
+      name: s.name,
+      path: s.path,
+      createdAt: s.createdAt,
+      lastOpened: s.lastOpened,
+      isActive: currentScratch?.id === s.id,
+    }));
+    list.sort((a, b) => b.lastOpened - a.lastOpened);
+    return list;
+  }, [scratches, currentScratch?.id]);
+
+  const createScratch = useCallback(async () => {
+    close();
+    try {
+      const created = await createScratchAction();
+      await switchScratchAction(created.id);
+    } catch (error) {
+      const retry = async () => {
+        try {
+          const created = await createScratchAction();
+          await switchScratchAction(created.id);
+        } catch (retryError) {
+          notify({
+            type: "error",
+            title: "Couldn't create scratch",
+            message: formatErrorMessage(retryError, "Couldn't create scratch workspace"),
+            actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+          });
+        }
+      };
+      notify({
+        type: "error",
+        title: "Couldn't create scratch",
+        message: formatErrorMessage(error, "Couldn't create scratch workspace"),
+        actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+      });
+    }
+  }, [close, createScratchAction, switchScratchAction]);
+
+  const selectScratch = useCallback(
+    async (scratch: SearchableScratch) => {
+      if (scratch.isActive) {
+        close();
+        return;
+      }
+      close();
+      try {
+        await switchScratchAction(scratch.id);
+      } catch (error) {
+        notify({
+          type: "error",
+          title: "Couldn't switch scratch",
+          message: formatErrorMessage(error, "Couldn't switch to scratch workspace"),
+        });
+      }
+    },
+    [close, switchScratchAction]
+  );
+
+  const removeScratchAction = useCallback(
+    async (scratchId: string) => {
+      try {
+        await removeScratchActionStore(scratchId);
+      } catch (error) {
+        notify({
+          type: "error",
+          title: "Couldn't remove scratch",
+          message: formatErrorMessage(error, "Couldn't remove scratch workspace"),
+        });
+      }
+    },
+    [removeScratchActionStore]
+  );
+
   const confirmRemoveProject = useCallback(async () => {
     if (!removeConfirmProject || isRemovingProject) return;
 
@@ -443,5 +546,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     confirmRemoveProject,
     isRemovingProject,
     backgroundWaitingCount,
+    scratchResults,
+    createScratch,
+    selectScratch,
+    removeScratchAction,
   };
 }

@@ -910,6 +910,14 @@ function App() {
                       { source: "user" }
                     );
                   }}
+                  scratchResults={projectSwitcherPalette.scratchResults}
+                  onCreateScratch={() => void projectSwitcherPalette.createScratch()}
+                  onSelectScratch={(scratch) =>
+                    void projectSwitcherPalette.selectScratch(scratch)
+                  }
+                  onRemoveScratch={(scratchId) =>
+                    void projectSwitcherPalette.removeScratchAction(scratchId)
+                  }
                 />
               </Suspense>
             )}

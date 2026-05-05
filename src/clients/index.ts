@@ -14,6 +14,7 @@ export { hibernationClient } from "./hibernationClient";
 export { idleTerminalClient } from "./idleTerminalClient";
 export { logsClient } from "./logsClient";
 export { projectClient, invalidateCurrentCache } from "./projectClient";
+export { scratchClient } from "./scratchClient";
 export { slashCommandsClient } from "./slashCommandsClient";
 export { systemClient } from "./systemClient";
 export { terminalClient } from "./terminalClient";

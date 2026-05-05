@@ -1,8 +1,11 @@
-import { useMemo, useEffect, useLayoutEffect, useRef, useCallback, memo } from "react";
+import { useMemo, useEffect, useLayoutEffect, useRef, useState, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import {
+  ChevronDown,
+  ChevronRight,
   Clipboard,
   Download,
+  FileText,
   FolderOpen,
   FolderPlus,
   Pin,
@@ -10,6 +13,7 @@ import {
   Plus,
   Settings2,
   Square,
+  Trash2,
   X,
   AppWindow,
 } from "lucide-react";
@@ -30,7 +34,11 @@ import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useOverlayClaim } from "@/hooks";
 import { usePaletteStore } from "@/store/paletteStore";
-import type { ProjectSwitcherMode, SearchableProject } from "@/hooks/useProjectSwitcherPalette";
+import type {
+  ProjectSwitcherMode,
+  SearchableProject,
+  SearchableScratch,
+} from "@/hooks/useProjectSwitcherPalette";
 import { useUIStore } from "@/store/uiStore";
 
 export interface ProjectSwitcherPaletteProps {
@@ -61,6 +69,14 @@ export interface ProjectSwitcherPaletteProps {
   onRemoveConfirmClose?: () => void;
   onConfirmRemove?: () => void;
   isRemovingProject?: boolean;
+  /** Scratch (one-off agent workspace) results — rendered in their own collapsible section. */
+  scratchResults?: SearchableScratch[];
+  /** Callback to create and switch to a new scratch. */
+  onCreateScratch?: () => void;
+  /** Callback to switch to an existing scratch. */
+  onSelectScratch?: (scratch: SearchableScratch) => void;
+  /** Callback to remove a scratch. */
+  onRemoveScratch?: (scratchId: string) => void;
 }
 
 interface ProjectListItemProps {
@@ -429,6 +445,119 @@ function ProjectListContent({
   );
 }
 
+interface ScratchSectionProps {
+  scratches: SearchableScratch[];
+  onCreate?: () => void;
+  onSelect?: (scratch: SearchableScratch) => void;
+  onRemove?: (scratchId: string) => void;
+}
+
+/**
+ * Collapsible "Scratch" section. Defaults to collapsed when there are no
+ * scratches yet — discoverable but quiet. Once the user has scratches,
+ * defaults to expanded.
+ *
+ * Sort order is purely by `lastOpened` desc (the hook already does this).
+ * Scratches deliberately do NOT participate in the project frecency ranking.
+ */
+function ScratchSection({ scratches, onCreate, onSelect, onRemove }: ScratchSectionProps) {
+  const [collapsed, setCollapsed] = useState<boolean>(scratches.length === 0);
+
+  // If a scratch was just created from the empty state, expand the section
+  // so the new entry is visible.
+  useEffect(() => {
+    if (scratches.length > 0 && collapsed) setCollapsed(false);
+    // We intentionally only react to length === 0 -> >0 transitions; do not
+    // auto-collapse if the user expanded an empty section.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scratches.length]);
+
+  return (
+    <div className="px-2 py-1.5">
+      <button
+        type="button"
+        onClick={() => setCollapsed((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none hover:text-daintree-text/60 transition-colors"
+        aria-expanded={!collapsed}
+        aria-controls="scratch-section-list"
+      >
+        <span className="flex items-center gap-1.5">
+          {collapsed ? (
+            <ChevronRight className="w-3 h-3" aria-hidden="true" />
+          ) : (
+            <ChevronDown className="w-3 h-3" aria-hidden="true" />
+          )}
+          Scratch
+        </span>
+        {scratches.length > 0 && (
+          <span className="text-[10px] tabular-nums">{scratches.length}</span>
+        )}
+      </button>
+      {!collapsed && (
+        <div id="scratch-section-list" className="mt-1">
+          {scratches.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-daintree-text/40">
+              No scratch workspaces yet. Create one for a quick one-off task.
+            </div>
+          ) : (
+            <div role="listbox" aria-label="Scratch workspaces">
+              {scratches.map((scratch) => (
+                <ContextMenu key={scratch.id}>
+                  <ContextMenuTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => onSelect?.(scratch)}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors",
+                        scratch.isActive ? "bg-overlay-subtle" : "hover:bg-overlay-subtle"
+                      )}
+                      role="option"
+                      aria-selected={scratch.isActive}
+                    >
+                      <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
+                        <FileText className="h-4 w-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{scratch.name}</div>
+                        <div className="text-xs text-daintree-text/40 truncate">
+                          {formatTimeAgo(scratch.lastOpened)}
+                        </div>
+                      </div>
+                    </button>
+                  </ContextMenuTrigger>
+                  {onRemove && (
+                    <ContextMenuContent>
+                      <ContextMenuItem destructive onClick={() => onRemove(scratch.id)}>
+                        <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                        Delete scratch
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  )}
+                </ContextMenu>
+              ))}
+            </div>
+          )}
+          {onCreate && (
+            <button
+              type="button"
+              onClick={onCreate}
+              className="w-full flex items-center gap-3 px-3 py-2 mt-1 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
+              data-testid="scratch-create-button"
+            >
+              <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
+                <Plus className="h-4 w-4" />
+              </div>
+              <span className="font-medium text-sm text-muted-foreground">
+                New scratch workspace
+              </span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const KBD_CLASS =
   "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60";
 
@@ -490,6 +619,10 @@ interface ProjectPaletteInnerProps {
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
+  scratchResults?: SearchableScratch[];
+  onCreateScratch?: () => void;
+  onSelectScratch?: (scratch: SearchableScratch) => void;
+  onRemoveScratch?: (scratchId: string) => void;
 }
 
 function ProjectPaletteInner({
@@ -515,6 +648,10 @@ function ProjectPaletteInner({
   onLocateProject,
   onTogglePinProject,
   onCopyPath,
+  scratchResults,
+  onCreateScratch,
+  onSelectScratch,
+  onRemoveScratch,
 }: ProjectPaletteInnerProps) {
   const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
 
@@ -633,6 +770,17 @@ function ProjectPaletteInner({
           onCopyPath={onCopyPath}
           onSelectNewWindow={onSelectNewWindow}
         />
+        {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
+          <>
+            <div className="h-[3px] bg-tint/[0.08]" />
+            <ScratchSection
+              scratches={scratchResults ?? []}
+              onCreate={onCreateScratch}
+              onSelect={onSelectScratch}
+              onRemove={onRemoveScratch}
+            />
+          </>
+        )}
       </AppPaletteDialog.Body>
 
       {(onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder) && (
@@ -808,6 +956,10 @@ function ModalContent({
           onCopyPath={innerProps.onCopyPath}
           onSelectBackground={innerProps.onSelectBackground}
           onSelectNewWindow={innerProps.onSelectNewWindow}
+          scratchResults={innerProps.scratchResults}
+          onCreateScratch={innerProps.onCreateScratch}
+          onSelectScratch={innerProps.onSelectScratch}
+          onRemoveScratch={innerProps.onRemoveScratch}
         />
       </div>
     </div>,
@@ -886,6 +1038,10 @@ function DropdownContent({
           onCopyPath={innerProps.onCopyPath}
           onSelectBackground={innerProps.onSelectBackground}
           onSelectNewWindow={innerProps.onSelectNewWindow}
+          scratchResults={innerProps.scratchResults}
+          onCreateScratch={innerProps.onCreateScratch}
+          onSelectScratch={innerProps.onSelectScratch}
+          onRemoveScratch={innerProps.onRemoveScratch}
         />
       </PopoverContent>
     </Popover>
@@ -920,6 +1076,10 @@ export function ProjectSwitcherPalette({
   onRemoveConfirmClose,
   onConfirmRemove,
   isRemovingProject = false,
+  scratchResults,
+  onCreateScratch,
+  onSelectScratch,
+  onRemoveScratch,
 }: ProjectSwitcherPaletteProps) {
   const hasRunningProcesses = removeConfirmProject
     ? removeConfirmProject.processCount > 0 ||
@@ -952,6 +1112,10 @@ export function ProjectSwitcherPalette({
         onSelectNewWindow={onSelectNewWindow}
         onOpenProjectSettings={onOpenProjectSettings}
         dropdownAlign={dropdownAlign}
+        scratchResults={scratchResults}
+        onCreateScratch={onCreateScratch}
+        onSelectScratch={onSelectScratch}
+        onRemoveScratch={onRemoveScratch}
       >
         {children}
       </DropdownContent>
@@ -978,6 +1142,10 @@ export function ProjectSwitcherPalette({
         onSelectBackground={onSelectBackground}
         onSelectNewWindow={onSelectNewWindow}
         onOpenProjectSettings={onOpenProjectSettings}
+        scratchResults={scratchResults}
+        onCreateScratch={onCreateScratch}
+        onSelectScratch={onSelectScratch}
+        onRemoveScratch={onRemoveScratch}
       />
     );
 

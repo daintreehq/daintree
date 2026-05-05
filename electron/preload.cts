@@ -1363,6 +1363,40 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.PROJECT_LOCATE, projectId),
   },
 
+  // Scratch (one-off agent workspace) API
+  scratch: {
+    getAll: (): Promise<import("../shared/types/scratch.js").Scratch[]> =>
+      _unwrappingInvoke(CHANNELS.SCRATCH_GET_ALL),
+
+    getCurrent: (): Promise<import("../shared/types/scratch.js").Scratch | null> =>
+      _unwrappingInvoke(CHANNELS.SCRATCH_GET_CURRENT),
+
+    create: (name?: string): Promise<import("../shared/types/scratch.js").Scratch> =>
+      _unwrappingInvoke(CHANNELS.SCRATCH_CREATE, name),
+
+    update: (
+      scratchId: string,
+      updates: { name?: string; lastOpened?: number }
+    ): Promise<import("../shared/types/scratch.js").Scratch> =>
+      _unwrappingInvoke(CHANNELS.SCRATCH_UPDATE, scratchId, updates),
+
+    remove: (scratchId: string): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.SCRATCH_REMOVE, scratchId),
+
+    switch: (scratchId: string): Promise<import("../shared/types/scratch.js").Scratch> =>
+      _unwrappingInvoke(CHANNELS.SCRATCH_SWITCH, scratchId),
+
+    onUpdated: (callback: (scratch: import("../shared/types/scratch.js").Scratch) => void) =>
+      _typedOn(CHANNELS.SCRATCH_UPDATED, callback),
+
+    onRemoved: (callback: (scratchId: string) => void) =>
+      _typedOn(CHANNELS.SCRATCH_REMOVED, callback),
+
+    onSwitch: (
+      callback: (payload: import("../shared/types/ipc/scratch.js").ScratchSwitchPayload) => void
+    ) => _typedOn(CHANNELS.SCRATCH_ON_SWITCH, callback),
+  },
+
   // Global Recipes API
   globalRecipes: {
     getRecipes: (): Promise<TerminalRecipe[]> => _unwrappingInvoke(CHANNELS.GLOBAL_GET_RECIPES),

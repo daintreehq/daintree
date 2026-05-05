@@ -91,6 +91,9 @@ export type {
   PredicateFleetSavedScope,
 } from "./project.js";
 
+// Scratch types
+export type { Scratch } from "./scratch.js";
+
 // IPC types - communication payloads
 export type {
   // Terminal IPC types
