@@ -43,7 +43,10 @@ export const useScratchStore = create<ScratchStoreState>((set, get) => ({
 
   createScratch: async (name?: string) => {
     const scratch = await scratchClient.create(name);
-    set((state) => ({ scratches: [scratch, ...state.scratches] }));
+    // Dedup: the main process broadcasts a SCRATCH_UPDATED push BEFORE the
+    // invoke response arrives, so `upsertScratch` may have already inserted
+    // this scratch. Use upsert here too instead of a blind prepend.
+    get().upsertScratch(scratch);
     return scratch;
   },
 
@@ -115,7 +118,9 @@ if (typeof window !== "undefined" && window.electron?.scratch) {
       useScratchStore.getState().removeScratchLocal(scratchId);
     });
     window.electron.scratch.onSwitch((payload) => {
-      if (!payload?.scratch) return;
+      if (!payload) return;
+      // payload.scratch is null when a project switch deactivated the
+      // previously-active scratch. Clear local current state in that case.
       useScratchStore.getState().setCurrentScratch(payload.scratch);
     });
   }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePanelStore, type AddPanelOptions, type TerminalInstance } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useWorktrees } from "./useWorktrees";
@@ -113,6 +114,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
   const { worktreeMap, isInitialized } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const currentScratch = useScratchStore((state) => state.currentScratch);
   const { homeDir } = useHomeDir();
   const availability = useCliAvailabilityStore((state) => state.availability);
   const isLoading = useCliAvailabilityStore((state) => state.isLoading);
@@ -211,7 +213,12 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         }
 
         const cwd =
-          launchOptions?.cwd ?? targetWorktree?.path ?? currentProject?.path ?? homeDir ?? "";
+          launchOptions?.cwd ??
+          targetWorktree?.path ??
+          currentScratch?.path ??
+          currentProject?.path ??
+          homeDir ??
+          "";
 
         // Handle browser pane specially
         if (agentId === "browser") {
@@ -498,7 +505,16 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         launchingAgentsRef.current.delete(agentId);
       }
     },
-    [activeWorktreeId, worktreeMap, isInitialized, addPanel, currentProject, agentSettings, homeDir]
+    [
+      activeWorktreeId,
+      worktreeMap,
+      isInitialized,
+      addPanel,
+      currentProject,
+      currentScratch,
+      agentSettings,
+      homeDir,
+    ]
   );
 
   return {

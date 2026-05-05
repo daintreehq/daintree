@@ -86,18 +86,21 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
     const pvmCtx = senderWindow ? deps.windowRegistry?.getByWindowId(senderWindow.id) : undefined;
     const pvm = pvmCtx?.services?.projectViewManager ?? deps.projectViewManager;
 
-    // Update the canonical pointers FIRST so any GET_CURRENT that races with
-    // the switch sees the new state.
-    const updated = scratchStore.setCurrentScratch(scratchId);
-    // Mutually exclusive with project: clear the project pointer so the
-    // renderer's `getCurrentProject` does not race-restore the previous project.
-    projectStore.clearCurrentProject();
-
+    // Run the PVM switch first; if it throws, the canonical pointers stay
+    // pointed at the previous state so an app restart hydrates a coherent
+    // workspace. Mirrors the project:switch flow where `setCurrentProject` is
+    // only called after `pvm.switchTo()` resolves.
     let activeView: WebContentsView | null = null;
     if (pvm) {
       const result = await pvm.switchTo(scratchId, scratch.path);
       activeView = result.view;
     }
+
+    // Now commit canonical pointers — scratch active, project cleared.
+    // Mutually exclusive with project: clear the project pointer so the
+    // renderer's `getCurrentProject` does not race-restore the previous project.
+    const updated = scratchStore.setCurrentScratch(scratchId);
+    projectStore.clearCurrentProject();
 
     // Tell the PTY host the active workspace changed. PtyClient treats the ID
     // as an opaque string and the path as a working directory, so passing a

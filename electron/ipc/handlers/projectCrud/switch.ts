@@ -1,8 +1,9 @@
 import { CHANNELS } from "../../channels.js";
-import { typedHandleWithContext } from "../../utils.js";
+import { typedHandleWithContext, broadcastToRenderer } from "../../utils.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { scratchStore } from "../../../services/ScratchStore.js";
 import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js";
 import {
   sanitizeTerminals,
@@ -153,6 +154,16 @@ async function activateProjectView(
 ): Promise<void> {
   // Multi-view path: swap WebContentsViews instead of resetting stores
   const { view, isNew } = await pvm.switchTo(projectId, project.path);
+
+  // Mutually exclusive with scratch: switching to a project clears any
+  // active scratch pointer + notifies renderers so palette/UI state stays
+  // coherent. Without this, `currentScratchId` would linger in app_state
+  // and `scratchStore.getCurrentScratch()` would return stale data.
+  const hadActiveScratch = scratchStore.getCurrentScratchId() !== null;
+  if (hadActiveScratch) {
+    scratchStore.clearCurrentScratch();
+    broadcastToRenderer(CHANNELS.SCRATCH_ON_SWITCH, { scratch: null, switchId: "" });
+  }
 
   // Update the main process global state
   await projectStore.setCurrentProject(projectId);
