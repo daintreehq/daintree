@@ -65,10 +65,9 @@ const mockDocument = {
 (global as any).document = mockDocument;
 
 describe("TerminalInstanceService - options", () => {
-  it("sets rescaleOverlappingGlyphs and reflowCursorLine on constructed Terminal", async () => {
+  it("uses current defaults for non-agent terminals", async () => {
     const { terminalInstanceService } = await import("../TerminalInstanceService");
 
-    // Mock matchMedia for xterm's Terminal.open()
     window.matchMedia = vi.fn().mockReturnValue({
       matches: false,
       addEventListener: vi.fn(),
@@ -79,7 +78,7 @@ describe("TerminalInstanceService - options", () => {
 
     const managed = terminalInstanceService.getOrCreate(
       "test-options",
-      "terminal",
+      undefined,
       {},
       () => TerminalRefreshTier.FOCUSED,
       undefined
@@ -88,9 +87,71 @@ describe("TerminalInstanceService - options", () => {
     expect(managed.terminal.options).toEqual(
       expect.objectContaining({
         rescaleOverlappingGlyphs: true,
+        customGlyphs: true,
         reflowCursorLine: true,
       })
     );
+
+    terminalInstanceService.destroy("test-options");
+  });
+
+  it("disables cosmetic options for agent terminals", async () => {
+    const { terminalInstanceService } = await import("../TerminalInstanceService");
+
+    window.matchMedia = vi.fn().mockReturnValue({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    });
+
+    const managed = terminalInstanceService.getOrCreate(
+      "test-options",
+      "claude",
+      {},
+      () => TerminalRefreshTier.FOCUSED,
+      undefined
+    );
+
+    expect(managed.terminal.options).toEqual(
+      expect.objectContaining({
+        cursorBlink: false,
+        rescaleOverlappingGlyphs: false,
+        customGlyphs: false,
+        reflowCursorLine: true,
+      })
+    );
+
+    terminalInstanceService.destroy("test-options");
+  });
+
+  it("preserves agent cosmetic options on terminal.options for hibernation rebuilds", async () => {
+    const { terminalInstanceService } = await import("../TerminalInstanceService");
+
+    window.matchMedia = vi.fn().mockReturnValue({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    });
+
+    const managed = terminalInstanceService.getOrCreate(
+      "test-options",
+      "claude",
+      {},
+      () => TerminalRefreshTier.FOCUSED,
+      undefined
+    );
+
+    // TerminalHibernationManager.unhibernate() calls new Terminal(managed.terminal.options)
+    // so these must be present on the stored options object
+    expect(managed.terminal.options).toMatchObject({
+      cursorBlink: false,
+      rescaleOverlappingGlyphs: false,
+      customGlyphs: false,
+    });
 
     terminalInstanceService.destroy("test-options");
   });

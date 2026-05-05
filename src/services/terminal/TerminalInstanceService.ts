@@ -662,6 +662,12 @@ class TerminalInstanceService {
       },
     };
 
+    if (launchAgentId !== undefined) {
+      terminalOptions.cursorBlink = false;
+      terminalOptions.rescaleOverlappingGlyphs = false;
+      terminalOptions.customGlyphs = false;
+    }
+
     const terminal = new Terminal(terminalOptions);
     this.cwdProviders.set(id, getCwd ?? (() => ""));
     const addons = setupTerminalAddons(
