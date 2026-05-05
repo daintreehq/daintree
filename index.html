@@ -440,17 +440,27 @@
         animation-delay: 160ms;
       }
 
-      /* ── Stuck-state overlay (fades in at 6s if React never hydrates) ── */
+      /* ── Stuck-state card (fades in at 6s if React never hydrates) ── */
       .skeleton-stuck {
         position: absolute;
-        inset: 0;
+        bottom: 56px;
+        left: 50%;
+        transform: translateX(-50%);
         display: flex;
         flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 16px;
-        padding: 24px;
-        background: color-mix(in oklch, var(--theme-surface-grid, #0e0e0d) 88%, transparent);
+        align-items: flex-start;
+        gap: 12px;
+        width: min(360px, calc(100% - 32px));
+        padding: 16px 18px;
+        border-radius: 8px;
+        border: 1px solid
+          color-mix(
+            in oklch,
+            var(--theme-surface-grid, #0e0e0d),
+            var(--theme-text-primary, #e4e4e7) 18%
+          );
+        background: color-mix(in oklch, var(--theme-surface-grid, #0e0e0d) 95%, transparent);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
         opacity: 0;
         pointer-events: none;
         animation: skeleton-stuck-reveal 200ms ease-out forwards;
@@ -462,9 +472,9 @@
         font-weight: 600;
         line-height: 1.5;
         color: var(--theme-text-primary, #e4e4e7);
-        text-align: center;
       }
       .skeleton-stuck-btn {
+        align-self: stretch;
         padding: 7px 14px;
         border-radius: 6px;
         border: 1px solid
@@ -820,7 +830,13 @@
           );
         }
         .skeleton-stuck {
-          background: color-mix(in oklch, var(--theme-surface-grid, #cdd3db) 88%, transparent);
+          background: color-mix(in oklch, var(--theme-surface-grid, #cdd3db) 95%, transparent);
+          border-color: color-mix(
+            in oklch,
+            var(--theme-surface-grid, #cdd3db),
+            var(--theme-text-primary, #1e252e) 18%
+          );
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
         }
         .skeleton-stuck-title {
           color: var(--theme-text-primary, #1e252e);
@@ -1128,8 +1144,8 @@
         <!-- /skeleton-main-col -->
       </div>
 
-      <!-- Stuck-state recovery cue (CSS animation-delay reveals it at 6s) -->
-      <div class="skeleton-stuck" role="alert" aria-live="assertive">
+      <!-- Stuck-state card (CSS animation-delay reveals it at 6s) -->
+      <div class="skeleton-stuck" role="status" aria-live="polite">
         <p class="skeleton-stuck-title">Daintree is taking longer than expected</p>
         <button type="button" class="skeleton-stuck-btn" id="skeleton-stuck-btn">Reload app</button>
       </div>
