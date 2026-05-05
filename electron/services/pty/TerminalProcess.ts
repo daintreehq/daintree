@@ -1233,6 +1233,21 @@ export class TerminalProcess {
     this.exitObservers.dispose();
   }
 
+  private noteAgentOutputActivity(data: string): void {
+    if (!data || !this.isAgentLive) {
+      return;
+    }
+
+    const state = this.terminalInfo.agentState;
+    if (state !== "waiting" && state !== "idle" && state !== "completed") {
+      return;
+    }
+
+    this.deps.agentStateService.handleActivityState(this.terminalInfo, "busy", {
+      trigger: "output",
+    });
+  }
+
   private setupPtyHandlers(ptyProcess: pty.IPty): void {
     const terminal = this.terminalInfo;
 
@@ -1246,6 +1261,7 @@ export class TerminalProcess {
       if (this.activityMonitor) {
         this.activityMonitor.onData(data);
       }
+      this.noteAgentOutputActivity(data);
 
       // The headless responder answers device-attribute queries (CSI 6n, 5n)
       // for plain terminals so zsh et al. don't block waiting. When an agent

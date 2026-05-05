@@ -366,17 +366,17 @@ export class ActivityMonitor {
     if (this.isDisposed) return;
     const now = Date.now();
 
-    const isLikelyUserEcho = data ? this.inputTracker.isLikelyUserEcho(data, now) : false;
-    const isCosmeticRedraw = data ? isStatusLineRewrite(data) : false;
-
     if (this.simpleOutputState) {
-      if (!data || isLikelyUserEcho) {
+      if (!data) {
         return;
       }
       this.lastActivityTimestamp = now;
       this.becomeBusy({ trigger: "output" }, now);
       return;
     }
+
+    const isLikelyUserEcho = data ? this.inputTracker.isLikelyUserEcho(data, now) : false;
+    const isCosmeticRedraw = data ? isStatusLineRewrite(data) : false;
 
     this.lastDataTimestamp = now;
 

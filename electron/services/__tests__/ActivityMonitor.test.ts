@@ -723,6 +723,25 @@ describe("ActivityMonitor", () => {
 
       monitor.dispose();
     });
+
+    it("treats echo-like output as working in simple agent mode", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("agent-simple-echo", 1000, onStateChange, {
+        agentId: "claude",
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.onInput("x");
+      monitor.onData("x");
+
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).toHaveBeenCalledWith("agent-simple-echo", 1000, "busy", {
+        trigger: "output",
+      });
+
+      monitor.dispose();
+    });
   });
 
   describe("notifySubmission (hybrid input bar)", () => {

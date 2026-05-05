@@ -201,6 +201,33 @@ describe("TerminalProcess — terminal:exited event", () => {
 });
 
 describe("TerminalProcess — observer-driven exit handlers", () => {
+  it("recovers a waiting live agent to working on PTY output without a monitor", () => {
+    const pty = createControllablePty();
+    const handleActivityState = vi.fn();
+    const terminal = createTerminal(
+      pty,
+      { kind: "terminal", launchAgentId: "claude" },
+      {
+        agentStateService: {
+          handleActivityState,
+          updateAgentState: () => {},
+          emitAgentKilled: () => {},
+          emitAgentCompleted: () => {},
+        } as unknown as TerminalProcessDeps["agentStateService"],
+      },
+      "t-output-recovery"
+    );
+
+    terminal.stopActivityMonitor();
+    terminal.getInfo().agentState = "waiting";
+
+    pty.emitData("still working\n");
+
+    expect(handleActivityState).toHaveBeenCalledWith(terminal.getInfo(), "busy", {
+      trigger: "output",
+    });
+  });
+
   it("fires fallback classifier on natural agent exit with connection error tail", () => {
     const pty = createControllablePty();
     const fallbackListener = vi.fn();
