@@ -174,9 +174,10 @@ export function useAgentScope({
   const handleCommitEdit = useCallback(() => {
     const trimmed = editName.trim();
     if (editingPresetId && trimmed && trimmed.length <= 200 && !/[<>'"&]/.test(trimmed)) {
-      const now = Date.now();
-      if (now - lastEditTimeRef.current < 100) return;
-      lastEditTimeRef.current = now;
+      // Stamp lastEditTimeRef so external rate-limit consumers can detect
+      // a recent edit. Double-commit between Enter+blur is already prevented
+      // by the `editingPresetId &&` guard above (the second call sees null).
+      lastEditTimeRef.current = Date.now();
       handleUpdatePreset(editingPresetId, { name: trimmed });
     }
     setEditingPresetId(null);

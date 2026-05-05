@@ -320,12 +320,23 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     [onTitleChange, titleEditing]
   );
 
+  const commitTitle = useCallback(() => {
+    titleEditing.stopEditing();
+    if (titleEditing.editingValue.trim() && titleEditing.editingValue !== title) {
+      onTitleChange?.(titleEditing.editingValue.trim());
+    }
+  }, [titleEditing, title, onTitleChange]);
+
   const handleTitleSave = useCallback(() => {
     // Ignore spurious blurs that happen while overlay-restoration logic is
     // racing the input's mount. When the rename action starts editing from a
     // context menu, Radix's `onCloseAutoFocus` may steal focus from the input
     // moments after we focus it — this fires a stray blur. Re-anchor focus on
     // the input instead of saving with the unchanged value.
+    //
+    // Only the BLUR path needs this suppression — explicit Enter (handled
+    // by handleTitleInputKeyDown) calls commitTitle directly so a fast
+    // type-then-Enter flow still saves immediately.
     if (
       titleEditing.editingStartedAtRef.current &&
       Date.now() - titleEditing.editingStartedAtRef.current < 300
@@ -333,11 +344,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
       requestAnimationFrame(() => titleInputRef.current?.focus());
       return;
     }
-    titleEditing.stopEditing();
-    if (titleEditing.editingValue.trim() && titleEditing.editingValue !== title) {
-      onTitleChange?.(titleEditing.editingValue.trim());
-    }
-  }, [titleEditing, title, onTitleChange]);
+    commitTitle();
+  }, [titleEditing, commitTitle]);
 
   const handleTitleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -354,13 +362,14 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const handleTitleInputKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === "Enter") {
-        handleTitleSave();
+        e.preventDefault();
+        commitTitle();
       } else if (e.key === "Escape") {
         titleEditing.stopEditing();
         titleEditing.setEditingValue(title);
       }
     },
-    [handleTitleSave, title, titleEditing]
+    [commitTitle, title, titleEditing]
   );
 
   const handleClick = useCallback(
@@ -384,7 +393,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         data-launch-agent-id={agentId || undefined}
         data-ever-detected-agent={everDetectedAgent ? "true" : undefined}
         data-chrome-agent-id={terminalChrome.agentId || undefined}
-        data-agent-state={ownAgentState || undefined}
+        data-agent-state={headerAgentState || undefined}
         data-ambient-agent-state={ambientAgentState || undefined}
         data-runtime-kind={terminalChrome.runtimeKind}
         data-runtime-icon-id={terminalChrome.iconId || undefined}

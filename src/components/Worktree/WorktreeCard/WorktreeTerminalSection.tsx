@@ -85,7 +85,11 @@ function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(term.id));
   const armBadge = useFleetArmingStore((s) => s.armOrderById[term.id]);
   const chrome = deriveTerminalChrome(term);
-  const agentState = term.agentState;
+  // Mirror the panel-level `data-agent-state` attribute: only surface the
+  // agent state while the chrome is rendering an agent. Once the chrome
+  // demotes back to a plain terminal (agent exited or never lived), there
+  // is nothing for the sidebar row to track either.
+  const agentState = getTerminalAgentDisplayState(chrome, term.agentState);
   // Only the primary ("last armed") row gets the accent ring — it's the
   // singular focus anchor that will receive keyboard focus when fleet scope
   // exits. Secondary armed peers keep the dashed shape but use a neutral

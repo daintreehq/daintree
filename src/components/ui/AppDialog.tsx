@@ -5,6 +5,12 @@ import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useOverlayState, useEscapeStack } from "@/hooks";
+import {
+  registerDialogEscapeBackstop,
+  isTopmostDialogBackstop,
+  radixLayerWasOpenWhenEscapePressed,
+  markBackstopConsumedEscape,
+} from "@/lib/dialogEscapeBackstop";
 import { usePortalStore } from "@/store";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import {
@@ -166,15 +172,51 @@ export function AppDialog({
   // so the dialog still closes. Inner handlers can opt out by calling
   // `e.stopPropagation()` — which the settings search input already
   // does when clearing a non-empty query.
+  // Backstop registration must NOT churn on every handleClose-identity change
+  // (re-registering pushes the entry to the top of the stack and breaks LIFO
+  // when this dialog is rendered underneath another). Hold the latest closer
+  // in a ref and only register once per `isOpen && dismissible` cycle.
+  const handleCloseRef = useRef(handleClose);
+  useEffect(() => {
+    handleCloseRef.current = handleClose;
+  }, [handleClose]);
+
   useEffect(() => {
     if (!isOpen || !dismissible) return;
+    const closeThis = () => {
+      void handleCloseRef.current();
+    };
+    const unregister = registerDialogEscapeBackstop(closeThis);
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.isComposing || e.repeat) return;
-      void handleClose();
+      // Only fire for the topmost dialog so layered overlays close one
+      // at a time (LIFO), matching the escape-stack semantics.
+      if (!isTopmostDialogBackstop(closeThis)) return;
+      // If a Radix popover / select / dropdown was OPEN when Escape entered
+      // the event chain, it is the one handling this keypress — bail so the
+      // dialog underneath stays open. The backstop exists only for the
+      // mid-exit case where Radix's stale `preventDefault` would otherwise
+      // leave the dialog stuck.
+      if (radixLayerWasOpenWhenEscapePressed()) return;
+      // We deliberately do NOT bail on `e.defaultPrevented`: Radix Select /
+      // Combobox triggers call `preventDefault` on Escape even when their
+      // popup is closed, which would leave the dialog stuck open if we
+      // honored that flag. The capture-time radix-open snapshot above is
+      // the correct gate.
+      //
+      // Mark the event consumed so the window-level escape-stack
+      // dispatcher (`useGlobalEscapeDispatcher`) bails — otherwise, after
+      // `closeThis` synchronously unregisters the top entry, the dispatcher
+      // walks one layer deeper and closes the dialog underneath.
+      markBackstopConsumedEscape();
+      closeThis();
     };
     document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [isOpen, dismissible, handleClose]);
+    return () => {
+      document.removeEventListener("keydown", handler);
+      unregister();
+    };
+  }, [isOpen, dismissible]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === "Tab" && dialogRef.current) {

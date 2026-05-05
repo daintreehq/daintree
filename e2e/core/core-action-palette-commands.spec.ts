@@ -49,13 +49,16 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
       await expectPaletteFocused(window, "action", T_SHORT);
 
       const searchInput = window.locator(SEL.actionPalette.searchInput);
-
-      // Capture unfiltered count
       const options = window.locator(SEL.actionPalette.options);
+
+      // Empty query shows only recently-used actions; on a fresh project
+      // that list is empty. Type a broad query to populate the list, then
+      // narrow it.
+      await searchInput.fill("panel");
+      await window.waitForTimeout(T_SETTLE);
       await expect(options.first()).toBeVisible({ timeout: T_MEDIUM });
       const unfilteredCount = await options.count();
 
-      // Type a specific query that should narrow results
       await searchInput.fill("toggle sidebar");
       await window.waitForTimeout(T_SETTLE);
 
@@ -69,8 +72,10 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
 
       const searchInput = window.locator(SEL.actionPalette.searchInput);
 
-      // Clear query to ensure multiple results for navigation
-      await searchInput.fill("");
+      // A broad query produces multiple results to navigate through
+      // (an empty query would only show recently-used, which is empty
+      // on a fresh project).
+      await searchInput.fill("panel");
       await window.waitForTimeout(T_SETTLE);
 
       const options = window.locator(SEL.actionPalette.options);

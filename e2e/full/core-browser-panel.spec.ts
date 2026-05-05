@@ -297,7 +297,14 @@ test.describe.serial("Core: Browser Panel", () => {
       await expect(addressBar).toHaveValue(/console-test/, { timeout: T_LONG });
 
       await browserPanel.locator(SEL.browser.consoleToggle).click();
-      await expect(browserPanel.getByText("No console output")).toBeVisible({ timeout: T_MEDIUM });
+      // The drawer's empty-state copy ("No console output") only renders when
+      // there are zero captured messages — but a freshly-loaded page logs CSP
+      // / favicon warnings before the drawer opens, so empty state is racy.
+      // Assert the drawer is visible by checking for the persistent header
+      // label instead.
+      await expect(browserPanel.getByText("Console", { exact: true })).toBeVisible({
+        timeout: T_MEDIUM,
+      });
     });
 
     test("console displays captured log message", async () => {

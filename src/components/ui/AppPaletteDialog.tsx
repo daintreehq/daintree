@@ -7,6 +7,12 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { KbdChord } from "@/components/ui/Kbd";
 import { useOverlayState, useEscapeStack } from "@/hooks";
+import {
+  registerDialogEscapeBackstop,
+  isTopmostDialogBackstop,
+  radixLayerWasOpenWhenEscapePressed,
+  markBackstopConsumedEscape,
+} from "@/lib/dialogEscapeBackstop";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { usePaletteStore } from "@/store/paletteStore";
 import {
@@ -98,15 +104,46 @@ export function AppPaletteDialog({
   // Document-bubble fires after target handlers but ignores
   // defaultPrevented; inner handlers can still opt out by calling
   // `e.stopPropagation()`.
+  // Backstop registration must NOT churn on every onClose-identity change
+  // (re-registering pushes the entry to the top of the stack and breaks LIFO
+  // when this palette is rendered underneath another dialog). Hold the latest
+  // onClose in a ref and only register once per `isOpen` cycle.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!isOpen) return;
+    const closeThis = () => onCloseRef.current();
+    const unregister = registerDialogEscapeBackstop(closeThis);
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.isComposing || e.repeat) return;
-      onClose();
+      // Only fire for the topmost dialog so layered overlays close one
+      // at a time (LIFO), matching the escape-stack semantics.
+      if (!isTopmostDialogBackstop(closeThis)) return;
+      // If a Radix popover / select / dropdown was OPEN when Escape entered
+      // the event chain, it is the one handling this keypress — bail so the
+      // palette underneath stays open. The backstop exists only for the
+      // mid-exit case where Radix's stale `preventDefault` would otherwise
+      // leave the palette stuck.
+      if (radixLayerWasOpenWhenEscapePressed()) return;
+      // We deliberately do NOT bail on `e.defaultPrevented`: Radix Select /
+      // Combobox triggers call `preventDefault` on Escape even when their
+      // popup is closed, which would leave the palette stuck. The
+      // capture-time radix-open snapshot above is the correct gate.
+      //
+      // Mark the event consumed so the window-level escape-stack
+      // dispatcher (`useGlobalEscapeDispatcher`) bails.
+      markBackstopConsumedEscape();
+      closeThis();
     };
     document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [isOpen, onClose]);
+    return () => {
+      document.removeEventListener("keydown", handler);
+      unregister();
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;

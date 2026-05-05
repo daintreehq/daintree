@@ -169,6 +169,13 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
 
     // Ensure faults are cleared from previous test before spawning
     await clearAllFaults(ctx.app);
+    // The prior `delayed spawn` test leaves an in-flight terminal
+    // that may still be settling into the cached Project A view when
+    // this test starts. Give the main process time to drain queued
+    // PTY-attach IPCs against the cached view before reactivating it
+    // — without this, the cached view's IPC handlers race with
+    // unregister-on-deactivate and the renderer can crash uncaughtly.
+    await ctx.window.waitForTimeout(2_000);
 
     // Ensure we're on Project A with a fresh terminal fully spawned
     await switchToProject(ctx.window, PROJECT_A_NAME);
@@ -185,7 +192,13 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
 
     // Switch to Project B then back — the key invariant is that A's panels survive
     await switchToProject(ctx.window, PROJECT_B_NAME);
-    await ctx.window.waitForTimeout(T_SETTLE);
+    // The previous test (`delayed spawn`) left a terminal mid-spawn that
+    // arrives in Project A AFTER its WebContentsView was deactivated. The
+    // cached view's IPC handlers continue draining queued messages for a
+    // short period — switching back too soon races handler unregistration
+    // against the activation flow and the renderer crashes uncaughtly. Wait
+    // long enough for those messages to drain before reactivating A.
+    await ctx.window.waitForTimeout(2_000);
 
     // Switch back to Project A — its panels should reappear
     await switchToProject(ctx.window, PROJECT_A_NAME);

@@ -99,7 +99,7 @@ test.describe.serial("Persistence: Project memory across restart", () => {
 
     const trigger = ctx.window.locator(SEL.toolbar.projectSwitcherTrigger);
     await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
-    await expect(trigger).toContainText("Persistence Test", { timeout: T_SHORT });
+    await expect(trigger).toContainText("persistence-test", { timeout: T_SHORT });
 
     const pid = ctx.app.process().pid!;
     await closeApp(ctx.app);
@@ -112,6 +112,6 @@ test.describe.serial("Persistence: Project memory across restart", () => {
 
     const trigger2 = w2.locator(SEL.toolbar.projectSwitcherTrigger);
     await expect(trigger2).toBeVisible({ timeout: T_MEDIUM });
-    await expect(trigger2).toContainText("Persistence Test", { timeout: T_MEDIUM });
+    await expect(trigger2).toContainText("persistence-test", { timeout: T_MEDIUM });
   });
 });

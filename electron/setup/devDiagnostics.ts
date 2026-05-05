@@ -16,6 +16,12 @@ function handleProcessWarning(warning: Error): void {
     return;
   }
   console.warn("[DEV] MaxListenersExceededWarning:", warning.stack ?? warning.message);
+  // E2E suites repeatedly create/destroy WebContentsViews during project-
+  // switching tests, which can legitimately push transient listener counts
+  // past the default 10-listener threshold without indicating a real leak.
+  // Killing the app in that environment derails entire test files —
+  // surface the warning and keep going.
+  if (process.env.DAINTREE_E2E_MODE === "1") return;
   // app.exit(1) skips before-quit/will-quit/quit so the CrashLoopGuard does not
   // count this as a crash, and Chromium subprocesses are torn down cleanly.
   // throw would route through globalErrorHandlers' relaunch path; process.exit

@@ -335,14 +335,10 @@ test.describe.serial("Core: Shell & Settings", () => {
       });
       await generalBtn.click();
 
-      const nameInput = window.locator('input[aria-label="Project name"]');
-      if (await nameInput.isVisible().catch(() => false)) {
-        const value = await nameInput.inputValue();
-        expect(value).toContain("Shell Settings Test");
-      } else {
-        const nameText = window.locator('text="Shell Settings Test"');
-        await expect(nameText).toBeVisible({ timeout: T_SHORT });
-      }
+      const nameInput = window.locator("#project-name-input");
+      await expect(nameInput).toBeVisible({ timeout: T_SHORT });
+      const value = await nameInput.inputValue();
+      expect(value).toContain("shell-settings");
     });
 
     test("dev server command input is visible", async () => {

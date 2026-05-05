@@ -198,7 +198,9 @@ test.describe.serial("Core: Accessibility", () => {
         test("toolbar supports arrow-key navigation", async () => {
           const { window } = ctx;
 
-          const toolbar = window.locator('[role="toolbar"]');
+          // The page has multiple `role="toolbar"` elements (main toolbar +
+          // per-worktree action toolbars). Scope to the main toolbar.
+          const toolbar = window.getByRole("toolbar", { name: "Main toolbar" });
           await expect(toolbar).toBeVisible({ timeout: T_SHORT });
 
           const firstItem = toolbar.locator("[data-toolbar-item]:not(:disabled)").first();

@@ -60,8 +60,15 @@ test.describe.serial("Core: Action dispatch safety", () => {
   });
 
   test("agent dispatch of confirm-level action without confirmation returns CONFIRMATION_REQUIRED", async () => {
+    // worktree.delete is danger:"confirm" with `worktreeId: z.string()`.
+    // Pass valid args so we clear schema validation and reach the
+    // confirmation gate; the worktree ID does not need to exist.
     const result = await ctx.window.evaluate(() =>
-      (window as any).__daintreeDispatchAction("terminal.kill", {}, { source: "agent" })
+      (window as any).__daintreeDispatchAction(
+        "worktree.delete",
+        { worktreeId: "nonexistent-test-id" },
+        { source: "agent" }
+      )
     );
 
     expect((result as any).ok).toBe(false);
@@ -69,16 +76,19 @@ test.describe.serial("Core: Action dispatch safety", () => {
     expect((result as any).error.message).toContain("requires explicit confirmation");
   });
 
-  test("agent dispatch of confirm-level action with confirmed: true succeeds", async () => {
+  test("agent dispatch of confirm-level action with confirmed: true bypasses the gate", async () => {
+    // Same action with valid args + confirmed:true. The gate must be
+    // bypassed, so the result code (whatever the action returns for an
+    // unknown worktree) must NOT be CONFIRMATION_REQUIRED.
     const result = await ctx.window.evaluate(() =>
       (window as any).__daintreeDispatchAction(
-        "terminal.kill",
-        {},
+        "worktree.delete",
+        { worktreeId: "nonexistent-test-id" },
         { source: "agent", confirmed: true }
       )
     );
 
-    expect((result as any).ok).toBe(true);
+    expect((result as any).error?.code).not.toBe("CONFIRMATION_REQUIRED");
   });
 
   test("sensitive args are redacted in event payloads", async () => {

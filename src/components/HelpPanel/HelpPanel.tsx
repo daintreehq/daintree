@@ -696,6 +696,10 @@ export function HelpPanel({ width: effectiveWidth }: HelpPanelProps) {
       tabIndex={-1}
       aria-label="Daintree Assistant"
       aria-hidden={!isVisible}
+      // `inert` removes descendant buttons from focus / a11y tree while the
+      // aside is collapsed — `aria-hidden` alone leaves them focusable, which
+      // axe flags as `aria-hidden-focus` (WCAG 2.2 AA).
+      inert={!isVisible || undefined}
       data-macro-focus={isMacroFocused ? "true" : undefined}
       className={cn(
         "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
