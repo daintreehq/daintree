@@ -36,6 +36,7 @@ export interface ReplayCastOpts {
   maxWorkingSilenceMs?: number;
   idleDebounceMs?: number;
   promptFastPathMinQuietMs?: number;
+  simpleOutputState?: boolean;
 }
 
 export interface ExpectedTransition {
@@ -310,9 +311,17 @@ export async function replayCast(
       pollingIntervalMs,
       pollingMaxBootMs: opts.pollingMaxBootMs ?? baseOptions.pollingMaxBootMs,
       maxWorkingSilenceMs: opts.maxWorkingSilenceMs ?? baseOptions.maxWorkingSilenceMs,
-      idleDebounceMs: opts.idleDebounceMs ?? baseOptions.idleDebounceMs,
-      promptFastPathMinQuietMs:
-        opts.promptFastPathMinQuietMs ?? baseOptions.promptFastPathMinQuietMs,
+      // Replay fixtures were calibrated against the legacy 6000ms agent
+      // debounce floor; the production floor is now 8000ms (set by
+      // buildActivityMonitorOptions). Pin both timing knobs to the legacy
+      // value so fixture timestamps remain meaningful — the replay harness
+      // exercises pattern/prompt detection logic, not the production floor.
+      idleDebounceMs: opts.idleDebounceMs ?? 6000,
+      promptFastPathMinQuietMs: opts.promptFastPathMinQuietMs ?? 6000,
+      // Replay fixtures encode pattern/prompt-driven transitions
+      // (completed/pattern, idle/pattern). simpleOutputState short-circuits
+      // those paths, so opt out unless the caller explicitly requests it.
+      simpleOutputState: opts.simpleOutputState ?? false,
     }
   );
 
