@@ -461,6 +461,9 @@ function App() {
       void preloadNewTerminalPalette();
       void preloadPanelPalette();
       void preloadThemePalette();
+      void preloadSendToAgentPalette();
+      void preloadQuickCreatePalette();
+      void preloadLogLevelPalette();
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
     };
