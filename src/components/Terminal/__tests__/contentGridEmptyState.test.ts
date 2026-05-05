@@ -1,9 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { readFile, access } from "fs/promises";
+import { readFile } from "fs/promises";
 import { resolve } from "path";
 
 const EMPTY_STATE_PATH = resolve(__dirname, "../ContentGridEmptyState.tsx");
-const TIPS_PATH = resolve(__dirname, "../contentGridTips.tsx");
 
 describe("ContentGrid EmptyState — RecipeRunner integration", () => {
   it("hero section uses reduced spacing (mb-6 / mb-4)", async () => {
@@ -28,16 +27,12 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
     expect(content).toContain("hasActiveWorktree && hasEverLaunchedAgent");
   });
 
-  it("does not render RotatingTip — teaching content waits until after first launch", async () => {
+  it("gates RotatingTip on hasEverLaunchedAgent — teaching content waits until after first launch", async () => {
+    // Issue #6752 — first-run users (no agent ever launched) shouldn't see
+    // shortcut-carousel teaching content. Returning users still see the
+    // count-biased rotation polished by issue #6756.
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).not.toContain("RotatingTip");
-  });
-
-  it("contentGridTips.tsx is deleted — issue #6752 removed the only call site so the file cleanup follows", async () => {
-    // Issue #6752 stripped RotatingTip out of the empty state. With no remaining
-    // call site the tips module would knip-fail as an unused file — this guard
-    // keeps the cleanup intent explicit so a future re-introduction has to also
-    // restore a real consumer.
-    await expect(access(TIPS_PATH)).rejects.toThrow();
+    expect(content).toContain("<RotatingTip />");
+    expect(content).toMatch(/hasActiveWorktree && hasEverLaunchedAgent && <RotatingTip \/>/);
   });
 });

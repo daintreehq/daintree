@@ -4,6 +4,7 @@ import { ProjectPulseCard } from "@/components/Pulse";
 import { svgToDataUrl, sanitizeSvg } from "@/lib/svg";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
+import { RotatingTip } from "./contentGridTips";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
 
 export function ContentGridEmptyState({
@@ -115,6 +116,8 @@ export function ContentGridEmptyState({
         )}
 
         <div className="flex flex-col items-center gap-4 mt-4">
+          {hasActiveWorktree && hasEverLaunchedAgent && <RotatingTip />}
+
           {!hasActiveWorktree && (
             <button
               type="button"
