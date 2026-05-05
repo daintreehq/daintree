@@ -72,34 +72,18 @@ import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
 import { ContentGrid } from "./components/Terminal";
 import { PanelTransitionOverlay } from "./components/Panel";
-import { WorktreePalette, WorktreeOverviewModal, QuickCreatePalette } from "./components/Worktree";
-import { CrossWorktreeDiff } from "./components/Worktree/CrossWorktreeDiff";
 
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
-import { TerminalCloseConfirmHost } from "./components/Terminal/TerminalCloseConfirmHost";
-import { FileViewerModalHost } from "./components/FileViewer/FileViewerModalHost";
-import { NewTerminalPalette } from "./components/TerminalPalette";
-import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
 import { buildResumeCommand } from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import { GitInitDialog, CloneRepoDialog, WelcomeScreen } from "./components/Project";
+import { WelcomeScreen } from "./components/Project";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
-import { CreateProjectFolderDialog } from "./components/Project/CreateProjectFolderDialog";
-import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
-import { ProjectMruSwitcherOverlay } from "./components/Project/ProjectMruSwitcherOverlay";
-import { ActionPalette } from "./components/ActionPalette";
-import { QuickSwitcher } from "./components/QuickSwitcher";
-import { SendToAgentPalette } from "./components/Terminal/SendToAgentPalette";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
-import { McpConfirmDialog } from "./components/McpConfirmDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
-import { PanelLimitConfirmDialog } from "./components/Terminal/PanelLimitConfirmDialog";
-import { ThemePalette } from "./components/ThemePalette";
-import { LogLevelPalette } from "./components/LogLevelPalette";
 
 function preloadSettingsDialog() {
   return import("./components/Settings/SettingsDialog");
@@ -108,13 +92,177 @@ const LazySettingsDialog = lazy(() =>
   preloadSettingsDialog().then((m) => ({ default: m.SettingsDialog }))
 );
 
-import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
+function preloadWorktreePalette() {
+  return import("./components/Worktree/WorktreePalette");
+}
+const LazyWorktreePalette = lazy(() =>
+  preloadWorktreePalette().then((m) => ({ default: m.WorktreePalette }))
+);
+
+function preloadWorktreeOverviewModal() {
+  return import("./components/Worktree/WorktreeOverviewModal");
+}
+const LazyWorktreeOverviewModal = lazy(() =>
+  preloadWorktreeOverviewModal().then((m) => ({ default: m.WorktreeOverviewModal }))
+);
+
+function preloadQuickCreatePalette() {
+  return import("./components/Worktree/QuickCreatePalette");
+}
+const LazyQuickCreatePalette = lazy(() =>
+  preloadQuickCreatePalette().then((m) => ({ default: m.QuickCreatePalette }))
+);
+
+function preloadCrossWorktreeDiff() {
+  return import("./components/Worktree/CrossWorktreeDiff");
+}
+const LazyCrossWorktreeDiff = lazy(() =>
+  preloadCrossWorktreeDiff().then((m) => ({ default: m.CrossWorktreeDiff }))
+);
+
+function preloadNewTerminalPalette() {
+  return import("./components/TerminalPalette/NewTerminalPalette");
+}
+const LazyNewTerminalPalette = lazy(() =>
+  preloadNewTerminalPalette().then((m) => ({ default: m.NewTerminalPalette }))
+);
+
+function preloadSendToAgentPalette() {
+  return import("./components/Terminal/SendToAgentPalette");
+}
+const LazySendToAgentPalette = lazy(() =>
+  preloadSendToAgentPalette().then((m) => ({ default: m.SendToAgentPalette }))
+);
+
+function preloadPanelPalette() {
+  return import("./components/PanelPalette/PanelPalette");
+}
+const LazyPanelPalette = lazy(() =>
+  preloadPanelPalette().then((m) => ({ default: m.PanelPalette }))
+);
+
+function preloadActionPalette() {
+  return import("./components/ActionPalette/ActionPalette");
+}
+const LazyActionPalette = lazy(() =>
+  preloadActionPalette().then((m) => ({ default: m.ActionPalette }))
+);
+
+function preloadQuickSwitcher() {
+  return import("./components/QuickSwitcher/QuickSwitcher");
+}
+const LazyQuickSwitcher = lazy(() =>
+  preloadQuickSwitcher().then((m) => ({ default: m.QuickSwitcher }))
+);
+
+function preloadProjectSwitcherPalette() {
+  return import("./components/Project/ProjectSwitcherPalette");
+}
+const LazyProjectSwitcherPalette = lazy(() =>
+  preloadProjectSwitcherPalette().then((m) => ({ default: m.ProjectSwitcherPalette }))
+);
+
+function preloadProjectMruSwitcherOverlay() {
+  return import("./components/Project/ProjectMruSwitcherOverlay");
+}
+const LazyProjectMruSwitcherOverlay = lazy(() =>
+  preloadProjectMruSwitcherOverlay().then((m) => ({ default: m.ProjectMruSwitcherOverlay }))
+);
+
+function preloadGitInitDialog() {
+  return import("./components/Project/GitInitDialog");
+}
+const LazyGitInitDialog = lazy(() =>
+  preloadGitInitDialog().then((m) => ({ default: m.GitInitDialog }))
+);
+
+function preloadCloneRepoDialog() {
+  return import("./components/Project/CloneRepoDialog");
+}
+const LazyCloneRepoDialog = lazy(() =>
+  preloadCloneRepoDialog().then((m) => ({ default: m.CloneRepoDialog }))
+);
+
+function preloadCreateProjectFolderDialog() {
+  return import("./components/Project/CreateProjectFolderDialog");
+}
+const LazyCreateProjectFolderDialog = lazy(() =>
+  preloadCreateProjectFolderDialog().then((m) => ({ default: m.CreateProjectFolderDialog }))
+);
+
+function preloadThemePalette() {
+  return import("./components/ThemePalette/ThemePalette");
+}
+const LazyThemePalette = lazy(() =>
+  preloadThemePalette().then((m) => ({ default: m.ThemePalette }))
+);
+
+function preloadLogLevelPalette() {
+  return import("./components/LogLevelPalette/LogLevelPalette");
+}
+const LazyLogLevelPalette = lazy(() =>
+  preloadLogLevelPalette().then((m) => ({ default: m.LogLevelPalette }))
+);
+
+function preloadShortcutReferenceDialog() {
+  return import("./components/KeyboardShortcuts/ShortcutReferenceDialog");
+}
+const LazyShortcutReferenceDialog = lazy(() =>
+  preloadShortcutReferenceDialog().then((m) => ({ default: m.ShortcutReferenceDialog }))
+);
+
+function preloadOnboardingFlow() {
+  return import("./components/Onboarding/OnboardingFlow");
+}
+const LazyOnboardingFlow = lazy(() =>
+  preloadOnboardingFlow().then((m) => ({ default: m.OnboardingFlow }))
+);
+
+function preloadGettingStartedChecklist() {
+  return import("./components/Onboarding/GettingStartedChecklist");
+}
+const LazyGettingStartedChecklist = lazy(() =>
+  preloadGettingStartedChecklist().then((m) => ({ default: m.GettingStartedChecklist }))
+);
+
+function preloadCelebrationConfetti() {
+  return import("./components/Onboarding/CelebrationConfetti");
+}
+const LazyCelebrationConfetti = lazy(() =>
+  preloadCelebrationConfetti().then((m) => ({ default: m.CelebrationConfetti }))
+);
+
+function preloadTerminalCloseConfirmHost() {
+  return import("./components/Terminal/TerminalCloseConfirmHost");
+}
+const LazyTerminalCloseConfirmHost = lazy(() =>
+  preloadTerminalCloseConfirmHost().then((m) => ({ default: m.TerminalCloseConfirmHost }))
+);
+
+function preloadFileViewerModalHost() {
+  return import("./components/FileViewer/FileViewerModalHost");
+}
+const LazyFileViewerModalHost = lazy(() =>
+  preloadFileViewerModalHost().then((m) => ({ default: m.FileViewerModalHost }))
+);
+
+function preloadMcpConfirmDialog() {
+  return import("./components/McpConfirmDialog");
+}
+const LazyMcpConfirmDialog = lazy(() =>
+  preloadMcpConfirmDialog().then((m) => ({ default: m.McpConfirmDialog }))
+);
+
+function preloadPanelLimitConfirmDialog() {
+  return import("./components/Terminal/PanelLimitConfirmDialog");
+}
+const LazyPanelLimitConfirmDialog = lazy(() =>
+  preloadPanelLimitConfirmDialog().then((m) => ({ default: m.PanelLimitConfirmDialog }))
+);
+
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
-import { OnboardingFlow } from "./components/Onboarding/OnboardingFlow";
-import { GettingStartedChecklist } from "./components/Onboarding/GettingStartedChecklist";
-import { CelebrationConfetti } from "./components/Onboarding/CelebrationConfetti";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
 import {
@@ -305,8 +453,14 @@ function App() {
 
     const execute = () => {
       if (controller.signal.aborted) return;
-      preloadSettingsDialog();
-      preloadNewWorktreeDialog();
+      void preloadSettingsDialog();
+      void preloadNewWorktreeDialog();
+      void preloadActionPalette();
+      void preloadQuickSwitcher();
+      void preloadWorktreePalette();
+      void preloadNewTerminalPalette();
+      void preloadPanelPalette();
+      void preloadThemePalette();
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
     };
@@ -325,7 +479,7 @@ function App() {
   }, [isStateLoaded]);
 
   const handlePreloadSettings = useCallback(() => {
-    preloadSettingsDialog();
+    void preloadSettingsDialog();
   }, []);
 
   const handleLaunchAgent = useCallback(
@@ -543,185 +697,219 @@ function App() {
               componentName="QuickSwitcher"
               resetKeys={[Number(quickSwitcher.isOpen)]}
             >
-              <QuickSwitcher
-                isOpen={quickSwitcher.isOpen}
-                query={quickSwitcher.query}
-                results={quickSwitcher.results}
-                totalResults={quickSwitcher.totalResults}
-                selectedIndex={quickSwitcher.selectedIndex}
-                isLoading={quickSwitcher.isLoading}
-                close={quickSwitcher.close}
-                setQuery={quickSwitcher.setQuery}
-                setSelectedIndex={quickSwitcher.setSelectedIndex}
-                selectPrevious={quickSwitcher.selectPrevious}
-                selectNext={quickSwitcher.selectNext}
-                selectItem={quickSwitcher.selectItem}
-                confirmSelection={quickSwitcher.confirmSelection}
-              />
+              {quickSwitcher.isOpen && (
+                <Suspense fallback={null}>
+                  <LazyQuickSwitcher
+                    isOpen={quickSwitcher.isOpen}
+                    query={quickSwitcher.query}
+                    results={quickSwitcher.results}
+                    totalResults={quickSwitcher.totalResults}
+                    selectedIndex={quickSwitcher.selectedIndex}
+                    isLoading={quickSwitcher.isLoading}
+                    close={quickSwitcher.close}
+                    setQuery={quickSwitcher.setQuery}
+                    setSelectedIndex={quickSwitcher.setSelectedIndex}
+                    selectPrevious={quickSwitcher.selectPrevious}
+                    selectNext={quickSwitcher.selectNext}
+                    selectItem={quickSwitcher.selectItem}
+                    confirmSelection={quickSwitcher.confirmSelection}
+                  />
+                </Suspense>
+              )}
             </ErrorBoundary>
-            <SendToAgentPalette
-              isOpen={sendToAgentPalette.isOpen}
-              query={sendToAgentPalette.query}
-              results={sendToAgentPalette.results}
-              totalResults={sendToAgentPalette.totalResults}
-              selectedIndex={sendToAgentPalette.selectedIndex}
-              close={sendToAgentPalette.close}
-              setQuery={sendToAgentPalette.setQuery}
-              selectPrevious={sendToAgentPalette.selectPrevious}
-              selectNext={sendToAgentPalette.selectNext}
-              selectItem={sendToAgentPalette.selectItem}
-              confirmSelection={sendToAgentPalette.confirmSelection}
-            />
-            <NewTerminalPalette
-              isOpen={newTerminalPalette.isOpen}
-              query={newTerminalPalette.query}
-              results={newTerminalPalette.results}
-              totalResults={newTerminalPalette.totalResults}
-              selectedIndex={newTerminalPalette.selectedIndex}
-              onQueryChange={newTerminalPalette.setQuery}
-              onSelectPrevious={newTerminalPalette.selectPrevious}
-              onSelectNext={newTerminalPalette.selectNext}
-              onSelect={newTerminalPalette.handleSelect}
-              onConfirm={newTerminalPalette.confirmSelection}
-              onClose={newTerminalPalette.close}
-            />
-            <WorktreePalette
-              isOpen={worktreePalette.isOpen}
-              query={worktreePalette.query}
-              results={worktreePalette.results}
-              totalResults={worktreePalette.totalResults}
-              activeWorktreeId={worktreePalette.activeWorktreeId}
-              selectedIndex={worktreePalette.selectedIndex}
-              isStale={worktreePalette.isStale}
-              onQueryChange={worktreePalette.setQuery}
-              onSelectPrevious={worktreePalette.selectPrevious}
-              onSelectNext={worktreePalette.selectNext}
-              onSelect={worktreePalette.selectWorktree}
-              onConfirm={worktreePalette.confirmSelection}
-              onClose={worktreePalette.close}
-            />
-            <QuickCreatePalette palette={quickCreatePalette} />
+            {sendToAgentPalette.isOpen && (
+              <Suspense fallback={null}>
+                <LazySendToAgentPalette
+                  isOpen={sendToAgentPalette.isOpen}
+                  query={sendToAgentPalette.query}
+                  results={sendToAgentPalette.results}
+                  totalResults={sendToAgentPalette.totalResults}
+                  selectedIndex={sendToAgentPalette.selectedIndex}
+                  close={sendToAgentPalette.close}
+                  setQuery={sendToAgentPalette.setQuery}
+                  selectPrevious={sendToAgentPalette.selectPrevious}
+                  selectNext={sendToAgentPalette.selectNext}
+                  selectItem={sendToAgentPalette.selectItem}
+                  confirmSelection={sendToAgentPalette.confirmSelection}
+                />
+              </Suspense>
+            )}
+            {newTerminalPalette.isOpen && (
+              <Suspense fallback={null}>
+                <LazyNewTerminalPalette
+                  isOpen={newTerminalPalette.isOpen}
+                  query={newTerminalPalette.query}
+                  results={newTerminalPalette.results}
+                  totalResults={newTerminalPalette.totalResults}
+                  selectedIndex={newTerminalPalette.selectedIndex}
+                  onQueryChange={newTerminalPalette.setQuery}
+                  onSelectPrevious={newTerminalPalette.selectPrevious}
+                  onSelectNext={newTerminalPalette.selectNext}
+                  onSelect={newTerminalPalette.handleSelect}
+                  onConfirm={newTerminalPalette.confirmSelection}
+                  onClose={newTerminalPalette.close}
+                />
+              </Suspense>
+            )}
+            {worktreePalette.isOpen && (
+              <Suspense fallback={null}>
+                <LazyWorktreePalette
+                  isOpen={worktreePalette.isOpen}
+                  query={worktreePalette.query}
+                  results={worktreePalette.results}
+                  totalResults={worktreePalette.totalResults}
+                  activeWorktreeId={worktreePalette.activeWorktreeId}
+                  selectedIndex={worktreePalette.selectedIndex}
+                  isStale={worktreePalette.isStale}
+                  onQueryChange={worktreePalette.setQuery}
+                  onSelectPrevious={worktreePalette.selectPrevious}
+                  onSelectNext={worktreePalette.selectNext}
+                  onSelect={worktreePalette.selectWorktree}
+                  onConfirm={worktreePalette.confirmSelection}
+                  onClose={worktreePalette.close}
+                />
+              </Suspense>
+            )}
+            {quickCreatePalette.isOpen && (
+              <Suspense fallback={null}>
+                <LazyQuickCreatePalette palette={quickCreatePalette} />
+              </Suspense>
+            )}
             <ErrorBoundary
               variant="component"
               componentName="PanelPalette"
               resetKeys={[Number(panelPalette.isOpen)]}
             >
-              <PanelPalette
-                isOpen={panelPalette.isOpen}
-                query={panelPalette.query}
-                results={panelPalette.results}
-                totalResults={panelPalette.totalResults}
-                selectedIndex={panelPalette.selectedIndex}
-                matchesById={panelPalette.matchesById}
-                onQueryChange={panelPalette.setQuery}
-                onSelectPrevious={panelPalette.selectPrevious}
-                onSelectNext={panelPalette.selectNext}
-                onSelect={(kind) => {
-                  const result = panelPalette.handleSelect(kind);
-                  if (!result) return;
-                  if (result.resumeSession) {
-                    const session = result.resumeSession;
-                    const agentConfig = getEffectiveAgentConfig(session.agentId);
-                    const command = buildResumeCommand(
-                      session.agentId,
-                      session.sessionId,
-                      session.agentLaunchFlags
-                    );
-                    if (command && agentConfig) {
-                      addPanel({
-                        kind: "terminal",
-                        launchAgentId: session.agentId,
-                        title: agentConfig.name,
-                        cwd: defaultTerminalCwd,
-                        worktreeId: activeWorktreeId ?? undefined,
-                        command,
-                        location: "grid",
-                      });
-                    }
-                  } else if (result.id.startsWith("agent:")) {
-                    const agentId = result.id.slice("agent:".length);
-                    if (agentId) {
-                      launchAgent(agentId);
-                    }
-                  } else {
-                    addPanel({
-                      kind: result.id as BuiltInPanelKind,
-                      cwd: defaultTerminalCwd,
-                      worktreeId: activeWorktreeId ?? undefined,
-                      location: "grid",
-                    });
-                  }
-                }}
-                onConfirm={() => {
-                  const selected = panelPalette.confirmSelection();
-                  if (!selected) return;
-                  if (selected.id === MORE_AGENTS_PANEL_ID) return;
-                  if (selected.resumeSession) {
-                    const session = selected.resumeSession;
-                    const agentConfig = getEffectiveAgentConfig(session.agentId);
-                    const command = buildResumeCommand(
-                      session.agentId,
-                      session.sessionId,
-                      session.agentLaunchFlags
-                    );
-                    if (command && agentConfig) {
-                      addPanel({
-                        kind: "terminal",
-                        launchAgentId: session.agentId,
-                        title: agentConfig.name,
-                        cwd: defaultTerminalCwd,
-                        worktreeId: activeWorktreeId ?? undefined,
-                        command,
-                        location: "grid",
-                      });
-                    }
-                  } else if (selected.id.startsWith("agent:")) {
-                    const agentId = selected.id.slice("agent:".length);
-                    if (agentId) {
-                      launchAgent(agentId);
-                    }
-                  } else {
-                    addPanel({
-                      kind: selected.id as BuiltInPanelKind,
-                      cwd: defaultTerminalCwd,
-                      worktreeId: activeWorktreeId ?? undefined,
-                      location: "grid",
-                    });
-                  }
-                }}
-                onClose={panelPalette.close}
-              />
+              {panelPalette.isOpen && (
+                <Suspense fallback={null}>
+                  <LazyPanelPalette
+                    isOpen={panelPalette.isOpen}
+                    query={panelPalette.query}
+                    results={panelPalette.results}
+                    totalResults={panelPalette.totalResults}
+                    selectedIndex={panelPalette.selectedIndex}
+                    matchesById={panelPalette.matchesById}
+                    onQueryChange={panelPalette.setQuery}
+                    onSelectPrevious={panelPalette.selectPrevious}
+                    onSelectNext={panelPalette.selectNext}
+                    onSelect={(kind) => {
+                      const result = panelPalette.handleSelect(kind);
+                      if (!result) return;
+                      if (result.resumeSession) {
+                        const session = result.resumeSession;
+                        const agentConfig = getEffectiveAgentConfig(session.agentId);
+                        const command = buildResumeCommand(
+                          session.agentId,
+                          session.sessionId,
+                          session.agentLaunchFlags
+                        );
+                        if (command && agentConfig) {
+                          addPanel({
+                            kind: "terminal",
+                            launchAgentId: session.agentId,
+                            title: agentConfig.name,
+                            cwd: defaultTerminalCwd,
+                            worktreeId: activeWorktreeId ?? undefined,
+                            command,
+                            location: "grid",
+                          });
+                        }
+                      } else if (result.id.startsWith("agent:")) {
+                        const agentId = result.id.slice("agent:".length);
+                        if (agentId) {
+                          launchAgent(agentId);
+                        }
+                      } else {
+                        addPanel({
+                          kind: result.id as BuiltInPanelKind,
+                          cwd: defaultTerminalCwd,
+                          worktreeId: activeWorktreeId ?? undefined,
+                          location: "grid",
+                        });
+                      }
+                    }}
+                    onConfirm={() => {
+                      const selected = panelPalette.confirmSelection();
+                      if (!selected) return;
+                      if (selected.id === MORE_AGENTS_PANEL_ID) return;
+                      if (selected.resumeSession) {
+                        const session = selected.resumeSession;
+                        const agentConfig = getEffectiveAgentConfig(session.agentId);
+                        const command = buildResumeCommand(
+                          session.agentId,
+                          session.sessionId,
+                          session.agentLaunchFlags
+                        );
+                        if (command && agentConfig) {
+                          addPanel({
+                            kind: "terminal",
+                            launchAgentId: session.agentId,
+                            title: agentConfig.name,
+                            cwd: defaultTerminalCwd,
+                            worktreeId: activeWorktreeId ?? undefined,
+                            command,
+                            location: "grid",
+                          });
+                        }
+                      } else if (selected.id.startsWith("agent:")) {
+                        const agentId = selected.id.slice("agent:".length);
+                        if (agentId) {
+                          launchAgent(agentId);
+                        }
+                      } else {
+                        addPanel({
+                          kind: selected.id as BuiltInPanelKind,
+                          cwd: defaultTerminalCwd,
+                          worktreeId: activeWorktreeId ?? undefined,
+                          location: "grid",
+                        });
+                      }
+                    }}
+                    onClose={panelPalette.close}
+                  />
+                </Suspense>
+              )}
             </ErrorBoundary>
-            <ProjectMruSwitcherOverlay
-              isVisible={mruSwitcher.isVisible}
-              projects={mruSwitcher.projects}
-              selectedIndex={mruSwitcher.selectedIndex}
-            />
-            <ProjectSwitcherPalette
-              isOpen={projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal"}
-              query={projectSwitcherPalette.query}
-              results={projectSwitcherPalette.results}
-              selectedIndex={projectSwitcherPalette.selectedIndex}
-              onQueryChange={projectSwitcherPalette.setQuery}
-              onSelectPrevious={projectSwitcherPalette.selectPrevious}
-              onSelectNext={projectSwitcherPalette.selectNext}
-              onSelect={projectSwitcherPalette.selectProject}
-              onClose={projectSwitcherPalette.close}
-              onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
-              onCloseProject={(projectId) => void projectSwitcherPalette.removeProject(projectId)}
-              removeConfirmProject={projectSwitcherPalette.removeConfirmProject}
-              onRemoveConfirmClose={() => projectSwitcherPalette.setRemoveConfirmProject(null)}
-              onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
-              isRemovingProject={projectSwitcherPalette.isRemovingProject}
-              onSelectNewWindow={(project) => {
-                projectSwitcherPalette.close();
-                void actionService.dispatch(
-                  "app.newWindow",
-                  { projectPath: project.path },
-                  { source: "user" }
-                );
-              }}
-            />
+            {mruSwitcher.isVisible && (
+              <Suspense fallback={null}>
+                <LazyProjectMruSwitcherOverlay
+                  isVisible={mruSwitcher.isVisible}
+                  projects={mruSwitcher.projects}
+                  selectedIndex={mruSwitcher.selectedIndex}
+                />
+              </Suspense>
+            )}
+            {projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal" && (
+              <Suspense fallback={null}>
+                <LazyProjectSwitcherPalette
+                  isOpen={projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal"}
+                  query={projectSwitcherPalette.query}
+                  results={projectSwitcherPalette.results}
+                  selectedIndex={projectSwitcherPalette.selectedIndex}
+                  onQueryChange={projectSwitcherPalette.setQuery}
+                  onSelectPrevious={projectSwitcherPalette.selectPrevious}
+                  onSelectNext={projectSwitcherPalette.selectNext}
+                  onSelect={projectSwitcherPalette.selectProject}
+                  onClose={projectSwitcherPalette.close}
+                  onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
+                  onCloseProject={(projectId) =>
+                    void projectSwitcherPalette.removeProject(projectId)
+                  }
+                  removeConfirmProject={projectSwitcherPalette.removeConfirmProject}
+                  onRemoveConfirmClose={() => projectSwitcherPalette.setRemoveConfirmProject(null)}
+                  onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
+                  isRemovingProject={projectSwitcherPalette.isRemovingProject}
+                  onSelectNewWindow={(project) => {
+                    projectSwitcherPalette.close();
+                    void actionService.dispatch(
+                      "app.newWindow",
+                      { projectPath: project.path },
+                      { source: "user" }
+                    );
+                  }}
+                />
+              </Suspense>
+            )}
             <ConfirmDialog
               isOpen={projectSwitcherPalette.stopConfirmProjectId != null}
               onClose={() => {
@@ -737,54 +925,77 @@ function App() {
               variant="destructive"
             />
 
-            <ThemePalette isOpen={isThemePaletteOpen} onClose={closeThemePalette} />
+            {isThemePaletteOpen && (
+              <Suspense fallback={null}>
+                <LazyThemePalette isOpen={isThemePaletteOpen} onClose={closeThemePalette} />
+              </Suspense>
+            )}
 
-            <LogLevelPalette isOpen={isLogLevelPaletteOpen} onClose={closeLogLevelPalette} />
+            {isLogLevelPaletteOpen && (
+              <Suspense fallback={null}>
+                <LazyLogLevelPalette
+                  isOpen={isLogLevelPaletteOpen}
+                  onClose={closeLogLevelPalette}
+                />
+              </Suspense>
+            )}
 
             <ErrorBoundary
               variant="component"
               componentName="ActionPalette"
               resetKeys={[Number(actionPalette.isOpen)]}
             >
-              <ActionPalette
-                isOpen={actionPalette.isOpen}
-                query={actionPalette.query}
-                results={actionPalette.results}
-                totalResults={actionPalette.totalResults}
-                selectedIndex={actionPalette.selectedIndex}
-                isShowingRecentlyUsed={actionPalette.isShowingRecentlyUsed}
-                isStale={actionPalette.isStale}
-                close={actionPalette.close}
-                setQuery={actionPalette.setQuery}
-                setSelectedIndex={actionPalette.setSelectedIndex}
-                selectPrevious={actionPalette.selectPrevious}
-                selectNext={actionPalette.selectNext}
-                executeAction={actionPalette.executeAction}
-                confirmSelection={actionPalette.confirmSelection}
-              />
+              {actionPalette.isOpen && (
+                <Suspense fallback={null}>
+                  <LazyActionPalette
+                    isOpen={actionPalette.isOpen}
+                    query={actionPalette.query}
+                    results={actionPalette.results}
+                    totalResults={actionPalette.totalResults}
+                    selectedIndex={actionPalette.selectedIndex}
+                    isShowingRecentlyUsed={actionPalette.isShowingRecentlyUsed}
+                    isStale={actionPalette.isStale}
+                    close={actionPalette.close}
+                    setQuery={actionPalette.setQuery}
+                    setSelectedIndex={actionPalette.setSelectedIndex}
+                    selectPrevious={actionPalette.selectPrevious}
+                    selectNext={actionPalette.selectNext}
+                    executeAction={actionPalette.executeAction}
+                    confirmSelection={actionPalette.confirmSelection}
+                  />
+                </Suspense>
+              )}
             </ErrorBoundary>
 
-            <WorktreeOverviewModal
-              isOpen={isWorktreeOverviewOpen}
-              onClose={closeWorktreeOverview}
-              worktrees={worktrees}
-              activeWorktreeId={activeWorktreeId}
-              focusedWorktreeId={focusedWorktreeId}
-              onSelectWorktree={selectWorktree}
-              onCopyTree={overviewWorktreeActions.handleCopyTree}
-              onOpenEditor={overviewWorktreeActions.handleOpenEditor}
-              onSaveLayout={undefined}
-              onLaunchAgent={overviewWorktreeActions.handleLaunchAgent}
-              agentAvailability={availability}
-              agentSettings={agentSettings}
-              homeDir={homeDir}
-            />
+            {isWorktreeOverviewOpen && (
+              <Suspense fallback={null}>
+                <LazyWorktreeOverviewModal
+                  isOpen={isWorktreeOverviewOpen}
+                  onClose={closeWorktreeOverview}
+                  worktrees={worktrees}
+                  activeWorktreeId={activeWorktreeId}
+                  focusedWorktreeId={focusedWorktreeId}
+                  onSelectWorktree={selectWorktree}
+                  onCopyTree={overviewWorktreeActions.handleCopyTree}
+                  onOpenEditor={overviewWorktreeActions.handleOpenEditor}
+                  onSaveLayout={undefined}
+                  onLaunchAgent={overviewWorktreeActions.handleLaunchAgent}
+                  agentAvailability={availability}
+                  agentSettings={agentSettings}
+                  homeDir={homeDir}
+                />
+              </Suspense>
+            )}
 
-            <CrossWorktreeDiff
-              isOpen={crossDiffDialog.isOpen}
-              onClose={closeCrossWorktreeDiff}
-              initialWorktreeId={crossDiffDialog.initialWorktreeId}
-            />
+            {crossDiffDialog.isOpen && (
+              <Suspense fallback={null}>
+                <LazyCrossWorktreeDiff
+                  isOpen={crossDiffDialog.isOpen}
+                  onClose={closeCrossWorktreeDiff}
+                  initialWorktreeId={crossDiffDialog.initialWorktreeId}
+                />
+              </Suspense>
+            )}
 
             {(isSettingsOpen || hasOpenedSettings) && (
               <Suspense fallback={null}>
@@ -800,57 +1011,97 @@ function App() {
               </Suspense>
             )}
 
-            <ShortcutReferenceDialog
-              isOpen={isShortcutsOpen}
-              onClose={() => setIsShortcutsOpen(false)}
-            />
-
-            <TerminalInfoDialogHost />
-            <TerminalCloseConfirmHost />
-            <McpConfirmDialog />
-            <FileViewerModalHost />
-
-            {gitInitDirectoryPath && (
-              <GitInitDialog
-                isOpen={gitInitDialogOpen}
-                directoryPath={gitInitDirectoryPath}
-                onSuccess={handleGitInitSuccess}
-                onCancel={closeGitInitDialog}
-              />
+            {isShortcutsOpen && (
+              <Suspense fallback={null}>
+                <LazyShortcutReferenceDialog
+                  isOpen={isShortcutsOpen}
+                  onClose={() => setIsShortcutsOpen(false)}
+                />
+              </Suspense>
             )}
 
-            <CreateProjectFolderDialog
-              isOpen={createFolderDialogOpen}
-              onClose={closeCreateFolderDialog}
-            />
+            <TerminalInfoDialogHost />
+            {isStateLoaded && (
+              <Suspense fallback={null}>
+                <LazyTerminalCloseConfirmHost />
+              </Suspense>
+            )}
+            {isStateLoaded && (
+              <Suspense fallback={null}>
+                <LazyMcpConfirmDialog />
+              </Suspense>
+            )}
+            {isStateLoaded && (
+              <Suspense fallback={null}>
+                <LazyFileViewerModalHost />
+              </Suspense>
+            )}
 
-            <CloneRepoDialog
-              isOpen={cloneRepoDialogOpen}
-              onSuccess={handleCloneSuccess}
-              onCancel={closeCloneRepoDialog}
-            />
+            {gitInitDirectoryPath && (
+              <Suspense fallback={null}>
+                <LazyGitInitDialog
+                  isOpen={gitInitDialogOpen}
+                  directoryPath={gitInitDirectoryPath}
+                  onSuccess={handleGitInitSuccess}
+                  onCancel={closeGitInitDialog}
+                />
+              </Suspense>
+            )}
+
+            {createFolderDialogOpen && (
+              <Suspense fallback={null}>
+                <LazyCreateProjectFolderDialog
+                  isOpen={createFolderDialogOpen}
+                  onClose={closeCreateFolderDialog}
+                />
+              </Suspense>
+            )}
+
+            {cloneRepoDialogOpen && (
+              <Suspense fallback={null}>
+                <LazyCloneRepoDialog
+                  isOpen={cloneRepoDialogOpen}
+                  onSuccess={handleCloneSuccess}
+                  onCancel={closeCloneRepoDialog}
+                />
+              </Suspense>
+            )}
 
             <PanelTransitionOverlay />
-            <PanelLimitConfirmDialog />
+            {isStateLoaded && (
+              <Suspense fallback={null}>
+                <LazyPanelLimitConfirmDialog />
+              </Suspense>
+            )}
 
             <Toaster />
             <ShortcutHint />
             <ReEntrySummary state={reEntrySummary} />
-            <OnboardingFlow
-              availability={availability}
-              onRefreshSettings={refreshSettings}
-              onComplete={gettingStarted.notifyOnboardingComplete}
-            />
-            {currentProject !== null && gettingStarted.visible && gettingStarted.checklist && (
-              <GettingStartedChecklist
-                checklist={gettingStarted.checklist}
-                collapsed={gettingStarted.collapsed}
-                onDismiss={gettingStarted.dismiss}
-                onToggleCollapse={gettingStarted.toggleCollapse}
-                onMarkItem={gettingStarted.markItem}
-              />
+            {isStateLoaded && (
+              <Suspense fallback={null}>
+                <LazyOnboardingFlow
+                  availability={availability}
+                  onRefreshSettings={refreshSettings}
+                  onComplete={gettingStarted.notifyOnboardingComplete}
+                />
+              </Suspense>
             )}
-            {gettingStarted.showCelebration && <CelebrationConfetti />}
+            {currentProject !== null && gettingStarted.visible && gettingStarted.checklist && (
+              <Suspense fallback={null}>
+                <LazyGettingStartedChecklist
+                  checklist={gettingStarted.checklist}
+                  collapsed={gettingStarted.collapsed}
+                  onDismiss={gettingStarted.dismiss}
+                  onToggleCollapse={gettingStarted.toggleCollapse}
+                  onMarkItem={gettingStarted.markItem}
+                />
+              </Suspense>
+            )}
+            {gettingStarted.showCelebration && (
+              <Suspense fallback={null}>
+                <LazyCelebrationConfetti />
+              </Suspense>
+            )}
           </TooltipProvider>
         </ErrorBoundary>
       </MotionConfig>
