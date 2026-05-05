@@ -15,6 +15,13 @@
       "when": 1777962339910,
       "tag": "0001_add_scratches",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1777971986182,
+      "tag": "0002_add_scratch_deleted_at",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import { existsSync } from "fs";
 import { randomUUID } from "crypto";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, isNull, lt } from "drizzle-orm";
 import type { Scratch } from "../../shared/types/scratch.js";
 import { getSharedDb } from "./persistence/db.js";
 import {
@@ -87,15 +87,50 @@ export class ScratchStore {
 
   getAllScratches(): Scratch[] {
     const db = getSharedDb();
-    const rows = db.select().from(scratchesTable).orderBy(desc(scratchesTable.lastOpened)).all();
+    const rows = db
+      .select()
+      .from(scratchesTable)
+      .where(isNull(scratchesTable.deletedAt))
+      .orderBy(desc(scratchesTable.lastOpened))
+      .all();
     return rows.map(rowToScratch);
   }
 
   getScratchById(scratchId: string): Scratch | null {
     if (!isValidScratchId(scratchId)) return null;
     const db = getSharedDb();
-    const row = db.select().from(scratchesTable).where(eq(scratchesTable.id, scratchId)).get();
+    const row = db
+      .select()
+      .from(scratchesTable)
+      .where(and(eq(scratchesTable.id, scratchId), isNull(scratchesTable.deletedAt)))
+      .get();
     return row ? rowToScratch(row) : null;
+  }
+
+  /**
+   * Returns raw rows of scratches whose `last_opened` predates the cutoff and
+   * which have not yet been tombstoned. Used by the startup cleanup sweep —
+   * exposes `path` directly so the sweep does not have to re-derive it.
+   */
+  getStaleScratchCandidates(cutoffMs: number): ScratchRow[] {
+    const db = getSharedDb();
+    return db
+      .select()
+      .from(scratchesTable)
+      .where(and(lt(scratchesTable.lastOpened, cutoffMs), isNull(scratchesTable.deletedAt)))
+      .all();
+  }
+
+  /**
+   * Marks a scratch as tombstoned (sets `deleted_at`). The DB row is preserved
+   * so a partial directory delete can be retried idempotently on next startup.
+   */
+  tombstoneScratch(scratchId: string, deletedAt: number): void {
+    if (!isValidScratchId(scratchId)) {
+      throw new Error(`Invalid scratch ID: ${scratchId}`);
+    }
+    const db = getSharedDb();
+    db.update(scratchesTable).set({ deletedAt }).where(eq(scratchesTable.id, scratchId)).run();
   }
 
   updateScratch(
@@ -114,9 +149,16 @@ export class ScratchStore {
       set.lastOpened = updates.lastOpened;
     }
     if (Object.keys(set).length > 0) {
-      db.update(scratchesTable).set(set).where(eq(scratchesTable.id, scratchId)).run();
+      db.update(scratchesTable)
+        .set(set)
+        .where(and(eq(scratchesTable.id, scratchId), isNull(scratchesTable.deletedAt)))
+        .run();
     }
-    const row = db.select().from(scratchesTable).where(eq(scratchesTable.id, scratchId)).get();
+    const row = db
+      .select()
+      .from(scratchesTable)
+      .where(and(eq(scratchesTable.id, scratchId), isNull(scratchesTable.deletedAt)))
+      .get();
     if (!row) throw new Error(`Scratch not found: ${scratchId}`);
     return rowToScratch(row);
   }

@@ -6,7 +6,7 @@ import { useScratchStore } from "@/store/scratchStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { notify } from "@/lib/notify";
 import type { Project, Scratch } from "@shared/types";
-import { projectClient } from "@/clients";
+import { projectClient, scratchClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export type ProjectSwitcherMode = "modal" | "dropdown";
@@ -77,6 +77,21 @@ export interface UseProjectSwitcherPaletteReturn {
   selectScratch: (scratch: SearchableScratch) => Promise<void>;
   /** Remove a scratch (deletes folder + DB row). Used by context menu. */
   removeScratchAction: (scratchId: string) => Promise<void>;
+  /**
+   * Open the directory picker and save the scratch as a project. On success
+   * exposes a follow-up confirmation via {@link saveAsProjectConfirm} so the
+   * user can optionally delete the original scratch.
+   */
+  saveAsProject: (scratchId: string) => Promise<void>;
+  /**
+   * Pending "Delete original?" confirmation surfaced after a successful
+   * Save-as-Project copy. Cleared by `confirmDeleteOriginalScratch` or
+   * `dismissSaveAsProjectConfirm`.
+   */
+  saveAsProjectConfirm: { scratch: SearchableScratch; project: Project } | null;
+  dismissSaveAsProjectConfirm: () => void;
+  confirmDeleteOriginalScratch: () => Promise<void>;
+  isDeletingOriginalScratch: boolean;
 }
 
 const MAX_RESULTS = 15;
@@ -92,6 +107,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const [isStoppingProject, setIsStoppingProject] = useState(false);
   const [removeConfirmProject, setRemoveConfirmProject] = useState<SearchableProject | null>(null);
   const [isRemovingProject, setIsRemovingProject] = useState(false);
+  const [saveAsProjectConfirm, setSaveAsProjectConfirm] = useState<{
+    scratch: SearchableScratch;
+    project: Project;
+  } | null>(null);
+  const [isDeletingOriginalScratch, setIsDeletingOriginalScratch] = useState(false);
   const selectedProjectIdRef = useRef<string | null>(null);
 
   const projects = useProjectStore((state) => state.projects);
@@ -466,6 +486,48 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [removeScratchActionStore]
   );
 
+  const saveAsProject = useCallback(
+    async (scratchId: string) => {
+      const scratch = scratchResults.find((s) => s.id === scratchId);
+      if (!scratch) return;
+      try {
+        const result = await scratchClient.saveAsProject(scratchId);
+        if (result.status === "cancelled") return;
+        await loadProjects();
+        setSaveAsProjectConfirm({ scratch, project: result.project });
+      } catch (error) {
+        notify({
+          type: "error",
+          title: "Couldn't save scratch as project",
+          message: formatErrorMessage(error, "Couldn't save scratch as project"),
+        });
+      }
+    },
+    [scratchResults, loadProjects]
+  );
+
+  const dismissSaveAsProjectConfirm = useCallback(() => {
+    setSaveAsProjectConfirm(null);
+  }, []);
+
+  const confirmDeleteOriginalScratch = useCallback(async () => {
+    if (!saveAsProjectConfirm || isDeletingOriginalScratch) return;
+    setIsDeletingOriginalScratch(true);
+    const scratchId = saveAsProjectConfirm.scratch.id;
+    try {
+      await removeScratchActionStore(scratchId);
+      setSaveAsProjectConfirm(null);
+    } catch (error) {
+      notify({
+        type: "error",
+        title: "Couldn't remove original scratch",
+        message: formatErrorMessage(error, "Couldn't remove the original scratch workspace"),
+      });
+    } finally {
+      setIsDeletingOriginalScratch(false);
+    }
+  }, [saveAsProjectConfirm, isDeletingOriginalScratch, removeScratchActionStore]);
+
   const confirmRemoveProject = useCallback(async () => {
     if (!removeConfirmProject || isRemovingProject) return;
 
@@ -550,5 +612,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     createScratch,
     selectScratch,
     removeScratchAction,
+    saveAsProject,
+    saveAsProjectConfirm,
+    dismissSaveAsProjectConfirm,
+    confirmDeleteOriginalScratch,
+    isDeletingOriginalScratch,
   };
 }

@@ -597,6 +597,7 @@ export interface ElectronAPI {
     ): Promise<import("../scratch.js").Scratch>;
     remove(scratchId: string): Promise<void>;
     switch(scratchId: string): Promise<import("../scratch.js").Scratch>;
+    saveAsProject(scratchId: string): Promise<import("./scratch.js").ScratchSaveAsProjectResult>;
     onUpdated(callback: (scratch: import("../scratch.js").Scratch) => void): () => void;
     onRemoved(callback: (scratchId: string) => void): () => void;
     onSwitch(callback: (payload: import("./scratch.js").ScratchSwitchPayload) => void): () => void;

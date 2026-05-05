@@ -1,4 +1,5 @@
 import type { Scratch } from "@shared/types";
+import type { ScratchSaveAsProjectResult } from "@shared/types/ipc/scratch";
 
 /**
  * Thin renderer-side wrapper for `window.electron.scratch`. Mirrors the
@@ -45,6 +46,11 @@ export const scratchClient = {
     const a = api();
     if (!a) return Promise.reject(new Error("scratch IPC unavailable"));
     return a.switch(scratchId);
+  },
+  saveAsProject(scratchId: string): Promise<ScratchSaveAsProjectResult> {
+    const a = api();
+    if (!a) return Promise.reject(new Error("scratch IPC unavailable"));
+    return a.saveAsProject(scratchId);
   },
   onUpdated(callback: (scratch: Scratch) => void): () => void {
     return api()?.onUpdated(callback) ?? NOOP_CLEANUP;

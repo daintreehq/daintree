@@ -3,9 +3,6 @@
  * Parallel to `Project` rather than a subtype: separate table, store, IPC
  * namespace, and lifecycle. Folders live in a UUID-named path under the app's
  * `userData` directory so they don't pollute the user's project folders.
- *
- * Out of scope for v1: auto-cleanup, "Save as Project…" promotion, visual
- * differentiation of the active scratch, first-run note. See issue #6778.
  */
 export interface Scratch {
   /** UUID v4 — both identifier and path component under userData/scratches/. */

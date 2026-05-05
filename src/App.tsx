@@ -916,6 +916,15 @@ function App() {
                   onRemoveScratch={(scratchId) =>
                     void projectSwitcherPalette.removeScratchAction(scratchId)
                   }
+                  onSaveAsProject={(scratchId) =>
+                    void projectSwitcherPalette.saveAsProject(scratchId)
+                  }
+                  saveAsProjectConfirm={projectSwitcherPalette.saveAsProjectConfirm}
+                  onDismissSaveAsProjectConfirm={projectSwitcherPalette.dismissSaveAsProjectConfirm}
+                  onConfirmDeleteOriginalScratch={() =>
+                    void projectSwitcherPalette.confirmDeleteOriginalScratch()
+                  }
+                  isDeletingOriginalScratch={projectSwitcherPalette.isDeletingOriginalScratch}
                 />
               </Suspense>
             )}

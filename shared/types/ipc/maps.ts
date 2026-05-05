@@ -182,7 +182,7 @@ import type {
 } from "./demo.js";
 import type { BulkProjectStats } from "./project.js";
 import type { Scratch } from "../scratch.js";
-import type { ScratchSwitchPayload } from "./scratch.js";
+import type { ScratchSwitchPayload, ScratchSaveAsProjectResult } from "./scratch.js";
 import type {
   PrerequisiteSpec,
   PrerequisiteCheckResult,
@@ -2074,6 +2074,10 @@ export interface IpcInvokeMap {
   "scratch:switch": {
     args: [scratchId: string];
     result: Scratch;
+  };
+  "scratch:save-as-project": {
+    args: [scratchId: string];
+    result: ScratchSaveAsProjectResult;
   };
 
   // Global env channels
