@@ -1,11 +1,16 @@
-import React, { useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { useStore } from "zustand";
 import { Kbd } from "@/components/ui/Kbd";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import type { ActionId } from "@shared/types/actions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
+
+// HCI: surface 3–5 unlearned tips at a time; 4 balances variety vs cognitive load.
+const ROTATING_TIP_SUBSET_SIZE = 4;
 
 export interface TipEntry {
   id: string;
@@ -201,12 +206,12 @@ export function LiveTipMessage({ tip }: { tip: TipEntry }) {
   return <>{tip.message}</>;
 }
 
-let tipMountCount = 0;
-
 export function RotatingTip() {
   "use memo";
-  const mountIndex = useRef(tipMountCount++);
   const availability = useCliAvailabilityStore((s) => s.availability);
+  // Subscribe to `hydrated` only — `counts` are read once via getState() when we
+  // pick the tip, so subsequent increments don't churn or swap the visible tip.
+  const hydrated = useStore(shortcutHintStore, (s) => s.hydrated);
 
   const filteredTips = useMemo(
     () =>
@@ -217,9 +222,27 @@ export function RotatingTip() {
     [availability]
   );
 
-  if (filteredTips.length === 0) return null;
+  const [tip, setTip] = useState<TipEntry | null>(null);
 
-  const tip = filteredTips[mountIndex.current % filteredTips.length]!;
+  useEffect(() => {
+    if (tip || !hydrated || filteredTips.length === 0) return;
+    const counts = shortcutHintStore.getState().counts;
+    // Use shortcutActionId when present (mirrors LiveTipMessage lookup) so a tip
+    // whose kbd shortcut dispatches a different action than its label-click
+    // (e.g. worktree-overview: ⌘⇧O → "worktree.overview", click → ".open") still
+    // counts toward "used" when the user invokes it via keyboard.
+    const lookupKey = (tipEntry: TipEntry) => tipEntry.shortcutActionId ?? tipEntry.actionId ?? "";
+    const prioritized = [...filteredTips]
+      .sort((a, b) => (counts[lookupKey(a)] ?? 0) - (counts[lookupKey(b)] ?? 0))
+      .slice(0, ROTATING_TIP_SUBSET_SIZE);
+    // Pick randomly within the unused-bias subset so per-mount variety doesn't
+    // require a module-level counter (which leaks between tests, see #4754).
+    const index = Math.floor(Math.random() * prioritized.length);
+    const picked = prioritized[index] ?? null;
+    if (picked) setTip(picked);
+  }, [tip, hydrated, filteredTips]);
+
+  if (!tip) return null;
 
   return (
     <div className="flex flex-col items-center gap-2 animate-in fade-in duration-200">

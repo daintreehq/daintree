@@ -32,7 +32,18 @@ describe("useHeldShortcutReveal", () => {
     delete document.documentElement.dataset[REVEAL_DATASET_KEY];
   });
 
-  it("does not reveal before 1s threshold", () => {
+  it("does not reveal before 500ms threshold", () => {
+    renderHook(() => useHeldShortcutReveal());
+
+    act(() => dispatchKey("keydown", "Meta"));
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(isRevealed()).toBe(false);
+  });
+
+  it("reveals after 500ms hold of Meta on macOS", () => {
     renderHook(() => useHeldShortcutReveal());
 
     act(() => dispatchKey("keydown", "Meta"));
@@ -40,26 +51,15 @@ describe("useHeldShortcutReveal", () => {
       vi.advanceTimersByTime(500);
     });
 
-    expect(isRevealed()).toBe(false);
-  });
-
-  it("reveals after 1s hold of Meta on macOS", () => {
-    renderHook(() => useHeldShortcutReveal());
-
-    act(() => dispatchKey("keydown", "Meta"));
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
-
     expect(isRevealed()).toBe(true);
   });
 
-  it("does not reveal at 999ms but reveals on the next tick", () => {
+  it("does not reveal at 499ms but reveals on the next tick", () => {
     renderHook(() => useHeldShortcutReveal());
 
     act(() => dispatchKey("keydown", "Meta"));
     act(() => {
-      vi.advanceTimersByTime(999);
+      vi.advanceTimersByTime(499);
     });
     expect(isRevealed()).toBe(false);
 
@@ -69,13 +69,13 @@ describe("useHeldShortcutReveal", () => {
     expect(isRevealed()).toBe(true);
   });
 
-  it("reveals after 1s hold of Control on non-mac", () => {
+  it("reveals after 500ms hold of Control on non-mac", () => {
     isMacMock.mockReturnValue(false);
     renderHook(() => useHeldShortcutReveal());
 
     act(() => dispatchKey("keydown", "Control"));
     act(() => {
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(500);
     });
 
     expect(isRevealed()).toBe(true);
@@ -99,7 +99,7 @@ describe("useHeldShortcutReveal", () => {
 
     act(() => dispatchKey("keydown", "Meta"));
     act(() => {
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(500);
     });
     expect(isRevealed()).toBe(true);
 
@@ -112,7 +112,22 @@ describe("useHeldShortcutReveal", () => {
 
     act(() => dispatchKey("keydown", "Meta"));
     act(() => {
-      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(400);
+    });
+    act(() => dispatchKey("keyup", "Meta"));
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+
+    expect(isRevealed()).toBe(false);
+  });
+
+  it("cancels pending reveal if keyup fires at exactly 499ms (boundary)", () => {
+    renderHook(() => useHeldShortcutReveal());
+
+    act(() => dispatchKey("keydown", "Meta"));
+    act(() => {
+      vi.advanceTimersByTime(499);
     });
     act(() => dispatchKey("keyup", "Meta"));
     act(() => {
@@ -127,7 +142,7 @@ describe("useHeldShortcutReveal", () => {
 
     act(() => dispatchKey("keydown", "Meta"));
     act(() => {
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(500);
     });
     expect(isRevealed()).toBe(true);
 
@@ -143,7 +158,7 @@ describe("useHeldShortcutReveal", () => {
 
     act(() => dispatchKey("keydown", "Meta"));
     act(() => {
-      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(400);
     });
     act(() => {
       window.dispatchEvent(new Event("blur"));
@@ -160,7 +175,7 @@ describe("useHeldShortcutReveal", () => {
 
     act(() => dispatchKey("keydown", "Meta"));
     act(() => {
-      vi.advanceTimersByTime(900);
+      vi.advanceTimersByTime(400);
     });
     // Auto-repeat: should NOT restart the timer
     act(() => dispatchKey("keydown", "Meta", true));
@@ -168,7 +183,7 @@ describe("useHeldShortcutReveal", () => {
       vi.advanceTimersByTime(150);
     });
 
-    // Original timer at 900+150=1050ms should have fired
+    // Original timer at 400+150=550ms should have fired
     expect(isRevealed()).toBe(true);
   });
 
@@ -176,14 +191,14 @@ describe("useHeldShortcutReveal", () => {
     renderHook(() => useHeldShortcutReveal());
 
     act(() => dispatchKey("keydown", "Meta"));
-    act(() => vi.advanceTimersByTime(1000));
+    act(() => vi.advanceTimersByTime(500));
     expect(isRevealed()).toBe(true);
 
     act(() => dispatchKey("keyup", "Meta"));
     expect(isRevealed()).toBe(false);
 
     act(() => dispatchKey("keydown", "Meta"));
-    act(() => vi.advanceTimersByTime(1000));
+    act(() => vi.advanceTimersByTime(500));
     expect(isRevealed()).toBe(true);
   });
 
@@ -191,7 +206,7 @@ describe("useHeldShortcutReveal", () => {
     const { unmount } = renderHook(() => useHeldShortcutReveal());
 
     act(() => dispatchKey("keydown", "Meta"));
-    act(() => vi.advanceTimersByTime(1000));
+    act(() => vi.advanceTimersByTime(500));
     expect(isRevealed()).toBe(true);
 
     unmount();
@@ -199,7 +214,7 @@ describe("useHeldShortcutReveal", () => {
 
     // After unmount, further events should have no effect
     act(() => dispatchKey("keydown", "Meta"));
-    act(() => vi.advanceTimersByTime(1000));
+    act(() => vi.advanceTimersByTime(500));
     expect(isRevealed()).toBe(false);
   });
 
@@ -207,7 +222,7 @@ describe("useHeldShortcutReveal", () => {
     const { unmount } = renderHook(() => useHeldShortcutReveal());
 
     act(() => dispatchKey("keydown", "Meta"));
-    act(() => vi.advanceTimersByTime(500));
+    act(() => vi.advanceTimersByTime(400));
     unmount();
     act(() => vi.advanceTimersByTime(2000));
 

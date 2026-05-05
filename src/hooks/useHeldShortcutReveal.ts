@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { isMac } from "@/lib/platform";
 
-const REVEAL_HOLD_MS = 1000;
+const REVEAL_HOLD_MS = 500;
 const REVEAL_ATTR = "shortcutReveal";
 
 function isPrimaryModifierKey(key: string): boolean {
