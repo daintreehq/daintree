@@ -65,11 +65,11 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
               <div className="w-8 h-8 flex items-center justify-center text-foreground group-hover:text-daintree-text transition-colors">
                 <PortalIcon icon={link.icon} size="launchpad" url={link.url} type={link.type} />
               </div>
-              <div className="text-left">
+              <div className="text-left min-w-0">
                 <div className="font-medium text-foreground group-hover:text-daintree-text transition-colors">
                   {link.title}
                 </div>
-                <div className="text-xs text-daintree-text/70">
+                <div className="text-xs text-daintree-text/70 truncate">
                   {(() => {
                     try {
                       const host = new URL(link.url).hostname;
