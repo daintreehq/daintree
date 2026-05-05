@@ -307,12 +307,14 @@ function App() {
       if (controller.signal.aborted) return;
       preloadSettingsDialog();
       preloadNewWorktreeDialog();
-      void import("@fontsource/jetbrains-mono/latin-500.css");
-      void import("@fontsource/jetbrains-mono/latin-600.css");
+      import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
+      import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
     };
 
     if (typeof scheduler !== "undefined" && typeof scheduler.postTask === "function") {
-      void scheduler.postTask(execute, { priority: "background", signal: controller.signal });
+      void scheduler
+        .postTask(execute, { priority: "background", signal: controller.signal })
+        .catch(() => {});
     } else {
       const id = requestIdleCallback(execute, { timeout: 5000 });
       const cancel = () => cancelIdleCallback(id);
