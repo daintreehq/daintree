@@ -1386,6 +1386,11 @@ const api: ElectronAPI = {
     switch: (scratchId: string): Promise<import("../shared/types/scratch.js").Scratch> =>
       _unwrappingInvoke(CHANNELS.SCRATCH_SWITCH, scratchId),
 
+    saveAsProject: (
+      scratchId: string
+    ): Promise<import("../shared/types/ipc/scratch.js").ScratchSaveAsProjectResult> =>
+      _unwrappingInvoke(CHANNELS.SCRATCH_SAVE_AS_PROJECT, scratchId),
+
     onUpdated: (callback: (scratch: import("../shared/types/scratch.js").Scratch) => void) =>
       _typedOn(CHANNELS.SCRATCH_UPDATED, callback),
 

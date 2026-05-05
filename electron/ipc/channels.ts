@@ -655,6 +655,7 @@ export const CHANNELS = {
   SCRATCH_UPDATE: "scratch:update",
   SCRATCH_REMOVE: "scratch:remove",
   SCRATCH_SWITCH: "scratch:switch",
+  SCRATCH_SAVE_AS_PROJECT: "scratch:save-as-project",
   SCRATCH_UPDATED: "scratch:updated",
   SCRATCH_REMOVED: "scratch:removed",
   SCRATCH_ON_SWITCH: "scratch:on-switch",

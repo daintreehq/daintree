@@ -8,15 +8,21 @@
  * `ProjectSwitchService` (which validates against `projects`).
  */
 import { randomUUID } from "crypto";
-import type { WebContentsView } from "electron";
+import { dialog, type WebContentsView } from "electron";
+import fs from "fs/promises";
+import path from "path";
 import { CHANNELS } from "../../channels.js";
 import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { addProjectByPath } from "../projectCrud/crud.js";
+import { createHardenedGit } from "../../../utils/hardenedGit.js";
+import { logError } from "../../../utils/logger.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { Scratch } from "../../../../shared/types/scratch.js";
+import type { ScratchSaveAsProjectResult } from "../../../../shared/types/ipc/scratch.js";
 
 export function registerScratchHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -128,6 +134,105 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
     return updated;
   };
   handlers.push(typedHandleWithContext(CHANNELS.SCRATCH_SWITCH, handleSwitch));
+
+  /**
+   * Save-as-Project — opens a directory picker, copies the scratch folder to
+   * the chosen destination, and registers the destination as a regular
+   * project. Copy (not move) so a failed registration leaves the scratch
+   * intact; the original scratch is NOT deleted by this handler. The renderer
+   * prompts the user separately and calls `scratch:remove` if they confirm.
+   */
+  const handleSaveAsProject = async (
+    ctx: import("../../types.js").IpcContext,
+    scratchId: string
+  ): Promise<ScratchSaveAsProjectResult> => {
+    if (typeof scratchId !== "string" || !scratchId) {
+      throw new Error("Invalid scratch ID");
+    }
+
+    const scratch = scratchStore.getScratchById(scratchId);
+    if (!scratch) {
+      throw new Error(`Scratch not found: ${scratchId}`);
+    }
+
+    const senderWindow = getWindowForWebContents(ctx.event.sender);
+    const dialogOpts: Electron.OpenDialogOptions = {
+      title: "Save scratch as project",
+      buttonLabel: "Save here",
+      properties: ["openDirectory", "createDirectory"],
+    };
+    const result = senderWindow
+      ? await dialog.showOpenDialog(senderWindow, dialogOpts)
+      : await dialog.showOpenDialog(dialogOpts);
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { status: "cancelled" };
+    }
+
+    const destinationPath = result.filePaths[0]!;
+    if (!path.isAbsolute(destinationPath)) {
+      throw new Error("Destination path must be absolute");
+    }
+
+    // Refuse if the user picked the scratch directory itself or a path inside
+    // the scratch — `fs.cp` would recurse into the destination it's writing.
+    // Use realpath so a symlink at the destination that resolves into the
+    // scratch dir cannot bypass the guard. `realpath` throws ENOENT for paths
+    // that don't yet exist (the dialog's `createDirectory` option produces
+    // these); fall back to lexical resolve in that case.
+    const normalizedScratch = await fs.realpath(scratch.path).catch(() => scratch.path);
+    const normalizedDest = await fs.realpath(destinationPath).catch(() => destinationPath);
+    const resolvedScratch = path.resolve(normalizedScratch);
+    const resolvedDest = path.resolve(normalizedDest);
+    if (resolvedDest === resolvedScratch || resolvedDest.startsWith(resolvedScratch + path.sep)) {
+      throw new Error("Destination cannot be inside the scratch folder");
+    }
+
+    // Reject pre-existing non-empty destinations so we never silently merge
+    // the scratch contents into another project. The dialog's `createDirectory`
+    // option lets users make a fresh folder right from the picker.
+    try {
+      const entries = await fs.readdir(destinationPath);
+      if (entries.length > 0) {
+        throw new Error("Destination folder is not empty. Choose an empty folder.");
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") throw error;
+      // ENOENT means the dir doesn't exist; fs.cp will create it.
+    }
+
+    try {
+      await fs.cp(scratch.path, destinationPath, {
+        recursive: true,
+        preserveTimestamps: true,
+        errorOnExist: false,
+      });
+    } catch (error) {
+      logError(
+        `[IPC] scratch:save-as-project: copy failed for ${scratchId} -> ${destinationPath}`,
+        error
+      );
+      throw error;
+    }
+
+    // Scratch folders are not git repositories, but `projectStore.addProject`
+    // requires a git root. Initialize a fresh repo at the destination so the
+    // saved folder behaves like any other project (worktrees, status, etc.).
+    // If the user already chose a git-tracked destination, `git init` is a
+    // no-op — it reports the existing repo and exits 0.
+    try {
+      const git = createHardenedGit(destinationPath);
+      await git.init();
+    } catch (error) {
+      logError(`[IPC] scratch:save-as-project: git init failed for ${destinationPath}`, error);
+      throw error;
+    }
+
+    const project = await addProjectByPath(destinationPath);
+    return { status: "saved", project, destinationPath };
+  };
+  handlers.push(typedHandleWithContext(CHANNELS.SCRATCH_SAVE_AS_PROJECT, handleSaveAsProject));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

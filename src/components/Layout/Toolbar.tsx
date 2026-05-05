@@ -986,6 +986,13 @@ export function Toolbar({
             onCreateScratch={() => void projectSwitcher.createScratch()}
             onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
             onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
+            onSaveAsProject={(scratchId) => void projectSwitcher.saveAsProject(scratchId)}
+            saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
+            onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
+            onConfirmDeleteOriginalScratch={() =>
+              void projectSwitcher.confirmDeleteOriginalScratch()
+            }
+            isDeletingOriginalScratch={projectSwitcher.isDeletingOriginalScratch}
           >
             <button
               data-toolbar-item=""

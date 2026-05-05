@@ -9,7 +9,26 @@ import type { Project } from "../../../types/index.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 
+/**
+ * Validate, register, and broadcast a project for the given absolute path.
+ * Extracted from `handleProjectAdd` so other handlers (e.g. scratch
+ * Save-as-Project) can register a path as a project without going through IPC.
+ */
+export async function addProjectByPath(projectPath: string): Promise<Project> {
+  if (typeof projectPath !== "string" || !projectPath) {
+    throw new Error("Invalid project path");
+  }
+  if (!path.isAbsolute(projectPath)) {
+    throw new Error("Project path must be absolute");
+  }
+  const project = await projectStore.addProject(projectPath);
+  broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
+  return project;
+}
+
 export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () => void {
+  const handleProjectAdd = async (projectPath: string) => addProjectByPath(projectPath);
+
   const handlers: Array<() => void> = [];
 
   const handleProjectGetAll = async () => {
@@ -55,17 +74,6 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_GET_CURRENT, handleProjectGetCurrent));
 
-  const handleProjectAdd = async (projectPath: string) => {
-    if (typeof projectPath !== "string" || !projectPath) {
-      throw new Error("Invalid project path");
-    }
-    if (!path.isAbsolute(projectPath)) {
-      throw new Error("Project path must be absolute");
-    }
-    const project = await projectStore.addProject(projectPath);
-    broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
-    return project;
-  };
   handlers.push(typedHandle(CHANNELS.PROJECT_ADD, handleProjectAdd));
 
   const handleProjectRemove = async (projectId: string) => {

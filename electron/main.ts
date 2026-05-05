@@ -79,6 +79,7 @@ import { registerCommands } from "./services/commands/index.js";
 import { initializeCrashRecoveryService } from "./services/CrashRecoveryService.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
 import { initializeTrashedPidCleanup } from "./services/TrashedPidTracker.js";
+import { initializeScratchCleanup } from "./services/ScratchCleanupService.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
 import { initializeDatabaseMaintenance } from "./services/DatabaseMaintenanceService.js";
 import { readLastActiveProjectIdSync } from "./services/persistence/readLastProjectId.js";
@@ -164,6 +165,7 @@ if (!gotTheLock) {
   initializeCrashRecoveryService();
   initializeDatabaseMaintenance();
   initializeTrashedPidCleanup();
+  initializeScratchCleanup();
   initializeGpuCrashMonitor();
 
   const windowRegistry = new WindowRegistry();

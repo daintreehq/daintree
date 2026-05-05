@@ -17,6 +17,13 @@ import { openDb } from "../db.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../migrations");
 
+// Derive the expected migration count from the journal so each new migration
+// added to the repo doesn't require touching every assertion in this file.
+const migrationsJournalEntries = JSON.parse(
+  fs.readFileSync(path.join(migrationsFolder, "meta", "_journal.json"), "utf8")
+).entries as Array<{ tag: string }>;
+const EXPECTED_MIGRATION_COUNT = migrationsJournalEntries.length;
+
 type ColInfo = { name: string; type: string };
 
 describe("openDb (integration)", () => {
@@ -49,7 +56,7 @@ describe("openDb (integration)", () => {
         id: number;
         hash: string;
       }[];
-      expect(migrations).toHaveLength(2);
+      expect(migrations).toHaveLength(EXPECTED_MIGRATION_COUNT);
       expect(migrations[0].hash).toBeTruthy();
     } finally {
       sqlite.close();
@@ -88,7 +95,7 @@ describe("openDb (integration)", () => {
       const migrations = second.sqlite.prepare("SELECT id FROM __drizzle_migrations").all() as {
         id: number;
       }[];
-      expect(migrations).toHaveLength(2);
+      expect(migrations).toHaveLength(EXPECTED_MIGRATION_COUNT);
     } finally {
       second.sqlite.close();
     }
@@ -169,7 +176,7 @@ describe("openDb (integration)", () => {
       const migrations = sqlite.prepare("SELECT id FROM __drizzle_migrations").all() as {
         id: number;
       }[];
-      expect(migrations).toHaveLength(2);
+      expect(migrations).toHaveLength(EXPECTED_MIGRATION_COUNT);
     } finally {
       sqlite.close();
     }
@@ -255,7 +262,7 @@ describe("openDb (integration)", () => {
       const migrations = sqlite.prepare("SELECT id FROM __drizzle_migrations").all() as {
         id: number;
       }[];
-      expect(migrations).toHaveLength(2);
+      expect(migrations).toHaveLength(EXPECTED_MIGRATION_COUNT);
     } finally {
       sqlite.close();
     }
