@@ -158,12 +158,12 @@ function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
           {(() => {
             const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
             if (!displayAgentState) return null;
-            const Icon = getEffectiveStateIcon(displayAgentState, term.waitingReason);
+            const Icon = getEffectiveStateIcon(displayAgentState);
             return (
               <Icon
                 className={cn(
                   "w-3 h-3",
-                  getEffectiveStateColor(displayAgentState, term.waitingReason),
+                  getEffectiveStateColor(displayAgentState),
                   displayAgentState === "working" && "animate-spin-slow motion-reduce:animate-none"
                 )}
                 aria-label={STATE_LABELS[displayAgentState]}

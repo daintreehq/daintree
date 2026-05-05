@@ -3,7 +3,6 @@ import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/
 import { m } from "framer-motion";
 import { X, AlertTriangle } from "lucide-react";
 import type { PanelKind, AgentState } from "@/types";
-import type { WaitingReason } from "@shared/types/agent";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -11,7 +10,6 @@ import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
 } from "@/components/Worktree/terminalStateConfig";
-import { usePanelStore } from "@/store";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { UI_ANIMATION_DURATION } from "@/lib/animationUtils";
@@ -247,13 +245,8 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     [onClick]
   );
 
-  const waitingReason = usePanelStore((state) => state.panelsById[id]?.waitingReason) as
-    | WaitingReason
-    | undefined;
   const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
-  const StateIcon = displayAgentState
-    ? getEffectiveStateIcon(displayAgentState, waitingReason)
-    : null;
+  const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
 
   return (
     <Tooltip>
@@ -330,7 +323,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
             <StateIcon
               className={cn(
                 "w-3 h-3 shrink-0",
-                getEffectiveStateColor(displayAgentState, waitingReason),
+                getEffectiveStateColor(displayAgentState),
                 displayAgentState === "working" && "animate-spin-slow",
                 "motion-reduce:animate-none"
               )}

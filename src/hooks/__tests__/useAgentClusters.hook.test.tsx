@@ -66,14 +66,14 @@ describe("useAgentClusters (hook integration)", () => {
     expect(result.current).toBeNull();
   });
 
-  it("detects a prompt cluster with 2 eligible agents", () => {
+  it("detects a waiting cluster with 2 eligible agents", () => {
     seedWorktrees(["wt-1"]);
     seedPanels([
       makeAgent("a", { agentState: "waiting", waitingReason: "prompt", lastStateChange: 1 }),
       makeAgent("b", { agentState: "waiting", waitingReason: "prompt", lastStateChange: 2 }),
     ]);
     const { result } = renderHook(() => useAgentClusters());
-    expect(result.current?.type).toBe("prompt");
+    expect(result.current?.type).toBe("waiting");
     expect(result.current?.memberIds).toEqual(["a", "b"]);
   });
 
@@ -112,7 +112,7 @@ describe("useAgentClusters (hook integration)", () => {
       ]);
     });
 
-    expect(result.current?.type).toBe("prompt");
+    expect(result.current?.type).toBe("waiting");
     expect(result.current?.count).toBe(2);
   });
 

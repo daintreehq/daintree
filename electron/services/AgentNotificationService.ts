@@ -170,7 +170,7 @@ class AgentNotificationService {
     timestamp: number;
     waitingReason?: string;
   }): void {
-    const { state, previousState, terminalId, agentId, waitingReason } = payload;
+    const { state, previousState, terminalId, agentId } = payload;
     // Backend no longer emits worktreeId on agent events (#5139). Resolve it
     // from persisted renderer state so focus suppression, dedup keying, and
     // notification context still work correctly.
@@ -187,8 +187,7 @@ class AgentNotificationService {
     // All-clear tracking runs regardless of notification settings
     this.checkAllClear(state, previousState);
 
-    // Allow same-state transitions for waitingReason changes (e.g., prompt -> question)
-    if (state === previousState && !(state === "waiting" && waitingReason !== undefined)) return;
+    if (state === previousState) return;
 
     // Prefer terminalId so per-terminal dedup timers don't collide when two
     // runtime-detected terminals share the same agentId value (e.g. both

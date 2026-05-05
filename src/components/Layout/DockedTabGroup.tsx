@@ -448,9 +448,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
   const displayTitle = getBaseTitle(activePanel.title);
   const displayAgentState = getTerminalAgentDisplayState(activeChrome, agentState);
-  const StateIcon = displayAgentState
-    ? getEffectiveStateIcon(displayAgentState, activePanel.waitingReason)
-    : null;
+  const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
 
   return (
     <>
@@ -526,7 +524,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                     <div
                       className={cn(
                         "flex items-center shrink-0",
-                        getEffectiveStateColor(displayAgentState, activePanel.waitingReason)
+                        getEffectiveStateColor(displayAgentState)
                       )}
                     >
                       <StateIcon

@@ -83,7 +83,6 @@ function TerminalHeaderContentComponent({
     lastStateChange,
     stateChangeTrigger,
     stateChangeConfidence,
-    waitingReason,
     sessionCost,
     sessionTokens,
   } = usePanelStore(
@@ -95,7 +94,6 @@ function TerminalHeaderContentComponent({
         lastStateChange: t?.lastStateChange,
         stateChangeTrigger: t?.stateChangeTrigger,
         stateChangeConfidence: t?.stateChangeConfidence,
-        waitingReason: t?.waitingReason,
         sessionCost: t?.sessionCost,
         sessionTokens: t?.sessionTokens,
       };
@@ -136,10 +134,10 @@ function TerminalHeaderContentComponent({
       return null;
     }
 
-    const StateIcon = getEffectiveStateIcon(agentState, waitingReason);
+    const StateIcon = getEffectiveStateIcon(agentState);
     if (!StateIcon) return null;
 
-    const effectiveColor = getEffectiveStateColor(agentState, waitingReason);
+    const effectiveColor = getEffectiveStateColor(agentState);
 
     const chipStyle =
       agentState === "working"
@@ -150,13 +148,11 @@ function TerminalHeaderContentComponent({
             ? "bg-[color-mix(in_oklab,var(--color-status-success)_15%,transparent)] border-status-success/40"
             : agentState === "exited"
               ? "bg-overlay-soft border-divider"
-              : agentState === "waiting" && waitingReason === "prompt"
-                ? "bg-[color-mix(in_oklab,var(--color-status-warning)_15%,transparent)] border-status-warning/40"
-                : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
+              : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
 
     const headline = activity?.headline?.trim() || `Agent ${agentState}`;
     const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
-    const stateLabel = getEffectiveStateLabel(agentState, waitingReason);
+    const stateLabel = getEffectiveStateLabel(agentState);
 
     return (
       <Tooltip>

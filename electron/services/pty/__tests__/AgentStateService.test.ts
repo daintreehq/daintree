@@ -199,6 +199,35 @@ describe("AgentStateService", () => {
     expect(stateChanges[0]?.waitingReason).toBe("prompt");
   });
 
+  it("does not emit state changes for waitingReason-only updates", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "waiting" });
+    terminal.waitingReason = "prompt";
+    const stateChanges: Array<{ state: string; waitingReason?: string }> = [];
+    const activityEvents: unknown[] = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({ state: payload.state, waitingReason: payload.waitingReason });
+    });
+    events.on("terminal:activity", (payload) => {
+      activityEvents.push(payload);
+    });
+
+    const changed = service.updateAgentState(
+      terminal,
+      { type: "prompt" },
+      "activity",
+      1.0,
+      "question"
+    );
+
+    expect(changed).toBe(false);
+    expect(terminal.agentState).toBe("waiting");
+    expect(terminal.waitingReason).toBe("prompt");
+    expect(stateChanges).toHaveLength(0);
+    expect(activityEvents).toHaveLength(0);
+  });
+
   it("clears waitingReason when transitioning away from waiting", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "waiting" });

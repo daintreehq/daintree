@@ -58,7 +58,7 @@ describe("ActivityHeadlineGenerator", () => {
     expect(result.headline).toBe("Running tests");
   });
 
-  describe("waitingReason differentiation", () => {
+  describe("waiting state display", () => {
     it('returns "Waiting for input" for prompt waitingReason', () => {
       const result = generator.generate({
         terminalId: "term-6",
@@ -69,14 +69,14 @@ describe("ActivityHeadlineGenerator", () => {
       expect(result.headline).toBe("Waiting for input");
     });
 
-    it('returns "Waiting for response" for question waitingReason', () => {
+    it('returns "Waiting for input" for question waitingReason', () => {
       const result = generator.generate({
         terminalId: "term-8",
         agentId: "claude",
         agentState: "waiting",
         waitingReason: "question",
       });
-      expect(result.headline).toBe("Waiting for response");
+      expect(result.headline).toBe("Waiting for input");
     });
 
     it('returns "Waiting for input" when waitingReason is undefined', () => {

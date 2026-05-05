@@ -5,7 +5,7 @@ import { isFleetArmEligible } from "@/store/fleetArmingStore";
 import { isTerminalErrorClusterEligible } from "@/store/fleetEligibility";
 import { isTerminalVisible, useWorktreeIds } from "@/hooks/useTerminalSelectors";
 
-export type ClusterType = "prompt" | "error" | "completion";
+export type ClusterType = "waiting" | "error" | "completion";
 
 export interface ClusterGroup {
   type: ClusterType;
@@ -17,7 +17,7 @@ export interface ClusterGroup {
   latestStateChange: number;
 }
 
-const PROMPT_PRIORITY = 1;
+const WAITING_PRIORITY = 1;
 const ERROR_PRIORITY = 2;
 const COMPLETION_PRIORITY = 3;
 const COMPLETION_WINDOW_MS = 30_000;
@@ -30,7 +30,7 @@ function makeSignature(type: ClusterType, memberIds: string[], latestStateChange
 function makeHeadline(type: ClusterType, count: number): string {
   const noun = count === 1 ? "agent" : "agents";
   switch (type) {
-    case "prompt":
+    case "waiting":
       return `${count} ${noun} need${count === 1 ? "s" : ""} input`;
     case "error":
       return `${count} ${noun} exited with errors`;
@@ -41,8 +41,8 @@ function makeHeadline(type: ClusterType, count: number): string {
 
 function priorityFor(type: ClusterType): number {
   switch (type) {
-    case "prompt":
-      return PROMPT_PRIORITY;
+    case "waiting":
+      return WAITING_PRIORITY;
     case "error":
       return ERROR_PRIORITY;
     case "completion":
@@ -67,14 +67,14 @@ interface DeriveParams {
  * Pure cluster derivation. Scans eligible agent terminals in `panelIds` order
  * and returns the highest-priority cluster (≥2 members) or null.
  *
- * Priority: prompt (1) > error (2) > completion (3).
+ * Priority: waiting (1) > error (2) > completion (3).
  * Tie-break: larger count → newer latestStateChange → lexical member-id order.
  */
 export function deriveHighestPriorityCluster(params: DeriveParams): ClusterGroup | null {
   const { panelIds, panelsById, isInTrash, worktreeIds, now } = params;
 
   const buckets: Record<ClusterType, BucketMember[]> = {
-    prompt: [],
+    waiting: [],
     error: [],
     completion: [],
   };
@@ -89,11 +89,11 @@ export function deriveHighestPriorityCluster(params: DeriveParams): ClusterGroup
         ? t.lastStateChange
         : 0;
 
-    // Per-bucket eligibility: prompt and completion need a live PTY (their
+    // Per-bucket eligibility: waiting and completion need a live PTY (their
     // downstream fleet actions assume one), but the error bucket is for
     // post-exit terminals — the very state `isFleetArmEligible` rejects.
-    if (t.agentState === "waiting" && t.waitingReason === "prompt" && isFleetArmEligible(t)) {
-      buckets.prompt.push({ id, lastStateChange: lsc });
+    if (t.agentState === "waiting" && isFleetArmEligible(t)) {
+      buckets.waiting.push({ id, lastStateChange: lsc });
       continue;
     }
 
@@ -120,7 +120,7 @@ export function deriveHighestPriorityCluster(params: DeriveParams): ClusterGroup
   }
 
   const candidates: ClusterGroup[] = [];
-  for (const type of ["prompt", "error", "completion"] as const) {
+  for (const type of ["waiting", "error", "completion"] as const) {
     const members = buckets[type];
     if (members.length < 2) continue;
     const memberIds = members.map((m) => m.id);

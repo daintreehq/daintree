@@ -279,9 +279,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // Indicator stays visible for the lifetime of the agent chrome — idle/missing
   // state coerces to waiting so it never disappears mid-flight.
   const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
-  const StateIcon = displayAgentState
-    ? getEffectiveStateIcon(displayAgentState, terminal.waitingReason)
-    : null;
+  const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
   const isDeprioritized =
     !isOpen &&
     (!agentState || agentState === "idle" || agentState === "completed" || agentState === "exited");
@@ -353,7 +351,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                       <div
                         className={cn(
                           "flex items-center shrink-0",
-                          getEffectiveStateColor(displayAgentState, terminal.waitingReason)
+                          getEffectiveStateColor(displayAgentState)
                         )}
                       >
                         <StateIcon

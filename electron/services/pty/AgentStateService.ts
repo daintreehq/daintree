@@ -173,36 +173,6 @@ export class AgentStateService {
     );
 
     if (newState === previousState) {
-      // Allow waitingReason updates within the same "waiting" state. The
-      // hysteresis guard does not apply here — no group direction change.
-      if (
-        newState === "waiting" &&
-        waitingReason !== undefined &&
-        waitingReason !== terminal.waitingReason
-      ) {
-        terminal.waitingReason = waitingReason;
-
-        const stateChangePayload = {
-          agentId: effectiveAgentId,
-          state: newState,
-          previousState,
-          timestamp: getStateChangeTimestamp(),
-          traceId: terminal.traceId,
-          terminalId: terminal.id,
-          cwd: terminal.cwd,
-          trigger: inferredTrigger,
-          confidence: inferredConfidence,
-          waitingReason,
-        };
-
-        const validated = AgentStateChangedSchema.safeParse(stateChangePayload);
-        if (validated.success) {
-          events.emit("agent:state-changed", validated.data);
-        }
-
-        this.emitTerminalActivity(terminal);
-        return true;
-      }
       return false;
     }
 

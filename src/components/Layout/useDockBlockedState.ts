@@ -15,7 +15,6 @@ function toBlockedState(agentState: AgentState | undefined): BlockedState {
 type AgentStateSource = {
   agentState?: AgentState;
   activityStatus?: "working" | "waiting" | "success" | "failure";
-  waitingReason?: unknown;
   detectedAgentId?: string;
   runtimeIdentity?: TerminalRuntimeIdentity;
   launchAgentId?: string;

@@ -210,6 +210,22 @@ describe("AgentNotificationService", () => {
     expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
   });
 
+  it("does not fire notifications for same-state waitingReason updates", () => {
+    mockStore({
+      waitingEnabled: true,
+      soundEnabled: true,
+    });
+
+    events.emit("agent:state-changed", {
+      ...makePayload("waiting", "waiting"),
+      waitingReason: "prompt",
+    });
+    vi.advanceTimersByTime(5000);
+
+    expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+  });
+
   it("plays sound when soundEnabled is true and a notification type is enabled", () => {
     mockStore({ waitingEnabled: true, soundEnabled: true });
 
