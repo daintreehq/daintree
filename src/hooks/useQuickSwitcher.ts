@@ -52,10 +52,10 @@ const MAX_RESULTS = 20;
 const MRU_BOOST_FACTOR = 0.05;
 
 export function useQuickSwitcher(): UseQuickSwitcherReturn {
-  const panelIds = usePanelStore(useShallow((state) => state.panelIds));
-  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
+  const panelIds = usePanelStore((state) => state.panelIds);
+  const panelsById = usePanelStore((state) => state.panelsById);
   const setFocused = usePanelStore((state) => state.setFocused);
-  const mruList = usePanelStore(useShallow((state) => state.mruList));
+  const mruList = usePanelStore((state) => state.mruList);
   const pruneMru = usePanelStore((state) => state.pruneMru);
 
   const {

@@ -58,7 +58,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
-import { useShallow } from "zustand/react/shallow";
+
 import { panelKindCanRestart, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
@@ -261,8 +261,7 @@ function PanelHeaderComponent({
     duplicateShortcut
   );
 
-  // Terminal record for overflow menu actions (single shallow selector, matching TerminalContextMenu pattern)
-  const terminal = usePanelStore(useShallow((state) => state.panelsById[id]));
+  const terminal = usePanelStore((state) => state.panelsById[id]);
   const isInputLocked = terminal?.isInputLocked ?? false;
   const hasPty = panelKindHasPty(kind);
 

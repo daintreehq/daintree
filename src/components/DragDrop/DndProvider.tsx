@@ -33,7 +33,7 @@ import {
   useWorktreeSelectionStore,
   type TerminalInstance,
 } from "@/store";
-import { useShallow } from "zustand/react/shallow";
+
 import { TerminalDragPreview } from "./TerminalDragPreview";
 import { WorktreeDragPreview } from "./WorktreeDragPreview";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -323,7 +323,7 @@ export function DndProvider({ children }: DndProviderProps) {
     })
   );
 
-  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
+  const panelsById = usePanelStore((state) => state.panelsById);
   const reorderTerminals = usePanelStore((s) => s.reorderTerminals);
   const reorderTabGroups = usePanelStore((s) => s.reorderTabGroups);
   const moveTerminalToPosition = usePanelStore((s) => s.moveTerminalToPosition);

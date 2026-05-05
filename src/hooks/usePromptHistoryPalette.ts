@@ -1,7 +1,6 @@
 import { useState, useCallback, useMemo } from "react";
 import type { IFuseOptions } from "fuse.js";
 import { useCommandHistoryStore, type PromptHistoryEntry } from "@/store/commandHistoryStore";
-import { useShallow } from "zustand/react/shallow";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useSearchablePalette } from "./useSearchablePalette";
 
@@ -23,7 +22,7 @@ export interface UsePromptHistoryPaletteOptions {
 export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHistoryPaletteOptions) {
   const [scope, setScope] = useState<HistoryScope>("project");
 
-  const history = useCommandHistoryStore(useShallow((s) => s.history));
+  const history = useCommandHistoryStore((s) => s.history);
 
   const items = useMemo(() => {
     if (scope === "project") {

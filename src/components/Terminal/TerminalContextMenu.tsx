@@ -3,7 +3,7 @@ import { isMac } from "@/lib/platform";
 import type React from "react";
 import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
-import { useShallow } from "zustand/react/shallow";
+
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
@@ -66,7 +66,7 @@ export function TerminalContextMenu({
   children,
   forceLocation,
 }: TerminalContextMenuProps) {
-  const terminal = usePanelStore(useShallow((state) => state.panelsById[terminalId]));
+  const terminal = usePanelStore((state) => state.panelsById[terminalId]);
   const maximizeTarget = usePanelStore((s) => s.maximizeTarget);
   const getPanelGroup = usePanelStore((s) => s.getPanelGroup);
 

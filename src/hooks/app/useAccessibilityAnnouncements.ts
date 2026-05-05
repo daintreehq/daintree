@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import { usePanelStore } from "@/store";
-import { useShallow } from "zustand/react/shallow";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { AgentState } from "@shared/types/agent";
 
@@ -31,8 +30,8 @@ export function useAccessibilityAnnouncements() {
   const debounceTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const focusedId = usePanelStore((s) => s.focusedId);
-  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
-  const panelIds = usePanelStore(useShallow((s) => s.panelIds));
+  const panelsById = usePanelStore((s) => s.panelsById);
+  const panelIds = usePanelStore((s) => s.panelIds);
 
   // Panel focus announcements
   useEffect(() => {

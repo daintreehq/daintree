@@ -206,8 +206,8 @@ export function WorktreeOverviewModal({
   const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
 
   // Terminal store for derived metadata
-  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
-  const panelIds = usePanelStore(useShallow((state) => state.panelIds));
+  const panelsById = usePanelStore((state) => state.panelsById);
+  const panelIds = usePanelStore((state) => state.panelIds);
 
   // Error store for derived metadata
   // Filter store: hide main worktree preference

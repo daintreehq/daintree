@@ -1,6 +1,5 @@
 import { useCallback, useMemo } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
-import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, type TerminalInstance } from "@/store";
 import { useSearchablePalette } from "./useSearchablePalette";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
@@ -79,8 +78,8 @@ function sendSelectionToTarget(targetId: string): void {
 const MAX_RESULTS = 20;
 
 export function useSendToAgentPalette() {
-  const panelIds = usePanelStore(useShallow((state) => state.panelIds));
-  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
+  const panelIds = usePanelStore((state) => state.panelIds);
+  const panelsById = usePanelStore((state) => state.panelsById);
   const isOpen = usePaletteStore((state) => state.activePaletteId === "send-to-agent");
 
   const items = useMemo<SendToAgentItem[]>(() => {

@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useShallow } from "zustand/react/shallow";
+
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
@@ -80,9 +80,7 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
 
 export function useActionPalette(): UseActionPaletteReturn {
   const isActionOpen = usePaletteStore((state) => state.activePaletteId === "action");
-  const getSortedActionMruList = useActionMruStore(
-    useShallow((state) => state.getSortedActionMruList)
-  );
+  const getSortedActionMruList = useActionMruStore((state) => state.getSortedActionMruList);
 
   const allActions = useMemo<ActionPaletteItem[]>(() => {
     if (!isActionOpen) return [];

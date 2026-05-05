@@ -43,7 +43,7 @@ export function useDockRenderState(): DockRenderState & {
     )
   );
 
-  const trashedCount = usePanelStore(useShallow((state) => state.trashedTerminals.size));
+  const trashedCount = usePanelStore((state) => state.trashedTerminals.size);
 
   const { waitingCount } = useTerminalNotificationCounts();
 

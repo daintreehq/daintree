@@ -46,7 +46,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useShallow } from "zustand/react/shallow";
+
 import { resolveEffectivePresetId } from "@shared/types";
 import {
   getDominantAgentState,
@@ -154,8 +154,8 @@ export function AgentButton({
   const ccrPresets = useCcrPresetsStore((s) => s.ccrPresetsByAgent[type]);
   const projectPresets = useProjectPresetsStore((s) => s.presetsByAgent[type]);
 
-  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
-  const panelIds = usePanelStore(useShallow((s) => s.panelIds));
+  const panelsById = usePanelStore((s) => s.panelsById);
+  const panelIds = usePanelStore((s) => s.panelIds);
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
   // Radix Tooltip reopens on focus restoration. When the chevron's

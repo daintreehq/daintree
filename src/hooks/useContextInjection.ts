@@ -1,5 +1,5 @@
 import { useCallback, useState, useEffect, useRef, useSyncExternalStore } from "react";
-import { useShallow } from "zustand/react/shallow";
+
 import { usePanelStore } from "@/store/panelStore";
 import { useErrorStore } from "@/store/errorStore";
 import type { AgentState, CopyTreeProgress } from "@/types";
@@ -88,7 +88,7 @@ const globalInjectionState = {
 export function useContextInjection(targetTerminalId?: string): UseContextInjectionReturn {
   const [error, setError] = useState<string | null>(null);
   const focusedId = usePanelStore((state) => state.focusedId);
-  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
+  const panelsById = usePanelStore((state) => state.panelsById);
   const addError = useErrorStore((state) => state.addError);
   const removeError = useErrorStore((state) => state.removeError);
 

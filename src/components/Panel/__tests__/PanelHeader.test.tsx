@@ -49,10 +49,6 @@ vi.mock("@/components/DragDrop/DragHandleContext", () => ({
   useDragHandle: () => null,
 }));
 
-vi.mock("zustand/react/shallow", () => ({
-  useShallow: (fn: (...args: unknown[]) => unknown) => fn,
-}));
-
 const mockWatchPanel = vi.fn();
 const mockUnwatchPanel = vi.fn();
 
