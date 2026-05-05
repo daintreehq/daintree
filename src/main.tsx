@@ -10,10 +10,8 @@ initBuiltInPanelKinds();
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import "@fontsource/jetbrains-mono/400.css";
-import "@fontsource/jetbrains-mono/500.css";
-import "@fontsource/jetbrains-mono/600.css";
-import "@fontsource/jetbrains-mono/700.css";
+import latin400Woff2Url from "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url";
+import "@fontsource/jetbrains-mono/latin-700.css";
 import "./index.css";
 import { applyDefaultAppTheme } from "./theme/applyAppTheme";
 // Importing this module has the side effect of starting the font load (via
@@ -35,6 +33,18 @@ import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupOrchestrator: (() => void) | undefined;
+
+function ensureLatin400Preload(href: string) {
+  if (document.head.querySelector(`link[rel="preload"][href="${href}"]`)) return;
+  const link = document.createElement("link");
+  link.rel = "preload";
+  link.as = "font";
+  link.type = "font/woff2";
+  link.href = href;
+  document.head.appendChild(link);
+}
+
+ensureLatin400Preload(latin400Woff2Url);
 
 async function bootstrap() {
   await initRendererSentry();
