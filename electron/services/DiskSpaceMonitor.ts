@@ -3,6 +3,7 @@ import { app } from "electron";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import { setWritesSuppressed } from "./diskPressureState.js";
+import { getSystemSleepService } from "./SystemSleepService.js";
 
 export type DiskSpaceStatus = "normal" | "warning" | "critical";
 
@@ -52,6 +53,8 @@ export function startDiskSpaceMonitor(actions: DiskSpaceMonitorActions): () => v
   let lastStatus: DiskSpaceStatus = "normal";
   let lastNotificationAt = 0;
   let disposed = false;
+  let removeSuspendListener: (() => void) | null = null;
+  let removeWakeListener: (() => void) | null = null;
 
   async function poll(): Promise<void> {
     if (disposed) return;
@@ -139,11 +142,27 @@ export function startDiskSpaceMonitor(actions: DiskSpaceMonitorActions): () => v
   void poll();
   armTimer();
 
+  try {
+    removeSuspendListener = getSystemSleepService().onSuspend(() => {
+      clearAlignedInterval?.();
+      clearAlignedInterval = null;
+    });
+    removeWakeListener = getSystemSleepService().onWake(() => {
+      if (disposed || clearAlignedInterval !== null) return;
+      void poll();
+      armTimer();
+    });
+  } catch {
+    // SystemSleepService may not be initialized yet at early startup.
+  }
+
   return () => {
     disposed = true;
     clearAlignedInterval?.();
     clearAlignedInterval = null;
     diskSpacePollFn = null;
     rearmDiskSpaceTimer = null;
+    removeSuspendListener?.();
+    removeWakeListener?.();
   };
 }

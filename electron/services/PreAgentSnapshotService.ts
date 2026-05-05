@@ -1,5 +1,6 @@
 import { events } from "./events.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
+import { getSystemSleepService } from "./SystemSleepService.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import type { SnapshotInfo } from "../../shared/types/ipc/git.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -13,6 +14,8 @@ export class PreAgentSnapshotService {
   private unsubscribers: Array<() => void> = [];
   private pruneTimer: NodeJS.Timeout | null = null;
   private pruneIntervalMs = PRUNE_INTERVAL_MS;
+  private removeSuspendListener: (() => void) | null = null;
+  private removeWakeListener: (() => void) | null = null;
 
   initialize(): void {
     if (this.pruneTimer) return;
@@ -24,6 +27,21 @@ export class PreAgentSnapshotService {
 
     this.pruneAllWorktrees();
     this.pruneTimer = setInterval(() => this.pruneAllWorktrees(), this.pruneIntervalMs);
+
+    try {
+      this.removeSuspendListener = getSystemSleepService().onSuspend(() => {
+        if (this.pruneTimer) {
+          clearInterval(this.pruneTimer);
+          this.pruneTimer = null;
+        }
+      });
+      this.removeWakeListener = getSystemSleepService().onWake(() => {
+        if (this.pruneTimer) return;
+        this.pruneTimer = setInterval(() => this.pruneAllWorktrees(), this.pruneIntervalMs);
+      });
+    } catch {
+      // SystemSleepService may not be initialized yet at early startup.
+    }
   }
 
   updatePollInterval(ms: number): void {
@@ -257,6 +275,15 @@ export class PreAgentSnapshotService {
     if (this.pruneTimer) {
       clearInterval(this.pruneTimer);
       this.pruneTimer = null;
+    }
+
+    if (this.removeSuspendListener) {
+      this.removeSuspendListener();
+      this.removeSuspendListener = null;
+    }
+    if (this.removeWakeListener) {
+      this.removeWakeListener();
+      this.removeWakeListener = null;
     }
 
     this.snapshots.clear();

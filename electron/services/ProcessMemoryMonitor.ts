@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { app } from "electron";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
+import { getSystemSleepService } from "./SystemSleepService.js";
 
 const POLL_INTERVAL_MS = 30_000;
 const SNAPSHOT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -218,6 +219,8 @@ export function refreshAppMetricsMonitor(): void {
 export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => void {
   const snapshotCooldowns = new Map<number, number>();
   const trendState = new Map<number, PidTrendState>();
+  let removeSuspendListener: (() => void) | null = null;
+  let removeWakeListener: (() => void) | null = null;
   let pollCount = 0;
   let consecutivePressureCount = 0;
   let lastTier2At = 0;
@@ -398,10 +401,27 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
 
   armTimer();
 
+  try {
+    removeSuspendListener = getSystemSleepService().onSuspend(() => {
+      clearAlignedInterval?.();
+      clearAlignedInterval = null;
+      trendState.clear();
+      snapshotCooldowns.clear();
+    });
+    removeWakeListener = getSystemSleepService().onWake(() => {
+      if (clearAlignedInterval !== null) return;
+      armTimer();
+    });
+  } catch {
+    // SystemSleepService may not be initialized yet at early startup.
+  }
+
   return () => {
     clearAlignedInterval?.();
     clearAlignedInterval = null;
     appMetricsPollFn = null;
     rearmAppMetricsTimer = null;
+    removeSuspendListener?.();
+    removeWakeListener?.();
   };
 }

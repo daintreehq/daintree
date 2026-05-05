@@ -6,6 +6,7 @@ import type {
 } from "../../shared/types/ipc/idleTerminals.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
+import { getSystemSleepService } from "./SystemSleepService.js";
 import { logInfo, logError } from "../utils/logger.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -54,9 +55,13 @@ export class IdleTerminalNotificationService {
    * real check further out.
    */
   private quietUntil: number | null = null;
+  private wakeQuietUntil: number | null = null;
+  private removeSuspendListener: (() => void) | null = null;
+  private removeWakeListener: (() => void) | null = null;
   private readonly CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
   private readonly STARTUP_QUIET_MS = 2 * 60 * 1000; // 2 minutes
   private readonly INITIAL_CHECK_DELAY_MS = 5_000;
+  private readonly WAKE_QUIET_MS = 30_000;
   private currentCheckIntervalMs = this.CHECK_INTERVAL_MS;
 
   private normalizeThreshold(value: unknown, fallback: number): number {
@@ -141,6 +146,31 @@ export class IdleTerminalNotificationService {
         logError("idle-terminal-notify-initial-check-failed", error);
       });
     }, this.INITIAL_CHECK_DELAY_MS);
+
+    try {
+      this.removeSuspendListener = getSystemSleepService().onSuspend(() => {
+        if (this.checkInterval) {
+          clearInterval(this.checkInterval);
+          this.checkInterval = null;
+        }
+        if (this.initialCheckTimer) {
+          clearTimeout(this.initialCheckTimer);
+          this.initialCheckTimer = null;
+        }
+      });
+      this.removeWakeListener = getSystemSleepService().onWake(() => {
+        this.wakeQuietUntil = Date.now() + this.WAKE_QUIET_MS;
+        if (!this.checkInterval) {
+          this.checkInterval = setInterval(() => {
+            void this.checkAndNotify().catch((error) => {
+              logError("idle-terminal-notify-check-failed", error);
+            });
+          }, this.currentCheckIntervalMs);
+        }
+      });
+    } catch {
+      // SystemSleepService may not be initialized yet at early startup.
+    }
   }
 
   stop(): void {
@@ -152,6 +182,14 @@ export class IdleTerminalNotificationService {
     if (this.initialCheckTimer) {
       clearTimeout(this.initialCheckTimer);
       this.initialCheckTimer = null;
+    }
+    if (this.removeSuspendListener) {
+      this.removeSuspendListener();
+      this.removeSuspendListener = null;
+    }
+    if (this.removeWakeListener) {
+      this.removeWakeListener();
+      this.removeWakeListener = null;
     }
   }
 
@@ -238,6 +276,12 @@ export class IdleTerminalNotificationService {
     // immediately after the user opens the app. Gated on `quietUntil`, which
     // is seeded once on first start and never bumped thereafter.
     if (this.quietUntil !== null && Date.now() < this.quietUntil) {
+      return;
+    }
+
+    // Post-wake quiet period — prevent notification burst right after
+    // system resume while the OS is still stabilizing.
+    if (this.wakeQuietUntil !== null && Date.now() < this.wakeQuietUntil) {
       return;
     }
 
