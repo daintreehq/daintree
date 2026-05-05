@@ -41,6 +41,10 @@ import type {
   SearchableScratch,
 } from "@/hooks/useProjectSwitcherPalette";
 import { useUIStore } from "@/store/uiStore";
+import {
+  SCRATCH_CLEANUP_TTL_MS,
+  SCRATCH_CLEANUP_COUNTDOWN_VISIBLE_DAYS,
+} from "@shared/config/scratchCleanup";
 
 export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
@@ -460,25 +464,17 @@ function ProjectListContent({
 }
 
 /**
- * 30 days mirrors the auto-cleanup TTL in `ScratchCleanupService`. Kept in
- * sync by hand because the renderer/main split prevents importing the value
- * from a main-only module without a shared module — and a single literal in
- * two places is simpler than a new shared module.
- */
-const SCRATCH_CLEANUP_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-/** Show the countdown only when within this many days of cleanup. */
-const SCRATCH_COUNTDOWN_VISIBLE_DAYS = 7;
-
-/**
  * Returns the cleanup-countdown microcopy when a scratch is within the
  * visibility window, otherwise null. Strings are hardcoded English (sentence
- * case, no period) per the project microcopy convention.
+ * case, no period) per the project microcopy convention. The TTL constant is
+ * imported from `shared/config/scratchCleanup` so the user-visible countdown
+ * never drifts from the actual deletion threshold in `ScratchCleanupService`.
  */
 export function formatScratchCleanupCountdown(lastOpened: number, now: number): string | null {
   if (!lastOpened) return null;
   const expiresAt = lastOpened + SCRATCH_CLEANUP_TTL_MS;
   const daysLeft = Math.ceil((expiresAt - now) / (24 * 60 * 60 * 1000));
-  if (daysLeft > SCRATCH_COUNTDOWN_VISIBLE_DAYS) return null;
+  if (daysLeft > SCRATCH_CLEANUP_COUNTDOWN_VISIBLE_DAYS) return null;
   if (daysLeft <= 0) return "Auto-cleanup today";
   if (daysLeft === 1) return "Auto-cleanup tomorrow";
   return `Auto-cleanup in ${daysLeft} days`;

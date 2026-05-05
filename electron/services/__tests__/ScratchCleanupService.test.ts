@@ -12,13 +12,16 @@ vi.mock("../../utils/logger.js", () => ({
 
 interface FakeStore {
   rows: ScratchRow[];
+  currentScratchId: string | null;
   getStaleScratchCandidates: (cutoffMs: number) => ScratchRow[];
   tombstoneScratch: (scratchId: string, deletedAt: number) => void;
+  getCurrentScratchId: () => string | null;
 }
 
-function makeStore(rows: ScratchRow[]): FakeStore {
+function makeStore(rows: ScratchRow[], currentScratchId: string | null = null): FakeStore {
   const store: FakeStore = {
     rows,
+    currentScratchId,
     getStaleScratchCandidates(cutoffMs: number) {
       return store.rows.filter((r) => r.lastOpened < cutoffMs && r.deletedAt == null);
     },
@@ -26,6 +29,9 @@ function makeStore(rows: ScratchRow[]): FakeStore {
       const r = store.rows.find((x) => x.id === scratchId);
       if (!r) throw new Error(`not found: ${scratchId}`);
       r.deletedAt = deletedAt;
+    },
+    getCurrentScratchId() {
+      return store.currentScratchId;
     },
   };
   return store;
@@ -156,5 +162,55 @@ describe("runScratchCleanup", () => {
 
     expect(result.candidates).toBe(0);
     expect(store.rows[0]!.deletedAt).toBeNull();
+  });
+
+  it("never deletes the active scratch even when stale", async () => {
+    const activeDir = path.join(tmpDir, "active");
+    await fs.mkdir(activeDir, { recursive: true });
+    const otherDir = path.join(tmpDir, "other");
+    await fs.mkdir(otherDir, { recursive: true });
+    const store = makeStore(
+      [
+        row({ id: "active", path: activeDir, lastOpened: NOW - 2 * SCRATCH_TTL_MS }),
+        row({ id: "other", path: otherDir, lastOpened: NOW - 2 * SCRATCH_TTL_MS }),
+      ],
+      "active"
+    );
+
+    const result = await runScratchCleanup(
+      NOW,
+      store as unknown as Parameters<typeof runScratchCleanup>[1]
+    );
+
+    expect(result.tombstoned).toBe(1);
+    expect(store.rows.find((r) => r.id === "active")!.deletedAt).toBeNull();
+    expect(store.rows.find((r) => r.id === "other")!.deletedAt).toBe(NOW);
+    await expect(fs.access(activeDir)).resolves.toBeUndefined();
+    await expect(fs.access(otherDir)).rejects.toBeDefined();
+  });
+
+  it("does not retry tombstoned rows even when their directory still exists", async () => {
+    const ghost = path.join(tmpDir, "ghost-dir");
+    await fs.mkdir(ghost, { recursive: true });
+    // Simulate a previous sweep that tombstoned the row but failed to remove
+    // the directory. The current implementation accepts this orphan rather
+    // than re-trying — guard the contract so future changes are deliberate.
+    const store = makeStore([
+      row({
+        id: "ghost",
+        path: ghost,
+        lastOpened: NOW - 2 * SCRATCH_TTL_MS,
+        deletedAt: NOW - 86_400_000,
+      }),
+    ]);
+
+    const result = await runScratchCleanup(
+      NOW,
+      store as unknown as Parameters<typeof runScratchCleanup>[1]
+    );
+
+    expect(result.candidates).toBe(0);
+    expect(result.tombstoned).toBe(0);
+    await expect(fs.access(ghost)).resolves.toBeUndefined();
   });
 });

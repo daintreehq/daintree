@@ -18,6 +18,7 @@ import { distributePortsToView } from "../../../window/portDistribution.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
+import { createHardenedGit } from "../../../utils/hardenedGit.js";
 import { logError } from "../../../utils/logger.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { Scratch } from "../../../../shared/types/scratch.js";
@@ -175,12 +176,15 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
 
     // Refuse if the user picked the scratch directory itself or a path inside
     // the scratch — `fs.cp` would recurse into the destination it's writing.
-    const normalizedScratch = path.resolve(scratch.path);
-    const normalizedDest = path.resolve(destinationPath);
-    if (
-      normalizedDest === normalizedScratch ||
-      normalizedDest.startsWith(normalizedScratch + path.sep)
-    ) {
+    // Use realpath so a symlink at the destination that resolves into the
+    // scratch dir cannot bypass the guard. `realpath` throws ENOENT for paths
+    // that don't yet exist (the dialog's `createDirectory` option produces
+    // these); fall back to lexical resolve in that case.
+    const normalizedScratch = await fs.realpath(scratch.path).catch(() => scratch.path);
+    const normalizedDest = await fs.realpath(destinationPath).catch(() => destinationPath);
+    const resolvedScratch = path.resolve(normalizedScratch);
+    const resolvedDest = path.resolve(normalizedDest);
+    if (resolvedDest === resolvedScratch || resolvedDest.startsWith(resolvedScratch + path.sep)) {
       throw new Error("Destination cannot be inside the scratch folder");
     }
 
@@ -209,6 +213,19 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
         `[IPC] scratch:save-as-project: copy failed for ${scratchId} -> ${destinationPath}`,
         error
       );
+      throw error;
+    }
+
+    // Scratch folders are not git repositories, but `projectStore.addProject`
+    // requires a git root. Initialize a fresh repo at the destination so the
+    // saved folder behaves like any other project (worktrees, status, etc.).
+    // If the user already chose a git-tracked destination, `git init` is a
+    // no-op — it reports the existing repo and exits 0.
+    try {
+      const git = createHardenedGit(destinationPath);
+      await git.init();
+    } catch (error) {
+      logError(`[IPC] scratch:save-as-project: git init failed for ${destinationPath}`, error);
       throw error;
     }
 

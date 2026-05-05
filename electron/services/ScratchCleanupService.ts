@@ -1,11 +1,18 @@
 /**
  * Startup auto-cleanup for stale scratch workspaces.
  *
- * A scratch whose `lastOpened` predates `now - SCRATCH_TTL_MS` has its
- * filesystem directory removed; the SQLite row is preserved as a tombstone
- * (`deleted_at` set) so a partial delete left by a crash can be retried
- * idempotently on the next boot. Tombstoned rows are filtered out of every
- * renderer-facing query in `ScratchStore`, so the renderer never sees them.
+ * A scratch whose `lastOpened` predates `now - SCRATCH_CLEANUP_TTL_MS` has
+ * its filesystem directory removed and its DB row tombstoned (`deleted_at`
+ * set). Tombstoned rows are filtered out of every renderer-facing query in
+ * `ScratchStore`, so the renderer never sees them again. The current scratch
+ * (per `app_state.currentScratchId`) is always excluded so an actively-open
+ * workspace can never disappear under the user.
+ *
+ * Tombstoning is one-way — orphaned directories left by a failed `fs.rm`
+ * stay on disk (logged, not retried). Accepting that orphan rate is
+ * deliberate: the alternative (re-sweeping tombstoned rows) would require a
+ * second query and could surprise users who manually re-create folders at
+ * the same path.
  *
  * Mirrors the fire-and-forget pattern of `initializeTrashedPidCleanup`:
  * called once at app boot, never awaited, never throws — a cleanup failure
@@ -15,9 +22,9 @@ import fs from "fs/promises";
 import { existsSync } from "fs";
 import { scratchStore as defaultScratchStore } from "./ScratchStore.js";
 import { logError, logInfo } from "../utils/logger.js";
+import { SCRATCH_CLEANUP_TTL_MS } from "../../shared/config/scratchCleanup.js";
 
-export const SCRATCH_TTL_DAYS = 30;
-export const SCRATCH_TTL_MS = SCRATCH_TTL_DAYS * 24 * 60 * 60 * 1000;
+export { SCRATCH_CLEANUP_TTL_MS as SCRATCH_TTL_MS } from "../../shared/config/scratchCleanup.js";
 
 export interface ScratchCleanupResult {
   /** Total rows examined as candidates (predate cutoff, not yet tombstoned). */
@@ -46,8 +53,11 @@ export async function runScratchCleanup(
     directoriesFailed: 0,
   };
 
-  const cutoff = now - SCRATCH_TTL_MS;
-  const candidates = store.getStaleScratchCandidates(cutoff);
+  const cutoff = now - SCRATCH_CLEANUP_TTL_MS;
+  const currentScratchId = store.getCurrentScratchId();
+  const candidates = store
+    .getStaleScratchCandidates(cutoff)
+    .filter((row) => row.id !== currentScratchId);
   result.candidates = candidates.length;
 
   for (const row of candidates) {
