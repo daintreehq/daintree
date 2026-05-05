@@ -12,6 +12,10 @@ const {
   mockRevokeSession,
   mockGetAssistantSupportedAgentIds,
   mockGetHelpAssistantSettings,
+  mockSystemSleepGetMetrics,
+  mockSystemSleepOnSuspend,
+  mockSystemSleepOnWake,
+  systemSleepListeners,
   helpPanelState,
   panelStoreState,
   cliAvailabilityState,
@@ -34,6 +38,18 @@ const {
     auditRetention: 7,
     customArgs: "",
   }),
+  mockSystemSleepGetMetrics: vi.fn().mockResolvedValue({
+    totalSleepMs: 0,
+    sleepPeriods: [],
+    isCurrentlySleeping: false,
+    currentSleepStart: null,
+  }),
+  mockSystemSleepOnSuspend: vi.fn(),
+  mockSystemSleepOnWake: vi.fn(),
+  systemSleepListeners: {
+    suspend: [] as Array<() => void>,
+    wake: [] as Array<(sleepDurationMs: number) => void>,
+  },
   helpPanelState: {
     isOpen: true,
     width: 380,
@@ -285,6 +301,32 @@ beforeEach(() => {
   vi.clearAllMocks();
   resetState();
 
+  systemSleepListeners.suspend.length = 0;
+  systemSleepListeners.wake.length = 0;
+  mockSystemSleepGetMetrics.mockReset();
+  mockSystemSleepGetMetrics.mockResolvedValue({
+    totalSleepMs: 0,
+    sleepPeriods: [],
+    isCurrentlySleeping: false,
+    currentSleepStart: null,
+  });
+  mockSystemSleepOnSuspend.mockReset();
+  mockSystemSleepOnSuspend.mockImplementation((cb: () => void) => {
+    systemSleepListeners.suspend.push(cb);
+    return () => {
+      const idx = systemSleepListeners.suspend.indexOf(cb);
+      if (idx >= 0) systemSleepListeners.suspend.splice(idx, 1);
+    };
+  });
+  mockSystemSleepOnWake.mockReset();
+  mockSystemSleepOnWake.mockImplementation((cb: (sleepDurationMs: number) => void) => {
+    systemSleepListeners.wake.push(cb);
+    return () => {
+      const idx = systemSleepListeners.wake.indexOf(cb);
+      if (idx >= 0) systemSleepListeners.wake.splice(idx, 1);
+    };
+  });
+
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
@@ -296,6 +338,11 @@ beforeEach(() => {
         },
         helpAssistant: {
           getSettings: mockGetHelpAssistantSettings,
+        },
+        systemSleep: {
+          getMetrics: mockSystemSleepGetMetrics,
+          onSuspend: mockSystemSleepOnSuspend,
+          onWake: mockSystemSleepOnWake,
         },
       },
     },
@@ -1336,5 +1383,208 @@ describe("HelpPanel — close confirmation guard (issue #6623)", () => {
     expect(getByTestId("dialog-confirm").textContent).toBe("Stop and close");
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
     expect(helpPanelState.setOpen).not.toHaveBeenCalled();
+  });
+});
+
+describe("HelpPanel — visibilitychange teardown vs. system sleep (issue #6758)", () => {
+  function mountWithBoundTerminal() {
+    helpPanelState.terminalId = "term-sleep";
+    helpPanelState.agentId = "claude";
+    helpPanelState.sessionId = "session-sleep";
+    panelStoreState.panelsById = { "term-sleep": { id: "term-sleep" } };
+    return render(<HelpPanel width={380} />);
+  }
+
+  async function flushAsync() {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("skips teardown when document.hidden flips during system suspend", async () => {
+    await act(async () => {
+      mountWithBoundTerminal();
+    });
+
+    act(() => {
+      systemSleepListeners.suspend.forEach((cb) => cb());
+    });
+
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await flushAsync();
+
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(mockRevokeSession).not.toHaveBeenCalled();
+    expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
+    expect(mockSystemSleepGetMetrics).not.toHaveBeenCalled();
+  });
+
+  it("skips teardown when getMetrics reports the system is currently sleeping (race fallback)", async () => {
+    mockSystemSleepGetMetrics.mockResolvedValueOnce({
+      totalSleepMs: 0,
+      sleepPeriods: [],
+      isCurrentlySleeping: true,
+      currentSleepStart: Date.now(),
+    });
+
+    await act(async () => {
+      mountWithBoundTerminal();
+    });
+
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await flushAsync();
+
+    expect(mockSystemSleepGetMetrics).toHaveBeenCalledTimes(1);
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(mockRevokeSession).not.toHaveBeenCalled();
+  });
+
+  it("tears down when getMetrics reports the system is awake (project switch / window close path)", async () => {
+    await act(async () => {
+      mountWithBoundTerminal();
+    });
+
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await flushAsync();
+
+    expect(mockSystemSleepGetMetrics).toHaveBeenCalledTimes(1);
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-sleep");
+    expect(mockRevokeSession).toHaveBeenCalledWith("session-sleep");
+    expect(helpPanelState.clearTerminal).toHaveBeenCalled();
+  });
+
+  it("tears down (safe fallback) when getMetrics rejects", async () => {
+    mockSystemSleepGetMetrics.mockRejectedValueOnce(new Error("ipc broken"));
+
+    await act(async () => {
+      mountWithBoundTerminal();
+    });
+
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await flushAsync();
+
+    expect(mockSystemSleepGetMetrics).toHaveBeenCalledTimes(1);
+    expect(mockLogError).toHaveBeenCalled();
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-sleep");
+    expect(mockRevokeSession).toHaveBeenCalledWith("session-sleep");
+  });
+
+  it("skips teardown if the document becomes visible before getMetrics resolves", async () => {
+    let resolveMetrics:
+      | ((value: {
+          totalSleepMs: number;
+          sleepPeriods: never[];
+          isCurrentlySleeping: boolean;
+          currentSleepStart: number | null;
+        }) => void)
+      | null = null;
+    mockSystemSleepGetMetrics.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveMetrics = resolve;
+        })
+    );
+
+    await act(async () => {
+      mountWithBoundTerminal();
+    });
+
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+    await act(async () => {
+      resolveMetrics?.({
+        totalSleepMs: 0,
+        sleepPeriods: [],
+        isCurrentlySleeping: false,
+        currentSleepStart: null,
+      });
+    });
+    await flushAsync();
+
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(mockRevokeSession).not.toHaveBeenCalled();
+  });
+
+  it("skips teardown if onSuspend arrives while getMetrics is in flight", async () => {
+    let resolveMetrics:
+      | ((value: {
+          totalSleepMs: number;
+          sleepPeriods: never[];
+          isCurrentlySleeping: boolean;
+          currentSleepStart: number | null;
+        }) => void)
+      | null = null;
+    mockSystemSleepGetMetrics.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveMetrics = resolve;
+        })
+    );
+
+    await act(async () => {
+      mountWithBoundTerminal();
+    });
+
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    act(() => {
+      systemSleepListeners.suspend.forEach((cb) => cb());
+    });
+
+    await act(async () => {
+      resolveMetrics?.({
+        totalSleepMs: 0,
+        sleepPeriods: [],
+        isCurrentlySleeping: false,
+        currentSleepStart: null,
+      });
+    });
+    await flushAsync();
+
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(mockRevokeSession).not.toHaveBeenCalled();
+  });
+
+  it("clears the suspend guard on wake so subsequent visibilitychange tears down normally", async () => {
+    await act(async () => {
+      mountWithBoundTerminal();
+    });
+
+    act(() => {
+      systemSleepListeners.suspend.forEach((cb) => cb());
+    });
+    act(() => {
+      systemSleepListeners.wake.forEach((cb) => cb(1000));
+    });
+
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await flushAsync();
+
+    expect(mockSystemSleepGetMetrics).toHaveBeenCalledTimes(1);
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-sleep");
+    expect(mockRevokeSession).toHaveBeenCalledWith("session-sleep");
   });
 });
