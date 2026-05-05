@@ -67,7 +67,7 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
     expect(source).not.toMatch(/isThemeBrowserOpen && "bg-scrim-soft\/30 backdrop-blur-\[2px\]"/);
   });
 
-  it("anchors ThemeBrowser right edge via shared --right-obstruction-offset (issue #6629, #6800)", () => {
+  it("anchors ThemeBrowser right edge via shared --right-obstruction-offset (issues #6629, #6800)", () => {
     // Both the Portal and the Assistant occupy the right edge of the viewport.
     // ThemeBrowser must step left of whichever is wider — and previously, when
     // only the Assistant was open, ThemeBrowser used `right: "0px"` and
@@ -80,4 +80,34 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
     // The old hand-computed ternary must not be reintroduced.
     expect(source).not.toMatch(/right: layout\.portalOpen \? `\$\{layout\.portalWidth\}px` :/);
   });
+});
+
+describe("Right-obstruction CSS var consumers (issue #6800)", () => {
+  // Source-scan guard: every fixed body-portaled consumer that should dodge
+  // both Portal and Assistant must read --right-obstruction-offset, NOT
+  // --portal-right-offset. The latter is portal-only and reserved for
+  // toolbar dropdowns (FixedDropdown).
+  const consumers = [
+    {
+      name: "popover collision boundary",
+      file: path.resolve(__dirname, "../../ui/popover.tsx"),
+    },
+    { name: "toaster", file: path.resolve(__dirname, "../../ui/toaster.tsx") },
+    {
+      name: "ReEntrySummary",
+      file: path.resolve(__dirname, "../../ui/ReEntrySummary.tsx"),
+    },
+    {
+      name: "GettingStartedChecklist",
+      file: path.resolve(__dirname, "../../Onboarding/GettingStartedChecklist.tsx"),
+    },
+  ];
+
+  for (const { name, file } of consumers) {
+    it(`${name} reads --right-obstruction-offset, not --portal-right-offset`, async () => {
+      const source = await fs.readFile(file, "utf-8");
+      expect(source).toContain("--right-obstruction-offset");
+      expect(source).not.toContain("--portal-right-offset");
+    });
+  }
 });
