@@ -3,8 +3,8 @@ import { invalidateGitStatusCache } from "../utils/git.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 
 const GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS = 1000;
-const WATCHER_FALLBACK_POLL_INTERVAL_MS = 30_000;
-const WATCHER_GIT_ONLY_ACTIVE_POLL_INTERVAL_MS = 10_000;
+const WATCHER_FALLBACK_POLL_INTERVAL_MS = 300_000;
+const WATCHER_GIT_ONLY_ACTIVE_POLL_INTERVAL_MS = 60_000;
 const WATCHER_RETRY_INTERVAL_MS = 30_000;
 const WATCHER_MAX_RETRIES = 5;
 const WATCHER_WORKTREE_MIN_DEBOUNCE_MS = 150;

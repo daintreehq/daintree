@@ -25,9 +25,10 @@ import { WatcherController, type WatcherControllerHost } from "./WatcherControll
 
 const PLAN_FILE_CANDIDATES = ["TODO.md", "PLAN.md", "plan.md", "TASKS.md"] as const;
 const RESOURCE_POLL_DEFAULT_ACTIVE_MS = 30_000;
-const RESOURCE_POLL_DEFAULT_BACKGROUND_MS = 120_000;
+const RESOURCE_POLL_DEFAULT_BACKGROUND_MS = 300_000;
 const HEARTBEAT_GAP_MULTIPLIER = 3;
 const HEARTBEAT_GAP_FLOOR_MS = 30_000;
+const HEARTBEAT_GAP_CEILING_MS = 120_000;
 
 export interface WorktreeMonitorConfig {
   basePollingInterval: number;
@@ -971,7 +972,10 @@ export class WorktreeMonitor {
       // longer than the floor (e.g., a slow git on a frozen filesystem).
       if (!this._isUpdating && this.lastGitStatusCompletedAt > 0) {
         const elapsedMs = Date.now() - this.lastGitStatusCompletedAt;
-        const threshold = Math.max(delayMs * HEARTBEAT_GAP_MULTIPLIER, HEARTBEAT_GAP_FLOOR_MS);
+        const threshold = Math.min(
+          Math.max(delayMs * HEARTBEAT_GAP_MULTIPLIER, HEARTBEAT_GAP_FLOOR_MS),
+          HEARTBEAT_GAP_CEILING_MS
+        );
         if (elapsedMs > threshold) {
           this.mood = "stale";
           this.emitUpdate();
