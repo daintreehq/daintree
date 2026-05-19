@@ -4,7 +4,7 @@ import { deriveBand, BAND_OVERRIDES } from "../../../shared/utils/actionRiskBand
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { HelpTokenValidator } from "./shared.js";
-import { type McpTier, OPEN_WORLD_CATEGORIES, TIER_ALLOWLISTS } from "./shared.js";
+import { type McpTier, TIER_ALLOWLISTS } from "./shared.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -131,8 +131,8 @@ export function buildAnnotations(entry: ActionManifestEntry): ToolAnnotations {
     title: entry.title,
     readOnlyHint: overrides?.readOnlyHint ?? isQuery,
     idempotentHint: overrides?.idempotentHint ?? isQuery,
-    destructiveHint: overrides?.destructiveHint ?? entry.danger === "confirm",
-    openWorldHint: OPEN_WORLD_CATEGORIES.has(entry.category),
+    destructiveHint: overrides?.destructiveHint ?? !isQuery,
+    openWorldHint: overrides?.openWorldHint ?? true,
   };
 }
 
