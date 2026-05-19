@@ -232,7 +232,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
         throw new Error(`Only GitHub PR URLs are allowed, got ${url.hostname}`);
       }
     } catch (error) {
-      throw new Error(formatErrorMessage(error, "Invalid PR URL"));
+      throw new Error(formatErrorMessage(error, "Invalid PR URL"), { cause: error });
     }
     await shell.openExternal(prUrl);
   };

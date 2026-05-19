@@ -2037,6 +2037,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [projectId: string];
     result: Record<string, AgentPreset[]>;
   };
+  "project:list-remotes": {
+    args: [cwd: string];
+    result: Array<{
+      name: string;
+      fetchUrl: string;
+      parsedRepo: { owner: string; repo: string } | null;
+    }>;
+  };
 
   // Recipe import/export
   "recipe:export-file": {
