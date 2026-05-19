@@ -274,14 +274,22 @@ describe("FetchScheduler", () => {
     const host = makeHost({ isCurrent: true });
     const scheduler = new FetchScheduler(host as FetchSchedulerHost);
 
-    // Initial fetch runs at 2-5s.
-    scheduler.schedule(true);
-    await vi.advanceTimersByTimeAsync(6_000);
-    expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+    // Pin random so the 2nd fetch lands inside the advance window and a 3rd
+    // can't: low rolls put min cumulative time at 2 + 22.5 + 22.5 = 47s ≤ 52s.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
 
-    // After completion, the next focused-tier fetch should be scheduled.
-    await vi.advanceTimersByTimeAsync(46_000);
-    expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
+    try {
+      // Initial fetch runs at 2-5s.
+      scheduler.schedule(true);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+
+      // After completion, the next focused-tier fetch should be scheduled.
+      await vi.advanceTimersByTimeAsync(46_000);
+      expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it("recovers from a rejected onExecuteFetch — emits update + reschedules", async () => {
