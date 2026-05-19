@@ -61,6 +61,13 @@ import {
   getRegisteredForgeProviders,
   listMatchingProviders,
 } from "../forgeProviderRegistry.js";
+import {
+  clearFileDecorationImplRegistry,
+  clearFileDecorationRegistry,
+  getFileDecorationImpls,
+  getRegisteredFileDecorationProviders,
+} from "../fileDecorationRegistry.js";
+import { broadcastToRenderer } from "../../ipc/utils.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -84,6 +91,7 @@ type PluginManifestShape = {
     views?: unknown[];
     mcpServers?: unknown[];
     forgeProviders?: unknown[];
+    fileDecorationProviders?: unknown[];
   };
 };
 
@@ -129,6 +137,8 @@ afterEach(async () => {
     clearToolbarButtonRegistry();
     clearPluginMenuRegistry();
     clearForgeProviderRegistry();
+    clearFileDecorationRegistry();
+    clearFileDecorationImplRegistry();
     storeState.clear();
     for (const key of globalMarkers) {
       delete (globalThis as Record<string, unknown>)[key];
@@ -443,6 +453,130 @@ describe("PluginService integration — forge provider contributions", () => {
     expect(getRegisteredForgeProviders()).toHaveLength(2);
     expect(listMatchingProviders("https://primary.example/repo")).toHaveLength(1);
     expect(listMatchingProviders("https://secondary.example/repo")).toHaveLength(1);
+  });
+});
+
+describe("PluginService integration — file decoration provider contributions", () => {
+  it("registers a manifest fileDecorationProviders entry and unregisters it on unload", async () => {
+    await writePlugin("acme.decor-plugin", {
+      name: "acme.decor-plugin",
+      version: "1.0.0",
+      contributes: {
+        fileDecorationProviders: [{ id: "badges", scopes: ["my-scope:*"] }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const registered = getRegisteredFileDecorationProviders();
+    expect(registered).toEqual([
+      {
+        pluginId: "acme.decor-plugin",
+        contribution: { id: "badges", scopes: ["my-scope:*"] },
+      },
+    ]);
+
+    service.unloadPlugin("acme.decor-plugin");
+    expect(getRegisteredFileDecorationProviders()).toEqual([]);
+  });
+
+  it("serves a non-GitHub plugin's decorations opaquely and broadcasts invalidation", async () => {
+    // This is the acceptance proof: the host wires through a fake plugin's
+    // decorations with zero knowledge of what they represent (no review
+    // threads, no GitHub) and rebroadcasts its invalidation signal.
+    const pluginDir = await writePlugin("acme.decor-plugin", {
+      name: "acme.decor-plugin",
+      version: "1.0.0",
+    });
+    const mainFile = `decor-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  const dispose = host.registerFileDecorationProvider({ id: "badges" }, {
+    async provideDecorations(scope, paths) {
+      const out = {};
+      for (const p of paths) out[p] = { badge: "★", tooltip: "fake:" + scope };
+      return out;
+    },
+  });
+  host.invalidateFileDecorations("my-scope:/x", ["a.ts"]);
+  return dispose;
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.decor-plugin",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          fileDecorationProviders: [{ id: "badges", scopes: ["my-scope:*"] }],
+        },
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const impls = getFileDecorationImpls("my-scope:/x");
+    expect(impls).toHaveLength(1);
+    expect(impls[0]).toMatchObject({
+      pluginId: "acme.decor-plugin",
+      contributionId: "badges",
+    });
+
+    const decorations = await impls[0].impl.provideDecorations("my-scope:/x", ["a.ts", "b.ts"]);
+    expect(decorations).toEqual({
+      "a.ts": { badge: "★", tooltip: "fake:my-scope:/x" },
+      "b.ts": { badge: "★", tooltip: "fake:my-scope:/x" },
+    });
+
+    expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith("events:push", {
+      name: "plugin:decorations-changed",
+      payload: { scope: "my-scope:/x", paths: ["a.ts"] },
+    });
+
+    service.unloadPlugin("acme.decor-plugin");
+    expect(getFileDecorationImpls("my-scope:/x")).toEqual([]);
+  });
+
+  it("rejects registering a provider id not declared in the manifest", async () => {
+    const pluginDir = await writePlugin("acme.bad-decor", {
+      name: "acme.bad-decor",
+      version: "1.0.0",
+    });
+    const markerKey = makeMarkerKey();
+    const mainFile = `decor-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  try {
+    host.registerFileDecorationProvider({ id: "undeclared" }, { async provideDecorations() { return {}; } });
+  } catch (err) {
+    globalThis[${JSON.stringify(markerKey)}] = String(err && err.message);
+  }
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.bad-decor",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          fileDecorationProviders: [{ id: "declared", scopes: ["s:*"] }],
+        },
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    expect(String(readMarker(markerKey))).toContain("is not declared in contributes");
+    expect(getFileDecorationImpls("s:/x")).toEqual([]);
   });
 });
 

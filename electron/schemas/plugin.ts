@@ -10,7 +10,10 @@ import type {
   McpServerContribution,
   PluginPermission,
 } from "../../shared/types/plugin.js";
-import type { ForgeProviderContribution } from "../../shared/types/forge.js";
+import type {
+  FileDecorationContribution,
+  ForgeProviderContribution,
+} from "../../shared/types/forge.js";
 
 const SAFE_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
@@ -96,6 +99,19 @@ export const ForgeProviderContributionSchema = z.object({
   viewRefs: z.array(z.string().min(1)).optional(),
 });
 
+/**
+ * `fileDecorationProviders` manifest entry. Declares which scopes a plugin's
+ * decoration provider handles so the host can route renderer pulls without
+ * the plugin's code having run yet. Strict so unknown fields from plugin
+ * authors are rejected loudly rather than silently ignored.
+ */
+export const FileDecorationContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    scopes: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
+
 export const PluginPermissionSchema = z.enum(BUILT_IN_PLUGIN_PERMISSIONS);
 
 export const PluginManifestSchema = z
@@ -128,6 +144,7 @@ export const PluginManifestSchema = z
         views: z.array(ViewContributionSchema).default([]),
         mcpServers: z.array(McpServerContributionSchema).default([]),
         forgeProviders: z.array(ForgeProviderContributionSchema).default([]),
+        fileDecorationProviders: z.array(FileDecorationContributionSchema).default([]),
       })
       .default({
         panels: [],
@@ -136,6 +153,7 @@ export const PluginManifestSchema = z
         views: [],
         mcpServers: [],
         forgeProviders: [],
+        fileDecorationProviders: [],
       }),
   })
   .strict();
@@ -149,4 +167,4 @@ export type {
   McpServerContribution,
   PluginPermission,
 };
-export type { ForgeProviderContribution };
+export type { ForgeProviderContribution, FileDecorationContribution };

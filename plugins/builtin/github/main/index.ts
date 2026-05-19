@@ -1,17 +1,29 @@
 import type { PluginHostApi } from "../../../../shared/types/plugin.js";
 import { githubForgeProvider } from "./forgeProvider.js";
+import { registerReviewDecorationProvider } from "./reviewDecorationProvider.js";
 
 /**
  * Plugin activation entry point — called by `PluginService` after manifest
- * validation. Registers the `github` forge provider declared in `plugin.json`.
- * The descriptor id MUST match `contributes.forgeProviders[].id` or
- * `host.registerForgeProvider` throws.
+ * validation. Registers the `github` forge provider plus the
+ * `worktree-diff-review` file-decoration provider, both declared in
+ * `plugin.json`. The descriptor ids MUST match the manifest contributions or
+ * the host throws. Returns a disposer that tears down both.
  */
 export function activate(host: PluginHostApi): () => void {
-  return host.registerForgeProvider({ id: "github" }, githubForgeProvider);
+  const disposeForge = host.registerForgeProvider({ id: "github" }, githubForgeProvider);
+  const disposeDecorations = registerReviewDecorationProvider(host);
+  return () => {
+    disposeForge();
+    disposeDecorations();
+  };
 }
 
 export { githubForgeProvider } from "./forgeProvider.js";
+
+export {
+  createReviewDecorationProvider,
+  registerReviewDecorationProvider,
+} from "./reviewDecorationProvider.js";
 
 export {
   GitHubAuth,

@@ -460,3 +460,76 @@ export interface ResolvedForgeProvider {
   entry: ForgeProviderEntry | null;
   resolvedVia: ForgeProviderResolutionVia | null;
 }
+
+/**
+ * Per-file decoration a plugin attaches to a path within a named scope.
+ * Modelled on VS Code's `FileDecoration`. The host renders this opaquely —
+ * it never inspects what the decoration represents (review threads, lint
+ * errors, sync state, …); that meaning is entirely the plugin's.
+ *
+ * `color` is a raw string passed straight to `className` on the renderer
+ * side, matching the existing plugin-contributed color convention
+ * ({@link ForgeProviderContribution} has no color, but `PanelContribution`
+ * and `ToolbarButtonContribution` already pass raw color/token strings).
+ * Plugins are responsible for using a valid design-system semantic token.
+ */
+export interface FileDecoration {
+  /** Short badge text — keep to ≤2 visible chars per the VS Code convention. */
+  badge?: string;
+  /** Hover tooltip describing what the decoration means. */
+  tooltip?: string;
+  /** Opaque color token/class passed through to `className` by the host. */
+  color?: string;
+}
+
+/**
+ * Runtime contract a plugin implements and binds via
+ * `host.registerFileDecorationProvider`. The host invokes
+ * {@link provideDecorations} on demand (renderer pull) and never caches the
+ * result — invalidation is signalled separately via
+ * `host.invalidateFileDecorations`.
+ *
+ * `scope` is a runtime string (e.g. `worktree-diff:/abs/worktree/path`); the
+ * provider decides how to interpret it. `paths` is the set of file paths the
+ * caller currently cares about — the provider should return a map containing
+ * only the paths it has a decoration for (omitted paths render undecorated).
+ */
+export interface FileDecorationProviderImpl {
+  provideDecorations(scope: string, paths: string[]): Promise<Record<string, FileDecoration>>;
+}
+
+/**
+ * `fileDecorationProviders` manifest entry. Eager (manifest-driven)
+ * registration lets the host know which plugin owns which scopes before any
+ * plugin code runs; the implementation handler binds lazily during
+ * `activate()` via `host.registerFileDecorationProvider`.
+ *
+ * `scopes` are exact strings or `prefix:*` wildcards (e.g. `worktree-diff:*`)
+ * — the host matches a runtime scope against these to decide which providers
+ * to invoke. At least one scope pattern is required.
+ */
+export interface FileDecorationContribution {
+  /** Namespaced at runtime as `{pluginId}.{id}`; must match the descriptor passed to `registerFileDecorationProvider`. */
+  id: string;
+  /** Exact scope strings or `prefix:*` wildcards this provider handles. */
+  scopes: string[];
+}
+
+/**
+ * Passed to `host.registerFileDecorationProvider` alongside the impl. Mirrors
+ * the manifest entry; only `id` is required since `scopes` are already
+ * declared statically in `plugin.json`.
+ */
+export interface FileDecorationProviderDescriptor {
+  id: string;
+  scopes?: string[];
+}
+
+/**
+ * Registry-surface shape for a `fileDecorationProviders` contribution, paired
+ * with the `pluginId` that registered it.
+ */
+export interface RegisteredFileDecorationProvider {
+  pluginId: string;
+  contribution: FileDecorationContribution;
+}

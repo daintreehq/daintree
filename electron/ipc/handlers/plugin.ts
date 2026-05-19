@@ -16,6 +16,8 @@ import {
   getRegisteredForgeProviders,
   type RegisteredForgeProvider,
 } from "../../services/forgeProviderRegistry.js";
+import { getFileDecorationImpls } from "../../services/fileDecorationRegistry.js";
+import type { FileDecoration } from "../../../shared/types/forge.js";
 import { isTrustedRendererUrl } from "../../../shared/utils/trustedRenderer.js";
 import type {
   LoadedPluginInfo,
@@ -104,6 +106,76 @@ async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
   return getRegisteredForgeProviders();
 }
 
+/**
+ * Resolve per-file decorations for `scope` over the given `paths` by invoking
+ * every plugin impl whose declared scopes match. Results merge with
+ * first-writer-wins semantics per field (badge/tooltip/color independently):
+ * the first provider in plugin load order that returns a non-undefined value
+ * for a field on a path keeps it. The host treats every decoration opaquely —
+ * it never inspects what a badge means. A provider that throws or rejects is
+ * skipped (logged) so one bad plugin can't blank the whole row.
+ */
+async function handleFileDecorationsGet(
+  scope: string,
+  paths: string[]
+): Promise<Record<string, FileDecoration>> {
+  if (typeof scope !== "string" || scope.length === 0) return {};
+  if (!Array.isArray(paths) || paths.length === 0) return {};
+  const cleanPaths = [
+    ...new Set(paths.filter((p): p is string => typeof p === "string" && p.length > 0)),
+  ];
+  if (cleanPaths.length === 0) return {};
+
+  const impls = getFileDecorationImpls(scope);
+  if (impls.length === 0) return {};
+
+  const merged: Record<string, FileDecoration> = {};
+  const results = await Promise.allSettled(
+    impls.map(({ impl }) => impl.provideDecorations(scope, cleanPaths))
+  );
+
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status !== "fulfilled" || !r.value || typeof r.value !== "object") {
+      if (r.status === "rejected") {
+        const { pluginId, contributionId } = impls[i];
+        console.warn(
+          `[Plugin] fileDecorationProvider "${pluginId}.${contributionId}" failed for scope "${scope}":`,
+          r.reason
+        );
+      }
+      continue;
+    }
+    for (const [path, decoration] of Object.entries(r.value)) {
+      if (!decoration || typeof decoration !== "object") continue;
+      const target = merged[path] ?? (merged[path] = {});
+      if (target.badge === undefined && typeof decoration.badge === "string") {
+        target.badge = decoration.badge;
+      }
+      if (target.tooltip === undefined && typeof decoration.tooltip === "string") {
+        target.tooltip = decoration.tooltip;
+      }
+      if (target.color === undefined && typeof decoration.color === "string") {
+        target.color = decoration.color;
+      }
+    }
+  }
+
+  // Drop paths that ended up with no fields (a provider returned an entry but
+  // every field was empty) so the renderer's "decorated?" check stays cheap.
+  for (const [path, decoration] of Object.entries(merged)) {
+    if (
+      decoration.badge === undefined &&
+      decoration.tooltip === undefined &&
+      decoration.color === undefined
+    ) {
+      delete merged[path];
+    }
+  }
+
+  return merged;
+}
+
 export const pluginNamespace = defineIpcNamespace({
   name: "plugin",
   ops: {
@@ -116,6 +188,7 @@ export const pluginNamespace = defineIpcNamespace({
     unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister),
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
+    getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),
   },
 });
 

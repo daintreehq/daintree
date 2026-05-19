@@ -380,6 +380,67 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 });
 
+describe("PluginManifestSchema fileDecorationProviders contribution", () => {
+  const validBase = { name: "acme.decor", version: "1.0.0" };
+
+  it("defaults contributes.fileDecorationProviders to [] when contributes is absent", () => {
+    const result = PluginManifestSchema.safeParse(validBase);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.fileDecorationProviders).toEqual([]);
+    }
+  });
+
+  it("defaults to [] when contributes is an empty object", () => {
+    const result = PluginManifestSchema.safeParse({ ...validBase, contributes: {} });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.fileDecorationProviders).toEqual([]);
+    }
+  });
+
+  it("accepts a valid fileDecorationProviders entry", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: {
+        fileDecorationProviders: [{ id: "worktree-diff-review", scopes: ["worktree-diff:*"] }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.fileDecorationProviders).toEqual([
+        { id: "worktree-diff-review", scopes: ["worktree-diff:*"] },
+      ]);
+    }
+  });
+
+  it("rejects an entry with an empty scopes array", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: { fileDecorationProviders: [{ id: "d", scopes: [] }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an entry missing required fields", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: { fileDecorationProviders: [{ id: "d" }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unknown keys on the entry (strict schema)", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: {
+        fileDecorationProviders: [{ id: "d", scopes: ["s:*"], extra: true }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("PluginService", () => {
   it("returns empty list when plugins directory does not exist", async () => {
     const service = new PluginService(path.join(tmpDir, "nonexistent"));

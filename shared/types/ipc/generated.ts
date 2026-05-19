@@ -230,6 +230,10 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, actionId: string];
     result: void;
   };
+  "plugin:file-decorations-get": {
+    args: [scope: string, paths: string[]];
+    result: Record<string, import("../forge.js").FileDecoration>;
+  };
   "plugin:forge-providers-get": {
     args: [];
     result: import("../forge.js").RegisteredForgeProvider[];

@@ -742,6 +742,7 @@ export const CHANNELS = {
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
   PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
+  PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",
 
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",

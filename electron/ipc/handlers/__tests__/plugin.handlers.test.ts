@@ -37,6 +37,11 @@ vi.mock("../../../services/forgeProviderRegistry.js", () => ({
   getRegisteredForgeProviders: (...args: unknown[]) => mockGetRegisteredForgeProviders(...args),
 }));
 
+const mockGetFileDecorationImpls = vi.fn();
+vi.mock("../../../services/fileDecorationRegistry.js", () => ({
+  getFileDecorationImpls: (...args: unknown[]) => mockGetFileDecorationImpls(...args),
+}));
+
 const mockIpcMainHandle = vi.fn();
 const mockIpcMainRemoveHandler = vi.fn();
 vi.mock("electron", () => ({
@@ -56,6 +61,7 @@ beforeEach(() => {
   mockGetPluginMenuItems.mockReturnValue([]);
   mockListPluginActions.mockReturnValue([]);
   mockGetRegisteredForgeProviders.mockReturnValue([]);
+  mockGetFileDecorationImpls.mockReturnValue([]);
   _resetIpcGuardForTesting();
   markIpcSecurityReady();
 });
@@ -63,7 +69,7 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(10);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(11);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:toolbar-buttons", expect.any(Function));
@@ -81,6 +87,10 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:panel-kinds-get", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:forge-providers-get",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:file-decorations-get",
       expect.any(Function)
     );
   });
@@ -517,6 +527,98 @@ describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {
     const handler = getHandler();
     const result = await handler({});
     expect(result).toEqual([]);
+  });
+});
+
+describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
+  function getHandler() {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:file-decorations-get"
+    )![1] as (...args: unknown[]) => unknown;
+  }
+
+  it("returns {} when no impl matches the scope", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([]);
+    const handler = getHandler();
+    expect(await handler({}, "worktree-diff:/r", ["a.ts"])).toEqual({});
+  });
+
+  it("returns {} for empty scope or empty paths without calling the registry", async () => {
+    const handler = getHandler();
+    expect(await handler({}, "", ["a.ts"])).toEqual({});
+    expect(await handler({}, "worktree-diff:/r", [])).toEqual({});
+    expect(mockGetFileDecorationImpls).not.toHaveBeenCalled();
+  });
+
+  it("merges providers first-writer-wins per field, in load order", async () => {
+    const first = {
+      pluginId: "p.one",
+      contributionId: "d",
+      impl: {
+        provideDecorations: vi.fn().mockResolvedValue({
+          "a.ts": { badge: "1", color: "text-status-warning" },
+        }),
+      },
+    };
+    const second = {
+      pluginId: "p.two",
+      contributionId: "d",
+      impl: {
+        provideDecorations: vi.fn().mockResolvedValue({
+          "a.ts": { badge: "9", tooltip: "from second" },
+          "b.ts": { badge: "2" },
+        }),
+      },
+    };
+    mockGetFileDecorationImpls.mockReturnValue([first, second]);
+    const handler = getHandler();
+    const result = await handler({}, "worktree-diff:/r", ["a.ts", "b.ts"]);
+    expect(result).toEqual({
+      "a.ts": { badge: "1", color: "text-status-warning", tooltip: "from second" },
+      "b.ts": { badge: "2" },
+    });
+  });
+
+  it("deduplicates requested paths before invoking impls", async () => {
+    const provide = vi.fn().mockResolvedValue({});
+    mockGetFileDecorationImpls.mockReturnValue([
+      { pluginId: "p", contributionId: "d", impl: { provideDecorations: provide } },
+    ]);
+    const handler = getHandler();
+    await handler({}, "s:1", ["a.ts", "a.ts", "b.ts"]);
+    expect(provide).toHaveBeenCalledWith("s:1", ["a.ts", "b.ts"]);
+  });
+
+  it("skips a rejecting provider without dropping a healthy one's results", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p.bad",
+        contributionId: "d",
+        impl: { provideDecorations: vi.fn().mockRejectedValue(new Error("boom")) },
+      },
+      {
+        pluginId: "p.good",
+        contributionId: "d",
+        impl: {
+          provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "3" } }),
+        },
+      },
+    ]);
+    const handler = getHandler();
+    expect(await handler({}, "s:1", ["a.ts"])).toEqual({ "a.ts": { badge: "3" } });
+  });
+
+  it("omits paths whose merged decoration has no fields", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p",
+        contributionId: "d",
+        impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": {} }) },
+      },
+    ]);
+    const handler = getHandler();
+    expect(await handler({}, "s:1", ["a.ts"])).toEqual({});
   });
 });
 

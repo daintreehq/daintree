@@ -24,6 +24,12 @@
           "releases"
         ]
       }
+    ],
+    "fileDecorationProviders": [
+      {
+        "id": "worktree-diff-review",
+        "scopes": ["worktree-diff:*"]
+      }
     ]
   }
 }
