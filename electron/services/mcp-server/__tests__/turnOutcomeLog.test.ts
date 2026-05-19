@@ -20,6 +20,8 @@ function makeAuditRecord(overrides: Partial<McpAuditRecord>): McpAuditRecord {
     argsSummary: overrides.argsSummary ?? "{}",
     result: overrides.result ?? "success",
     durationMs: overrides.durationMs ?? 12,
+    schemaVersion: overrides.schemaVersion ?? 1,
+    severity: overrides.severity ?? "info",
     ...(overrides.errorCode !== undefined ? { errorCode: overrides.errorCode } : {}),
     ...(overrides.confirmationDecision !== undefined
       ? { confirmationDecision: overrides.confirmationDecision }
@@ -610,5 +612,112 @@ describe("TurnOutcomeService.clear", () => {
       makeTransition({ previousState: "waiting", state: "idle", trigger: "timeout" })
     );
     expect(f.service.getRecords()).toHaveLength(1);
+  });
+});
+
+describe("TurnOutcomeService turnId lifecycle", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("mints a turnId on active entry and stamps the outcome record", () => {
+    const f = makeFixture();
+    f.service.appendOutput("term-1", "Done — the file was updated and tests pass cleanly.");
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    f.service.handleTransition(
+      makeTransition({ previousState: "working", state: "idle", trigger: "output" })
+    );
+    f.flushPersist();
+    const records = f.service.getRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]?.turnId).toBeDefined();
+    expect(records[0]?.turnId?.length).toBeGreaterThan(0);
+  });
+
+  it("getCurrentTurnIdForSession returns the active turnId", () => {
+    const f = makeFixture();
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    const turnId = f.service.getCurrentTurnIdForSession("session-1");
+    expect(turnId).toBeDefined();
+    expect(typeof turnId).toBe("string");
+  });
+
+  it("getCurrentTurnIdForSession returns null for unknown session", () => {
+    const f = makeFixture();
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    expect(f.service.getCurrentTurnIdForSession("nonexistent")).toBeNull();
+  });
+
+  it("getCurrentTurnIdForSession returns null when session not bound at mint time", () => {
+    const f = makeFixture({ sessionId: null });
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeNull();
+  });
+
+  it("rapid consecutive active transitions produce distinct turnIds", () => {
+    const f = makeFixture();
+    f.service.appendOutput("term-1", "Done — the file was updated and the tests pass cleanly.");
+    // First turn
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    f.service.handleTransition(
+      makeTransition({ previousState: "working", state: "idle", trigger: "output" })
+    );
+    // Second turn
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    f.service.handleTransition(
+      makeTransition({ previousState: "working", state: "idle", trigger: "output" })
+    );
+    const records = f.service.getRecords();
+    expect(records).toHaveLength(2);
+    expect(records[0]?.turnId).toBeDefined();
+    expect(records[1]?.turnId).toBeDefined();
+    expect(records[0]?.turnId).not.toBe(records[1]?.turnId);
+  });
+
+  it("dropTerminal clears turnId entries", () => {
+    const f = makeFixture();
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeDefined();
+    f.service.dropTerminal("term-1");
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeNull();
+  });
+
+  it("clear resets turnId maps", () => {
+    const f = makeFixture();
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeDefined();
+    f.service.clear();
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeNull();
+  });
+
+  it("turnId is absent on recordDirectOutcome (pre-turn failures)", () => {
+    const f = makeFixture();
+    f.service.recordDirectOutcome({
+      outcome: "mcp-not-ready",
+      sessionId: "sess-failed",
+      detail: "Probe failed",
+    });
+    const records = f.service.getRecords();
+    expect(records[0]?.outcome).toBe("mcp-not-ready");
+    expect(records[0]?.turnId).toBeUndefined();
   });
 });

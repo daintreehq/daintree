@@ -117,6 +117,13 @@ export function registerMcpServerHandlers(): () => void {
   // needs the derived 4-state snapshot (`disabled|starting|ready|failed`)
   // plus `lastError`, not just config + bound port.
   handlers.push(
+    typedHandle(CHANNELS.MCP_SERVER_GET_TURN_OUTCOME_RECORDS, async () => {
+      const svc = await getMcpServerService();
+      return svc.getTurnOutcomeRecords();
+    })
+  );
+
+  handlers.push(
     typedHandle(CHANNELS.MCP_SERVER_GET_RUNTIME_STATE, async () => {
       const svc = await getMcpServerService();
       return svc.getRuntimeState();

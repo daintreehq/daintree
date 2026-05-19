@@ -36,6 +36,7 @@ import type {
   HelpAssistantTier,
   McpAuditRecord,
   McpAuditStats,
+  AssistantTurnRecord,
 } from "@shared/types";
 import {
   HELP_TIER_CUMULATIVE,
@@ -117,6 +118,7 @@ export function DaintreeAssistantSettingsTab() {
   const [showBlastRadius, setShowBlastRadius] = useState(false);
   const [auditRecords, setAuditRecords] = useState<McpAuditRecord[]>([]);
   const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
+  const [turnRecords, setTurnRecords] = useState<AssistantTurnRecord[]>([]);
   const [auditLoading, setAuditLoading] = useState(true);
   const [auditCopied, setAuditCopied] = useState(false);
   const [auditExported, setAuditExported] = useState(false);
@@ -221,9 +223,10 @@ export function DaintreeAssistantSettingsTab() {
   // viewer hydrate independently of the settings + MCP status round-trips.
   // `allSettled` so a stats failure doesn't silently blank the record list.
   const refreshAuditRecords = async (): Promise<void> => {
-    const [recordsResult, statsResult] = await Promise.allSettled([
+    const [recordsResult, statsResult, turnsResult] = await Promise.allSettled([
       window.electron.mcpServer.getAuditRecords(),
       window.electron.mcpServer.getAuditStats(),
+      window.electron.mcpServer.getTurnOutcomeRecords(),
     ]);
     if (recordsResult.status === "fulfilled") {
       setAuditRecords(recordsResult.value);
@@ -235,6 +238,11 @@ export function DaintreeAssistantSettingsTab() {
     } else {
       logError("Failed to load MCP audit stats for assistant tab", statsResult.reason);
     }
+    if (turnsResult.status === "fulfilled") {
+      setTurnRecords(turnsResult.value);
+    } else {
+      logError("Failed to load MCP turn outcomes for assistant tab", turnsResult.reason);
+    }
   };
 
   useEffect(() => {
@@ -244,8 +252,9 @@ export function DaintreeAssistantSettingsTab() {
       Promise.allSettled([
         window.electron.mcpServer.getAuditRecords(),
         window.electron.mcpServer.getAuditStats(),
+        window.electron.mcpServer.getTurnOutcomeRecords(),
       ])
-        .then(([recordsResult, statsResult]) => {
+        .then(([recordsResult, statsResult, turnsResult]) => {
           if (cancelled) return;
           if (recordsResult.status === "fulfilled") {
             setAuditRecords(recordsResult.value);
@@ -256,6 +265,11 @@ export function DaintreeAssistantSettingsTab() {
             setAuditStats(statsResult.value);
           } else {
             logError("Failed initial audit stats load for assistant tab", statsResult.reason);
+          }
+          if (turnsResult.status === "fulfilled") {
+            setTurnRecords(turnsResult.value);
+          } else {
+            logError("Failed initial turn outcomes load for assistant tab", turnsResult.reason);
           }
         })
         .finally(() => {
@@ -614,6 +628,7 @@ export function DaintreeAssistantSettingsTab() {
         />
         <McpAuditLogViewer
           records={auditRecords}
+          turnRecords={turnRecords}
           loading={auditLoading}
           onRefresh={refreshAuditRecords}
           onCopy={handleCopyAuditAsJson}

@@ -551,6 +551,7 @@ export const CHANNELS = {
    * because the renderer needs the derived `disabled|starting|ready|failed`
    * state plus `lastError` to drive the dock-button readiness pip.
    */
+  MCP_SERVER_GET_TURN_OUTCOME_RECORDS: "mcp-server:get-turn-outcome-records",
   MCP_SERVER_GET_RUNTIME_STATE: "mcp-server:get-runtime-state",
   /** Push channel for runtime-state transitions. */
   MCP_SERVER_RUNTIME_STATE_CHANGED: "mcp-server:runtime-state-changed",

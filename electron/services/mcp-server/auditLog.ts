@@ -118,6 +118,7 @@ export class AuditService {
     confirmationDecision?: McpConfirmationDecision;
     argsSummary: string;
     bannerSuppressed?: boolean;
+    turnId?: string;
   }): void {
     if (this.readConfig().auditEnabled === false) return;
     this.hydrate();
@@ -136,6 +137,8 @@ export class AuditService {
       argsSummary: input.argsSummary,
       result: classification.result,
       durationMs: Math.max(0, Math.round(input.durationMs)),
+      schemaVersion: 1,
+      severity: auditSeverityFromResult(classification.result),
     };
     if (classification.errorCode !== undefined) {
       record.errorCode = classification.errorCode;
@@ -148,6 +151,9 @@ export class AuditService {
       if (input.bannerSuppressed) {
         record.bannerSuppressed = true;
       }
+    }
+    if (input.turnId !== undefined) {
+      record.turnId = input.turnId;
     }
 
     this.records.push(record);
@@ -295,6 +301,22 @@ export class AuditService {
     this.saveConfig({ auditMaxRecords: normalized });
     this.flushNow();
     return this.getAuditConfig();
+  }
+}
+
+function auditSeverityFromResult(
+  result: McpAuditResult
+): import("../../../shared/types/ipc/mcpServer.js").McpAuditSeverity {
+  switch (result) {
+    case "success":
+    case "dedup":
+      return "info";
+    case "confirmation-pending":
+      return "notice";
+    case "unauthorized":
+      return "warning";
+    case "error":
+      return "error";
   }
 }
 

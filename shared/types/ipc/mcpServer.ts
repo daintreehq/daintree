@@ -51,6 +51,19 @@ export type McpAuditResult =
  */
 export type McpConfirmationDecision = "approved" | "rejected" | "timeout";
 
+/**
+ * Audit-record severity tier. Derived from the dispatch result at record-write
+ * time so readers can triage without re-deriving from errorCode + result.
+ *
+ * - `info`: success or dedup — nominal dispatch.
+ * - `notice`: confirmation-pending — gate waiting on user approval.
+ * - `warning`: tier-rejected — legit user action blocked by policy.
+ * - `error`: dispatch threw, timed out, or returned an error other than
+ *   confirmation-pending/unauthorized.
+ * - `critical`: reserved for systemic failures (not yet emitted).
+ */
+export type McpAuditSeverity = "info" | "notice" | "warning" | "error" | "critical";
+
 export interface McpAuditRecord {
   id: string;
   timestamp: number;
@@ -78,6 +91,17 @@ export interface McpAuditRecord {
    * in the audit panel even when no banner fired. See #8442.
    */
   bannerSuppressed?: boolean;
+  /**
+   * Stable correlation ID for the assistant turn this dispatch belongs to.
+   * Minted at the `active` FSM transition boundary in `TurnOutcomeService`
+   * and stamped on every audit record written within that turn window.
+   * Absent on pre-auth rejections and dispatches outside a turn boundary.
+   */
+  turnId?: string;
+  /** Schema version for forward-compat. New records always carry the current version. */
+  schemaVersion: number;
+  /** Derived severity so readers can triage without re-deriving from result/errorCode. */
+  severity: McpAuditSeverity;
 }
 
 /**
@@ -255,6 +279,12 @@ export interface AssistantTurnRecord {
   previousState?: string;
   /** Free-text diagnostic for non-classified failures (e.g. mcp-not-ready reason). */
   detail?: string;
+  /**
+   * Stable correlation ID shared with `McpAuditRecord.turnId` for every
+   * dispatch inside this turn window. Minted at the `active` FSM transition
+   * boundary and absent on pre-turn failures (`mcp-not-ready`).
+   */
+  turnId?: string;
 }
 
 /**
