@@ -587,10 +587,10 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
     vi.useRealTimers();
   });
 
-  it("decays an elevated session back to workbench after the TTL and fires onTierDecayed", () => {
+  it("decays a workbench-baseline session back to workbench after the TTL and fires onTierDecayed", () => {
     store.sessions.set("s", fakeSseSession());
     store.sessionTierMap.set("s", "action");
-    store.armTierElevationTimer("s", "action");
+    store.armTierElevationTimer("s", "action", "workbench");
 
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
@@ -599,10 +599,44 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
     expect(decayed).toEqual(["s"]);
   });
 
-  it("does not arm a timer for the workbench baseline (nothing to decay)", () => {
+  it("decays to the session's token baseline, not hardcoded workbench", () => {
+    // A help-session bearer configured with `tier: "action"` connects at
+    // the action baseline, then gets elevated to system. After the window
+    // it must fall back to action — dropping to workbench would strip
+    // tools the user legitimately held from handshake.
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "action");
+    store.armTierElevationTimer("s", "system", "action");
+    store.sessionTierMap.set("s", "system");
+
+    setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
+    vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
+
+    expect(store.getTier("s")).toBe("action");
+    expect(decayed).toEqual(["s"]);
+  });
+
+  it("a chained elevation decays all the way to the original baseline", () => {
+    // workbench → action → system: the second arm must preserve the
+    // workbench baseline captured by the first, not decay to action.
     store.sessions.set("s", fakeSseSession());
     store.sessionTierMap.set("s", "workbench");
-    store.armTierElevationTimer("s", "workbench");
+    store.armTierElevationTimer("s", "action", "workbench");
+    store.sessionTierMap.set("s", "action");
+    store.armTierElevationTimer("s", "system", "action");
+    store.sessionTierMap.set("s", "system");
+
+    setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
+    vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
+
+    expect(store.getTier("s")).toBe("workbench");
+    expect(decayed).toEqual(["s"]);
+  });
+
+  it("does not arm a timer when the requested tier equals the baseline (nothing to decay)", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "workbench");
+    store.armTierElevationTimer("s", "workbench", "workbench");
 
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
@@ -610,15 +644,35 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
     expect(decayed).toEqual([]);
   });
 
+  it("drops stale denial-suppression counters on decay so the banner re-triggers", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "action");
+    store.armTierElevationTimer("s", "action", "workbench");
+
+    // Tool was denied enough times before the elevation that the banner
+    // is now suppressed for it.
+    store.grantCache.incrementDenial("s", "worktree.delete");
+    store.grantCache.incrementDenial("s", "worktree.delete");
+    store.grantCache.incrementDenial("s", "worktree.delete");
+    expect(store.grantCache.shouldSuppressBanner("s", "worktree.delete")).toBe(true);
+
+    setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
+    vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
+
+    expect(store.getTier("s")).toBe("workbench");
+    // Post-decay the next out-of-baseline call must surface the banner.
+    expect(store.grantCache.shouldSuppressBanner("s", "worktree.delete")).toBe(false);
+  });
+
   it("re-arming refreshes the window from now (repeat Always allow)", () => {
     store.sessions.set("s", fakeSseSession());
     store.sessionTierMap.set("s", "action");
-    store.armTierElevationTimer("s", "action");
+    store.armTierElevationTimer("s", "action", "workbench");
 
     // Halfway through the window the user re-approves — window resets.
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS / 2);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS / 2);
-    store.armTierElevationTimer("s", "action");
+    store.armTierElevationTimer("s", "action", "workbench");
 
     // Original deadline passes — must NOT have decayed (window was reset).
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS / 2 + 1);
@@ -634,7 +688,7 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
   it("does not count suspended time against the window (awake-time corrected)", () => {
     store.sessions.set("s", fakeSseSession());
     store.sessionTierMap.set("s", "system");
-    store.armTierElevationTimer("s", "system");
+    store.armTierElevationTimer("s", "system", "workbench");
 
     // Wall clock advances a full TTL but the machine was asleep — zero
     // awake time elapsed, so the elevation must survive.
@@ -650,7 +704,7 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
     store.sessionTierMap.set("h", "action");
     clearTimeout(store.httpSessions.get("h")!.idleTimer);
     store.httpSessions.get("h")!.idleTimer = store.createHttpIdleTimer("h");
-    store.armTierElevationTimer("h", "action");
+    store.armTierElevationTimer("h", "action", "workbench");
 
     // Long wall-clock sleep but ~no awake time elapsed — the wake recompute
     // must keep both the idle and elevation windows armed, not collapse them.
@@ -665,7 +719,7 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
   it("does not wipe a tier the user re-approved between arm and fire (stale-token guard, #2243)", () => {
     store.sessions.set("s", fakeSseSession());
     store.sessionTierMap.set("s", "action");
-    store.armTierElevationTimer("s", "action");
+    store.armTierElevationTimer("s", "action", "workbench");
 
     // Simulate a re-elevation to a different tier just before the original
     // timer fires: the live tier no longer matches the captured token.
@@ -682,7 +736,7 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
   it("is a safe no-op when the session was torn down before the timer fires (#3728)", () => {
     store.sessions.set("s", fakeSseSession());
     store.sessionTierMap.set("s", "action");
-    store.armTierElevationTimer("s", "action");
+    store.armTierElevationTimer("s", "action", "workbench");
 
     store.revokeSession("s");
 
@@ -693,15 +747,15 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
 
   it("clears elevation state on revokeSession, drain, and clearElevationTimer", () => {
     store.sessions.set("s1", fakeSseSession());
-    store.armTierElevationTimer("s1", "action");
+    store.armTierElevationTimer("s1", "action", "workbench");
     store.revokeSession("s1");
 
     store.httpSessions.set("h1", fakeHttpSession());
-    store.armTierElevationTimer("h1", "action");
+    store.armTierElevationTimer("h1", "action", "workbench");
     store.clearElevationTimer("h1");
 
     store.sessions.set("s2", fakeSseSession());
-    store.armTierElevationTimer("s2", "action");
+    store.armTierElevationTimer("s2", "action", "workbench");
     store.drain();
 
     // No armed timer survives — advancing past the TTL decays nothing.
@@ -715,7 +769,7 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
     store.sessionTierMap.set("s", "action");
     clearTimeout(store.sessions.get("s")!.idleTimer);
     store.sessions.get("s")!.idleTimer = store.createIdleTimer("s");
-    store.armTierElevationTimer("s", "action");
+    store.armTierElevationTimer("s", "action", "workbench");
 
     // Both windows are equal; the idle reaper collects the session first.
     setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);

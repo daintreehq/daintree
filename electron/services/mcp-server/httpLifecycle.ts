@@ -950,10 +950,12 @@ export class HttpLifecycle {
     }
     this.deps.sessionStore.sessionTierMap.set(sessionId, tier);
     // Bound the renderer-approved elevation: after MCP_TIER_ELEVATION_TTL_MS
-    // of awake time the session silently decays back to `workbench` so a
-    // stale "Always allow" can't outlive the user's intent (#8462). Each
-    // accepted approval refreshes the window from now.
-    this.deps.sessionStore.armTierElevationTimer(sessionId, tier);
+    // of awake time the session silently decays back to its token-resolved
+    // baseline (`current`, the pre-elevation tier) so a stale "Always allow"
+    // can't outlive the user's intent (#8462). Each accepted approval
+    // refreshes the window from now; a chained re-elevation preserves the
+    // original baseline.
+    this.deps.sessionStore.armTierElevationTimer(sessionId, tier, current);
     return { sessionId, tier };
   }
 

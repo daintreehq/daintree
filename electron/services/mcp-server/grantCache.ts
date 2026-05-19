@@ -231,6 +231,22 @@ export class GrantCache {
   }
 
   /**
+   * Drop only the consecutive-denial suppression counters for a session,
+   * leaving any active per-tool grants intact. Used by the tier-decay path
+   * (#8462): a decayed session must re-show the tier-mismatch banner on its
+   * next out-of-baseline call rather than have it silently suppressed by
+   * denials accrued before the elevation. Grants are an orthogonal per-tool
+   * approval (#8442) with their own TTL and must survive the decay, so this
+   * is deliberately narrower than {@link clearSessionState}.
+   */
+  clearDenialCounts(sessionId: string): void {
+    const prefix = `${sessionId}:`;
+    for (const k of [...this.denialCounts.keys()]) {
+      if (k.startsWith(prefix)) this.denialCounts.delete(k);
+    }
+  }
+
+  /**
    * True when the current denial for the pair should suppress the renderer
    * banner. The audit record is still written; this controls only the UI
    * surface. The check uses the post-increment count: with threshold = 2

@@ -129,6 +129,14 @@ export class SessionStore {
   private readonly tierElevationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly tierElevationStartedAt = new Map<string, number>();
   private readonly tierElevationToken = new Map<string, McpTier>();
+  // The session's token-resolved baseline tier captured at the first
+  // elevation in a chain. Decay reverts here, NOT to a hardcoded
+  // `workbench` — a help-session bearer can hold a configured baseline of
+  // `action`/`system` (`HelpAssistantTier`), and dropping it to `workbench`
+  // would strip tools the user legitimately had from handshake. Preserved
+  // across chained re-elevations (workbench→action→system still decays all
+  // the way to workbench).
+  private readonly tierElevationBaseline = new Map<string, McpTier>();
 
   private readonly cleanupResourceSubscriptionsFn: (sessionId: string) => void;
   private readonly dropAbuseStateFn: (sessionId: string) => void;
@@ -369,16 +377,23 @@ export class SessionStore {
 
   /**
    * Arm (or refresh) the decay timer for a renderer-approved tier
-   * elevation. Idempotent: clearing first makes a repeat "Always allow"
-   * correctly reset the window from now. `workbench` is the baseline — there
-   * is nothing to decay, so any pending timer is just cleared. Call this
-   * from `setSessionTier` after the promote-only guard accepts the change.
+   * elevation. `baselineTier` is the session's pre-elevation tier (the
+   * token-resolved handshake tier) — decay reverts here, not to a hardcoded
+   * `workbench`. Idempotent: clearing first makes a repeat "Always allow"
+   * reset the window from now. A baseline captured by an earlier elevation
+   * in the same chain is preserved (workbench→action→system still decays
+   * all the way to workbench). When the requested tier equals the effective
+   * baseline the session isn't actually elevated, so any pending timer is
+   * just cleared. Call this from `setSessionTier` after the promote-only
+   * guard accepts the change.
    */
-  armTierElevationTimer(sessionId: string, tier: McpTier): void {
+  armTierElevationTimer(sessionId: string, tier: McpTier, baselineTier: McpTier): void {
+    const baseline = this.tierElevationBaseline.get(sessionId) ?? baselineTier;
     this.clearElevationTimer(sessionId);
-    if (tier === "workbench") return;
+    if (tier === baseline) return;
     this.tierElevationStartedAt.set(sessionId, Date.now());
     this.tierElevationToken.set(sessionId, tier);
+    this.tierElevationBaseline.set(sessionId, baseline);
     this.scheduleTierElevationCheck(sessionId, MCP_TIER_ELEVATION_TTL_MS);
   }
 
@@ -416,6 +431,7 @@ export class SessionStore {
 
   private decayTier(sessionId: string): void {
     const token = this.tierElevationToken.get(sessionId);
+    const baseline = this.tierElevationBaseline.get(sessionId) ?? "workbench";
     const current = this.sessionTierMap.get(sessionId);
     this.clearElevationTimer(sessionId);
     // Guard #1: session gone — nothing to decay, nobody to notify.
@@ -424,8 +440,15 @@ export class SessionStore {
     // between arm and fire — its own timer owns the new window now; never
     // wipe a tier the user just re-approved.
     if (current === undefined || current !== token) return;
-    if (current === "workbench") return;
-    this.sessionTierMap.set(sessionId, "workbench");
+    // Already at/below the token baseline — nothing to roll back.
+    if (current === baseline) return;
+    this.sessionTierMap.set(sessionId, baseline);
+    // Drop stale denial-suppression counters so the first post-decay
+    // out-of-baseline call re-triggers the tier-mismatch banner instead of
+    // being silently suppressed by denials accrued before the elevation
+    // (the #8462 acceptance criterion). Per-tool grants survive — they are
+    // an orthogonal explicit approval (#8442).
+    this.grantCache.clearDenialCounts(sessionId);
     this.onTierDecayedFn(sessionId);
   }
 
@@ -442,6 +465,7 @@ export class SessionStore {
     this.tierElevationTimers.delete(sessionId);
     this.tierElevationStartedAt.delete(sessionId);
     this.tierElevationToken.delete(sessionId);
+    this.tierElevationBaseline.delete(sessionId);
   }
 
   getTier(sessionId: string): McpTier {
@@ -521,6 +545,7 @@ export class SessionStore {
     this.tierElevationTimers.clear();
     this.tierElevationStartedAt.clear();
     this.tierElevationToken.clear();
+    this.tierElevationBaseline.clear();
     this.sessionTierMap.clear();
     this.sessionWebContentsMap.clear();
     this.sessionContextMap.clear();
