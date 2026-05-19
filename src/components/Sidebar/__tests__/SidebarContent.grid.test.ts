@@ -216,12 +216,12 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       expect(source).toMatch(/"Enter"/);
       expect(source).toMatch(/"ArrowRight"/);
       expect(source).toMatch(/"Escape"/);
-      expect(source).toMatch(/modeRef\.current\s*=\s*"toolbar"/);
+      expect(source).toMatch(/setGridMode\(\s*"toolbar"\s*\)/);
     });
 
     it("resets to list mode on window blur (lesson #4591)", () => {
       expect(source).toContain('window.addEventListener("blur"');
-      expect(source).toMatch(/modeRef\.current\s*=\s*"list"/);
+      expect(source).toMatch(/setGridMode\(\s*"list"\s*\)/);
     });
 
     it("allows Ctrl+Home and Ctrl+End through the modifier guard", () => {
