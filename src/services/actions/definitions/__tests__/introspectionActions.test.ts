@@ -47,7 +47,10 @@ Object.defineProperty(window, "localStorage", {
 // Stubs for other actions' dependencies (actions.list, actions.getContext). These
 // are not exercised by the persistedStores tests but must load without errors.
 vi.mock("@/services/ActionService", () => ({
-  actionService: { list: vi.fn(() => []) },
+  actionService: {
+    list: vi.fn(() => []),
+    get: vi.fn(() => null),
+  },
 }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => ({}) } }));
 vi.mock("@/store/portalStore", () => ({ usePortalStore: { getState: () => ({}) } }));
@@ -379,5 +382,343 @@ describe("actions.list", () => {
     };
 
     expect(result.actions.map((a) => a.id)).toEqual(["actions.findMe"]);
+  });
+
+  it("has mcpVisibility set to core", () => {
+    const def = registry.get("actions.list")!();
+    expect(def.mcpVisibility).toBe("core");
+  });
+});
+
+describe("actions.search", () => {
+  function makeEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifestEntry {
+    return {
+      id: "actions.example",
+      name: "actions.example",
+      title: "Example",
+      description: "An example action",
+      category: "test",
+      kind: "command",
+      danger: "safe",
+      enabled: true,
+      requiresArgs: false,
+      ...overrides,
+    } as ActionManifestEntry;
+  }
+
+  it("is registered with the expected metadata", () => {
+    expect(registry.has("actions.search")).toBe(true);
+    const def = registry.get("actions.search")!();
+    expect(def.id).toBe("actions.search");
+    expect(def.kind).toBe("query");
+    expect(def.danger).toBe("safe");
+    expect(def.mcpVisibility).toBe("core");
+  });
+
+  it("returns matching entries without inputSchema or outputSchema", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({
+        id: "git.commit",
+        title: "Commit",
+        description: "Commit staged changes",
+        category: "git",
+        inputSchema: { type: "object", properties: { message: { type: "string" } } },
+        outputSchema: { type: "object" },
+      }),
+      makeEntry({ id: "worktree.list", title: "List Worktrees", category: "worktree" }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "commit" } as never, stubCtx)) as {
+      totalMatches: number;
+      results: ActionManifestEntry[];
+    };
+
+    expect(result.totalMatches).toBe(1);
+    expect(result.results[0]!.id).toBe("git.commit");
+    expect(result.results[0]!).not.toHaveProperty("inputSchema");
+    expect(result.results[0]!).not.toHaveProperty("outputSchema");
+  });
+
+  it("scores exact id match highest", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "git.commit", title: "Some Other Title", category: "git" }),
+      makeEntry({ id: "git.commitAll", title: "Commit All", category: "git" }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "git.commit" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+
+    expect(result.results[0]!.id).toBe("git.commit");
+  });
+
+  it("excludes hidden entries from results", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "actions.secret", title: "Secret", mcpVisibility: "hidden" }),
+      makeEntry({ id: "actions.visible", title: "Visible", mcpVisibility: "core" }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "actions" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+
+    const ids = result.results.map((r) => r.id);
+    expect(ids).toContain("actions.visible");
+    expect(ids).not.toContain("actions.secret");
+  });
+
+  it("includes unclassified entries (no mcpVisibility) for back-compat", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "git.push", title: "Push", mcpVisibility: undefined }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "push" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]!.id).toBe("git.push");
+  });
+
+  it("respects limit parameter", async () => {
+    const entries = Array.from({ length: 30 }, (_, i) =>
+      makeEntry({ id: `actions.tool${i}`, title: `Tool ${i}` })
+    );
+    vi.mocked(actionService.list).mockReturnValueOnce(entries);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "Tool", limit: 5 } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+
+    expect(result.results).toHaveLength(5);
+  });
+
+  it("returns empty results for queries with no matches", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "git.commit", title: "Commit" }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "zzzNoMatch" } as never, stubCtx)) as {
+      totalMatches: number;
+      results: unknown[];
+    };
+
+    expect(result.totalMatches).toBe(0);
+    expect(result.results).toEqual([]);
+  });
+
+  it("returns empty results for whitespace-only queries", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "git.commit", title: "Commit" }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "   " } as never, stubCtx)) as {
+      totalMatches: number;
+      results: unknown[];
+    };
+
+    expect(result.totalMatches).toBe(0);
+    expect(result.results).toEqual([]);
+  });
+
+  it("matches across title, description, keywords, and category", async () => {
+    vi.mocked(actionService.list).mockReturnValue([
+      makeEntry({
+        id: "a",
+        title: "Alpha",
+        description: "first",
+        keywords: ["init"],
+        category: "core",
+      }),
+      makeEntry({ id: "b", title: "Beta", description: "second", category: "extra" }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+
+    const byTitle = (await def.run({ query: "alpha" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+    expect(byTitle.results[0]!.id).toBe("a");
+
+    const byDesc = (await def.run({ query: "second" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+    expect(byDesc.results[0]!.id).toBe("b");
+
+    const byKeyword = (await def.run({ query: "init" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+    expect(byKeyword.results[0]!.id).toBe("a");
+
+    const byCategory = (await def.run({ query: "extra" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+    expect(byCategory.results[0]!.id).toBe("b");
+  });
+
+  it("stably orders results by score descending then id ascending", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "c", title: "Title Match" }),
+      makeEntry({ id: "a", title: "Title Match" }),
+      makeEntry({ id: "b", title: "Title Match" }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "Title Match" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+
+    expect(result.results.map((r) => r.id)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("actions.getSchema", () => {
+  function makeEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifestEntry {
+    return {
+      id: "actions.example",
+      name: "actions.example",
+      title: "Example",
+      description: "An example action",
+      category: "test",
+      kind: "command",
+      danger: "safe",
+      enabled: true,
+      requiresArgs: false,
+      ...overrides,
+    } as ActionManifestEntry;
+  }
+
+  it("is registered with the expected metadata", () => {
+    expect(registry.has("actions.getSchema")).toBe(true);
+    const def = registry.get("actions.getSchema")!();
+    expect(def.id).toBe("actions.getSchema");
+    expect(def.kind).toBe("query");
+    expect(def.danger).toBe("safe");
+    expect(def.mcpVisibility).toBe("core");
+  });
+
+  it("returns full entry including inputSchema for a valid action", async () => {
+    const entry = makeEntry({
+      id: "git.commit",
+      title: "Commit",
+      inputSchema: { type: "object", properties: { message: { type: "string" } } },
+    });
+    vi.mocked(actionService.get).mockReturnValueOnce(entry);
+
+    const def = registry.get("actions.getSchema")!();
+    const result = (await def.run({ actionId: "git.commit" } as never, stubCtx)) as {
+      ok: true;
+      entry: ActionManifestEntry;
+    };
+
+    expect(result.ok).toBe(true);
+    expect(result.entry.id).toBe("git.commit");
+    expect(result.entry.inputSchema).toBeDefined();
+    expect(result.entry.inputSchema!.type).toBe("object");
+  });
+
+  it("returns structured error for unknown action", async () => {
+    vi.mocked(actionService.get).mockReturnValueOnce(null);
+
+    const def = registry.get("actions.getSchema")!();
+    const result = (await def.run({ actionId: "nonexistent" } as never, stubCtx)) as {
+      ok: false;
+      error: { code: string; message: string };
+    };
+
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe("NOT_FOUND");
+    expect(result.error.message).toContain("nonexistent");
+  });
+
+  it("returns structured error for hidden action", async () => {
+    const entry = makeEntry({ id: "actions.secret", mcpVisibility: "hidden" });
+    vi.mocked(actionService.get).mockReturnValueOnce(entry);
+
+    const def = registry.get("actions.getSchema")!();
+    const result = (await def.run({ actionId: "actions.secret" } as never, stubCtx)) as {
+      ok: false;
+      error: { code: string; message: string };
+    };
+
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe("NOT_FOUND");
+  });
+
+  it("returns schema for discoverable action (getSchema is the path to reach them)", async () => {
+    const entry = makeEntry({
+      id: "git.push",
+      title: "Push",
+      mcpVisibility: "discoverable",
+      inputSchema: { type: "object", properties: { force: { type: "boolean" } } },
+    });
+    vi.mocked(actionService.get).mockReturnValueOnce(entry);
+
+    const def = registry.get("actions.getSchema")!();
+    const result = (await def.run({ actionId: "git.push" } as never, stubCtx)) as {
+      ok: true;
+      entry: ActionManifestEntry;
+    };
+
+    expect(result.ok).toBe(true);
+    expect(result.entry.inputSchema).toBeDefined();
+  });
+});
+
+describe("search → getSchema roundtrip", () => {
+  function makeEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifestEntry {
+    return {
+      id: "actions.example",
+      name: "actions.example",
+      title: "Example",
+      description: "An example action",
+      category: "test",
+      kind: "command",
+      danger: "safe",
+      enabled: true,
+      requiresArgs: false,
+      ...overrides,
+    } as ActionManifestEntry;
+  }
+
+  it("allows model to discover then fetch schema for a non-core tool", async () => {
+    // Step 1: the discoverable tool is in the full manifest but excluded from tools/list
+    const pushEntry = makeEntry({
+      id: "git.push",
+      title: "Push",
+      description: "Push commits to remote",
+      category: "git",
+      mcpVisibility: "discoverable",
+      inputSchema: { type: "object", properties: { force: { type: "boolean" } } },
+    });
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "actions.list", title: "List Actions", mcpVisibility: "core" }),
+      pushEntry,
+    ]);
+    vi.mocked(actionService.get).mockReturnValueOnce(pushEntry);
+
+    // Step 2: search finds the discoverable tool
+    const searchDef = registry.get("actions.search")!();
+    const searchResult = (await searchDef.run({ query: "push" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+    expect(searchResult.results[0]!.id).toBe("git.push");
+    expect(searchResult.results[0]!).not.toHaveProperty("inputSchema");
+
+    // Step 3: getSchema retrieves the full schema
+    const schemaDef = registry.get("actions.getSchema")!();
+    const schemaResult = (await schemaDef.run({ actionId: "git.push" } as never, stubCtx)) as {
+      ok: true;
+      entry: ActionManifestEntry;
+    };
+    expect(schemaResult.ok).toBe(true);
+    expect(schemaResult.entry.inputSchema).toBeDefined();
   });
 });

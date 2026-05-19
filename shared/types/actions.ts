@@ -14,6 +14,8 @@ export type RiskBand =
   | "destructive-local"
   | "destructive-network";
 
+export type McpVisibility = "core" | "discoverable" | "hidden";
+
 export type ActionScope = "renderer";
 
 /**
@@ -127,6 +129,14 @@ export interface ActionDefinition<
    * results where the schema adds real value for programmatic consumers.
    */
   mcpOutputSchema?: boolean;
+  /**
+   * MCP progressive-disclosure visibility. `core` tools always appear on
+   * `tools/list`; `discoverable` tools are reachable via `actions.search` +
+   * `actions.getSchema` but omitted from the default list; `hidden` tools
+   * never surface in discovery. Unset (undefined) preserves pre-existing
+   * behavior (tool appears on `tools/list` when tier-permitted).
+   */
+  mcpVisibility?: McpVisibility;
 }
 
 export interface ActionManifestEntry {
@@ -157,6 +167,8 @@ export interface ActionManifestEntry {
   dangerRationale?: string;
   /** Risk band derived from danger + open-world category. Read by consent dialogs. */
   band?: RiskBand;
+  /** MCP progressive-disclosure visibility classification. */
+  mcpVisibility?: McpVisibility;
 }
 
 export interface ActionDispatchSuccess<Result = unknown> {

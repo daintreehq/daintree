@@ -1,5 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import type { ActionContext } from "@shared/types/actions";
+import type { ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { z } from "zod";
 import { PersistedStoreInfoSchema } from "./schemas";
 import { actionService } from "@/services/ActionService";
@@ -19,11 +19,12 @@ export function registerIntrospectionActions(
     id: "actions.list",
     title: "List Actions",
     description:
-      "List available actions. Filter by category or search. Includes metadata like danger level and enabled state.",
+      "List available actions with full schemas. Filter by category or search. Prefer `actions.search` for targeted discovery.",
     category: "introspection",
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     argsSchema: z
       .object({
         category: z
@@ -72,6 +73,7 @@ export function registerIntrospectionActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     resultSchema: z.object({
       projectId: z.string().optional(),
       projectName: z.string().optional(),
@@ -139,6 +141,7 @@ export function registerIntrospectionActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "discoverable",
     resultSchema: z.object({
       storeCount: z.number(),
       stores: z.array(PersistedStoreInfoSchema),
@@ -184,6 +187,142 @@ export function registerIntrospectionActions(
       });
 
       return { storeCount: stores.length, stores };
+    },
+  }));
+
+  actions.set("actions.search", () => ({
+    id: "actions.search",
+    title: "Search Actions",
+    description:
+      "Search actions by natural-language query. Returns lightweight matches without full schemas.",
+    category: "introspection",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    mcpVisibility: "core",
+    argsSchema: z.object({
+      query: z
+        .string()
+        .min(1)
+        .refine((s) => s.trim().length > 0, "must contain non-whitespace text")
+        .describe("Natural-language query or keywords to search for"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .default(20)
+        .describe("Max results (1-100, default 20)"),
+    }),
+    resultSchema: z.object({
+      totalMatches: z.number().int().nonnegative(),
+      results: z.array(z.unknown()),
+    }),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { query, limit = 20 } = args as { query: string; limit?: number };
+      const manifest = actionService.list(ctx);
+
+      const q = query.toLowerCase();
+      const qTerms = q.split(/\s+/).filter((t) => t.length > 0);
+
+      interface ScoredEntry {
+        entry: Omit<ActionManifestEntry, "inputSchema" | "outputSchema">;
+        score: number;
+      }
+
+      const scored: ScoredEntry[] = [];
+
+      for (const entry of manifest) {
+        if (entry.mcpVisibility === "hidden") continue;
+
+        const id = (entry.id ?? "").toLowerCase();
+        const title = (entry.title ?? "").toLowerCase();
+        const description = (entry.description ?? "").toLowerCase();
+        const category = (entry.category ?? "").toLowerCase();
+        const keywords = (entry.keywords ?? []).join(" ").toLowerCase();
+
+        let score = 0;
+
+        for (const term of qTerms) {
+          if (id === term) {
+            score += 50;
+          } else if (id.includes(term)) {
+            score += 25;
+          }
+          if (title.includes(term)) {
+            score += 15;
+          }
+          if (keywords.includes(term)) {
+            score += 8;
+          }
+          if (description.includes(term)) {
+            score += 4;
+          }
+          if (category.includes(term)) {
+            score += 2;
+          }
+        }
+
+        if (score > 0) {
+          const { inputSchema: _, outputSchema: __, ...lightweight } = entry;
+          scored.push({ entry: lightweight, score });
+        }
+      }
+
+      scored.sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id));
+
+      const results = scored.slice(0, Math.min(limit, 100)).map((s) => s.entry);
+
+      return { totalMatches: scored.length, results };
+    },
+  }));
+
+  actions.set("actions.getSchema", () => ({
+    id: "actions.getSchema",
+    title: "Get Action Schema",
+    description:
+      "Fetch full action schema (inputSchema + outputSchema) by ID. Use after actions.search for schema details.",
+    category: "introspection",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    mcpVisibility: "core",
+    argsSchema: z.object({
+      actionId: z.string().min(1).describe("The action ID to fetch the schema for"),
+    }),
+    resultSchema: z.union([
+      z.object({ ok: z.literal(true), entry: z.unknown() }),
+      z.object({
+        ok: z.literal(false),
+        error: z.object({ code: z.string(), message: z.string() }),
+      }),
+    ]),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { actionId } = args as { actionId: string };
+      const entry = actionService.get(actionId, ctx);
+
+      if (!entry) {
+        return {
+          ok: false,
+          error: {
+            code: "NOT_FOUND",
+            message: `No action found with id "${actionId}". Use actions.search to find available actions.`,
+          },
+        };
+      }
+
+      if (entry.mcpVisibility === "hidden") {
+        return {
+          ok: false,
+          error: {
+            code: "NOT_FOUND",
+            message: `No action found with id "${actionId}". Use actions.search to find available actions.`,
+          },
+        };
+      }
+
+      return { ok: true, entry };
     },
   }));
 }

@@ -19,7 +19,9 @@ import {
   parseToolArguments,
   precomputeApiKeyBearerHash,
   resolveTokenTier,
+  shouldExposeTool,
 } from "../tierAuth.js";
+import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
 beforeEach(() => {
   mockPaneConfigService.isValidPaneToken.mockReset();
@@ -274,5 +276,63 @@ describe("BAND_OVERRIDES invariant", () => {
     for (const id of Object.keys(BAND_OVERRIDES)) {
       expect(id).toBeTruthy();
     }
+  });
+});
+
+function makeEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifestEntry {
+  return {
+    id: "actions.list",
+    name: "actions.list",
+    title: "Test",
+    description: "Test action",
+    category: "introspection",
+    kind: "query",
+    danger: "safe",
+    enabled: true,
+    requiresArgs: false,
+    ...overrides,
+  };
+}
+
+describe("shouldExposeTool", () => {
+  it("exposes core entries when tier-permitted", () => {
+    const entry = makeEntry({ id: "actions.list", mcpVisibility: "core" });
+    expect(shouldExposeTool(entry, "workbench", false)).toBe(true);
+  });
+
+  it("excludes discoverable entries from tools/list", () => {
+    const entry = makeEntry({ id: "actions.list", mcpVisibility: "discoverable" });
+    expect(shouldExposeTool(entry, "workbench", false)).toBe(false);
+  });
+
+  it("excludes hidden entries from tools/list", () => {
+    const entry = makeEntry({ id: "actions.list", mcpVisibility: "hidden" });
+    expect(shouldExposeTool(entry, "workbench", false)).toBe(false);
+  });
+
+  it("exposes unclassified entries (no mcpVisibility) for back-compat", () => {
+    const entry = makeEntry({ id: "actions.list" });
+    expect(shouldExposeTool(entry, "workbench", false)).toBe(true);
+  });
+
+  it("still excludes core entries outside the tier allowlist (tier is the authority gate)", () => {
+    const entry = makeEntry({ id: "git.push", mcpVisibility: "core" });
+    expect(shouldExposeTool(entry, "workbench", false)).toBe(false);
+    expect(shouldExposeTool(entry, "system", false)).toBe(true);
+  });
+
+  it("still excludes restricted-danger tools regardless of visibility", () => {
+    const entry = makeEntry({ id: "actions.list", mcpVisibility: "core", danger: "restricted" });
+    expect(shouldExposeTool(entry, "workbench", false)).toBe(false);
+  });
+
+  it("does not expose discoverable entries in external tier even with fullToolSurface (visibility gate precedes fullToolSurface)", () => {
+    const entry = makeEntry({ id: "actions.search", mcpVisibility: "discoverable" });
+    expect(shouldExposeTool(entry, "external", true)).toBe(false);
+  });
+
+  it("still excludes hidden entries even with fullToolSurface", () => {
+    const entry = makeEntry({ id: "actions.search", mcpVisibility: "hidden" });
+    expect(shouldExposeTool(entry, "external", true)).toBe(false);
   });
 });

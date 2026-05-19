@@ -232,6 +232,8 @@ export function unionSet(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
 const MCP_TOOL_ALLOWLIST_ENTRIES = [
   ACTIONS_LIST_TOOL,
   "actions.getContext",
+  "actions.search",
+  "actions.getSchema",
 
   "agent.launch",
   "agent.terminal",
