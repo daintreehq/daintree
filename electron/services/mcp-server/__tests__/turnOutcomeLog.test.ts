@@ -598,7 +598,7 @@ describe("TurnOutcomeService.clear", () => {
     vi.useRealTimers();
   });
 
-  it("empties records and resets stuck guard + buffers", () => {
+  it("empties records but preserves live classifier state", () => {
     const f = makeFixture();
     f.service.appendOutput("term-1", "x".repeat(80));
     f.service.handleTransition(
@@ -607,11 +607,11 @@ describe("TurnOutcomeService.clear", () => {
     expect(f.service.getRecords()).toHaveLength(1);
     f.service.clear();
     expect(f.service.getRecords()).toHaveLength(0);
-    // Stuck guard cleared — next timeout records again
+    // Stuck guard preserved — duplicate timeout does not re-record
     f.service.handleTransition(
       makeTransition({ previousState: "waiting", state: "idle", trigger: "timeout" })
     );
-    expect(f.service.getRecords()).toHaveLength(1);
+    expect(f.service.getRecords()).toHaveLength(0);
   });
 });
 
@@ -699,14 +699,17 @@ describe("TurnOutcomeService turnId lifecycle", () => {
     expect(f.service.getCurrentTurnIdForSession("session-1")).toBeNull();
   });
 
-  it("clear resets turnId maps", () => {
+  it("clear preserves active turnId so in-progress turns survive log wipe", () => {
     const f = makeFixture();
     f.service.handleTransition(
       makeTransition({ previousState: "idle", state: "working", trigger: "input" })
     );
-    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeDefined();
+    const beforeClear = f.service.getCurrentTurnIdForSession("session-1");
+    expect(beforeClear).toBeDefined();
     f.service.clear();
-    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeNull();
+    // Live classifier state is preserved across clear() — the active turn
+    // continues to be stamped so dispatches mid-turn stay correlated.
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBe(beforeClear);
   });
 
   it("turnId is absent on recordDirectOutcome (pre-turn failures)", () => {

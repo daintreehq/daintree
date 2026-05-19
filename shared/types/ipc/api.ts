@@ -1395,10 +1395,12 @@ export interface ElectronAPI {
      * since-launch 401 counter). Resets on app restart.
      */
     getAuditStats(): Promise<import("./mcpServer.js").McpAuditStats>;
-    /** Read the turn-outcome record ring buffer (newest first). */
-    getTurnOutcomeRecords(): Promise<import("./mcpServer.js").AssistantTurnRecord[]>;
     /** Clear all audit records from the ring buffer and persistence. */
     clearAuditLog(): Promise<void>;
+    /** Read the turn-outcome ring buffer (newest first). */
+    getTurnOutcomeRecords(): Promise<import("./mcpServer.js").AssistantTurnRecord[]>;
+    /** Clear all turn-outcome records from the ring buffer and persistence. */
+    clearTurnOutcomeLog(): Promise<void>;
     /** Toggle audit-log capture without losing existing records. */
     setAuditEnabled(enabled: boolean): Promise<{ enabled: boolean; maxRecords: number }>;
     /** Update the ring-buffer cap (clamped to MCP_AUDIT_MIN/MAX). */
