@@ -52,7 +52,10 @@ export function consumeToken(
 ): ConsumeTokenResult {
   const elapsed = Math.max(0, nowMs - bucket.lastRefillMs);
   bucket.tokens = Math.min(config.capacity, bucket.tokens + elapsed * config.refillPerMs);
-  bucket.lastRefillMs = nowMs;
+  // Never move the refill anchor backward: a backward `Date.now()` (NTP
+  // step-back, which Electron can see on macOS) would otherwise let the
+  // next call accrue refill it didn't earn.
+  bucket.lastRefillMs = Math.max(bucket.lastRefillMs, nowMs);
   if (bucket.tokens >= 1) {
     bucket.tokens -= 1;
     return { allowed: true };

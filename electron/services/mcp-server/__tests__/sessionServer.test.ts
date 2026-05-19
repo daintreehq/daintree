@@ -1690,15 +1690,39 @@ describe("SessionStore.consumeRateLimitToken", () => {
     store.drain();
   });
 
-  it("revokeSession tears down the rate-limit buckets", () => {
+  it("drain() tears down all rate-limit buckets", () => {
     const store = new RealSessionStore(() => {});
     store.consumeRateLimitToken("s", "git.commit", 1000);
     expect(store.rateLimitBuckets.has("s")).toBe(true);
-    store.sessionTierMap.set("s", "system");
-    // No live transport, but revokeSession returns false only when no
-    // session entry exists — drive teardown via drain() which also clears.
     store.drain();
     expect(store.rateLimitBuckets.size).toBe(0);
+  });
+
+  it("revokeSession() tears down the rate-limit buckets for a live session", () => {
+    const store = new RealSessionStore(() => {});
+    store.consumeRateLimitToken("live", "git.commit", 1000);
+    expect(store.rateLimitBuckets.has("live")).toBe(true);
+    // Install a minimal HTTP session so revokeSession() has an entry to
+    // tear down (it returns false and no-ops without one).
+    store.httpSessions.set("live", {
+      transport: { close: vi.fn().mockResolvedValue(undefined) },
+      server: {},
+      idleTimer: setTimeout(() => {}, 1_000_000),
+    } as unknown as (typeof store.httpSessions extends Map<string, infer V> ? V : never));
+    expect(store.revokeSession("live")).toBe(true);
+    expect(store.rateLimitBuckets.has("live")).toBe(false);
+    store.drain();
+  });
+
+  it("does not advance lastRefillMs backward on a clock step-back", () => {
+    const store = new RealSessionStore(() => {});
+    store.consumeRateLimitToken("s", "git.commit", 10000);
+    store.consumeRateLimitToken("s", "git.commit", 9000); // clock went back
+    const bucket = store.rateLimitBuckets.get("s")!.get("git.commit")!;
+    expect(bucket.lastRefillMs).toBe(10000);
+    store.consumeRateLimitToken("s", "git.commit", 10001);
+    expect(bucket.lastRefillMs).toBe(10001);
+    store.drain();
   });
 });
 
@@ -1803,6 +1827,57 @@ describe("CallTool rate limiting (handler integration)", () => {
     expect(result.isError).not.toBe(true);
     expect(sessionStore.consumeRateLimitToken).toHaveBeenCalledWith("rl-5", "files.search");
     expect(dispatchAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("charges a token even when the call is served from the dedup cache", async () => {
+    // Real store so dedup actually caches; spy on the real token bucket to
+    // prove rate-limit runs before dedup for *cached* hits, not just
+    // in-flight ones.
+    const store = new RealSessionStore(() => {});
+    store.sessionTierMap.set("rl-dedup", "system");
+    const consumeSpy = vi.spyOn(store, "consumeRateLimitToken");
+    const dispatchAction = vi
+      .fn()
+      .mockResolvedValue({ result: { ok: true, result: { sha: "abc" } } });
+    const deps = fakeDeps({ sessionStore: store, dispatchAction });
+    const server = createSessionServer("rl-dedup", deps);
+
+    const args = { message: "one" };
+    await callTool(server, { name: "git.commit", arguments: args });
+    await callTool(server, { name: "git.commit", arguments: args });
+
+    // Second call is a dedup cache hit (dispatch ran once) but the token
+    // was still charged on both — runaway loops stay bounded.
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(consumeSpy).toHaveBeenCalledTimes(2);
+    store.drain();
+  });
+
+  it("rate-limits a grant-authorized call (auth passes, rate limit fails)", async () => {
+    // Workbench tier can't call worktree.delete; a per-tool grant lifts the
+    // auth gate. The rate limiter must still reject, and the tier-mismatch
+    // banner must NOT fire (this is not an authorization failure).
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.grantCache.issueGrant("rl-grant", "worktree.delete");
+    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
+      allowed: false,
+      retryAfter: 4,
+    });
+    const dispatchAction = vi.fn();
+    const notifyTierMismatch = vi.fn();
+    const deps = fakeDeps({ sessionStore, dispatchAction, notifyTierMismatch });
+    const server = createSessionServer("rl-grant", deps);
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "w1" },
+    })) as { content: unknown; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(parseToolErrorPayload(result).code).toBe(MCP_RATE_LIMITED_CODE);
+    expect(notifyTierMismatch).not.toHaveBeenCalled();
+    expect(dispatchAction).not.toHaveBeenCalled();
+    sessionStore.grantCache.dispose();
   });
 });
 
