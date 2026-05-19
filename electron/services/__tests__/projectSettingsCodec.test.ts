@@ -88,6 +88,20 @@ describe("decode", () => {
     expect(result.settings.forgeProviderOverride).toBeUndefined();
   });
 
+  it("migrates legacy githubRemote to forgeRemote", () => {
+    const result = decode({ runCommands: [], githubRemote: "upstream" });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.forgeRemote).toBe("upstream");
+    expect(result.settings.githubRemote).toBeUndefined();
+  });
+
+  it("prefers forgeRemote over legacy githubRemote when both are present", () => {
+    const result = decode({ runCommands: [], forgeRemote: "fork", githubRemote: "upstream" });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.forgeRemote).toBe("fork");
+    expect(result.settings.githubRemote).toBeUndefined();
+  });
+
   it("filters invalid runCommands entries", () => {
     const result = decode({
       runCommands: [
@@ -124,9 +138,13 @@ describe("encodeEnvelope", () => {
       runCommands: [],
       resourceEnvironment: { provision: ["legacy"] },
       exposeDaintreeMcpToAgents: true,
+      githubRemote: "upstream",
+      forgeRemote: "upstream",
     });
     expect(enc.resourceEnvironment).toBeUndefined();
     expect(enc.exposeDaintreeMcpToAgents).toBeUndefined();
+    expect(enc.githubRemote).toBeUndefined();
+    expect(enc.forgeRemote).toBe("upstream");
   });
 
   it("strips agentInstructions so the runtime helper never reaches disk", () => {

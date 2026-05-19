@@ -361,10 +361,12 @@ port.on("message", async (rawMsg: any) => {
           request.globalEnvVars,
           request.wslGitByWorktree,
           request.forgeProviderOverride !== undefined ||
-            request.forgeDefaultProviderId !== undefined
+            request.forgeDefaultProviderId !== undefined ||
+            request.forgeRemote !== undefined
             ? {
                 forgeProviderOverride: request.forgeProviderOverride ?? null,
                 forgeDefaultProviderId: request.forgeDefaultProviderId ?? null,
+                forgeRemote: request.forgeRemote ?? null,
               }
             : undefined
         );
@@ -374,6 +376,7 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.updateForgeSettings({
           forgeProviderOverride: request.forgeProviderOverride,
           forgeDefaultProviderId: request.forgeDefaultProviderId,
+          forgeRemote: request.forgeRemote,
         });
         break;
 

@@ -214,6 +214,83 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
+  it("resolves the provider against the selected forgeRemote, not origin (#8456)", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const resolveForgeProvider = vi.fn().mockReturnValue({ entry: null, resolvedVia: null });
+    vi.doMock("../forgeProviderResolver.js", () => ({ resolveForgeProvider }));
+    vi.doMock("../forgeProviderRegistry.js", () => ({
+      getForgeProviderImpl: vi.fn().mockReturnValue(undefined),
+    }));
+    vi.doMock("../projectStorePaths.js", () => ({
+      generateProjectId: vi.fn().mockReturnValue("test-project-id"),
+    }));
+    const getConfig = vi.fn(async (key: string) =>
+      key === "remote.upstream.url"
+        ? "https://github.com/upstreamowner/upstreamrepo.git"
+        : "https://github.com/originowner/originrepo.git"
+    );
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: vi.fn().mockReturnValue({ getConfig }),
+    }));
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+
+    pullRequestService.initialize("/repo");
+    pullRequestService.setForgeSettings({
+      forgeProviderOverride: null,
+      forgeDefaultProviderId: null,
+      forgeRemote: "upstream",
+    });
+
+    await pullRequestService.refresh();
+
+    expect(getConfig).toHaveBeenCalledWith("remote.upstream.url");
+    expect(resolveForgeProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ remoteUrl: "https://github.com/upstreamowner/upstreamrepo.git" })
+    );
+
+    pullRequestService.destroy();
+  });
+
+  it("falls back to origin when the selected forgeRemote has no URL (#8456)", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const resolveForgeProvider = vi.fn().mockReturnValue({ entry: null, resolvedVia: null });
+    vi.doMock("../forgeProviderResolver.js", () => ({ resolveForgeProvider }));
+    vi.doMock("../forgeProviderRegistry.js", () => ({
+      getForgeProviderImpl: vi.fn().mockReturnValue(undefined),
+    }));
+    vi.doMock("../projectStorePaths.js", () => ({
+      generateProjectId: vi.fn().mockReturnValue("test-project-id"),
+    }));
+    const getConfig = vi.fn(async (key: string) =>
+      key === "remote.origin.url" ? "https://github.com/originowner/originrepo.git" : null
+    );
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: vi.fn().mockReturnValue({ getConfig }),
+    }));
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+
+    pullRequestService.initialize("/repo");
+    pullRequestService.setForgeSettings({
+      forgeProviderOverride: null,
+      forgeDefaultProviderId: null,
+      forgeRemote: "missing",
+    });
+
+    await pullRequestService.refresh();
+
+    expect(resolveForgeProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ remoteUrl: "https://github.com/originowner/originrepo.git" })
+    );
+
+    pullRequestService.destroy();
+  });
+
   it("does not track default branches like main/master", async () => {
     const clearPRCaches = vi.fn();
     vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));

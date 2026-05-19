@@ -1028,8 +1028,8 @@ function ProjectFormTabContent({
     case "project:code-forge":
       return (
         <LazyComp
-          githubRemote={projectForm.githubRemote}
-          onGithubRemoteChange={projectForm.setGithubRemote}
+          forgeRemote={projectForm.forgeRemote}
+          onForgeRemoteChange={projectForm.setForgeRemote}
           forgeProviderOverride={projectForm.forgeProviderOverride}
           onForgeProviderOverrideChange={projectForm.setForgeProviderOverride}
           projectPath={projectForm.currentProject?.path}

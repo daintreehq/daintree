@@ -45,9 +45,10 @@ export async function getRepoContext(cwd: string): Promise<RepoContext | null> {
       const project = await projectStore.getProjectByPath(repoRoot);
       if (project) {
         const settings = await projectStore.getProjectSettings(project.id);
-        if (settings.githubRemote) {
+        const selectedRemote = settings.forgeRemote ?? settings.githubRemote;
+        if (selectedRemote) {
           const remotes = await gitService.listRemotes(cwd);
-          const match = remotes.find((r) => r.name === settings.githubRemote);
+          const match = remotes.find((r) => r.name === selectedRemote);
           if (match?.fetchUrl) {
             fetchUrl = match.fetchUrl;
           }

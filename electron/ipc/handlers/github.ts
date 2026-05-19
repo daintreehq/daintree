@@ -458,12 +458,18 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_GET_PR_REVIEW_THREADS, handleGitHubGetPRReviewThreads));
 
-  const handleGitHubListRemotes = async (
+  // Lists all git remotes (origin, upstream, …) with an optional parsed
+  // owner/repo for remotes whose URL looks like a forge repo. The data is
+  // provider-agnostic; the `github:list-remotes` channel name is legacy.
+  // New callers should use `project:list-remotes` (#8456); the GitHub
+  // channel stays registered for backward compat.
+  const listRemotesForChannel = async (
+    rateLimitKey: string,
     cwd: string
   ): Promise<
     Array<{ name: string; fetchUrl: string; parsedRepo: { owner: string; repo: string } | null }>
   > => {
-    checkRateLimit(CHANNELS.GITHUB_LIST_REMOTES, 10, 10_000);
+    checkRateLimit(rateLimitKey, 10, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -473,7 +479,16 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { listGitHubRemotes } = await import("../../services/github/index.js");
     return listGitHubRemotes(cwd);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_LIST_REMOTES, handleGitHubListRemotes));
+  handlers.push(
+    typedHandle(CHANNELS.GITHUB_LIST_REMOTES, (cwd: string) =>
+      listRemotesForChannel(CHANNELS.GITHUB_LIST_REMOTES, cwd)
+    )
+  );
+  handlers.push(
+    typedHandle(CHANNELS.PROJECT_LIST_REMOTES, (cwd: string) =>
+      listRemotesForChannel(CHANNELS.PROJECT_LIST_REMOTES, cwd)
+    )
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

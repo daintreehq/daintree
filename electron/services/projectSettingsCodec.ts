@@ -351,7 +351,12 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
     branchPrefixMode: decodeBranchPrefixMode(migrated.branchPrefixMode),
     branchPrefixCustom:
       typeof migrated.branchPrefixCustom === "string" ? migrated.branchPrefixCustom : undefined,
-    githubRemote: typeof migrated.githubRemote === "string" ? migrated.githubRemote : undefined,
+    forgeRemote:
+      typeof migrated.forgeRemote === "string"
+        ? migrated.forgeRemote
+        : typeof migrated.githubRemote === "string"
+          ? migrated.githubRemote
+          : undefined,
     forgeProviderOverride: decodeForgeProviderOverride(migrated.forgeProviderOverride),
     worktreePathPattern:
       typeof migrated.worktreePathPattern === "string" && migrated.worktreePathPattern.trim()
@@ -393,9 +398,9 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
  * Transient fields (`insecureEnvironmentVariables`,
  * `unresolvedSecureEnvironmentVariables`, `agentInstructions`) are stripped
  * — those are runtime helpers, not persisted state. The legacy
- * `resourceEnvironment` and `exposeDaintreeMcpToAgents` fields are also
- * stripped since they have already been migrated into their canonical
- * counterparts at decode time.
+ * `resourceEnvironment`, `exposeDaintreeMcpToAgents`, and `githubRemote`
+ * fields are also stripped since they have already been migrated into their
+ * canonical counterparts at decode time.
  */
 export function encodeEnvelope(settings: ProjectSettings): Record<string, unknown> {
   // Strip transient runtime fields, both legacy migration fields, the
@@ -409,6 +414,7 @@ export function encodeEnvelope(settings: ProjectSettings): Record<string, unknow
   delete persistable.unresolvedSecureEnvironmentVariables;
   delete persistable.resourceEnvironment;
   delete persistable.exposeDaintreeMcpToAgents;
+  delete persistable.githubRemote;
   delete persistable.agentInstructions;
   delete persistable._schemaVersion;
 
@@ -452,6 +458,7 @@ export const ProjectSettingsSaveSchema = z
     preferredImageViewer: z.unknown().optional(),
     branchPrefixMode: z.enum(["none", "username", "custom"]).optional(),
     branchPrefixCustom: z.string().optional(),
+    forgeRemote: z.string().optional(),
     githubRemote: z.string().optional(),
     forgeProviderOverride: z.union([z.string(), z.null()]).optional(),
     worktreePathPattern: z.string().optional(),

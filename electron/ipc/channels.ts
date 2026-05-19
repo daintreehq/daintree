@@ -213,6 +213,7 @@ export const CHANNELS = {
   PROJECT_GET_SETTINGS: "project:get-settings",
   PROJECT_SAVE_SETTINGS: "project:save-settings",
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
+  PROJECT_LIST_REMOTES: "project:list-remotes",
   PROJECT_CLOSE: "project:close",
   PROJECT_REOPEN: "project:reopen",
   PROJECT_GET_STATS: "project:get-stats",

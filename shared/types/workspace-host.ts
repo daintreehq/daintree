@@ -277,11 +277,19 @@ export type WorkspaceHostRequest =
        * `forgeProviderOverride` — `electron-store` is main-process-only.
        */
       forgeDefaultProviderId?: string | null;
+      /**
+       * Selected git remote name (`forgeRemote`, #8456). The host resolves the
+       * provider against this remote's URL rather than always `origin`, so a
+       * project that pushes PRs to `upstream` resolves correctly. Plumbed in
+       * for the same main-process-only reason as the fields above.
+       */
+      forgeRemote?: string | null;
     }
   | {
       type: "update-forge-settings";
       forgeProviderOverride: string | null;
       forgeDefaultProviderId: string | null;
+      forgeRemote: string | null;
     }
   | {
       type: "sync";
