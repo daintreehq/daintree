@@ -270,14 +270,9 @@ describe("BAND_OVERRIDES invariant", () => {
     }
   });
 
-  it("every override alters the default derivation", () => {
-    for (const [id, band] of Object.entries(BAND_OVERRIDES)) {
-      // We can't know the danger/category without the registry, but we can at
-      // least assert the override isn't a no-op by checking it differs from
-      // what the mechanical derivation would produce for any plausible input.
-      // The real safety check is the invariant above — overrides exist to
-      // override, so they must point to a non-reversible band.
-      expect(band).toBeDefined();
+  it("every override key is a non-empty string", () => {
+    for (const id of Object.keys(BAND_OVERRIDES)) {
+      expect(id).toBeTruthy();
     }
   });
 });
