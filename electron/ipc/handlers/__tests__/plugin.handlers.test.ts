@@ -620,6 +620,68 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     const handler = getHandler();
     expect(await handler({}, "s:1", ["a.ts"])).toEqual({});
   });
+
+  it("treats an empty-string field as absent so a later provider can fill it", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p.first",
+        contributionId: "d",
+        impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "" } }) },
+      },
+      {
+        pluginId: "p.second",
+        contributionId: "d",
+        impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "7" } }) },
+      },
+    ]);
+    const handler = getHandler();
+    expect(await handler({}, "s:1", ["a.ts"])).toEqual({ "a.ts": { badge: "7" } });
+  });
+
+  it("drops decorations for paths the caller did not request", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p",
+        contributionId: "d",
+        impl: {
+          provideDecorations: vi.fn().mockResolvedValue({
+            "requested.ts": { badge: "1" },
+            "not-requested.ts": { badge: "9" },
+          }),
+        },
+      },
+    ]);
+    const handler = getHandler();
+    expect(await handler({}, "s:1", ["requested.ts"])).toEqual({
+      "requested.ts": { badge: "1" },
+    });
+  });
+
+  it("skips a provider that never settles and still returns the healthy one", async () => {
+    vi.useFakeTimers();
+    try {
+      mockGetFileDecorationImpls.mockReturnValue([
+        {
+          pluginId: "p.hang",
+          contributionId: "d",
+          impl: { provideDecorations: vi.fn().mockReturnValue(new Promise(() => {})) },
+        },
+        {
+          pluginId: "p.good",
+          contributionId: "d",
+          impl: {
+            provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "4" } }),
+          },
+        },
+      ]);
+      const handler = getHandler();
+      const promise = handler({}, "s:1", ["a.ts"]) as Promise<unknown>;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(await promise).toEqual({ "a.ts": { badge: "4" } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("registerPluginHandler", () => {

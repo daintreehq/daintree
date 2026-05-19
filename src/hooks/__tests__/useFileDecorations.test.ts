@@ -101,6 +101,48 @@ describe("useFileDecorations", () => {
     expect(getDecorationsMock).toHaveBeenCalledTimes(1);
   });
 
+  it("re-pulls on a wildcard payload scope (plugin-unload broadcast)", async () => {
+    let listener: ((p: { scope: string; paths?: string[] }) => void) | undefined;
+    onDecorationsChangedMock.mockImplementation((cb: typeof listener) => {
+      listener = cb;
+      return () => {};
+    });
+    getDecorationsMock.mockResolvedValueOnce({ "a.ts": { badge: "1" } });
+    const useFileDecorations = await load();
+    const { result } = renderHook(() => useFileDecorations("worktree-diff:/r", ["a.ts"]));
+    await waitFor(() => expect(result.current).toEqual({ "a.ts": { badge: "1" } }));
+
+    getDecorationsMock.mockResolvedValueOnce({});
+    act(() => listener?.({ scope: "worktree-diff:*" }));
+    await waitFor(() => expect(result.current).toEqual({}));
+  });
+
+  it("ignores a stale fetch that resolves after a newer one", async () => {
+    let listener: ((p: { scope: string; paths?: string[] }) => void) | undefined;
+    onDecorationsChangedMock.mockImplementation((cb: typeof listener) => {
+      listener = cb;
+      return () => {};
+    });
+    let resolveFirst: ((v: Record<string, FileDecoration>) => void) | undefined;
+    getDecorationsMock.mockReturnValueOnce(
+      new Promise<Record<string, FileDecoration>>((res) => {
+        resolveFirst = res;
+      })
+    );
+    const useFileDecorations = await load();
+    const { result } = renderHook(() => useFileDecorations("s:1", ["a.ts"]));
+
+    // Second fetch (from invalidation) resolves first with the fresh value.
+    getDecorationsMock.mockResolvedValueOnce({ "a.ts": { badge: "new" } });
+    act(() => listener?.({ scope: "s:1" }));
+    await waitFor(() => expect(result.current).toEqual({ "a.ts": { badge: "new" } }));
+
+    // The stale first fetch resolves late — it must NOT clobber the fresh value.
+    act(() => resolveFirst?.({ "a.ts": { badge: "stale" } }));
+    await Promise.resolve();
+    expect(result.current).toEqual({ "a.ts": { badge: "new" } });
+  });
+
   it("ignores invalidation whose narrowed paths don't intersect visible paths", async () => {
     let listener: ((p: { scope: string; paths?: string[] }) => void) | undefined;
     onDecorationsChangedMock.mockImplementation((cb: typeof listener) => {

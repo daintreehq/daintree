@@ -126,7 +126,7 @@ export function clearFileDecorationImplRegistry(): void {
  * matches any scope. No regex — the pattern space is intentionally tiny so
  * the contract stays obvious to plugin authors.
  */
-function scopeMatchesPattern(scope: string, pattern: string): boolean {
+export function scopeMatchesPattern(scope: string, pattern: string): boolean {
   if (pattern === "*") return true;
   if (pattern.endsWith("*")) {
     return scope.startsWith(pattern.slice(0, -1));

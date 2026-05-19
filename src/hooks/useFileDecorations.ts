@@ -9,6 +9,19 @@ import { logWarn } from "@/utils/logger";
 const EMPTY: Readonly<Record<string, FileDecoration>> = Object.freeze({});
 
 /**
+ * An invalidation payload scope may be a concrete scope (from a plugin's
+ * `invalidateFileDecorations`, which equals this hook's scope) or a declared
+ * pattern (`prefix:*` / `*`, broadcast when a plugin unloads). Match both with
+ * the same tiny rule the host registry uses so an unload-time wildcard still
+ * triggers a re-pull. Exact equality is the `pattern === scope` branch.
+ */
+function payloadScopeMatches(payloadScope: string, scope: string): boolean {
+  if (payloadScope === "*") return true;
+  if (payloadScope.endsWith("*")) return scope.startsWith(payloadScope.slice(0, -1));
+  return payloadScope === scope;
+}
+
+/**
  * Subscribe to plugin-contributed file decorations for `scope` over `paths`.
  *
  * The host knows nothing about what a decoration means — a plugin (e.g. the
@@ -33,7 +46,9 @@ export function useFileDecorations(scope: string, paths: string[]): Record<strin
     }
     return [...seen].sort();
   }, [paths]);
-  const pathsKey = cleanPaths.join("\n");
+  // NUL join: the one byte that cannot appear in a POSIX path, so the key is
+  // unambiguous even for filenames containing newlines.
+  const pathsKey = cleanPaths.join("\0");
 
   const [decorations, setDecorations] = useState<Record<string, FileDecoration>>(EMPTY);
 
@@ -82,7 +97,7 @@ export function useFileDecorations(scope: string, paths: string[]): Record<strin
     fetchDecorations();
 
     const cleanup = electron.plugin.onDecorationsChanged((payload) => {
-      if (payload.scope !== scope) return;
+      if (!payloadScopeMatches(payload.scope, scope)) return;
       // No path narrowing, or the invalidated paths intersect what we show →
       // re-pull. An empty intersection means nothing visible changed.
       if (payload.paths && payload.paths.length > 0) {

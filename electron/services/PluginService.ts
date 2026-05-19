@@ -41,6 +41,7 @@ import {
 import {
   registerFileDecorationProviderImpl,
   registerFileDecorationProviders,
+  scopeMatchesPattern,
   unregisterFileDecorationProviderImpl,
   unregisterFileDecorationProviderImpls,
   unregisterFileDecorationProviders,
@@ -702,6 +703,22 @@ export class PluginService {
             `Plugin "${pluginId}" invalidateFileDecorations: scope must be a non-empty string`
           );
         }
+        // A plugin may only invalidate scopes it actually declared in
+        // `contributes.fileDecorationProviders`. Without this a plugin could
+        // force unrelated renderer views to re-pull. Mirrors the
+        // registration-time declared-id guard so the manifest stays the
+        // single source of truth for what a plugin owns.
+        const declaredScopes = this.plugins
+          .get(pluginId)
+          ?.manifest.contributes.fileDecorationProviders.flatMap((c) => c.scopes);
+        if (
+          !declaredScopes ||
+          !declaredScopes.some((pattern) => scopeMatchesPattern(scope, pattern))
+        ) {
+          throw new Error(
+            `Plugin "${pluginId}" invalidateFileDecorations: scope "${scope}" is not covered by any declared contributes.fileDecorationProviders[].scopes`
+          );
+        }
         const narrowed =
           Array.isArray(paths) && paths.length > 0
             ? paths.filter((p): p is string => typeof p === "string" && p.length > 0)
@@ -893,9 +910,25 @@ export class PluginService {
     // re-bind that didn't refresh the disposer slot). The bulk call is
     // idempotent — already-cleared keys are silent no-ops.
     unregisterForgeProviderImpls(pluginId);
+    // Capture the unloaded plugin's declared decoration scopes before clearing
+    // the registry so we can tell any renderer that was showing them to
+    // re-pull (it will now resolve no impl and clear). Without this, stale
+    // decorations from a runtime-unloaded plugin would linger until the next
+    // scope/path change or remount.
+    const decorationScopes = this.plugins
+      .get(pluginId)
+      ?.manifest.contributes.fileDecorationProviders.flatMap((c) => c.scopes);
     unregisterFileDecorationProviders(pluginId);
     unregisterFileDecorationProviderImpls(pluginId);
     this.plugins.delete(pluginId);
+    if (decorationScopes && decorationScopes.length > 0) {
+      for (const scope of new Set(decorationScopes)) {
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:decorations-changed",
+          payload: { scope },
+        });
+      }
+    }
   }
 
   private flushPluginEventCleanups(pluginId: string): void {

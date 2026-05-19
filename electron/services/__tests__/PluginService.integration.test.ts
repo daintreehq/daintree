@@ -578,6 +578,114 @@ describe("PluginService integration — file decoration provider contributions",
     expect(String(readMarker(markerKey))).toContain("is not declared in contributes");
     expect(getFileDecorationImpls("s:/x")).toEqual([]);
   });
+
+  it("rejects invalidating a scope not covered by declared scopes", async () => {
+    const pluginDir = await writePlugin("acme.scope-guard", {
+      name: "acme.scope-guard",
+      version: "1.0.0",
+    });
+    const markerKey = makeMarkerKey();
+    const mainFile = `decor-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  try {
+    host.invalidateFileDecorations("other:/x");
+  } catch (err) {
+    globalThis[${JSON.stringify(markerKey)}] = String(err && err.message);
+  }
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.scope-guard",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          fileDecorationProviders: [{ id: "d", scopes: ["allowed:*"] }],
+        },
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    expect(String(readMarker(markerKey))).toContain("is not covered by any declared");
+  });
+
+  it("broadcasts a decorations-changed event for each declared scope on unload", async () => {
+    await writePlugin("acme.unload-decor", {
+      name: "acme.unload-decor",
+      version: "1.0.0",
+      contributes: {
+        fileDecorationProviders: [{ id: "d", scopes: ["scope-a:*", "scope-b:*"] }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    service.unloadPlugin("acme.unload-decor");
+
+    const decorationBroadcasts = vi
+      .mocked(broadcastToRenderer)
+      .mock.calls.filter(
+        (c) =>
+          c[0] === "events:push" &&
+          (c[1] as { name?: string }).name === "plugin:decorations-changed"
+      )
+      .map((c) => (c[1] as { payload: { scope: string } }).payload.scope);
+    expect(new Set(decorationBroadcasts)).toEqual(new Set(["scope-a:*", "scope-b:*"]));
+    expect(getFileDecorationImpls("scope-a:/x")).toEqual([]);
+  });
+
+  it("invalidateFileDecorations is a silent no-op after the plugin unloads", async () => {
+    const pluginDir = await writePlugin("acme.post-unload", {
+      name: "acme.post-unload",
+      version: "1.0.0",
+    });
+    const mainFile = `decor-${randomUUID()}.mjs`;
+    // Stash the host so the test can call invalidate AFTER unload — the true
+    // post-activation path the no-op guard protects.
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  globalThis.__postUnloadHost = host;
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.post-unload",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          fileDecorationProviders: [{ id: "d", scopes: ["live:*"] }],
+        },
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    const host = (globalThis as Record<string, unknown>).__postUnloadHost as {
+      invalidateFileDecorations: (scope: string) => void;
+    };
+    service.unloadPlugin("acme.post-unload");
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    expect(() => host.invalidateFileDecorations("live:/x")).not.toThrow();
+    const after = vi
+      .mocked(broadcastToRenderer)
+      .mock.calls.filter(
+        (c) => (c[1] as { name?: string } | undefined)?.name === "plugin:decorations-changed"
+      );
+    expect(after).toEqual([]);
+    delete (globalThis as Record<string, unknown>).__postUnloadHost;
+  });
 });
 
 describe("PluginService integration — main entry execution", () => {
