@@ -65,6 +65,7 @@ export function registerWorktreeQueryActions(
         id: worktree.id,
         path: worktree.path,
         branch: worktree.branch,
+        isActive: true,
         isMain: worktree.isMainWorktree ?? false,
         issueNumber: worktree.issueNumber ?? null,
         issueTitle: worktree.issueTitle ?? null,

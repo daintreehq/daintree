@@ -261,7 +261,7 @@ export function TroubleshootingTab() {
       .dispatch("logs.getVerbose", undefined, { source: "user" })
       .then((result) => {
         if (result.ok) {
-          setVerboseLogging(result.result as boolean);
+          setVerboseLogging((result.result as { verbose: boolean }).verbose);
         }
       })
       .catch((error) => {
