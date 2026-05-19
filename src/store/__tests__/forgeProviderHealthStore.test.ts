@@ -123,6 +123,15 @@ describe("forgeProviderHealthStore", () => {
     ).toBeNull();
   });
 
+  it("returns an immutable default for unseen providers (no shared mutation)", () => {
+    const a = selectForgeProviderHealth("p.one.one")(useForgeProviderHealthStore.getState());
+    expect(() => {
+      a.rateLimitBlocked = true;
+    }).toThrow();
+    const b = selectForgeProviderHealth("p.two.two")(useForgeProviderHealthStore.getState());
+    expect(b.rateLimitBlocked).toBe(false);
+  });
+
   it("produces a new providers object reference on every mutation", () => {
     const before = useForgeProviderHealthStore.getState().providers;
     useForgeProviderHealthStore

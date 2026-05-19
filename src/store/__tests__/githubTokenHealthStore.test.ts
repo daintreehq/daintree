@@ -37,4 +37,16 @@ describe("githubTokenHealthStore (shim)", () => {
     useGitHubTokenHealthStore.getState().setUnhealthy(false);
     expect(useGitHubTokenHealthStore.getState().isUnhealthy).toBe(false);
   });
+
+  it("delegates .setState through to the backing keyed store", () => {
+    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    expect(useGitHubTokenHealthStore.getState().isUnhealthy).toBe(true);
+    expect(
+      selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(useForgeProviderHealthStore.getState())
+        .tokenUnhealthy
+    ).toBe(true);
+
+    useGitHubTokenHealthStore.setState({ isUnhealthy: false });
+    expect(useGitHubTokenHealthStore.getState().isUnhealthy).toBe(false);
+  });
 });

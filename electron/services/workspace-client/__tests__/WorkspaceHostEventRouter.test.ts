@@ -540,6 +540,46 @@ describe("WorkspaceHostEventRouter", () => {
       }
     });
 
+    it("respects the exact guard-window fence-post (4999 suppress, 5000 pass)", () => {
+      const nowSpy = vi.spyOn(Date, "now");
+      try {
+        nowSpy.mockReturnValue(1_000_000);
+        const entry = makeEntry();
+        router.updateForgeCredentials(BUILTIN_GITHUB_PROVIDER_ID, {
+          kind: "bearer",
+          value: "tok",
+        });
+
+        // 4999ms after the credential change — still inside the window.
+        nowSpy.mockReturnValue(1_004_999);
+        router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+        expect(broadcastToRenderer).not.toHaveBeenCalled();
+
+        // Exactly 5000ms — `delta < GUARD_MS` is false, so it passes.
+        nowSpy.mockReturnValue(1_005_000);
+        router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+        expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("broadcasts the exact ForgeRateLimitChangedPayload shape", () => {
+      const entry = makeEntry();
+      const state: RateLimitInfo = {
+        limit: 5000,
+        remaining: 0,
+        resetAt: 1_700_000_000_000,
+        secondaryThrottled: true,
+      };
+      router.routeHostEvent(entry, forgeRateLimitEvent(FAKE_PROVIDER_ID, state));
+
+      expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+        providerId: FAKE_PROVIDER_ID,
+        state: { limit: 5000, remaining: 0, resetAt: 1_700_000_000_000, secondaryThrottled: true },
+      });
+    });
+
     it("broadcasts again once the guard window elapses", () => {
       const nowSpy = vi.spyOn(Date, "now");
       try {

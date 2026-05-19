@@ -63,6 +63,22 @@ describe("githubRateLimitStore", () => {
     expect(state.resetAt).toBeNull();
   });
 
+  it("delegates .setState through to the backing keyed store", () => {
+    useGitHubRateLimitStore.setState({ blocked: true, kind: "primary", resetAt: 123 });
+
+    const state = useGitHubRateLimitStore.getState();
+    expect(state.blocked).toBe(true);
+    expect(state.kind).toBe("primary");
+    expect(state.resetAt).toBe(123);
+
+    const slice = useForgeProviderHealthStore.getState().providers["daintree.github.github"];
+    expect(slice).toMatchObject({
+      rateLimitBlocked: true,
+      rateLimitKind: "primary",
+      rateLimitResetAt: 123,
+    });
+  });
+
   it("replaces stale state on repeated apply() calls", () => {
     useGitHubRateLimitStore.getState().apply({
       blocked: true,

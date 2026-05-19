@@ -31,3 +31,17 @@ useGitHubTokenHealthStore.getState = (): GitHubTokenHealthState => {
     DEFAULT_PROVIDER_HEALTH;
   return { isUnhealthy: p.tokenUnhealthy, setUnhealthy };
 };
+
+/**
+ * Test/imperative compatibility with the previous real Zustand store. Existing
+ * suites call `.setState({ isUnhealthy })` for setup; delegate to the backing
+ * keyed store's `setTokenUnhealthy` for GitHub.
+ */
+useGitHubTokenHealthStore.setState = (
+  partial: Partial<Pick<GitHubTokenHealthState, "isUnhealthy">>
+): void => {
+  if (partial.isUnhealthy === undefined) return;
+  useForgeProviderHealthStore
+    .getState()
+    .setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, partial.isUnhealthy);
+};

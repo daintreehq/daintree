@@ -23,12 +23,14 @@ export interface ForgeProviderHealth {
   tokenUnhealthy: boolean;
 }
 
-export const DEFAULT_PROVIDER_HEALTH: ForgeProviderHealth = {
+// Frozen: the selector returns this by reference for an unseen provider, so a
+// stray mutation would corrupt every future unseen-provider lookup.
+export const DEFAULT_PROVIDER_HEALTH: ForgeProviderHealth = Object.freeze({
   rateLimitBlocked: false,
   rateLimitKind: null,
   rateLimitResetAt: null,
   tokenUnhealthy: false,
-};
+});
 
 /** Normalized rate-limit state applied to a provider's slice. */
 export interface ForgeRateLimitState {

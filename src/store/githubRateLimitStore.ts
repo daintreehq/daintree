@@ -51,3 +51,21 @@ export function useGitHubRateLimitStore<T>(selector: (state: GitHubRateLimitStat
 }
 
 useGitHubRateLimitStore.getState = gitHubView;
+
+/**
+ * Test/imperative compatibility with the previous real Zustand store. Existing
+ * suites call `.setState({ blocked, kind, resetAt })` for setup; delegate that
+ * to the backing keyed store's `applyRateLimit` for GitHub. Object-partial
+ * form only (no functional updater) — that is all callers use.
+ */
+useGitHubRateLimitStore.setState = (
+  partial: Partial<Pick<GitHubRateLimitState, "blocked" | "kind" | "resetAt">>
+): void => {
+  const cur = gitHubView();
+  const next = { ...cur, ...partial };
+  useForgeProviderHealthStore.getState().applyRateLimit(BUILTIN_GITHUB_PROVIDER_ID, {
+    blocked: next.blocked,
+    kind: next.kind,
+    resetAt: next.resetAt,
+  });
+};
