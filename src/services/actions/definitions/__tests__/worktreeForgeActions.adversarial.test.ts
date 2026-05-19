@@ -191,6 +191,20 @@ describe("worktree forge actions", () => {
       expect(actionServiceMock.dispatch).not.toHaveBeenCalled();
     });
 
+    it("rejects a non-http(s) issue url returned by the forge provider", async () => {
+      forgeClientMock.getIssueUrl.mockResolvedValue("javascript:alert(1)");
+      mockWorktrees.set("wt1", { path: "/repo", issueNumber: 42 });
+      await get("worktree.openIssueInPortal").run?.(undefined, ctx);
+      expect(actionServiceMock.dispatch).not.toHaveBeenCalled();
+    });
+
+    it("rejects a file: issue url returned by the forge provider", async () => {
+      forgeClientMock.getIssueUrl.mockResolvedValue("file:///etc/passwd");
+      mockWorktrees.set("wt1", { path: "/repo", issueNumber: 42 });
+      await get("worktree.openIssueInPortal").run?.(undefined, ctx);
+      expect(actionServiceMock.dispatch).not.toHaveBeenCalled();
+    });
+
     it("propagates a forgeClient.getIssueUrl rejection", async () => {
       forgeClientMock.getIssueUrl.mockRejectedValue(new Error("no provider"));
       mockWorktrees.set("wt1", { path: "/repo", issueNumber: 42 });

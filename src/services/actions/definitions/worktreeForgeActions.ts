@@ -147,6 +147,17 @@ export function registerWorktreeForgeActions(
         const issueUrl = await forgeClient.getIssueUrl(worktree.path, worktree.issueNumber);
         if (!issueUrl) return;
 
+        try {
+          const parsed = new URL(issueUrl);
+          if (!["https:", "http:"].includes(parsed.protocol)) {
+            logWarn(`Invalid issue URL protocol: ${parsed.protocol}`);
+            return;
+          }
+        } catch (error) {
+          logError(`Invalid issue URL: ${issueUrl}`, error);
+          return;
+        }
+
         await actionService.dispatch(
           "portal.openUrl",
           {
