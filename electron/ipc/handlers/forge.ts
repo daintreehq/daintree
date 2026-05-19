@@ -130,6 +130,30 @@ export function registerForgeHandlers(): () => void {
 
   cleanups.push(
     typedHandle(
+      CHANNELS.FORGE_GET_ISSUE_URL,
+      async (payload: { cwd: string; issueNumber: number }) => {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        if (typeof payload.cwd !== "string" || !payload.cwd) {
+          throw new Error("Invalid working directory");
+        }
+        if (
+          typeof payload.issueNumber !== "number" ||
+          !Number.isInteger(payload.issueNumber) ||
+          payload.issueNumber <= 0
+        ) {
+          throw new Error("Invalid issue number");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        return impl.buildIssueUrl(repoRef, payload.issueNumber);
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandle(
       CHANNELS.FORGE_ASSIGN_ISSUE,
       async (payload: { cwd: string; issueNumber: number; username: string }) => {
         if (!payload || typeof payload !== "object") {

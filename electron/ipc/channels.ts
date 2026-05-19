@@ -724,6 +724,7 @@ export const CHANNELS = {
   FORGE_OPEN_PRS: "forge:open-prs",
   FORGE_OPEN_COMMITS: "forge:open-commits",
   FORGE_OPEN_ISSUE: "forge:open-issue",
+  FORGE_GET_ISSUE_URL: "forge:get-issue-url",
   FORGE_ASSIGN_ISSUE: "forge:assign-issue",
   FORGE_VALIDATE_TOKEN: "forge:validate-token",
 
