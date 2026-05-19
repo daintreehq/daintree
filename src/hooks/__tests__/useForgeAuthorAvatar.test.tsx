@@ -80,6 +80,21 @@ describe("useForgeAuthorAvatar", () => {
     expect(result.current).toBeUndefined();
   });
 
+  it("clears the avatar when the forge changes from GitHub to non-GitHub", async () => {
+    resolveAuthorAvatar.mockResolvedValue("https://avatars.example/u/1");
+    const { result, rerender } = renderHook(
+      ({ provider }) =>
+        useForgeAuthorAvatar({ email: "dev@example.com", linkedProviderId: provider }),
+      { initialProps: { provider: BUILTIN_GITHUB_PROVIDER_ID as string } }
+    );
+    await waitFor(() => expect(result.current).toBe("https://avatars.example/u/1"));
+
+    resolveAuthorAvatar.mockClear();
+    rerender({ provider: "gitlab.gitlab" });
+    expect(result.current).toBeUndefined();
+    expect(resolveAuthorAvatar).not.toHaveBeenCalled();
+  });
+
   it("does not apply a stale response after the email changes", async () => {
     let resolveFirst: (v: string) => void = () => {};
     resolveAuthorAvatar.mockImplementationOnce(

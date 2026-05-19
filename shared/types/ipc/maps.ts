@@ -1953,6 +1953,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: GitHubRateLimitDetails | null;
   };
+  "github:resolve-author-avatar": {
+    args: [email: string];
+    result: string | null;
+  };
 
   // Per-service connectivity channels
   "connectivity:get-state": {

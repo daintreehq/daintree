@@ -67,7 +67,12 @@ async function fetchAvatarByEmail(email: string, signal?: AbortSignal): Promise<
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "Daintree-Electron",
       },
-      signal: signal ?? AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+      // Compose the caller's abort signal with the API timeout so neither is
+      // silently dropped — a caller-provided signal must not disable the
+      // timeout, and vice versa.
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(GITHUB_API_TIMEOUT_MS)])
+        : AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
     });
     if (!response.ok) {
       // 422 is GitHub's "the query itself can't match" — a genuine, stable
@@ -98,10 +103,13 @@ async function resolveByEmail(email: string, signal?: AbortSignal): Promise<stri
 
   const request = fetchAvatarByEmail(key, signal)
     .then((outcome) => {
+      // A genuine outcome means the HTTP call completed — cache it regardless
+      // of the initiating caller's signal. The singleflight promise is shared
+      // by every concurrent caller, so keying the cache write off the *first*
+      // caller's abort would deny a successful result to all the others and
+      // leave the cache empty. An aborted in-flight fetch never reaches here:
+      // its AbortError is caught and mapped to TRANSIENT (uncached, retryable).
       if (outcome === TRANSIENT) return null;
-      // A request aborted by the caller's unmount must not poison the cache —
-      // the next mount should retry rather than read a forced `null`.
-      if (signal?.aborted) return null;
       avatarCache.set(key, outcome);
       return outcome;
     })

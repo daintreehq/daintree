@@ -122,6 +122,84 @@ describe("GitHubProfilePicture", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("retries once a token becomes available (no-token is not cached)", async () => {
+    mockToken = null;
+    expect(await resolveAuthorAvatar("dev@example.com")).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    mockToken = "test-token";
+    mockFetch.mockResolvedValueOnce(
+      okResponse([{ avatar_url: "https://avatars.example/after-token" }])
+    );
+    expect(await resolveAuthorAvatar("dev@example.com")).toBe(
+      "https://avatars.example/after-token"
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("singleflights a TRANSIENT failure: all callers get null, then a retry succeeds", async () => {
+    let resolveFetch: (v: unknown) => void = () => {};
+    mockFetch.mockReturnValueOnce(
+      new Promise((res) => {
+        resolveFetch = res;
+      })
+    );
+
+    const calls = Array.from({ length: 10 }, () => resolveAuthorAvatar("burst@example.com"));
+    resolveFetch({ ok: false, status: 403, json: async () => ({}) });
+    const results = await Promise.all(calls);
+    expect(results).toEqual(Array(10).fill(null));
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    // inflight was cleared and 403 wasn't cached — a later lookup retries.
+    mockFetch.mockResolvedValueOnce(
+      okResponse([{ avatar_url: "https://avatars.example/recovered" }])
+    );
+    expect(await resolveAuthorAvatar("burst@example.com")).toBe(
+      "https://avatars.example/recovered"
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("caches a successful response even when the initiating caller aborts", async () => {
+    const controller = new AbortController();
+    let resolveFetch: (v: unknown) => void = () => {};
+    mockFetch.mockReturnValueOnce(
+      new Promise((res) => {
+        resolveFetch = res;
+      })
+    );
+
+    const first = gitHubProfilePictureProvider.resolveByEmail(
+      "abort@example.com",
+      controller.signal
+    );
+    const second = resolveAuthorAvatar("abort@example.com");
+
+    controller.abort();
+    resolveFetch(okResponse([{ avatar_url: "https://avatars.example/shared-win" }]));
+
+    expect(await first).toBe("https://avatars.example/shared-win");
+    expect(await second).toBe("https://avatars.example/shared-win");
+    // Cached — a third lookup does not hit the network.
+    expect(await resolveAuthorAvatar("abort@example.com")).toBe(
+      "https://avatars.example/shared-win"
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["items null", { items: null }],
+    ["empty object item", { items: [{}] }],
+    ["empty string avatar_url", { items: [{ avatar_url: "" }] }],
+    ["non-string avatar_url", { items: [{ avatar_url: 42 }] }],
+  ])("treats a malformed body (%s) as a cached genuine miss", async (_label, body) => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => body });
+    expect(await resolveAuthorAvatar("malformed@example.com")).toBeNull();
+    expect(await resolveAuthorAvatar("malformed@example.com")).toBeNull();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("retries after a failed lookup (inflight entry is cleared)", async () => {
     mockFetch.mockRejectedValueOnce(new Error("network"));
     expect(await resolveAuthorAvatar("flaky@example.com")).toBeNull();
