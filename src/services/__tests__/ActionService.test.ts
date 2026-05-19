@@ -166,6 +166,7 @@ describe("ActionService", () => {
         danger: "safe",
         scope: "renderer",
         rawOutputSchema: rawOutput,
+        mcpOutputSchema: true,
         run: vi.fn().mockResolvedValue({ ok: true }),
       };
       service.register(action as unknown as ActionDefinition);
@@ -186,6 +187,7 @@ describe("ActionService", () => {
         scope: "renderer",
         resultSchema: z.object({ canonical: z.string() }),
         rawOutputSchema: rawOutput,
+        mcpOutputSchema: true,
         run: vi.fn().mockResolvedValue({ canonical: "x" }),
       };
       service.register(action as unknown as ActionDefinition);
