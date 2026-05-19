@@ -89,7 +89,10 @@ export class AuditService {
     const config = this.readConfig();
     const persisted = Array.isArray(config.auditLog) ? config.auditLog : [];
     const cap = this.normalizeMaxRecords(config.auditMaxRecords);
-    const backfilled = persisted.map((r: Record<string, unknown>) => {
+    const safe = persisted.filter(
+      (r: unknown): r is Record<string, unknown> => r !== null && typeof r === "object"
+    );
+    const backfilled = safe.map((r: Record<string, unknown>) => {
       // Grant records (post-#8442) carry a `type` discriminator and never
       // need audit-specific backfilling — pass them through unchanged.
       if ("type" in r && typeof r.type === "string") {
@@ -261,6 +264,7 @@ export class AuditService {
       if (existing && existing.errorCode === PRE_AUTH_FAILED_CODE) {
         existing.timestamp = now;
         existing.repeatCount = (existing.repeatCount ?? 1) + 1;
+        this.lastPreAuthRecordAt = now;
         this.scheduleFlush();
         return;
       }
