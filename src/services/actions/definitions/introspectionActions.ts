@@ -201,7 +201,11 @@ export function registerIntrospectionActions(
     scope: "renderer",
     mcpVisibility: "core",
     argsSchema: z.object({
-      query: z.string().min(1).describe("Natural-language query or keywords to search for"),
+      query: z
+        .string()
+        .min(1)
+        .refine((s) => s.trim().length > 0, "must contain non-whitespace text")
+        .describe("Natural-language query or keywords to search for"),
       limit: z
         .number()
         .int()
@@ -216,7 +220,7 @@ export function registerIntrospectionActions(
       const manifest = actionService.list(ctx);
 
       const q = query.toLowerCase();
-      const qTerms = q.split(/\s+/);
+      const qTerms = q.split(/\s+/).filter((t) => t.length > 0);
 
       interface ScoredEntry {
         entry: Omit<ActionManifestEntry, "inputSchema" | "outputSchema">;

@@ -513,6 +513,21 @@ describe("actions.search", () => {
     expect(result.results).toEqual([]);
   });
 
+  it("returns empty results for whitespace-only queries", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "git.commit", title: "Commit" }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "   " } as never, stubCtx)) as {
+      totalMatches: number;
+      results: unknown[];
+    };
+
+    expect(result.totalMatches).toBe(0);
+    expect(result.results).toEqual([]);
+  });
+
   it("matches across title, description, keywords, and category", async () => {
     vi.mocked(actionService.list).mockReturnValue([
       makeEntry({
