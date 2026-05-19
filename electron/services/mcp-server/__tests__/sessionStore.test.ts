@@ -1,6 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionStore } from "../sessionStore.js";
 import { MCP_SSE_IDLE_TIMEOUT_MS, type McpSseSession, type McpHttpSession } from "../shared.js";
+
+// Mutable test state controlled per-test.
+let mockAwakeTimeSince = 0;
+
+vi.mock("../../SystemSleepService.js", () => ({
+  getSystemSleepService: vi.fn(() => ({
+    getAwakeTimeSince: vi.fn(() => mockAwakeTimeSince),
+    onWake: vi.fn(() => () => {}),
+  })),
+}));
+
+import { SessionStore } from "../sessionStore.js";
 
 function fakeSseSession(): McpSseSession {
   return {
@@ -19,6 +30,10 @@ function fakeHttpSession(): McpHttpSession {
     server: {} as McpHttpSession["server"],
     idleTimer: setTimeout(() => {}, 1_000_000),
   };
+}
+
+function setAwakeTime(ms: number): void {
+  mockAwakeTimeSince = ms;
 }
 
 describe("SessionStore.sessionWebContentsMap (#7002)", () => {
@@ -61,13 +76,13 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
   });
 
   it("SSE idle-timer expiry deletes the session's pin so an evicted session does not leak the WebContents id", () => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
     const session = fakeSseSession();
     const sessionId = "sse-1";
     store.sessions.set(sessionId, session);
     store.sessionTierMap.set(sessionId, "action");
     store.sessionWebContentsMap.set(sessionId, 42);
 
-    // Replace with a fresh idle timer that we can fast-forward.
     clearTimeout(session.idleTimer);
     session.idleTimer = store.createIdleTimer(sessionId);
 
@@ -82,6 +97,7 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
   });
 
   it("Streamable-HTTP idle-timer expiry deletes the session's pin", () => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
     const session = fakeHttpSession();
     const sessionId = "http-1";
     store.httpSessions.set(sessionId, session);
@@ -146,7 +162,7 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
   });
 
   it("idle-timer for a session that was already removed is a no-op (does not stomp another session's pin)", () => {
-    // Set up two sessions; one gets removed before its timer fires.
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
     store.sessions.set("alive", fakeSseSession());
     store.sessionWebContentsMap.set("alive", 1);
     store.sessionWebContentsMap.set("evicted", 2);
@@ -166,5 +182,220 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
 
     // The other session's pin must remain untouched.
     expect(store.sessionWebContentsMap.get("alive")).toBe(1);
+  });
+});
+
+describe("SessionStore.recomputeIdleTimers", () => {
+  let store: SessionStore;
+  let resourceCleanups: string[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockAwakeTimeSince = 0;
+    resourceCleanups = [];
+    store = new SessionStore((sessionId) => {
+      resourceCleanups.push(sessionId);
+    });
+  });
+
+  afterEach(() => {
+    // GrantCache owns a recurring sweep interval; dispose so `vi.runAllTimers()`
+    // in tests doesn't loop indefinitely on the sweep schedule.
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  it("expires an SSE session when awake elapsed >= MCP_SSE_IDLE_TIMEOUT_MS", () => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    const session = fakeSseSession();
+    store.sessions.set("sse-1", session);
+    store.sessionTierMap.set("sse-1", "action");
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("sse-1");
+
+    store.recomputeIdleTimers();
+
+    expect(store.sessions.has("sse-1")).toBe(false);
+    expect(store.sessionTierMap.has("sse-1")).toBe(false);
+    expect(resourceCleanups).toContain("sse-1");
+  });
+
+  it("expires an HTTP session when awake elapsed >= MCP_SSE_IDLE_TIMEOUT_MS", () => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    const session = fakeHttpSession();
+    store.httpSessions.set("http-1", session);
+    store.sessionTierMap.set("http-1", "action");
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createHttpIdleTimer("http-1");
+
+    store.recomputeIdleTimers();
+
+    expect(store.httpSessions.has("http-1")).toBe(false);
+    expect(store.sessionTierMap.has("http-1")).toBe(false);
+    expect(resourceCleanups).toContain("http-1");
+  });
+
+  it("resets SSE timer with remaining awake time when not yet expired", () => {
+    const halfTimeout = MCP_SSE_IDLE_TIMEOUT_MS / 2;
+    setAwakeTime(halfTimeout);
+    const session = fakeSseSession();
+    store.sessions.set("sse-2", session);
+    clearTimeout(session.idleTimer);
+    const originalTimer = store.createIdleTimer("sse-2");
+    session.idleTimer = originalTimer;
+
+    store.recomputeIdleTimers();
+
+    expect(store.sessions.has("sse-2")).toBe(true);
+    expect(session.idleTimer).not.toBe(originalTimer);
+
+    vi.advanceTimersByTime(halfTimeout - 1);
+    expect(store.sessions.has("sse-2")).toBe(true);
+
+    // The timer callback's defense-in-depth checks getAwakeTimeSince().
+    // Set it to expired so it proceeds to actual expiry.
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    vi.advanceTimersByTime(2);
+    expect(store.sessions.has("sse-2")).toBe(false);
+  });
+
+  it("resets HTTP timer with remaining awake time when not yet expired", () => {
+    const halfTimeout = MCP_SSE_IDLE_TIMEOUT_MS / 2;
+    setAwakeTime(halfTimeout);
+    const session = fakeHttpSession();
+    store.httpSessions.set("http-2", session);
+    clearTimeout(session.idleTimer);
+    const originalTimer = store.createHttpIdleTimer("http-2");
+    session.idleTimer = originalTimer;
+
+    store.recomputeIdleTimers();
+
+    expect(store.httpSessions.has("http-2")).toBe(true);
+    expect(session.idleTimer).not.toBe(originalTimer);
+
+    vi.advanceTimersByTime(halfTimeout - 1);
+    expect(store.httpSessions.has("http-2")).toBe(true);
+
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    vi.advanceTimersByTime(2);
+    expect(store.httpSessions.has("http-2")).toBe(false);
+  });
+
+  it("resetIdleTimer updates the timestamp so recompute reflects the reset", () => {
+    setAwakeTime(0);
+    const session = fakeSseSession();
+    store.sessions.set("sse-3", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("sse-3");
+
+    setAwakeTime(20 * 60 * 1000);
+    store.resetIdleTimer("sse-3");
+
+    setAwakeTime(5 * 60 * 1000);
+    store.recomputeIdleTimers();
+
+    expect(store.sessions.has("sse-3")).toBe(true);
+  });
+
+  it("resetHttpIdleTimer updates the timestamp so recompute reflects the reset", () => {
+    setAwakeTime(0);
+    const session = fakeHttpSession();
+    store.httpSessions.set("http-3", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createHttpIdleTimer("http-3");
+
+    setAwakeTime(20 * 60 * 1000);
+    store.resetHttpIdleTimer("http-3");
+
+    setAwakeTime(5 * 60 * 1000);
+    store.recomputeIdleTimers();
+
+    expect(store.httpSessions.has("http-3")).toBe(true);
+  });
+
+  it("drain() clears timestamp maps so no stale entries survive", () => {
+    const session = fakeSseSession();
+    store.sessions.set("a", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("a");
+    const httpSession = fakeHttpSession();
+    store.httpSessions.set("b", httpSession);
+    clearTimeout(httpSession.idleTimer);
+    httpSession.idleTimer = store.createHttpIdleTimer("b");
+
+    store.drain();
+
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    expect(() => store.recomputeIdleTimers()).not.toThrow();
+  });
+
+  it("timer callback cleans up timestamp entries on expiry", () => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    const session = fakeSseSession();
+    store.sessions.set("sse-ts", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("sse-ts");
+
+    // Use advanceTimersByTime rather than runAllTimers — GrantCache's recurring
+    // sweep interval would otherwise trigger vitest's infinite-loop guard.
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+
+    expect(store.sessions.has("sse-ts")).toBe(false);
+    expect(() => store.drain()).not.toThrow();
+  });
+
+  it("timer callback re-arms when awake time is below threshold (defense-in-depth)", () => {
+    setAwakeTime(0);
+    const session = fakeSseSession();
+    store.sessions.set("sse-survive", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("sse-survive");
+
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS);
+
+    // Session should survive because awake time is below threshold.
+    expect(store.sessions.has("sse-survive")).toBe(true);
+  });
+
+  it("is a no-op when no sessions exist", () => {
+    expect(() => store.recomputeIdleTimers()).not.toThrow();
+  });
+
+  it("uses fallback timestamp for sessions missing idleStartedAt (does not expire immediately)", () => {
+    setAwakeTime(0);
+    const session = fakeSseSession();
+    store.sessions.set("no-ts", session);
+
+    store.recomputeIdleTimers();
+
+    expect(store.sessions.has("no-ts")).toBe(true);
+  });
+
+  it("repeated recompute calls do not extend idle lifetime (accumulated awake time is preserved)", () => {
+    // Simulate: idle for 10 min, sleep, wake (recompute), idle 10 min, sleep,
+    // wake (recompute), idle 10 min, sleep, wake (recompute). The session has
+    // accumulated 30+ min of awake idle time and should expire on the third wake.
+    const thirdOfTimeout = MCP_SSE_IDLE_TIMEOUT_MS / 3;
+    setAwakeTime(0);
+    const session = fakeSseSession();
+    store.sessions.set("acc", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("acc");
+
+    // First cycle: 10 min awake, recompute on wake.
+    setAwakeTime(thirdOfTimeout);
+    store.recomputeIdleTimers();
+    expect(store.sessions.has("acc")).toBe(true);
+
+    // Second cycle: 20 min awake, recompute on wake.
+    setAwakeTime(thirdOfTimeout * 2);
+    store.recomputeIdleTimers();
+    expect(store.sessions.has("acc")).toBe(true);
+
+    // Third cycle: 30 min awake — should expire.
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    store.recomputeIdleTimers();
+    expect(store.sessions.has("acc")).toBe(false);
+    expect(resourceCleanups).toContain("acc");
   });
 });

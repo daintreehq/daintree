@@ -3,6 +3,7 @@ import type { McpTier, McpSseSession, McpHttpSession } from "./shared.js";
 import { MCP_SSE_IDLE_TIMEOUT_MS } from "./shared.js";
 import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
+import { getSystemSleepService } from "../SystemSleepService.js";
 
 export interface SessionStoreOptions {
   /**
@@ -44,6 +45,12 @@ export class SessionStore {
    */
   readonly grantCache: GrantCache;
 
+  // Wall-clock timestamps recording when each session's idle timer was armed.
+  // Used by recomputeIdleTimers() to calculate awake elapsed time across
+  // suspend/resume cycles via SystemSleepService.getAwakeTimeSince().
+  private readonly idleStartedAt = new Map<string, number>();
+  private readonly httpIdleStartedAt = new Map<string, number>();
+
   private readonly cleanupResourceSubscriptionsFn: (sessionId: string) => void;
 
   constructor(
@@ -59,25 +66,48 @@ export class SessionStore {
     this.dedupResultCache.delete(sessionId);
   }
 
+  private expireSseSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    this.sessions.delete(sessionId);
+    this.sessionTierMap.delete(sessionId);
+    // Revoke BEFORE deleting the WebContents pin so the lifecycle
+    // emitter can still resolve the pinned renderer and dispatch the
+    // `grant.revoked` event. The audit-record write tolerates a
+    // missing pin (it doesn't need one); the targeted `wc.send` does.
+    this.grantCache.revokeSession(sessionId, "session-idle");
+    this.sessionWebContentsMap.delete(sessionId);
+    this.sessionContextMap.delete(sessionId);
+    this.clearDedupState(sessionId);
+    this.idleStartedAt.delete(sessionId);
+    this.cleanupResourceSubscriptionsFn(sessionId);
+    session.transport.close().catch(() => {
+      // ignore close errors during idle timeout cleanup
+    });
+  }
+
   createIdleTimer(sessionId: string): ReturnType<typeof setTimeout> {
-    const timer = setTimeout(() => {
+    this.idleStartedAt.set(sessionId, Date.now());
+    const checkAndExpire = () => {
       const session = this.sessions.get(sessionId);
       if (!session) return;
-      this.sessions.delete(sessionId);
-      this.sessionTierMap.delete(sessionId);
-      // Revoke BEFORE deleting the WebContents pin so the lifecycle
-      // emitter can still resolve the pinned renderer and dispatch the
-      // `grant.revoked` event. The audit-record write tolerates a
-      // missing pin (it doesn't need one); the targeted `wc.send` does.
-      this.grantCache.revokeSession(sessionId, "session-idle");
-      this.sessionWebContentsMap.delete(sessionId);
-      this.sessionContextMap.delete(sessionId);
-      this.clearDedupState(sessionId);
-      this.cleanupResourceSubscriptionsFn(sessionId);
-      session.transport.close().catch(() => {
-        // ignore close errors during idle timeout cleanup
-      });
-    }, MCP_SSE_IDLE_TIMEOUT_MS);
+      const startedAt = this.idleStartedAt.get(sessionId);
+      if (startedAt !== undefined) {
+        try {
+          const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
+          if (awakeElapsed < MCP_SSE_IDLE_TIMEOUT_MS) {
+            const remaining = Math.max(1, MCP_SSE_IDLE_TIMEOUT_MS - awakeElapsed);
+            session.idleTimer = setTimeout(checkAndExpire, remaining);
+            (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
+            return;
+          }
+        } catch {
+          // Fall through to expiry.
+        }
+      }
+      this.expireSseSession(sessionId);
+    };
+    const timer = setTimeout(checkAndExpire, MCP_SSE_IDLE_TIMEOUT_MS);
     timer.unref?.();
     return timer;
   }
@@ -89,23 +119,46 @@ export class SessionStore {
     session.idleTimer = this.createIdleTimer(sessionId);
   }
 
+  private expireHttpSession(sessionId: string): void {
+    const session = this.httpSessions.get(sessionId);
+    if (!session) return;
+    this.httpSessions.delete(sessionId);
+    this.sessionTierMap.delete(sessionId);
+    // Revoke BEFORE deleting the WebContents pin — same reasoning
+    // as `expireSseSession` above.
+    this.grantCache.revokeSession(sessionId, "session-idle");
+    this.sessionWebContentsMap.delete(sessionId);
+    this.sessionContextMap.delete(sessionId);
+    this.clearDedupState(sessionId);
+    this.httpIdleStartedAt.delete(sessionId);
+    this.cleanupResourceSubscriptionsFn(sessionId);
+    session.transport.close().catch(() => {
+      // ignore close errors during idle timeout cleanup
+    });
+  }
+
   createHttpIdleTimer(sessionId: string): ReturnType<typeof setTimeout> {
-    const timer = setTimeout(() => {
+    this.httpIdleStartedAt.set(sessionId, Date.now());
+    const checkAndExpire = () => {
       const session = this.httpSessions.get(sessionId);
       if (!session) return;
-      this.httpSessions.delete(sessionId);
-      this.sessionTierMap.delete(sessionId);
-      // Revoke BEFORE deleting the WebContents pin — same reasoning
-      // as `createIdleTimer` above.
-      this.grantCache.revokeSession(sessionId, "session-idle");
-      this.sessionWebContentsMap.delete(sessionId);
-      this.sessionContextMap.delete(sessionId);
-      this.clearDedupState(sessionId);
-      this.cleanupResourceSubscriptionsFn(sessionId);
-      session.transport.close().catch(() => {
-        // ignore close errors during idle timeout cleanup
-      });
-    }, MCP_SSE_IDLE_TIMEOUT_MS);
+      const startedAt = this.httpIdleStartedAt.get(sessionId);
+      if (startedAt !== undefined) {
+        try {
+          const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
+          if (awakeElapsed < MCP_SSE_IDLE_TIMEOUT_MS) {
+            const remaining = Math.max(1, MCP_SSE_IDLE_TIMEOUT_MS - awakeElapsed);
+            session.idleTimer = setTimeout(checkAndExpire, remaining);
+            (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
+            return;
+          }
+        } catch {
+          // Fall through to expiry.
+        }
+      }
+      this.expireHttpSession(sessionId);
+    };
+    const timer = setTimeout(checkAndExpire, MCP_SSE_IDLE_TIMEOUT_MS);
     timer.unref?.();
     return timer;
   }
@@ -115,6 +168,59 @@ export class SessionStore {
     if (!session) return;
     clearTimeout(session.idleTimer);
     session.idleTimer = this.createHttpIdleTimer(sessionId);
+  }
+
+  recomputeIdleTimers(): void {
+    // Snapshot entries to avoid mutation-during-iteration from timer callbacks.
+    const sseEntries = Array.from(this.sessions.entries());
+    for (const [sessionId, session] of sseEntries) {
+      let startedAt = this.idleStartedAt.get(sessionId);
+      if (startedAt === undefined) {
+        console.warn(`[MCP] Missing idleStartedAt for SSE session ${sessionId}, resetting`);
+        startedAt = Date.now();
+        this.idleStartedAt.set(sessionId, startedAt);
+      }
+      try {
+        const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
+        if (awakeElapsed >= MCP_SSE_IDLE_TIMEOUT_MS) {
+          this.expireSseSession(sessionId);
+        } else {
+          clearTimeout(session.idleTimer);
+          const remaining = Math.max(1, MCP_SSE_IDLE_TIMEOUT_MS - awakeElapsed);
+          session.idleTimer = setTimeout(() => {
+            this.expireSseSession(sessionId);
+          }, remaining);
+          (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
+        }
+      } catch {
+        // SystemSleepService may not be initialized; keep existing timer.
+      }
+    }
+
+    const httpEntries = Array.from(this.httpSessions.entries());
+    for (const [sessionId, session] of httpEntries) {
+      let startedAt = this.httpIdleStartedAt.get(sessionId);
+      if (startedAt === undefined) {
+        console.warn(`[MCP] Missing httpIdleStartedAt for HTTP session ${sessionId}, resetting`);
+        startedAt = Date.now();
+        this.httpIdleStartedAt.set(sessionId, startedAt);
+      }
+      try {
+        const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
+        if (awakeElapsed >= MCP_SSE_IDLE_TIMEOUT_MS) {
+          this.expireHttpSession(sessionId);
+        } else {
+          clearTimeout(session.idleTimer);
+          const remaining = Math.max(1, MCP_SSE_IDLE_TIMEOUT_MS - awakeElapsed);
+          session.idleTimer = setTimeout(() => {
+            this.expireHttpSession(sessionId);
+          }, remaining);
+          (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
+        }
+      } catch {
+        // SystemSleepService may not be initialized; keep existing timer.
+      }
+    }
   }
 
   getTier(sessionId: string): McpTier {
@@ -139,6 +245,7 @@ export class SessionStore {
       }
     }
     this.sessions.clear();
+    this.idleStartedAt.clear();
 
     for (const session of this.httpSessions.values()) {
       clearTimeout(session.idleTimer);
@@ -151,6 +258,7 @@ export class SessionStore {
       }
     }
     this.httpSessions.clear();
+    this.httpIdleStartedAt.clear();
     this.sessionTierMap.clear();
     this.sessionWebContentsMap.clear();
     this.sessionContextMap.clear();
