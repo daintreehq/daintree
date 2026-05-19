@@ -336,24 +336,25 @@ const _projectStore = create<ProjectScopedState>()(
         manualOrder: state.manualOrder,
       }),
       migrate: (persistedState, version) => {
-        // v1 retires the "running" SessionFilter (#5810). Strip any stale
-        // entries from pre-v1 blobs so the Set coercion in `merge` doesn't
-        // restore a filter the UI no longer exposes.
+        let result = persistedState as Record<string, unknown>;
+        // v1 retires the "running" SessionFilter (#5810).
         if (version < 1) {
           const legacy = (persistedState ?? {}) as Partial<ProjectPersistedShape>;
           const cleaned = stripLegacySessionFilters(legacy.sessionFilters);
-          return { ...legacy, sessionFilters: cleaned } as ProjectPersistedShape;
+          result = { ...legacy, sessionFilters: cleaned } as unknown as Record<string, unknown>;
         }
         // v2 renames `githubFilters` → `prIssueFilters` (#8461).
         if (version < 2) {
-          const v1 = persistedState as Record<string, unknown>;
-          const { githubFilters, ...rest } = v1;
-          return {
-            ...rest,
-            prIssueFilters: Array.isArray(githubFilters) ? githubFilters : [],
-          };
+          const { githubFilters, ...rest } = result;
+          const raw = Array.isArray(githubFilters) ? githubFilters : [];
+          const valid = raw.filter((v): v is PrIssueFilter =>
+            (["hasIssue", "hasPR", "prOpen", "prMerged", "prClosed"] as const).includes(
+              v as PrIssueFilter
+            )
+          );
+          result = { ...rest, prIssueFilters: valid };
         }
-        return persistedState as ProjectPersistedShape;
+        return result as unknown as ProjectPersistedShape;
       },
       merge: (persisted, current) => {
         const p = persisted as Partial<ProjectPersistedShape> | undefined;

@@ -210,6 +210,8 @@ export function WorktreeOverviewModal({
   );
   const clearAllFilters = useWorktreeFilterStore((state) => state.clearAll);
   const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
+  const hasFacetFilters = useWorktreeFilterStore((state) => state.hasFacetFilters);
+  const hasFacetFiltersActive = hasFacetFilters();
   const setQuickStateFilter = useWorktreeFilterStore((state) => state.setQuickStateFilter);
 
   // Terminal store for derived metadata
@@ -367,7 +369,13 @@ export function WorktreeOverviewModal({
         return false;
       }
 
-      if (alwaysShowActive && isActive && !hasActiveQuery && quickStateFilter === "all") {
+      if (
+        alwaysShowActive &&
+        isActive &&
+        !hasActiveQuery &&
+        quickStateFilter === "all" &&
+        !hasFacetFiltersActive
+      ) {
         return true;
       }
 
@@ -375,7 +383,8 @@ export function WorktreeOverviewModal({
         alwaysShowWaiting &&
         derived.hasWaitingAgent &&
         !hasActiveQuery &&
-        quickStateFilter === "all"
+        quickStateFilter === "all" &&
+        !hasFacetFiltersActive
       ) {
         return true;
       }
