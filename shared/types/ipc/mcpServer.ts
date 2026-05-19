@@ -96,7 +96,6 @@ export function computeMcpAuditSeverity(
   return SEVERITY_BY_RESULT[result];
 }
 
-
 export interface McpAuditRecord {
   id: string;
   timestamp: number;
