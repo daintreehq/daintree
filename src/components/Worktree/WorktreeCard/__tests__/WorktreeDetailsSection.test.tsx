@@ -392,7 +392,7 @@ describe("WorktreeDetailsSection activity freshness ring", () => {
     expect(ring!.style.boxShadow).not.toContain("color-mix");
   });
 
-  it("does not render a freshness ring when there is no commit author avatar", () => {
+  it("does not render a freshness ring when there is no commit chip at all", () => {
     const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: Date.now() };
     const { container } = renderSection({ worktree, hasChanges: false });
     expect(container.querySelector(".avatar-freshness-ring")).toBeNull();
@@ -525,6 +525,8 @@ describe("WorktreeDetailsSection commit author chip", () => {
       el.getAttribute("src")?.includes("gravatar.com")
     );
     expect(gravatarImg).toBeFalsy();
+    // No avatar host → no freshness ring even though a timestamp exists
+    expect(container.querySelector(".avatar-freshness-ring")).toBeNull();
   });
 
   it("omits the trailing chip and freshness ring entirely when lastCommitTimestampMs is absent", () => {
