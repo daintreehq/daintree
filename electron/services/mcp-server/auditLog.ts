@@ -314,6 +314,7 @@ function auditSeverityFromResult(
     case "confirmation-pending":
       return "notice";
     case "unauthorized":
+    case "collision":
       return "warning";
     case "error":
       return "error";
