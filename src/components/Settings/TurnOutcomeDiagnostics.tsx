@@ -15,6 +15,7 @@ const OUTCOME_LABEL: Record<TurnOutcomeClass, string> = {
   "mcp-not-ready": "MCP not ready",
   "agent-stuck": "Agent stuck",
   "tool-error": "Tool error",
+  "reasoning-loop": "Reasoning loop",
   "hibernate-resume-stale": "Resume stale",
   unknown: "Unknown",
 };
@@ -28,6 +29,7 @@ const OUTCOME_ORDER: TurnOutcomeClass[] = [
   "mcp-not-ready",
   "agent-stuck",
   "tool-error",
+  "reasoning-loop",
   "hibernate-resume-stale",
   "unknown",
 ];
