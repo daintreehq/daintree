@@ -91,6 +91,12 @@ export function shouldExposeTool(
   if (entry.danger === "restricted") {
     return false;
   }
+  if (entry.mcpVisibility === "hidden") {
+    return false;
+  }
+  if (entry.mcpVisibility === "discoverable") {
+    return false;
+  }
   if (tier === "external" && fullToolSurface) {
     return true;
   }

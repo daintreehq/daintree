@@ -295,6 +295,8 @@ export const BUILT_IN_ACTION_IDS = [
   "actions.list",
   "actions.getContext",
   "actions.persistedStores",
+  "actions.search",
+  "actions.getSchema",
 
   // -- terminalLifecycleActions --
   "terminal.restart",

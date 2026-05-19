@@ -7,6 +7,8 @@ const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
 export const WORKBENCH_TIER_TOOLS = [
   ACTIONS_LIST_TOOL,
   "actions.getContext",
+  "actions.search",
+  "actions.getSchema",
 
   "project.getAll",
   "project.getCurrent",
