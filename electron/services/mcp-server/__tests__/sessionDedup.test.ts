@@ -83,23 +83,35 @@ describe("sessionDedup", () => {
   });
 
   describe("readDedupCache", () => {
-    it("returns the cached result while not expired", () => {
+    it("returns the cached entry while not expired", () => {
       const cache = new Map();
       const result = { content: [{ type: "text" as const, text: "ok" }] };
-      cache.set("k", { result, expiresAt: 1000 });
-      expect(readDedupCache(cache, "k", 999)).toBe(result);
+      cache.set("k", { result, expiresAt: 1000, argsHash: "abc123" });
+      expect(readDedupCache(cache, "k", 999)).toEqual({
+        result,
+        expiresAt: 1000,
+        argsHash: "abc123",
+      });
+    });
+
+    it("preserves argsHash on the returned entry", () => {
+      const cache = new Map();
+      const result = { content: [{ type: "text" as const, text: "ok" }] };
+      cache.set("k", { result, expiresAt: 2000, argsHash: "sha256-hex" });
+      const entry = readDedupCache(cache, "k", 1000);
+      expect(entry?.argsHash).toBe("sha256-hex");
     });
 
     it("returns undefined and evicts when entry is expired", () => {
       const cache = new Map();
-      cache.set("k", { result: { content: [] }, expiresAt: 1000 });
+      cache.set("k", { result: { content: [] }, expiresAt: 1000, argsHash: "h" });
       expect(readDedupCache(cache, "k", 1001)).toBeUndefined();
       expect(cache.has("k")).toBe(false);
     });
 
     it("returns undefined for an entry exactly at expiry (expiresAt is exclusive)", () => {
       const cache = new Map();
-      cache.set("k", { result: { content: [] }, expiresAt: 1000 });
+      cache.set("k", { result: { content: [] }, expiresAt: 1000, argsHash: "h" });
       expect(readDedupCache(cache, "k", 1000)).toBeUndefined();
     });
 

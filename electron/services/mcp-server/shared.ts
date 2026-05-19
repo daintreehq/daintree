@@ -132,6 +132,7 @@ export const ELICITATION_FAILED_CODE = "ELICITATION_FAILED";
 export const EXECUTION_ERROR_CODE = "EXECUTION_ERROR";
 export const BINDING_STALE = "BINDING_STALE";
 export const SESSION_BINDING_GONE = "SESSION_BINDING_GONE";
+export const MCP_DEDUP_KEY_COLLISION_CODE = "MCP_DEDUP_KEY_COLLISION";
 
 /**
  * Application-level convention: codes here flag transient failures that a
