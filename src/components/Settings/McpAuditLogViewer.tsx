@@ -319,7 +319,7 @@ export function McpAuditLogViewer({
             Group by turn
           </button>
         )}
-        {!anomalySuppressed && visibleSignals.length > 0 && (
+        {!anomalySuppressed && anomalySignals.length > 0 && (
           <button
             type="button"
             onClick={() => setIgnoreLastHour((v) => !v)}

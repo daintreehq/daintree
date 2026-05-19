@@ -83,14 +83,26 @@ export function McpServerSettingsTab() {
 
   const refreshAuditRecords = async (): Promise<void> => {
     try {
-      const [records, turns, stats] = await Promise.all([
+      const [recordsResult, turnsResult, statsResult] = await Promise.allSettled([
         window.electron.mcpServer.getAuditRecords(),
         window.electron.mcpServer.getTurnOutcomeRecords(),
         window.electron.mcpServer.getAuditStats(),
       ]);
-      setAuditRecords(records);
-      setTurnRecords(turns);
-      setAuditStats(stats);
+      if (recordsResult.status === "fulfilled") {
+        setAuditRecords(recordsResult.value);
+      } else {
+        logError("Failed to load MCP audit log", recordsResult.reason);
+      }
+      if (turnsResult.status === "fulfilled") {
+        setTurnRecords(turnsResult.value);
+      } else {
+        logError("Failed to load MCP turn outcome records", turnsResult.reason);
+      }
+      if (statsResult.status === "fulfilled") {
+        setAuditStats(statsResult.value);
+      } else {
+        logError("Failed to load MCP audit stats", statsResult.reason);
+      }
     } catch (err) {
       logError("Failed to load MCP audit log", err);
     }
@@ -297,6 +309,7 @@ export function McpServerSettingsTab() {
       setError(null);
       await window.electron.mcpServer.clearAuditLog();
       setAuditRecords([]);
+      setAuditStats(null);
       setShowClearConfirm(false);
     } catch (err) {
       setError(formatErrorMessage(err, "Failed to clear audit log"));

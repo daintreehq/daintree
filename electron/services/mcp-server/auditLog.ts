@@ -33,13 +33,14 @@ const FAILURE_CLUSTER_MIN_FAILURES = 3;
 const MAD_SCALE_FACTOR = 0.6745;
 const P95_Z_SCORE_MIN_TOOLS = 5;
 
-function percentile(sortedAsc: number[], p: number): number {
-  if (sortedAsc.length === 1) return sortedAsc[0]!;
-  const rank = p * (sortedAsc.length - 1);
+function percentile(values: number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  if (sorted.length === 1) return sorted[0]!;
+  const rank = p * (sorted.length - 1);
   const k = Math.floor(rank);
   const f = rank - k;
-  const lower = sortedAsc[k]!;
-  const upper = sortedAsc[k + 1] ?? lower;
+  const lower = sorted[k]!;
+  const upper = sorted[k + 1] ?? lower;
   return lower + f * (upper - lower);
 }
 
@@ -328,11 +329,9 @@ export class AuditService {
     for (const [toolId, toolRecords] of byTool) {
       if (toolRecords.length < 2) continue;
       const durations = toolRecords.map((r) => r.durationMs);
-      const sortedDurations = [...durations].sort((a, b) => a - b);
-      const median = percentile(sortedDurations, 0.5);
+      const median = percentile(durations, 0.5);
       const absDeviations = durations.map((d) => Math.abs(d - median));
-      const sortedAbsDeviations = [...absDeviations].sort((a, b) => a - b);
-      const mad = percentile(sortedAbsDeviations, 0.5);
+      const mad = percentile(absDeviations, 0.5);
       if (mad === 0) continue;
       for (let i = 0; i < toolRecords.length; i++) {
         const duration = durations[i]!;
@@ -411,11 +410,9 @@ export class AuditService {
     if (toolP95s.length < P95_Z_SCORE_MIN_TOOLS) return signals;
 
     const p95s = toolP95s.map((t) => t.p95);
-    const sortedP95s = [...p95s].sort((a, b) => a - b);
-    const medianP95 = percentile(sortedP95s, 0.5);
+    const medianP95 = percentile(p95s, 0.5);
     const absDeviations = p95s.map((p) => Math.abs(p - medianP95));
-    const sortedAbsDeviations = [...absDeviations].sort((a, b) => a - b);
-    const madP95 = percentile(sortedAbsDeviations, 0.5);
+    const madP95 = percentile(absDeviations, 0.5);
     if (madP95 === 0) return signals;
 
     for (const entry of toolP95s) {
