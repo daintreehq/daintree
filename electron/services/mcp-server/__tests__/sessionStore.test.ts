@@ -507,12 +507,12 @@ describe("SessionStore.revokeSession", () => {
 });
 
 describe("SessionStore dropAbuseState wiring (#8467)", () => {
-  let dropAbuseSpy: ReturnType<typeof vi.fn>;
+  let dropAbuseSpy: ReturnType<typeof vi.fn<(sessionId: string) => void>>;
   let store: SessionStore;
 
   beforeEach(() => {
     vi.useFakeTimers();
-    dropAbuseSpy = vi.fn();
+    dropAbuseSpy = vi.fn<(sessionId: string) => void>();
     store = new SessionStore(() => {}, { dropAbuseState: dropAbuseSpy });
   });
 
