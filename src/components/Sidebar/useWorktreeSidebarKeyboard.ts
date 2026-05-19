@@ -86,8 +86,16 @@ export function useWorktreeSidebarKeyboard({
 }: UseWorktreeSidebarKeyboardOptions): UseWorktreeSidebarKeyboardReturn {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const modeRef = useRef<GridMode>("list");
+  // Mirror mode in state so render can read it (the ref stays for synchronous
+  // reads inside event handlers, where state would be stale within the tick).
+  const [mode, setMode] = useState<GridMode>("list");
   const activeToolbarIndexRef = useRef<number>(0);
   const [activeWorktreeId, setActiveWorktreeId] = useState<string | null>(null);
+
+  const setGridMode = useCallback((next: GridMode) => {
+    modeRef.current = next;
+    setMode(next);
+  }, []);
 
   // Stash callbacks in refs so changing identity doesn't churn the
   // keydown/focus handlers (which would force the grid container to re-bind
@@ -223,12 +231,12 @@ export function useWorktreeSidebarKeyboard({
       if (modeRef.current === "toolbar" && previous) {
         clearToolbarTabStops(previous);
       }
-      modeRef.current = "list";
+      setGridMode("list");
       if (worktreeId !== null) setActiveWorktreeId(worktreeId);
       // Restore focus to the grid container so aria-activedescendant takes effect.
       gridRef.current?.focus();
     },
-    [activeWorktreeId, clearToolbarTabStops]
+    [activeWorktreeId, clearToolbarTabStops, setGridMode]
   );
 
   const enterToolbarMode = useCallback(
@@ -237,13 +245,13 @@ export function useWorktreeSidebarKeyboard({
       if (!row) return false;
       const toolbarItems = getToolbarItemsForRow(row);
       if (toolbarItems.length === 0) return false;
-      modeRef.current = "toolbar";
+      setGridMode("toolbar");
       activeToolbarIndexRef.current = 0;
       syncToolbarTabStops(toolbarItems, 0);
       toolbarItems[0]!.focus();
       return true;
     },
-    [findRowEl, getToolbarItemsForRow, syncToolbarTabStops]
+    [findRowEl, getToolbarItemsForRow, setGridMode, syncToolbarTabStops]
   );
 
   const selectRow = useCallback((worktreeId: string, e: React.SyntheticEvent) => {
@@ -257,12 +265,12 @@ export function useWorktreeSidebarKeyboard({
   useEffect(() => {
     const handleBlur = () => {
       if (modeRef.current !== "toolbar") return;
-      modeRef.current = "list";
+      setGridMode("list");
       if (activeWorktreeId !== null) clearToolbarTabStops(activeWorktreeId);
     };
     window.addEventListener("blur", handleBlur);
     return () => window.removeEventListener("blur", handleBlur);
-  }, [activeWorktreeId, clearToolbarTabStops]);
+  }, [activeWorktreeId, clearToolbarTabStops, setGridMode]);
 
   // Re-sync the active toolbar tabIndex after every render so a re-mount of
   // the active row (Virtuoso scrolling it into overscan) doesn't strand the
@@ -273,7 +281,7 @@ export function useWorktreeSidebarKeyboard({
     if (!row) return;
     const toolbarItems = getToolbarItemsForRow(row);
     if (toolbarItems.length === 0) {
-      modeRef.current = "list";
+      setGridMode("list");
       gridRef.current?.focus();
       return;
     }
@@ -308,7 +316,7 @@ export function useWorktreeSidebarKeyboard({
         const toolbarItems = getToolbarItemsForRow(row);
         const itemIdx = toolbarItems.indexOf(target);
         if (itemIdx !== -1) {
-          modeRef.current = "toolbar";
+          setGridMode("toolbar");
           activeToolbarIndexRef.current = itemIdx;
           syncToolbarTabStops(toolbarItems, itemIdx);
           setActiveWorktreeId(worktreeId);
@@ -320,10 +328,10 @@ export function useWorktreeSidebarKeyboard({
       // active row but stay in list mode.
       setActiveWorktreeId(worktreeId);
       if (modeRef.current === "toolbar") {
-        modeRef.current = "list";
+        setGridMode("list");
       }
     },
-    [getToolbarItemsForRow, syncToolbarTabStops]
+    [getToolbarItemsForRow, setGridMode, syncToolbarTabStops]
   );
 
   const handleGridKeyDown = useCallback(
@@ -517,9 +525,7 @@ export function useWorktreeSidebarKeyboard({
   );
 
   const activeDescendantId =
-    modeRef.current === "list" && activeWorktreeId
-      ? getWorktreeSidebarRowId(activeWorktreeId)
-      : undefined;
+    mode === "list" && activeWorktreeId ? getWorktreeSidebarRowId(activeWorktreeId) : undefined;
 
   return {
     gridRef,

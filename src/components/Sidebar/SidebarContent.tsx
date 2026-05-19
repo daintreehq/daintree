@@ -343,7 +343,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     setBannerDismissed(false);
   }, [error]);
   const onBannerDismiss = useCallback(() => setBannerDismissed(true), []);
-  worktreesRef.current = worktrees;
+  useEffect(() => {
+    worktreesRef.current = worktrees;
+  }, [worktrees]);
 
   // 1Hz tick that drives the escalated "Reconnecting… last updated X ago"
   // copy. The store holds the start timestamp; this state forces a render so
@@ -894,7 +896,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   );
 
   const dragStartOrder = useMemo(() => filteredWorktrees.map((w) => w.id), [filteredWorktrees]);
-  dragStartOrderRef.current = dragStartOrder;
+  useEffect(() => {
+    dragStartOrderRef.current = dragStartOrder;
+  }, [dragStartOrder]);
 
   // Drop a pending reorder announcement if the sidebar unmounts mid-key-repeat.
   useEffect(() => {
@@ -992,7 +996,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const hasQuery = query.trim().length > 0;
   const isSortDisabled = isGroupedByType || hasQuery;
-  isSortDisabledRef.current = isSortDisabled;
+  useEffect(() => {
+    isSortDisabledRef.current = isSortDisabled;
+  }, [isSortDisabled]);
 
   const mainRowIndex = mainVisible ? 1 : 0;
   const integrationRowIndex = integrationVisible ? mainRowIndex + 1 : mainRowIndex;

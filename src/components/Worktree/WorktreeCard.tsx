@@ -582,7 +582,9 @@ export function WorktreeCard({
 
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverWorktreeIdRef = useRef(worktree.id);
-  hoverWorktreeIdRef.current = worktree.id;
+  useEffect(() => {
+    hoverWorktreeIdRef.current = worktree.id;
+  }, [worktree.id]);
 
   const handleRevalidate = useCallback(() => {
     const id = hoverWorktreeIdRef.current;
