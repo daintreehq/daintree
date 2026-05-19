@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { useForgeResourceListSWR } from "../useForgeResourceListSWR";
-import { _resetForTests } from "@/lib/forgeResourceCache";
+import { _resetForTests, nextGeneration } from "@/lib/forgeResourceCache";
 import type { Issue, PR, Page } from "@shared/types/forge";
 
 // @vitest-environment jsdom
@@ -56,11 +56,11 @@ describe("useForgeResourceListSWR (fake provider, no GitHub IPC)", () => {
     _resetForTests();
     listIssues.mockReset();
     listPRs.mockReset();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).electron = {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test double: only the forge surface is exercised; github is a throwing trap proving isolation
+    window.electron = {
       forge: { listIssues, listPRs },
       github: githubTrap,
-    };
+    } as unknown as typeof window.electron;
   });
 
   it("renders an issue list sourced entirely from the forge IPC path", async () => {
@@ -165,5 +165,77 @@ describe("useForgeResourceListSWR (fake provider, no GitHub IPC)", () => {
     expect(second.result.current.data.map((i) => i.number)).toEqual([1]);
     await waitFor(() => expect(second.result.current.refreshing).toBe(false));
     expect(listIssues).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears the previous repo's rows on a cache-key change", async () => {
+    listIssues.mockResolvedValueOnce({
+      items: [makeIssue(1), makeIssue(2)],
+      nextCursor: null,
+      hasMore: false,
+    });
+
+    const { result, rerender } = renderHook((props) => useForgeResourceListSWR(props), {
+      initialProps: {
+        cwd: "/repo-a",
+        providerId: "acme.gitea",
+        owner: "acme",
+        repo: "alpha",
+        type: "issue" as const,
+        filterState: "open",
+        sortOrder: "created",
+      },
+    });
+
+    await waitFor(() => expect(result.current.data.map((i) => i.number)).toEqual([1, 2]));
+
+    // Switch to a different repo; its fetch rejects. Stale alpha rows must
+    // not bleed through while loading or after the failure.
+    listIssues.mockRejectedValueOnce(new Error("nope"));
+    rerender({
+      cwd: "/repo-b",
+      providerId: "acme.gitea",
+      owner: "acme",
+      repo: "beta",
+      type: "issue" as const,
+      filterState: "open",
+      sortOrder: "created",
+    });
+
+    expect(result.current.data).toEqual([]);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.data).toEqual([]);
+    expect(result.current.error).toBe("nope");
+  });
+
+  it("does not strand loading when the generation map evicts its key", async () => {
+    let resolveFetch: (page: Page<Issue>) => void = () => {};
+    listIssues.mockImplementation(
+      () =>
+        new Promise<Page<Issue>>((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    const { result } = renderHook(() =>
+      useForgeResourceListSWR({
+        cwd: "/repo",
+        providerId: "acme.gitea",
+        owner: "acme",
+        repo: "widgets",
+        type: "issue",
+        filterState: "open",
+        sortOrder: "created",
+      })
+    );
+
+    expect(result.current.loading).toBe(true);
+
+    // Evict the hook's key from the bounded generation map by churning 20+
+    // unrelated keys, then let the original in-flight fetch resolve.
+    for (let i = 0; i < 25; i++) nextGeneration(`unrelated-${i}`);
+    resolveFetch({ items: [makeIssue(9)], nextCursor: null, hasMore: false });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.data.map((i) => i.number)).toEqual([9]);
   });
 });

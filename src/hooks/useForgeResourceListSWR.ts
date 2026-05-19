@@ -90,6 +90,12 @@ export function useForgeResourceListSWR({
       setLoading(false);
       setRefreshing(true);
     } else {
+      // Cache miss after a key change (repo/provider/filter switch): drop the
+      // previous slot's rows so a consumer rendering `data` while `loading` is
+      // true never shows the wrong repo's issues, even if the new fetch fails.
+      setData([]);
+      setHasMore(false);
+      setLastUpdatedAt(null);
       setLoading(true);
       setRefreshing(false);
     }
@@ -107,13 +113,18 @@ export function useForgeResourceListSWR({
       opts = {};
     }
 
+    // Superseded only by a *strictly newer* generation (a later fetch or a
+    // `mutateCacheEntries` bump). A plain `!==` would also discard this
+    // response when the bounded generation map evicts our key back to 0,
+    // stranding the hook in a permanent loading state (#8455 review).
+    const isSuperseded = () => getGeneration(cacheKey) > generation;
+
     const fetchPage =
       type === "issue" ? forgeClient.listIssues(cwd, opts) : forgeClient.listPRs(cwd, opts);
 
     fetchPage
       .then((page) => {
-        // Discard if a newer fetch/mutation superseded this one.
-        if (cancelled || getGeneration(cacheKey) !== generation) return;
+        if (cancelled || isSuperseded()) return;
         const entry = {
           items: page.items,
           nextCursor: page.nextCursor,
@@ -127,7 +138,7 @@ export function useForgeResourceListSWR({
         setError(null);
       })
       .catch((err: unknown) => {
-        if (cancelled || getGeneration(cacheKey) !== generation) return;
+        if (cancelled || isSuperseded()) return;
         setError(
           formatErrorMessage(
             err,
@@ -136,7 +147,7 @@ export function useForgeResourceListSWR({
         );
       })
       .finally(() => {
-        if (cancelled || getGeneration(cacheKey) !== generation) return;
+        if (cancelled || isSuperseded()) return;
         setLoading(false);
         setRefreshing(false);
       });
