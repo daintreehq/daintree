@@ -1591,6 +1591,9 @@ const api: ElectronAPI = {
 
     listRemotes: (cwd: string) => _unwrappingInvoke(CHANNELS.GITHUB_LIST_REMOTES, cwd),
 
+    resolveAuthorAvatar: (email: string) =>
+      _unwrappingInvoke(CHANNELS.GITHUB_RESOLVE_AUTHOR_AVATAR, email),
+
     onPRDetected: (callback: (data: PRDetectedPayload) => void) =>
       _typedOn(CHANNELS.PR_DETECTED, callback),
 

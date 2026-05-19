@@ -18,6 +18,7 @@ import {
   gitHubRateLimitService,
   gitHubTokenHealthService,
   fetchRateLimitDetails,
+  resolveAuthorAvatar,
   setTokenAndSync,
   clearTokenAndSync,
 } from "../../services/github/index.js";
@@ -48,6 +49,13 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     return fetchRateLimitDetails();
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_GET_RATE_LIMIT_DETAILS, handleGetRateLimitDetails));
+
+  const handleResolveAuthorAvatar = async (email: string): Promise<string | null> => {
+    checkRateLimit(CHANNELS.GITHUB_RESOLVE_AUTHOR_AVATAR, 30, 60_000);
+    if (typeof email !== "string" || !email.trim()) return null;
+    return resolveAuthorAvatar(email.trim().toLowerCase());
+  };
+  handlers.push(typedHandle(CHANNELS.GITHUB_RESOLVE_AUTHOR_AVATAR, handleResolveAuthorAvatar));
 
   const handleGitHubGetRepoStats = async (
     cwd: string,

@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { WorktreeDetails } from "../WorktreeDetails";
 import { CommitChip } from "./CommitChip";
 import { Spinner } from "@/components/ui/Spinner";
+import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
 import {
   Activity,
   AlertTriangle,
@@ -98,6 +99,14 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   } = props;
   const detailsId = `worktree-${worktree.id}-details`;
   const detailsPanelId = `worktree-${worktree.id}-details-panel`;
+
+  // Forge-resolved committer avatar (#8514). Resolves to a real GitHub
+  // profile picture when the email is public; `undefined` while loading or on
+  // miss, so the existing Gravatar tier transparently takes over.
+  const forgeAuthorAvatarUrl = useForgeAuthorAvatar({
+    email: worktree.worktreeChanges?.lastCommitAuthor?.email,
+    linkedProviderId: worktree.linked?.providerId,
+  });
 
   const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;
   const [countScope, animate] = useAnimate<HTMLSpanElement>();
@@ -425,6 +434,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       lastCommitTimestampMs={worktree.worktreeChanges.lastCommitTimestampMs}
                       author={worktree.worktreeChanges.lastCommitAuthor}
                       commitMessage={worktree.worktreeChanges.lastCommitMessage}
+                      forgeAvatarUrl={forgeAuthorAvatarUrl}
                     />
                   )}
               </div>

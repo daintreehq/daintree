@@ -136,3 +136,6 @@ export { fetchRateLimitDetails } from "./GitHubRateLimitApi.js";
 
 // Remotes
 export { listGitHubRemotes } from "./GitHubRemotes.js";
+
+// Profile pictures (forge-agnostic avatar resolution)
+export { resolveAuthorAvatar, gitHubProfilePictureProvider } from "./GitHubProfilePicture.js";

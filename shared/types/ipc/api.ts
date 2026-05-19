@@ -725,6 +725,7 @@ export interface ElectronAPI {
     getPRReviewThreads(cwd: string, prNumber: number): Promise<Record<string, number>>;
     /** @deprecated Use `project.listRemotes` instead (#8456). */
     listRemotes(cwd: string): Promise<import("./github.js").RemoteInfo[]>;
+    resolveAuthorAvatar(email: string): Promise<string | null>;
     onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
     onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;
