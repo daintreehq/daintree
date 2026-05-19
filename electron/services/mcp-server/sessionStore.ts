@@ -88,9 +88,26 @@ export class SessionStore {
 
   createIdleTimer(sessionId: string): ReturnType<typeof setTimeout> {
     this.idleStartedAt.set(sessionId, Date.now());
-    const timer = setTimeout(() => {
+    const checkAndExpire = () => {
+      const session = this.sessions.get(sessionId);
+      if (!session) return;
+      const startedAt = this.idleStartedAt.get(sessionId);
+      if (startedAt !== undefined) {
+        try {
+          const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
+          if (awakeElapsed < MCP_SSE_IDLE_TIMEOUT_MS) {
+            const remaining = Math.max(1, MCP_SSE_IDLE_TIMEOUT_MS - awakeElapsed);
+            session.idleTimer = setTimeout(checkAndExpire, remaining);
+            (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
+            return;
+          }
+        } catch {
+          // Fall through to expiry.
+        }
+      }
       this.expireSseSession(sessionId);
-    }, MCP_SSE_IDLE_TIMEOUT_MS);
+    };
+    const timer = setTimeout(checkAndExpire, MCP_SSE_IDLE_TIMEOUT_MS);
     timer.unref?.();
     return timer;
   }
@@ -122,9 +139,26 @@ export class SessionStore {
 
   createHttpIdleTimer(sessionId: string): ReturnType<typeof setTimeout> {
     this.httpIdleStartedAt.set(sessionId, Date.now());
-    const timer = setTimeout(() => {
+    const checkAndExpire = () => {
+      const session = this.httpSessions.get(sessionId);
+      if (!session) return;
+      const startedAt = this.httpIdleStartedAt.get(sessionId);
+      if (startedAt !== undefined) {
+        try {
+          const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
+          if (awakeElapsed < MCP_SSE_IDLE_TIMEOUT_MS) {
+            const remaining = Math.max(1, MCP_SSE_IDLE_TIMEOUT_MS - awakeElapsed);
+            session.idleTimer = setTimeout(checkAndExpire, remaining);
+            (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
+            return;
+          }
+        } catch {
+          // Fall through to expiry.
+        }
+      }
       this.expireHttpSession(sessionId);
-    }, MCP_SSE_IDLE_TIMEOUT_MS);
+    };
+    const timer = setTimeout(checkAndExpire, MCP_SSE_IDLE_TIMEOUT_MS);
     timer.unref?.();
     return timer;
   }
@@ -157,7 +191,6 @@ export class SessionStore {
             this.expireSseSession(sessionId);
           }, remaining);
           (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
-          this.idleStartedAt.set(sessionId, Date.now());
         }
       } catch {
         // SystemSleepService may not be initialized; keep existing timer.
@@ -183,7 +216,6 @@ export class SessionStore {
             this.expireHttpSession(sessionId);
           }, remaining);
           (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
-          this.httpIdleStartedAt.set(sessionId, Date.now());
         }
       } catch {
         // SystemSleepService may not be initialized; keep existing timer.

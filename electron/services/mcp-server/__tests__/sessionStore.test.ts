@@ -77,13 +77,13 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
   });
 
   it("SSE idle-timer expiry deletes the session's pin so an evicted session does not leak the WebContents id", () => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
     const session = fakeSseSession();
     const sessionId = "sse-1";
     store.sessions.set(sessionId, session);
     store.sessionTierMap.set(sessionId, "action");
     store.sessionWebContentsMap.set(sessionId, 42);
 
-    // Replace with a fresh idle timer that we can fast-forward.
     clearTimeout(session.idleTimer);
     session.idleTimer = store.createIdleTimer(sessionId);
 
@@ -98,6 +98,7 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
   });
 
   it("Streamable-HTTP idle-timer expiry deletes the session's pin", () => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
     const session = fakeHttpSession();
     const sessionId = "http-1";
     store.httpSessions.set(sessionId, session);
@@ -162,7 +163,7 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
   });
 
   it("idle-timer for a session that was already removed is a no-op (does not stomp another session's pin)", () => {
-    // Set up two sessions; one gets removed before its timer fires.
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
     store.sessions.set("alive", fakeSseSession());
     store.sessionWebContentsMap.set("alive", 1);
     store.sessionWebContentsMap.set("evicted", 2);
@@ -249,6 +250,9 @@ describe("SessionStore.recomputeIdleTimers", () => {
     vi.advanceTimersByTime(halfTimeout - 1);
     expect(store.sessions.has("sse-2")).toBe(true);
 
+    // The timer callback's defense-in-depth checks getAwakeTimeSince().
+    // Set it to expired so it proceeds to actual expiry.
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
     vi.advanceTimersByTime(2);
     expect(store.sessions.has("sse-2")).toBe(false);
   });
@@ -270,6 +274,7 @@ describe("SessionStore.recomputeIdleTimers", () => {
     vi.advanceTimersByTime(halfTimeout - 1);
     expect(store.httpSessions.has("http-2")).toBe(true);
 
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
     vi.advanceTimersByTime(2);
     expect(store.httpSessions.has("http-2")).toBe(false);
   });
@@ -322,17 +327,30 @@ describe("SessionStore.recomputeIdleTimers", () => {
     expect(() => store.recomputeIdleTimers()).not.toThrow();
   });
 
-  it("timer callback cleans up timestamp entries", () => {
+  it("timer callback cleans up timestamp entries on expiry", () => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
     const session = fakeSseSession();
     store.sessions.set("sse-ts", session);
     clearTimeout(session.idleTimer);
     session.idleTimer = store.createIdleTimer("sse-ts");
 
-    setAwakeTime(0);
     vi.runAllTimers();
 
     expect(store.sessions.has("sse-ts")).toBe(false);
     expect(() => store.drain()).not.toThrow();
+  });
+
+  it("timer callback re-arms when awake time is below threshold (defense-in-depth)", () => {
+    setAwakeTime(0);
+    const session = fakeSseSession();
+    store.sessions.set("sse-survive", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("sse-survive");
+
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS);
+
+    // Session should survive because awake time is below threshold.
+    expect(store.sessions.has("sse-survive")).toBe(true);
   });
 
   it("is a no-op when no sessions exist", () => {
@@ -347,5 +365,33 @@ describe("SessionStore.recomputeIdleTimers", () => {
     store.recomputeIdleTimers();
 
     expect(store.sessions.has("no-ts")).toBe(true);
+  });
+
+  it("repeated recompute calls do not extend idle lifetime (accumulated awake time is preserved)", () => {
+    // Simulate: idle for 10 min, sleep, wake (recompute), idle 10 min, sleep,
+    // wake (recompute), idle 10 min, sleep, wake (recompute). The session has
+    // accumulated 30+ min of awake idle time and should expire on the third wake.
+    const thirdOfTimeout = MCP_SSE_IDLE_TIMEOUT_MS / 3;
+    setAwakeTime(0);
+    const session = fakeSseSession();
+    store.sessions.set("acc", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("acc");
+
+    // First cycle: 10 min awake, recompute on wake.
+    setAwakeTime(thirdOfTimeout);
+    store.recomputeIdleTimers();
+    expect(store.sessions.has("acc")).toBe(true);
+
+    // Second cycle: 20 min awake, recompute on wake.
+    setAwakeTime(thirdOfTimeout * 2);
+    store.recomputeIdleTimers();
+    expect(store.sessions.has("acc")).toBe(true);
+
+    // Third cycle: 30 min awake — should expire.
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    store.recomputeIdleTimers();
+    expect(store.sessions.has("acc")).toBe(false);
+    expect(resourceCleanups).toContain("acc");
   });
 });
