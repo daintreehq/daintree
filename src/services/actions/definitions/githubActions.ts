@@ -354,7 +354,7 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
       id: "github.getRepoStats",
       title: "Get GitHub Repo Stats",
       description:
-        "Get repository statistics (commit/issue/PR counts) via the GitHub CLI. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `bypassCache` (optional) to force a fresh fetch. Returns commitCount, issueCount, prCount, loading, plus optional ghError/stale/lastUpdated/rate-limit fields. Errors when `cwd` is omitted and no worktree is active; GitHub failures surface in `ghError` rather than throwing.",
+        "Get repository statistics (commit/issue/PR counts) via the token-backed GitHub API. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `bypassCache` (optional) to force a fresh fetch. Returns commitCount, issueCount, prCount, loading, plus optional ghError/stale/lastUpdated/rate-limit fields. Errors when `cwd` is omitted and no worktree is active; GitHub failures surface in `ghError` rather than throwing.",
       category: "github",
       kind: "query",
       danger: "safe",
@@ -390,7 +390,7 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
       id: "github.listIssues",
       title: "List GitHub Issues",
       description:
-        "List repository issues via the GitHub CLI (paginated). Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `search`; `state` ('open'|'closed'|'merged'|'all', default 'open' — 'merged' is invalid for issues and yields a runtime error); `cursor` from a previous response's `pageInfo.endCursor`. Returns { items, pageInfo:{ hasNextPage, endCursor } }. Errors when `cwd` is omitted and no worktree is active. Do NOT use this for pull requests — call `github.listPullRequests`.",
+        "List repository issues via the token-backed GitHub API (paginated). Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `search`; `state` ('open'|'closed'|'all', default 'open' — 'merged' is accepted by the schema but not meaningful for issues and is silently treated as 'open'); `cursor` from a previous response's `pageInfo.endCursor`. Returns { items, pageInfo:{ hasNextPage, endCursor } }. Errors when `cwd` is omitted and no worktree is active. Do NOT use this for pull requests — call `github.listPullRequests`.",
       category: "github",
       kind: "query",
       danger: "safe",
@@ -421,7 +421,7 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
       id: "github.getIssueByNumber",
       title: "Get GitHub Issue",
       description:
-        "Fetch a single GitHub issue by its number. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int). Returns the issue { number, title, state, url, body?, labels?, assignees?, createdAt?, updatedAt? } or null when not found. Errors when `cwd` is omitted and no worktree is active. Do NOT use `github.listIssues` to fetch one known number — this is the direct lookup.",
+        "Fetch a single GitHub issue by its number. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int). Returns the issue { number, title, url, state ('OPEN'|'CLOSED'), updatedAt, author, assignees, commentCount, labels?, linkedPR? } or null when not found. Errors when `cwd` is omitted and no worktree is active. Do NOT use `github.listIssues` to fetch one known number — this is the direct lookup.",
       category: "github",
       kind: "query",
       danger: "safe",
@@ -469,7 +469,7 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
       id: "github.listPullRequests",
       title: "List GitHub Pull Requests",
       description:
-        "List repository pull requests via the GitHub CLI (paginated). Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `search`; `state` ('open'|'closed'|'merged'|'all', default 'open'); `cursor` from a previous response's `pageInfo.endCursor`. Returns { items, pageInfo:{ hasNextPage, endCursor } }. Errors when `cwd` is omitted and no worktree is active. Do NOT use this for issues — call `github.listIssues` (issues have no 'merged' state).",
+        "List repository pull requests via the token-backed GitHub API (paginated). Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `search`; `state` ('open'|'closed'|'merged'|'all', default 'open'); `cursor` from a previous response's `pageInfo.endCursor`. Returns { items, pageInfo:{ hasNextPage, endCursor } }. Errors when `cwd` is omitted and no worktree is active. Do NOT use this for issues — call `github.listIssues` (issues have no 'merged' state).",
       category: "github",
       kind: "query",
       danger: "safe",
@@ -494,7 +494,7 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
     id: "github.checkCli",
     title: "Check GitHub CLI",
     description:
-      "Check whether the GitHub CLI (`gh`) is installed and authenticated. Takes no args. Returns { available: boolean, error? } — `error` carries the reason when unavailable (missing binary or not logged in). Never throws; an unavailable CLI is reported as available:false, not an exception. Call this before other github.* actions when CLI presence is uncertain.",
+      "Check whether a GitHub token is configured (the credential the github.* actions use). Takes no args. Returns { available: boolean, error? } — available:true when a token is stored, otherwise available:false with `error` explaining a token must be set in Settings. Does NOT check for the `gh` binary or token validity. Never throws. Call this before other github.* actions when credential presence is uncertain.",
     category: "github",
     kind: "query",
     danger: "safe",
