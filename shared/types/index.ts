@@ -333,6 +333,9 @@ export type {
   McpConfirmationDecision,
   AssistantTurnRecord,
   TurnOutcomeClass,
+  McpAnomalySeverity,
+  McpAnomalyKind,
+  McpAnomalySignal,
   McpRuntimeSnapshot,
   McpRuntimeState,
 } from "./ipc/mcpServer.js";

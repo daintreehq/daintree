@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Copy, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
+import { Check, Clock, Copy, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import type { McpAuditRecord, McpAuditResult, AssistantTurnRecord } from "@shared/types";
+import type {
+  McpAuditRecord,
+  McpAuditResult,
+  AssistantTurnRecord,
+  McpAnomalySignal,
+} from "@shared/types";
 
 type AuditResultFilter = "all" | McpAuditResult;
 
@@ -131,6 +136,8 @@ interface McpAuditLogViewerProps {
   onExport?: (records: McpAuditRecord[]) => Promise<void> | void;
   /** Set when an export succeeded so the UI can flash a confirmation. */
   exportFlashActive?: boolean;
+  anomalySignals?: McpAnomalySignal[];
+  anomalySuppressed?: boolean;
 }
 
 export function McpAuditLogViewer({
@@ -145,6 +152,8 @@ export function McpAuditLogViewer({
   copyFlashActive,
   onExport,
   exportFlashActive,
+  anomalySignals = [],
+  anomalySuppressed = true,
 }: McpAuditLogViewerProps) {
   const [toolFilter, setToolFilter] = useState("");
   const [resultFilter, setResultFilter] = useState<AuditResultFilter>("all");
@@ -152,6 +161,7 @@ export function McpAuditLogViewer({
   const [searchQuery, setSearchQuery] = useState("");
   const [nowTick, setNowTick] = useState(Date.now());
   const [groupByTurn, setGroupByTurn] = useState(false);
+  const [ignoreLastHour, setIgnoreLastHour] = useState(false);
 
   useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), RELATIVE_TIMESTAMP_REFRESH_MS);
@@ -191,6 +201,32 @@ export function McpAuditLogViewer({
   }, [groupByTurn, turnRecords, filteredRecords]);
 
   const showCopyAll = filteredRecords.length === visibleRecords.length;
+
+  const oneHourAgo = Date.now() - 3_600_000;
+  const visibleSignals = useMemo(() => {
+    if (anomalySuppressed) return [];
+    return ignoreLastHour
+      ? anomalySignals.filter((s) => s.timestamp <= oneHourAgo)
+      : anomalySignals;
+  }, [anomalySignals, anomalySuppressed, ignoreLastHour, oneHourAgo]);
+
+  const signalRecordIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const sig of visibleSignals) {
+      for (const id of sig.recordIds) {
+        set.add(id);
+      }
+    }
+    return set;
+  }, [visibleSignals]);
+
+  const anomalyCountsByKind = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const sig of visibleSignals) {
+      counts[sig.kind] = (counts[sig.kind] ?? 0) + 1;
+    }
+    return counts;
+  }, [visibleSignals]);
 
   const showTierRejections = () => {
     setResultFilter("unauthorized");
@@ -283,7 +319,34 @@ export function McpAuditLogViewer({
             Group by turn
           </button>
         )}
+        {!anomalySuppressed && anomalySignals.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setIgnoreLastHour((v) => !v)}
+            className={cn(
+              "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
+              ignoreLastHour
+                ? "border-status-warning/20 text-status-warning bg-status-warning/10"
+                : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+            )}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            Ignore last hour
+          </button>
+        )}
       </div>
+
+      {!anomalySuppressed && visibleSignals.length > 0 && (
+        <div className="flex items-start gap-2 p-2.5 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
+          <span className="text-xs text-status-danger">
+            {visibleSignals.length} anomaly signal{visibleSignals.length !== 1 ? "s" : ""}
+            {Object.entries(anomalyCountsByKind).length > 0 &&
+              ` (${Object.entries(anomalyCountsByKind)
+                .map(([kind, count]) => `${count} ${kind}`)
+                .join(", ")})`}
+          </span>
+        </div>
+      )}
 
       <div className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg">
         {loading ? (
@@ -414,14 +477,19 @@ export function McpAuditLogViewer({
           <ul className="divide-y divide-daintree-border">
             {filteredRecords.map((record) => (
               <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                <span
-                  className={cn(
-                    "mt-1 h-2 w-2 rounded-full shrink-0",
-                    RESULT_DOT_CLASS[record.result]
+                <div className="flex items-start gap-1 mt-1">
+                  <span
+                    className={cn("h-2 w-2 rounded-full shrink-0", RESULT_DOT_CLASS[record.result])}
+                    aria-label={RESULT_LABEL[record.result]}
+                    title={RESULT_LABEL[record.result]}
+                  />
+                  {signalRecordIds.has(record.id) && (
+                    <span
+                      className="h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
+                      title="Anomaly"
+                    />
                   )}
-                  aria-label={RESULT_LABEL[record.result]}
-                  title={RESULT_LABEL[record.result]}
-                />
+                </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-daintree-text/90 truncate">

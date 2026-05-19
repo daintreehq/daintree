@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  McpAnomalySignal,
   McpAuditRecord,
   McpAuditResult,
   McpAuditStats,
@@ -25,6 +26,24 @@ import {
   minimumPermittingTier,
 } from "./shared.js";
 
+const ANOMALY_MIN_RECORDS = 50;
+const LATENCY_SIGMA_THRESHOLD = 3;
+const FAILURE_CLUSTER_WINDOW = 10;
+const FAILURE_CLUSTER_MIN_FAILURES = 3;
+const MAD_SCALE_FACTOR = 0.6745;
+const P95_Z_SCORE_MIN_TOOLS = 5;
+
+function percentile(values: number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  if (sorted.length === 1) return sorted[0]!;
+  const rank = p * (sorted.length - 1);
+  const k = Math.floor(rank);
+  const f = rank - k;
+  const lower = sorted[k]!;
+  const upper = sorted[k + 1] ?? lower;
+  return lower + f * (upper - lower);
+}
+
 /**
  * Hydrate predicate: existing on-disk records predate the discriminated
  * union (#8442) and have no `type` field; new entries written by
@@ -46,6 +65,13 @@ export class AuditService {
    * no `toolId`/`tier` is known. Reset on app restart by design.
    */
   private auth401Count = 0;
+  /**
+   * Known {toolId, tier} combinations observed across the entire process
+   * lifetime. Seeded from hydrated records on the first `getSignals()` call.
+   * Survives `clear()` — clearing the ring frees space but should not
+   * re-trigger first-seen signals for combinations already observed.
+   */
+  private knownCombinations = new Set<string>();
 
   constructor(
     private readonly saveConfig: (patch: Record<string, unknown>) => void,
@@ -218,7 +244,193 @@ export class AuditService {
    * Read the session-scoped audit health counters. Renderer-facing.
    */
   getAuditStats(): McpAuditStats {
-    return { auth401Count: this.auth401Count };
+    const signals = this.getSignals();
+    return {
+      auth401Count: this.auth401Count,
+      anomalySignals: signals,
+      anomalySuppressed: this.dispatchRecordCount() < ANOMALY_MIN_RECORDS,
+      anomalyRecordFloor: ANOMALY_MIN_RECORDS,
+    };
+  }
+
+  /**
+   * Count of dispatch records (excluding grant-lifecycle entries) currently
+   * in the ring buffer. Anomaly detection operates strictly on dispatch
+   * records, so the suppression floor is measured against this count.
+   */
+  private dispatchRecordCount(): number {
+    let n = 0;
+    for (const r of this.records) {
+      if (!isGrantRecord(r)) n += 1;
+    }
+    return n;
+  }
+
+  getSignals(): McpAnomalySignal[] {
+    this.hydrate();
+    const records: McpAuditRecord[] = [];
+    for (const r of this.records) {
+      if (!isGrantRecord(r)) records.push(r);
+    }
+    if (records.length < ANOMALY_MIN_RECORDS) return [];
+
+    const signals: McpAnomalySignal[] = [];
+
+    // Seed knownCombinations from all records on first call so existing
+    // combos don't fire first-seen signals retroactively.
+    const firstCall = this.knownCombinations.size === 0;
+    if (firstCall) {
+      for (const r of records) {
+        this.knownCombinations.add(`${r.toolId} ${r.tier}`);
+      }
+    }
+
+    // 1. First-seen combinations — only for combos not yet in the set.
+    for (const r of records) {
+      const key = `${r.toolId} ${r.tier}`;
+      if (!this.knownCombinations.has(key)) {
+        this.knownCombinations.add(key);
+        signals.push({
+          id: `first-seen:${r.toolId}:${r.tier}`,
+          kind: "first-seen-combination",
+          toolId: r.toolId,
+          tier: r.tier,
+          severity: "danger",
+          timestamp: r.timestamp,
+          recordIds: [r.id],
+        });
+      }
+    }
+
+    // 2. Latency drift — per-tool modified z-score (MAD-based).
+    const latencySignals = this.computeLatencyDrift(records);
+    signals.push(...latencySignals);
+
+    // 3. Failure clustering — sliding window over chronological records.
+    const failureSignals = this.computeFailureClusters(records);
+    signals.push(...failureSignals);
+
+    // 4. P95 z-score — cross-tool outlier detection.
+    const p95Signals = this.computeP95ZScores(records);
+    signals.push(...p95Signals);
+
+    return signals;
+  }
+
+  private computeLatencyDrift(records: readonly McpAuditRecord[]): McpAnomalySignal[] {
+    const signals: McpAnomalySignal[] = [];
+    const byTool = new Map<string, McpAuditRecord[]>();
+    for (const r of records) {
+      if (r.result !== "success") continue;
+      const list = byTool.get(r.toolId);
+      if (list) list.push(r);
+      else byTool.set(r.toolId, [r]);
+    }
+    for (const [toolId, toolRecords] of byTool) {
+      if (toolRecords.length < 2) continue;
+      const durations = toolRecords.map((r) => r.durationMs);
+      const median = percentile(durations, 0.5);
+      const absDeviations = durations.map((d) => Math.abs(d - median));
+      const mad = percentile(absDeviations, 0.5);
+      if (mad === 0) continue;
+      for (let i = 0; i < toolRecords.length; i++) {
+        const duration = durations[i]!;
+        const zScore = (MAD_SCALE_FACTOR * (duration - median)) / mad;
+        if (zScore >= LATENCY_SIGMA_THRESHOLD) {
+          const record = toolRecords[i]!;
+          signals.push({
+            id: `latency-drift:${record.id}`,
+            kind: "latency-drift",
+            toolId,
+            tier: record.tier,
+            severity: "danger",
+            timestamp: record.timestamp,
+            recordIds: [record.id],
+            zScore: Math.round(zScore * 100) / 100,
+            durationMs: duration,
+            baselineMedianMs: Math.round(median),
+          });
+        }
+      }
+    }
+    return signals;
+  }
+
+  private computeFailureClusters(records: readonly McpAuditRecord[]): McpAnomalySignal[] {
+    const signals: McpAnomalySignal[] = [];
+    const emitted = new Set<string>();
+    for (let start = 0; start <= records.length - FAILURE_CLUSTER_WINDOW; start++) {
+      const windowRecords = records.slice(start, start + FAILURE_CLUSTER_WINDOW);
+      const failuresByTool = new Map<string, McpAuditRecord[]>();
+      for (const r of windowRecords) {
+        if (r.result === "success" || r.result === "dedup") continue;
+        const list = failuresByTool.get(r.toolId);
+        if (list) list.push(r);
+        else failuresByTool.set(r.toolId, [r]);
+      }
+      for (const [toolId, toolFailures] of failuresByTool) {
+        if (toolFailures.length < FAILURE_CLUSTER_MIN_FAILURES) continue;
+        const latest = toolFailures[toolFailures.length - 1]!;
+        const sigId = `failure-cluster:${toolId}:${latest.id}`;
+        if (emitted.has(sigId)) continue;
+        emitted.add(sigId);
+        signals.push({
+          id: sigId,
+          kind: "failure-cluster",
+          toolId,
+          severity: "danger",
+          timestamp: latest.timestamp,
+          recordIds: toolFailures.map((r) => r.id),
+          clusterSize: toolFailures.length,
+          clusterWindow: FAILURE_CLUSTER_WINDOW,
+        });
+      }
+    }
+    return signals;
+  }
+
+  private computeP95ZScores(records: readonly McpAuditRecord[]): McpAnomalySignal[] {
+    const signals: McpAnomalySignal[] = [];
+    const byTool = new Map<string, McpAuditRecord[]>();
+    for (const r of records) {
+      if (r.result !== "success") continue;
+      const list = byTool.get(r.toolId);
+      if (list) list.push(r);
+      else byTool.set(r.toolId, [r]);
+    }
+    if (byTool.size < P95_Z_SCORE_MIN_TOOLS) return signals;
+
+    const toolP95s: { toolId: string; p95: number; latestRecord: McpAuditRecord }[] = [];
+    for (const [toolId, toolRecords] of byTool) {
+      if (toolRecords.length < 2) continue;
+      const sorted = toolRecords.map((r) => r.durationMs).sort((a, b) => a - b);
+      const p95 = percentile(sorted, 0.95);
+      toolP95s.push({ toolId, p95, latestRecord: toolRecords[toolRecords.length - 1]! });
+    }
+    if (toolP95s.length < P95_Z_SCORE_MIN_TOOLS) return signals;
+
+    const p95s = toolP95s.map((t) => t.p95);
+    const medianP95 = percentile(p95s, 0.5);
+    const absDeviations = p95s.map((p) => Math.abs(p - medianP95));
+    const madP95 = percentile(absDeviations, 0.5);
+    if (madP95 === 0) return signals;
+
+    for (const entry of toolP95s) {
+      const zScore = (MAD_SCALE_FACTOR * (entry.p95 - medianP95)) / madP95;
+      if (zScore >= LATENCY_SIGMA_THRESHOLD) {
+        signals.push({
+          id: `p95-z-score:${entry.toolId}`,
+          kind: "p95-z-score",
+          toolId: entry.toolId,
+          severity: "danger",
+          timestamp: entry.latestRecord.timestamp,
+          recordIds: [entry.latestRecord.id],
+          zScore: Math.round(zScore * 100) / 100,
+          p95Ms: Math.round(entry.p95),
+        });
+      }
+    }
+    return signals;
   }
 
   private scheduleFlush(): void {
@@ -284,6 +496,9 @@ export class AuditService {
     this.hydrate();
     this.records = [];
     this.flushNow();
+    // knownCombinations intentionally preserved — clearing the ring frees
+    // space but should not re-trigger first-seen signals for combos already
+    // observed in this process lifetime.
   }
 
   setEnabled(enabled: boolean): { enabled: boolean; maxRecords: number } {
