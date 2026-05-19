@@ -78,6 +78,7 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     getConfigSnippet: vi.fn().mockResolvedValue("http://127.0.0.1:9020/sse"),
     rotateApiKey: vi.fn().mockResolvedValue("dnt-key-rotated789"),
     getAuditRecords: vi.fn().mockResolvedValue([]),
+    getTurnOutcomeRecords: vi.fn().mockResolvedValue([]),
     getAuditConfig: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
     clearAuditLog: vi.fn().mockResolvedValue(undefined),
     setAuditEnabled: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),

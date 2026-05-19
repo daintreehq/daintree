@@ -72,6 +72,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       recordDirectOutcome: vi.fn(),
       getRecords: vi.fn(() => []),
       clear: vi.fn(),
+      getCurrentTurnIdForSession: vi.fn(() => null),
     },
     requestManifest: vi.fn().mockResolvedValue([]),
     dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: null } }),
@@ -333,6 +334,61 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       expect(() => lc.setSessionTier("", "system")).toThrow(/Invalid sessionId/);
+    });
+  });
+
+  describe("buildSessionServerDeps — appendAuditRecord turnId stamping", () => {
+    it("stamps turnId on appendRecord when getCurrentTurnIdForSession returns a value", () => {
+      const deps = fakeDeps();
+      (
+        deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>
+      ).mockReturnValue("turn-uuid-abc");
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps("session-1");
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-1",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+      });
+      expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ turnId: "turn-uuid-abc" })
+      );
+    });
+
+    it("omits turnId when getCurrentTurnIdForSession returns null", () => {
+      const deps = fakeDeps();
+      (
+        deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>
+      ).mockReturnValue(null);
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps("session-1");
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-1",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+      });
+      const callArgs = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
+        .calls[0]?.[0];
+      expect(callArgs).toBeDefined();
+      expect(callArgs.turnId).toBeUndefined();
     });
   });
 

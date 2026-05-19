@@ -329,6 +329,10 @@ export type {
   McpAuditRecord,
   McpAuditResult,
   McpAuditStats,
+  McpAuditSeverity,
+  McpConfirmationDecision,
+  AssistantTurnRecord,
+  TurnOutcomeClass,
   McpRuntimeSnapshot,
   McpRuntimeState,
 } from "./ipc/mcpServer.js";

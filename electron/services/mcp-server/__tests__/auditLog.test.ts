@@ -116,6 +116,121 @@ describe("AuditService.appendRecord", () => {
   });
 });
 
+describe("AuditService.appendRecord — turnId, severity, schemaVersion", () => {
+  it("persists turnId when provided", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 10,
+      outcome: successOutcome,
+      argsSummary: "{}",
+      turnId: "turn-uuid-123",
+    });
+    const [record] = service.getRecords();
+    expect(record!.turnId).toBe("turn-uuid-123");
+  });
+
+  it("turnId is absent when not provided", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 10,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    const [record] = service.getRecords();
+    expect(record!.turnId).toBeUndefined();
+  });
+
+  it("new records carry schemaVersion 1", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 10,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    const [record] = service.getRecords();
+    expect(record!.schemaVersion).toBe(1);
+  });
+
+  it("derives severity: success → info", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 10,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    const [record] = service.getRecords();
+    expect(record!.severity).toBe("info");
+  });
+
+  it("derives severity: unauthorized → warning", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "workbench",
+      args: {},
+      durationMs: 0,
+      outcome: unauthorizedOutcome,
+      argsSummary: "{}",
+    });
+    const [record] = service.getRecords();
+    expect(record!.severity).toBe("warning");
+  });
+
+  it("derives severity: dedup → info", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 10,
+      outcome: { kind: "dedup" },
+      argsSummary: "{}",
+    });
+    const [record] = service.getRecords();
+    expect(record!.severity).toBe("info");
+  });
+});
+
+describe("AuditService hydrate — backward compat", () => {
+  it("tolerates persisted records missing schemaVersion and severity", () => {
+    const { service } = makeFixture({
+      auditLog: [
+        {
+          id: "old-1",
+          timestamp: 1000,
+          toolId: "agent.terminal",
+          sessionId: "sess-1",
+          tier: "action",
+          argsSummary: "{}",
+          result: "success",
+          durationMs: 5,
+        },
+      ],
+    });
+    const records = service.getRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.id).toBe("old-1");
+  });
+});
+
 describe("AuditService.recordAuth401 / getAuditStats", () => {
   it("starts at zero", () => {
     const { service } = makeFixture();

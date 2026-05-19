@@ -793,9 +793,11 @@ export class HttpLifecycle {
         // `summarizeMcpArgs` — running the scrubber after truncation would
         // miss bearer tokens whose body got cut below the scrubber's
         // 8-char minimum match length.
+        const turnId = this.deps.turnOutcomeService.getCurrentTurnIdForSession(sessionId);
         this.deps.auditService.appendRecord({
           ...input,
           argsSummary: summarizeMcpArgs(input.args, (s) => scrubSecrets(sanitizePath(s))),
+          ...(turnId !== null ? { turnId } : {}),
         });
       },
       getCachedManifest,

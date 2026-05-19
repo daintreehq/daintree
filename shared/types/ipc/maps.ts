@@ -1780,6 +1780,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [max: number];
     result: { enabled: boolean; maxRecords: number };
   };
+  "mcp-server:get-turn-outcome-records": {
+    args: [];
+    result: import("./mcpServer.js").AssistantTurnRecord[];
+  };
   "mcp-server:get-runtime-state": {
     args: [];
     result: import("./mcpServer.js").McpRuntimeSnapshot;

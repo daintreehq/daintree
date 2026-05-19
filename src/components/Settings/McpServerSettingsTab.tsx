@@ -24,6 +24,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import {
   type McpAuditRecord,
+  type AssistantTurnRecord,
   MCP_AUDIT_DEFAULT_MAX_RECORDS,
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_MIN_RECORDS,
@@ -64,6 +65,7 @@ export function McpServerSettingsTab() {
   const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [auditRecords, setAuditRecords] = useState<McpAuditRecord[]>([]);
+  const [turnRecords, setTurnRecords] = useState<AssistantTurnRecord[]>([]);
   const [auditEnabled, setAuditEnabled] = useState(true);
   const [auditMaxRecords, setAuditMaxRecords] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS);
   const [maxRecordsInput, setMaxRecordsInput] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS.toString());
@@ -78,8 +80,12 @@ export function McpServerSettingsTab() {
 
   const refreshAuditRecords = async (): Promise<void> => {
     try {
-      const records = await window.electron.mcpServer.getAuditRecords();
+      const [records, turns] = await Promise.all([
+        window.electron.mcpServer.getAuditRecords(),
+        window.electron.mcpServer.getTurnOutcomeRecords(),
+      ]);
       setAuditRecords(records);
+      setTurnRecords(turns);
     } catch (err) {
       logError("Failed to load MCP audit log", err);
     }
@@ -98,8 +104,9 @@ export function McpServerSettingsTab() {
       window.electron.mcpServer.getStatus(),
       window.electron.mcpServer.getAuditConfig(),
       window.electron.mcpServer.getAuditRecords(),
+      window.electron.mcpServer.getTurnOutcomeRecords(),
     ])
-      .then(([s, auditCfg, records]) => {
+      .then(([s, auditCfg, records, turns]) => {
         if (settled) return;
         setStatus(s);
         setPortInput(s.configuredPort?.toString() ?? "");
@@ -108,6 +115,7 @@ export function McpServerSettingsTab() {
         setAuditMaxRecords(auditCfg.maxRecords);
         setMaxRecordsInput(auditCfg.maxRecords.toString());
         setAuditRecords(records);
+        setTurnRecords(turns);
         setError(null);
       })
       .catch((err) => {
@@ -596,6 +604,7 @@ export function McpServerSettingsTab() {
 
               <McpAuditLogViewer
                 records={auditRecords}
+                turnRecords={turnRecords}
                 loading={auditLoading}
                 onRefresh={refreshAuditRecords}
                 onCopy={handleCopyAuditAsJson}
