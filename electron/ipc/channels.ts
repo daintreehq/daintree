@@ -727,6 +727,9 @@ export const CHANNELS = {
   FORGE_GET_ISSUE_URL: "forge:get-issue-url",
   FORGE_ASSIGN_ISSUE: "forge:assign-issue",
   FORGE_VALIDATE_TOKEN: "forge:validate-token",
+  FORGE_SET_CREDENTIAL: "forge:set-credential",
+  FORGE_GET_CREDENTIAL_STATUS: "forge:get-credential-status",
+  FORGE_CLEAR_CREDENTIAL: "forge:clear-credential",
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",

@@ -2392,6 +2392,12 @@ const api: ElectronAPI = {
     assignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
       _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
     validateToken: (token: string) => _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, token),
+    setCredential: (providerId: string, credentials: Record<string, string>) =>
+      _unwrappingInvoke(CHANNELS.FORGE_SET_CREDENTIAL, providerId, credentials),
+    getCredentialStatus: (providerId: string) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_CREDENTIAL_STATUS, providerId),
+    clearCredential: (providerId: string) =>
+      _unwrappingInvoke(CHANNELS.FORGE_CLEAR_CREDENTIAL, providerId),
   },
 
   // Voice Input API

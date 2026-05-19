@@ -1,11 +1,18 @@
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { typedHandle } from "../utils.js";
-import { getRegisteredForgeProviders } from "../../services/forgeProviderRegistry.js";
+import {
+  getForgeProviderImpl,
+  getRegisteredForgeProviders,
+} from "../../services/forgeProviderRegistry.js";
 import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
-import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
+import {
+  makeForgeProviderId,
+  normalizeProviderId,
+} from "../../../shared/utils/forgeProviderIds.js";
+import type { AuthValidation, CredentialField } from "../../../shared/types/forge.js";
 
 /**
  * Read the persisted global default provider id, normalizing legacy forms
@@ -14,6 +21,68 @@ import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
  */
 function readDefaultProviderId(): string | null {
   return normalizeProviderId(store.get("forgeDefaultProviderId"));
+}
+
+/**
+ * Look up a registered provider's declared credential fields by canonical id.
+ * Returns `[]` when the provider declares none (or is not registered) — the
+ * caller treats that as a single-value credential.
+ */
+function credentialFieldsFor(providerId: string): CredentialField[] {
+  const entry = getRegisteredForgeProviders().find(
+    (p) => makeForgeProviderId(p.pluginId, p.contribution.id) === providerId
+  );
+  return entry?.contribution.credentialFields ?? [];
+}
+
+/**
+ * Pick the value passed to `validateToken`, which takes a single string. The
+ * primary field is the first `"password"`-typed declared field, else the
+ * first declared field; with no declared fields, the first record value.
+ */
+function pickPrimaryValue(fields: CredentialField[], credentials: Record<string, string>): string {
+  if (fields.length > 0) {
+    const primary = fields.find((f) => f.type === "password") ?? fields[0];
+    return credentials[primary.id] ?? "";
+  }
+  const first = Object.values(credentials)[0];
+  return typeof first === "string" ? first : "";
+}
+
+/** True when a stored record has at least one non-empty value. */
+function recordHasCredential(raw: string | undefined): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return false;
+    return Object.values(parsed as Record<string, unknown>).some(
+      (v) => typeof v === "string" && v.trim().length > 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Push a provider's credentials to the workspace-host UtilityProcess so
+ * branch→PR detection can use them. Mirrors `syncWorkspaceToken` in
+ * `GitHubTokenOrchestrator` — best-effort, swallows errors when the client
+ * is not yet initialized (the host re-reads the store on next launch).
+ */
+async function syncWorkspaceCredential(
+  providerId: string,
+  primaryValue: string | null
+): Promise<void> {
+  try {
+    const { getWorkspaceClient } = await import("../../services/WorkspaceClient.js");
+    const credentials =
+      primaryValue && primaryValue.length > 0
+        ? { kind: "bearer" as const, value: primaryValue }
+        : null;
+    getWorkspaceClient().updateForgeCredentials(providerId, credentials);
+  } catch {
+    // WorkspaceClient may not be initialized yet — store is the source of truth.
+  }
 }
 
 export function registerForgeSettingsHandlers(): () => void {
@@ -74,6 +143,72 @@ export function registerForgeSettingsHandlers(): () => void {
         console.warn(`[forgeSettings] resolve failed for ${projectId}:`, error);
         return { entry: null, resolvedVia: null };
       }
+    })
+  );
+
+  cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_SET_CREDENTIAL,
+      async (providerId: unknown, credentials: unknown): Promise<AuthValidation> => {
+        if (typeof providerId !== "string" || providerId.length === 0) {
+          return { valid: false, error: "Provider id is required" };
+        }
+        if (!credentials || typeof credentials !== "object") {
+          return { valid: false, error: "Credentials are required" };
+        }
+        const record: Record<string, string> = {};
+        for (const [k, v] of Object.entries(credentials as Record<string, unknown>)) {
+          if (typeof v === "string") record[k] = v;
+        }
+
+        const fields = credentialFieldsFor(providerId);
+        const primaryValue = pickPrimaryValue(fields, record).trim();
+        if (primaryValue.length === 0) {
+          return { valid: false, error: "Credential is required" };
+        }
+
+        const impl = getForgeProviderImpl(providerId);
+        if (!impl) {
+          return { valid: false, error: "Provider not activated. Open it in Settings first." };
+        }
+
+        const validation = await impl.validateToken(primaryValue);
+        if (!validation.valid) {
+          return validation;
+        }
+
+        const existing = store.get("forgeCredentials") ?? {};
+        store.set("forgeCredentials", { ...existing, [providerId]: JSON.stringify(record) });
+
+        await syncWorkspaceCredential(providerId, primaryValue);
+
+        return validation;
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandle(CHANNELS.FORGE_GET_CREDENTIAL_STATUS, (providerId: unknown) => {
+      if (typeof providerId !== "string" || providerId.length === 0) {
+        return { hasCredential: false };
+      }
+      const map = store.get("forgeCredentials") ?? {};
+      return { hasCredential: recordHasCredential(map[providerId]) };
+    })
+  );
+
+  cleanups.push(
+    typedHandle(CHANNELS.FORGE_CLEAR_CREDENTIAL, async (providerId: unknown) => {
+      if (typeof providerId !== "string" || providerId.length === 0) {
+        return;
+      }
+      const existing = store.get("forgeCredentials") ?? {};
+      if (providerId in existing) {
+        const next = { ...existing };
+        delete next[providerId];
+        store.set("forgeCredentials", next);
+      }
+      await syncWorkspaceCredential(providerId, null);
     })
   );
 

@@ -549,4 +549,6 @@ export type {
   ForgeProviderResolutionVia,
   ForgeCapabilityHint,
   ResolvedForgeProvider,
+  CredentialField,
+  CredentialFieldType,
 } from "./forge.js";
