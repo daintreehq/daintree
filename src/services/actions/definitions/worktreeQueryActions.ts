@@ -12,7 +12,8 @@ export function registerWorktreeQueryActions(
   actions.set("worktree.list", () => ({
     id: "worktree.list",
     title: "List Worktrees",
-    description: "Get list of all worktrees with status information",
+    description:
+      "List every worktree in the active project with summary status. Takes no args. Returns { worktrees } — each entry has id, path, branch, isActive, isMain, issueNumber/issueTitle, prNumber/prTitle/prUrl, status (mood), and lastCommit. Never errors; returns an empty array when none exist. Do NOT use this when you only need the active worktree — call `worktree.getCurrent`.",
     category: "worktree",
     kind: "query",
     danger: "safe",
@@ -44,7 +45,8 @@ export function registerWorktreeQueryActions(
   actions.set("worktree.getCurrent", () => ({
     id: "worktree.getCurrent",
     title: "Get Current Worktree",
-    description: "Get the currently active worktree details",
+    description:
+      "Get the currently active worktree's summary. Takes no args. Returns { worktree } — the same shape as a `worktree.list` entry (id, path, branch, isActive, isMain, issue/PR fields, status, lastCommit), or null when no worktree is active or it can't be found. Never errors. Do NOT use `worktree.list` for this — that returns all worktrees; this returns only the active one.",
     category: "worktree",
     kind: "query",
     danger: "safe",
@@ -84,12 +86,23 @@ export function registerWorktreeQueryActions(
     defineAction({
       id: "worktree.listBranches",
       title: "List Branches",
-      description: "List git branches for a repository root",
+      description:
+        "List git branches for a repository. Args: `rootPath` (required) — absolute path to the repository root (a worktree `path` from `worktree.list`). Returns { branches } — each entry has name, current (bool), commit (sha), and optional remote. Errors when `rootPath` is missing or not a git repository.",
       category: "worktree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ rootPath: z.string() }),
+      argsSchema: z.object({
+        rootPath: z
+          .string()
+          .describe("Absolute repository root path — a worktree `path` from `worktree.list`."),
+      }),
+      examples: [
+        {
+          args: { rootPath: "/Users/me/Projects/app" },
+          description: "List branches for the repository at that path",
+        },
+      ],
       resultSchema: z.object({
         branches: z.array(
           z.object({
@@ -111,12 +124,24 @@ export function registerWorktreeQueryActions(
     defineAction({
       id: "worktree.getDefaultPath",
       title: "Get Default Worktree Path",
-      description: "Get the default path for a new worktree based on branch and config",
+      description:
+        "Compute the default filesystem path for a new worktree from the repo root, branch name, and the configured path pattern. Args: `rootPath` (required) — repository root path (a worktree `path` from `worktree.list`); `branchName` (required) — the branch the worktree will track. Returns { path }. Errors when either arg is missing.",
       category: "worktree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ rootPath: z.string(), branchName: z.string() }),
+      argsSchema: z.object({
+        rootPath: z
+          .string()
+          .describe("Absolute repository root path — a worktree `path` from `worktree.list`."),
+        branchName: z.string().describe("Branch name the new worktree will track."),
+      }),
+      examples: [
+        {
+          args: { rootPath: "/Users/me/Projects/app", branchName: "feature/login" },
+          description: "Resolve where a worktree for 'feature/login' would be created",
+        },
+      ],
       resultSchema: z.object({ path: z.string() }),
       run: async ({ rootPath, branchName }) => {
         const result = await worktreeClient.getDefaultPath(rootPath, branchName);
@@ -130,12 +155,23 @@ export function registerWorktreeQueryActions(
       id: "worktree.getAvailableBranch",
       title: "Get Available Branch Name",
       description:
-        "Get a collision-safe branch name. Returns the original name if available, or a numbered variant if the branch exists.",
+        "Resolve a collision-safe branch name: returns the requested name if free, otherwise a numbered variant (e.g. 'feature-2'). Args: `rootPath` (required) — repository root path (a worktree `path` from `worktree.list`); `branchName` (required) — the desired branch name. Returns { branch } — the safe name to use. Errors when either arg is missing.",
       category: "worktree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ rootPath: z.string(), branchName: z.string() }),
+      argsSchema: z.object({
+        rootPath: z
+          .string()
+          .describe("Absolute repository root path — a worktree `path` from `worktree.list`."),
+        branchName: z.string().describe("Desired branch name to check for collisions."),
+      }),
+      examples: [
+        {
+          args: { rootPath: "/Users/me/Projects/app", branchName: "feature/login" },
+          description: "Get a non-colliding branch name based on 'feature/login'",
+        },
+      ],
       resultSchema: z.object({ branch: z.string() }),
       run: async ({ rootPath, branchName }) => {
         const result = await worktreeClient.getAvailableBranch(rootPath, branchName);

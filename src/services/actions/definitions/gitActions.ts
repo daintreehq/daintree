@@ -9,7 +9,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.getProjectPulse", () => ({
     id: "git.getProjectPulse",
     title: "Get Project Pulse",
-    description: "Get git activity pulse for a worktree",
+    description:
+      "Get a worktree's git activity pulse — historical commit heatmap, range counts, streak, and optional uncommitted/delta-to-main summary. Args (all optional): `worktreeId` (from `worktree.list`, defaults to active); `rangeDays` (60|120|180); `includeDelta`; `includeRecentCommits`; `forceRefresh`. Returns worktree/branch info, heatmap, commitsInRange, activeDays, projectAgeDays, recentCommits, and optional uncommitted/deltaToMain. Errors when no worktree is active. Do NOT use this for current staged/unstaged state — use `git.getStagingStatus`.",
     category: "git",
     kind: "query",
     danger: "safe",
@@ -67,7 +68,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.getFileDiff", () => ({
     id: "git.getFileDiff",
     title: "Get File Diff",
-    description: "Get git diff for a file",
+    description:
+      "Get the git diff for a single file. Args: `cwd` (optional) — repo working directory, defaults to the active worktree path; `filePath` (required) — repo-relative path; `status` (required) — the file's git status (from a `git.getStagingStatus` entry). Returns { content } — the unified diff text. Errors when `cwd` is omitted and no worktree is active.",
     category: "git",
     kind: "query",
     danger: "safe",
@@ -77,9 +79,19 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         .string()
         .optional()
         .describe("Repository working directory. Defaults to the active worktree path."),
-      filePath: z.string(),
-      status: GitStatusSchema,
+      filePath: z
+        .string()
+        .describe("Repo-relative file path (from a `git.getStagingStatus` entry)."),
+      status: GitStatusSchema.describe(
+        "The file's git status — the `status` value from a `git.getStagingStatus` entry."
+      ),
     }),
+    examples: [
+      {
+        args: { filePath: "src/index.css", status: "modified" },
+        description: "Get the diff for a modified file in the active worktree",
+      },
+    ],
     resultSchema: z.object({ content: z.string() }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { cwd, filePath, status } = args as {
@@ -97,7 +109,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.listCommits", () => ({
     id: "git.listCommits",
     title: "List Commits",
-    description: "List git commits for a repository",
+    description:
+      "List commits for a repository with optional search and pagination. Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `search` (message/author filter); `branch`; `skip`/`limit` for paging. Returns { items, hasMore, total }. Errors when `cwd` is omitted and no worktree is active.",
     category: "git",
     kind: "query",
     danger: "safe",
@@ -308,7 +321,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.getStagingStatus", () => ({
     id: "git.getStagingStatus",
     title: "Get Staging Status",
-    description: "Get the current staging status of files",
+    description:
+      "Get the current working-tree state for a repository. Args: `cwd` (optional) — repo working directory, defaults to the active worktree path. Returns staged/unstaged file lists, conflicted/conflictedFiles, currentBranch, isDetachedHead, hasRemote, repoState, and rebase progress fields. Errors when `cwd` is omitted and no worktree is active. Use this before committing; do NOT use `git.getProjectPulse` for current changes — that reports historical activity, not working-tree state.",
     category: "git",
     kind: "query",
     danger: "safe",
@@ -338,7 +352,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.snapshotGet", () => ({
     id: "git.snapshotGet",
     title: "Get Pre-Agent Snapshot",
-    description: "Get the pre-agent file snapshot for a worktree",
+    description:
+      "Get the pre-agent file snapshot for one worktree (the stash taken before an agent run, used to revert agent changes). Args: `worktreeId` (optional) — a worktree id from `worktree.list`, defaults to the active worktree. Returns { snapshot } where snapshot is { worktreeId, stashRef, createdAt, hasChanges } or null when none exists. Errors when no worktree is active. Do NOT use `git.snapshotList` to check one worktree — this is the single-worktree lookup.",
     category: "git",
     kind: "query",
     danger: "safe",
@@ -366,7 +381,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.snapshotList", () => ({
     id: "git.snapshotList",
     title: "List Pre-Agent Snapshots",
-    description: "List all pre-agent file snapshots",
+    description:
+      "List pre-agent file snapshots across all worktrees. Takes no args. Returns { snapshots } — an array of { worktreeId, stashRef, createdAt, hasChanges }; empty when none exist. Never errors. Do NOT use this to check a single worktree — call `git.snapshotGet` with a worktreeId.",
     category: "git",
     kind: "query",
     danger: "safe",

@@ -19,7 +19,7 @@ export function registerIntrospectionActions(
     id: "actions.list",
     title: "List Actions",
     description:
-      "List available actions with full schemas. Filter by category or search. Prefer `actions.search` for targeted discovery.",
+      "List the full action manifest, each entry including inputSchema/outputSchema. Args (all optional): `category` filters by domain (e.g. terminal, git, github); `search` substring-matches id/title/description; `enabledOnly` drops disabled actions. Returns { actions } — an array of manifest entries. Never errors; empty filters return everything. Do NOT use this for discovery — it returns every schema and is expensive; call `actions.search` first, then `actions.getSchema` for the one you need.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -68,7 +68,7 @@ export function registerIntrospectionActions(
     id: "actions.getContext",
     title: "Get Action Context",
     description:
-      "Get the current UI context: focused terminal, active worktree, current project, and portal state",
+      "Snapshot the current UI context the assistant operates in. Takes no args. Returns the active project (id/name/path), active and focused worktree (id/name/path/branch/isMain), focused terminal (id/kind/title), portal open state and active tab, plus terminalCount and worktreeCount. Fields are omitted when nothing is focused/active. Never errors. Call this first to resolve the implicit 'current' worktree or terminal before actions that take an explicit id.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -194,7 +194,7 @@ export function registerIntrospectionActions(
     id: "actions.search",
     title: "Search Actions",
     description:
-      "Search actions by natural-language query. Returns lightweight matches without full schemas.",
+      "Search the action registry by natural-language query, ranked by relevance. Args: `query` (required — keywords or phrase); `limit` (optional, 1-100, default 20). Returns { totalMatches, results } where results are lightweight manifest entries WITHOUT inputSchema/outputSchema. Errors when `query` is empty or whitespace-only. Use this for discovery, then `actions.getSchema` for the chosen action's full schema. Do NOT use `actions.list` for discovery — it returns every schema and is far heavier.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -215,6 +215,16 @@ export function registerIntrospectionActions(
         .default(20)
         .describe("Max results (1-100, default 20)"),
     }),
+    examples: [
+      {
+        args: { query: "terminal output" },
+        description: "Find actions related to reading terminal output",
+      },
+      {
+        args: { query: "list worktrees", limit: 5 },
+        description: "Find the top 5 worktree-listing actions",
+      },
+    ],
     resultSchema: z.object({
       totalMatches: z.number().int().nonnegative(),
       results: z.array(z.unknown()),
@@ -282,15 +292,26 @@ export function registerIntrospectionActions(
     id: "actions.getSchema",
     title: "Get Action Schema",
     description:
-      "Fetch full action schema (inputSchema + outputSchema) by ID. Use after actions.search for schema details.",
+      "Fetch one action's full manifest entry, including inputSchema and outputSchema. Args: `actionId` (required) — an action id from `actions.search` results (the `id` field). Returns { ok: true, entry } on success, or { ok: false, error: { code: 'NOT_FOUND', message } } as data (not a thrown error) when the id is unknown or hidden. Use after `actions.search` to inspect the exact arguments an action expects before dispatching it.",
     category: "introspection",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     mcpVisibility: "core",
     argsSchema: z.object({
-      actionId: z.string().min(1).describe("The action ID to fetch the schema for"),
+      actionId: z
+        .string()
+        .min(1)
+        .describe(
+          "Action id returned by `actions.search` (the `id` field), e.g. 'terminal.getStatus'."
+        ),
     }),
+    examples: [
+      {
+        args: { actionId: "terminal.getStatus" },
+        description: "Inspect the input/output schema for terminal.getStatus",
+      },
+    ],
     resultSchema: z.union([
       z.object({ ok: z.literal(true), entry: z.unknown() }),
       z.object({
