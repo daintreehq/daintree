@@ -58,7 +58,7 @@ describe("errors.recent", () => {
       ],
     });
     const result = await run(setupActions(), "errors.recent");
-    expect(result.map((e: any) => e.id)).toEqual(["e1"]);
+    expect(result.errors.map((e: any) => e.id)).toEqual(["e1"]);
   });
 
   it("includes dismissed errors when includesDismissed is true", async () => {
@@ -69,7 +69,7 @@ describe("errors.recent", () => {
       ],
     });
     const result = await run(setupActions(), "errors.recent", { includesDismissed: true });
-    expect(result.map((e: any) => e.id)).toEqual(["e1", "e2"]);
+    expect(result.errors.map((e: any) => e.id)).toEqual(["e1", "e2"]);
   });
 
   it("respects the limit and preserves newest-first store order", async () => {
@@ -81,7 +81,7 @@ describe("errors.recent", () => {
       ],
     });
     const result = await run(setupActions(), "errors.recent", { limit: 2 });
-    expect(result.map((e: any) => e.id)).toEqual(["e1", "e2"]);
+    expect(result.errors.map((e: any) => e.id)).toEqual(["e1", "e2"]);
   });
 
   it("projects only allowed fields and flattens context", async () => {
@@ -107,7 +107,9 @@ describe("errors.recent", () => {
         },
       ],
     });
-    const [r] = await run(setupActions(), "errors.recent");
+    const {
+      errors: [r],
+    } = await run(setupActions(), "errors.recent");
     expect(r).toEqual({
       id: "e1",
       type: "git",
@@ -130,7 +132,7 @@ describe("errors.recent", () => {
 
   it("returns an empty array when the store is empty", async () => {
     errorStoreMock.getState.mockReturnValue({ errors: [] });
-    expect(await run(setupActions(), "errors.recent")).toEqual([]);
+    expect(await run(setupActions(), "errors.recent")).toEqual({ errors: [] });
   });
 
   it("sorts by timestamp desc even when store array order is stale (in-place dedup)", async () => {
@@ -142,7 +144,7 @@ describe("errors.recent", () => {
       ],
     });
     const result = await run(setupActions(), "errors.recent");
-    expect(result.map((e: any) => e.id)).toEqual(["e-deduped", "e-mid", "e-old"]);
+    expect(result.errors.map((e: any) => e.id)).toEqual(["e-deduped", "e-mid", "e-old"]);
   });
 
   it("defaults to a limit of 20", async () => {
@@ -156,7 +158,7 @@ describe("errors.recent", () => {
       })),
     });
     const result = await run(setupActions(), "errors.recent");
-    expect(result).toHaveLength(20);
+    expect(result.errors).toHaveLength(20);
   });
 });
 
@@ -187,7 +189,7 @@ describe("notifications.recent", () => {
       ],
     });
     const result = await run(setupActions(), "notifications.recent", { limit: 2 });
-    expect(result.map((e: any) => e.id)).toEqual(["n1", "n2"]);
+    expect(result.notifications.map((e: any) => e.id)).toEqual(["n1", "n2"]);
   });
 
   it("filters by type", async () => {
@@ -198,7 +200,7 @@ describe("notifications.recent", () => {
       ],
     });
     const result = await run(setupActions(), "notifications.recent", { type: "error" });
-    expect(result.map((e: any) => e.id)).toEqual(["n2"]);
+    expect(result.notifications.map((e: any) => e.id)).toEqual(["n2"]);
   });
 
   it("filters to unread only when unreadOnly is true", async () => {
@@ -209,7 +211,7 @@ describe("notifications.recent", () => {
       ],
     });
     const result = await run(setupActions(), "notifications.recent", { unreadOnly: true });
-    expect(result.map((e: any) => e.id)).toEqual(["n2"]);
+    expect(result.notifications.map((e: any) => e.id)).toEqual(["n2"]);
   });
 
   it("coerces non-string message to a placeholder", async () => {
@@ -224,7 +226,9 @@ describe("notifications.recent", () => {
         },
       ],
     });
-    const [r] = await run(setupActions(), "notifications.recent");
+    const {
+      notifications: [r],
+    } = await run(setupActions(), "notifications.recent");
     expect(r.message).toBe("[rich content]");
   });
 
@@ -246,7 +250,9 @@ describe("notifications.recent", () => {
         },
       ],
     });
-    const [r] = await run(setupActions(), "notifications.recent");
+    const {
+      notifications: [r],
+    } = await run(setupActions(), "notifications.recent");
     expect(r).toEqual({
       id: "n1",
       type: "info",
@@ -265,7 +271,7 @@ describe("notifications.recent", () => {
 
   it("returns an empty array when the inbox is empty", async () => {
     notificationHistoryMock.getState.mockReturnValue({ entries: [] });
-    expect(await run(setupActions(), "notifications.recent")).toEqual([]);
+    expect(await run(setupActions(), "notifications.recent")).toEqual({ notifications: [] });
   });
 
   it("excludes non-countable entries from unreadOnly (matches bell-badge semantics)", async () => {
@@ -291,7 +297,7 @@ describe("notifications.recent", () => {
       ],
     });
     const result = await run(setupActions(), "notifications.recent", { unreadOnly: true });
-    expect(result.map((e: any) => e.id)).toEqual(["n1", "n3"]);
+    expect(result.notifications.map((e: any) => e.id)).toEqual(["n1", "n3"]);
   });
 
   it("defaults to a limit of 20", async () => {
@@ -305,7 +311,7 @@ describe("notifications.recent", () => {
       })),
     });
     const result = await run(setupActions(), "notifications.recent");
-    expect(result).toHaveLength(20);
+    expect(result.notifications).toHaveLength(20);
   });
 
   it("applies type, unreadOnly and limit together", async () => {
@@ -322,6 +328,6 @@ describe("notifications.recent", () => {
       unreadOnly: true,
       limit: 1,
     });
-    expect(result.map((e: any) => e.id)).toEqual(["n2"]);
+    expect(result.notifications.map((e: any) => e.id)).toEqual(["n2"]);
   });
 });

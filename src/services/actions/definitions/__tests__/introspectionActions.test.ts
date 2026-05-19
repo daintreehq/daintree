@@ -374,8 +374,10 @@ describe("actions.list", () => {
     ]);
 
     const def = registry.get("actions.list")!();
-    const result = (await def.run({ search: "findMe" } as never, stubCtx)) as ActionManifestEntry[];
+    const result = (await def.run({ search: "findMe" } as never, stubCtx)) as {
+      actions: ActionManifestEntry[];
+    };
 
-    expect(result.map((a) => a.id)).toEqual(["actions.findMe"]);
+    expect(result.actions.map((a) => a.id)).toEqual(["actions.findMe"]);
   });
 });
