@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
+import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 
 describe("githubRateLimitStore", () => {
   beforeEach(() => {
-    useGitHubRateLimitStore.setState({ blocked: false, kind: null, resetAt: null });
+    // The shim holds no state of its own — reset the backing provider-keyed
+    // store instead.
+    useForgeProviderHealthStore.setState({ providers: {} });
   });
 
   it("starts in the unblocked state", () => {

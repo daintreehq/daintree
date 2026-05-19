@@ -2,13 +2,9 @@ import path from "path";
 import { events } from "../events.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
-import { gitHubRateLimitService } from "../github/index.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
-import type { RateLimitInfo } from "../../../shared/types/forge.js";
-import type { GitHubRateLimitPayload } from "../../../shared/types/ipc/github.js";
-import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
 
 export type EmitFn = (event: string | symbol, ...args: unknown[]) => boolean;
 
@@ -16,24 +12,6 @@ export interface WorkspaceHostEventRouterDeps {
   emit: EmitFn;
   worktreePathToProject: Map<string, string>;
   copyTreeProgressCallbacks: Map<string, CopyTreeProgressCallback>;
-}
-
-// Reconstruct a GitHubRateLimitPayload from the provider-agnostic RateLimitInfo
-// so the existing gitHubRateLimitService.applyRemoteState() path in main works
-// unchanged for the GitHub provider.
-function toGitHubRateLimitPayload(info: RateLimitInfo): GitHubRateLimitPayload {
-  if (info.remaining !== 0 && !info.secondaryThrottled) {
-    return { blocked: false, kind: null };
-  }
-  // `applyRemoteState` requires `resetAt` for any blocked payload (absent
-  // `resetAt` it calls `clear()`). Use a 60s fallback matching the secondary
-  // throttle convention so the block is always preserved across the relay.
-  const resetAt = info.resetAt ?? Date.now() + 60_000;
-  return {
-    blocked: true,
-    kind: info.secondaryThrottled ? "secondary" : "primary",
-    resetAt,
-  };
 }
 
 export class WorkspaceHostEventRouter {
@@ -46,7 +24,6 @@ export class WorkspaceHostEventRouter {
   private forgeCredentialChangeAt = new Map<string, number>();
   private inotifyLimitToastSent = false;
   private emfileLimitToastSent = false;
-  private forgeRateLimitStates = new Map<string, RateLimitInfo>();
   private cloudTeardownFailureToastKeys = new Set<string>();
 
   constructor(deps: WorkspaceHostEventRouterDeps) {
@@ -193,24 +170,34 @@ export class WorkspaceHostEventRouter {
       }
 
       case "forge-rate-limit-changed": {
-        // Route rate-limit state by provider. GitHub's provider updates the
-        // existing `gitHubRateLimitService` singleton so the toolbar countdown
-        // and main-process callers see limits triggered by workspace-host polling.
-        // Unknown providers get cached locally for future inspection.
-        if (event.providerId === BUILTIN_GITHUB_PROVIDER_ID) {
-          const ghChangeAt = this.forgeCredentialChangeAt.get(BUILTIN_GITHUB_PROVIDER_ID) ?? 0;
-          if (
-            event.state.remaining === 0 &&
-            ghChangeAt > 0 &&
-            Date.now() - ghChangeAt < WorkspaceHostEventRouter.RATE_LIMIT_TOKEN_CHANGE_GUARD_MS
-          ) {
-            break;
-          }
-          const payload = toGitHubRateLimitPayload(event.state);
-          gitHubRateLimitService.applyRemoteState(payload);
-        } else {
-          this.forgeRateLimitStates.set(event.providerId, event.state);
+        // Provider-agnostic routing: every forge provider (GitHub included)
+        // flows through the same `forge:rate-limit-changed` broadcast keyed by
+        // its canonical providerId. The renderer keys state per provider so
+        // GitHub and any additional provider never cross-contaminate. There is
+        // no GitHub fast-path and no per-provider dead-end cache anymore.
+        const changeAt = this.forgeCredentialChangeAt.get(event.providerId) ?? 0;
+        if (
+          event.state.remaining === 0 &&
+          changeAt > 0 &&
+          Date.now() - changeAt < WorkspaceHostEventRouter.RATE_LIMIT_TOKEN_CHANGE_GUARD_MS
+        ) {
+          // Suppress a stale exhausted-quota response surfacing immediately
+          // after a credential rotation — the old token's 403 is not the new
+          // token's state. Applies to any provider, not just GitHub.
+          break;
         }
+        broadcastToRenderer(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+          providerId: event.providerId,
+          state: event.state,
+        });
+        break;
+      }
+
+      case "forge-token-health-changed": {
+        broadcastToRenderer(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, {
+          providerId: event.providerId,
+          isUnhealthy: event.isUnhealthy,
+        });
         break;
       }
 

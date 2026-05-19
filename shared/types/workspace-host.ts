@@ -570,6 +570,15 @@ export type WorkspaceHostEvent =
       providerId: string;
       state: import("./forge.js").RateLimitInfo;
     }
+  // Forge provider token-health state observed in the workspace-host utility
+  // process. Forward-compat: the main process keys it by providerId and
+  // broadcasts `forge:token-health-changed`. No provider implementation emits
+  // this yet — GitHub token health still flows over the legacy GitHub path.
+  | {
+      type: "forge-token-health-changed";
+      providerId: string;
+      isUnhealthy: boolean;
+    }
   // CopyTree events
   | { type: "copytree:progress"; operationId: string; progress: CopyTreeProgress }
   | {

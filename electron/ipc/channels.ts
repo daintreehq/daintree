@@ -718,6 +718,8 @@ export const CHANNELS = {
   DEMO_CAPTURE_STOP: "demo:capture-stop",
 
   // Forge integration channels
+  FORGE_RATE_LIMIT_CHANGED: "forge:rate-limit-changed",
+  FORGE_TOKEN_HEALTH_CHANGED: "forge:token-health-changed",
   FORGE_GET_SETTINGS: "forge:get-settings",
   FORGE_SET_DEFAULT_PROVIDER: "forge:set-default-provider",
   FORGE_GET_PROVIDERS: "forge:get-providers",

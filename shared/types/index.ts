@@ -178,6 +178,9 @@ export type {
   GitHubRateLimitDetails,
   GitHubTokenHealthPayload,
   GitHubTokenHealthStatus,
+  ForgeRateLimitKind,
+  ForgeRateLimitChangedPayload,
+  ForgeTokenHealthChangedPayload,
   // Per-service connectivity types
   ConnectivityServiceKey,
   ServiceConnectivityStatus,

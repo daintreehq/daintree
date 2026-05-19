@@ -729,6 +729,8 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "inotify-limit-reached":
       case "emfile-limit-reached":
       case "watcher-recovered":
+      case "forge-rate-limit-changed":
+      case "forge-token-health-changed":
         this.emit("host-event", event);
         break;
 
