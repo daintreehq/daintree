@@ -163,8 +163,52 @@ describe("PullRequestService", () => {
       prState: "open",
       prTitle: "Add new feature",
       providerId: "daintree.github.github",
+      // #8452: the canonical repo identity must ride the event from the
+      // resolved repoRef, not be synthesized downstream with empty strings.
+      owner: "testowner",
+      repo: "testrepo",
     });
     expect(detected[0].issueNumber).toBeUndefined();
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("emits sys:issue:detected carrying the canonical owner/repo (#8452)", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+    const mockImpl = mockForgeProviderResolved();
+    mockImpl.getIssue = vi.fn().mockResolvedValue({
+      number: 88,
+      title: "Widget request",
+      state: "open",
+      rawState: "OPEN",
+      url: "https://github.com/o/r/issues/88",
+      rawData: null,
+    });
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const issues: DaintreeEventMap["sys:issue:detected"][] = [];
+    const unsubscribe = events.on("sys:issue:detected", (payload) => issues.push(payload));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/widget", issueNumber: 88 })
+    );
+
+    await pullRequestService.refresh();
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({
+      worktreeId: "wt-1",
+      issueNumber: 88,
+      issueTitle: "Widget request",
+      providerId: "daintree.github.github",
+      owner: "testowner",
+      repo: "testrepo",
+    });
 
     unsubscribe();
     pullRequestService.destroy();

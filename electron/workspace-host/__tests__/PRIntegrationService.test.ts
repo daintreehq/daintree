@@ -111,6 +111,62 @@ describe("PRIntegrationService", () => {
     expect(updateCalls[1][1]).toMatchObject({ worktreeId: "wt-linked", isMainWorktree: false });
   });
 
+  describe("forwards canonical owner/repo (#8452)", () => {
+    it("threads owner/repo from a non-GitHub sys:pr:detected event to onPRDetected", async () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      await service.initialize("/repo", () => []);
+
+      eventBus.emit("sys:pr:detected", {
+        worktreeId: "wt-1",
+        prNumber: 1234,
+        prUrl: "https://gitlab.acme.com/acme-corp/my-project/-/merge_requests/1234",
+        prState: "open",
+        prTitle: "Add widget",
+        branchName: "feature/widget",
+        providerId: "acme.gitlab",
+        owner: "acme-corp",
+        repo: "my-project",
+        timestamp: Date.now(),
+      });
+
+      expect(callbacks.onPRDetected).toHaveBeenCalledWith(
+        "wt-1",
+        expect.objectContaining({
+          providerId: "acme.gitlab",
+          owner: "acme-corp",
+          repo: "my-project",
+          prNumber: 1234,
+        })
+      );
+    });
+
+    it("threads owner/repo from a non-GitHub sys:issue:detected event to onIssueDetected", async () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      await service.initialize("/repo", () => []);
+
+      eventBus.emit("sys:issue:detected", {
+        worktreeId: "wt-2",
+        issueNumber: 88,
+        issueTitle: "Widget request",
+        branchName: "feature/widget",
+        providerId: "acme.gitlab",
+        owner: "acme-corp",
+        repo: "my-project",
+        timestamp: Date.now(),
+      });
+
+      expect(callbacks.onIssueDetected).toHaveBeenCalledWith(
+        "wt-2",
+        expect.objectContaining({
+          providerId: "acme.gitlab",
+          owner: "acme-corp",
+          repo: "my-project",
+          issueNumber: 88,
+        })
+      );
+    });
+  });
+
   describe("getStatus", () => {
     it("maps PullRequestService status to PRServiceStatus shape", () => {
       prServiceMock.getStatus = vi.fn(() => ({

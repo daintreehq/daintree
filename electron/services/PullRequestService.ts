@@ -891,6 +891,8 @@ class PullRequestService {
               issueNumber: this.candidates.get(worktreeId)?.issueNumber,
               branchName: lookupBranchByWorktreeId.get(worktreeId),
               providerId: detectedPR.providerId,
+              owner: repo.owner,
+              repo: repo.repo,
               timestamp: Date.now(),
             });
           }
@@ -993,6 +995,8 @@ class PullRequestService {
                   issueTitle: issue.title,
                   branchName: lookupBranch,
                   providerId,
+                  owner: repo.owner,
+                  repo: repo.repo,
                   timestamp: Date.now(),
                 });
               } else {
@@ -1059,6 +1063,8 @@ class PullRequestService {
             issueNumber,
             branchName: lookupBranch,
             providerId,
+            owner: repo.owner,
+            repo: repo.repo,
             timestamp: Date.now(),
           });
         }
@@ -1176,6 +1182,8 @@ class PullRequestService {
               issueNumber: this.candidates.get(worktreeId)?.issueNumber,
               branchName: this.candidates.get(worktreeId)?.branchName,
               providerId: pr.providerId,
+              owner: repo.owner,
+              repo: repo.repo,
               ciStatus: pr._ciStatus,
               timestamp: Date.now(),
             });
