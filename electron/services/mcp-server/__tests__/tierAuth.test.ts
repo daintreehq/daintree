@@ -225,3 +225,54 @@ describe("parseToolArguments", () => {
     expect(parseToolArguments(true)).toEqual({ args: {} });
   });
 });
+
+import { deriveBand, BAND_OVERRIDES } from "../../../../shared/utils/actionRiskBand.js";
+
+describe("deriveBand", () => {
+  it("returns reversible for safe + non-open-world category", () => {
+    expect(deriveBand({ danger: "safe", category: "git" })).toBe("reversible");
+  });
+
+  it("returns external-effect for safe + open-world category", () => {
+    expect(deriveBand({ danger: "safe", category: "github" })).toBe("external-effect");
+  });
+
+  it("returns destructive-local for confirm + non-open-world category", () => {
+    expect(deriveBand({ danger: "confirm", category: "worktree" })).toBe("destructive-local");
+  });
+
+  it("returns destructive-network for confirm + open-world category", () => {
+    expect(deriveBand({ danger: "confirm", category: "system" })).toBe("destructive-network");
+  });
+
+  it("applies explicit overrides from BAND_OVERRIDES", () => {
+    expect(deriveBand({ id: "git.push", danger: "confirm", category: "git" })).toBe(
+      "external-effect"
+    );
+    expect(
+      deriveBand({ id: "copyTree.generateAndCopyFile", danger: "safe", category: "copyTree" })
+    ).toBe("destructive-local");
+  });
+
+  it("returns reversible for restricted danger (degenerate input)", () => {
+    expect(deriveBand({ danger: "restricted", category: "git" })).toBe("reversible");
+  });
+
+  it("returns external-effect for restricted + open-world category", () => {
+    expect(deriveBand({ danger: "restricted", category: "github" })).toBe("external-effect");
+  });
+});
+
+describe("BAND_OVERRIDES invariant", () => {
+  it("every override key maps to a non-reversible band", () => {
+    for (const [id, band] of Object.entries(BAND_OVERRIDES)) {
+      expect(band, `BAND_OVERRIDES["${id}"] must not be "reversible"`).not.toBe("reversible");
+    }
+  });
+
+  it("every override key is a non-empty string", () => {
+    for (const id of Object.keys(BAND_OVERRIDES)) {
+      expect(id).toBeTruthy();
+    }
+  });
+});

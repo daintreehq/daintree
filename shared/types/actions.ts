@@ -8,6 +8,12 @@ export type ActionKind = "command" | "query";
 
 export type ActionDanger = "safe" | "confirm" | "restricted";
 
+export type RiskBand =
+  | "reversible"
+  | "external-effect"
+  | "destructive-local"
+  | "destructive-network";
+
 export type ActionScope = "renderer";
 
 /**
@@ -142,6 +148,8 @@ export interface ActionManifestEntry {
   examples?: readonly ActionExample[];
   /** Human-readable rationale for the action's `danger` rating. */
   dangerRationale?: string;
+  /** Risk band derived from danger + open-world category. Read by consent dialogs. */
+  band?: RiskBand;
 }
 
 export interface ActionDispatchSuccess<Result = unknown> {

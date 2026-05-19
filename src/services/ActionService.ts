@@ -17,6 +17,7 @@ import { keybindingService } from "./KeybindingService";
 import { shortcutHintStore } from "../store/shortcutHintStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { WORKBENCH_TIER_TOOLS } from "@shared/config/helpAssistantTierAllowlists";
+import { deriveBand } from "../../shared/utils/actionRiskBand.js";
 
 /**
  * Fields that should be redacted from event payloads to prevent secret leakage.
@@ -443,6 +444,11 @@ export class ActionService {
       category: definition.category,
       kind: definition.kind,
       danger: definition.danger,
+      band: deriveBand({
+        id: definition.id,
+        danger: definition.danger,
+        category: definition.category,
+      }),
       inputSchema: cached.inputSchema ? { ...cached.inputSchema } : undefined,
       outputSchema: cached.outputSchema ? { ...cached.outputSchema } : undefined,
       enabled,
