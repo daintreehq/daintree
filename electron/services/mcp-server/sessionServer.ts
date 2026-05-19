@@ -126,7 +126,17 @@ export interface SessionServerDeps {
    * notification. External / api-key sessions have no associated UI so the
    * callback is a no-op.
    */
-  notifySessionRevoked?: (payload: { sessionId: string; denialKind: string }) => void;
+  notifySessionRevoked?: (payload: {
+    sessionId: string;
+    denialKind: string;
+    /** Saved before revokeSession clears the map, so the callback can route. */
+    pinnedWebContentsId?: number;
+  }) => void;
+  /**
+   * Remove a session from the abuse policy state so a reconnected session
+   * doesn't inherit stale counters. Called after revokeSession and drain().
+   */
+  clearDenialState?: (sessionId: string) => void;
 }
 
 export function createSessionServer(sessionId: string, deps: SessionServerDeps): Server {
@@ -141,6 +151,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifyTierMismatch,
     recordDenial,
     notifySessionRevoked,
+    clearDenialState,
   } = deps;
 
   const server = new Server(
@@ -236,10 +247,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (recordDenial) {
           const result = recordDenial(sessionId, "tierMismatch");
           if (result.tripped) {
+            const pinnedId = sessionStore.sessionWebContentsMap.get(sessionId);
             sessionStore.revokeSession(sessionId);
+            clearDenialState?.(sessionId);
             if (notifySessionRevoked) {
               try {
-                notifySessionRevoked({ sessionId, denialKind: "tierMismatch" });
+                notifySessionRevoked({
+                  sessionId,
+                  denialKind: "tierMismatch",
+                  pinnedWebContentsId: pinnedId,
+                });
               } catch (err) {
                 console.error("[MCP] Failed to notify session-revoked:", err);
               }
