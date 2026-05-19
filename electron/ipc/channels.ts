@@ -570,6 +570,13 @@ export const CHANNELS = {
    */
   MCP_TIER_NOT_PERMITTED: "mcp-server:tier-not-permitted",
   /**
+   * Push channel: a session was revoked by the abuse policy after exceeding
+   * the denial threshold. Targeted at the pinned WebContents — the renderer
+   * surfaces this as a notification so the user understands why the session
+   * ended and can re-authorise.
+   */
+  MCP_SESSION_REVOKED: "mcp-server:session-revoked",
+  /**
    * Elevate the tier of an active help-session (Always allow). Mutates
    * `sessionTierMap` in-place — never downgrades, so a malicious renderer
    * cannot drop its own privileges. The per-tool "Approve once" flow now

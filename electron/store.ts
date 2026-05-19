@@ -200,6 +200,9 @@ export interface StoreSchema {
     auditMaxRecords: number;
     auditLog?: McpAuditRecord[];
     turnOutcomeLog?: AssistantTurnRecord[];
+    abusePolicyEnabled: boolean;
+    abusePolicyMaxDenials: number;
+    abusePolicyWindowMs: number;
   };
   /**
    * Help-assistant settings. Includes audit/permission configuration plus
@@ -400,6 +403,9 @@ const storeOptions = {
       fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: MCP_AUDIT_DEFAULT_MAX_RECORDS,
+      abusePolicyEnabled: false,
+      abusePolicyMaxDenials: 5,
+      abusePolicyWindowMs: 60_000,
     },
     helpAssistant: {
       docSearch: true,

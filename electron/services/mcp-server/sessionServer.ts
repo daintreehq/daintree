@@ -112,6 +112,31 @@ export interface SessionServerDeps {
      */
     targetTier: "workbench" | "action" | "system" | null;
   }) => void;
+  /**
+   * Feed a denial into the abuse policy — both 401s and tier-mismatches
+   * share the same per-session sliding-window counter. Returns
+   * `{ tripped: true }` when the threshold is exceeded. Implemented by
+   * httpLifecycle; absent in test fixtures that don't wire the policy.
+   */
+  recordDenial?: (sessionId: string, kind: "auth401" | "tierMismatch") => { tripped: boolean };
+  /**
+   * Optional renderer notifier fired when a session is revoked by the abuse
+   * policy. Follows the same pinned-WebContents pattern as
+   * `notifyTierMismatch` so only help-session bearers surface the
+   * notification. External / api-key sessions have no associated UI so the
+   * callback is a no-op.
+   */
+  notifySessionRevoked?: (payload: {
+    sessionId: string;
+    denialKind: string;
+    /** Saved before revokeSession clears the map, so the callback can route. */
+    pinnedWebContentsId?: number;
+  }) => void;
+  /**
+   * Remove a session from the abuse policy state so a reconnected session
+   * doesn't inherit stale counters. Called after revokeSession and drain().
+   */
+  clearDenialState?: (sessionId: string) => void;
 }
 
 export function createSessionServer(sessionId: string, deps: SessionServerDeps): Server {
@@ -124,6 +149,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     getCachedManifest,
     getFullToolSurface,
     notifyTierMismatch,
+    recordDenial,
+    notifySessionRevoked,
+    clearDenialState,
   } = deps;
 
   const server = new Server(
@@ -214,6 +242,25 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             });
           } catch (err) {
             console.error("[MCP] Failed to notify tier-mismatch:", err);
+          }
+        }
+        if (recordDenial) {
+          const result = recordDenial(sessionId, "tierMismatch");
+          if (result.tripped) {
+            const pinnedId = sessionStore.sessionWebContentsMap.get(sessionId);
+            sessionStore.revokeSession(sessionId);
+            clearDenialState?.(sessionId);
+            if (notifySessionRevoked) {
+              try {
+                notifySessionRevoked({
+                  sessionId,
+                  denialKind: "tierMismatch",
+                  pinnedWebContentsId: pinnedId,
+                });
+              } catch (err) {
+                console.error("[MCP] Failed to notify session-revoked:", err);
+              }
+            }
           }
         }
         return buildToolError({

@@ -23,6 +23,7 @@ import { createRendererBridge } from "./mcp-server/rendererBridge.js";
 import { handleWaitUntilIdle } from "./mcp-server/waitUntilIdle.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
+import { AbusePolicy } from "./mcp-server/abusePolicy.js";
 import type {
   PendingRequest,
   DispatchEnvelope,
@@ -75,12 +76,21 @@ export class McpServerService {
       () => this.getConfig()
     );
 
+    // AbusePolicy must be constructed BEFORE SessionStore so the
+    // store can call into it on every per-session cleanup hook. The
+    // `dropAbuseState` callback ties the policy's denial counter map
+    // to the same lifecycle as the rest of the per-session state.
+    const abusePolicy = new AbusePolicy({
+      readConfig: () => this.getConfig(),
+    });
+
     this.sessionStore = new SessionStore(
       (sessionId) => {
         cleanupResourceSubscriptions(sessionId, this.sessionStore);
       },
       {
         emitGrantLifecycle: (sessionId, payload) => this.emitGrantLifecycle(sessionId, payload),
+        dropAbuseState: (sessionId) => abusePolicy.dropSession(sessionId),
       }
     );
 
@@ -138,6 +148,7 @@ export class McpServerService {
       sessionStore: this.sessionStore,
       auditService: this.auditService,
       turnOutcomeService: this.turnOutcomeService,
+      abusePolicy,
       requestManifest: () => this.bridge.requestManifest(),
       dispatchAction: (actionId, args, confirmed) =>
         this.bridge.dispatchAction(actionId, args, confirmed),

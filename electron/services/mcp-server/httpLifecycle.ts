@@ -31,6 +31,7 @@ import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServ
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
+import type { AbusePolicy } from "./abusePolicy.js";
 import {
   DEFAULT_PORT,
   MAX_PORT_RETRIES,
@@ -46,6 +47,7 @@ export interface HttpLifecycleDeps {
   sessionStore: SessionStore;
   auditService: AuditService;
   turnOutcomeService: TurnOutcomeService;
+  abusePolicy: AbusePolicy;
   requestManifest: () => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
   dispatchAction: (
     actionId: string,
@@ -299,6 +301,10 @@ export class HttpLifecycle {
 
     // Drain sessions
     this.deps.sessionStore.drain();
+    // Mirror the planned-stop path so an unexpected close also wipes
+    // the abuse-policy state. Otherwise denial counters would leak
+    // into the lifetime of any subsequent restart.
+    this.deps.abusePolicy.clear();
 
     for (const cleanup of this.deps.cleanupListeners) {
       try {
@@ -388,6 +394,12 @@ export class HttpLifecycle {
         this.deps.auditService.flushNow();
         this.deps.turnOutcomeService.flushNow();
         this.deps.sessionStore.drain();
+        // The drain wipes session-scoped state (grants, dedup, pins);
+        // the abuse-policy denial Map is owned alongside but lives on
+        // `HttpLifecycle.deps` so we clear it here in lockstep. Without
+        // this, the policy retains denial counters across a stop/start
+        // cycle for sessionIds that will never reappear.
+        this.deps.abusePolicy.clear();
 
         for (const cleanup of this.deps.cleanupListeners) {
           try {
@@ -493,9 +505,45 @@ export class HttpLifecycle {
       return;
     }
 
+    const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
+
+    // Extract the claimed session identifier before the auth gate so a 401 on
+    // a session-carrying request feeds the per-session abuse policy. Handshake-
+    // level requests (GET /sse, initial Streamable HTTP without a session
+    // header) have no session to associate with and remain global-only.
+    let claimedSessionId: string | undefined;
+    if (req.method === "POST" && url.pathname === "/messages") {
+      claimedSessionId = url.searchParams.get("sessionId") ?? undefined;
+    } else if (url.pathname === "/mcp") {
+      const headerValue = req.headers["mcp-session-id"];
+      const mcpSessionId = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+      if (mcpSessionId) claimedSessionId = mcpSessionId;
+    }
+
     const authHeader = req.headers.authorization ?? "";
     if (!isAuthorized(authHeader, this.apiKeyBearerHash, this.helpTokenValidator)) {
       this.deps.auditService.recordAuth401();
+      if (claimedSessionId) {
+        const result = this.deps.abusePolicy.recordDenial(claimedSessionId, "auth401");
+        if (result.tripped) {
+          const pinnedId = this.deps.sessionStore.sessionWebContentsMap.get(claimedSessionId);
+          this.deps.sessionStore.revokeSession(claimedSessionId);
+          this.deps.abusePolicy.dropSession(claimedSessionId);
+          if (pinnedId !== undefined) {
+            const wc = webContentsModule.fromId(pinnedId);
+            if (wc && !wc.isDestroyed()) {
+              try {
+                wc.send(CHANNELS.MCP_SESSION_REVOKED, {
+                  sessionId: claimedSessionId,
+                  denialKind: "auth401",
+                });
+              } catch (err) {
+                console.error("[MCP] session-revoked send failed:", err);
+              }
+            }
+          }
+        }
+      }
       res.writeHead(401, {
         "Content-Type": "text/plain",
         "WWW-Authenticate": 'Bearer realm="Daintree MCP"',
@@ -503,8 +551,6 @@ export class HttpLifecycle {
       res.end("Unauthorized");
       return;
     }
-
-    const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
 
     if (req.method === "GET" && url.pathname === "/sse") {
       const allowedHosts = [`127.0.0.1:${this.port}`, `localhost:${this.port}`];
@@ -549,6 +595,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
+        this.deps.abusePolicy.dropSession(sessionId);
         cleanupResourceSubscriptions(sessionId, this.deps.sessionStore);
       };
 
@@ -564,6 +611,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
+        this.deps.abusePolicy.dropSession(sessionId);
         transport.onclose = undefined;
         await transport.close().catch(() => {});
         throw err;
@@ -673,6 +721,7 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionWebContentsMap.delete(id);
       this.deps.sessionStore.sessionContextMap.delete(id);
       this.deps.sessionStore.clearDedupState(id);
+      this.deps.abusePolicy.dropSession(id);
       cleanupResourceSubscriptions(id, this.deps.sessionStore);
     };
 
@@ -693,6 +742,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.delete(id);
         this.deps.sessionStore.sessionContextMap.delete(id);
         this.deps.sessionStore.clearDedupState(id);
+        this.deps.abusePolicy.dropSession(id);
         cleanupResourceSubscriptions(id, this.deps.sessionStore);
       } else {
         this.deps.sessionStore.sessionTierMap.delete(newSessionId);
@@ -700,6 +750,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.delete(newSessionId);
         this.deps.sessionStore.sessionContextMap.delete(newSessionId);
         this.deps.sessionStore.clearDedupState(newSessionId);
+        this.deps.abusePolicy.dropSession(newSessionId);
         cleanupResourceSubscriptions(newSessionId, this.deps.sessionStore);
       }
       await transport.close().catch(() => {});
@@ -783,6 +834,31 @@ export class HttpLifecycle {
         }
       };
 
+    const recordDenial: import("./sessionServer.js").SessionServerDeps["recordDenial"] = (
+      sessionId,
+      kind
+    ) => {
+      return this.deps.abusePolicy.recordDenial(sessionId, kind);
+    };
+
+    const notifySessionRevoked: import("./sessionServer.js").SessionServerDeps["notifySessionRevoked"] =
+      (payload) => {
+        const id =
+          payload.pinnedWebContentsId ??
+          this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
+        if (id === undefined) return;
+        const wc = webContentsModule.fromId(id);
+        if (!wc || wc.isDestroyed()) return;
+        try {
+          wc.send(CHANNELS.MCP_SESSION_REVOKED, {
+            sessionId: payload.sessionId,
+            denialKind: payload.denialKind,
+          });
+        } catch (err) {
+          console.error("[MCP] session-revoked send failed:", err);
+        }
+      };
+
     return {
       sessionStore: this.deps.sessionStore,
       requestManifest,
@@ -803,6 +879,11 @@ export class HttpLifecycle {
       getCachedManifest,
       getFullToolSurface: () => this.getConfig().fullToolSurface === true,
       notifyTierMismatch,
+      recordDenial,
+      notifySessionRevoked,
+      clearDenialState: (sessionId) => {
+        this.deps.abusePolicy.dropSession(sessionId);
+      },
     };
   }
 

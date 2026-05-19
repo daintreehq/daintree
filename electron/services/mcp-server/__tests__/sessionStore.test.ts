@@ -399,3 +399,161 @@ describe("SessionStore.recomputeIdleTimers", () => {
     expect(resourceCleanups).toContain("acc");
   });
 });
+
+describe("SessionStore.revokeSession", () => {
+  let store: SessionStore;
+  let resourceCleanups: string[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resourceCleanups = [];
+    store = new SessionStore((sessionId) => {
+      resourceCleanups.push(sessionId);
+    });
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  it("revokes an SSE session and cleans all maps", () => {
+    const session = fakeSseSession();
+    const closeSpy = session.transport.close as ReturnType<typeof vi.fn>;
+    store.sessions.set("sse-1", session);
+    store.sessionTierMap.set("sse-1", "action");
+    store.sessionWebContentsMap.set("sse-1", 42);
+    store.sessionContextMap.set("sse-1", { worktreeId: "w1" } as never);
+
+    const result = store.revokeSession("sse-1");
+
+    expect(result).toBe(true);
+    expect(store.sessions.has("sse-1")).toBe(false);
+    expect(store.sessionTierMap.has("sse-1")).toBe(false);
+    expect(store.sessionWebContentsMap.has("sse-1")).toBe(false);
+    expect(store.sessionContextMap.has("sse-1")).toBe(false);
+    expect(resourceCleanups).toContain("sse-1");
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it("revokes a Streamable-HTTP session", () => {
+    const session = fakeHttpSession();
+    const closeSpy = session.transport.close as ReturnType<typeof vi.fn>;
+    store.httpSessions.set("http-1", session);
+    store.sessionTierMap.set("http-1", "system");
+    store.sessionWebContentsMap.set("http-1", 99);
+
+    const result = store.revokeSession("http-1");
+
+    expect(result).toBe(true);
+    expect(store.httpSessions.has("http-1")).toBe(false);
+    expect(store.sessionTierMap.has("http-1")).toBe(false);
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it("returns false for unknown session", () => {
+    expect(store.revokeSession("ghost")).toBe(false);
+  });
+
+  it("is idempotent — double revoke is harmless", () => {
+    const session = fakeSseSession();
+    store.sessions.set("sse-1", session);
+    store.sessionTierMap.set("sse-1", "action");
+
+    expect(store.revokeSession("sse-1")).toBe(true);
+    expect(store.revokeSession("sse-1")).toBe(false);
+  });
+
+  it("only revokes the target session, leaving others intact", () => {
+    const s1 = fakeSseSession();
+    const s2 = fakeSseSession();
+    store.sessions.set("s1", s1);
+    store.sessions.set("s2", s2);
+    store.sessionTierMap.set("s1", "action");
+    store.sessionTierMap.set("s2", "system");
+
+    store.revokeSession("s1");
+
+    expect(store.sessions.has("s1")).toBe(false);
+    expect(store.sessions.has("s2")).toBe(true);
+    expect(store.sessionTierMap.get("s2")).toBe("system");
+  });
+
+  it("clears dedup state for the revoked session", () => {
+    const session = fakeSseSession();
+    store.sessions.set("sse-1", session);
+    store.dedupInFlight.set("sse-1", new Map([["k", Promise.resolve({}) as never]]));
+    store.dedupResultCache.set("sse-1", new Map());
+
+    store.revokeSession("sse-1");
+
+    expect(store.dedupInFlight.has("sse-1")).toBe(false);
+    expect(store.dedupResultCache.has("sse-1")).toBe(false);
+  });
+
+  it("revokes the session's grants via grantCache.revokeSession (#8467)", () => {
+    // Without this hop the renderer never receives the `revoked`
+    // lifecycle event for outstanding per-tool grants on the
+    // session being torn down by the abuse-policy circuit-breaker.
+    const session = fakeSseSession();
+    store.sessions.set("sse-1", session);
+    store.sessionWebContentsMap.set("sse-1", 42);
+    const grantRevokeSpy = vi.spyOn(store.grantCache, "revokeSession");
+
+    store.revokeSession("sse-1");
+
+    expect(grantRevokeSpy).toHaveBeenCalledWith("sse-1", "session-ended");
+  });
+});
+
+describe("SessionStore dropAbuseState wiring (#8467)", () => {
+  let dropAbuseSpy: ReturnType<typeof vi.fn<(sessionId: string) => void>>;
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    dropAbuseSpy = vi.fn<(sessionId: string) => void>();
+    store = new SessionStore(() => {}, { dropAbuseState: dropAbuseSpy });
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  it("invokes dropAbuseState on SSE idle expiry", () => {
+    const session = fakeSseSession();
+    store.sessions.set("s1", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("s1");
+
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+
+    expect(dropAbuseSpy).toHaveBeenCalledWith("s1");
+  });
+
+  it("invokes dropAbuseState on Streamable-HTTP idle expiry", () => {
+    const session = fakeHttpSession();
+    store.httpSessions.set("h1", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createHttpIdleTimer("h1");
+
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+
+    expect(dropAbuseSpy).toHaveBeenCalledWith("h1");
+  });
+
+  it("invokes dropAbuseState on explicit revokeSession", () => {
+    const session = fakeSseSession();
+    store.sessions.set("s1", session);
+
+    store.revokeSession("s1");
+
+    expect(dropAbuseSpy).toHaveBeenCalledWith("s1");
+  });
+
+  it("does not fire dropAbuseState when revokeSession returns false (unknown session)", () => {
+    expect(store.revokeSession("ghost")).toBe(false);
+    expect(dropAbuseSpy).not.toHaveBeenCalled();
+  });
+});
