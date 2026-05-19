@@ -543,6 +543,8 @@ export const CHANNELS = {
    * because pre-dispatch auth failures never reach the record ring buffer.
    */
   MCP_SERVER_GET_AUDIT_STATS: "mcp-server:get-audit-stats",
+  /** Export filtered audit records as scrubbed NDJSON via OS save dialog. */
+  MCP_SERVER_EXPORT_AUDIT_LOG: "mcp-server:export-audit-log",
   /**
    * Mount-time hydration of the runtime-state snapshot. Distinct from
    * `MCP_SERVER_GET_STATUS` (which exposes config — enabled/port/apiKey)

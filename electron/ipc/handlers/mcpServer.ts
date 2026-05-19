@@ -1,6 +1,10 @@
+import { dialog } from "electron";
+import { writeFile } from "fs/promises";
 import { CHANNELS } from "../channels.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
 import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../utils.js";
+import { sanitizePath } from "../../utils/pathScrubber.js";
+import { scrubSecrets } from "../../utils/secretScrubber.js";
 
 type McpServerSingleton = typeof McpServerServiceModule.mcpServerService;
 
@@ -117,6 +121,34 @@ export function registerMcpServerHandlers(): () => void {
       const svc = await getMcpServerService();
       return svc.getRuntimeState();
     })
+  );
+
+  handlers.push(
+    typedHandleWithContext(
+      CHANNELS.MCP_SERVER_EXPORT_AUDIT_LOG,
+      async (ctx, records: unknown): Promise<boolean> => {
+        if (!Array.isArray(records)) throw new Error("records must be an array");
+        const ndjsonLines = records.map((record) => {
+          const line = JSON.stringify(record);
+          return scrubSecrets(sanitizePath(line));
+        });
+        const ndjsonContent = ndjsonLines.join("\n") + "\n";
+        const win = ctx.senderWindow ?? undefined;
+        const now = Date.now();
+        const defaultFilename = `mcp-audit-log-${new Date(now).toISOString().replace(/[:.]/g, "-")}.ndjson`;
+        const dialogOptions: Electron.SaveDialogOptions = {
+          title: "Export MCP Audit Log",
+          defaultPath: defaultFilename,
+          filters: [{ name: "NDJSON Files", extensions: ["ndjson"] }],
+        };
+        const { filePath, canceled } = win
+          ? await dialog.showSaveDialog(win, dialogOptions)
+          : await dialog.showSaveDialog(dialogOptions);
+        if (canceled || !filePath) return false;
+        await writeFile(filePath, ndjsonContent, "utf-8");
+        return true;
+      }
+    )
   );
 
   handlers.push(

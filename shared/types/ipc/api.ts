@@ -1443,6 +1443,8 @@ export interface ElectronAPI {
      * this WebContents. The callback fires when a tool call is denied because
      * the session tier doesn't permit it.
      */
+    /** Export filtered audit records as scrubbed NDJSON via OS save dialog. Returns false if canceled. */
+    exportAuditLog(records: import("./mcpServer.js").McpAuditRecord[]): Promise<boolean>;
     onTierNotPermitted(
       callback: (payload: {
         sessionId: string;
