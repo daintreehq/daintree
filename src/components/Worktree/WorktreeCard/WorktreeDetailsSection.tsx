@@ -419,13 +419,14 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     </span>
                   )}
 
-                {worktree.worktreeChanges?.lastCommitTimestampMs != null && (
-                  <CommitChip
-                    lastCommitTimestampMs={worktree.worktreeChanges.lastCommitTimestampMs}
-                    author={worktree.worktreeChanges.lastCommitAuthor}
-                    commitMessage={worktree.worktreeChanges.lastCommitMessage}
-                  />
-                )}
+                {worktree.worktreeChanges?.lastCommitTimestampMs != null &&
+                  Number.isFinite(worktree.worktreeChanges.lastCommitTimestampMs) && (
+                    <CommitChip
+                      lastCommitTimestampMs={worktree.worktreeChanges.lastCommitTimestampMs}
+                      author={worktree.worktreeChanges.lastCommitAuthor}
+                      commitMessage={worktree.worktreeChanges.lastCommitMessage}
+                    />
+                  )}
               </div>
 
               {showReviewHubButton && (

@@ -40,21 +40,20 @@ const MACHINE_EMAIL_TO_AGENT: Record<string, string> = {
   "noreply@anthropic.com": "claude",
 };
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /**
  * Tier 1 — match the commit author against the agent registry. Returns the
  * branded icon component when the committer is a known AI agent (Claude,
- * Codex, Gemini, …), else null so the chain falls through. Matching is
- * deliberately conservative: an exact machine-email map, an email segment
- * equal to an agent id (≥4 chars, to avoid short-token collisions), or the
- * agent's display name as a standalone word in the author name.
+ * Codex, Gemini, …), else null so the chain falls through.
+ *
+ * Matching is intentionally email-only and conservative: an exact
+ * machine-email map, or an email segment that exactly equals an agent id
+ * (≥4 chars, to avoid short-token collisions). Author *name* is deliberately
+ * not matched — a human committing as "Claude Monet" must not be painted as
+ * an AI agent. Every documented real agent identity (Codex, Gemini CLI,
+ * Claude Code's co-author address) is covered by the email signal.
  */
 export function resolveCommitAgentIcon(author: CommitAuthor): ComponentType<AgentIconProps> | null {
   const email = author.email.trim().toLowerCase();
-  const name = author.name.trim().toLowerCase();
 
   const mapped = MACHINE_EMAIL_TO_AGENT[email];
   if (mapped && AGENT_REGISTRY[mapped]) return AGENT_REGISTRY[mapped].icon;
@@ -63,8 +62,6 @@ export function resolveCommitAgentIcon(author: CommitAuthor): ComponentType<Agen
   for (const agent of Object.values(AGENT_REGISTRY)) {
     const id = agent.id.toLowerCase();
     if (id.length >= 4 && segments.includes(id)) return agent.icon;
-    const display = agent.name.toLowerCase();
-    if (new RegExp(`\\b${escapeRegExp(display)}\\b`).test(name)) return agent.icon;
   }
   return null;
 }

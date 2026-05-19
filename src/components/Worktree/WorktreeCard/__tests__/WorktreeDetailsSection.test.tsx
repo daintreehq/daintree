@@ -454,4 +454,54 @@ describe("WorktreeDetailsSection trailing commit chip", () => {
     expect(screen.queryByLabelText(/Last commit/)).toBeNull();
     expect(container.querySelector("img")).toBeNull();
   });
+
+  it("does not paint an agent icon for a human whose name contains 'Claude'", () => {
+    const worktree = {
+      ...baseWorktree,
+      worktreeChanges: {
+        ...baseWorktree.worktreeChanges,
+        lastCommitTimestampMs: Date.now() - 120_000,
+        lastCommitAuthor: { name: "Claude Monet", email: "cmonet@museum.fr" },
+      } as WorktreeChanges,
+    };
+    const { container } = renderSection({ worktree, hasChanges: false });
+
+    // No branded SVG icon — falls through to the Gravatar image instead.
+    expect(container.querySelector("svg")).toBeNull();
+    const avatarImg = Array.from(container.querySelectorAll("img")).find((el) =>
+      el.getAttribute("src")?.includes("gravatar.com")
+    );
+    expect(avatarImg).toBeTruthy();
+  });
+
+  it("omits the chip when lastCommitTimestampMs is NaN", () => {
+    const worktree = {
+      ...baseWorktree,
+      worktreeChanges: {
+        ...baseWorktree.worktreeChanges,
+        lastCommitTimestampMs: Number.NaN,
+        lastCommitAuthor: { name: "Jane Doe", email: "jane@example.com" },
+      } as WorktreeChanges,
+    };
+    const { container } = renderSection({ worktree, hasChanges: false });
+
+    expect(screen.queryByLabelText(/Last commit/)).toBeNull();
+    expect(container.textContent).not.toContain("NaN");
+  });
+
+  it("renders exactly one trailing chip when both commit and activity timestamps exist", () => {
+    const worktree = {
+      ...baseWorktree,
+      lastActivityTimestamp: Date.now() - 60_000,
+      worktreeChanges: {
+        ...baseWorktree.worktreeChanges,
+        lastCommitTimestampMs: Date.now() - 120_000,
+        lastCommitAuthor: { name: "Jane Doe", email: "jane@example.com" },
+      } as WorktreeChanges,
+    };
+    renderSection({ worktree, hasChanges: false });
+
+    expect(screen.getAllByLabelText(/Last commit/)).toHaveLength(1);
+    expect(screen.queryByText("No activity")).toBeNull();
+  });
 });
