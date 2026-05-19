@@ -6,9 +6,9 @@ export interface RecipeContext {
 }
 
 const VARIABLE_DEFINITIONS = [
-  { name: "issue_number", description: "GitHub issue number" },
-  { name: "pr_number", description: "GitHub PR number" },
-  { name: "number", description: "GitHub issue or PR number (whichever is set)" },
+  { name: "issue_number", description: "Issue number" },
+  { name: "pr_number", description: "PR number" },
+  { name: "number", description: "Issue or PR number (whichever is set)" },
   { name: "worktree_path", description: "Absolute path to worktree directory" },
   { name: "branch_name", description: "Git branch name" },
 ] as const;

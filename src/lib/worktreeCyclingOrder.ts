@@ -120,7 +120,7 @@ export function getVisibleWorktreesForCycling(
     groupByType: isGroupedByType,
     statusFilters,
     typeFilters,
-    githubFilters,
+    prIssueFilters,
     sessionFilters,
     activityFilters,
     alwaysShowActive,
@@ -173,7 +173,7 @@ export function getVisibleWorktreesForCycling(
     query,
     statusFilters,
     typeFilters,
-    githubFilters,
+    prIssueFilters,
     sessionFilters,
     activityFilters,
   };

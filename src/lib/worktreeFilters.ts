@@ -5,7 +5,7 @@ import type {
   OrderBy,
   StatusFilter,
   TypeFilter,
-  GitHubFilter,
+  PrIssueFilter,
   SessionFilter,
   ActivityFilter,
 } from "@/store/worktreeFilterStore";
@@ -132,7 +132,7 @@ export interface FilterState {
   query: string;
   statusFilters: Set<StatusFilter>;
   typeFilters: Set<TypeFilter>;
-  githubFilters: Set<GitHubFilter>;
+  prIssueFilters: Set<PrIssueFilter>;
   sessionFilters: Set<SessionFilter>;
   activityFilters: Set<ActivityFilter>;
 }
@@ -170,18 +170,18 @@ export function matchesFilters(
     if (!filters.typeFilters.has(type)) return false;
   }
 
-  // GitHub filters (OR within category)
-  if (filters.githubFilters.size > 0) {
+  // PR/issue filters (OR within category)
+  if (filters.prIssueFilters.size > 0) {
     let hasMatch = false;
 
-    if (filters.githubFilters.has("hasIssue") && worktree.issueNumber) hasMatch = true;
-    if (filters.githubFilters.has("hasPR") && worktree.linked?.pr) hasMatch = true;
-    if (filters.githubFilters.has("prOpen") && worktree.linked?.pr?.state === "open")
+    if (filters.prIssueFilters.has("hasIssue") && worktree.issueNumber) hasMatch = true;
+    if (filters.prIssueFilters.has("hasPR") && worktree.linked?.pr) hasMatch = true;
+    if (filters.prIssueFilters.has("prOpen") && worktree.linked?.pr?.state === "open")
       hasMatch = true;
-    if (filters.githubFilters.has("prMerged") && worktree.linked?.pr?.state === "merged")
+    if (filters.prIssueFilters.has("prMerged") && worktree.linked?.pr?.state === "merged")
       hasMatch = true;
     if (
-      filters.githubFilters.has("prClosed") &&
+      filters.prIssueFilters.has("prClosed") &&
       (worktree.linked?.pr?.state === "closed" || worktree.linked?.pr?.state === "declined")
     )
       hasMatch = true;
@@ -380,7 +380,7 @@ export function hasAnyFilters(filters: FilterState): boolean {
     filters.query.length > 0 ||
     filters.statusFilters.size > 0 ||
     filters.typeFilters.size > 0 ||
-    filters.githubFilters.size > 0 ||
+    filters.prIssueFilters.size > 0 ||
     filters.sessionFilters.size > 0 ||
     filters.activityFilters.size > 0
   );
@@ -432,7 +432,7 @@ export function findIntegrationWorktree<T extends Worktree | WorktreeState>(
 export interface ChipCounts {
   status: Record<StatusFilter, number>;
   branchType: Record<TypeFilter, number>;
-  github: Record<GitHubFilter, number>;
+  prIssue: Record<PrIssueFilter, number>;
   sessions: Record<SessionFilter, number>;
   activity: Record<ActivityFilter, number>;
 }
@@ -455,7 +455,7 @@ const TYPE_KEYS: TypeFilter[] = [
   "detached",
   "other",
 ];
-const GITHUB_KEYS: GitHubFilter[] = ["hasIssue", "hasPR", "prOpen", "prMerged", "prClosed"];
+const PR_ISSUE_KEYS: PrIssueFilter[] = ["hasIssue", "hasPR", "prOpen", "prMerged", "prClosed"];
 const SESSION_KEYS: SessionFilter[] = ["hasTerminals", "working", "waiting", "completed", "exited"];
 const ACTIVITY_KEYS: ActivityFilter[] = ["last15m", "last1h", "last24h", "last7d"];
 
@@ -476,7 +476,7 @@ export function emptyChipCounts(): ChipCounts {
   return {
     status: emptyRecord(STATUS_KEYS),
     branchType: emptyRecord(TYPE_KEYS),
-    github: emptyRecord(GITHUB_KEYS),
+    prIssue: emptyRecord(PR_ISSUE_KEYS),
     sessions: emptyRecord(SESSION_KEYS),
     activity: emptyRecord(ACTIVITY_KEYS),
   };
@@ -513,7 +513,7 @@ export function computeChipCounts(
   // Build base set per group — filtered by all OTHER groups + query
   const statusBase = worktrees.filter((w) => matchesGroup(w, "statusFilters"));
   const typeBase = worktrees.filter((w) => matchesGroup(w, "typeFilters"));
-  const githubBase = worktrees.filter((w) => matchesGroup(w, "githubFilters"));
+  const prIssueBase = worktrees.filter((w) => matchesGroup(w, "prIssueFilters"));
   const sessionsBase = worktrees.filter((w) => matchesGroup(w, "sessionFilters"));
   const activityBase = worktrees.filter((w) => matchesGroup(w, "activityFilters"));
 
@@ -526,13 +526,13 @@ export function computeChipCounts(
     counts.branchType[getWorktreeType(w)]++;
   }
 
-  for (const w of githubBase) {
-    if (w.issueNumber) counts.github.hasIssue++;
-    if (w.linked?.pr) counts.github.hasPR++;
-    if (w.linked?.pr?.state === "open") counts.github.prOpen++;
-    if (w.linked?.pr?.state === "merged") counts.github.prMerged++;
+  for (const w of prIssueBase) {
+    if (w.issueNumber) counts.prIssue.hasIssue++;
+    if (w.linked?.pr) counts.prIssue.hasPR++;
+    if (w.linked?.pr?.state === "open") counts.prIssue.prOpen++;
+    if (w.linked?.pr?.state === "merged") counts.prIssue.prMerged++;
     if (w.linked?.pr?.state === "closed" || w.linked?.pr?.state === "declined")
-      counts.github.prClosed++;
+      counts.prIssue.prClosed++;
   }
 
   for (const w of sessionsBase) {

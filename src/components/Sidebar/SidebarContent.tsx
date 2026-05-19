@@ -439,7 +439,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     groupByType: isGroupedByType,
     statusFilters,
     typeFilters,
-    githubFilters,
+    prIssueFilters,
     sessionFilters,
     activityFilters,
     alwaysShowActive,
@@ -454,7 +454,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       groupByType: state.groupByType,
       statusFilters: state.statusFilters,
       typeFilters: state.typeFilters,
-      githubFilters: state.githubFilters,
+      prIssueFilters: state.prIssueFilters,
       sessionFilters: state.sessionFilters,
       activityFilters: state.activityFilters,
       alwaysShowActive: state.alwaysShowActive,
@@ -494,7 +494,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const activeFacetFilterCount =
     statusFilters.size +
     typeFilters.size +
-    githubFilters.size +
+    prIssueFilters.size +
     sessionFilters.size +
     activityFilters.size;
   const collapsedWorktrees = useWorktreeFilterStore((state) => state.collapsedWorktrees);
@@ -708,7 +708,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       query,
       statusFilters,
       typeFilters,
-      githubFilters,
+      prIssueFilters,
       sessionFilters,
       activityFilters,
     });
@@ -721,7 +721,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     query,
     statusFilters,
     typeFilters,
-    githubFilters,
+    prIssueFilters,
     sessionFilters,
     activityFilters,
   ]);
@@ -750,7 +750,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         query,
         statusFilters,
         typeFilters,
-        githubFilters,
+        prIssueFilters,
         sessionFilters,
         activityFilters,
       };
@@ -850,7 +850,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       isGroupedByType,
       statusFilters,
       typeFilters,
-      githubFilters,
+      prIssueFilters,
       sessionFilters,
       activityFilters,
       alwaysShowActive,
@@ -944,7 +944,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     query,
     statusFilters,
     typeFilters,
-    githubFilters,
+    prIssueFilters,
     sessionFilters,
     activityFilters,
   };

@@ -183,7 +183,7 @@ export function WorktreeOverviewModal({
     groupByType: isGroupedByType,
     statusFilters,
     typeFilters,
-    githubFilters,
+    prIssueFilters,
     sessionFilters,
     activityFilters,
     alwaysShowActive,
@@ -198,7 +198,7 @@ export function WorktreeOverviewModal({
       groupByType: state.groupByType,
       statusFilters: state.statusFilters,
       typeFilters: state.typeFilters,
-      githubFilters: state.githubFilters,
+      prIssueFilters: state.prIssueFilters,
       sessionFilters: state.sessionFilters,
       activityFilters: state.activityFilters,
       alwaysShowActive: state.alwaysShowActive,
@@ -210,6 +210,8 @@ export function WorktreeOverviewModal({
   );
   const clearAllFilters = useWorktreeFilterStore((state) => state.clearAll);
   const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
+  const hasFacetFilters = useWorktreeFilterStore((state) => state.hasFacetFilters);
+  const hasFacetFiltersActive = hasFacetFilters();
   const setQuickStateFilter = useWorktreeFilterStore((state) => state.setQuickStateFilter);
 
   // Terminal store for derived metadata
@@ -287,7 +289,7 @@ export function WorktreeOverviewModal({
       query,
       statusFilters,
       typeFilters,
-      githubFilters,
+      prIssueFilters,
       sessionFilters,
       activityFilters,
     });
@@ -299,7 +301,7 @@ export function WorktreeOverviewModal({
     query,
     statusFilters,
     typeFilters,
-    githubFilters,
+    prIssueFilters,
     sessionFilters,
     activityFilters,
   ]);
@@ -343,7 +345,7 @@ export function WorktreeOverviewModal({
       query,
       statusFilters,
       typeFilters,
-      githubFilters,
+      prIssueFilters,
       sessionFilters,
       activityFilters,
     };
@@ -367,7 +369,13 @@ export function WorktreeOverviewModal({
         return false;
       }
 
-      if (alwaysShowActive && isActive && !hasActiveQuery && quickStateFilter === "all") {
+      if (
+        alwaysShowActive &&
+        isActive &&
+        !hasActiveQuery &&
+        quickStateFilter === "all" &&
+        !hasFacetFiltersActive
+      ) {
         return true;
       }
 
@@ -375,7 +383,8 @@ export function WorktreeOverviewModal({
         alwaysShowWaiting &&
         derived.hasWaitingAgent &&
         !hasActiveQuery &&
-        quickStateFilter === "all"
+        quickStateFilter === "all" &&
+        !hasFacetFiltersActive
       ) {
         return true;
       }
@@ -410,7 +419,7 @@ export function WorktreeOverviewModal({
     isGroupedByType,
     statusFilters,
     typeFilters,
-    githubFilters,
+    prIssueFilters,
     sessionFilters,
     activityFilters,
     alwaysShowActive,
@@ -421,6 +430,7 @@ export function WorktreeOverviewModal({
     activeWorktreeId,
     hideMainWorktree,
     quickStateFilter,
+    hasFacetFiltersActive,
   ]);
 
   const handleKeyDown = useEffectEvent((e: KeyboardEvent) => {

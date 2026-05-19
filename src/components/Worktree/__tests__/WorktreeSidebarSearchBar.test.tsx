@@ -12,7 +12,7 @@ function resetWorktreeFilterStore() {
     groupByType: false,
     statusFilters: new Set(),
     typeFilters: new Set(),
-    githubFilters: new Set(),
+    prIssueFilters: new Set(),
     sessionFilters: new Set(),
     activityFilters: new Set(),
     alwaysShowActive: true,
