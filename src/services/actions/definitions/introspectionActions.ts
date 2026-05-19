@@ -19,7 +19,7 @@ export function registerIntrospectionActions(
     id: "actions.list",
     title: "List Actions",
     description:
-      "List available actions. Filter by category or search. Includes metadata like danger level and enabled state. Prefer `actions.search` for targeted discovery — `actions.list` returns full schemas and is best used as a last-resort escape hatch.",
+      "List available actions with full schemas. Filter by category or search. Prefer `actions.search` for targeted discovery.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -194,7 +194,7 @@ export function registerIntrospectionActions(
     id: "actions.search",
     title: "Search Actions",
     description:
-      "Search available actions by natural-language query or keywords. Returns lightweight matches (id, title, description, category) without full input schemas — use `actions.getSchema` to fetch the full schema for a specific action when you intend to call it.",
+      "Search actions by natural-language query. Returns lightweight matches without full schemas.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -278,7 +278,7 @@ export function registerIntrospectionActions(
     id: "actions.getSchema",
     title: "Get Action Schema",
     description:
-      "Fetch the full manifest entry (including inputSchema and outputSchema) for a specific action by ID. Use after `actions.search` to retrieve the schema only for the action you intend to call.",
+      "Fetch full action schema (inputSchema + outputSchema) by ID. Use after actions.search for schema details.",
     category: "introspection",
     kind: "query",
     danger: "safe",
