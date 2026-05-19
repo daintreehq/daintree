@@ -134,6 +134,7 @@ vi.mock("../ProjectStore.js", () => ({
 
 import path from "path";
 import { WorkspaceClient } from "../WorkspaceClient.js";
+import { projectStore } from "../ProjectStore.js";
 
 type MockHost = InstanceType<typeof MockWorkspaceHostProcess>;
 
@@ -947,6 +948,33 @@ describe("WorkspaceClient multi-process manager", () => {
         .getAllRequests()
         .filter((r: any) => r.type === "load-project")[1];
       expect(reloadReq.rootPath).toBe(path.resolve("/project-a"));
+    });
+
+    it("forwards the selected forgeRemote on the post-restart load-project (#8456)", async () => {
+      vi.mocked(projectStore.getProjectSettings).mockResolvedValue({
+        runCommands: [],
+        forgeRemote: "upstream",
+      } as any);
+
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      h(0).emit("restarted");
+
+      await vi.waitFor(() => {
+        const reqs = h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "load-project");
+        expect(reqs).toHaveLength(2);
+      });
+
+      const reloadReq = h(0)
+        .getAllRequests()
+        .filter((r: any) => r.type === "load-project")[1];
+      expect(reloadReq.forgeRemote).toBe("upstream");
+
+      vi.mocked(projectStore.getProjectSettings).mockResolvedValue({ runCommands: [] } as any);
     });
   });
 

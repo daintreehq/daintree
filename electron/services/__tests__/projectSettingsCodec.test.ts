@@ -102,6 +102,18 @@ describe("decode", () => {
     expect(result.settings.githubRemote).toBeUndefined();
   });
 
+  it("falls through to legacy githubRemote when forgeRemote is blank", () => {
+    const result = decode({ runCommands: [], forgeRemote: "  ", githubRemote: "upstream" });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.forgeRemote).toBe("upstream");
+  });
+
+  it("drops a blank forgeRemote with no legacy fallback", () => {
+    const result = decode({ runCommands: [], forgeRemote: "" });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.forgeRemote).toBeUndefined();
+  });
+
   it("filters invalid runCommands entries", () => {
     const result = decode({
       runCommands: [

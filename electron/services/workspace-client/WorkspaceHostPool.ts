@@ -456,6 +456,7 @@ export class WorkspaceHostPool {
       wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
       forgeProviderOverride: forgeSettings.forgeProviderOverride,
       forgeDefaultProviderId: forgeSettings.forgeDefaultProviderId,
+      forgeRemote: forgeSettings.forgeRemote,
     });
 
     for (const [wcId, wc] of entry.directPortViews) {

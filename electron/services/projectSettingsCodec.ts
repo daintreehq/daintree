@@ -351,12 +351,19 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
     branchPrefixMode: decodeBranchPrefixMode(migrated.branchPrefixMode),
     branchPrefixCustom:
       typeof migrated.branchPrefixCustom === "string" ? migrated.branchPrefixCustom : undefined,
-    forgeRemote:
-      typeof migrated.forgeRemote === "string"
-        ? migrated.forgeRemote
-        : typeof migrated.githubRemote === "string"
-          ? migrated.githubRemote
-          : undefined,
+    // Migration: the canonical `forgeRemote` wins, but a blank/whitespace
+    // value falls through to the legacy `githubRemote` so an empty string
+    // can't strand existing projects mid-migration (#8456).
+    forgeRemote: (() => {
+      const canonical =
+        typeof migrated.forgeRemote === "string" && migrated.forgeRemote.trim().length > 0
+          ? migrated.forgeRemote.trim()
+          : undefined;
+      if (canonical) return canonical;
+      return typeof migrated.githubRemote === "string" && migrated.githubRemote.trim().length > 0
+        ? migrated.githubRemote.trim()
+        : undefined;
+    })(),
     forgeProviderOverride: decodeForgeProviderOverride(migrated.forgeProviderOverride),
     worktreePathPattern:
       typeof migrated.worktreePathPattern === "string" && migrated.worktreePathPattern.trim()
