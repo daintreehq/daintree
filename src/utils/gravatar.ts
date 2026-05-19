@@ -155,11 +155,14 @@ function rr(x: number, n: number): number {
   return (x >>> n) | (x << (32 - n));
 }
 
+// `d=404` — Gravatar returns HTTP 404 (not a generic identicon) when the email
+// has no custom image, so the avatar chain can fall through to coloured
+// initials instead of ever painting a meaningless geometric placeholder.
 export function getGravatarUrl(email: string, size: number): string {
   const trimmed = email.trim().toLowerCase();
-  if (!trimmed) return `${GRAVATAR_BASE}/00000000000000000000000000000000?s=${size}&d=mp`;
+  if (!trimmed) return `${GRAVATAR_BASE}/00000000000000000000000000000000?s=${size}&d=404`;
   const hash = sha256hex(trimmed);
-  return `${GRAVATAR_BASE}/${hash}?s=${size}&d=mp`;
+  return `${GRAVATAR_BASE}/${hash}?s=${size}&d=404`;
 }
 
 export function isBotAuthor(name: string): boolean {

@@ -26,6 +26,28 @@ export const ACTION_CATEGORY_COLORS: Record<string, string> = {
 export const ACTION_CATEGORY_DEFAULT_COLOR = "bg-tint/[0.06] text-daintree-text/50";
 
 /**
+ * The 12 --color-cat-* hue tokens as complete Tailwind class literals.
+ * Listed in full here (not assembled from parts) so the JIT scanner keeps
+ * every variant; consumers index into this array via a deterministic hash to
+ * give an entity a stable colour (e.g. initials avatars). `/15` tint matches
+ * the action/event chip treatment so the palette stays visually consistent.
+ */
+export const CAT_COLOR_CLASSES: readonly string[] = [
+  "bg-cat-blue/15 text-cat-blue",
+  "bg-cat-purple/15 text-cat-purple",
+  "bg-cat-cyan/15 text-cat-cyan",
+  "bg-cat-green/15 text-cat-green",
+  "bg-cat-amber/15 text-cat-amber",
+  "bg-cat-orange/15 text-cat-orange",
+  "bg-cat-teal/15 text-cat-teal",
+  "bg-cat-indigo/15 text-cat-indigo",
+  "bg-cat-rose/15 text-cat-rose",
+  "bg-cat-pink/15 text-cat-pink",
+  "bg-cat-violet/15 text-cat-violet",
+  "bg-cat-slate/15 text-cat-slate",
+];
+
+/**
  * Event inspector category chip styles.
  * Uses the same --color-cat-* hue tokens as action palette, assigned independently
  * to the event domain (system events ≠ system actions).

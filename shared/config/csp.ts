@@ -11,6 +11,11 @@ const FRAME_LOCALHOST =
 
 const GITHUB_AVATARS = "https://avatars.githubusercontent.com";
 
+// Custom commit-author avatars. `getGravatarUrl()` requests
+// `https://www.gravatar.com/avatar/<hash>?d=404`; with `d=404` there is no
+// redirect to *.wp.com on a miss, so only this origin needs allowing.
+const GRAVATAR = "https://www.gravatar.com";
+
 // Named Trusted Types policy backing all DOM HTML-sink writes in the renderer.
 // 'allow-duplicates' is required so Vite HMR can re-evaluate the policy module
 // on hot reload without throwing 'Policy with name "<x>" already exists'.
@@ -45,7 +50,7 @@ export function getDaintreeAppProdCSP(): string {
     "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     `connect-src 'self' ${FILE_SCHEMES}`,
-    `img-src 'self' ${GITHUB_AVATARS} ${FILE_SCHEMES} data: blob:`,
+    `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${FILE_SCHEMES} data: blob:`,
     "font-src 'self' data:",
     "media-src 'self'",
     "worker-src 'self' blob:",
@@ -79,7 +84,7 @@ export function getDaintreeAppDevCSP(): string {
     `script-src 'self' ${origins} 'unsafe-inline' 'unsafe-eval'`,
     `style-src 'self' ${origins} 'unsafe-inline'`,
     `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES}`,
-    `img-src 'self' ${origins} ${GITHUB_AVATARS} ${FILE_SCHEMES} data: blob:`,
+    `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${FILE_SCHEMES} data: blob:`,
     `font-src 'self' ${origins} data:`,
     "media-src 'self'",
     "worker-src 'self' blob:",

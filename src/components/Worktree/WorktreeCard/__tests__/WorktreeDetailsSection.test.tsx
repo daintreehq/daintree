@@ -336,7 +336,7 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
   });
 });
 
-describe("WorktreeDetailsSection activity indicator", () => {
+describe("WorktreeDetailsSection trailing commit chip", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-06-15T12:00:00Z").getTime());
@@ -346,61 +346,7 @@ describe("WorktreeDetailsSection activity indicator", () => {
     vi.useRealTimers();
   });
 
-  it("renders 'No activity' placeholder when lastActivityTimestamp is null", () => {
-    const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: null };
-    renderSection({ worktree, hasChanges: false });
-    expect(screen.getByText("No activity")).toBeDefined();
-  });
-
-  it("renders the activity dot and time ago when timestamp is present", () => {
-    const worktree: WorktreeState = {
-      ...baseWorktree,
-      lastActivityTimestamp: Date.now(),
-    };
-    renderSection({ worktree, hasChanges: false });
-    expect(screen.queryByText("No activity")).toBeNull();
-    // LiveTimeAgo renders "now" for a just-now timestamp
-    expect(screen.getByText("now")).toBeDefined();
-  });
-
-  it("renders hollow ring and time label for decayed timestamp", () => {
-    const worktree: WorktreeState = {
-      ...baseWorktree,
-      lastActivityTimestamp: Date.now() - 120_000, // 2 minutes ago — past DECAY_DURATION (90s)
-    };
-    renderSection({ worktree, hasChanges: false });
-    expect(screen.queryByText("No activity")).toBeNull();
-    // LiveTimeAgo renders a time label like "2m"
-    expect(screen.getByText("2m")).toBeDefined();
-  });
-
-  it("collapsed view shows 'No activity' when expanded view shows worktree details without activity section", () => {
-    // The expanded view (WorktreeDetails) already gates the activity section
-    // on showTime && lastActivityTimestamp (line 81). Verify the collapsed
-    // view handles the null case distinctly.
-    const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: null };
-    renderSection({ worktree, hasChanges: false });
-    expect(screen.getByText("No activity")).toBeDefined();
-  });
-
-  it("null timestamp worktree does not render an ActivityLight dot", () => {
-    const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: null };
-    const { container } = renderSection({ worktree, hasChanges: false });
-    expect(container.querySelector('[aria-hidden="true"]')).toBeNull();
-  });
-});
-
-describe("WorktreeDetailsSection commit author chip", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-06-15T12:00:00Z").getTime());
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("renders avatar and time when lastCommitAuthor and timestamp present", () => {
+  it("renders a single avatar and commit time when author and timestamp present", () => {
     const worktree = {
       ...baseWorktree,
       worktreeChanges: {
@@ -417,10 +363,15 @@ describe("WorktreeDetailsSection commit author chip", () => {
       el.getAttribute("src")?.includes("gravatar.com")
     );
     expect(avatarImg).toBeTruthy();
+    // Gravatar uses the d=404 probe so generic identicons never paint.
+    expect(avatarImg!.getAttribute("src")).toContain("d=404");
+    expect(avatarImg!.getAttribute("src")).not.toContain("d=mp");
     expect(container.textContent).toContain("2m");
+    // Old duplicated activity chip is gone.
+    expect(screen.queryByText("No activity")).toBeNull();
   });
 
-  it("renders square avatar for bot author", () => {
+  it("renders a square avatar for a bot author", () => {
     const worktree = {
       ...baseWorktree,
       worktreeChanges: {
@@ -443,7 +394,7 @@ describe("WorktreeDetailsSection commit author chip", () => {
     expect(avatarImg!.className).not.toContain("rounded-full");
   });
 
-  it("renders LiveTimeAgo without avatar when timestamp present but author absent", () => {
+  it("renders the time without an avatar when the author is absent", () => {
     const worktree = {
       ...baseWorktree,
       worktreeChanges: {
@@ -453,8 +404,41 @@ describe("WorktreeDetailsSection commit author chip", () => {
     };
     const { container } = renderSection({ worktree, hasChanges: false });
 
-    // Should show time without an avatar
     expect(container.textContent).toContain("2m");
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("falls through to coloured initials when Gravatar 404s", () => {
+    const worktree = {
+      ...baseWorktree,
+      worktreeChanges: {
+        ...baseWorktree.worktreeChanges,
+        lastCommitTimestampMs: Date.now() - 120_000,
+        lastCommitAuthor: { name: "Jane Doe", email: "jane@example.com" },
+      } as WorktreeChanges,
+    };
+    const { container } = renderSection({ worktree, hasChanges: false });
+
+    const img = container.querySelector("img")!;
+    expect(img).toBeTruthy();
+    fireEvent.error(img);
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText("JD")).toBeDefined();
+  });
+
+  it("renders a branded agent icon for a known agent committer", () => {
+    const worktree = {
+      ...baseWorktree,
+      worktreeChanges: {
+        ...baseWorktree.worktreeChanges,
+        lastCommitTimestampMs: Date.now() - 120_000,
+        lastCommitAuthor: { name: "Codex", email: "noreply@codex.openai.com" },
+      } as WorktreeChanges,
+    };
+    const { container } = renderSection({ worktree, hasChanges: false });
+
+    expect(container.querySelector("svg")).toBeTruthy();
     const imgs = container.querySelectorAll("img");
     const gravatarImg = Array.from(imgs).find((el) =>
       el.getAttribute("src")?.includes("gravatar.com")
@@ -462,13 +446,12 @@ describe("WorktreeDetailsSection commit author chip", () => {
     expect(gravatarImg).toBeFalsy();
   });
 
-  it("omits commit chip when lastCommitTimestampMs is absent", () => {
+  it("omits the trailing chip entirely when lastCommitTimestampMs is absent", () => {
     const worktree = { ...baseWorktree, lastActivityTimestamp: Date.now() };
-    renderSection({ worktree, hasChanges: false });
+    const { container } = renderSection({ worktree, hasChanges: false });
 
-    // Activity indicator should be visible but no commit author chip
-    expect(screen.getByText("now")).toBeDefined();
-    // "No activity" should NOT appear since there is activity
     expect(screen.queryByText("No activity")).toBeNull();
+    expect(screen.queryByLabelText(/Last commit/)).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
   });
 });
