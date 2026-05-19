@@ -164,6 +164,7 @@ interface McpServerApi {
   onRuntimeStateChanged: ReturnType<typeof vi.fn>;
   getAuditRecords: ReturnType<typeof vi.fn>;
   getAuditStats: ReturnType<typeof vi.fn>;
+  getTurnOutcomeRecords: ReturnType<typeof vi.fn>;
   clearAuditLog: ReturnType<typeof vi.fn>;
 }
 
@@ -200,6 +201,7 @@ function installApi(
     onRuntimeStateChanged: vi.fn(() => () => {}),
     getAuditRecords: vi.fn().mockResolvedValue([]),
     getAuditStats: vi.fn().mockResolvedValue({ auth401Count: 0 }),
+    getTurnOutcomeRecords: vi.fn().mockResolvedValue([]),
     clearAuditLog: vi.fn().mockResolvedValue(undefined),
   };
   window.electron = {
