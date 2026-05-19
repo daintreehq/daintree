@@ -31,9 +31,11 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ filters: z.any().optional() }).optional(),
+    resultSchema: z.object({ entries: z.array(z.unknown()) }),
     run: async (args: unknown) => {
       const { filters } = (args as { filters?: unknown } | undefined) ?? {};
-      return await logsClient.getAll(filters as any);
+      const result = await logsClient.getAll(filters as any);
+      return { entries: result };
     },
   }));
 
@@ -45,8 +47,10 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ sources: z.array(z.string()) }),
     run: async () => {
-      return await logsClient.getSources();
+      const result = await logsClient.getSources();
+      return { sources: result };
     },
   }));
 
@@ -88,8 +92,10 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ verbose: z.boolean() }),
     run: async () => {
-      return await logsClient.getVerbose();
+      const result = await logsClient.getVerbose();
+      return { verbose: result };
     },
   }));
 
@@ -114,6 +120,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.record(z.string(), z.string()),
     run: async () => {
       return await logsClient.getLevelOverrides();
     },
@@ -157,8 +164,10 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ sources: z.array(z.string()) }),
     run: async () => {
-      return await logsClient.getRegistry();
+      const result = await logsClient.getRegistry();
+      return { sources: result };
     },
   }));
 
@@ -214,6 +223,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
           .describe("Include dismissed errors (default: false — active errors only)"),
       })
       .optional(),
+    resultSchema: z.object({ errors: z.array(z.unknown()) }),
     run: async (args: unknown) => {
       const { limit = 20, includesDismissed = false } =
         (args as { limit?: number; includesDismissed?: boolean } | undefined) ?? {};
@@ -222,21 +232,23 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
       // errorStore dedup updates in place (keeps array slot, refreshes timestamp),
       // so array order is not strictly newest-first — sort before slicing.
       const sorted = [...filtered].sort((a, b) => b.timestamp - a.timestamp);
-      return sorted.slice(0, limit).map((e) => ({
-        id: e.id,
-        type: e.type,
-        message: e.message,
-        details: e.details,
-        source: e.source,
-        timestamp: e.timestamp,
-        retryability: e.retryability,
-        dismissed: e.dismissed,
-        worktreeId: e.context?.worktreeId,
-        terminalId: e.context?.terminalId,
-        recoveryHint: e.recoveryHint,
-        retryExhausted: e.retryExhausted,
-        occurrenceCount: e.occurrenceCount,
-      }));
+      return {
+        errors: sorted.slice(0, limit).map((e) => ({
+          id: e.id,
+          type: e.type,
+          message: e.message,
+          details: e.details,
+          source: e.source,
+          timestamp: e.timestamp,
+          retryability: e.retryability,
+          dismissed: e.dismissed,
+          worktreeId: e.context?.worktreeId,
+          terminalId: e.context?.terminalId,
+          recoveryHint: e.recoveryHint,
+          retryExhausted: e.retryExhausted,
+          occurrenceCount: e.occurrenceCount,
+        })),
+      };
     },
   }));
 
@@ -270,6 +282,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
           .describe("Only return notifications not yet seen as a toast (default: false)"),
       })
       .optional(),
+    resultSchema: z.object({ notifications: z.array(z.unknown()) }),
     run: async (args: unknown) => {
       const {
         limit = 20,
@@ -285,17 +298,19 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
           // surface silent non-countable entries the UI never badges.
           (!unreadOnly || (!e.seenAsToast && e.countable !== false))
       );
-      return filtered.slice(0, limit).map((e) => ({
-        id: e.id,
-        type: e.type,
-        title: e.title,
-        message: typeof e.message === "string" ? e.message : "[rich content]",
-        timestamp: e.timestamp,
-        seenAsToast: e.seenAsToast,
-        worktreeId: e.context?.worktreeId,
-        panelId: e.context?.panelId,
-        eventKind: e.context?.eventKind,
-      }));
+      return {
+        notifications: filtered.slice(0, limit).map((e) => ({
+          id: e.id,
+          type: e.type,
+          title: e.title,
+          message: typeof e.message === "string" ? e.message : "[rich content]",
+          timestamp: e.timestamp,
+          seenAsToast: e.seenAsToast,
+          worktreeId: e.context?.worktreeId,
+          panelId: e.context?.panelId,
+          eventKind: e.context?.eventKind,
+        })),
+      };
     },
   }));
 
@@ -324,6 +339,13 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
           .describe("Number of events to skip (default: 0)"),
       })
       .optional(),
+    resultSchema: z.object({
+      events: z.array(z.unknown()),
+      total: z.number(),
+      limit: z.number(),
+      offset: z.number(),
+      hasMore: z.boolean(),
+    }),
     run: async (args: unknown) => {
       const { limit = 50, offset = 0 } =
         (args as { limit?: number; offset?: number } | undefined) ?? {};
@@ -367,6 +389,13 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
         .optional()
         .describe("Max events to return (default: 50, max: 500)"),
       offset: z.number().int().min(0).optional().describe("Number of events to skip (default: 0)"),
+    }),
+    resultSchema: z.object({
+      events: z.array(z.unknown()),
+      total: z.number(),
+      limit: z.number(),
+      offset: z.number(),
+      hasMore: z.boolean(),
     }),
     run: async (args: unknown) => {
       const { limit, offset, ...filters } = args as Record<string, unknown>;

@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { TerminalSpawnSourceSchema } from "./schemas";
+import { TerminalSpawnSourceSchema, RecipeSummarySchema } from "./schemas";
 
 export function registerRecipeActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("recipe.list", () =>
@@ -17,6 +17,10 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      resultSchema: z.object({
+        recipes: z.array(RecipeSummarySchema),
+        isLoading: z.boolean(),
+      }),
       run: async (args) => {
         const worktreeId = args?.worktreeId;
         const recipeState = useRecipeStore.getState();

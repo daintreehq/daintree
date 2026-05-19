@@ -1,5 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
+import { TerminalSummarySchema, TerminalStatusEntrySchema } from "./schemas";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
@@ -29,6 +30,7 @@ export function registerTerminalQueryActions(
         location: z.enum(["grid", "dock", "trash", "background"]).optional(),
       })
       .optional(),
+    resultSchema: z.object({ terminals: z.array(TerminalSummarySchema) }),
     run: async (args: unknown) => {
       const { worktreeId, location } = (args ?? {}) as {
         worktreeId?: string;
@@ -57,7 +59,7 @@ export function registerTerminalQueryActions(
       }
 
       // Return essential metadata only (avoid returning full PTY buffers)
-      return terminals.map((t) => ({
+      const result = terminals.map((t) => ({
         id: t.id,
         kind: t.kind,
         type: undefined,
@@ -69,6 +71,8 @@ export function registerTerminalQueryActions(
         isInputLocked: t.isInputLocked ?? false,
         isFocused: t.id === state.focusedId,
       }));
+
+      return { terminals: result };
     },
   }));
 
@@ -104,6 +108,13 @@ export function registerTerminalQueryActions(
         description: "Get last 500 lines with ANSI codes preserved",
       },
     ],
+    resultSchema: z.object({
+      terminalId: z.string(),
+      content: z.string().nullable(),
+      lineCount: z.number(),
+      truncated: z.boolean(),
+      error: z.string().optional(),
+    }),
     run: async (args: unknown) => {
       const {
         terminalId,
@@ -203,6 +214,7 @@ export function registerTerminalQueryActions(
           ),
       })
       .optional(),
+    resultSchema: z.object({ terminals: z.array(TerminalStatusEntrySchema) }),
     run: async (args: unknown) => {
       const { terminalIds, worktreeId, location, includeOutput } = (args ?? {}) as {
         terminalIds?: string[];

@@ -7,6 +7,7 @@ import { useUIStore } from "@/store/uiStore";
 import { logError } from "@/utils/logger";
 import { deriveEffectiveTier } from "../deriveEffectiveTier";
 import { usePortalPendingCloseStore } from "@/store/portalPendingCloseStore";
+import { PortalTabSummarySchema } from "./schemas";
 import {
   activatePortalTab,
   clearPortalPendingIf,
@@ -37,6 +38,11 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      isOpen: z.boolean(),
+      activeTabId: z.string().nullable(),
+      tabs: z.array(PortalTabSummarySchema),
+    }),
     run: async () => {
       const state = usePortalStore.getState();
       return {

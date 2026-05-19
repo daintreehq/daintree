@@ -349,6 +349,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .min(1)
         .describe("Agent ID to look up (e.g., 'claude', 'codex'). From terminal.list[].agentId."),
     }),
+    resultSchema: z.object({
+      agentId: z.string(),
+      state: z.string().nullable(),
+      waitingReason: z.string().nullable(),
+      lastTransitionAt: z.number().nullable(),
+      terminalId: z.string().nullable(),
+      found: z.boolean(),
+    }),
     run: async (args: unknown) => {
       const { agentId } = args as { agentId: string };
       const state = usePanelStore.getState();

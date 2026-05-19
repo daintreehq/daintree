@@ -208,18 +208,12 @@ describe("definition invariants", () => {
     const missing: string[] = [];
     for (const [key, factory] of registry) {
       const def = factory();
-      if (def.kind === "query" && !def.resultSchema) {
+      if (def.kind === "query" && !def.resultSchema && !def.rawOutputSchema) {
         missing.push(`${key} (${def.title})`);
       }
     }
 
-    if (missing.length > 0) {
-      console.warn(
-        `[quality-gate] ${missing.length} query action(s) missing resultSchema:\n` +
-          missing.map((m) => `  - ${m}`).join("\n")
-      );
-    }
-    // TODO(#6305): Promote to hard assert once existing schemas are added.
+    expect(missing).toEqual([]);
   });
 
   it("every action description is at least 80 characters", async () => {
