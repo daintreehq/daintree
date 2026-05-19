@@ -41,7 +41,15 @@ export class AbusePolicy {
     return { tripped };
   }
 
-  clearSession(sessionId: string): void {
+  /**
+   * Drop the per-session denial counter. Called from the SessionStore
+   * lifecycle hooks (idle expiry, explicit revoke, drain) and from the
+   * abuse-trip handler in HttpLifecycle once the session has been
+   * revoked. Otherwise the `state` Map grows unboundedly across normal
+   * session churn — the only previous prune path was the trip itself,
+   * which the vast majority of well-behaved sessions never hit.
+   */
+  dropSession(sessionId: string): void {
     this.state.delete(sessionId);
   }
 

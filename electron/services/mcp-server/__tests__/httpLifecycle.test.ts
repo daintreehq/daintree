@@ -89,7 +89,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
     setConfig: vi.fn(),
     abusePolicy: {
       recordDenial: vi.fn(() => ({ tripped: false })),
-      clearSession: vi.fn(),
+      dropSession: vi.fn(),
       clear: vi.fn(),
       getSnapshot: vi.fn(() => null),
     },

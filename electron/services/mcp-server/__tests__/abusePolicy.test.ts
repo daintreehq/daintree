@@ -142,14 +142,35 @@ describe("AbusePolicy", () => {
     });
   });
 
-  describe("clearSession and clear", () => {
-    it("clearSession removes state for one session", () => {
+  describe("dropSession and clear", () => {
+    it("dropSession removes state for one session", () => {
       const { policy } = makePolicy({ ...baseConfig, abusePolicyMaxDenials: 3 });
       policy.recordDenial("s1", "auth401");
       policy.recordDenial("s2", "auth401");
-      policy.clearSession("s1");
+      policy.dropSession("s1");
       expect(policy.getSnapshot("s1")).toBeNull();
       expect(policy.getSnapshot("s2")).toEqual({ count: 1, tripped: false });
+    });
+
+    it("dropSession on an unknown session is a harmless no-op", () => {
+      const { policy } = makePolicy({ ...baseConfig, abusePolicyMaxDenials: 3 });
+      expect(() => policy.dropSession("never-seen")).not.toThrow();
+      expect(policy.getSnapshot("never-seen")).toBeNull();
+    });
+
+    it("dropSession lets a previously-tracked session restart its counter cleanly", () => {
+      // Regression for the wiring fix: after the idle-timer / drain
+      // hooks call dropSession, the same session id (typically a fresh
+      // session minted with a new uuid, but identity-preserving in
+      // principle) must start from zero — proving the entry was
+      // genuinely removed and not just zeroed in place.
+      const { policy } = makePolicy({ ...baseConfig, abusePolicyMaxDenials: 3 });
+      policy.recordDenial("s1", "auth401");
+      policy.recordDenial("s1", "auth401");
+      expect(policy.getSnapshot("s1")).toEqual({ count: 2, tripped: false });
+      policy.dropSession("s1");
+      expect(policy.recordDenial("s1", "auth401")).toEqual({ tripped: false });
+      expect(policy.getSnapshot("s1")).toEqual({ count: 1, tripped: false });
     });
 
     it("clear removes all state", () => {

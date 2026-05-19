@@ -301,6 +301,10 @@ export class HttpLifecycle {
 
     // Drain sessions
     this.deps.sessionStore.drain();
+    // Mirror the planned-stop path so an unexpected close also wipes
+    // the abuse-policy state. Otherwise denial counters would leak
+    // into the lifetime of any subsequent restart.
+    this.deps.abusePolicy.clear();
 
     for (const cleanup of this.deps.cleanupListeners) {
       try {
@@ -390,6 +394,12 @@ export class HttpLifecycle {
         this.deps.auditService.flushNow();
         this.deps.turnOutcomeService.flushNow();
         this.deps.sessionStore.drain();
+        // The drain wipes session-scoped state (grants, dedup, pins);
+        // the abuse-policy denial Map is owned alongside but lives on
+        // `HttpLifecycle.deps` so we clear it here in lockstep. Without
+        // this, the policy retains denial counters across a stop/start
+        // cycle for sessionIds that will never reappear.
+        this.deps.abusePolicy.clear();
 
         for (const cleanup of this.deps.cleanupListeners) {
           try {
@@ -518,7 +528,7 @@ export class HttpLifecycle {
         if (result.tripped) {
           const pinnedId = this.deps.sessionStore.sessionWebContentsMap.get(claimedSessionId);
           this.deps.sessionStore.revokeSession(claimedSessionId);
-          this.deps.abusePolicy.clearSession(claimedSessionId);
+          this.deps.abusePolicy.dropSession(claimedSessionId);
           if (pinnedId !== undefined) {
             const wc = webContentsModule.fromId(pinnedId);
             if (wc && !wc.isDestroyed()) {
@@ -585,6 +595,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
+        this.deps.abusePolicy.dropSession(sessionId);
         cleanupResourceSubscriptions(sessionId, this.deps.sessionStore);
       };
 
@@ -600,6 +611,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
+        this.deps.abusePolicy.dropSession(sessionId);
         transport.onclose = undefined;
         await transport.close().catch(() => {});
         throw err;
@@ -709,6 +721,7 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionWebContentsMap.delete(id);
       this.deps.sessionStore.sessionContextMap.delete(id);
       this.deps.sessionStore.clearDedupState(id);
+      this.deps.abusePolicy.dropSession(id);
       cleanupResourceSubscriptions(id, this.deps.sessionStore);
     };
 
@@ -729,6 +742,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.delete(id);
         this.deps.sessionStore.sessionContextMap.delete(id);
         this.deps.sessionStore.clearDedupState(id);
+        this.deps.abusePolicy.dropSession(id);
         cleanupResourceSubscriptions(id, this.deps.sessionStore);
       } else {
         this.deps.sessionStore.sessionTierMap.delete(newSessionId);
@@ -736,6 +750,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.delete(newSessionId);
         this.deps.sessionStore.sessionContextMap.delete(newSessionId);
         this.deps.sessionStore.clearDedupState(newSessionId);
+        this.deps.abusePolicy.dropSession(newSessionId);
         cleanupResourceSubscriptions(newSessionId, this.deps.sessionStore);
       }
       await transport.close().catch(() => {});
@@ -867,7 +882,7 @@ export class HttpLifecycle {
       recordDenial,
       notifySessionRevoked,
       clearDenialState: (sessionId) => {
-        this.deps.abusePolicy.clearSession(sessionId);
+        this.deps.abusePolicy.dropSession(sessionId);
       },
     };
   }

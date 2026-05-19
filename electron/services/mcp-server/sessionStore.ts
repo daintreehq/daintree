@@ -14,6 +14,15 @@ export interface SessionStoreOptions {
    * defaults to silent).
    */
   emitGrantLifecycle?: GrantLifecycleEmitter;
+  /**
+   * Callback fired alongside the other per-session cleanup hooks
+   * (idle expiry, explicit revoke, drain) so the {@link AbusePolicy}
+   * denial counter can be pruned in lockstep. Without this, the
+   * policy's internal Map grows for every session that ever opens
+   * and is only pruned on the rare abuse-trip path. Optional so test
+   * fixtures construct without one.
+   */
+  dropAbuseState?: (sessionId: string) => void;
 }
 
 export class SessionStore {
@@ -52,12 +61,14 @@ export class SessionStore {
   private readonly httpIdleStartedAt = new Map<string, number>();
 
   private readonly cleanupResourceSubscriptionsFn: (sessionId: string) => void;
+  private readonly dropAbuseStateFn: (sessionId: string) => void;
 
   constructor(
     cleanupResourceSubscriptions: (sessionId: string) => void,
     options: SessionStoreOptions = {}
   ) {
     this.cleanupResourceSubscriptionsFn = cleanupResourceSubscriptions;
+    this.dropAbuseStateFn = options.dropAbuseState ?? (() => {});
     this.grantCache = new GrantCache({ emit: options.emitGrantLifecycle });
   }
 
@@ -80,6 +91,7 @@ export class SessionStore {
     this.sessionContextMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.idleStartedAt.delete(sessionId);
+    this.dropAbuseStateFn(sessionId);
     this.cleanupResourceSubscriptionsFn(sessionId);
     session.transport.close().catch(() => {
       // ignore close errors during idle timeout cleanup
@@ -131,6 +143,7 @@ export class SessionStore {
     this.sessionContextMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.httpIdleStartedAt.delete(sessionId);
+    this.dropAbuseStateFn(sessionId);
     this.cleanupResourceSubscriptionsFn(sessionId);
     session.transport.close().catch(() => {
       // ignore close errors during idle timeout cleanup
@@ -244,9 +257,17 @@ export class SessionStore {
     }
 
     this.sessionTierMap.delete(sessionId);
+    // Revoke BEFORE deleting the WebContents pin so the lifecycle
+    // emitter can still resolve the pinned renderer for the
+    // `grant.revoked` push. Without this, any outstanding per-tool
+    // grants would be left in the cache while the session entry is
+    // torn down — the renderer would never receive the `revoked`
+    // lifecycle event and the grant state would leak (#8467).
+    this.grantCache.revokeSession(sessionId, "session-ended");
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
     this.clearDedupState(sessionId);
+    this.dropAbuseStateFn(sessionId);
     this.cleanupResourceSubscriptionsFn(sessionId);
     return true;
   }

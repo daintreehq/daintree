@@ -76,18 +76,23 @@ export class McpServerService {
       () => this.getConfig()
     );
 
+    // AbusePolicy must be constructed BEFORE SessionStore so the
+    // store can call into it on every per-session cleanup hook. The
+    // `dropAbuseState` callback ties the policy's denial counter map
+    // to the same lifecycle as the rest of the per-session state.
+    const abusePolicy = new AbusePolicy({
+      readConfig: () => this.getConfig(),
+    });
+
     this.sessionStore = new SessionStore(
       (sessionId) => {
         cleanupResourceSubscriptions(sessionId, this.sessionStore);
       },
       {
         emitGrantLifecycle: (sessionId, payload) => this.emitGrantLifecycle(sessionId, payload),
+        dropAbuseState: (sessionId) => abusePolicy.dropSession(sessionId),
       }
     );
-
-    const abusePolicy = new AbusePolicy({
-      readConfig: () => this.getConfig(),
-    });
 
     this.turnOutcomeService = new TurnOutcomeService({
       saveConfig: (patch) => this.persistConfig(patch),
