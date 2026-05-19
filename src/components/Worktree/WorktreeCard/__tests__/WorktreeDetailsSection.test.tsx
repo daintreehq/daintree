@@ -336,7 +336,7 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
   });
 });
 
-describe("WorktreeDetailsSection trailing commit chip", () => {
+describe("WorktreeDetailsSection activity freshness ring", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-06-15T12:00:00Z").getTime());
@@ -346,7 +346,88 @@ describe("WorktreeDetailsSection trailing commit chip", () => {
     vi.useRealTimers();
   });
 
-  it("renders a single avatar and commit time when author and timestamp present", () => {
+  function withAuthor(lastActivityTimestamp: number | null): WorktreeState {
+    return {
+      ...withChanges({
+        lastCommitTimestampMs: Date.now() - 120_000,
+        lastCommitAuthor: { name: "Jane Doe", email: "jane@example.com" },
+      }),
+      lastActivityTimestamp,
+    };
+  }
+
+  it("removes the standalone 'No activity' placeholder entirely", () => {
+    const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: null };
+    renderSection({ worktree, hasChanges: false });
+    expect(screen.queryByText("No activity")).toBeNull();
+  });
+
+  it("renders an idle freshness ring (no color-mix) when lastActivityTimestamp is null", () => {
+    const { container } = renderSection({ worktree: withAuthor(null), hasChanges: false });
+    const ring = container.querySelector<HTMLElement>(".avatar-freshness-ring");
+    expect(ring).not.toBeNull();
+    expect(ring!.getAttribute("aria-hidden")).toBe("true");
+    expect(ring!.style.boxShadow).toContain("#52525b");
+    expect(ring!.style.boxShadow).not.toContain("color-mix");
+  });
+
+  it("renders an active (color-mix) freshness ring for a recent timestamp", () => {
+    const { container } = renderSection({
+      worktree: withAuthor(Date.now()),
+      hasChanges: false,
+    });
+    const ring = container.querySelector<HTMLElement>(".avatar-freshness-ring");
+    expect(ring).not.toBeNull();
+    expect(ring!.style.boxShadow).toContain("color-mix");
+  });
+
+  it("renders an idle freshness ring for a decayed timestamp (past 90s)", () => {
+    const { container } = renderSection({
+      worktree: withAuthor(Date.now() - 120_000),
+      hasChanges: false,
+    });
+    const ring = container.querySelector<HTMLElement>(".avatar-freshness-ring");
+    expect(ring).not.toBeNull();
+    expect(ring!.style.boxShadow).toContain("#52525b");
+    expect(ring!.style.boxShadow).not.toContain("color-mix");
+  });
+
+  it("does not render a freshness ring when there is no commit author avatar", () => {
+    const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: Date.now() };
+    const { container } = renderSection({ worktree, hasChanges: false });
+    expect(container.querySelector(".avatar-freshness-ring")).toBeNull();
+  });
+
+  it("matches the avatar shape — square ring for bot authors", () => {
+    const worktree: WorktreeState = {
+      ...withChanges({
+        lastCommitTimestampMs: Date.now() - 120_000,
+        lastCommitAuthor: {
+          name: "dependabot[bot]",
+          email: "49699333+dependabot[bot]@users.noreply.github.com",
+        },
+      }),
+      lastActivityTimestamp: Date.now(),
+    };
+    const { container } = renderSection({ worktree, hasChanges: false });
+    const ring = container.querySelector<HTMLElement>(".avatar-freshness-ring");
+    expect(ring).not.toBeNull();
+    expect(ring!.className).toContain("rounded-md");
+    expect(ring!.className).not.toContain("rounded-full");
+  });
+});
+
+describe("WorktreeDetailsSection commit author chip", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2025-06-15T12:00:00Z").getTime());
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("renders avatar and time when lastCommitAuthor and timestamp present", () => {
     const worktree = {
       ...baseWorktree,
       worktreeChanges: {
@@ -446,13 +527,15 @@ describe("WorktreeDetailsSection trailing commit chip", () => {
     expect(gravatarImg).toBeFalsy();
   });
 
-  it("omits the trailing chip entirely when lastCommitTimestampMs is absent", () => {
+  it("omits the trailing chip and freshness ring entirely when lastCommitTimestampMs is absent", () => {
     const worktree = { ...baseWorktree, lastActivityTimestamp: Date.now() };
     const { container } = renderSection({ worktree, hasChanges: false });
 
+    // No commit timestamp → no commit chip, so no avatar to host the ring.
     expect(screen.queryByText("No activity")).toBeNull();
     expect(screen.queryByLabelText(/Last commit/)).toBeNull();
     expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".avatar-freshness-ring")).toBeNull();
   });
 
   it("does not paint an agent icon for a human whose name contains 'Claude'", () => {
@@ -503,5 +586,20 @@ describe("WorktreeDetailsSection trailing commit chip", () => {
 
     expect(screen.getAllByLabelText(/Last commit/)).toHaveLength(1);
     expect(screen.queryByText("No activity")).toBeNull();
+  });
+
+  it("renders exactly one freshness ring when commit and activity timestamps coexist", () => {
+    const worktree = {
+      ...baseWorktree,
+      lastActivityTimestamp: Date.now() - 60_000,
+      worktreeChanges: {
+        ...baseWorktree.worktreeChanges,
+        lastCommitTimestampMs: Date.now() - 120_000,
+        lastCommitAuthor: { name: "Jane Doe", email: "jane@example.com" },
+      } as WorktreeChanges,
+    };
+    const { container } = renderSection({ worktree, hasChanges: false });
+
+    expect(container.querySelectorAll(".avatar-freshness-ring")).toHaveLength(1);
   });
 });
