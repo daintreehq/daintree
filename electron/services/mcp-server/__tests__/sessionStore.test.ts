@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MCP_SSE_IDLE_TIMEOUT_MS } from "../shared.js";
+import { MCP_SSE_IDLE_TIMEOUT_MS, type McpSseSession, type McpHttpSession } from "../shared.js";
 
 // Mutable test state controlled per-test.
 let mockAwakeTimeSince = 0;
@@ -12,7 +12,6 @@ vi.mock("../../SystemSleepService.js", () => ({
 }));
 
 import { SessionStore } from "../sessionStore.js";
-import { MCP_SSE_IDLE_TIMEOUT_MS, type McpSseSession, type McpHttpSession } from "../shared.js";
 
 function fakeSseSession(): McpSseSession {
   return {
@@ -200,6 +199,9 @@ describe("SessionStore.recomputeIdleTimers", () => {
   });
 
   afterEach(() => {
+    // GrantCache owns a recurring sweep interval; dispose so `vi.runAllTimers()`
+    // in tests doesn't loop indefinitely on the sweep schedule.
+    store.grantCache.dispose();
     vi.useRealTimers();
   });
 
@@ -334,7 +336,9 @@ describe("SessionStore.recomputeIdleTimers", () => {
     clearTimeout(session.idleTimer);
     session.idleTimer = store.createIdleTimer("sse-ts");
 
-    vi.runAllTimers();
+    // Use advanceTimersByTime rather than runAllTimers — GrantCache's recurring
+    // sweep interval would otherwise trigger vitest's infinite-loop guard.
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
 
     expect(store.sessions.has("sse-ts")).toBe(false);
     expect(() => store.drain()).not.toThrow();
