@@ -1,4 +1,11 @@
-import type { AuthValidation } from "@shared/types/forge";
+import type {
+  AuthValidation,
+  Issue,
+  PR,
+  Page,
+  RepoMetadata,
+  ListOptions,
+} from "@shared/types/forge";
 
 export const forgeClient = {
   openIssues: (cwd: string, query?: string, state?: string): Promise<void> => {
@@ -27,5 +34,25 @@ export const forgeClient = {
 
   validateToken: (token: string): Promise<AuthValidation> => {
     return window.electron.forge.validateToken(token);
+  },
+
+  listIssues: (cwd: string, opts?: ListOptions): Promise<Page<Issue>> => {
+    return window.electron.forge.listIssues({ cwd, opts });
+  },
+
+  listPRs: (cwd: string, opts?: ListOptions): Promise<Page<PR>> => {
+    return window.electron.forge.listPRs({ cwd, opts });
+  },
+
+  getIssue: (cwd: string, issueNumber: number): Promise<Issue | null> => {
+    return window.electron.forge.getIssue({ cwd, issueNumber });
+  },
+
+  getPR: (cwd: string, prNumber: number): Promise<PR | null> => {
+    return window.electron.forge.getPR({ cwd, prNumber });
+  },
+
+  getRepoMetadata: (cwd: string): Promise<RepoMetadata> => {
+    return window.electron.forge.getRepoMetadata({ cwd });
   },
 } as const;

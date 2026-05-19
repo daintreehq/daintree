@@ -730,6 +730,11 @@ export const CHANNELS = {
   FORGE_SET_CREDENTIAL: "forge:set-credential",
   FORGE_GET_CREDENTIAL_STATUS: "forge:get-credential-status",
   FORGE_CLEAR_CREDENTIAL: "forge:clear-credential",
+  FORGE_LIST_ISSUES: "forge:list-issues",
+  FORGE_LIST_PRS: "forge:list-prs",
+  FORGE_GET_ISSUE: "forge:get-issue",
+  FORGE_GET_PR: "forge:get-pr",
+  FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
