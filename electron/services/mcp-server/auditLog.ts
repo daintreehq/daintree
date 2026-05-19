@@ -261,7 +261,9 @@ export class AuditService {
 
     if (this.lastPreAuthRecordId !== null && now - this.lastPreAuthRecordAt < COALESCE_WINDOW_MS) {
       const existing = this.records.find((r) => r.id === this.lastPreAuthRecordId);
-      if (existing && existing.errorCode === PRE_AUTH_FAILED_CODE) {
+      // Narrow to McpAuditRecord — grant records carry a `type` discriminator;
+      // audit records do not. See `McpLogRecord` in shared/types/ipc/mcpServer.ts.
+      if (existing && !("type" in existing) && existing.errorCode === PRE_AUTH_FAILED_CODE) {
         existing.timestamp = now;
         existing.repeatCount = (existing.repeatCount ?? 1) + 1;
         this.lastPreAuthRecordAt = now;
