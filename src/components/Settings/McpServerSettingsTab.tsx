@@ -26,6 +26,7 @@ import { logError } from "@/utils/logger";
 import {
   type McpAuditRecord,
   type AssistantTurnRecord,
+  type McpAuditStats,
   MCP_AUDIT_DEFAULT_MAX_RECORDS,
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_MIN_RECORDS,
@@ -67,6 +68,7 @@ export function McpServerSettingsTab() {
 
   const [auditRecords, setAuditRecords] = useState<McpAuditRecord[]>([]);
   const [turnRecords, setTurnRecords] = useState<AssistantTurnRecord[]>([]);
+  const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
   const [auditEnabled, setAuditEnabled] = useState(true);
   const [auditMaxRecords, setAuditMaxRecords] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS);
   const [maxRecordsInput, setMaxRecordsInput] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS.toString());
@@ -81,12 +83,14 @@ export function McpServerSettingsTab() {
 
   const refreshAuditRecords = async (): Promise<void> => {
     try {
-      const [records, turns] = await Promise.all([
+      const [records, turns, stats] = await Promise.all([
         window.electron.mcpServer.getAuditRecords(),
         window.electron.mcpServer.getTurnOutcomeRecords(),
+        window.electron.mcpServer.getAuditStats(),
       ]);
       setAuditRecords(records);
       setTurnRecords(turns);
+      setAuditStats(stats);
     } catch (err) {
       logError("Failed to load MCP audit log", err);
     }
@@ -106,8 +110,9 @@ export function McpServerSettingsTab() {
       window.electron.mcpServer.getAuditConfig(),
       window.electron.mcpServer.getAuditRecords(),
       window.electron.mcpServer.getTurnOutcomeRecords(),
+      window.electron.mcpServer.getAuditStats(),
     ])
-      .then(([s, auditCfg, records, turns]) => {
+      .then(([s, auditCfg, records, turns, stats]) => {
         if (settled) return;
         setStatus(s);
         setPortInput(s.configuredPort?.toString() ?? "");
@@ -117,6 +122,7 @@ export function McpServerSettingsTab() {
         setMaxRecordsInput(auditCfg.maxRecords.toString());
         setAuditRecords(records);
         setTurnRecords(turns);
+        setAuditStats(stats);
         setError(null);
       })
       .catch((err) => {
@@ -614,6 +620,8 @@ export function McpServerSettingsTab() {
                 maxRecords={auditMaxRecords}
                 onExport={handleExportAuditLog}
                 exportFlashActive={exportedAudit}
+                anomalySignals={auditStats?.anomalySignals ?? []}
+                anomalySuppressed={auditStats?.anomalySuppressed ?? true}
               />
             </div>
           </SettingsSection>

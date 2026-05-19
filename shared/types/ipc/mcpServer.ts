@@ -206,6 +206,33 @@ export const MCP_AUDIT_DEFAULT_MAX_RECORDS = 500;
  */
 export interface McpAuditStats {
   auth401Count: number;
+  anomalySignals: McpAnomalySignal[];
+  anomalySuppressed: boolean;
+  anomalyRecordFloor: number;
+}
+
+export type McpAnomalySeverity = "danger";
+
+export type McpAnomalyKind =
+  | "latency-drift"
+  | "first-seen-combination"
+  | "failure-cluster"
+  | "p95-z-score";
+
+export interface McpAnomalySignal {
+  id: string;
+  kind: McpAnomalyKind;
+  toolId: string;
+  tier?: string;
+  severity: McpAnomalySeverity;
+  timestamp: number;
+  recordIds: string[];
+  zScore?: number;
+  durationMs?: number;
+  baselineMedianMs?: number;
+  p95Ms?: number;
+  clusterSize?: number;
+  clusterWindow?: number;
 }
 
 /**
