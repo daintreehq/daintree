@@ -128,9 +128,13 @@ export function registerMcpServerHandlers(): () => void {
       CHANNELS.MCP_SERVER_EXPORT_AUDIT_LOG,
       async (ctx, records: unknown): Promise<boolean> => {
         if (!Array.isArray(records)) throw new Error("records must be an array");
-        const ndjsonLines = records.map((record) => {
-          const line = JSON.stringify(record);
-          return scrubSecrets(sanitizePath(line));
+        const ndjsonLines = records.map((rawRecord) => {
+          const record = rawRecord as Record<string, unknown>;
+          const cleaned: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(record)) {
+            cleaned[key] = typeof value === "string" ? sanitizePath(value) : value;
+          }
+          return scrubSecrets(JSON.stringify(cleaned));
         });
         const ndjsonContent = ndjsonLines.join("\n") + "\n";
         const win = ctx.senderWindow ?? undefined;

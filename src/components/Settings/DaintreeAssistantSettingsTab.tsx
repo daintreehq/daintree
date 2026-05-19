@@ -120,6 +120,7 @@ export function DaintreeAssistantSettingsTab() {
   const [auditLoading, setAuditLoading] = useState(true);
   const [auditCopied, setAuditCopied] = useState(false);
   const [auditExported, setAuditExported] = useState(false);
+  const [isExportingAudit, setIsExportingAudit] = useState(false);
   const [showClearAuditConfirm, setShowClearAuditConfirm] = useState(false);
   const [isClearingAudit, setIsClearingAudit] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -286,6 +287,8 @@ export function DaintreeAssistantSettingsTab() {
   };
 
   const handleExportAuditAsNdjson = async (records: McpAuditRecord[]) => {
+    if (isExportingAudit) return;
+    setIsExportingAudit(true);
     try {
       setError(null);
       const written = await window.electron.mcpServer.exportAuditLog(records);
@@ -305,6 +308,8 @@ export function DaintreeAssistantSettingsTab() {
       }
       setError(formatErrorMessage(err, "Couldn't export audit log"));
       logError("Failed to export MCP audit log from assistant tab", err);
+    } finally {
+      setIsExportingAudit(false);
     }
   };
 

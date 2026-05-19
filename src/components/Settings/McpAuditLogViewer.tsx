@@ -113,7 +113,10 @@ export function McpAuditLogViewer({
       if (cutoffMs !== undefined && record.timestamp < cutoffMs) return false;
       if (resultFilter !== "all" && record.result !== resultFilter) return false;
       if (needle.length > 0 && !record.toolId.toLowerCase().includes(needle)) return false;
-      if (searchNeedle.length > 0 && !record.argsSummary.toLowerCase().includes(searchNeedle))
+      if (
+        searchNeedle.length > 0 &&
+        !(record.argsSummary || "").toLowerCase().includes(searchNeedle)
+      )
         return false;
       return true;
     });

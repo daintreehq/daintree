@@ -57,7 +57,7 @@ function sloBand(p95: number): SloBand {
   if (p95 <= 0) return { label: "", className: "" };
   if (p95 < 200) return { label: "Instant", className: "text-status-success" };
   if (p95 < 1000) return { label: "Fast", className: "text-status-success" };
-  if (p95 < 5000) return { label: "Standard", className: "text-status-warning" };
+  if (p95 <= 5000) return { label: "Standard", className: "text-status-warning" };
   return { label: "Slow", className: "text-status-danger" };
 }
 

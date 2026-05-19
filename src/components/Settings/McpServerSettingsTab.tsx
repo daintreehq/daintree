@@ -57,6 +57,7 @@ export function McpServerSettingsTab() {
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedAudit, setCopiedAudit] = useState(false);
   const [exportedAudit, setExportedAudit] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const configCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const apiKeyCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -314,6 +315,8 @@ export function McpServerSettingsTab() {
   };
 
   const handleExportAuditLog = async (records: McpAuditRecord[]) => {
+    if (isExporting) return;
+    setIsExporting(true);
     try {
       setError(null);
       const written = await window.electron.mcpServer.exportAuditLog(records);
@@ -330,6 +333,8 @@ export function McpServerSettingsTab() {
       }
       setError(formatErrorMessage(err, "Failed to export audit log"));
       logError("Failed to export MCP audit log", err);
+    } finally {
+      setIsExporting(false);
     }
   };
 
