@@ -153,7 +153,7 @@ vi.mock("../../services/worktree/index.js", () => ({
 import { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { WorktreeMonitorConfig, WorktreeMonitorCallbacks } from "../WorktreeMonitor.js";
 import { getGitDir } from "../../utils/gitUtils.js";
-import { stat, readFile } from "fs/promises";
+import { stat, readFile, access } from "fs/promises";
 
 const TEST_WORKTREE: Worktree = {
   id: "/test/worktree",
@@ -278,6 +278,47 @@ describe("WorktreeMonitor", () => {
     expect(monitor.getSnapshot().mood).toBe("error");
 
     monitor.stop();
+  });
+
+  describe("refresh() path-existence preflight (#8510)", () => {
+    it("stops and calls onRemoved when the worktree path is gone (ENOENT)", async () => {
+      vi.mocked(access).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      await monitor.refresh();
+
+      expect(callbacks.onRemoved).toHaveBeenCalledWith("/test/worktree");
+      // Preflight short-circuits before the git status path runs.
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+      expect(callbacks.onUpdate).not.toHaveBeenCalled();
+    });
+
+    it("falls through to a normal refresh on non-ENOENT access errors", async () => {
+      vi.mocked(access).mockRejectedValue(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        totalInsertions: 0,
+        totalDeletions: 0,
+        insertions: 0,
+        deletions: 0,
+        latestFileMtime: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      await monitor.refresh();
+
+      // A permission blip must not be misclassified as a removal.
+      expect(callbacks.onRemoved).not.toHaveBeenCalled();
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalled();
+    });
   });
 
   it("includes createdAt and lifecycleStatus in snapshot", () => {

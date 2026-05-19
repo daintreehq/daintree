@@ -934,6 +934,22 @@ export class WorktreeMonitor {
   }
 
   async refresh(): Promise<void> {
+    // Path-existence preflight (#8510): without this, a removed worktree is
+    // only self-detected once the poll reaches the fs.access deep inside
+    // getWorktreeChangesWithStats. Catching it here means every refresh path —
+    // including a topology-reconcile-triggered one — clears the phantom row
+    // immediately. Mirrors the WorktreeRemovedError handling in updateGitStatus.
+    try {
+      await access(this.path);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        this.stop();
+        this.callbacks.onRemoved?.(this.id);
+        return;
+      }
+      // Non-ENOENT (EACCES/EPERM/transient) — fall through to normal refresh
+      // rather than misclassify a permission blip as a removal.
+    }
     if (this.pollingStrategy.isCircuitBreakerTripped()) {
       this.pollingStrategy.reset();
     }
