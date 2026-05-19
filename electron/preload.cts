@@ -14,7 +14,7 @@ import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
 import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
-import type { McpRuntimeSnapshot } from "../shared/types/ipc/mcpServer.js";
+import type { McpAuditRecord, McpRuntimeSnapshot } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import type { HelpAssistantTier } from "../shared/types/ipc/maps.js";
