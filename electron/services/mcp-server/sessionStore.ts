@@ -1,11 +1,7 @@
 import type { ActionContext } from "../../../shared/types/actions.js";
 import type { McpTier, McpSseSession, McpHttpSession } from "./shared.js";
 import { MCP_SSE_IDLE_TIMEOUT_MS } from "./shared.js";
-import type {
-  CallToolResultLike,
-  DedupCacheEntry,
-  DedupInFlightEntry,
-} from "./sessionDedup.js";
+import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
 
 export interface SessionStoreOptions {
