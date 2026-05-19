@@ -83,7 +83,7 @@ describe("GitHubProfilePicture", () => {
   });
 
   it("returns null (not a throw) on rate-limit errors", async () => {
-    mockFetch.mockRejectedValueOnce(new GitHubRateLimitError("secondary limit"));
+    mockFetch.mockRejectedValueOnce(new GitHubRateLimitError("secondary", Date.now() + 60000));
     await expect(resolveAuthorAvatar("dev@example.com")).resolves.toBeNull();
   });
 
