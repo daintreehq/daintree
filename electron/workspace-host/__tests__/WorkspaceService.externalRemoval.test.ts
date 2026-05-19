@@ -709,6 +709,36 @@ describe("WorkspaceService external worktree removal", () => {
       vi.useRealTimers();
     });
 
+    it("clears a phantom monitor end-to-end when the interval fires", async () => {
+      createAndRegisterMonitor();
+      expect(service["monitors"].has("/test/worktree")).toBe(true);
+
+      mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+        if (args[0] === "worktree" && args[1] === "list") {
+          // Post-prune list: the externally-removed worktree is gone.
+          return [
+            "worktree /test/root",
+            "HEAD aaaaaaaaaaaaaaaaaaaa",
+            "branch refs/heads/main",
+            "",
+          ].join("\n");
+        }
+        return undefined;
+      });
+      service["listService"].invalidateCache();
+
+      vi.useFakeTimers();
+      service["startPeriodicSafetyTimer"]();
+      await vi.advanceTimersByTimeAsync(90_000);
+
+      expect(service["monitors"].has("/test/worktree")).toBe(false);
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "worktree-removed", worktreeId: "/test/worktree" })
+      );
+
+      vi.useRealTimers();
+    });
+
     it("restarts symmetrically across a setPollingEnabled pause/resume cycle", async () => {
       vi.useFakeTimers();
       const reconcileSpy = vi

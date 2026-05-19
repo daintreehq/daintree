@@ -934,6 +934,11 @@ export class WorktreeMonitor {
   }
 
   async refresh(): Promise<void> {
+    // A stopped monitor has nothing to refresh. This also makes the ENOENT
+    // preflight below idempotent: the first removal detection calls stop(),
+    // so a concurrent refresh() (background poll racing a topology reconcile)
+    // returns here instead of emitting a duplicate worktree-removed (#8510).
+    if (!this._isRunning) return;
     // Path-existence preflight (#8510): without this, a removed worktree is
     // only self-detected once the poll reaches the fs.access deep inside
     // getWorktreeChangesWithStats. Catching it here means every refresh path —

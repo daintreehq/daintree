@@ -281,43 +281,65 @@ describe("WorktreeMonitor", () => {
   });
 
   describe("refresh() path-existence preflight (#8510)", () => {
+    const SUCCESS_STATS = {
+      worktreeId: "/test/worktree",
+      rootPath: "/test",
+      changes: [],
+      changedFileCount: 0,
+      totalInsertions: 0,
+      totalDeletions: 0,
+      insertions: 0,
+      deletions: 0,
+      latestFileMtime: 0,
+      lastUpdated: Date.now(),
+    };
+
     it("stops and calls onRemoved when the worktree path is gone (ENOENT)", async () => {
-      vi.mocked(access).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+      mockGetWorktreeChangesWithStats.mockResolvedValue(SUCCESS_STATS);
 
       const callbacks = makeCallbacks();
       const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+      await flushInitialStatus();
+
+      // Path disappears after the monitor is up and running.
+      vi.mocked(access).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+      mockGetWorktreeChangesWithStats.mockClear();
+      vi.mocked(callbacks.onRemoved!).mockClear();
 
       await monitor.refresh();
 
       expect(callbacks.onRemoved).toHaveBeenCalledWith("/test/worktree");
+      expect(callbacks.onRemoved).toHaveBeenCalledTimes(1);
       // Preflight short-circuits before the git status path runs.
       expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
-      expect(callbacks.onUpdate).not.toHaveBeenCalled();
+
+      // Idempotent: a concurrent/repeat refresh after stop() must not re-emit.
+      await monitor.refresh();
+      expect(callbacks.onRemoved).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
     });
 
     it("falls through to a normal refresh on non-ENOENT access errors", async () => {
-      vi.mocked(access).mockRejectedValue(Object.assign(new Error("EACCES"), { code: "EACCES" }));
-      mockGetWorktreeChangesWithStats.mockResolvedValue({
-        worktreeId: "/test/worktree",
-        rootPath: "/test",
-        changes: [],
-        changedFileCount: 0,
-        totalInsertions: 0,
-        totalDeletions: 0,
-        insertions: 0,
-        deletions: 0,
-        latestFileMtime: 0,
-        lastUpdated: Date.now(),
-      });
+      mockGetWorktreeChangesWithStats.mockResolvedValue(SUCCESS_STATS);
 
       const callbacks = makeCallbacks();
       const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+      await flushInitialStatus();
+
+      vi.mocked(access).mockRejectedValue(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+      mockGetWorktreeChangesWithStats.mockClear();
+      vi.mocked(callbacks.onRemoved!).mockClear();
 
       await monitor.refresh();
 
       // A permission blip must not be misclassified as a removal.
       expect(callbacks.onRemoved).not.toHaveBeenCalled();
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalled();
+
+      monitor.stop();
     });
   });
 
