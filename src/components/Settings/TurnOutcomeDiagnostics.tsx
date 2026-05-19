@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { logError } from "@/utils/logger";
 import type { AssistantTurnRecord, McpAuditRecord, TurnOutcomeClass } from "@shared/types";
 
@@ -57,6 +58,8 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
   const [toolErrorOpen, setToolErrorOpen] = useState(true);
   const [tierRejectedOpen, setTierRejectedOpen] = useState(true);
   const [agentStuckOpen, setAgentStuckOpen] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
 
   const fetchRecords = async () => {
     setLoading(true);
@@ -68,6 +71,25 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
     } finally {
       setLoading(false);
     }
+  };
+
+  const confirmClearTurnOutcomeLog = async () => {
+    if (isClearing) return;
+    setIsClearing(true);
+    try {
+      await window.electron.mcpServer.clearTurnOutcomeLog();
+      setRecords([]);
+      setShowClearConfirm(false);
+    } catch (err) {
+      logError("Failed to clear turn outcome log", err);
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  const handleCancelClear = () => {
+    if (isClearing) return;
+    setShowClearConfirm(false);
   };
 
   useEffect(() => {
@@ -282,7 +304,7 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
                         <th className="text-right font-medium py-1 px-2 w-16">Errors</th>
                         <th className="text-right font-medium py-1 px-2 w-16">Turns</th>
                         <th className="text-right font-medium py-1 px-2 w-16">Rate</th>
-                        <th className="text-right font-medium py-1 pl-2 w-40">Action</th>
+                        <th className="text-right font-medium py-1 pl-2 w-40">Recommendation</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-daintree-border">
@@ -350,7 +372,7 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
                         <th className="text-right font-medium py-1 px-2 w-16">Rejected</th>
                         <th className="text-right font-medium py-1 px-2 w-16">Turns</th>
                         <th className="text-right font-medium py-1 px-2 w-16">Rate</th>
-                        <th className="text-right font-medium py-1 pl-2 w-40">Action</th>
+                        <th className="text-right font-medium py-1 pl-2 w-40">Recommendation</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-daintree-border">
@@ -416,7 +438,7 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
                         <th className="text-right font-medium py-1 px-2 w-16">Stuck</th>
                         <th className="text-right font-medium py-1 px-2 w-16">Turns</th>
                         <th className="text-right font-medium py-1 px-2 w-16">Rate</th>
-                        <th className="text-right font-medium py-1 pl-2 w-40">Action</th>
+                        <th className="text-right font-medium py-1 pl-2 w-40">Recommendation</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-daintree-border">
@@ -456,14 +478,7 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
             </button>
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  await window.electron.mcpServer.clearTurnOutcomeLog();
-                  setRecords([]);
-                } catch (err) {
-                  logError("Failed to clear turn outcome log", err);
-                }
-              }}
+              onClick={() => setShowClearConfirm(true)}
               disabled={records.length === 0}
               className={cn(
                 "px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
@@ -480,6 +495,19 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
           </div>
         </>
       )}
+
+      <ConfirmDialog
+        isOpen={showClearConfirm}
+        onClose={isClearing ? undefined : handleCancelClear}
+        title="Clear turn-outcome log?"
+        description="All recorded turn outcomes will be permanently deleted. This can't be undone."
+        confirmLabel="Clear log"
+        cancelLabel="Cancel"
+        onConfirm={confirmClearTurnOutcomeLog}
+        isConfirmLoading={isClearing}
+        variant="destructive"
+        zIndex="nested"
+      />
     </div>
   );
 }
