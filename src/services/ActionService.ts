@@ -181,7 +181,9 @@ function computeManifestPartials(definition: AnyActionDefinition): CachedManifes
     outputSchema:
       definition.mcpOutputSchema && definition.resultSchema
         ? zodSchemaToJsonSchema(definition.resultSchema, "output")
-        : definition.rawOutputSchema,
+        : definition.mcpOutputSchema
+          ? definition.rawOutputSchema
+          : undefined,
     requiresArgs: definition.argsSchema
       ? !definition.argsSchema.safeParse(undefined).success &&
         !definition.argsSchema.safeParse({}).success

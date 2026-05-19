@@ -626,14 +626,14 @@ describe("McpServerService", () => {
     });
     expect(dangerousTool?.inputSchema.properties?._meta).toBeUndefined();
 
-    // Annotations — query tool. Spec-conservative defaults: destructiveHint
-    // and openWorldHint are true unless overridden; readOnly/idempotent still
-    // derive from kind: "query".
+    // Annotations — query tool. readOnly/idempotent from kind: "query";
+    // destructiveHint is false for queries (already declared read-only);
+    // openWorldHint defaults to true per spec.
     expect(safeTool?.annotations).toEqual({
       title: "List Actions",
       readOnlyHint: true,
       idempotentHint: true,
-      destructiveHint: true,
+      destructiveHint: false,
       openWorldHint: true,
     });
 
@@ -716,12 +716,13 @@ describe("McpServerService", () => {
 
     // Explicit `false` overrides must win over kind-derived defaults —
     // this would silently break if `??` were ever swapped for `||`.
-    // destructiveHint/openWorldHint now default to true per spec.
+    // destructiveHint is false for queries (!isQuery); openWorldHint defaults
+    // to true per spec.
     expect(queryFalse?.annotations).toEqual({
       title: "Query With False Overrides",
       readOnlyHint: false,
       idempotentHint: false,
-      destructiveHint: true,
+      destructiveHint: false,
       openWorldHint: true,
     });
   });
