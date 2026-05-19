@@ -20,6 +20,20 @@ export function registerTerminalConfigActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      scrollbackLines: z.number(),
+      performanceMode: z.boolean(),
+      fontSize: z.number().optional(),
+      fontFamily: z.string().optional(),
+      hybridInputEnabled: z.boolean().optional(),
+      hybridInputAutoFocus: z.boolean().optional(),
+      colorSchemeId: z.string().optional(),
+      screenReaderMode: z.enum(["auto", "on", "off"]).optional(),
+      resourceMonitoringEnabled: z.boolean().optional(),
+      memoryLeakDetectionEnabled: z.boolean().optional(),
+      memoryLeakAutoRestartThresholdMb: z.number().optional(),
+      cachedProjectViews: z.number().optional(),
+    }),
     run: async () => {
       return await terminalConfigClient.get();
     },

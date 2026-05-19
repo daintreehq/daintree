@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
+import { WorktreeSummarySchema } from "./schemas";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { worktreeClient } from "@/clients";
 
@@ -16,11 +17,12 @@ export function registerWorktreeQueryActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ worktrees: z.array(WorktreeSummarySchema) }),
     run: async () => {
       const worktrees = callbacks.getWorktrees();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
 
-      return worktrees.map((w) => ({
+      const result = worktrees.map((w) => ({
         id: w.id,
         path: w.path,
         branch: w.branch,
@@ -34,6 +36,8 @@ export function registerWorktreeQueryActions(
         status: w.mood ?? null,
         lastCommit: w.summary ?? null,
       }));
+
+      return { worktrees: result };
     },
   }));
 
@@ -45,21 +49,23 @@ export function registerWorktreeQueryActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ worktree: WorktreeSummarySchema.nullable() }),
     run: async () => {
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       if (!activeWorktreeId) {
-        return null;
+        return { worktree: null };
       }
 
       const worktree = getCurrentViewStore().getState().worktrees.get(activeWorktreeId);
       if (!worktree) {
-        return null;
+        return { worktree: null };
       }
 
-      return {
+      const result = {
         id: worktree.id,
         path: worktree.path,
         branch: worktree.branch,
+        isActive: true,
         isMain: worktree.isMainWorktree ?? false,
         issueNumber: worktree.issueNumber ?? null,
         issueTitle: worktree.issueTitle ?? null,
@@ -69,6 +75,8 @@ export function registerWorktreeQueryActions(
         status: worktree.mood ?? null,
         lastCommit: worktree.summary ?? null,
       };
+
+      return { worktree: result };
     },
   }));
 
@@ -82,8 +90,19 @@ export function registerWorktreeQueryActions(
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ rootPath: z.string() }),
+      resultSchema: z.object({
+        branches: z.array(
+          z.object({
+            name: z.string(),
+            current: z.boolean(),
+            commit: z.string(),
+            remote: z.string().optional(),
+          })
+        ),
+      }),
       run: async ({ rootPath }) => {
-        return await worktreeClient.listBranches(rootPath);
+        const result = await worktreeClient.listBranches(rootPath);
+        return { branches: result };
       },
     })
   );
@@ -98,8 +117,10 @@ export function registerWorktreeQueryActions(
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ rootPath: z.string(), branchName: z.string() }),
+      resultSchema: z.object({ path: z.string() }),
       run: async ({ rootPath, branchName }) => {
-        return await worktreeClient.getDefaultPath(rootPath, branchName);
+        const result = await worktreeClient.getDefaultPath(rootPath, branchName);
+        return { path: result };
       },
     })
   );
@@ -115,8 +136,10 @@ export function registerWorktreeQueryActions(
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ rootPath: z.string(), branchName: z.string() }),
+      resultSchema: z.object({ branch: z.string() }),
       run: async ({ rootPath, branchName }) => {
-        return await worktreeClient.getAvailableBranch(rootPath, branchName);
+        const result = await worktreeClient.getAvailableBranch(rootPath, branchName);
+        return { branch: result };
       },
     })
   );

@@ -120,3 +120,69 @@ export const AgentSettingsEntrySchema = z
     customPresets: z.array(AgentPresetSchema).optional(),
   })
   .catchall(z.unknown());
+
+export const WorktreeSummarySchema = z.object({
+  id: z.string(),
+  path: z.string(),
+  branch: z.string().nullable(),
+  isActive: z.boolean(),
+  isMain: z.boolean(),
+  issueNumber: z.number().nullable(),
+  issueTitle: z.string().nullable(),
+  prNumber: z.number().nullable(),
+  prTitle: z.string().nullable(),
+  prUrl: z.string().nullable(),
+  status: z.string().nullable(),
+  lastCommit: z.string().nullable(),
+});
+
+export const TerminalSummarySchema = z.object({
+  id: z.string(),
+  kind: z.string(),
+  type: z.unknown().nullable(),
+  worktreeId: z.string().nullable(),
+  title: z.string().nullable(),
+  location: z.enum(["grid", "dock", "trash", "background"]),
+  agentId: z.string().nullable(),
+  agentState: z.string().nullable(),
+  isInputLocked: z.boolean(),
+  isFocused: z.boolean(),
+});
+
+export const TerminalStatusEntrySchema = z.object({
+  terminalId: z.string(),
+  agentId: z.string().nullable(),
+  agentState: z.string().nullable(),
+  waitingReason: z.string().optional(),
+  lastTransitionAt: z.number().optional(),
+  recentOutput: z.string().nullable().optional(),
+  error: z.string().optional(),
+});
+
+export const PersistedStoreInfoSchema = z.object({
+  storeId: z.string(),
+  storageKey: z.string(),
+  declaredVersion: z.number().nullable(),
+  persistedBlobVersion: z.number().nullable(),
+  hasMigrate: z.boolean(),
+  hasMerge: z.boolean(),
+  hasPartialize: z.boolean(),
+  persistedStateType: z.string(),
+  hasPersistedValue: z.boolean(),
+  sizeBytes: z.number(),
+  parseStatus: z.enum(["ok", "missing", "corrupt"]),
+});
+
+export const PortalTabSummarySchema = z.object({
+  id: z.string(),
+  url: z.string().nullable(),
+  title: z.string(),
+});
+
+export const RecipeSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  worktreeId: z.string().nullable(),
+  terminalCount: z.number(),
+  showInEmptyState: z.boolean(),
+});

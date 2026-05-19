@@ -23,6 +23,10 @@ export function registerAppConfigActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      agents: z.record(z.string(), AgentSettingsEntrySchema),
+      settingsVersion: z.number().optional(),
+    }),
     run: async () => {
       const settings = await agentSettingsClient.get();
       useAgentSettingsStore.setState({
@@ -92,6 +96,10 @@ export function registerAppConfigActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      enabled: z.boolean(),
+      inactiveThresholdHours: z.number(),
+    }),
     run: async () => {
       return await hibernationClient.getConfig();
     },
@@ -123,6 +131,10 @@ export function registerAppConfigActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      enabled: z.boolean(),
+      thresholdMinutes: z.number(),
+    }),
     run: async () => {
       return await idleTerminalClient.getConfig();
     },
@@ -154,6 +166,7 @@ export function registerAppConfigActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ pathPattern: z.string() }),
     run: async () => {
       return await worktreeConfigClient.get();
     },

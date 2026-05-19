@@ -465,7 +465,7 @@ describe("project action hardening", () => {
     ).resolves.toEqual({ ok: true, result: { theme: "dark" } });
     await expect(
       service.dispatch("project.detectRunners", { projectId: "project-1" })
-    ).resolves.toEqual({ ok: true, result: ["dev"] });
+    ).resolves.toEqual({ ok: true, result: { runners: ["dev"] } });
     await expect(service.dispatch("project.getStats", { projectId: "project-1" })).resolves.toEqual(
       { ok: true, result: { files: 12 } }
     );
@@ -610,14 +610,14 @@ describe("system action hardening", () => {
 
     await expect(service.dispatch("system.checkCommand", { command: "git" })).resolves.toEqual({
       ok: true,
-      result: true,
+      result: { available: true },
     });
     await expect(
       service.dispatch("files.search", { cwd: "/repo", query: "main", limit: 5 })
     ).resolves.toEqual({ ok: true, result: ["src/main.ts"] });
     await expect(
       service.dispatch("slashCommands.list", { agentId: "codex", projectPath: "/repo" })
-    ).resolves.toEqual({ ok: true, result: ["/review"] });
+    ).resolves.toEqual({ ok: true, result: { commands: ["/review"] } });
     await expect(
       service.dispatch("copyTree.generate", {
         worktreeId: "wt-1",
@@ -633,7 +633,7 @@ describe("system action hardening", () => {
     ).resolves.toEqual({ ok: true, result: { injected: true } });
     await expect(
       service.dispatch("copyTree.getFileTree", { worktreeId: "wt-1", dirPath: "src" })
-    ).resolves.toEqual({ ok: true, result: [{ path: "src", type: "directory" }] });
+    ).resolves.toEqual({ ok: true, result: { nodes: [{ path: "src", type: "directory" }] } });
   });
 
   it("allows agent-driven artifact patches (danger:safe — patches are an IDE primitive)", async () => {

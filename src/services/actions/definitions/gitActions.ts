@@ -23,6 +23,29 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         forceRefresh: z.boolean().optional(),
       })
       .optional(),
+    resultSchema: z.object({
+      worktreeId: z.string(),
+      worktreePath: z.string(),
+      branch: z.string().optional(),
+      mainBranch: z.string(),
+      rangeDays: PulseRangeDaysSchema,
+      generatedAt: z.number(),
+      heatmap: z.array(z.unknown()),
+      commitsInRange: z.number(),
+      activeDays: z.number(),
+      projectAgeDays: z.number(),
+      currentStreakDays: z.number().optional(),
+      recentCommits: z.array(z.unknown()),
+      uncommitted: z
+        .object({
+          changedFiles: z.number(),
+          insertions: z.number().optional(),
+          deletions: z.number().optional(),
+          lastUpdated: z.number().optional(),
+        })
+        .optional(),
+      deltaToMain: z.unknown().optional(),
+    }),
     run: async (args: unknown, ctx: ActionContext) => {
       const merged = (args ?? {}) as {
         worktreeId?: string;
@@ -57,6 +80,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       filePath: z.string(),
       status: GitStatusSchema,
     }),
+    resultSchema: z.object({ content: z.string() }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { cwd, filePath, status } = args as {
         cwd?: string;
@@ -65,7 +89,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       };
       const resolvedCwd = cwd ?? ctx.activeWorktreePath;
       if (!resolvedCwd) throw new Error("No active worktree");
-      return await window.electron.git.getFileDiff(resolvedCwd, filePath, status as any);
+      const diff = await window.electron.git.getFileDiff(resolvedCwd, filePath, status as any);
+      return { content: diff };
     },
   }));
 
@@ -89,6 +114,11 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         limit: z.number().int().positive().optional(),
       })
       .optional(),
+    resultSchema: z.object({
+      items: z.array(z.unknown()),
+      hasMore: z.boolean(),
+      total: z.number(),
+    }),
     run: async (args: unknown, ctx: ActionContext) => {
       const merged = (args ?? {}) as {
         cwd?: string;
@@ -284,6 +314,19 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ cwd: z.string().optional() }).optional(),
+    resultSchema: z.object({
+      staged: z.array(z.unknown()),
+      unstaged: z.array(z.unknown()),
+      conflicted: z.array(z.string()),
+      conflictedFiles: z.array(z.unknown()),
+      isDetachedHead: z.boolean(),
+      currentBranch: z.string().nullable(),
+      hasRemote: z.boolean(),
+      repoState: z.string(),
+      rebaseStep: z.number().nullable(),
+      rebaseTotalSteps: z.number().nullable(),
+      rebaseSequence: z.unknown().nullable(),
+    }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { cwd } = (args ?? {}) as { cwd?: string };
       const resolvedCwd = cwd ?? ctx.activeWorktreePath;
@@ -301,11 +344,22 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+    resultSchema: z.object({
+      snapshot: z
+        .object({
+          worktreeId: z.string(),
+          stashRef: z.string(),
+          createdAt: z.number(),
+          hasChanges: z.boolean(),
+        })
+        .nullable(),
+    }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { worktreeId } = (args ?? {}) as { worktreeId?: string };
       const resolvedWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!resolvedWorktreeId) throw new Error("No active worktree");
-      return await window.electron.git.snapshotGet(resolvedWorktreeId);
+      const result = await window.electron.git.snapshotGet(resolvedWorktreeId);
+      return { snapshot: result };
     },
   }));
 
@@ -318,8 +372,19 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({}).optional(),
+    resultSchema: z.object({
+      snapshots: z.array(
+        z.object({
+          worktreeId: z.string(),
+          stashRef: z.string(),
+          createdAt: z.number(),
+          hasChanges: z.boolean(),
+        })
+      ),
+    }),
     run: async () => {
-      return await window.electron.git.snapshotList();
+      const result = await window.electron.git.snapshotList();
+      return { snapshots: result };
     },
   }));
 

@@ -36,10 +36,12 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       requestedId: z.string().optional(),
       force: z.boolean().optional(),
     }),
-    resultSchema: z.object({
-      terminalId: z.string(),
-      location: LaunchLocationSchema,
-    }),
+    resultSchema: z
+      .object({
+        terminalId: z.string(),
+        location: LaunchLocationSchema,
+      })
+      .nullable(),
     run: async (args: unknown) => {
       const {
         agentId,
@@ -118,10 +120,12 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     })
     .optional();
 
-  const shortcutResultSchema = z.object({
-    terminalId: z.string(),
-    location: LaunchLocationSchema,
-  });
+  const shortcutResultSchema = z
+    .object({
+      terminalId: z.string(),
+      location: LaunchLocationSchema,
+    })
+    .nullable();
 
   for (const [id, config] of Object.entries(AGENT_REGISTRY)) {
     const actionId = `agent.${id}` as ActionId;
@@ -348,6 +352,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .string()
         .min(1)
         .describe("Agent ID to look up (e.g., 'claude', 'codex'). From terminal.list[].agentId."),
+    }),
+    resultSchema: z.object({
+      agentId: z.string(),
+      state: z.string().nullable(),
+      waitingReason: z.string().nullable(),
+      lastTransitionAt: z.number().nullable(),
+      terminalId: z.string().nullable(),
+      found: z.boolean(),
     }),
     run: async (args: unknown) => {
       const { agentId } = args as { agentId: string };

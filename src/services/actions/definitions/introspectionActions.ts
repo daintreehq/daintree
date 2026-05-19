@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
+import { PersistedStoreInfoSchema } from "./schemas";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { usePortalStore } from "@/store/portalStore";
@@ -9,20 +10,6 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { listPersistedStores } from "@/store/persistence/persistedStoreRegistry";
 import { readLocalStorageItemSafely } from "@/store/persistence/safeStorage";
-
-interface PersistedStoreInfo {
-  storeId: string;
-  storageKey: string;
-  declaredVersion: number | null;
-  persistedBlobVersion: number | null;
-  hasMigrate: boolean;
-  hasMerge: boolean;
-  hasPartialize: boolean;
-  persistedStateType: string;
-  hasPersistedValue: boolean;
-  sizeBytes: number;
-  parseStatus: "ok" | "missing" | "corrupt";
-}
 
 export function registerIntrospectionActions(
   actions: ActionRegistry,
@@ -50,6 +37,7 @@ export function registerIntrospectionActions(
           .describe("Only return enabled actions (default: false)"),
       })
       .optional(),
+    resultSchema: z.object({ actions: z.array(z.unknown()) }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { category, search, enabledOnly } =
         (args as { category?: string; search?: string; enabledOnly?: boolean } | undefined) ?? {};
@@ -71,7 +59,7 @@ export function registerIntrospectionActions(
         manifest = manifest.filter((a) => a.enabled);
       }
 
-      return manifest;
+      return { actions: manifest };
     },
   }));
 
@@ -84,6 +72,24 @@ export function registerIntrospectionActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      projectId: z.string().optional(),
+      projectName: z.string().optional(),
+      projectPath: z.string().optional(),
+      activeWorktreeId: z.string().optional(),
+      activeWorktreeName: z.string().optional(),
+      activeWorktreePath: z.string().optional(),
+      activeWorktreeBranch: z.string().optional(),
+      activeWorktreeIsMain: z.boolean().optional(),
+      focusedWorktreeId: z.string().optional(),
+      focusedTerminalId: z.string().optional(),
+      focusedTerminalKind: z.string().optional(),
+      focusedTerminalTitle: z.string().optional(),
+      portalOpen: z.boolean(),
+      portalActiveTabId: z.string().nullable(),
+      terminalCount: z.number(),
+      worktreeCount: z.number(),
+    }),
     run: async () => {
       const project = useProjectStore.getState().currentProject;
       const terminalState = usePanelStore.getState();
@@ -133,9 +139,13 @@ export function registerIntrospectionActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      storeCount: z.number(),
+      stores: z.array(PersistedStoreInfoSchema),
+    }),
     run: async () => {
       const registrations = listPersistedStores();
-      const stores: PersistedStoreInfo[] = registrations.map((reg) => {
+      const stores: z.infer<typeof PersistedStoreInfoSchema>[] = registrations.map((reg) => {
         const options = reg.store.persist.getOptions();
         const storageKey = typeof options.name === "string" ? options.name : "";
         const declaredVersion = typeof options.version === "number" ? options.version : null;

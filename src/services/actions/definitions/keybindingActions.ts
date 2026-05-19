@@ -14,6 +14,7 @@ export function registerKeybindingActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.record(z.string(), z.array(z.string())),
     run: async () => {
       await keybindingService.loadOverrides();
       return keybindingService.getOverridesSnapshot();

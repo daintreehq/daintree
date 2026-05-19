@@ -31,7 +31,7 @@ async function callList(actions: ActionRegistry, args?: unknown): Promise<Termin
   const factory = actions.get("terminal.list");
   if (!factory) throw new Error("missing terminal.list");
   const def = factory() as AnyActionDefinition;
-  return (await def.run(args, {} as never)) as TerminalListItem[];
+  return ((await def.run(args, {} as never)) as { terminals: TerminalListItem[] }).terminals;
 }
 
 beforeEach(() => {

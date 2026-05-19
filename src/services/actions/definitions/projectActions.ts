@@ -185,8 +185,10 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ projects: z.array(z.unknown()) }),
     run: async () => {
-      return await projectClient.getAll();
+      const result = await projectClient.getAll();
+      return { projects: result };
     },
   }));
 
@@ -198,8 +200,10 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ project: z.unknown().nullable() }),
     run: async () => {
-      return await projectClient.getCurrent();
+      const result = await projectClient.getCurrent();
+      return { project: result };
     },
   }));
 
@@ -212,6 +216,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string().optional() }).optional(),
+    resultSchema: z.object({}).catchall(z.unknown()),
     run: async (args: unknown, ctx: ActionContext) => {
       const { projectId } = (args ?? {}) as { projectId?: string };
       const resolvedProjectId = projectId ?? ctx.projectId;
@@ -432,11 +437,13 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string().optional() }).optional(),
+    resultSchema: z.object({ runners: z.array(z.unknown()) }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { projectId } = (args ?? {}) as { projectId?: string };
       const resolvedProjectId = projectId ?? ctx.projectId;
       if (!resolvedProjectId) throw new Error("No active project");
-      return await projectClient.detectRunners(resolvedProjectId);
+      const result = await projectClient.detectRunners(resolvedProjectId);
+      return { runners: result };
     },
   }));
 
@@ -449,6 +456,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string().optional() }).optional(),
+    resultSchema: z.object({}).catchall(z.unknown()),
     run: async (args: unknown, ctx: ActionContext) => {
       const { projectId } = (args ?? {}) as { projectId?: string };
       const resolvedProjectId = projectId ?? ctx.projectId;

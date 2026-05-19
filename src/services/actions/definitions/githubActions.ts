@@ -194,6 +194,12 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ token: z.string() }),
+      resultSchema: z.object({
+        valid: z.boolean(),
+        scopes: z.array(z.string()).optional(),
+        expiresAt: z.number().nullable().optional(),
+        error: z.string().optional(),
+      }),
       run: async ({ token }) => {
         return await forgeClient.validateToken(token);
       },
@@ -304,6 +310,12 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
       danger: "safe",
       scope: "renderer",
       nonRepeatable: true,
+      resultSchema: z.object({
+        valid: z.boolean(),
+        scopes: z.array(z.string()).optional(),
+        expiresAt: z.number().nullable().optional(),
+        error: z.string().optional(),
+      }),
       run: async (args) => {
         return await dispatchAlias("forge.validateToken", args);
       },
@@ -348,6 +360,17 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
           .describe("Working directory of the git repo. Defaults to the active worktree path."),
         bypassCache: z.boolean().optional(),
       }),
+      resultSchema: z.object({
+        commitCount: z.number(),
+        issueCount: z.number().nullable(),
+        prCount: z.number().nullable(),
+        loading: z.boolean(),
+        ghError: z.string().optional(),
+        stale: z.boolean().optional(),
+        lastUpdated: z.number().optional(),
+        rateLimitResetAt: z.number().optional(),
+        rateLimitKind: z.string().optional(),
+      }),
       run: async ({ cwd, bypassCache }, ctx: ActionContext) => {
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
@@ -367,6 +390,13 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
       danger: "safe",
       scope: "renderer",
       argsSchema: GitHubListOptionsSchema,
+      resultSchema: z.object({
+        items: z.array(z.unknown()),
+        pageInfo: z.object({
+          hasNextPage: z.boolean(),
+          endCursor: z.string().nullable(),
+        }),
+      }),
       run: async (args, ctx: ActionContext) => {
         const resolvedCwd = args.cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
@@ -406,6 +436,19 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
           description: "Fetch issue #100 from a specific repo",
         },
       ],
+      resultSchema: z
+        .object({
+          number: z.number(),
+          title: z.string(),
+          state: z.string(),
+          url: z.string(),
+          body: z.string().nullable().optional(),
+          labels: z.array(z.unknown()).optional(),
+          assignees: z.array(z.unknown()).optional(),
+          createdAt: z.string().optional(),
+          updatedAt: z.string().nullable().optional(),
+        })
+        .nullable(),
       run: async ({ cwd, issueNumber }, ctx: ActionContext) => {
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
@@ -425,6 +468,13 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
       danger: "safe",
       scope: "renderer",
       argsSchema: GitHubListOptionsSchema,
+      resultSchema: z.object({
+        items: z.array(z.unknown()),
+        pageInfo: z.object({
+          hasNextPage: z.boolean(),
+          endCursor: z.string().nullable(),
+        }),
+      }),
       run: async (args, ctx: ActionContext) => {
         const resolvedCwd = args.cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
@@ -441,6 +491,10 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      available: z.boolean(),
+      error: z.string().optional(),
+    }),
     run: async () => {
       return await githubClient.checkCli();
     },
@@ -454,6 +508,12 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      hasToken: z.boolean(),
+      scopes: z.array(z.string()).optional(),
+      username: z.string().optional(),
+      avatarUrl: z.string().optional(),
+    }),
     run: async () => {
       return await githubClient.getConfig();
     },
