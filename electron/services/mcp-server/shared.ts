@@ -422,7 +422,7 @@ export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map
   ["git.push", RATE_LIMIT_TIERS.mutation],
   ["forge.openIssue", RATE_LIMIT_TIERS.mutation],
   ["github.openPR", RATE_LIMIT_TIERS.mutation],
-]);
+] as Array<[string, RateLimitConfig]>);
 
 /**
  * Resolve the rate-limit config for a tool — its explicit override or the

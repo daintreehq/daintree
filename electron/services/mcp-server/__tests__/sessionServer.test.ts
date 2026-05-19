@@ -1576,10 +1576,11 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 });
 
-function parseToolErrorPayload(result: {
-  content: unknown;
-  isError?: boolean;
-}): { code: string; retriable: boolean; details?: { retryAfter?: number } } {
+function parseToolErrorPayload(result: { content: unknown; isError?: boolean }): {
+  code: string;
+  retriable: boolean;
+  details?: { retryAfter?: number };
+} {
   const text = (result as { content: Array<{ text: string }> }).content[0].text;
   return JSON.parse(text);
 }
@@ -1708,7 +1709,7 @@ describe("SessionStore.consumeRateLimitToken", () => {
       transport: { close: vi.fn().mockResolvedValue(undefined) },
       server: {},
       idleTimer: setTimeout(() => {}, 1_000_000),
-    } as unknown as (typeof store.httpSessions extends Map<string, infer V> ? V : never));
+    } as unknown as typeof store.httpSessions extends Map<string, infer V> ? V : never);
     expect(store.revokeSession("live")).toBe(true);
     expect(store.rateLimitBuckets.has("live")).toBe(false);
     store.drain();
@@ -1883,7 +1884,12 @@ describe("CallTool rate limiting (handler integration)", () => {
 
 describe("MCP_DEDUP_ALLOWLIST widening (#8468)", () => {
   it("retains the original creation-tool cohort", () => {
-    for (const tool of ["terminal.new", "worktree.createWithRecipe", "agent.launch", "recipe.run"]) {
+    for (const tool of [
+      "terminal.new",
+      "worktree.createWithRecipe",
+      "agent.launch",
+      "recipe.run",
+    ]) {
       expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(true);
     }
   });
