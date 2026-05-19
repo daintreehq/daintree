@@ -91,6 +91,20 @@ export class McpServerService {
       {
         emitGrantLifecycle: (sessionId, payload) => this.emitGrantLifecycle(sessionId, payload),
         dropAbuseState: (sessionId) => abusePolicy.dropSession(sessionId),
+        onTierDecayed: (sessionId) => {
+          // Tier just decayed to the workbench baseline (#8462). Push a
+          // tools/list_changed so the model re-fetches the now-narrowed
+          // manifest instead of calling a tool it no longer has. The
+          // session map is the freshness check — a transport closing
+          // between the lookup and the send rejects harmlessly.
+          const session =
+            this.sessionStore.httpSessions.get(sessionId) ??
+            this.sessionStore.sessions.get(sessionId);
+          session?.server.sendToolListChanged().catch(() => {
+            // Transport already closing/closed — the model will see the
+            // narrowed surface on its next list call regardless.
+          });
+        },
       }
     );
 

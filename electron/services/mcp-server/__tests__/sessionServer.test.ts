@@ -1411,6 +1411,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     const sessionStore = fakeSessionStore("workbench");
     sessionStore.sessions.set("s", {
       transport: {} as never,
+      server: {} as never,
       idleTimer: setTimeout(() => {}, 1_000_000),
     });
     const resetIdle = sessionStore.resetIdleTimer as ReturnType<typeof vi.fn>;
@@ -1538,6 +1539,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     const sessionStore = fakeSessionStore("workbench");
     sessionStore.sessions.set("s", {
       transport: {} as never,
+      server: {} as never,
       idleTimer: setTimeout(() => {}, 1_000_000),
     });
     const resetIdle = sessionStore.resetIdleTimer as ReturnType<typeof vi.fn>;

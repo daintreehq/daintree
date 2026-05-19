@@ -578,13 +578,14 @@ export class HttpLifecycle {
       const server = createSessionServer(sessionId, deps);
 
       const idleTimer = this.deps.sessionStore.createIdleTimer(sessionId);
-      this.deps.sessionStore.sessions.set(sessionId, { transport, idleTimer });
+      this.deps.sessionStore.sessions.set(sessionId, { transport, server, idleTimer });
       transport.onclose = () => {
         const session = this.deps.sessionStore.sessions.get(sessionId);
         if (session) {
           clearTimeout(session.idleTimer);
           this.deps.sessionStore.sessions.delete(sessionId);
         }
+        this.deps.sessionStore.clearElevationTimer(sessionId);
         this.deps.sessionStore.sessionTierMap.delete(sessionId);
         // Revoke before deleting the WebContents pin so the lifecycle
         // emitter can still find the pinned renderer for the
@@ -605,6 +606,7 @@ export class HttpLifecycle {
       } catch (err) {
         clearTimeout(idleTimer);
         this.deps.sessionStore.sessions.delete(sessionId);
+        this.deps.sessionStore.clearElevationTimer(sessionId);
         this.deps.sessionStore.sessionTierMap.delete(sessionId);
         // Same pin-before-clear ordering — the connect failure path
         // mirrors normal close cleanup.
@@ -716,6 +718,7 @@ export class HttpLifecycle {
         clearTimeout(session.idleTimer);
         this.deps.sessionStore.httpSessions.delete(id);
       }
+      this.deps.sessionStore.clearElevationTimer(id);
       this.deps.sessionStore.sessionTierMap.delete(id);
       // Pin-before-revoke ordering identical to the SSE path above —
       // see `transport.onclose` in the GET /sse branch.
@@ -740,6 +743,7 @@ export class HttpLifecycle {
           clearTimeout(session.idleTimer);
           this.deps.sessionStore.httpSessions.delete(id);
         }
+        this.deps.sessionStore.clearElevationTimer(id);
         this.deps.sessionStore.sessionTierMap.delete(id);
         this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(id);
@@ -749,6 +753,7 @@ export class HttpLifecycle {
         this.deps.abusePolicy.dropSession(id);
         cleanupResourceSubscriptions(id, this.deps.sessionStore);
       } else {
+        this.deps.sessionStore.clearElevationTimer(newSessionId);
         this.deps.sessionStore.sessionTierMap.delete(newSessionId);
         this.deps.sessionStore.grantCache.revokeSession(newSessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(newSessionId);
@@ -944,6 +949,11 @@ export class HttpLifecycle {
       return { sessionId, tier: current };
     }
     this.deps.sessionStore.sessionTierMap.set(sessionId, tier);
+    // Bound the renderer-approved elevation: after MCP_TIER_ELEVATION_TTL_MS
+    // of awake time the session silently decays back to `workbench` so a
+    // stale "Always allow" can't outlive the user's intent (#8462). Each
+    // accepted approval refreshes the window from now.
+    this.deps.sessionStore.armTierElevationTimer(sessionId, tier);
     return { sessionId, tier };
   }
 

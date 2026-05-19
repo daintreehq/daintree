@@ -68,6 +68,20 @@ export const MAX_PORT_RETRIES = 10;
 export const MCP_SSE_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
+ * Lifetime of a renderer-approved session-tier elevation ("Always allow"
+ * via {@link minimumPermittingTier}). After this window the session silently
+ * decays back to the `workbench` baseline so a stale "Always allow" can't
+ * outlive the user's intent across hibernate/wake and project switches
+ * (#8462). The next out-of-baseline tool call re-triggers the tier-mismatch
+ * banner — there is no separate decay notification. The window is awake-time
+ * corrected via {@link SystemSleepService.getAwakeTimeSince} so suspend time
+ * doesn't count against it, exactly like the idle reaper. Intentionally
+ * equal to {@link MCP_SSE_IDLE_TIMEOUT_MS}: a tier can never silently apply
+ * to a session the idle reaper has already collected.
+ */
+export const MCP_TIER_ELEVATION_TTL_MS = 30 * 60 * 1000;
+
+/**
  * Sliding-TTL window for per-tool grants minted via "Approve once". A grant
  * issued for `(sessionId, toolId)` permits that exact tool for this session
  * for the duration, and any successful dispatch through the grant refreshes
@@ -696,6 +710,12 @@ export interface DispatchEnvelope {
 
 export interface McpSseSession {
   transport: import("@modelcontextprotocol/sdk/server/sse.js").SSEServerTransport;
+  // The per-session `Server` instance. Stored so the tier-decay path can
+  // call `sendToolListChanged()` on this exact session when its elevation
+  // window expires (#8462) — `McpHttpSession` already carries it for the
+  // same reason; the SSE path previously let the reference go out of scope
+  // after `server.connect(transport)`.
+  server: import("@modelcontextprotocol/sdk/server/index.js").Server;
   idleTimer: ReturnType<typeof setTimeout>;
 }
 

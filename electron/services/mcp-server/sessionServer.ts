@@ -159,7 +159,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     { name: "Daintree", version: app.getVersion() },
     {
       capabilities: {
-        tools: {},
+        // `listChanged: true` is required for clients to process the
+        // `notifications/tools/list_changed` we send when a session's tier
+        // elevates or decays (#8462). Must be declared at construction —
+        // the SDK rejects post-connect capability registration in ^1.20+.
+        tools: { listChanged: true },
         resources: { subscribe: true, listChanged: false },
         prompts: {},
       },

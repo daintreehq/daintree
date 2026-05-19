@@ -56,6 +56,8 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       createHttpIdleTimer: vi.fn(() => setTimeout(() => {}, 1_000_000)),
       resetIdleTimer: vi.fn(),
       resetHttpIdleTimer: vi.fn(),
+      armTierElevationTimer: vi.fn(),
+      clearElevationTimer: vi.fn(),
       revokeSession: vi.fn(() => false),
     },
     auditService: {

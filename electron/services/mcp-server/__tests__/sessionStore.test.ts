@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MCP_SSE_IDLE_TIMEOUT_MS, type McpSseSession, type McpHttpSession } from "../shared.js";
+import {
+  MCP_SSE_IDLE_TIMEOUT_MS,
+  MCP_TIER_ELEVATION_TTL_MS,
+  type McpSseSession,
+  type McpHttpSession,
+} from "../shared.js";
 
 // Mutable test state controlled per-test.
 let mockAwakeTimeSince = 0;
@@ -18,6 +23,9 @@ function fakeSseSession(): McpSseSession {
     transport: {
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as McpSseSession["transport"],
+    server: {
+      sendToolListChanged: vi.fn().mockResolvedValue(undefined),
+    } as unknown as McpSseSession["server"],
     idleTimer: setTimeout(() => {}, 1_000_000),
   };
 }
@@ -555,5 +563,165 @@ describe("SessionStore dropAbuseState wiring (#8467)", () => {
   it("does not fire dropAbuseState when revokeSession returns false (unknown session)", () => {
     expect(store.revokeSession("ghost")).toBe(false);
     expect(dropAbuseSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("SessionStore tier-elevation decay (#8462)", () => {
+  let store: SessionStore;
+  let decayed: string[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setAwakeTime(0);
+    decayed = [];
+    store = new SessionStore(() => {}, {
+      onTierDecayed: (sessionId) => {
+        decayed.push(sessionId);
+      },
+    });
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    store.drain();
+    vi.useRealTimers();
+  });
+
+  it("decays an elevated session back to workbench after the TTL and fires onTierDecayed", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "action");
+    store.armTierElevationTimer("s", "action");
+
+    setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
+    vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
+
+    expect(store.getTier("s")).toBe("workbench");
+    expect(decayed).toEqual(["s"]);
+  });
+
+  it("does not arm a timer for the workbench baseline (nothing to decay)", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "workbench");
+    store.armTierElevationTimer("s", "workbench");
+
+    setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
+    vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
+
+    expect(decayed).toEqual([]);
+  });
+
+  it("re-arming refreshes the window from now (repeat Always allow)", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "action");
+    store.armTierElevationTimer("s", "action");
+
+    // Halfway through the window the user re-approves — window resets.
+    setAwakeTime(MCP_TIER_ELEVATION_TTL_MS / 2);
+    vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS / 2);
+    store.armTierElevationTimer("s", "action");
+
+    // Original deadline passes — must NOT have decayed (window was reset).
+    setAwakeTime(MCP_TIER_ELEVATION_TTL_MS / 2 + 1);
+    vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS / 2 + 1);
+    expect(store.getTier("s")).toBe("action");
+
+    // Full fresh window elapsed from the re-arm — now it decays.
+    setAwakeTime(MCP_TIER_ELEVATION_TTL_MS + 1);
+    vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS);
+    expect(store.getTier("s")).toBe("workbench");
+  });
+
+  it("does not count suspended time against the window (awake-time corrected)", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "system");
+    store.armTierElevationTimer("s", "system");
+
+    // Wall clock advances a full TTL but the machine was asleep — zero
+    // awake time elapsed, so the elevation must survive.
+    setAwakeTime(0);
+    vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
+
+    expect(store.getTier("s")).toBe("system");
+    expect(decayed).toEqual([]);
+  });
+
+  it("recomputeIdleTimers does not prematurely decay when awake time is below the TTL (suspend correction)", () => {
+    store.httpSessions.set("h", fakeHttpSession());
+    store.sessionTierMap.set("h", "action");
+    clearTimeout(store.httpSessions.get("h")!.idleTimer);
+    store.httpSessions.get("h")!.idleTimer = store.createHttpIdleTimer("h");
+    store.armTierElevationTimer("h", "action");
+
+    // Long wall-clock sleep but ~no awake time elapsed — the wake recompute
+    // must keep both the idle and elevation windows armed, not collapse them.
+    setAwakeTime(0);
+    store.recomputeIdleTimers();
+
+    expect(store.getTier("h")).toBe("action");
+    expect(store.httpSessions.has("h")).toBe(true);
+    expect(decayed).toEqual([]);
+  });
+
+  it("does not wipe a tier the user re-approved between arm and fire (stale-token guard, #2243)", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "action");
+    store.armTierElevationTimer("s", "action");
+
+    // Simulate a re-elevation to a different tier just before the original
+    // timer fires: the live tier no longer matches the captured token.
+    store.sessionTierMap.set("s", "system");
+
+    setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
+    vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
+
+    // The original timer's decay must be a no-op — the re-approval stands.
+    expect(store.getTier("s")).toBe("system");
+    expect(decayed).toEqual([]);
+  });
+
+  it("is a safe no-op when the session was torn down before the timer fires (#3728)", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "action");
+    store.armTierElevationTimer("s", "action");
+
+    store.revokeSession("s");
+
+    setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
+    expect(() => vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1)).not.toThrow();
+    expect(decayed).toEqual([]);
+  });
+
+  it("clears elevation state on revokeSession, drain, and clearElevationTimer", () => {
+    store.sessions.set("s1", fakeSseSession());
+    store.armTierElevationTimer("s1", "action");
+    store.revokeSession("s1");
+
+    store.httpSessions.set("h1", fakeHttpSession());
+    store.armTierElevationTimer("h1", "action");
+    store.clearElevationTimer("h1");
+
+    store.sessions.set("s2", fakeSseSession());
+    store.armTierElevationTimer("s2", "action");
+    store.drain();
+
+    // No armed timer survives — advancing past the TTL decays nothing.
+    setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
+    vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
+    expect(decayed).toEqual([]);
+  });
+
+  it("idle expiry beating elevation decay leaves the decay a no-op", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "action");
+    clearTimeout(store.sessions.get("s")!.idleTimer);
+    store.sessions.get("s")!.idleTimer = store.createIdleTimer("s");
+    store.armTierElevationTimer("s", "action");
+
+    // Both windows are equal; the idle reaper collects the session first.
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+
+    expect(store.sessions.has("s")).toBe(false);
+    expect(decayed).toEqual([]);
   });
 });
