@@ -83,6 +83,8 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     clearAuditLog: vi.fn().mockResolvedValue(undefined),
     setAuditEnabled: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
     setAuditMaxRecords: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
+    getTurnOutcomeRecords: vi.fn().mockResolvedValue([]),
+    clearTurnOutcomeLog: vi.fn().mockResolvedValue(undefined),
     onRuntimeStateChanged: vi.fn().mockReturnValue(vi.fn()),
     ...overrides,
   };
@@ -609,7 +611,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getByRole("button", { name: /^clear log$/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
@@ -645,7 +647,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getByRole("button", { name: /^clear log$/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
@@ -681,7 +683,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getByRole("button", { name: /^clear log$/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
