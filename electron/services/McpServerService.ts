@@ -4,6 +4,7 @@ import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
+import { getSystemSleepService } from "./SystemSleepService.js";
 import type {
   AssistantTurnRecord,
   McpAuditRecord,
@@ -118,6 +119,14 @@ export class McpServerService {
       this.turnOutcomeService.dropTerminal(payload.terminalId);
     });
     this.persistentListeners.push(offExited);
+
+    try {
+      getSystemSleepService().onWake(() => {
+        this.sessionStore.recomputeIdleTimers();
+      });
+    } catch {
+      // SystemSleepService may not be initialized yet at early startup.
+    }
 
     this.bridge = createRendererBridge(
       this.pendingManifests,
