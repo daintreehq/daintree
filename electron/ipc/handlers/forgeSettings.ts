@@ -64,10 +64,18 @@ function recordHasCredential(raw: string | undefined): boolean {
 }
 
 /**
- * Push a provider's credentials to the workspace-host UtilityProcess so
+ * Push a provider's credentials to the live workspace-host UtilityProcess so
  * branch→PR detection can use them. Mirrors `syncWorkspaceToken` in
- * `GitHubTokenOrchestrator` — best-effort, swallows errors when the client
- * is not yet initialized (the host re-reads the store on next launch).
+ * `GitHubTokenOrchestrator` exactly: a best-effort live push that only
+ * reaches currently-spawned hosts and swallows errors when the client is not
+ * yet initialized. Note this is a live push only — like the GitHub path,
+ * there is no boot-time replay of persisted credentials into a freshly
+ * spawned host, and the workspace host currently only consumes GitHub
+ * credentials (`PRIntegrationService.updateForgeCredentials` no-ops for
+ * non-GitHub ids until a provider plugin wires its own auth module). The
+ * `forgeCredentials` store entry is the durable source of truth; wiring a
+ * boot-time replay for third-party providers is a provider-agnostic
+ * follow-on, not part of #8454's settings/auth surface.
  */
 async function syncWorkspaceCredential(
   providerId: string,

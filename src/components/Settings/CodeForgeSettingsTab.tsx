@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, type ComponentType, type ReactNode } from "react";
+import { useEffect, useRef, useState, useMemo, type ComponentType, type ReactNode } from "react";
 import { GitBranch, Github, Key, Check, AlertCircle } from "lucide-react";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
@@ -249,6 +249,11 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   const [result, setResult] = useState<CredentialResult>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasCredential, setHasCredential] = useState(false);
+  // Synchronous in-flight guard: `isSaving` state updates are batched and the
+  // re-render is deferred, so two rapid event dispatches could both pass an
+  // `isSaving`-derived check before the first commit. The ref flips
+  // synchronously, closing that double-submit window.
+  const savingRef = useRef(false);
 
   // Single effect keyed on providerId: reset form state and (re)load the
   // stored-credential status whenever the selected provider changes. Keeping
@@ -256,6 +261,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   // bug from #4958.
   useEffect(() => {
     let cancelled = false;
+    savingRef.current = false;
     setValues({});
     setResult(null);
     setErrorMessage(null);
@@ -289,7 +295,8 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   const canSave = !isSaving && (values[primaryId] ?? "").trim().length > 0;
 
   const handleSave = async () => {
-    if (!canSave) return;
+    if (!canSave || savingRef.current) return;
+    savingRef.current = true;
     setIsSaving(true);
     setResult(null);
     setErrorMessage(null);
@@ -313,6 +320,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
       setResult("error");
       setErrorMessage("Couldn't save credentials");
     } finally {
+      savingRef.current = false;
       setIsSaving(false);
     }
   };

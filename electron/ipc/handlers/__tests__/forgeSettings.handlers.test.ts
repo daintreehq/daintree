@@ -24,9 +24,18 @@ vi.mock("../../../store.js", () => ({ store: storeMock }));
 
 const registryMock = vi.hoisted(() => ({
   getRegisteredForgeProviders: vi.fn<() => ForgeProviderEntry[]>(() => []),
+  getForgeProviderImpl: vi.fn<(id: string) => unknown>(() => undefined),
 }));
 
 vi.mock("../../../services/forgeProviderRegistry.js", () => registryMock);
+
+const workspaceClientMock = vi.hoisted(() => ({
+  updateForgeCredentials: vi.fn(),
+}));
+
+vi.mock("../../../services/WorkspaceClient.js", () => ({
+  getWorkspaceClient: () => workspaceClientMock,
+}));
 
 const resolverMock = vi.hoisted(() => ({
   resolveForgeProvider: vi.fn<(inputs: ResolveForgeProviderInputs) => ResolvedForgeProvider>(
@@ -65,6 +74,8 @@ describe("registerForgeSettingsHandlers", () => {
       delete storeMock._data[key];
     }
     registryMock.getRegisteredForgeProviders.mockReturnValue([]);
+    registryMock.getForgeProviderImpl.mockReturnValue(undefined);
+    workspaceClientMock.updateForgeCredentials.mockReset();
     projectStoreMock.getProjectById.mockReturnValue({
       id: "project-1",
       path: "/repo",
@@ -74,9 +85,9 @@ describe("registerForgeSettingsHandlers", () => {
     gitServiceMock.getRemoteUrl.mockResolvedValue("https://github.com/owner/repo.git");
   });
 
-  it("registers four IPC handlers", () => {
+  it("registers all IPC handlers including the credential channels", () => {
     const cleanup = registerForgeSettingsHandlers();
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(4);
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(7);
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-settings", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith(
       "forge:set-default-provider",
@@ -84,6 +95,12 @@ describe("registerForgeSettingsHandlers", () => {
     );
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-providers", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:resolve-provider", expect.any(Function));
+    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:set-credential", expect.any(Function));
+    expect(ipcMainMock.handle).toHaveBeenCalledWith(
+      "forge:get-credential-status",
+      expect.any(Function)
+    );
+    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:clear-credential", expect.any(Function));
     cleanup();
   });
 
@@ -190,10 +207,10 @@ describe("registerForgeSettingsHandlers", () => {
     expect(getProviders(null)).toEqual(entries);
   });
 
-  it("cleanup removes all four handlers", () => {
+  it("cleanup removes all registered handlers", () => {
     const cleanup = registerForgeSettingsHandlers();
     cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(4);
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(7);
   });
 
   it("resolveProvider gathers inputs and delegates to the resolver", async () => {
@@ -316,5 +333,134 @@ describe("registerForgeSettingsHandlers", () => {
     expect(resolverMock.resolveForgeProvider).toHaveBeenCalledWith(
       expect.objectContaining({ globalDefaultProviderId: "daintree.github.github" })
     );
+  });
+
+  // ── Credential channels (#8454) ──
+
+  function registerGiteaProvider() {
+    const entries: ForgeProviderEntry[] = [
+      {
+        pluginId: "acme",
+        contribution: {
+          id: "gitea",
+          name: "Gitea",
+          matches: ["gitea.example.com"],
+          credentialFields: [
+            { id: "token", label: "API token", type: "password" },
+            { id: "baseUrl", label: "Base URL", type: "text" },
+          ],
+        },
+      },
+    ];
+    registryMock.getRegisteredForgeProviders.mockReturnValue(entries);
+  }
+
+  it("setCredential validates the primary field, persists the record, and syncs the host", async () => {
+    registerGiteaProvider();
+    const validateToken = vi.fn().mockResolvedValue({ valid: true, scopes: ["repo"] });
+    registryMock.getForgeProviderImpl.mockReturnValue({ validateToken });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    const result = await setCredential(null, "acme.gitea", {
+      token: "secret-token",
+      baseUrl: "https://gitea.example.com",
+    });
+
+    expect(validateToken).toHaveBeenCalledWith("secret-token");
+    expect(storeMock.set).toHaveBeenCalledWith("forgeCredentials", {
+      "acme.gitea": JSON.stringify({
+        token: "secret-token",
+        baseUrl: "https://gitea.example.com",
+      }),
+    });
+    expect(workspaceClientMock.updateForgeCredentials).toHaveBeenCalledWith("acme.gitea", {
+      kind: "bearer",
+      value: "secret-token",
+    });
+    expect(result).toEqual({ valid: true, scopes: ["repo"] });
+  });
+
+  it("setCredential does not persist or sync when validation fails", async () => {
+    registerGiteaProvider();
+    const validateToken = vi.fn().mockResolvedValue({ valid: false, error: "Bad token" });
+    registryMock.getForgeProviderImpl.mockReturnValue({ validateToken });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    const result = await setCredential(null, "acme.gitea", { token: "nope" });
+
+    expect(result).toEqual({ valid: false, error: "Bad token" });
+    expect(storeMock.set).not.toHaveBeenCalledWith("forgeCredentials", expect.anything());
+    expect(workspaceClientMock.updateForgeCredentials).not.toHaveBeenCalled();
+  });
+
+  it("setCredential returns a not-activated error when no impl is registered", async () => {
+    registerGiteaProvider();
+    registryMock.getForgeProviderImpl.mockReturnValue(undefined);
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    const result = (await setCredential(null, "acme.gitea", { token: "x" })) as {
+      valid: boolean;
+      error?: string;
+    };
+
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/not activated/i);
+    expect(storeMock.set).not.toHaveBeenCalledWith("forgeCredentials", expect.anything());
+  });
+
+  it("setCredential rejects invalid payloads without touching the store", async () => {
+    registerGiteaProvider();
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken: vi.fn().mockResolvedValue({ valid: true }),
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    expect(await setCredential(null, "", { token: "x" })).toEqual({
+      valid: false,
+      error: expect.any(String),
+    });
+    expect(await setCredential(null, "acme.gitea", 42)).toEqual({
+      valid: false,
+      error: expect.any(String),
+    });
+    expect(await setCredential(null, "acme.gitea", { token: "   " })).toEqual({
+      valid: false,
+      error: expect.any(String),
+    });
+    expect(storeMock.set).not.toHaveBeenCalledWith("forgeCredentials", expect.anything());
+  });
+
+  it("getCredentialStatus reflects whether a non-empty record is stored", () => {
+    storeMock._data["forgeCredentials"] = {
+      "acme.gitea": JSON.stringify({ token: "stored" }),
+      "acme.empty": JSON.stringify({ token: "  " }),
+    };
+    registerForgeSettingsHandlers();
+    const getStatus = findHandler("forge:get-credential-status");
+
+    expect(getStatus(null, "acme.gitea")).toEqual({ hasCredential: true });
+    expect(getStatus(null, "acme.empty")).toEqual({ hasCredential: false });
+    expect(getStatus(null, "acme.absent")).toEqual({ hasCredential: false });
+    expect(getStatus(null, "")).toEqual({ hasCredential: false });
+  });
+
+  it("clearCredential removes only the targeted provider and syncs a null credential", async () => {
+    storeMock._data["forgeCredentials"] = {
+      "acme.gitea": JSON.stringify({ token: "a" }),
+      "corp.gitlab": JSON.stringify({ token: "b" }),
+    };
+    registerForgeSettingsHandlers();
+    const clearCredential = findHandler("forge:clear-credential");
+
+    await clearCredential(null, "acme.gitea");
+
+    expect(storeMock.set).toHaveBeenCalledWith("forgeCredentials", {
+      "corp.gitlab": JSON.stringify({ token: "b" }),
+    });
+    expect(workspaceClientMock.updateForgeCredentials).toHaveBeenCalledWith("acme.gitea", null);
   });
 });
