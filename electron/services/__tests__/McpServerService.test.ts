@@ -166,6 +166,13 @@ vi.mock("../McpPaneConfigService.js", () => ({
   },
 }));
 
+vi.mock("../SystemSleepService.js", () => ({
+  getSystemSleepService: vi.fn(() => ({
+    getAwakeTimeSince: vi.fn(() => Number.MAX_SAFE_INTEGER),
+    onWake: vi.fn(() => () => {}),
+  })),
+}));
+
 import { McpServerService } from "../McpServerService.js";
 
 type DispatchRequest = {
