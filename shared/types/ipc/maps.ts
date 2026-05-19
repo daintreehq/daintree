@@ -1784,6 +1784,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: import("./mcpServer.js").McpRuntimeSnapshot;
   };
+  "mcp-server:export-audit-log": {
+    args: [records: import("./mcpServer.js").McpAuditRecord[]];
+    result: boolean;
+  };
   "mcp-server:set-session-tier": {
     args: [payload: { sessionId: string; tier: "workbench" | "action" | "system" }];
     result: { sessionId: string; tier: "workbench" | "action" | "system" };

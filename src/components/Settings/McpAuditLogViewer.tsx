@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Check, Copy, RefreshCw, ShieldOff } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Check, Copy, Download, RefreshCw, ShieldOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -29,8 +29,18 @@ const RESULT_DOT_CLASS: Record<McpAuditResult, string> = {
   dedup: "bg-status-info",
 };
 
-function formatRelativeTimestamp(ts: number): string {
-  const diffMs = Date.now() - ts;
+const TIME_RANGE_MS: Record<Exclude<TimeRange, "all">, number> = {
+  "5m": 300_000,
+  "1h": 3_600_000,
+  "24h": 86_400_000,
+};
+
+const RELATIVE_TIMESTAMP_REFRESH_MS = 30_000;
+
+type TimeRange = "5m" | "1h" | "24h" | "all";
+
+function formatRelativeTimestamp(ts: number, now: number): string {
+  const diffMs = now - ts;
   if (diffMs < 0) return "just now";
   const sec = Math.floor(diffMs / 1000);
   if (sec < 60) return `${sec}s ago`;
@@ -56,6 +66,10 @@ interface McpAuditLogViewerProps {
   maxRecords?: number;
   /** Set when a copy succeeded so the UI can flash a confirmation. */
   copyFlashActive?: boolean;
+  /** Triggers the NDJSON export via OS save dialog with the filtered records. */
+  onExport?: (records: McpAuditRecord[]) => Promise<void> | void;
+  /** Set when an export succeeded so the UI can flash a confirmation. */
+  exportFlashActive?: boolean;
 }
 
 export function McpAuditLogViewer({
@@ -67,9 +81,19 @@ export function McpAuditLogViewer({
   includeRecord,
   maxRecords,
   copyFlashActive,
+  onExport,
+  exportFlashActive,
 }: McpAuditLogViewerProps) {
   const [toolFilter, setToolFilter] = useState("");
   const [resultFilter, setResultFilter] = useState<AuditResultFilter>("all");
+  const [timeRange, setTimeRange] = useState<TimeRange>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [nowTick, setNowTick] = useState(Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), RELATIVE_TIMESTAMP_REFRESH_MS);
+    return () => clearInterval(id);
+  }, []);
 
   const visibleRecords = useMemo(() => {
     if (!includeRecord) return records;
@@ -83,12 +107,20 @@ export function McpAuditLogViewer({
 
   const filteredRecords = useMemo(() => {
     const needle = toolFilter.trim().toLowerCase();
+    const searchNeedle = searchQuery.trim().toLowerCase();
+    const cutoffMs = timeRange !== "all" ? nowTick - TIME_RANGE_MS[timeRange] : undefined;
     return visibleRecords.filter((record) => {
+      if (cutoffMs !== undefined && record.timestamp < cutoffMs) return false;
       if (resultFilter !== "all" && record.result !== resultFilter) return false;
       if (needle.length > 0 && !record.toolId.toLowerCase().includes(needle)) return false;
+      if (
+        searchNeedle.length > 0 &&
+        !(record.argsSummary || "").toLowerCase().includes(searchNeedle)
+      )
+        return false;
       return true;
     });
-  }, [visibleRecords, resultFilter, toolFilter]);
+  }, [visibleRecords, resultFilter, toolFilter, timeRange, searchQuery, nowTick]);
 
   const showCopyAll = filteredRecords.length === visibleRecords.length;
 
@@ -106,6 +138,14 @@ export function McpAuditLogViewer({
           placeholder="Filter by tool ID"
           aria-label="Filter audit by tool name"
           className="flex-1 min-w-[160px] bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-daintree-text/40 font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+        />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search arguments"
+          aria-label="Search audit arguments"
+          className="w-40 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-daintree-text/40 font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
         />
         <select
           value={resultFilter}
@@ -131,6 +171,22 @@ export function McpAuditLogViewer({
           <option value="confirmation-pending">Awaiting confirmation</option>
           <option value="unauthorized">Unauthorized</option>
           <option value="dedup">Deduplicated</option>
+        </select>
+        <select
+          value={timeRange}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (value === "5m" || value === "1h" || value === "24h" || value === "all") {
+              setTimeRange(value);
+            }
+          }}
+          aria-label="Filter audit by time range"
+          className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+        >
+          <option value="all">All</option>
+          <option value="5m">Last 5 minutes</option>
+          <option value="1h">Last hour</option>
+          <option value="24h">Last 24 hours</option>
         </select>
         {unauthorizedCount > 0 && resultFilter !== "unauthorized" && (
           <button
@@ -203,7 +259,7 @@ export function McpAuditLogViewer({
                   )}
                 </div>
                 <div className="text-right text-daintree-text/40 whitespace-nowrap">
-                  <div>{formatRelativeTimestamp(record.timestamp)}</div>
+                  <div>{formatRelativeTimestamp(record.timestamp, nowTick)}</div>
                   <div>{record.durationMs}ms</div>
                 </div>
               </li>
@@ -238,6 +294,28 @@ export function McpAuditLogViewer({
           {copyFlashActive ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
           {copyFlashActive ? "Copied!" : `Copy ${showCopyAll ? "all" : "filtered"} as JSON`}
         </button>
+        {onExport && (
+          <button
+            type="button"
+            onClick={() => void onExport(filteredRecords)}
+            disabled={filteredRecords.length === 0}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
+              filteredRecords.length === 0
+                ? "border-daintree-border text-daintree-text/30 cursor-not-allowed"
+                : exportFlashActive
+                  ? "text-status-success border-status-success/30"
+                  : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+            )}
+          >
+            {exportFlashActive ? (
+              <Check className="w-3.5 h-3.5" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+            {exportFlashActive ? "Exported!" : "Export as NDJSON"}
+          </button>
+        )}
         {onClear && (
           <button
             type="button"
@@ -254,7 +332,10 @@ export function McpAuditLogViewer({
           </button>
         )}
         <span className="ml-auto text-xs text-daintree-text/40">
-          {resultFilter !== "all" || toolFilter.trim().length > 0
+          {resultFilter !== "all" ||
+          toolFilter.trim().length > 0 ||
+          timeRange !== "all" ||
+          searchQuery.trim().length > 0
             ? `${filteredRecords.length} of ${visibleRecords.length}`
             : maxRecords !== undefined
               ? `${visibleRecords.length} of ${maxRecords}`

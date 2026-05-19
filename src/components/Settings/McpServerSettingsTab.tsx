@@ -37,6 +37,7 @@ interface McpServerStatus {
 }
 
 const COPY_FEEDBACK_MS = 2000;
+const STATUS_LOAD_TIMEOUT_MS = 10_000;
 
 const MASKED_KEY = "•".repeat(24);
 
@@ -55,9 +56,12 @@ export function McpServerSettingsTab() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedAudit, setCopiedAudit] = useState(false);
+  const [exportedAudit, setExportedAudit] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const configCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const apiKeyCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [auditRecords, setAuditRecords] = useState<McpAuditRecord[]>([]);
   const [auditEnabled, setAuditEnabled] = useState(true);
@@ -88,7 +92,7 @@ export function McpServerSettingsTab() {
       setError("Couldn't load MCP server settings. Restart Daintree and try again.");
       setLoading(false);
       logError("MCP status load timed out");
-    }, 10_000);
+    }, STATUS_LOAD_TIMEOUT_MS);
 
     Promise.all([
       window.electron.mcpServer.getStatus(),
@@ -140,6 +144,7 @@ export function McpServerSettingsTab() {
       if (configCopyTimeoutRef.current) clearTimeout(configCopyTimeoutRef.current);
       if (apiKeyCopyTimeoutRef.current) clearTimeout(apiKeyCopyTimeoutRef.current);
       if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
+      if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
     };
   }, []);
 
@@ -306,6 +311,30 @@ export function McpServerSettingsTab() {
       }
       setError(formatErrorMessage(err, "Failed to copy audit log"));
       logError("Failed to copy MCP audit log", err);
+    }
+  };
+
+  const handleExportAuditLog = async (records: McpAuditRecord[]) => {
+    if (isExporting) return;
+    setIsExporting(true);
+    try {
+      setError(null);
+      const written = await window.electron.mcpServer.exportAuditLog(records);
+      if (written) {
+        setExportedAudit(true);
+        if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
+        auditExportTimeoutRef.current = setTimeout(() => setExportedAudit(false), COPY_FEEDBACK_MS);
+      }
+    } catch (err) {
+      setExportedAudit(false);
+      if (auditExportTimeoutRef.current) {
+        clearTimeout(auditExportTimeoutRef.current);
+        auditExportTimeoutRef.current = null;
+      }
+      setError(formatErrorMessage(err, "Failed to export audit log"));
+      logError("Failed to export MCP audit log", err);
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -573,6 +602,8 @@ export function McpServerSettingsTab() {
                 onClear={() => setShowClearConfirm(true)}
                 copyFlashActive={copiedAudit}
                 maxRecords={auditMaxRecords}
+                onExport={handleExportAuditLog}
+                exportFlashActive={exportedAudit}
               />
             </div>
           </SettingsSection>

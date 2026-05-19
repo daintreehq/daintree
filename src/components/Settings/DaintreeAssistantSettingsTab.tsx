@@ -119,10 +119,13 @@ export function DaintreeAssistantSettingsTab() {
   const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
   const [auditLoading, setAuditLoading] = useState(true);
   const [auditCopied, setAuditCopied] = useState(false);
+  const [auditExported, setAuditExported] = useState(false);
+  const [isExportingAudit, setIsExportingAudit] = useState(false);
   const [showClearAuditConfirm, setShowClearAuditConfirm] = useState(false);
   const [isClearingAudit, setIsClearingAudit] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // customArgs is a free-form text input; persisting on every keystroke would
   // spam IPC. We track a pending edit alongside the persisted value: when the
@@ -209,6 +212,7 @@ export function DaintreeAssistantSettingsTab() {
       cancelled = true;
       unsubscribe();
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
     };
   }, []);
 
@@ -279,6 +283,33 @@ export function DaintreeAssistantSettingsTab() {
       }
       setError(formatErrorMessage(err, "Couldn't copy audit log"));
       logError("Failed to copy MCP audit log from assistant tab", err);
+    }
+  };
+
+  const handleExportAuditAsNdjson = async (records: McpAuditRecord[]) => {
+    if (isExportingAudit) return;
+    setIsExportingAudit(true);
+    try {
+      setError(null);
+      const written = await window.electron.mcpServer.exportAuditLog(records);
+      if (written) {
+        setAuditExported(true);
+        if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
+        auditExportTimeoutRef.current = setTimeout(
+          () => setAuditExported(false),
+          COPY_RESET_DELAY_MS
+        );
+      }
+    } catch (err) {
+      setAuditExported(false);
+      if (auditExportTimeoutRef.current) {
+        clearTimeout(auditExportTimeoutRef.current);
+        auditExportTimeoutRef.current = null;
+      }
+      setError(formatErrorMessage(err, "Couldn't export audit log"));
+      logError("Failed to export MCP audit log from assistant tab", err);
+    } finally {
+      setIsExportingAudit(false);
     }
   };
 
@@ -589,6 +620,8 @@ export function DaintreeAssistantSettingsTab() {
           onClear={() => setShowClearAuditConfirm(true)}
           copyFlashActive={auditCopied}
           includeRecord={(record) => record.tier !== "external"}
+          onExport={handleExportAuditAsNdjson}
+          exportFlashActive={auditExported}
         />
         <McpAuditLatencyTable
           records={auditRecords}

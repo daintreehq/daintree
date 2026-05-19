@@ -14,7 +14,7 @@ import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
 import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
-import type { McpRuntimeSnapshot } from "../shared/types/ipc/mcpServer.js";
+import type { McpAuditRecord, McpRuntimeSnapshot } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import type { HelpAssistantTier } from "../shared/types/ipc/maps.js";
@@ -2454,6 +2454,8 @@ const api: ElectronAPI = {
     getRuntimeState: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_RUNTIME_STATE),
     onRuntimeStateChanged: (callback: (snapshot: McpRuntimeSnapshot) => void) =>
       _typedOn(CHANNELS.MCP_SERVER_RUNTIME_STATE_CHANGED, callback),
+    exportAuditLog: (records: McpAuditRecord[]) =>
+      _unwrappingInvoke(CHANNELS.MCP_SERVER_EXPORT_AUDIT_LOG, records),
     setSessionTier: (sessionId: string, tier: "workbench" | "action" | "system") =>
       _unwrappingInvoke(CHANNELS.MCP_SERVER_SET_SESSION_TIER, { sessionId, tier }),
     issueGrant: (sessionId: string, toolId: string) =>
