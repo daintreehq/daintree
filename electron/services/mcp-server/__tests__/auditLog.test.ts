@@ -193,7 +193,7 @@ describe("AuditService.appendRecord — turnId, severity, schemaVersion", () => 
           result: null,
           error: { code: errorCode, message: "" },
         },
-      };
+      } as AuditOutcome;
     }
 
     service.appendRecord({
