@@ -467,12 +467,18 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         const existing = worktrees.get(event.worktreeId);
         if (!existing) return;
         if (existing.issueNumber !== event.issueNumber) return;
+        // `linked` is the source of truth (#8452): clearing the issue must
+        // drop linked.issue too, mirroring the host's onIssueNotFound and the
+        // pr-cleared handler above. Preserve any PR linkage that's present.
         store.getState().applyUpdate(
           {
             ...existing,
             issueNumber: undefined,
             issueTitle: undefined,
             issueLastUpdatedAt: undefined,
+            linked: existing.linked?.pr
+              ? { providerId: existing.linked.providerId, pr: existing.linked.pr }
+              : null,
           },
           overlayVersion(store.getState().version)
         );

@@ -510,7 +510,14 @@ describe("WorktreeMonitor", () => {
           title: "Add widget",
           url: "https://gitlab.acme.com/acme-corp/my-project/-/merge_requests/1234",
           state: "open",
-          ciStatus: { state: "failure" },
+          ciStatus: {
+            state: "failure",
+            total: 3,
+            passed: 1,
+            failed: 2,
+            pending: 0,
+            rawData: null,
+          },
         },
         issue: {
           ref: {

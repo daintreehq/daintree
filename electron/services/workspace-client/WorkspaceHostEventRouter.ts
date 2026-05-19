@@ -124,6 +124,13 @@ export class WorkspaceHostEventRouter {
         break;
 
       case "pr-detected": {
+        // `linked` is the source of truth (#8452) — derive the canonical
+        // provider/owner/repo from it rather than reintroducing empty
+        // strings on this second hop (workspace-host → router → bus).
+        const linkedRef = event.linked?.pr?.ref ?? event.linked?.issue?.ref;
+        const providerId = event.linked?.providerId ?? event.providerId ?? "";
+        const owner = linkedRef?.owner ?? "";
+        const repo = linkedRef?.repo ?? "";
         const prPayload = {
           worktreeId: event.worktreeId,
           prNumber: event.prNumber,
@@ -135,7 +142,7 @@ export class WorkspaceHostEventRouter {
           issueTitle: event.issueTitle,
           timestamp: Date.now(),
         };
-        events.emit("sys:pr:detected", prPayload);
+        events.emit("sys:pr:detected", { ...prPayload, providerId, owner, repo });
         sendToEntryWindows(entry, CHANNELS.PR_DETECTED, prPayload);
         break;
       }
@@ -151,6 +158,13 @@ export class WorkspaceHostEventRouter {
       }
 
       case "issue-detected": {
+        // `linked` is the source of truth (#8452) — derive the canonical
+        // provider/owner/repo from it rather than reintroducing empty
+        // strings on this second hop (workspace-host → router → bus).
+        const linkedRef = event.linked?.issue?.ref ?? event.linked?.pr?.ref;
+        const providerId = event.linked?.providerId ?? event.providerId ?? "";
+        const owner = linkedRef?.owner ?? "";
+        const repo = linkedRef?.repo ?? "";
         const issuePayload = {
           worktreeId: event.worktreeId,
           issueNumber: event.issueNumber,
@@ -158,6 +172,9 @@ export class WorkspaceHostEventRouter {
         };
         events.emit("sys:issue:detected", {
           ...issuePayload,
+          providerId,
+          owner,
+          repo,
           timestamp: Date.now(),
         });
         sendToEntryWindows(entry, CHANNELS.ISSUE_DETECTED, issuePayload);

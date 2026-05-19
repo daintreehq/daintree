@@ -1034,6 +1034,57 @@ describe("WorktreeStoreProvider issue-detected handler", () => {
     expect(wt?.linked?.pr?.ref.number).toBe(1234);
     expect(wt?.linked?.issue?.ref.number).toBe(88);
   });
+
+  it("issue-not-found clears linked.issue but preserves linked.pr (#8452)", async () => {
+    const store = await renderProvider();
+    act(() => {
+      store.getState().applyUpdate(
+        makeWorktree("wt-1", {
+          branch: "feature/widget",
+          issueNumber: 88,
+          issueTitle: "Widget request",
+          linked: {
+            providerId: "acme.gitlab",
+            issue: {
+              ref: {
+                providerId: "acme.gitlab",
+                owner: "acme-corp",
+                repo: "my-project",
+                number: 88,
+                rawData: null,
+              },
+              title: "Widget request",
+            },
+            pr: {
+              ref: {
+                providerId: "acme.gitlab",
+                owner: "acme-corp",
+                repo: "my-project",
+                number: 1234,
+                rawData: null,
+              },
+              url: "https://gitlab.acme.com/acme-corp/my-project/-/merge_requests/1234",
+              state: "open",
+            },
+          },
+        }),
+        nextV()
+      );
+    });
+
+    act(() => {
+      emit("issue-not-found", {
+        type: "issue-not-found",
+        worktreeId: "wt-1",
+        issueNumber: 88,
+      });
+    });
+
+    const wt = store.getState().worktrees.get("wt-1");
+    expect(wt?.issueNumber).toBeUndefined();
+    expect(wt?.linked?.issue).toBeUndefined();
+    expect(wt?.linked?.pr?.ref.number).toBe(1234);
+  });
 });
 
 describe("WorktreeStoreProvider manual issue associations (#8079)", () => {

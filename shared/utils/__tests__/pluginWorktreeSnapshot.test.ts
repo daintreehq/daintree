@@ -253,12 +253,26 @@ describe("toPluginWorktreeSnapshot — linked is the source of truth (#8452)", (
             },
             url: "u",
             state: "open",
-            ciStatus: { state: "failure" },
+            ciStatus: {
+              state: "failure",
+              total: 3,
+              passed: 1,
+              failed: 2,
+              pending: 0,
+              rawData: null,
+            },
           },
         },
       })
     );
-    expect(out.linked?.pr?.ciStatus).toEqual({ state: "failure" });
+    expect(out.linked?.pr?.ciStatus).toEqual({
+      state: "failure",
+      total: 3,
+      passed: 1,
+      failed: 2,
+      pending: 0,
+      rawData: null,
+    });
   });
 
   it("deep-clones rather than freezing the host's live linked reference", () => {

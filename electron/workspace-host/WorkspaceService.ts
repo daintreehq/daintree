@@ -296,6 +296,10 @@ export class WorkspaceService {
           return;
         }
 
+        // Keep the private flat issue number in lockstep so the
+        // onIssueNotFound guard (`monitor.issueNumber !== issueNumber`)
+        // matches forge-resolved issues, not just branch-parsed ones.
+        monitor.setIssueNumber(data.issueNumber);
         monitor.setIssueTitle(data.issueTitle);
         if (data.issueLastUpdatedAt !== undefined) {
           monitor.setIssueLastUpdatedAt(data.issueLastUpdatedAt);
