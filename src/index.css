@@ -104,10 +104,10 @@
   --shadow-floating: var(--theme-shadow-floating);
   --shadow-dialog: var(--theme-shadow-dialog);
   --color-tint: var(--theme-tint);
-  --color-github-open: var(--theme-github-open);
-  --color-github-merged: var(--theme-github-merged);
-  --color-github-closed: var(--theme-github-closed);
-  --color-github-draft: var(--theme-github-draft);
+  --color-pr-open: var(--theme-pr-open);
+  --color-pr-merged: var(--theme-pr-merged);
+  --color-pr-closed: var(--theme-pr-closed);
+  --color-pr-draft: var(--theme-pr-draft);
   --color-search-highlight-background: var(--theme-search-highlight-background);
   --color-search-highlight-text: var(--theme-search-highlight-text);
   --color-search-selected-result-border: var(--theme-search-selected-result-border);
@@ -781,8 +781,8 @@ code.hljs {
     --theme-status-danger: #fe6100;
     --theme-activity-active: #648fff;
     --theme-activity-working: #648fff;
-    --theme-github-open: #648fff;
-    --theme-github-closed: #fe6100;
+    --theme-pr-open: #648fff;
+    --theme-pr-closed: #fe6100;
     --theme-terminal-selection: #1a1f2e;
     --theme-terminal-red: #d55e00;
     --theme-terminal-green: #009e73;
@@ -796,7 +796,7 @@ code.hljs {
   html[data-colorblind="blue-yellow"] {
     --theme-status-warning: #94a3b8;
     --theme-activity-waiting: #94a3b8;
-    --theme-github-merged: #f97316;
+    --theme-pr-merged: #f97316;
     --theme-terminal-yellow: #cc79a7;
     --theme-terminal-blue: #0072b2;
     --theme-terminal-bright-yellow: #d98fc4;

@@ -50,9 +50,9 @@ function IssueOptionRow({ issue, isSelected, isCurrentlyAttached, onClick }: Iss
         )}
       >
         {issue.state === "OPEN" ? (
-          <CircleDot className="w-4 h-4 text-github-open shrink-0 mt-0.5" />
+          <CircleDot className="w-4 h-4 text-pr-open shrink-0 mt-0.5" />
         ) : (
-          <CircleCheck className="w-4 h-4 text-github-merged shrink-0 mt-0.5" />
+          <CircleCheck className="w-4 h-4 text-pr-merged shrink-0 mt-0.5" />
         )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -179,7 +179,7 @@ export function IssuePickerDialog({
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" maxHeight="max-h-[70vh]">
       <AppDialog.Header>
-        <AppDialog.Title icon={<Link className="w-5 h-5 text-github-open" />}>
+        <AppDialog.Title icon={<Link className="w-5 h-5 text-pr-open" />}>
           Attach Issue
         </AppDialog.Title>
         <AppDialog.CloseButton />

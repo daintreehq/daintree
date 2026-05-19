@@ -57,8 +57,10 @@ import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useFileDecorations } from "@/hooks/useFileDecorations";
 import { useShallow } from "zustand/react/shallow";
-// eslint-disable-next-line no-restricted-imports
+// eslint-disable-next-line no-restricted-imports -- getPRReviewThreads is the only remaining GitHub-specific call; tracked by #8511
 import { githubClient } from "@/clients/githubClient";
+import { systemClient } from "@/clients/systemClient";
+import { forgeClient } from "@/clients/forgeClient";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
@@ -68,7 +70,6 @@ import {
   type SectionViewState,
   DEFAULT_SECTION_STATE,
   FILTER_DEBOUNCE_MS,
-  extractGitHubErrorCode,
   getPushBannerConfig,
   isDensity,
   isGeneratedFile,
@@ -225,6 +226,13 @@ export function ReviewHubContent({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pushError, setPushError] = useState<PushErrorState | null>(null);
+  // Provider-classified push-error state, resolved async via the active forge
+  // provider (ForgeProviderImpl lives in main). `forgeErrorCode` is a stable,
+  // searchable code (e.g. GitHub's `GH###`); `forgeProviderId` is the resolved
+  // provider's contribution id, used to route the settings CTA. Both null when
+  // no provider resolves or it doesn't recognize the stderr.
+  const [forgeErrorCode, setForgeErrorCode] = useState<string | undefined>(undefined);
+  const [forgeProviderId, setForgeProviderId] = useState<string | null>(null);
   const [showPushDetails, setShowPushDetails] = useState(false);
   const [pushProgress, setPushProgress] = useState<Map<string, PushProgressEvent>>(new Map());
   const [pushTargetBranch, setPushTargetBranch] = useState<string | null>(null);
@@ -616,6 +624,58 @@ export function ReviewHubContent({
       setSelectedBaseBranchFile(null);
     }
   }, [status?.currentBranch, mainBranch, diffMode]);
+
+  useEffect(() => {
+    if (!isOpen || diffMode !== "base-branch" || !worktreePR?.prNumber || !worktreePath) {
+      if (diffMode !== "base-branch") {
+        setReviewThreadCounts(null);
+      }
+      return;
+    }
+
+    const requestId = ++reviewThreadsRequestRef.current;
+
+    void (async () => {
+      try {
+        const counts = await githubClient.getPRReviewThreads(worktreePath, worktreePR.prNumber!);
+        if (reviewThreadsRequestRef.current === requestId) {
+          setReviewThreadCounts(counts);
+        }
+      } catch {
+        if (reviewThreadsRequestRef.current === requestId) {
+          setReviewThreadCounts(null);
+        }
+      }
+    })();
+  }, [isOpen, diffMode, worktreePR?.prNumber, worktreePath]);
+
+  // Classify push failures via the active forge provider (lives in main).
+  // Provider-agnostic: surfaces a stable error code and the provider id used
+  // to route the settings CTA. Classification is best-effort — any failure
+  // leaves the banner in its generic state with the raw stderr.
+  useEffect(() => {
+    if (!pushError || !worktreePath) {
+      setForgeErrorCode(undefined);
+      setForgeProviderId(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await forgeClient.classifyPushError(worktreePath, pushError.rawMessage);
+        if (cancelled) return;
+        setForgeProviderId(result?.providerId ?? null);
+        setForgeErrorCode(result?.classification?.code);
+      } catch {
+        if (cancelled) return;
+        setForgeProviderId(null);
+        setForgeErrorCode(undefined);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pushError, worktreePath]);
 
   useEffect(() => {
     if (!status || !selectionSection) return;
@@ -1188,19 +1248,19 @@ export function ReviewHubContent({
                         className={cn(
                           "w-3 h-3 shrink-0",
                           worktreePR.prState === "merged"
-                            ? "text-github-merged"
+                            ? "text-pr-merged"
                             : worktreePR.prState === "closed" || worktreePR.prState === "declined"
-                              ? "text-github-closed"
-                              : "text-github-open"
+                              ? "text-pr-closed"
+                              : "text-pr-open"
                         )}
                       />
                       <span
                         className={
                           worktreePR.prState === "merged"
-                            ? "text-github-merged"
+                            ? "text-pr-merged"
                             : worktreePR.prState === "closed" || worktreePR.prState === "declined"
-                              ? "text-github-closed"
-                              : "text-github-open"
+                              ? "text-pr-closed"
+                              : "text-pr-open"
                         }
                       >
                         #{worktreePR.prNumber}
@@ -1238,14 +1298,14 @@ export function ReviewHubContent({
                     </span>
                     <button
                       type="button"
-                      onClick={() => void githubClient.openPR(worktreePR.prUrl as string)}
+                      onClick={() => void systemClient.openExternal(worktreePR.prUrl as string)}
                       className={cn(
                         "inline-flex items-center justify-center p-0.5 rounded",
                         "text-daintree-text/60 hover:bg-tint/5 hover:text-daintree-text",
                         "transition-colors cursor-pointer",
                         "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
                       )}
-                      aria-label={`View pull request #${worktreePR.prNumber} on GitHub`}
+                      aria-label={`View pull request #${worktreePR.prNumber}`}
                     >
                       <ExternalLink className="w-3 h-3" />
                     </button>
@@ -1340,16 +1400,15 @@ export function ReviewHubContent({
         )}
         {pushError &&
           (() => {
-            const config = getPushBannerConfig(pushError, behindCount);
-            const ghCode = extractGitHubErrorCode(pushError.rawMessage);
+            const config = getPushBannerConfig(pushError, behindCount, forgeProviderId);
             const canCollapse =
               config.detailPolicy === "collapse" && pushError.rawMessage.length > 0;
             const dispatchCta = (cta: PushBannerCta) => {
               switch (cta.kind) {
-                case "settings-github":
+                case "settings-forge":
                   void actionService.dispatch(
                     "app.settings.openTab",
-                    { tab: "code-forge", subtab: "github" },
+                    { tab: "code-forge", subtab: cta.providerId },
                     { source: "user" }
                   );
                   return;
@@ -1403,12 +1462,12 @@ export function ReviewHubContent({
                   <div>
                     <span className="font-medium">Push failed.</span> <span>{config.message}</span>
                   </div>
-                  {ghCode && (
+                  {forgeErrorCode && (
                     <div
                       data-testid="review-hub-push-error-code"
                       className="mt-1 text-[10px] font-mono opacity-80"
                     >
-                      {ghCode}
+                      {forgeErrorCode}
                     </div>
                   )}
                   {canCollapse && (
@@ -1505,7 +1564,7 @@ export function ReviewHubContent({
                       onBadgeClick={
                         worktreePR?.prUrl
                           ? () =>
-                              void githubClient.openPR(
+                              void systemClient.openExternal(
                                 `${worktreePR.prUrl}/files?file=${encodeURIComponent(file.path)}`
                               )
                           : undefined

@@ -1,5 +1,6 @@
 import type {
   AuthValidation,
+  PushErrorClassification,
   Issue,
   PR,
   Page,
@@ -54,5 +55,12 @@ export const forgeClient = {
 
   getRepoMetadata: (cwd: string): Promise<RepoMetadata> => {
     return window.electron.forge.getRepoMetadata({ cwd });
+  },
+
+  classifyPushError: (
+    cwd: string,
+    stderr: string
+  ): Promise<{ providerId: string; classification: PushErrorClassification | null } | null> => {
+    return window.electron.forge.classifyPushError({ cwd, stderr });
   },
 } as const;

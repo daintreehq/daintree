@@ -20,22 +20,22 @@ export const ANSI_CYAN_FALLBACK = "#22d3ee";
 
 const GITHUB_DARK_TOKENS: Pick<
   AppColorSchemeTokens,
-  "github-open" | "github-merged" | "github-closed" | "github-draft"
+  "pr-open" | "pr-merged" | "pr-closed" | "pr-draft"
 > = {
-  "github-open": "#3fb950",
-  "github-merged": "#a371f7",
-  "github-closed": "#f85149",
-  "github-draft": "#8b949e",
+  "pr-open": "#3fb950",
+  "pr-merged": "#a371f7",
+  "pr-closed": "#f85149",
+  "pr-draft": "#8b949e",
 };
 
 const GITHUB_LIGHT_TOKENS: Pick<
   AppColorSchemeTokens,
-  "github-open" | "github-merged" | "github-closed" | "github-draft"
+  "pr-open" | "pr-merged" | "pr-closed" | "pr-draft"
 > = {
-  "github-open": "#1A7F37",
-  "github-merged": "#8250DF",
-  "github-closed": "#CF222E",
-  "github-draft": "#8B949E",
+  "pr-open": "#1A7F37",
+  "pr-merged": "#8250DF",
+  "pr-closed": "#CF222E",
+  "pr-draft": "#8B949E",
 };
 
 export function createDaintreeTokens(

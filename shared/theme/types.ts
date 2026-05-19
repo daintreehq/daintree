@@ -103,10 +103,10 @@ export const APP_THEME_TOKEN_KEYS = [
   "radius-scale",
 
   // GitHub PR/issue states
-  "github-open",
-  "github-merged",
-  "github-closed",
-  "github-draft",
+  "pr-open",
+  "pr-merged",
+  "pr-closed",
+  "pr-draft",
 
   // Search highlighting (independent of accent)
   "search-highlight-background",

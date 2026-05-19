@@ -913,7 +913,7 @@ describe("WorktreeHeader cleanup button", () => {
     const button = screen.getByTestId("worktree-cleanup-button");
     expect(button.className).toContain("text-status-error/70");
     expect(button.className).toContain("hover:text-status-error");
-    expect(button.className).not.toContain("text-github-merged");
+    expect(button.className).not.toContain("text-pr-merged");
   });
 
   it("calls onCleanupWorktree and stops propagation when clicked", () => {

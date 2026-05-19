@@ -26,6 +26,7 @@ import type {
   AuthValidation,
   ForgeProviderEntry,
   ResolvedForgeProvider,
+  PushErrorClassification,
   Issue,
   PR,
   Page,
@@ -1391,6 +1392,17 @@ export interface ElectronAPI {
     onTokenHealthChanged(
       callback: (data: import("./forge.js").ForgeTokenHealthChangedPayload) => void
     ): () => void;
+    /**
+     * Classify a `git push` failure via the resolved forge provider. Returns
+     * the provider's `contribution.id` (for routing the push-error banner's
+     * settings CTA) plus the provider's classification (a stable error code,
+     * or `null` when the provider doesn't recognize the stderr). Resolves to
+     * `null` when no forge provider can be resolved for `cwd`.
+     */
+    classifyPushError(payload: {
+      cwd: string;
+      stderr: string;
+    }): Promise<{ providerId: string; classification: PushErrorClassification | null } | null>;
   };
   voiceInput: {
     getSettings(): Promise<VoiceInputSettings>;

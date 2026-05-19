@@ -105,7 +105,7 @@ export function IssueBadge({
             className={cn(
               "shrink-0",
               isHeadline ? "w-3.5 h-3.5" : "w-3 h-3",
-              missingToken ? "grayscale opacity-50" : "text-github-open"
+              missingToken ? "grayscale opacity-50" : "text-pr-open"
             )}
             aria-hidden="true"
           />
@@ -125,7 +125,7 @@ export function IssueBadge({
             {issueTitle ||
               (isColdTitleGap && !showColdFallback ? null : (
                 <span
-                  className={cn("font-mono", missingToken ? "text-text-muted" : "text-github-open")}
+                  className={cn("font-mono", missingToken ? "text-text-muted" : "text-pr-open")}
                 >
                   #{issueNumber}
                 </span>

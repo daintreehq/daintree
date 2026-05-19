@@ -189,16 +189,16 @@ describe("GitHubStatsToolbarButton corner activity chip wiring", () => {
   });
 
   it("renders activity chips with the matching github color via activityChip prop", () => {
-    // Issues chip uses bg-github-open (green); PRs chip uses bg-github-merged (purple).
+    // Issues chip uses bg-pr-open (green); PRs chip uses bg-pr-merged (purple).
     // Both are now passed as the activityChip ReactNode prop to GitHubStatPill.
     expect(source).toContain("showIssuesChip");
-    expect(source).toContain("bg-github-open");
+    expect(source).toContain("bg-pr-open");
     expect(source).toContain("polygon(0 0, 100% 0, 100% 100%)");
     expect(source).toContain("pointer-events-none");
     expect(source).toContain('aria-hidden="true"');
 
     expect(source).toContain("showPrsChip");
-    expect(source).toContain("bg-github-merged");
+    expect(source).toContain("bg-pr-merged");
   });
 
   it("does not render a chip on the commits button", () => {
