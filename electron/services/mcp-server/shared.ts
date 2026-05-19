@@ -27,7 +27,6 @@ import {
   SYSTEM_TIER_ADDONS as SYSTEM_TIER_ADDONS_LIST,
   WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
-import { RISK_BAND_OPEN_WORLD_CATEGORIES } from "../../../shared/utils/actionRiskBand.js";
 
 export {
   type WaitUntilIdleResult,
@@ -210,8 +209,6 @@ export function buildToolError(input: {
     isError: true,
   };
 }
-
-export { RISK_BAND_OPEN_WORLD_CATEGORIES as OPEN_WORLD_CATEGORIES };
 
 export type McpTier = "workbench" | "action" | "system" | "external";
 

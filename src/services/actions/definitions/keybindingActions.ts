@@ -64,6 +64,7 @@ export function registerKeybindingActions(
     dangerRationale:
       "Resets all keybinding overrides to defaults. All custom shortcuts are permanently lost.",
     keywords: ["shortcuts", "hotkeys", "defaults", "restore"],
+    mcpAnnotations: { openWorldHint: false },
     run: async () => {
       await keybindingService.resetAllOverrides();
       return keybindingService.getOverridesSnapshot();

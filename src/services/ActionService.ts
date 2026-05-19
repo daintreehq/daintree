@@ -98,10 +98,13 @@ function isElectronApiAvailable(): boolean {
 /**
  * Converts a zod schema to JSON Schema format using Zod v4's native toJSONSchema.
  */
-function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> | undefined {
+function zodSchemaToJsonSchema(
+  schema: z.ZodType,
+  io: "input" | "output" = "input"
+): Record<string, unknown> | undefined {
   try {
     return z.toJSONSchema(schema, {
-      io: "input",
+      io,
       unrepresentable: "any",
       reused: "inline",
       cycles: "ref",
@@ -175,9 +178,10 @@ function computeManifestPartials(definition: AnyActionDefinition): CachedManifes
     inputSchema: definition.argsSchema
       ? zodSchemaToJsonSchema(definition.argsSchema)
       : definition.rawInputSchema,
-    outputSchema: definition.resultSchema
-      ? zodSchemaToJsonSchema(definition.resultSchema)
-      : definition.rawOutputSchema,
+    outputSchema:
+      definition.mcpOutputSchema && definition.resultSchema
+        ? zodSchemaToJsonSchema(definition.resultSchema, "output")
+        : definition.rawOutputSchema,
     requiresArgs: definition.argsSchema
       ? !definition.argsSchema.safeParse(undefined).success &&
         !definition.argsSchema.safeParse({}).success

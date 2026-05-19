@@ -17,19 +17,17 @@ export type RiskBand =
 export type ActionScope = "renderer";
 
 /**
- * Explicit MCP tool annotation overrides. Only the hints that can be
- * meaningfully decoupled from `kind`/`danger` are exposed here — `title` is
- * always sourced from the action title and `openWorldHint` is derived from the
- * action category. Provide an override only when the heuristic from `kind` and
- * `danger` doesn't reflect the action's true semantics for an MCP client (for
- * example, a query that requires UX confirmation, or a status command that is
- * read-only). Defined inline (no `@modelcontextprotocol/sdk` import) so this
- * type stays usable from the renderer.
+ * Explicit MCP tool annotation overrides. The spec defaults to a conservative
+ * posture (destructive, open-world) — override only when the action's true
+ * semantics differ from that default. `title` is always sourced from the action
+ * title. Defined inline (no `@modelcontextprotocol/sdk` import) so this type
+ * stays usable from the renderer.
  */
 export interface ActionMcpAnnotations {
   readOnlyHint?: boolean;
   destructiveHint?: boolean;
   idempotentHint?: boolean;
+  openWorldHint?: boolean;
 }
 
 export type BuiltInActionId = BuiltInKeyAction | BuiltInRuntimeActionId;
@@ -105,7 +103,8 @@ export interface ActionDefinition<
   keywords?: string[];
   /**
    * Per-action MCP tool annotation overrides. Use sparingly — only when the
-   * defaults derived from `kind` and `danger` would mislead an MCP client.
+   * spec-conservative defaults (destructive, open-world) would mislead an MCP
+   * client.
    */
   mcpAnnotations?: ActionMcpAnnotations;
   /**
@@ -120,6 +119,14 @@ export interface ActionDefinition<
    * same reasoning the model would. Required when `danger !== "safe"`.
    */
   dangerRationale?: string;
+  /**
+   * Opt-in flag to expose `outputSchema` on the MCP tool manifest. When true
+   * and `resultSchema` is set, the Zod schema is converted to JSON Schema and
+   * surfaced as `outputSchema`, enabling structured `structuredContent` on
+   * `tools/call` responses. Use sparingly — only for naturally-structured
+   * results where the schema adds real value for programmatic consumers.
+   */
+  mcpOutputSchema?: boolean;
 }
 
 export interface ActionManifestEntry {

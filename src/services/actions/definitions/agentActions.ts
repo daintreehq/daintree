@@ -42,6 +42,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         location: LaunchLocationSchema,
       })
       .nullable(),
+    mcpOutputSchema: true,
     run: async (args: unknown) => {
       const {
         agentId,

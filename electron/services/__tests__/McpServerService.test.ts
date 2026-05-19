@@ -626,13 +626,15 @@ describe("McpServerService", () => {
     });
     expect(dangerousTool?.inputSchema.properties?._meta).toBeUndefined();
 
-    // Annotations — query tool
+    // Annotations — query tool. Spec-conservative defaults: destructiveHint
+    // and openWorldHint are true unless overridden; readOnly/idempotent still
+    // derive from kind: "query".
     expect(safeTool?.annotations).toEqual({
       title: "List Actions",
       readOnlyHint: true,
       idempotentHint: true,
-      destructiveHint: false,
-      openWorldHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
     });
 
     // Annotations — destructive tool. `destructiveHint: true` is the
@@ -643,7 +645,7 @@ describe("McpServerService", () => {
       readOnlyHint: false,
       idempotentHint: false,
       destructiveHint: true,
-      openWorldHint: false,
+      openWorldHint: true,
     });
   });
 
@@ -693,47 +695,56 @@ describe("McpServerService", () => {
     const queryFalse = result.tools.find((t) => t.name === "test.queryOverriddenFalse");
 
     // Override flips destructiveHint off; readOnlyHint/idempotentHint still
-    // come from the `kind: "query"` default.
+    // come from the `kind: "query"` default. openWorldHint now defaults to true.
     expect(generate?.annotations).toEqual({
       title: "Generate Context",
       readOnlyHint: true,
       idempotentHint: true,
       destructiveHint: false,
-      openWorldHint: false,
+      openWorldHint: true,
     });
 
-    // Override flips readOnly/idempotent on; destructiveHint still comes from
-    // the `danger: "safe"` default.
+    // Override flips readOnly/idempotent on; destructiveHint and openWorldHint
+    // now come from the spec-conservative true defaults.
     expect(readOnlyCmd?.annotations).toEqual({
       title: "Read Only Command",
       readOnlyHint: true,
       idempotentHint: true,
-      destructiveHint: false,
-      openWorldHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
     });
 
-    // Explicit `false` overrides must win over the `kind: "query"` default —
+    // Explicit `false` overrides must win over kind-derived defaults —
     // this would silently break if `??` were ever swapped for `||`.
+    // destructiveHint/openWorldHint now default to true per spec.
     expect(queryFalse?.annotations).toEqual({
       title: "Query With False Overrides",
       readOnlyHint: false,
       idempotentHint: false,
-      destructiveHint: false,
-      openWorldHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
     });
   });
 
-  it("ignores attempts to override openWorldHint via mcpAnnotations", async () => {
+  it("allows overriding openWorldHint via mcpAnnotations", async () => {
     storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
-        // openWorldHint is category-derived; mcpAnnotations exposes only the
-        // three hint fields, so this entry's `category: "github"` must yield
-        // `openWorldHint: true` regardless of any per-action override.
+        // openWorldHint defaults to true; explicit false override must win.
+        createManifestEntry({
+          id: "keybinding.resetAll" as ActionId,
+          title: "Reset All Keybindings",
+          description: "Local-only destructive action",
+          category: "settings",
+          kind: "command",
+          danger: "confirm",
+          mcpAnnotations: { openWorldHint: false },
+        }),
+        // No override — must default to true (spec-conservative).
         createManifestEntry({
           id: "github.someTool" as ActionId,
           title: "Some GitHub Tool",
-          description: "Tool in an open-world category",
+          description: "Tool without openWorldHint override",
           category: "github",
           kind: "command",
           danger: "safe",
@@ -751,12 +762,14 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     const result = await client.listTools();
-    const tool = result.tools.find((t) => t.name === "github.someTool");
+    const localTool = result.tools.find((t) => t.name === "keybinding.resetAll");
+    const ghTool = result.tools.find((t) => t.name === "github.someTool");
 
-    expect(tool?.annotations?.openWorldHint).toBe(true);
+    expect(localTool?.annotations?.openWorldHint).toBe(false);
+    expect(ghTool?.annotations?.openWorldHint).toBe(true);
   });
 
-  it("sets openWorldHint true for network-bound categories and false for local ones", async () => {
+  it("defaults openWorldHint to true for all categories per spec", async () => {
     storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
@@ -795,7 +808,7 @@ describe("McpServerService", () => {
 
     expect(ghTool?.annotations?.openWorldHint).toBe(true);
     expect(systemTool?.annotations?.openWorldHint).toBe(true);
-    expect(wtTool?.annotations?.openWorldHint).toBe(false);
+    expect(wtTool?.annotations?.openWorldHint).toBe(true);
   });
 
   it("falls back to renderer-modal dispatch when the client does not support elicitation", async () => {
