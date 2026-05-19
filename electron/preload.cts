@@ -2446,8 +2446,9 @@ const api: ElectronAPI = {
     getAuditRecords: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_AUDIT_RECORDS),
     getAuditConfig: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_AUDIT_CONFIG),
     getAuditStats: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_AUDIT_STATS),
-    getTurnOutcomeRecords: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_TURN_OUTCOME_RECORDS),
     clearAuditLog: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_CLEAR_AUDIT_LOG),
+    getTurnOutcomeRecords: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_TURN_OUTCOME_RECORDS),
+    clearTurnOutcomeLog: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_CLEAR_TURN_OUTCOME_LOG),
     setAuditEnabled: (enabled: boolean) =>
       _unwrappingInvoke(CHANNELS.MCP_SERVER_SET_AUDIT_ENABLED, enabled),
     setAuditMaxRecords: (max: number) =>

@@ -93,6 +93,20 @@ export function registerMcpServerHandlers(): () => void {
   );
 
   handlers.push(
+    typedHandle(CHANNELS.MCP_SERVER_GET_TURN_OUTCOME_RECORDS, async () => {
+      const svc = await getMcpServerService();
+      return svc.getTurnOutcomeRecords();
+    })
+  );
+
+  handlers.push(
+    typedHandle(CHANNELS.MCP_SERVER_CLEAR_TURN_OUTCOME_LOG, async () => {
+      const svc = await getMcpServerService();
+      svc.clearTurnOutcomeLog();
+    })
+  );
+
+  handlers.push(
     typedHandle(CHANNELS.MCP_SERVER_SET_AUDIT_ENABLED, async (enabled: boolean) => {
       if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
       const svc = await getMcpServerService();
@@ -116,13 +130,6 @@ export function registerMcpServerHandlers(): () => void {
   // Runtime-state surface — distinct from `getStatus()` because the renderer
   // needs the derived 4-state snapshot (`disabled|starting|ready|failed`)
   // plus `lastError`, not just config + bound port.
-  handlers.push(
-    typedHandle(CHANNELS.MCP_SERVER_GET_TURN_OUTCOME_RECORDS, async () => {
-      const svc = await getMcpServerService();
-      return svc.getTurnOutcomeRecords();
-    })
-  );
-
   handlers.push(
     typedHandle(CHANNELS.MCP_SERVER_GET_RUNTIME_STATE, async () => {
       const svc = await getMcpServerService();

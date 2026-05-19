@@ -20,6 +20,7 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
+import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import {
@@ -615,6 +616,15 @@ export function McpServerSettingsTab() {
                 exportFlashActive={exportedAudit}
               />
             </div>
+          </SettingsSection>
+
+          {/* Turn Outcome Diagnostics */}
+          <SettingsSection
+            icon={ScrollText}
+            title="Turn outcome diagnostics"
+            description="Per-turn outcome classification for MCP help sessions. Use the per-tool rollups to identify which tools are producing the most errors, tier rejections, or stuck agents."
+          >
+            <TurnOutcomeDiagnostics auditRecords={auditRecords} />
           </SettingsSection>
         </>
       )}

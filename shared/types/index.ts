@@ -324,7 +324,7 @@ export {
 // Per-service connectivity helpers
 export { CONNECTIVITY_SERVICE_KEYS } from "./ipc/connectivity.js";
 
-// MCP server audit log + runtime state
+// MCP server audit log + runtime state + turn outcomes
 export type {
   McpAuditRecord,
   McpAuditResult,
