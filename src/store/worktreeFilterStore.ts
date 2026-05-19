@@ -27,7 +27,7 @@ export type TypeFilter =
   | "main"
   | "detached"
   | "other";
-export type GitHubFilter = "hasIssue" | "hasPR" | "prOpen" | "prMerged" | "prClosed";
+export type PrIssueFilter = "hasIssue" | "hasPR" | "prOpen" | "prMerged" | "prClosed";
 export type SessionFilter = "hasTerminals" | "working" | "waiting" | "completed" | "exited";
 export type ActivityFilter = "last15m" | "last1h" | "last24h" | "last7d";
 
@@ -37,7 +37,7 @@ interface WorktreeFilterState {
   groupByType: boolean;
   statusFilters: Set<StatusFilter>;
   typeFilters: Set<TypeFilter>;
-  githubFilters: Set<GitHubFilter>;
+  prIssueFilters: Set<PrIssueFilter>;
   sessionFilters: Set<SessionFilter>;
   activityFilters: Set<ActivityFilter>;
   alwaysShowActive: boolean;
@@ -56,7 +56,7 @@ interface WorktreeFilterActions {
   setGroupByType: (enabled: boolean) => void;
   toggleStatusFilter: (filter: StatusFilter) => void;
   toggleTypeFilter: (filter: TypeFilter) => void;
-  toggleGitHubFilter: (filter: GitHubFilter) => void;
+  togglePrIssueFilter: (filter: PrIssueFilter) => void;
   toggleSessionFilter: (filter: SessionFilter) => void;
   toggleActivityFilter: (filter: ActivityFilter) => void;
   setAlwaysShowActive: (enabled: boolean) => void;
@@ -103,7 +103,7 @@ interface ProjectScopedState {
   query: string;
   statusFilters: Set<StatusFilter>;
   typeFilters: Set<TypeFilter>;
-  githubFilters: Set<GitHubFilter>;
+  prIssueFilters: Set<PrIssueFilter>;
   sessionFilters: Set<SessionFilter>;
   activityFilters: Set<ActivityFilter>;
   pinnedWorktrees: string[];
@@ -124,7 +124,7 @@ interface ProjectPersistedShape {
   query: string;
   statusFilters: StatusFilter[];
   typeFilters: TypeFilter[];
-  githubFilters: GitHubFilter[];
+  prIssueFilters: PrIssueFilter[];
   sessionFilters: SessionFilter[];
   activityFilters: ActivityFilter[];
   pinnedWorktrees: string[];
@@ -134,8 +134,20 @@ interface ProjectPersistedShape {
 
 /**
  * Shape of the legacy combined persist blob from before issue #5366.
+ * Listed explicitly rather than extending ProjectPersistedShape so the
+ * legacy JSON key `githubFilters` is preserved verbatim.
  */
-interface LegacyPersistedShape extends GlobalPersistedShape, ProjectPersistedShape {}
+interface LegacyPersistedShape extends GlobalPersistedShape {
+  query: string;
+  statusFilters: StatusFilter[];
+  typeFilters: TypeFilter[];
+  githubFilters: PrIssueFilter[];
+  sessionFilters: SessionFilter[];
+  activityFilters: ActivityFilter[];
+  pinnedWorktrees: string[];
+  collapsedWorktrees: string[];
+  manualOrder: string[];
+}
 
 const GLOBAL_KEY = "daintree-worktree-filters";
 
@@ -227,7 +239,7 @@ function loadLegacySeedForProject(): Partial<ProjectPersistedShape> {
     query: typeof state.query === "string" ? state.query : undefined,
     statusFilters: arrayOrUndefined<StatusFilter>(state.statusFilters),
     typeFilters: arrayOrUndefined<TypeFilter>(state.typeFilters),
-    githubFilters: arrayOrUndefined<GitHubFilter>(state.githubFilters),
+    prIssueFilters: arrayOrUndefined<PrIssueFilter>(state.githubFilters),
     sessionFilters: stripLegacySessionFilters(
       arrayOrUndefined<SessionFilter>(state.sessionFilters)
     ),
@@ -300,7 +312,7 @@ const _projectStore = create<ProjectScopedState>()(
       query: _legacySeed.query ?? "",
       statusFilters: new Set<StatusFilter>(_legacySeed.statusFilters ?? []),
       typeFilters: new Set<TypeFilter>(_legacySeed.typeFilters ?? []),
-      githubFilters: new Set<GitHubFilter>(_legacySeed.githubFilters ?? []),
+      prIssueFilters: new Set<PrIssueFilter>(_legacySeed.prIssueFilters ?? []),
       sessionFilters: new Set<SessionFilter>(_legacySeed.sessionFilters ?? []),
       activityFilters: new Set<ActivityFilter>(_legacySeed.activityFilters ?? []),
       pinnedWorktrees: _legacySeed.pinnedWorktrees ?? [],
@@ -310,13 +322,13 @@ const _projectStore = create<ProjectScopedState>()(
     }),
     {
       name: PROJECT_KEY,
-      version: 1,
+      version: 2,
       storage: createSafeJSONStorage(),
       partialize: (state): ProjectPersistedShape => ({
         query: state.query,
         statusFilters: Array.from(state.statusFilters),
         typeFilters: Array.from(state.typeFilters),
-        githubFilters: Array.from(state.githubFilters),
+        prIssueFilters: Array.from(state.prIssueFilters),
         sessionFilters: Array.from(state.sessionFilters),
         activityFilters: Array.from(state.activityFilters),
         pinnedWorktrees: state.pinnedWorktrees,
@@ -332,6 +344,15 @@ const _projectStore = create<ProjectScopedState>()(
           const cleaned = stripLegacySessionFilters(legacy.sessionFilters);
           return { ...legacy, sessionFilters: cleaned } as ProjectPersistedShape;
         }
+        // v2 renames `githubFilters` → `prIssueFilters` (#8461).
+        if (version < 2) {
+          const v1 = persistedState as Record<string, unknown>;
+          const { githubFilters, ...rest } = v1;
+          return {
+            ...rest,
+            prIssueFilters: Array.isArray(githubFilters) ? githubFilters : [],
+          };
+        }
         return persistedState as ProjectPersistedShape;
       },
       merge: (persisted, current) => {
@@ -342,7 +363,7 @@ const _projectStore = create<ProjectScopedState>()(
           query: p?.query ?? current.query,
           statusFilters: new Set(p?.statusFilters ?? Array.from(current.statusFilters)),
           typeFilters: new Set(p?.typeFilters ?? Array.from(current.typeFilters)),
-          githubFilters: new Set(p?.githubFilters ?? Array.from(current.githubFilters)),
+          prIssueFilters: new Set(p?.prIssueFilters ?? Array.from(current.prIssueFilters)),
           sessionFilters: new Set(persistedSessionFilters ?? Array.from(current.sessionFilters)),
           activityFilters: new Set(p?.activityFilters ?? Array.from(current.activityFilters)),
           pinnedWorktrees: p?.pinnedWorktrees ?? current.pinnedWorktrees,
@@ -388,12 +409,12 @@ const _actions: WorktreeFilterActions = {
       return { typeFilters: next };
     });
   },
-  toggleGitHubFilter: (filter) => {
+  togglePrIssueFilter: (filter) => {
     _projectStore.setState((state) => {
-      const next = new Set(state.githubFilters);
+      const next = new Set(state.prIssueFilters);
       if (next.has(filter)) next.delete(filter);
       else next.add(filter);
-      return { githubFilters: next };
+      return { prIssueFilters: next };
     });
   },
   toggleSessionFilter: (filter) => {
@@ -479,7 +500,7 @@ const _actions: WorktreeFilterActions = {
       query: "",
       statusFilters: new Set(),
       typeFilters: new Set(),
-      githubFilters: new Set(),
+      prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set(),
       quickStateFilter: "all",
@@ -493,7 +514,7 @@ const _actions: WorktreeFilterActions = {
       (hasQuery ? 1 : 0) +
       p.statusFilters.size +
       p.typeFilters.size +
-      p.githubFilters.size +
+      p.prIssueFilters.size +
       p.sessionFilters.size +
       p.activityFilters.size +
       (p.quickStateFilter !== "all" ? 1 : 0)
@@ -506,7 +527,7 @@ const _actions: WorktreeFilterActions = {
       hasQuery ||
       p.statusFilters.size > 0 ||
       p.typeFilters.size > 0 ||
-      p.githubFilters.size > 0 ||
+      p.prIssueFilters.size > 0 ||
       p.sessionFilters.size > 0 ||
       p.activityFilters.size > 0 ||
       p.quickStateFilter !== "all"
@@ -517,7 +538,7 @@ const _actions: WorktreeFilterActions = {
     return (
       p.statusFilters.size > 0 ||
       p.typeFilters.size > 0 ||
-      p.githubFilters.size > 0 ||
+      p.prIssueFilters.size > 0 ||
       p.sessionFilters.size > 0 ||
       p.activityFilters.size > 0
     );
@@ -541,7 +562,7 @@ function _computeMergedState(): WorktreeFilterStore {
     groupByType: g.groupByType,
     statusFilters: p.statusFilters,
     typeFilters: p.typeFilters,
-    githubFilters: p.githubFilters,
+    prIssueFilters: p.prIssueFilters,
     sessionFilters: p.sessionFilters,
     activityFilters: p.activityFilters,
     alwaysShowActive: g.alwaysShowActive,

@@ -9,7 +9,7 @@ import {
   type OrderBy,
   type StatusFilter,
   type TypeFilter,
-  type GitHubFilter,
+  type PrIssueFilter,
   type SessionFilter,
   type ActivityFilter,
 } from "@/store/worktreeFilterStore";
@@ -102,7 +102,7 @@ const TYPE_OPTIONS: { value: TypeFilter; label: string }[] = [
   { value: "other", label: "Other" },
 ];
 
-const GITHUB_OPTIONS: { value: GitHubFilter; label: string }[] = [
+const PR_ISSUE_OPTIONS: { value: PrIssueFilter; label: string }[] = [
   { value: "hasIssue", label: "Has Issue" },
   { value: "hasPR", label: "Has PR" },
   { value: "prOpen", label: "PR Open" },
@@ -157,7 +157,7 @@ export function WorktreeFilterPopover({
     groupByType,
     statusFilters,
     typeFilters,
-    githubFilters,
+    prIssueFilters,
     sessionFilters,
     activityFilters,
     setQuery,
@@ -165,7 +165,7 @@ export function WorktreeFilterPopover({
     setGroupByType,
     toggleStatusFilter,
     toggleTypeFilter,
-    toggleGitHubFilter,
+    togglePrIssueFilter,
     toggleSessionFilter,
     toggleActivityFilter,
     clearAll,
@@ -178,7 +178,7 @@ export function WorktreeFilterPopover({
       groupByType: state.groupByType,
       statusFilters: state.statusFilters,
       typeFilters: state.typeFilters,
-      githubFilters: state.githubFilters,
+      prIssueFilters: state.prIssueFilters,
       sessionFilters: state.sessionFilters,
       activityFilters: state.activityFilters,
       setQuery: state.setQuery,
@@ -186,7 +186,7 @@ export function WorktreeFilterPopover({
       setGroupByType: state.setGroupByType,
       toggleStatusFilter: state.toggleStatusFilter,
       toggleTypeFilter: state.toggleTypeFilter,
-      toggleGitHubFilter: state.toggleGitHubFilter,
+      togglePrIssueFilter: state.togglePrIssueFilter,
       toggleSessionFilter: state.toggleSessionFilter,
       toggleActivityFilter: state.toggleActivityFilter,
       clearAll: state.clearAll,
@@ -381,15 +381,15 @@ export function WorktreeFilterPopover({
             </div>
           </FilterSection>
 
-          <FilterSection title="GitHub" defaultOpen={githubFilters.size > 0}>
+          <FilterSection title="Issues & PRs" defaultOpen={prIssueFilters.size > 0}>
             <div className="flex flex-wrap gap-1.5">
-              {GITHUB_OPTIONS.map((option) => (
+              {PR_ISSUE_OPTIONS.map((option) => (
                 <FilterChip
                   key={option.value}
                   label={option.label}
-                  isActive={githubFilters.has(option.value)}
-                  onClick={() => toggleGitHubFilter(option.value)}
-                  count={chipCounts?.github[option.value]}
+                  isActive={prIssueFilters.has(option.value)}
+                  onClick={() => togglePrIssueFilter(option.value)}
+                  count={chipCounts?.prIssue[option.value]}
                 />
               ))}
             </div>

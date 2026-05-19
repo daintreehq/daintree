@@ -126,7 +126,7 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       // activity) — the same axes hasFacetFilters() reads. Do not include
       // query or quickStateFilter, which are named separately in the title.
       expect(source).toMatch(
-        /const activeFacetFilterCount =\s*statusFilters\.size \+\s*typeFilters\.size \+\s*githubFilters\.size \+\s*sessionFilters\.size \+\s*activityFilters\.size;/
+        /const activeFacetFilterCount =\s*statusFilters\.size \+\s*typeFilters\.size \+\s*prIssueFilters\.size \+\s*sessionFilters\.size \+\s*activityFilters\.size;/
       );
     });
 

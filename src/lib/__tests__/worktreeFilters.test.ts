@@ -65,7 +65,7 @@ const createEmptyFilters = (): FilterState => ({
   query: "",
   statusFilters: new Set(),
   typeFilters: new Set(),
-  githubFilters: new Set(),
+  prIssueFilters: new Set(),
   sessionFilters: new Set(),
   activityFilters: new Set(),
 });
@@ -549,7 +549,7 @@ describe("matchesFilters", () => {
   it("matches hasIssue filter", () => {
     const worktree = createMockWorktree({ issueNumber: 123 });
     const filters = createEmptyFilters();
-    filters.githubFilters.add("hasIssue");
+    filters.prIssueFilters.add("hasIssue");
     const meta = createEmptyMeta();
     expect(matchesFilters(worktree, filters, meta, false)).toBe(true);
   });
@@ -557,7 +557,7 @@ describe("matchesFilters", () => {
   it("matches hasPR filter", () => {
     const worktree = createMockWorktree({ prNumber: 456 });
     const filters = createEmptyFilters();
-    filters.githubFilters.add("hasPR");
+    filters.prIssueFilters.add("hasPR");
     const meta = createEmptyMeta();
     expect(matchesFilters(worktree, filters, meta, false)).toBe(true);
   });
@@ -565,7 +565,7 @@ describe("matchesFilters", () => {
   it("matches prOpen filter", () => {
     const worktree = createMockWorktree({ prState: "open" });
     const filters = createEmptyFilters();
-    filters.githubFilters.add("prOpen");
+    filters.prIssueFilters.add("prOpen");
     const meta = createEmptyMeta();
     expect(matchesFilters(worktree, filters, meta, false)).toBe(true);
   });
@@ -1002,7 +1002,7 @@ describe("hasAnyFilters", () => {
 
   it("returns true when github filter is set", () => {
     const filters = createEmptyFilters();
-    filters.githubFilters.add("hasIssue");
+    filters.prIssueFilters.add("hasIssue");
     expect(hasAnyFilters(filters)).toBe(true);
   });
 
@@ -1314,11 +1314,11 @@ describe("computeChipCounts", () => {
       createMockWorktree({ id: "4", prNumber: 203, prState: "closed" }),
     ];
     const counts = computeChipCounts(worktrees, new Map(), null, emptyFilters);
-    expect(counts.github.hasIssue).toBe(2);
-    expect(counts.github.hasPR).toBe(3);
-    expect(counts.github.prOpen).toBe(1);
-    expect(counts.github.prMerged).toBe(1);
-    expect(counts.github.prClosed).toBe(1);
+    expect(counts.prIssue.hasIssue).toBe(2);
+    expect(counts.prIssue.hasPR).toBe(3);
+    expect(counts.prIssue.prOpen).toBe(1);
+    expect(counts.prIssue.prMerged).toBe(1);
+    expect(counts.prIssue.prClosed).toBe(1);
   });
 
   it("counts status chips and respects activeWorktreeId for the 'active' chip", () => {
@@ -1442,7 +1442,7 @@ describe("computeChipCounts", () => {
       query: "",
       statusFilters: new Set<StatusFilter>(["stale"]),
       typeFilters: new Set(),
-      githubFilters: new Set(),
+      prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set(),
     };
@@ -1466,7 +1466,7 @@ describe("computeChipCounts", () => {
       query: "",
       statusFilters: new Set(),
       typeFilters: new Set<TypeFilter>(["feature"]),
-      githubFilters: new Set(),
+      prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set(),
     };
@@ -1502,7 +1502,7 @@ describe("computeChipCounts", () => {
       query: "",
       statusFilters: new Set(),
       typeFilters: new Set<TypeFilter>(["feature"]),
-      githubFilters: new Set(),
+      prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set<ActivityFilter>(["last15m"]),
     };
@@ -1526,7 +1526,7 @@ describe("computeChipCounts", () => {
       query: "login",
       statusFilters: new Set(),
       typeFilters: new Set(),
-      githubFilters: new Set(),
+      prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set(),
     };
@@ -1552,7 +1552,7 @@ describe("computeChipCounts", () => {
       query: "",
       statusFilters: new Set(),
       typeFilters: new Set<TypeFilter>(["bugfix"]),
-      githubFilters: new Set(),
+      prIssueFilters: new Set(),
       sessionFilters: new Set<SessionFilter>(["working"]),
       activityFilters: new Set(),
     };
@@ -1576,7 +1576,7 @@ describe("computeChipCounts", () => {
       query: "",
       statusFilters: new Set(),
       typeFilters: new Set<TypeFilter>(["feature"]),
-      githubFilters: new Set(),
+      prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set(),
     };
@@ -1596,7 +1596,7 @@ describe("computeChipCounts", () => {
       query: "#100",
       statusFilters: new Set(),
       typeFilters: new Set(),
-      githubFilters: new Set(),
+      prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set(),
     };
@@ -1604,7 +1604,7 @@ describe("computeChipCounts", () => {
     // Only w1 matches the exact-number query — all chips counted against it
     expect(counts.branchType.feature).toBe(1);
     expect(counts.branchType.bugfix).toBe(0);
-    expect(counts.github.hasIssue).toBe(1);
+    expect(counts.prIssue.hasIssue).toBe(1);
   });
 
   it("excludes worktrees with future lastActivityTimestamp from all activity windows", () => {

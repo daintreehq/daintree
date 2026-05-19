@@ -9,7 +9,7 @@ function resetWorktreeFilterStore() {
     groupByType: false,
     statusFilters: new Set(),
     typeFilters: new Set(),
-    githubFilters: new Set(),
+    prIssueFilters: new Set(),
     sessionFilters: new Set(),
     activityFilters: new Set(),
     alwaysShowActive: true,
@@ -39,7 +39,7 @@ describe("worktreeFilterStore", () => {
     const store = useWorktreeFilterStore.getState();
     store.setQuery("abc");
     store.toggleStatusFilter("active");
-    store.toggleGitHubFilter("hasIssue");
+    store.togglePrIssueFilter("hasIssue");
 
     expect(useWorktreeFilterStore.getState().getActiveFilterCount()).toBe(3);
     expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(true);
@@ -182,9 +182,9 @@ describe("worktreeFilterStore", () => {
       expect(useWorktreeFilterStore.getState().hasFacetFilters()).toBe(true);
     });
 
-    it("returns true when a githubFilter is active", () => {
+    it("returns true when a prIssueFilter is active", () => {
       useWorktreeFilterStore.getState().clearAll();
-      useWorktreeFilterStore.getState().toggleGitHubFilter("hasPR");
+      useWorktreeFilterStore.getState().togglePrIssueFilter("hasPR");
       expect(useWorktreeFilterStore.getState().hasFacetFilters()).toBe(true);
     });
 
@@ -240,7 +240,7 @@ describe("worktreeFilterStore", () => {
     store.setQuery("alpha");
     store.toggleStatusFilter("active");
     store.toggleTypeFilter("feature");
-    store.toggleGitHubFilter("hasPR");
+    store.togglePrIssueFilter("hasPR");
     store.toggleSessionFilter("working");
     store.toggleActivityFilter("last1h");
     store.pinWorktree("wt-1");
@@ -254,7 +254,7 @@ describe("worktreeFilterStore", () => {
     expect(next.query).toBe("alpha");
     expect(next.statusFilters.has("active")).toBe(true);
     expect(next.typeFilters.has("feature")).toBe(true);
-    expect(next.githubFilters.has("hasPR")).toBe(true);
+    expect(next.prIssueFilters.has("hasPR")).toBe(true);
     expect(next.sessionFilters.has("working")).toBe(true);
     expect(next.activityFilters.has("last1h")).toBe(true);
     expect(next.pinnedWorktrees).toEqual(["wt-1"]);
@@ -469,7 +469,7 @@ describe("worktreeFilterStore persistence scoping", () => {
         groupByType: false,
         statusFilters: ["active"],
         typeFilters: [],
-        githubFilters: [],
+        prIssueFilters: [],
         sessionFilters: [],
         activityFilters: [],
         alwaysShowActive: true,
@@ -506,7 +506,7 @@ describe("worktreeFilterStore persistence scoping", () => {
         query: "",
         statusFilters: [],
         typeFilters: [],
-        githubFilters: [],
+        prIssueFilters: [],
         sessionFilters: [],
         activityFilters: [],
         pinnedWorktrees: ["wt-scoped-pin"],
@@ -576,7 +576,7 @@ describe("worktreeFilterStore persistence scoping", () => {
         query: "",
         statusFilters: [],
         typeFilters: [],
-        githubFilters: [],
+        prIssueFilters: [],
         sessionFilters: ["running", "waiting"],
         activityFilters: [],
         pinnedWorktrees: [],
@@ -614,6 +614,53 @@ describe("worktreeFilterStore persistence scoping", () => {
     const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
 
     expect([...store.getState().sessionFilters].sort()).toEqual(["working"]);
+    expect(store.getState().pinnedWorktrees).toEqual(["wt-pin"]);
+  });
+
+  it("migrates v1 githubFilters key to prIssueFilters (v2, #8461)", async () => {
+    const scopedBlob = JSON.stringify({
+      state: {
+        query: "",
+        statusFilters: [],
+        typeFilters: [],
+        githubFilters: ["hasPR", "prOpen"],
+        sessionFilters: [],
+        activityFilters: [],
+        pinnedWorktrees: [],
+        collapsedWorktrees: [],
+        manualOrder: [],
+      },
+      version: 1,
+    });
+
+    installLocalStorage({
+      getItem: (key) => (key === PROJECT_KEY ? scopedBlob : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    expect([...store.getState().prIssueFilters].sort()).toEqual(["hasPR", "prOpen"]);
+  });
+
+  it("reads legacy githubFilters key from the combined global seed (#8461)", async () => {
+    const legacyBlob = JSON.stringify({
+      state: {
+        githubFilters: ["hasIssue", "prMerged"],
+        pinnedWorktrees: ["wt-pin"],
+      },
+    });
+
+    installLocalStorage({
+      getItem: (key) => (key === GLOBAL_KEY ? legacyBlob : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    expect([...store.getState().prIssueFilters].sort()).toEqual(["hasIssue", "prMerged"]);
     expect(store.getState().pinnedWorktrees).toEqual(["wt-pin"]);
   });
 
