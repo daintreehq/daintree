@@ -8,7 +8,12 @@ import type { ActionDefinition } from "@shared/types/actions";
 // actionDefinitions.bootstrap.test.ts for precedent.
 
 const TITLE_MAX = 60;
-const DESCRIPTION_MAX = 120;
+// Descriptions follow the four-line rubric (purpose → arg origins → return
+// shape → error conditions, with inline "Do NOT use when…" disambiguation —
+// see #8436), so the ceiling is generous. It still catches pathological
+// multi-paragraph dumps. The meaningful quality floor (>= 80 chars for
+// workbench-tier) lives in actionDefinitions.quality.test.ts.
+const DESCRIPTION_MAX = 1000;
 // Keep in sync with CLAUDE.md > Actions > Categories.
 const CANONICAL_CATEGORIES = new Set<string>([
   "agent",
