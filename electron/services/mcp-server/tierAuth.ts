@@ -1,9 +1,12 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { ActionManifestEntry } from "../../../shared/types/actions.js";
+import { deriveBand, BAND_OVERRIDES } from "../../../shared/utils/actionRiskBand.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { HelpTokenValidator } from "./shared.js";
 import { type McpTier, OPEN_WORLD_CATEGORIES, TIER_ALLOWLISTS } from "./shared.js";
+
+export { deriveBand, BAND_OVERRIDES };
 
 const BEARER_HEADER_PATTERN = /^Bearer[ \t]+(.+)$/i;
 
