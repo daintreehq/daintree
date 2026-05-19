@@ -720,4 +720,20 @@ describe("TurnOutcomeService turnId lifecycle", () => {
     expect(records[0]?.outcome).toBe("mcp-not-ready");
     expect(records[0]?.turnId).toBeUndefined();
   });
+
+  it("clears turnIdBySession after turn end so post-turn dispatches are not stamped", () => {
+    const f = makeFixture();
+    f.service.appendOutput("term-1", "Done — the file was updated and the tests pass cleanly.");
+    // Turn start
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeDefined();
+    // Turn end
+    f.service.handleTransition(
+      makeTransition({ previousState: "working", state: "idle", trigger: "output" })
+    );
+    // After turn ends, session should have no active turnId
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeNull();
+  });
 });

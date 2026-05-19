@@ -262,10 +262,20 @@ export class TurnOutcomeService {
     this.recentOutput.delete(terminalId);
     this.stuckRecorded.delete(terminalId);
     this.turnStartByTerminal.delete(terminalId);
+    const terminalTurnId = this.turnIdByTerminal.get(terminalId);
     this.turnIdByTerminal.delete(terminalId);
     const sessionId = this.deps.getSessionIdForTerminal(terminalId);
     if (sessionId !== null) {
       this.turnIdBySession.delete(sessionId);
+    } else if (terminalTurnId !== undefined) {
+      // Session binding was already revoked — fall back to a value scan
+      // so the entry doesn't leak for the process lifetime.
+      for (const [sid, tid] of this.turnIdBySession.entries()) {
+        if (tid === terminalTurnId) {
+          this.turnIdBySession.delete(sid);
+          break;
+        }
+      }
     }
   }
 
@@ -383,6 +393,11 @@ export class TurnOutcomeService {
     // Drain the ring so the next active turn classifies on its own output
     // rather than re-matching the prior turn's trailing text.
     this.recentOutput.delete(transition.terminalId);
+    // Clear the turnId so post-turn MCP dispatches (between this boundary
+    // and the next active entry) are not incorrectly stamped with the prior
+    // turn's ID. turnIdByTerminal is re-set on the next active transition.
+    this.turnIdBySession.delete(sessionId);
+    this.turnIdByTerminal.delete(transition.terminalId);
   }
 
   /**
