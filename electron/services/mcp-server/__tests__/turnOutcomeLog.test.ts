@@ -26,6 +26,8 @@ function makeAuditRecord(overrides: Partial<McpAuditRecord>): McpAuditRecord {
     ...(overrides.confirmationDecision !== undefined
       ? { confirmationDecision: overrides.confirmationDecision }
       : {}),
+    ...(overrides.turnId !== undefined ? { turnId: overrides.turnId } : {}),
+    ...(overrides.repeatCount !== undefined ? { repeatCount: overrides.repeatCount } : {}),
   };
 }
 

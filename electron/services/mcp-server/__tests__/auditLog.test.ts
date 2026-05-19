@@ -149,14 +149,14 @@ describe("AuditService.appendRecord — turnId, severity, schemaVersion", () => 
     expect(record!.turnId).toBeUndefined();
   });
 
-  it("new records carry schemaVersion 1", () => {
+  it("stamps schemaVersion on every record", () => {
     const { service } = makeFixture();
     service.appendRecord({
-      toolId: "agent.terminal",
+      toolId: "agent.launch",
       sessionId: "sess-1",
       tier: "action",
       args: {},
-      durationMs: 10,
+      durationMs: 5,
       outcome: successOutcome,
       argsSummary: "{}",
     });
@@ -164,49 +164,149 @@ describe("AuditService.appendRecord — turnId, severity, schemaVersion", () => 
     expect(record!.schemaVersion).toBe(1);
   });
 
-  it("derives severity: success → info", () => {
+  it.each([
+    ["success", undefined, "info"],
+    ["dedup", undefined, "info"],
+    ["confirmation-pending", "CONFIRMATION_REQUIRED", "info"],
+    ["unauthorized", "TIER_NOT_PERMITTED", "error"],
+    ["error", "EXECUTION_ERROR", "critical"],
+    ["error", "USER_REJECTED", "warning"],
+    ["error", "CONFIRMATION_TIMEOUT", "warning"],
+    ["error", "DISPATCH_THREW", "critical"],
+    ["error", "ELICITATION_FAILED", "error"],
+  ])("result=%s errorCode=%s → severity=%s", (result, errorCode, expectedSeverity) => {
     const { service } = makeFixture();
+    let outcome: AuditOutcome;
+    if (result === "unauthorized") {
+      outcome = { kind: "unauthorized" };
+    } else if (result === "dedup") {
+      outcome = { kind: "dedup" };
+    } else if (errorCode === "DISPATCH_THREW") {
+      outcome = { kind: "throw", error: new Error("boom") };
+    } else if (errorCode === undefined) {
+      outcome = { kind: "result", value: { ok: true, result: null } };
+    } else {
+      outcome = {
+        kind: "result",
+        value: {
+          ok: false,
+          result: null,
+          error: { code: errorCode, message: "" },
+        },
+      };
+    }
+
     service.appendRecord({
-      toolId: "agent.terminal",
+      toolId: "agent.launch",
       sessionId: "sess-1",
       tier: "action",
       args: {},
-      durationMs: 10,
+      durationMs: 5,
+      outcome,
+      argsSummary: "{}",
+    });
+    const [record] = service.getRecords();
+    // The result may differ from the input when classifyDispatchResult
+    // transforms it (e.g. CONFIRMATION_REQUIRED → confirmation-pending).
+    // We verify severity matches the computed value.
+    expect(record!.severity).toBe(expectedSeverity);
+  });
+});
+
+describe("AuditService.recordAuth401 pre-auth records", () => {
+  it("emits a pre-auth record alongside the counter increment", () => {
+    const { service } = makeFixture();
+    service.recordAuth401();
+    const stats = service.getAuditStats();
+    expect(stats.auth401Count).toBe(1);
+
+    const records = service.getRecords();
+    expect(records).toHaveLength(1);
+    const [record] = records;
+    expect(record!.toolId).toBe("mcp.pre-auth");
+    expect(record!.sessionId).toBe("");
+    expect(record!.result).toBe("unauthorized");
+    expect(record!.errorCode).toBe("PRE_AUTH_FAILED");
+    expect(record!.severity).toBe("error");
+    expect(record!.schemaVersion).toBe(1);
+    expect(record!.durationMs).toBe(0);
+    expect(record!.argsSummary).toBe("pre-auth request rejected");
+    expect(record!.repeatCount).toBeUndefined();
+  });
+
+  it("coalesces bursts within 1s by incrementing repeatCount", () => {
+    const { service } = makeFixture();
+    // Fire 3 401s in rapid succession.
+    service.recordAuth401();
+    service.recordAuth401();
+    service.recordAuth401();
+
+    const records = service.getRecords();
+    expect(records).toHaveLength(1);
+    const [record] = records;
+    expect(record!.errorCode).toBe("PRE_AUTH_FAILED");
+    // repeatCount starts at undefined for the first, then 2 for the first
+    // coalesced hit, then 3. Final should be 3.
+    expect(record!.repeatCount).toBe(3);
+    // Counter still tracks each individual call.
+    expect(service.getAuditStats().auth401Count).toBe(3);
+  });
+
+  it("writes a new record after the coalesce window expires", () => {
+    const { service } = makeFixture();
+    const now = Date.now();
+
+    // First record at t=0.
+    service.recordAuth401();
+
+    // Coalesce timer: fast-forward mock. Since we can't safely mock Date.now
+    // across the tight coalesce logic without controlling the clock, verify
+    // that two calls separated by a real wait produce two records.
+    // We'll test the window contract via the coalesced test above + the
+    // separate-call test below; for multi-record proof, force the coalesce
+    // state to expire.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).lastPreAuthRecordAt = now - 2000;
+
+    service.recordAuth401();
+    const records = service.getRecords();
+    // The first record (id from t=0) and the new record (id from t=2000)
+    // should both exist because the coalesce window expired.
+    expect(records.length).toBeGreaterThanOrEqual(2);
+    const preAuthRecords = records.filter((r) => r.errorCode === "PRE_AUTH_FAILED");
+    expect(preAuthRecords.length).toBe(2);
+    // The newest record should NOT have repeatCount (first in its own window).
+    expect(preAuthRecords[0]!.repeatCount).toBeUndefined();
+  });
+
+  it("respects auditEnabled kill switch for pre-auth records", () => {
+    const { service } = makeFixture({ auditEnabled: false });
+    service.recordAuth401();
+    service.recordAuth401();
+    expect(service.getAuditStats().auth401Count).toBe(0);
+    expect(service.getRecords()).toHaveLength(0);
+  });
+
+  it("does not corrupt the ring when non-pre-auth records interleave", () => {
+    const { service } = makeFixture();
+    service.recordAuth401();
+    service.appendRecord({
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 5,
       outcome: successOutcome,
       argsSummary: "{}",
     });
-    const [record] = service.getRecords();
-    expect(record!.severity).toBe("info");
-  });
+    service.recordAuth401();
 
-  it("derives severity: unauthorized → warning", () => {
-    const { service } = makeFixture();
-    service.appendRecord({
-      toolId: "agent.terminal",
-      sessionId: "sess-1",
-      tier: "workbench",
-      args: {},
-      durationMs: 0,
-      outcome: unauthorizedOutcome,
-      argsSummary: "{}",
-    });
-    const [record] = service.getRecords();
-    expect(record!.severity).toBe("warning");
-  });
-
-  it("derives severity: dedup → info", () => {
-    const { service } = makeFixture();
-    service.appendRecord({
-      toolId: "agent.terminal",
-      sessionId: "sess-1",
-      tier: "action",
-      args: {},
-      durationMs: 10,
-      outcome: { kind: "dedup" },
-      argsSummary: "{}",
-    });
-    const [record] = service.getRecords();
-    expect(record!.severity).toBe("info");
+    const records = service.getRecords();
+    // Two pre-auth calls coalesce into one record, plus the success record = 2.
+    expect(records.length).toBe(2);
+    const preAuthRecord = records.find((r) => r.errorCode === "PRE_AUTH_FAILED");
+    expect(preAuthRecord).toBeDefined();
+    expect(preAuthRecord!.repeatCount).toBe(2);
   });
 });
 
@@ -229,6 +329,49 @@ describe("AuditService hydrate — backward compat", () => {
     const records = service.getRecords();
     expect(records).toHaveLength(1);
     expect(records[0]!.id).toBe("old-1");
+  });
+
+  it("backfills schemaVersion and severity on old persisted records", () => {
+    const oldRecord = {
+      id: "old-1",
+      timestamp: 1000,
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      argsSummary: "{}",
+      result: "error",
+      errorCode: "EXECUTION_ERROR",
+      durationMs: 50,
+    };
+    const { service } = makeFixture({ auditLog: [oldRecord] });
+    // hydrate() is called lazily — trigger it via getRecords.
+    const records = service.getRecords();
+    expect(records).toHaveLength(1);
+    const [record] = records;
+    expect(record!.schemaVersion).toBe(1);
+    expect(record!.severity).toBe("critical");
+  });
+
+  it("preserves schemaVersion and severity on records that already have them", () => {
+    const currentRecord = {
+      id: "cur-1",
+      timestamp: 1000,
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      argsSummary: "{}",
+      result: "success",
+      durationMs: 50,
+      schemaVersion: 1,
+      severity: "info",
+    };
+    const { service } = makeFixture({ auditLog: [currentRecord] });
+    const records = service.getRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.schemaVersion).toBe(1);
+    expect(records[0]!.severity).toBe("info");
+  });
+});
   });
 });
 

@@ -132,6 +132,7 @@ export const EXECUTION_ERROR_CODE = "EXECUTION_ERROR";
 export const BINDING_STALE = "BINDING_STALE";
 export const SESSION_BINDING_GONE = "SESSION_BINDING_GONE";
 export const MCP_DEDUP_KEY_COLLISION_CODE = "MCP_DEDUP_KEY_COLLISION";
+export const PRE_AUTH_FAILED_CODE = "PRE_AUTH_FAILED";
 
 /**
  * Application-level convention: codes here flag transient failures that a

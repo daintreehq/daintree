@@ -64,6 +64,39 @@ export type McpConfirmationDecision = "approved" | "rejected" | "timeout";
  */
 export type McpAuditSeverity = "info" | "notice" | "warning" | "error" | "critical";
 
+export const MCP_AUDIT_SCHEMA_VERSION = 1;
+
+const SEVERITY_BY_RESULT: Record<McpAuditResult, McpAuditSeverity> = {
+  success: "info",
+  dedup: "info",
+  "confirmation-pending": "info",
+  unauthorized: "error",
+  error: "error",
+  collision: "warning",
+};
+
+const SEVERITY_BY_ERROR_CODE: Record<string, McpAuditSeverity> = {
+  USER_REJECTED: "warning",
+  CONFIRMATION_TIMEOUT: "warning",
+  CONFIRMATION_REQUIRED: "info",
+  TIER_NOT_PERMITTED: "error",
+  ELICITATION_FAILED: "error",
+  PRE_AUTH_FAILED: "error",
+  EXECUTION_ERROR: "critical",
+  DISPATCH_THREW: "critical",
+};
+
+export function computeMcpAuditSeverity(
+  result: McpAuditResult,
+  errorCode?: string
+): McpAuditSeverity {
+  if (errorCode !== undefined && errorCode in SEVERITY_BY_ERROR_CODE) {
+    return SEVERITY_BY_ERROR_CODE[errorCode]!;
+  }
+  return SEVERITY_BY_RESULT[result];
+}
+
+
 export interface McpAuditRecord {
   id: string;
   timestamp: number;
@@ -102,6 +135,8 @@ export interface McpAuditRecord {
   schemaVersion: number;
   /** Derived severity so readers can triage without re-deriving from result/errorCode. */
   severity: McpAuditSeverity;
+  /** Number of times this event repeated within the coalesce window. Absent when the event occurred once. */
+  repeatCount?: number;
 }
 
 /**
