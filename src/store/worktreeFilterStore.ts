@@ -31,6 +31,17 @@ export type PrIssueFilter = "hasIssue" | "hasPR" | "prOpen" | "prMerged" | "prCl
 export type SessionFilter = "hasTerminals" | "working" | "waiting" | "completed" | "exited";
 export type ActivityFilter = "last15m" | "last1h" | "last24h" | "last7d";
 
+const PR_ISSUE_FILTER_VALUES: ReadonlySet<string> = new Set<PrIssueFilter>([
+  "hasIssue",
+  "hasPR",
+  "prOpen",
+  "prMerged",
+  "prClosed",
+]);
+function isPrIssueFilter(value: unknown): value is PrIssueFilter {
+  return typeof value === "string" && PR_ISSUE_FILTER_VALUES.has(value);
+}
+
 interface WorktreeFilterState {
   query: string;
   orderBy: OrderBy;
@@ -336,25 +347,25 @@ const _projectStore = create<ProjectScopedState>()(
         manualOrder: state.manualOrder,
       }),
       migrate: (persistedState, version) => {
-        let result = persistedState as Record<string, unknown>;
+        // Chain v1 → v2 migrations through a property bag so each step can
+        // destructure/spread without re-casting; final cast lands at the end.
+        const initial: Partial<ProjectPersistedShape> & {
+          githubFilters?: unknown;
+        } = persistedState && typeof persistedState === "object" ? { ...persistedState } : {};
+        let result: Partial<ProjectPersistedShape> & { githubFilters?: unknown } = initial;
         // v1 retires the "running" SessionFilter (#5810).
         if (version < 1) {
-          const legacy = (persistedState ?? {}) as Partial<ProjectPersistedShape>;
-          const cleaned = stripLegacySessionFilters(legacy.sessionFilters);
-          result = { ...legacy, sessionFilters: cleaned } as unknown as Record<string, unknown>;
+          const cleaned = stripLegacySessionFilters(result.sessionFilters);
+          result = { ...result, sessionFilters: cleaned };
         }
         // v2 renames `githubFilters` → `prIssueFilters` (#8461).
         if (version < 2) {
           const { githubFilters, ...rest } = result;
           const raw = Array.isArray(githubFilters) ? githubFilters : [];
-          const valid = raw.filter((v): v is PrIssueFilter =>
-            (["hasIssue", "hasPR", "prOpen", "prMerged", "prClosed"] as const).includes(
-              v as PrIssueFilter
-            )
-          );
+          const valid = raw.filter(isPrIssueFilter);
           result = { ...rest, prIssueFilters: valid };
         }
-        return result as unknown as ProjectPersistedShape;
+        return result as ProjectPersistedShape;
       },
       merge: (persisted, current) => {
         const p = persisted as Partial<ProjectPersistedShape> | undefined;

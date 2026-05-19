@@ -430,6 +430,7 @@ export function WorktreeOverviewModal({
     activeWorktreeId,
     hideMainWorktree,
     quickStateFilter,
+    hasFacetFiltersActive,
   ]);
 
   const handleKeyDown = useEffectEvent((e: KeyboardEvent) => {
