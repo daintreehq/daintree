@@ -1,6 +1,6 @@
 import type { ActionContext } from "../../../shared/types/actions.js";
-import type { McpTier, McpSseSession, McpHttpSession } from "./shared.js";
-import { MCP_SSE_IDLE_TIMEOUT_MS } from "./shared.js";
+import type { McpTier, McpSseSession, McpHttpSession, RateLimitConfig } from "./shared.js";
+import { MCP_SSE_IDLE_TIMEOUT_MS, rateLimitConfigForTool } from "./shared.js";
 import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
@@ -25,6 +25,42 @@ export interface SessionStoreOptions {
   dropAbuseState?: (sessionId: string) => void;
 }
 
+/**
+ * Mutable token-bucket state for one `(sessionId, toolId)` pair. `tokens`
+ * is the current fractional balance; `lastRefillMs` is the wall-clock of
+ * the most recent refill so the next call can recompute lazily.
+ */
+export interface RateLimitBucket {
+  tokens: number;
+  lastRefillMs: number;
+}
+
+export type ConsumeTokenResult = { allowed: true } | { allowed: false; retryAfter: number };
+
+/**
+ * Pure token-bucket step. Refills `bucket` for the time elapsed since its
+ * last refill (capped at `config.capacity`), then attempts to consume one
+ * token. Mutates `bucket` in place and returns whether the call is allowed;
+ * on rejection `retryAfter` is the whole-seconds wait until one token has
+ * accrued (always `>= 1`). Exported for direct unit coverage independent
+ * of the session-store wiring.
+ */
+export function consumeToken(
+  bucket: RateLimitBucket,
+  config: RateLimitConfig,
+  nowMs: number
+): ConsumeTokenResult {
+  const elapsed = Math.max(0, nowMs - bucket.lastRefillMs);
+  bucket.tokens = Math.min(config.capacity, bucket.tokens + elapsed * config.refillPerMs);
+  bucket.lastRefillMs = nowMs;
+  if (bucket.tokens >= 1) {
+    bucket.tokens -= 1;
+    return { allowed: true };
+  }
+  const retryAfter = Math.max(1, Math.ceil((1 - bucket.tokens) / config.refillPerMs / 1000));
+  return { allowed: false, retryAfter };
+}
+
 export class SessionStore {
   readonly sessions = new Map<string, McpSseSession>();
   readonly httpSessions = new Map<string, McpHttpSession>();
@@ -46,6 +82,11 @@ export class SessionStore {
   // return the original result). Cleared on drain and idle expiry.
   readonly dedupInFlight = new Map<string, Map<string, DedupInFlightEntry>>();
   readonly dedupResultCache = new Map<string, Map<string, DedupCacheEntry>>();
+  // Per-`(sessionId, toolId)` token buckets for the runaway-loop rate
+  // limiter (#8468). Lazily populated on first call to a tool and torn
+  // down in lockstep with the other session-scoped maps on drain, idle
+  // expiry, and explicit revoke.
+  readonly rateLimitBuckets = new Map<string, Map<string, RateLimitBucket>>();
   /**
    * Per-`(sessionId, toolId)` time-bounded grants — replaces the sticky
    * `sessionTierMap` elevation pathway for the "Approve once" flow (#8442).
@@ -77,6 +118,35 @@ export class SessionStore {
     this.dedupResultCache.delete(sessionId);
   }
 
+  /**
+   * Charge one token against the `(sessionId, toolId)` bucket, creating a
+   * full bucket on first use. The tier is resolved from
+   * `rateLimitConfigForTool` so an unmapped tool falls back to `standard`.
+   * Thin wrapper around the pure {@link consumeToken} step.
+   */
+  consumeRateLimitToken(
+    sessionId: string,
+    toolId: string,
+    nowMs: number = Date.now()
+  ): ConsumeTokenResult {
+    const config = rateLimitConfigForTool(toolId);
+    let byTool = this.rateLimitBuckets.get(sessionId);
+    if (!byTool) {
+      byTool = new Map<string, RateLimitBucket>();
+      this.rateLimitBuckets.set(sessionId, byTool);
+    }
+    let bucket = byTool.get(toolId);
+    if (!bucket) {
+      bucket = { tokens: config.capacity, lastRefillMs: nowMs };
+      byTool.set(toolId, bucket);
+    }
+    return consumeToken(bucket, config, nowMs);
+  }
+
+  clearRateLimitState(sessionId: string): void {
+    this.rateLimitBuckets.delete(sessionId);
+  }
+
   private expireSseSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
@@ -90,6 +160,7 @@ export class SessionStore {
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
     this.clearDedupState(sessionId);
+    this.clearRateLimitState(sessionId);
     this.idleStartedAt.delete(sessionId);
     this.dropAbuseStateFn(sessionId);
     this.cleanupResourceSubscriptionsFn(sessionId);
@@ -142,6 +213,7 @@ export class SessionStore {
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
     this.clearDedupState(sessionId);
+    this.clearRateLimitState(sessionId);
     this.httpIdleStartedAt.delete(sessionId);
     this.dropAbuseStateFn(sessionId);
     this.cleanupResourceSubscriptionsFn(sessionId);
@@ -267,6 +339,7 @@ export class SessionStore {
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
     this.clearDedupState(sessionId);
+    this.clearRateLimitState(sessionId);
     this.dropAbuseStateFn(sessionId);
     this.cleanupResourceSubscriptionsFn(sessionId);
     return true;
@@ -278,6 +351,7 @@ export class SessionStore {
     // resurrect a torn-down session's cache.
     this.dedupInFlight.clear();
     this.dedupResultCache.clear();
+    this.rateLimitBuckets.clear();
 
     for (const session of this.sessions.values()) {
       clearTimeout(session.idleTimer);

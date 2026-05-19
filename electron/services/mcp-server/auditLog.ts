@@ -25,6 +25,7 @@ import {
   USER_REJECTED_CODE,
   CONFIRMATION_TIMEOUT_CODE,
   MCP_DEDUP_KEY_COLLISION_CODE,
+  MCP_RATE_LIMITED_CODE,
   minimumPermittingTier,
   PRE_AUTH_FAILED_CODE,
 } from "./shared.js";
@@ -133,6 +134,9 @@ export class AuditService {
     }
     if (outcome.kind === "collision") {
       return { result: "collision", errorCode: MCP_DEDUP_KEY_COLLISION_CODE };
+    }
+    if (outcome.kind === "rate_limited") {
+      return { result: "rate_limited", errorCode: MCP_RATE_LIMITED_CODE };
     }
     const value = outcome.value;
     if (value.ok) return { result: "success" };
@@ -594,4 +598,5 @@ export type AuditOutcome =
   | { kind: "throw"; error: unknown }
   | { kind: "unauthorized" }
   | { kind: "dedup" }
-  | { kind: "collision" };
+  | { kind: "collision" }
+  | { kind: "rate_limited"; retryAfter: number };

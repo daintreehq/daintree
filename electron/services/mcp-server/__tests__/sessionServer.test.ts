@@ -11,7 +11,7 @@ vi.mock("electron", () => ({
 import { createSessionServer } from "../sessionServer.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
-import { SessionStore as RealSessionStore } from "../sessionStore.js";
+import { SessionStore as RealSessionStore, consumeToken } from "../sessionStore.js";
 import { GrantCache } from "../grantCache.js";
 import {
   buildToolError,
@@ -24,6 +24,9 @@ import {
   USER_REJECTED_CODE,
   ELICITATION_FAILED_CODE,
   MCP_DEDUP_KEY_COLLISION_CODE,
+  MCP_DEDUP_ALLOWLIST,
+  MCP_RATE_LIMITED_CODE,
+  RATE_LIMIT_TIERS,
   unwrapDispatchResult,
 } from "../shared.js";
 import { SessionBindingError } from "../rendererBridge.js";
@@ -43,6 +46,7 @@ function fakeSessionStore(
     resourceSubscriptions: new Map(),
     dedupInFlight: new Map(),
     dedupResultCache: new Map(),
+    rateLimitBuckets: new Map(),
     grantCache,
     drain: vi.fn(),
     getTier: vi.fn(() => tier),
@@ -51,6 +55,11 @@ function fakeSessionStore(
     resetIdleTimer: vi.fn(),
     resetHttpIdleTimer: vi.fn(),
     clearDedupState: vi.fn(),
+    // Permissive by default so existing suites aren't throttled; the
+    // rate-limit suite overrides this with a counting stub or the real
+    // implementation.
+    consumeRateLimitToken: vi.fn(() => ({ allowed: true })),
+    clearRateLimitState: vi.fn(),
   } as unknown as SessionStore;
   return store;
 }
@@ -1564,5 +1573,254 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     expect(refreshSpy).toHaveBeenCalledTimes(1);
     expect(resetIdle).toHaveBeenCalledWith("s");
     sessionStore.grantCache.dispose();
+  });
+});
+
+function parseToolErrorPayload(result: {
+  content: unknown;
+  isError?: boolean;
+}): { code: string; retriable: boolean; details?: { retryAfter?: number } } {
+  const text = (result as { content: Array<{ text: string }> }).content[0].text;
+  return JSON.parse(text);
+}
+
+describe("consumeToken (pure token bucket)", () => {
+  const mutation = RATE_LIMIT_TIERS.mutation; // capacity 10, 10/min
+
+  it("allows up to capacity then rejects with a positive retryAfter", () => {
+    const bucket = { tokens: mutation.capacity, lastRefillMs: 1000 };
+    for (let i = 0; i < mutation.capacity; i++) {
+      expect(consumeToken(bucket, mutation, 1000).allowed).toBe(true);
+    }
+    const rejected = consumeToken(bucket, mutation, 1000);
+    expect(rejected.allowed).toBe(false);
+    if (!rejected.allowed) {
+      expect(rejected.retryAfter).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("refills proportionally to elapsed wall-clock", () => {
+    const bucket = { tokens: 0, lastRefillMs: 0 };
+    // 10/min => one token every 6000ms. After 6000ms exactly one token.
+    const r = consumeToken(bucket, mutation, 6000);
+    expect(r.allowed).toBe(true);
+    expect(bucket.tokens).toBeCloseTo(0, 5);
+  });
+
+  it("caps refill at capacity (no unbounded accrual while idle)", () => {
+    const bucket = { tokens: 0, lastRefillMs: 0 };
+    // A huge idle gap must not let the bucket exceed capacity.
+    consumeToken(bucket, mutation, 60 * 60 * 1000);
+    expect(bucket.tokens).toBeLessThanOrEqual(mutation.capacity);
+  });
+
+  it("never returns a sub-second retryAfter", () => {
+    const bucket = { tokens: 0.99, lastRefillMs: 0 };
+    const r = consumeToken(bucket, RATE_LIMIT_TIERS.highFreqRead, 0);
+    expect(r.allowed).toBe(false);
+    if (!r.allowed) expect(r.retryAfter).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("SessionStore.consumeRateLimitToken", () => {
+  it("exhausts the mutation tier (git.commit) after capacity calls", () => {
+    const store = new RealSessionStore(() => {});
+    const cap = RATE_LIMIT_TIERS.mutation.capacity;
+    for (let i = 0; i < cap; i++) {
+      expect(store.consumeRateLimitToken("s", "git.commit", 1000).allowed).toBe(true);
+    }
+    const rejected = store.consumeRateLimitToken("s", "git.commit", 1000);
+    expect(rejected.allowed).toBe(false);
+    store.drain();
+  });
+
+  it("uses the high-frequency tier for read tools (terminal.getStatus)", () => {
+    const store = new RealSessionStore(() => {});
+    const cap = RATE_LIMIT_TIERS.highFreqRead.capacity;
+    for (let i = 0; i < cap; i++) {
+      expect(store.consumeRateLimitToken("s", "terminal.getStatus", 1000).allowed).toBe(true);
+    }
+    expect(store.consumeRateLimitToken("s", "terminal.getStatus", 1000).allowed).toBe(false);
+    store.drain();
+  });
+
+  it("falls back to the standard tier for unmapped tools", () => {
+    const store = new RealSessionStore(() => {});
+    const cap = RATE_LIMIT_TIERS.standard.capacity;
+    for (let i = 0; i < cap; i++) {
+      expect(store.consumeRateLimitToken("s", "files.search", 1000).allowed).toBe(true);
+    }
+    expect(store.consumeRateLimitToken("s", "files.search", 1000).allowed).toBe(false);
+    store.drain();
+  });
+
+  it("isolates buckets per session", () => {
+    const store = new RealSessionStore(() => {});
+    const cap = RATE_LIMIT_TIERS.mutation.capacity;
+    for (let i = 0; i < cap; i++) {
+      store.consumeRateLimitToken("session-a", "git.push", 1000);
+    }
+    expect(store.consumeRateLimitToken("session-a", "git.push", 1000).allowed).toBe(false);
+    // A fresh session is unaffected by session-a's exhausted bucket.
+    expect(store.consumeRateLimitToken("session-b", "git.push", 1000).allowed).toBe(true);
+    store.drain();
+  });
+
+  it("isolates buckets per tool within a session", () => {
+    const store = new RealSessionStore(() => {});
+    const cap = RATE_LIMIT_TIERS.mutation.capacity;
+    for (let i = 0; i < cap; i++) {
+      store.consumeRateLimitToken("s", "git.commit", 1000);
+    }
+    expect(store.consumeRateLimitToken("s", "git.commit", 1000).allowed).toBe(false);
+    expect(store.consumeRateLimitToken("s", "git.push", 1000).allowed).toBe(true);
+    store.drain();
+  });
+
+  it("clearRateLimitState resets the session's buckets", () => {
+    const store = new RealSessionStore(() => {});
+    const cap = RATE_LIMIT_TIERS.mutation.capacity;
+    for (let i = 0; i < cap; i++) {
+      store.consumeRateLimitToken("s", "git.commit", 1000);
+    }
+    expect(store.consumeRateLimitToken("s", "git.commit", 1000).allowed).toBe(false);
+    store.clearRateLimitState("s");
+    // Fresh bucket — full capacity again.
+    expect(store.consumeRateLimitToken("s", "git.commit", 1000).allowed).toBe(true);
+    store.drain();
+  });
+
+  it("revokeSession tears down the rate-limit buckets", () => {
+    const store = new RealSessionStore(() => {});
+    store.consumeRateLimitToken("s", "git.commit", 1000);
+    expect(store.rateLimitBuckets.has("s")).toBe(true);
+    store.sessionTierMap.set("s", "system");
+    // No live transport, but revokeSession returns false only when no
+    // session entry exists — drive teardown via drain() which also clears.
+    store.drain();
+    expect(store.rateLimitBuckets.size).toBe(0);
+  });
+});
+
+describe("CallTool rate limiting (handler integration)", () => {
+  it("rejects with MCP_RATE_LIMITED + retryAfter when the bucket is exhausted", async () => {
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const sessionStore = fakeSessionStore("system");
+    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
+      allowed: false,
+      retryAfter: 7,
+    });
+    const appendAuditRecord = vi.fn();
+    const deps = fakeDeps({ sessionStore, dispatchAction, appendAuditRecord });
+    const server = createSessionServer("rl-1", deps);
+
+    const result = (await callTool(server, {
+      name: "git.commit",
+      arguments: { message: "x" },
+    })) as { content: unknown; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    const payload = parseToolErrorPayload(result);
+    expect(payload.code).toBe(MCP_RATE_LIMITED_CODE);
+    expect(payload.retriable).toBe(true);
+    expect(payload.details?.retryAfter).toBe(7);
+    // Rate limit runs before dispatch — the action never ran.
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("writes a rate_limited audit record before returning", async () => {
+    const sessionStore = fakeSessionStore("system");
+    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
+      allowed: false,
+      retryAfter: 3,
+    });
+    const appendAuditRecord = vi.fn();
+    const deps = fakeDeps({ sessionStore, appendAuditRecord });
+    const server = createSessionServer("rl-2", deps);
+
+    await callTool(server, { name: "git.push", arguments: {} });
+
+    expect(appendAuditRecord).toHaveBeenCalledTimes(1);
+    const arg = appendAuditRecord.mock.calls[0]![0] as {
+      outcome: { kind: string; retryAfter?: number };
+      toolId: string;
+    };
+    expect(arg.toolId).toBe("git.push");
+    expect(arg.outcome.kind).toBe("rate_limited");
+    expect(arg.outcome.retryAfter).toBe(3);
+  });
+
+  it("runs before dedup — an exhausted bucket short-circuits an allowlisted tool", async () => {
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const sessionStore = fakeSessionStore("system");
+    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
+      allowed: false,
+      retryAfter: 1,
+    });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("rl-3", deps);
+
+    // terminal.new is dedup-allowlisted; rate-limit must win the race.
+    const result = (await callTool(server, {
+      name: "terminal.new",
+      arguments: { spawnedBy: { kind: "user" } },
+    })) as { content: unknown; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(parseToolErrorPayload(result).code).toBe(MCP_RATE_LIMITED_CODE);
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(sessionStore.dedupInFlight.size).toBe(0);
+  });
+
+  it("does not consume a token for tier-denied calls (auth precedes rate limit)", async () => {
+    // workbench tier cannot call git.commit; the tier check returns first
+    // and the rate-limit token must not be charged.
+    const sessionStore = fakeSessionStore("workbench");
+    const deps = fakeDeps({ sessionStore });
+    const server = createSessionServer("rl-4", deps);
+
+    const result = (await callTool(server, {
+      name: "git.commit",
+      arguments: { message: "x" },
+    })) as { content: unknown; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(parseToolErrorPayload(result).code).not.toBe(MCP_RATE_LIMITED_CODE);
+    expect(sessionStore.consumeRateLimitToken).not.toHaveBeenCalled();
+  });
+
+  it("lets allowed calls dispatch normally", async () => {
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const sessionStore = fakeSessionStore("system");
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("rl-5", deps);
+
+    const result = (await callTool(server, {
+      name: "files.search",
+      arguments: { query: "x" },
+    })) as { isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    expect(sessionStore.consumeRateLimitToken).toHaveBeenCalledWith("rl-5", "files.search");
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("MCP_DEDUP_ALLOWLIST widening (#8468)", () => {
+  it("retains the original creation-tool cohort", () => {
+    for (const tool of ["terminal.new", "worktree.createWithRecipe", "agent.launch", "recipe.run"]) {
+      expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(true);
+    }
+  });
+
+  it("adds the git/forge mutation cohort", () => {
+    for (const tool of ["git.commit", "git.push", "forge.openIssue", "github.openPR"]) {
+      expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(true);
+    }
+  });
+
+  it("stays bounded — does not blanket every mutation", () => {
+    expect(MCP_DEDUP_ALLOWLIST.has("git.stageAll")).toBe(false);
+    expect(MCP_DEDUP_ALLOWLIST.has("terminal.sendCommand")).toBe(false);
   });
 });
