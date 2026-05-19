@@ -20,7 +20,8 @@ export type McpAuditResult =
   | "error"
   | "confirmation-pending"
   | "unauthorized"
-  | "dedup";
+  | "dedup"
+  | "collision";
 
 /**
  * Persisted audit record for a single MCP tool dispatch. Written once per

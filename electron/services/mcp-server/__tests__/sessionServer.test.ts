@@ -23,6 +23,7 @@ import {
   CONFIRMATION_TIMEOUT_CODE,
   USER_REJECTED_CODE,
   ELICITATION_FAILED_CODE,
+  MCP_DEDUP_KEY_COLLISION_CODE,
   unwrapDispatchResult,
 } from "../shared.js";
 import { SessionBindingError } from "../rendererBridge.js";
@@ -414,7 +415,7 @@ describe("CallTool idempotency dedup", () => {
     expect(dispatchAction).toHaveBeenCalledTimes(2);
   });
 
-  it("honors explicit requestKey over arg hash and strips it before dispatch", async () => {
+  it("returns collision error when same requestKey used with different args (result-cache)", async () => {
     const dispatchAction = vi
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-rk" } } });
@@ -424,20 +425,117 @@ describe("CallTool idempotency dedup", () => {
     });
     const server = createSessionServer("dedup-5", deps);
 
-    // Same requestKey, different args — should still dedup as the same call.
     await callTool(server, {
       name: "terminal.new",
       arguments: { requestKey: "rk-1", spawnedBy: { kind: "user" } },
     });
-    await callTool(server, {
+    const second = (await callTool(server, {
       name: "terminal.new",
       arguments: { requestKey: "rk-1", spawnedBy: { kind: "agent" } },
-    });
+    })) as { isError?: boolean; content: Array<{ text: string }> };
 
     expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(second.isError).toBe(true);
+    expect(second.content[0].text).toContain(MCP_DEDUP_KEY_COLLISION_CODE);
     // requestKey must not reach dispatchAction.
     const dispatchedArgs = dispatchAction.mock.calls[0][1] as Record<string, unknown>;
     expect(dispatchedArgs).not.toHaveProperty("requestKey");
+  });
+
+  it("returns collision error when same requestKey used with different args (in-flight)", async () => {
+    let resolveDispatch: ((envelope: unknown) => void) | undefined;
+    const dispatchAction = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDispatch = resolve as (envelope: unknown) => void;
+        })
+    );
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("system"),
+      dispatchAction,
+    });
+    const server = createSessionServer("dedup-5b", deps);
+
+    // Fire the first call — it will register in-flight and then await dispatch.
+    const first = callTool(server, {
+      name: "terminal.new",
+      arguments: { requestKey: "rk-inflight", spawnedBy: { kind: "user" } },
+    });
+
+    // Yield microtasks so the first handler registers its in-flight entry.
+    for (let i = 0; i < 50 && !resolveDispatch; i++) {
+      await Promise.resolve();
+    }
+    expect(resolveDispatch).toBeDefined();
+
+    // Second call with same requestKey but different args — must return collision
+    // synchronously, not await the in-flight promise.
+    const second = (await callTool(server, {
+      name: "terminal.new",
+      arguments: { requestKey: "rk-inflight", spawnedBy: { kind: "agent" } },
+    })) as { isError?: boolean; content: Array<{ text: string }> };
+
+    expect(second.isError).toBe(true);
+    expect(second.content[0].text).toContain(MCP_DEDUP_KEY_COLLISION_CODE);
+
+    // Resolve the first call so it doesn't hang.
+    resolveDispatch!({ result: { ok: true, result: { terminalId: "t-inflight" } } });
+    await first;
+
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedup still works with explicit requestKey and same args (result-cache)", async () => {
+    const dispatchAction = vi
+      .fn()
+      .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-rk-ok" } } });
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("system"),
+      dispatchAction,
+    });
+    const server = createSessionServer("dedup-rk-ok", deps);
+
+    const args = { requestKey: "rk-same", spawnedBy: { kind: "user" } };
+    const first = await callTool(server, { name: "terminal.new", arguments: args });
+    const second = await callTool(server, { name: "terminal.new", arguments: args });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+  });
+
+  it("dedup still works with explicit requestKey and same args (in-flight)", async () => {
+    let resolveDispatch: ((envelope: unknown) => void) | undefined;
+    const dispatchAction = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDispatch = resolve as (envelope: unknown) => void;
+        })
+    );
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("system"),
+      dispatchAction,
+    });
+    const server = createSessionServer("dedup-rk-inflight", deps);
+
+    const a = callTool(server, {
+      name: "terminal.new",
+      arguments: { requestKey: "rk-same2", spawnedBy: { kind: "user" } },
+    });
+    const b = callTool(server, {
+      name: "terminal.new",
+      arguments: { requestKey: "rk-same2", spawnedBy: { kind: "user" } },
+    });
+
+    for (let i = 0; i < 50 && !resolveDispatch; i++) {
+      await Promise.resolve();
+    }
+    expect(resolveDispatch).toBeDefined();
+
+    resolveDispatch!({ result: { ok: true, result: { terminalId: "t-rk-if-ok" } } });
+
+    const [resultA, resultB] = await Promise.all([a, b]);
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(resultA).toEqual(resultB);
   });
 
   it("does not cache failed dispatches; retries re-dispatch", async () => {

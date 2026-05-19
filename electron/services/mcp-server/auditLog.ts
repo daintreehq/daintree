@@ -21,6 +21,7 @@ import {
   CONFIRMATION_REQUIRED_CODE,
   USER_REJECTED_CODE,
   CONFIRMATION_TIMEOUT_CODE,
+  MCP_DEDUP_KEY_COLLISION_CODE,
   minimumPermittingTier,
 } from "./shared.js";
 
@@ -81,6 +82,9 @@ export class AuditService {
     }
     if (outcome.kind === "dedup") {
       return { result: "dedup" };
+    }
+    if (outcome.kind === "collision") {
+      return { result: "collision", errorCode: MCP_DEDUP_KEY_COLLISION_CODE };
     }
     const value = outcome.value;
     if (value.ok) return { result: "success" };
@@ -298,4 +302,5 @@ export type AuditOutcome =
   | { kind: "result"; value: import("../../../shared/types/actions.js").ActionDispatchResult }
   | { kind: "throw"; error: unknown }
   | { kind: "unauthorized" }
-  | { kind: "dedup" };
+  | { kind: "dedup" }
+  | { kind: "collision" };

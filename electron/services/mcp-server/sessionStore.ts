@@ -1,7 +1,7 @@
 import type { ActionContext } from "../../../shared/types/actions.js";
 import type { McpTier, McpSseSession, McpHttpSession } from "./shared.js";
 import { MCP_SSE_IDLE_TIMEOUT_MS } from "./shared.js";
-import type { CallToolResultLike, DedupCacheEntry } from "./sessionDedup.js";
+import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
 
 export interface SessionStoreOptions {
@@ -34,7 +34,7 @@ export class SessionStore {
   // Two phases: in-flight singleflight (same-moment duplicates share the
   // original Promise) and TTL'd result cache (post-completion duplicates
   // return the original result). Cleared on drain and idle expiry.
-  readonly dedupInFlight = new Map<string, Map<string, Promise<CallToolResultLike>>>();
+  readonly dedupInFlight = new Map<string, Map<string, DedupInFlightEntry>>();
   readonly dedupResultCache = new Map<string, Map<string, DedupCacheEntry>>();
   /**
    * Per-`(sessionId, toolId)` time-bounded grants — replaces the sticky

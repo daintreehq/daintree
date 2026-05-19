@@ -19,6 +19,7 @@ const RESULT_LABEL: Record<McpAuditResult, string> = {
   "confirmation-pending": "Awaiting confirmation",
   unauthorized: "Unauthorized",
   dedup: "Deduplicated",
+  collision: "Key collision",
 };
 
 const RESULT_DOT_CLASS: Record<McpAuditResult, string> = {
@@ -27,6 +28,7 @@ const RESULT_DOT_CLASS: Record<McpAuditResult, string> = {
   "confirmation-pending": "bg-status-warning",
   unauthorized: "bg-status-danger",
   dedup: "bg-status-info",
+  collision: "bg-status-warning",
 };
 
 const TIME_RANGE_MS: Record<Exclude<TimeRange, "all">, number> = {
@@ -157,7 +159,8 @@ export function McpAuditLogViewer({
               value === "error" ||
               value === "confirmation-pending" ||
               value === "unauthorized" ||
-              value === "dedup"
+              value === "dedup" ||
+              value === "collision"
             ) {
               setResultFilter(value);
             }
@@ -171,6 +174,7 @@ export function McpAuditLogViewer({
           <option value="confirmation-pending">Awaiting confirmation</option>
           <option value="unauthorized">Unauthorized</option>
           <option value="dedup">Deduplicated</option>
+          <option value="collision">Key collision</option>
         </select>
         <select
           value={timeRange}
