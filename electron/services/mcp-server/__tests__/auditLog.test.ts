@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AuditService, type AuditOutcome } from "../auditLog.js";
+import type { McpAuditResult } from "../../../../shared/types/ipc/mcpServer.js";
 
 function makeFixture(initialConfig: Record<string, unknown> = {}) {
   const config: Record<string, unknown> = {
@@ -288,7 +289,7 @@ describe("AuditService anomaly detection", () => {
                 kind: "result",
                 value: {
                   ok: false,
-                  error: { code: "ERR", message: "fail" },
+                  error: { code: "EXECUTION_ERROR", message: "fail" },
                 } as import("../../../../shared/types/actions.js").ActionDispatchResult,
               }
             : opts.result === "unauthorized"
@@ -446,7 +447,7 @@ describe("AuditService anomaly detection", () => {
         kind: "result",
         value: {
           ok: false,
-          error: { code: "ERR", message: "fail" },
+          error: { code: "EXECUTION_ERROR", message: "fail" },
         } as import("../../../../shared/types/actions.js").ActionDispatchResult,
       },
       argsSummary: "{}",
@@ -482,7 +483,7 @@ describe("AuditService anomaly detection", () => {
           kind: "result",
           value: {
             ok: false,
-            error: { code: "ERR", message: "fail" },
+            error: { code: "EXECUTION_ERROR", message: "fail" },
           } as import("../../../../shared/types/actions.js").ActionDispatchResult,
         },
         argsSummary: "{}",
@@ -518,7 +519,7 @@ describe("AuditService anomaly detection", () => {
           kind: "result",
           value: {
             ok: false,
-            error: { code: "ERR", message: "fail" },
+            error: { code: "EXECUTION_ERROR", message: "fail" },
           } as import("../../../../shared/types/actions.js").ActionDispatchResult,
         },
         argsSummary: "{}",
@@ -554,7 +555,7 @@ describe("AuditService anomaly detection", () => {
           kind: "result",
           value: {
             ok: false,
-            error: { code: "ERR", message: "fail" },
+            error: { code: "EXECUTION_ERROR", message: "fail" },
           } as import("../../../../shared/types/actions.js").ActionDispatchResult,
         },
         argsSummary: "{}",
