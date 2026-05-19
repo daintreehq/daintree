@@ -227,6 +227,30 @@ export class SessionStore {
     return this.sessionTierMap.get(sessionId) ?? "workbench";
   }
 
+  revokeSession(sessionId: string): boolean {
+    const sseSession = this.sessions.get(sessionId);
+    const httpSession = this.httpSessions.get(sessionId);
+    if (!sseSession && !httpSession) return false;
+
+    if (sseSession) {
+      clearTimeout(sseSession.idleTimer);
+      this.sessions.delete(sessionId);
+      sseSession.transport.close().catch(() => {});
+    }
+    if (httpSession) {
+      clearTimeout(httpSession.idleTimer);
+      this.httpSessions.delete(sessionId);
+      httpSession.transport.close().catch(() => {});
+    }
+
+    this.sessionTierMap.delete(sessionId);
+    this.sessionWebContentsMap.delete(sessionId);
+    this.sessionContextMap.delete(sessionId);
+    this.clearDedupState(sessionId);
+    this.cleanupResourceSubscriptionsFn(sessionId);
+    return true;
+  }
+
   drain(): void {
     // Clear dedup state up-front so an in-flight `.finally()` resolving
     // after drain finds no session to write back into and does not

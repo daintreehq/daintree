@@ -23,6 +23,7 @@ import { createRendererBridge } from "./mcp-server/rendererBridge.js";
 import { handleWaitUntilIdle } from "./mcp-server/waitUntilIdle.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
+import { AbusePolicy } from "./mcp-server/abusePolicy.js";
 import type {
   PendingRequest,
   DispatchEnvelope,
@@ -84,6 +85,10 @@ export class McpServerService {
       }
     );
 
+    const abusePolicy = new AbusePolicy({
+      readConfig: () => this.getConfig(),
+    });
+
     this.turnOutcomeService = new TurnOutcomeService({
       saveConfig: (patch) => this.persistConfig(patch),
       readConfig: () => this.getConfig(),
@@ -138,6 +143,7 @@ export class McpServerService {
       sessionStore: this.sessionStore,
       auditService: this.auditService,
       turnOutcomeService: this.turnOutcomeService,
+      abusePolicy,
       requestManifest: () => this.bridge.requestManifest(),
       dispatchAction: (actionId, args, confirmed) =>
         this.bridge.dispatchAction(actionId, args, confirmed),
