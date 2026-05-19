@@ -654,9 +654,12 @@ export function ReviewHubContent({
   // to route the settings CTA. Classification is best-effort — any failure
   // leaves the banner in its generic state with the raw stderr.
   useEffect(() => {
+    // Clear synchronously so a new failure never shows the previous error's
+    // code or routes its settings CTA to a stale provider while the new
+    // classification is in flight.
+    setForgeErrorCode(undefined);
+    setForgeProviderId(null);
     if (!pushError || !worktreePath) {
-      setForgeErrorCode(undefined);
-      setForgeProviderId(null);
       return;
     }
     let cancelled = false;

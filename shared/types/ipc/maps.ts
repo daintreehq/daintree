@@ -179,6 +179,7 @@ import type {
   AuthValidation,
   ForgeProviderEntry,
   ResolvedForgeProvider,
+  PushErrorClassification,
   Issue,
   PR,
   Page,
@@ -1699,6 +1700,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "forge:get-repo-metadata": {
     args: [payload: { cwd: string }];
     result: RepoMetadata;
+  };
+  "forge:classify-push-error": {
+    args: [payload: { cwd: string; stderr: string }];
+    result: { providerId: string; classification: PushErrorClassification | null } | null;
   };
 
   // Shortcut Hints

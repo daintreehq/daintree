@@ -1082,6 +1082,8 @@ describe("ReviewHub", () => {
       // system opener (no GitHub-specific IPC).
       fireEvent.click(screen.getByRole("button", { name: /view pull request #42/i }));
       expect(openExternalMock).toHaveBeenCalledWith("https://github.com/test/repo/pull/42");
+      // The GitHub-specific IPC must not be used (works for any forge now).
+      expect(openPRMock).not.toHaveBeenCalled();
     });
 
     it("shows 'No PR' when branch has remote but no PR", async () => {
@@ -1781,6 +1783,74 @@ describe("ReviewHub", () => {
         { tab: "code-forge", subtab: "github" },
         { source: "user" }
       );
+    });
+
+    it("omits the settings CTA when push-error classification fails (no provider resolved)", async () => {
+      classifyPushErrorMock.mockRejectedValue(new Error("no forge provider"));
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("fatal: Authentication failed for 'https://example.com/'"), {
+          name: "GitOperationError",
+          gitReason: "auth-failed",
+        })
+      );
+
+      await triggerCommitAndPush();
+
+      const banner = await screen.findByTestId("review-hub-push-error");
+      expect(banner.getAttribute("data-reason")).toBe("auth-failed");
+      // Message still shows, but there is no provider-agnostic settings route.
+      await waitFor(() => expect(classifyPushErrorMock).toHaveBeenCalled());
+      expect(screen.queryByTestId("review-hub-push-error-cta")).toBeNull();
+    });
+
+    it("does not show a stale code when a retry surfaces a different error", async () => {
+      // First failure is network-unavailable (has a Retry CTA) and the stderr
+      // carries a GH code so the default regex mock surfaces it.
+      pushMock.mockRejectedValueOnce(
+        Object.assign(new Error("Could not resolve host: github.com — GH999"), {
+          name: "GitOperationError",
+          gitReason: "network-unavailable",
+        })
+      );
+
+      await triggerCommitAndPush();
+      await screen.findByTestId("review-hub-push-error");
+      expect((await screen.findByTestId("review-hub-push-error-code")).textContent).toBe("GH999");
+
+      // Retry surfaces a code-less auth failure; hold the classification
+      // pending so we can observe the in-flight window.
+      let releaseSecond: (v: { providerId: string; classification: null }) => void = () => {};
+      classifyPushErrorMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseSecond = resolve;
+          })
+      );
+      pushMock.mockRejectedValueOnce(
+        Object.assign(new Error("fatal: Authentication failed for 'https://example.com/'"), {
+          name: "GitOperationError",
+          gitReason: "auth-failed",
+        })
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTestId("review-hub-push-error").getAttribute("data-reason")).toBe(
+          "auth-failed"
+        )
+      );
+      // While the second classification is pending, the stale GH999 must be gone.
+      expect(screen.queryByTestId("review-hub-push-error-code")).toBeNull();
+
+      await act(async () => {
+        releaseSecond({ providerId: "github", classification: null });
+        await Promise.resolve();
+      });
+      expect(screen.queryByTestId("review-hub-push-error-code")).toBeNull();
     });
 
     it("shows push-rejected-outdated banner with Pull-and-rebase primary CTA only when leaseSha is missing", async () => {
