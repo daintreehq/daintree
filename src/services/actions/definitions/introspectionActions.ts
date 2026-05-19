@@ -215,6 +215,10 @@ export function registerIntrospectionActions(
         .default(20)
         .describe("Max results (1-100, default 20)"),
     }),
+    resultSchema: z.object({
+      totalMatches: z.number().int().nonnegative(),
+      results: z.array(z.unknown()),
+    }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { query, limit = 20 } = args as { query: string; limit?: number };
       const manifest = actionService.list(ctx);
@@ -287,6 +291,13 @@ export function registerIntrospectionActions(
     argsSchema: z.object({
       actionId: z.string().min(1).describe("The action ID to fetch the schema for"),
     }),
+    resultSchema: z.union([
+      z.object({ ok: z.literal(true), entry: z.unknown() }),
+      z.object({
+        ok: z.literal(false),
+        error: z.object({ code: z.string(), message: z.string() }),
+      }),
+    ]),
     run: async (args: unknown, ctx: ActionContext) => {
       const { actionId } = args as { actionId: string };
       const entry = actionService.get(actionId, ctx);
