@@ -20,6 +20,8 @@ function getForgeIcon(id: string): ForgeIcon {
 
 const GENERAL_ID = "general";
 const GITHUB_ID = "github";
+const PROVIDER_LOAD_TIMEOUT_MS = 10_000;
+const CREDENTIAL_RESULT_DISPLAY_MS = 5000;
 
 interface CodeForgeSettingsTabProps {
   activeSubtab: string | null;
@@ -37,7 +39,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
     setLoadTimedOut(false);
     const timer = setTimeout(() => {
       if (!cancelled) setLoadTimedOut(true);
-    }, 10_000);
+    }, PROVIDER_LOAD_TIMEOUT_MS);
 
     window.electron.forge
       .getProviders()
@@ -287,7 +289,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
     const timer = setTimeout(() => {
       setResult(null);
       setErrorMessage(null);
-    }, 5000);
+    }, CREDENTIAL_RESULT_DISPLAY_MS);
     return () => clearTimeout(timer);
   }, [result]);
 
