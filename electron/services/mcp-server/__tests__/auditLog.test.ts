@@ -372,8 +372,6 @@ describe("AuditService hydrate — backward compat", () => {
     expect(records[0]!.severity).toBe("info");
   });
 });
-  });
-});
 
 describe("AuditService.recordAuth401 / getAuditStats", () => {
   it("starts at zero", () => {
