@@ -98,6 +98,7 @@ vi.mock("../../utils/gpuDetection.js", async () => {
 
 vi.mock("../GpuCrashMonitorService.js", () => ({
   isGpuDisabledByFlag: isGpuDisabledByFlagMock,
+  isGpuAngleFallbackApplied: vi.fn(() => false),
 }));
 
 describe("AppHydrationService adversarial", () => {
