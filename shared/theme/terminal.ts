@@ -15,6 +15,10 @@ export function getTerminalThemeFromAppTokens(tokens: AppColorSchemeTokens): ITh
   return {
     background: tokens["terminal-background"],
     foreground: tokens["terminal-foreground"],
+    // xterm 6.0 defaults overviewRulerBorder to #ffffff (the typings doc comment
+    // claiming black is stale). With the ruler enabled this paints a 1px white
+    // strip down the right edge — match the background so the outline blends in.
+    overviewRulerBorder: tokens["terminal-background"],
     cursor: tokens["terminal-cursor"],
     cursorAccent: tokens["terminal-cursor-accent"],
     selectionBackground: tokens["terminal-selection"],

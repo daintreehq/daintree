@@ -79,6 +79,12 @@ export function getTerminalThemeFromCSS(): typeof DAINTREE_TERMINAL_THEME {
   return {
     background: getVar("--theme-terminal-background", DAINTREE_TERMINAL_THEME.background ?? ""),
     foreground: getVar("--theme-terminal-foreground", DAINTREE_TERMINAL_THEME.foreground ?? ""),
+    // Match the background so xterm's overview ruler outline (white by default in
+    // xterm 6.0) blends in instead of painting a white strip on the right edge.
+    overviewRulerBorder: getVar(
+      "--theme-terminal-background",
+      DAINTREE_TERMINAL_THEME.overviewRulerBorder ?? ""
+    ),
     cursor: getVar("--theme-accent-primary", DAINTREE_TERMINAL_THEME.cursor ?? ""),
     cursorAccent: getVar("--theme-text-inverse", DAINTREE_TERMINAL_THEME.cursorAccent ?? ""),
     selectionBackground: getVar(
