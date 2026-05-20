@@ -390,7 +390,7 @@ describe("applyFleetBroadcastResult", () => {
     applyFleetBroadcastResult({
       results: [
         { id: "t1", ok: true },
-        { id: "t2", ok: false, error: { code: "ENOSPC", message: "no space" } },
+        { id: "t2", ok: false, error: { code: "EAGAIN", message: "would block" } },
       ],
     });
 
@@ -403,6 +403,8 @@ describe("applyFleetBroadcastResult", () => {
 
     const arming = useFleetArmingStore.getState();
     expect(arming.armedIds.has("t2")).toBe(true);
+
+    expect(clearDirectingStateMock).not.toHaveBeenCalled();
   });
 
   it("treats failures with no errno code as permanent (defensive default)", () => {
@@ -422,6 +424,28 @@ describe("applyFleetBroadcastResult", () => {
     expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
   });
 
+  it.each(["ENOTCONN", "ENXIO", "EINVAL"])(
+    "disarms the target on %s without recording a chip",
+    (code) => {
+      seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      broadcastFleetRawInput("t1", "x");
+
+      applyFleetBroadcastResult({
+        results: [
+          { id: "t1", ok: true },
+          { id: "t2", ok: false, error: { code, message: `write failure: ${code}` } },
+        ],
+      });
+
+      const arming = useFleetArmingStore.getState();
+      expect(arming.armedIds.has("t2")).toBe(false);
+      expect(arming.armedIds.has("t1")).toBe(true);
+      expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
+      expect(clearDirectingStateMock).toHaveBeenCalledWith("t2");
+    }
+  );
+
   it("handles a mixed batch — disarm permanent, record non-permanent", () => {
     seedPanels([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3"), makeTerminal("t4")]);
     useFleetArmingStore.getState().armIds(["t1", "t2", "t3", "t4"]);
@@ -431,7 +455,7 @@ describe("applyFleetBroadcastResult", () => {
       results: [
         { id: "t1", ok: true },
         { id: "t2", ok: false, error: { code: "EPIPE", message: "broken pipe" } },
-        { id: "t3", ok: false, error: { code: "ENOSPC", message: "no space" } },
+        { id: "t3", ok: false, error: { code: "EAGAIN", message: "would block" } },
         { id: "t4", ok: true },
       ],
     });
@@ -441,6 +465,9 @@ describe("applyFleetBroadcastResult", () => {
     expect(arming.armedIds.has("t3")).toBe(true);
 
     expect(Array.from(useFleetFailureStore.getState().failedIds)).toEqual(["t3"]);
+
+    expect(clearDirectingStateMock).toHaveBeenCalledWith("t2");
+    expect(clearDirectingStateMock).not.toHaveBeenCalledWith("t3");
   });
 
   it("does nothing when every target succeeded", () => {
