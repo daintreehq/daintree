@@ -161,4 +161,96 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(source).toMatch(/hideMainWorktree\s*&&\s*worktree\.isMainWorktree/);
     });
   });
+
+  describe("multi-select and keyboard navigation (#8653)", () => {
+    it("imports the overview keyboard hook", () => {
+      expect(source).toMatch(/useWorktreeOverviewKeyboard/);
+    });
+
+    it("imports getWorktreeOverviewCellId for stable cell ids", () => {
+      expect(source).toMatch(/getWorktreeOverviewCellId/);
+    });
+
+    it("declares modal-local selection state (Set of worktree ids)", () => {
+      expect(source).toMatch(/useState<Set<string>>/);
+    });
+
+    it("anchors range selection in a ref so it survives filter changes", () => {
+      expect(source).toMatch(/selectionAnchorRef\s*=\s*useRef<string\s*\|\s*null>/);
+    });
+
+    it("renders a single role='grid' wrapper around the cards", () => {
+      expect(source).toContain('role="grid"');
+    });
+
+    it("declares aria-multiselectable on the grid", () => {
+      expect(source).toContain('aria-multiselectable="true"');
+    });
+
+    it("threads aria-activedescendant through the grid container", () => {
+      expect(source).toContain("aria-activedescendant={activeDescendantId}");
+    });
+
+    it("renders cells with role='gridcell' and aria-selected", () => {
+      expect(source).toContain('role="gridcell"');
+      expect(source).toMatch(/aria-selected=\{isSelected\}/);
+    });
+
+    it("passes isSelected as boolean (not the Set) to each cell", () => {
+      // Avoid #4749 — never pass the Set or an index down; only the boolean
+      // result of `.has()` so memoization narrows re-renders to changed cells.
+      expect(source).toMatch(/isSelected=\{selectedIds\.has\(worktree\.id\)\}/);
+    });
+
+    it("uses bg-overlay-subtle (not accent) for the selected state", () => {
+      expect(source).toMatch(/isSelected\s*&&\s*"bg-overlay-subtle/);
+    });
+
+    it("does not introduce any forbidden accent token for selection treatment", () => {
+      // Composite assertion — accentGuard.contract.test.ts is the source of
+      // truth, but a local guard catches regressions before that contract
+      // test runs.
+      const selectionAccentTokens = [
+        "bg-daintree-accent",
+        "bg-accent-primary",
+        "bg-accent-soft",
+        "text-daintree-accent",
+        "text-accent-primary",
+      ];
+      for (const token of selectionAccentTokens) {
+        const usagePattern = new RegExp(`isSelected[^"]*${token}|${token}[^"]*isSelected`);
+        expect(source).not.toMatch(usagePattern);
+      }
+    });
+
+    it("reconciles selection when the visible worktree set changes", () => {
+      expect(source).toMatch(/setSelectedIds\(\(prev\)\s*=>/);
+      expect(source).toMatch(/visibleIdSet\.has\(id\)/);
+    });
+
+    it("Escape with selection clears it instead of closing the modal", () => {
+      expect(source).toMatch(/if\s*\(hasSelection\)\s*\{[\s\S]*?clearSelection\(\)/);
+    });
+
+    it("Cmd/Ctrl+A triggers selectAllVisible", () => {
+      expect(source).toMatch(/selectAllVisible\(\)/);
+    });
+
+    it("Cmd/Ctrl+A does not steal text-input Select-All", () => {
+      // Editable check guards against hijacking Cmd+A in a text input.
+      expect(source).toMatch(/isEditable/);
+    });
+
+    it("section headers render with role='presentation' inside the grid", () => {
+      expect(source).toContain('role="presentation"');
+    });
+
+    it("section headers span the full grid width via col-[1/-1]", () => {
+      expect(source).toContain("col-[1/-1]");
+    });
+
+    it("resets the anchor on window blur to avoid stuck Shift from Cmd+Tab (#4591)", () => {
+      expect(source).toMatch(/handleWindowBlur[\s\S]*?selectionAnchorRef\.current\s*=\s*null/);
+    });
+  });
 });

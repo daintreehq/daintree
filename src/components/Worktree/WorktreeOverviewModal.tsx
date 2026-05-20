@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo } from "react";
+import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo, useState } from "react";
 import { X, FilterX } from "lucide-react";
 import { Layers, Plug } from "@/components/icons";
 import { cn } from "@/lib/utils";
@@ -6,6 +6,10 @@ import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
 import { WorktreeSidebarSearchBar } from "./WorktreeSidebarSearchBar";
+import {
+  useWorktreeOverviewKeyboard,
+  getWorktreeOverviewCellId,
+} from "./useWorktreeOverviewKeyboard";
 import type { WorktreeState, WorktreeSnapshot } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -46,6 +50,8 @@ interface OverviewWorktreeCardProps {
   agentSettings?: UseAgentLauncherReturn["agentSettings"];
   homeDir?: string;
   onClose: () => void;
+  isSelected?: boolean;
+  onToggleSelect?: (worktreeId: string, event: React.MouseEvent) => void;
 }
 
 function OverviewWorktreeCard({
@@ -63,6 +69,8 @@ function OverviewWorktreeCard({
   agentSettings,
   homeDir,
   onClose,
+  isSelected,
+  onToggleSelect,
 }: OverviewWorktreeCardProps) {
   const worktreeSnap = useWorktreeStore((state) => state.worktrees.get(worktreeId));
   const worktree = useMemo(
@@ -98,6 +106,10 @@ function OverviewWorktreeCard({
     (agentId: string) => onLaunchAgent?.(worktreeId, agentId),
     [onLaunchAgent, worktreeId]
   );
+  const handleToggleSelect = useCallback(
+    (event: React.MouseEvent) => onToggleSelect?.(worktreeId, event),
+    [onToggleSelect, worktreeId]
+  );
 
   if (!worktree) return null;
 
@@ -117,7 +129,48 @@ function OverviewWorktreeCard({
       agentSettings={agentSettings}
       homeDir={homeDir}
       onAfterTerminalSelect={onClose}
+      isSelected={isSelected}
+      onToggleSelect={onToggleSelect ? handleToggleSelect : undefined}
     />
+  );
+}
+
+/**
+ * One cell of the overview grid. Wraps {@link OverviewWorktreeCard} in the
+ * ARIA `role="gridcell"` container that the keyboard hook tracks via
+ * `aria-activedescendant`. Selection treatment lives on this wrapper, not
+ * the card itself, so the shared {@link WorktreeCard} stays accent-policy
+ * neutral and its sidebar variant is untouched.
+ *
+ * The wrapper is the actual rendered box (the card's chrome). Selection
+ * styling uses `bg-overlay-subtle` + a neutral inset ring per CLAUDE.md's
+ * accent-color restraint — accent is reserved for one load-bearing signal
+ * per view and is never used as a multi-select indicator.
+ */
+function OverviewGridCell(props: OverviewWorktreeCardProps) {
+  const cellId = getWorktreeOverviewCellId(props.worktreeId);
+  const isSelected = props.isSelected ?? false;
+  return (
+    <div
+      id={cellId}
+      role="gridcell"
+      aria-selected={isSelected}
+      data-worktree-overview-cell={props.worktreeId}
+      style={{
+        contentVisibility: "auto",
+        containIntrinsicSize: "auto 240px",
+      }}
+      className={cn(
+        "rounded-lg overflow-hidden",
+        "border border-divider",
+        "bg-daintree-sidebar/50",
+        "transition duration-150",
+        "hover:bg-overlay-subtle hover:shadow-[var(--theme-shadow-ambient)]",
+        isSelected && "bg-overlay-subtle ring-1 ring-inset ring-border-default"
+      )}
+    >
+      <OverviewWorktreeCard {...props} variant="grid" />
+    </div>
   );
 }
 
@@ -414,11 +467,159 @@ export function WorktreeOverviewModal({
     hasFacetFiltersActive,
   ]);
 
+  // ── Multi-select state ────────────────────────────────────────────────
+  // Selection lives on the modal so it resets naturally when the modal
+  // unmounts (isOpen=false returns null below). Persistent stores would
+  // outlive the modal session and re-surface stale selection on reopen.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Anchor for contiguous range selection. Survives filter changes by design
+  // (lesson #4729) — only deliberate actions reset it.
+  const selectionAnchorRef = useRef<string | null>(null);
+
+  const visibleIds = useMemo(
+    () => filteredWorktrees.map((w) => w.id),
+    [filteredWorktrees]
+  );
+  const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
+
+  // Drop selections that are no longer visible (filter narrowed). Anchor is
+  // deliberately not reset — a user re-widening the filter can resume range
+  // selection from where they left off.
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (visibleIdSet.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [visibleIdSet]);
+
+  const toggleSelection = useCallback((worktreeId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(worktreeId)) {
+        next.delete(worktreeId);
+      } else {
+        next.add(worktreeId);
+      }
+      return next;
+    });
+  }, []);
+
+  const selectRangeBetween = useCallback(
+    (anchorId: string, targetId: string) => {
+      const anchorIdx = visibleIds.indexOf(anchorId);
+      const targetIdx = visibleIds.indexOf(targetId);
+      if (anchorIdx === -1 || targetIdx === -1) return;
+      const [lo, hi] =
+        anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
+      setSelectedIds(new Set(visibleIds.slice(lo, hi + 1)));
+    },
+    [visibleIds]
+  );
+
+  const selectAllVisible = useCallback(() => {
+    setSelectedIds(new Set(visibleIds));
+  }, [visibleIds]);
+
+  const clearSelection = useCallback(() => {
+    selectionAnchorRef.current = null;
+    setSelectedIds(new Set());
+  }, []);
+
+  const activateWorktree = useCallback(
+    (worktreeId: string) => {
+      onSelectWorktree(worktreeId);
+      onClose();
+    },
+    [onSelectWorktree, onClose]
+  );
+
+  const handleCardToggleSelect = useCallback(
+    (worktreeId: string, event: React.MouseEvent) => {
+      // Shift+Click on a card extends from the anchor; Ctrl/Cmd+Click toggles
+      // the individual cell. A plain click without modifiers never reaches
+      // this handler (WorktreeCard routes those to onSelect).
+      if (event.shiftKey && selectionAnchorRef.current !== null) {
+        selectRangeBetween(selectionAnchorRef.current, worktreeId);
+        return;
+      }
+      selectionAnchorRef.current = worktreeId;
+      toggleSelection(worktreeId);
+    },
+    [selectRangeBetween, toggleSelection]
+  );
+
+  const hasSelection = selectedIds.size > 0;
+
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const closeModal = useCallback(() => onClose(), [onClose]);
+
+  const { activeDescendantId, handleGridKeyDown, handleGridFocus } = useWorktreeOverviewKeyboard({
+    worktreeIds: visibleIds,
+    gridRef,
+    selectionAnchorRef,
+    onActivate: activateWorktree,
+    onToggleSelection: toggleSelection,
+    onSelectRange: selectRangeBetween,
+    onSelectAll: selectAllVisible,
+    onClearSelection: clearSelection,
+    onEscapeWithoutSelection: closeModal,
+    hasSelection,
+  });
+
+  // Reset modifier-driven anchor state when the window loses focus (lesson
+  // #4591) — prevents a stuck Shift after Cmd+Tab from producing phantom
+  // range selections on the next click.
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleWindowBlur = () => {
+      // Modifier keys are tracked by the browser; only the anchor state
+      // needs explicit reset on blur, so a subsequent un-modifier click
+      // doesn't pick up an unintended range origin.
+      selectionAnchorRef.current = null;
+    };
+    window.addEventListener("blur", handleWindowBlur);
+    return () => window.removeEventListener("blur", handleWindowBlur);
+  }, [isOpen]);
+
+  // Document-level keydown — fallback for keys fired outside the grid (e.g.
+  // when focus is on the close button or filter popover trigger). The grid
+  // hook handles Escape / Cmd+A when the grid is focused.
   const handleKeyDown = useEffectEvent((e: KeyboardEvent) => {
     if (e.key === "Escape") {
+      if (hasSelection) {
+        e.preventDefault();
+        e.stopPropagation();
+        clearSelection();
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       onClose();
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && (e.key === "a" || e.key === "A")) {
+      // Only intercept when focus is inside the modal but not in a text
+      // input — otherwise Cmd+A in a filter input must select the text.
+      const target = e.target as HTMLElement | null;
+      const isEditable =
+        !!target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+      if (isEditable) return;
+      e.preventDefault();
+      e.stopPropagation();
+      selectionAnchorRef.current = visibleIds[0] ?? null;
+      selectAllVisible();
     }
   });
 
@@ -684,115 +885,104 @@ export function WorktreeOverviewModal({
                 </Button>
               }
             />
-          ) : groupedSections ? (
-            <div className="space-y-6">
-              {groupedSections.map((section: GroupedSection<WorktreeState>) => (
-                <div key={section.type}>
-                  <div className="flex items-center gap-2 mb-3">
-                    <h3 className="text-xs font-medium text-daintree-text/60 uppercase tracking-wider">
-                      {section.displayName}
-                    </h3>
-                    <span className="text-xs text-daintree-text/40">
-                      ({section.worktrees.length})
-                    </span>
-                  </div>
-                  <div
-                    className={cn(
-                      "grid gap-3",
-                      "grid-cols-[repeat(auto-fit,minmax(min(320px,100%),480px))]",
-                      "justify-center",
-                      "auto-rows-min"
-                    )}
-                  >
-                    {section.worktrees.map((worktree: WorktreeState) => (
-                      <div
-                        key={worktree.id}
-                        style={{
-                          contentVisibility: "auto",
-                          containIntrinsicSize: "auto 240px",
-                        }}
-                        className={cn(
-                          "rounded-lg overflow-hidden",
-                          "border border-divider",
-                          "bg-daintree-sidebar/50",
-                          "transition duration-150",
-                          "hover:bg-overlay-subtle hover:shadow-[var(--theme-shadow-ambient)]"
-                        )}
-                      >
-                        <OverviewWorktreeCard
-                          worktreeId={worktree.id}
-                          activeWorktreeId={activeWorktreeId}
-                          focusedWorktreeId={focusedWorktreeId}
-                          totalWorktreeCount={worktrees.length}
-                          onSelectWorktree={onSelectWorktree}
-                          onCopyTree={onCopyTree}
-                          onOpenEditor={onOpenEditor}
-                          onSaveLayout={onSaveLayout}
-                          onLaunchAgent={onLaunchAgent}
-                          agentAvailability={agentAvailability}
-                          agentSettings={agentSettings}
-                          homeDir={homeDir}
-                          onClose={onClose}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
           ) : (
             <div
+              ref={gridRef}
+              role="grid"
+              tabIndex={0}
+              aria-multiselectable="true"
+              aria-activedescendant={activeDescendantId}
+              aria-rowcount={filteredWorktrees.length}
+              onKeyDown={handleGridKeyDown}
+              onFocus={handleGridFocus}
               className={cn(
                 "grid gap-3",
                 "grid-cols-[repeat(auto-fit,minmax(min(320px,100%),480px))]",
                 "justify-center",
-                "items-start"
+                "auto-rows-min items-start",
+                "focus:outline-hidden"
               )}
             >
-              {filteredWorktrees.map((worktree) => (
-                <div
-                  key={worktree.id}
-                  style={{
-                    contentVisibility: "auto",
-                    containIntrinsicSize: "auto 240px",
-                  }}
-                  className={cn(
-                    "rounded-lg overflow-hidden",
-                    "border border-divider",
-                    "bg-daintree-sidebar/50",
-                    "transition duration-150",
-                    "hover:bg-overlay-subtle hover:shadow-[var(--theme-shadow-ambient)]"
-                  )}
-                >
-                  <OverviewWorktreeCard
-                    variant="grid"
-                    worktreeId={worktree.id}
-                    activeWorktreeId={activeWorktreeId}
-                    focusedWorktreeId={focusedWorktreeId}
-                    totalWorktreeCount={worktrees.length}
-                    onSelectWorktree={onSelectWorktree}
-                    onCopyTree={onCopyTree}
-                    onOpenEditor={onOpenEditor}
-                    onSaveLayout={onSaveLayout}
-                    onLaunchAgent={onLaunchAgent}
-                    agentAvailability={agentAvailability}
-                    agentSettings={agentSettings}
-                    homeDir={homeDir}
-                    onClose={onClose}
-                  />
-                </div>
-              ))}
+              {groupedSections
+                ? groupedSections.flatMap((section: GroupedSection<WorktreeState>) => [
+                    <div
+                      key={`section-header-${section.type}`}
+                      role="presentation"
+                      className="col-[1/-1] flex items-center gap-2 mt-2 first:mt-0"
+                    >
+                      <h3 className="text-xs font-medium text-daintree-text/60 uppercase tracking-wider">
+                        {section.displayName}
+                      </h3>
+                      <span className="text-xs text-daintree-text/40">
+                        ({section.worktrees.length})
+                      </span>
+                    </div>,
+                    ...section.worktrees.map((worktree: WorktreeState) => (
+                      <OverviewGridCell
+                        key={worktree.id}
+                        worktreeId={worktree.id}
+                        activeWorktreeId={activeWorktreeId}
+                        focusedWorktreeId={focusedWorktreeId}
+                        totalWorktreeCount={worktrees.length}
+                        onSelectWorktree={onSelectWorktree}
+                        onCopyTree={onCopyTree}
+                        onOpenEditor={onOpenEditor}
+                        onSaveLayout={onSaveLayout}
+                        onLaunchAgent={onLaunchAgent}
+                        agentAvailability={agentAvailability}
+                        agentSettings={agentSettings}
+                        homeDir={homeDir}
+                        onClose={onClose}
+                        isSelected={selectedIds.has(worktree.id)}
+                        onToggleSelect={handleCardToggleSelect}
+                      />
+                    )),
+                  ])
+                : filteredWorktrees.map((worktree) => (
+                    <OverviewGridCell
+                      key={worktree.id}
+                      worktreeId={worktree.id}
+                      activeWorktreeId={activeWorktreeId}
+                      focusedWorktreeId={focusedWorktreeId}
+                      totalWorktreeCount={worktrees.length}
+                      onSelectWorktree={onSelectWorktree}
+                      onCopyTree={onCopyTree}
+                      onOpenEditor={onOpenEditor}
+                      onSaveLayout={onSaveLayout}
+                      onLaunchAgent={onLaunchAgent}
+                      agentAvailability={agentAvailability}
+                      agentSettings={agentSettings}
+                      homeDir={homeDir}
+                      onClose={onClose}
+                      isSelected={selectedIds.has(worktree.id)}
+                      onToggleSelect={handleCardToggleSelect}
+                    />
+                  ))}
             </div>
           )}
         </div>
 
         {/* Footer hint */}
         <div className="px-6 py-3 border-t border-divider shrink-0">
-          <div className="flex items-center justify-center gap-4 text-xs text-daintree-text/40">
+          <div className="flex items-center justify-center gap-x-4 gap-y-1 flex-wrap text-xs text-daintree-text/40">
             <span>
-              <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">Esc</kbd> to close
+              <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">↑↓←→</kbd> navigate
             </span>
-            <span>Click a worktree to switch</span>
+            <span>
+              <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">Enter</kbd> switch
+            </span>
+            <span>
+              <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">Space</kbd> select
+            </span>
+            <span>
+              <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">Esc</kbd>
+              {hasSelection ? " clear selection" : " close"}
+            </span>
+            {hasSelection && (
+              <span className="text-daintree-text/60 tabular-nums">
+                {selectedIds.size} selected
+              </span>
+            )}
           </div>
         </div>
       </div>
