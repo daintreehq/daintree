@@ -8,6 +8,7 @@ import {
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalSnapshot, TabGroup } from "../../types/index.js";
 import { typedHandle } from "../utils.js";
+import { getPanelSuspectLedger } from "../../services/PanelSuspectLedgerService.js";
 
 /**
  * Validate and filter terminal snapshots using the Zod schema.
@@ -96,11 +97,20 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
     const validTerminals = sanitizeTerminals(terminals, `project:set-terminals(${projectId})`);
 
     const existingState = await projectStore.getProjectState(projectId);
+    // Re-merge quarantined panel snapshots from the previous on-disk state.
+    // The renderer's panel store has the quarantined panels filtered out,
+    // so its setTerminals payload omits them — without this merge, the
+    // first save after a quarantine boot would erase the snapshot needed
+    // to restore the panel later.
+    const mergedTerminals = getPanelSuspectLedger().mergeQuarantined(
+      validTerminals,
+      existingState?.terminals ?? []
+    );
     const newState = {
       projectId,
       activeWorktreeId: existingState?.activeWorktreeId,
       sidebarWidth: existingState?.sidebarWidth ?? 350,
-      terminals: validTerminals,
+      terminals: mergedTerminals,
       tabGroups: existingState?.tabGroups ?? [],
       terminalLayout: existingState?.terminalLayout,
       focusMode: existingState?.focusMode,

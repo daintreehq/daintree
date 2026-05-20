@@ -54,10 +54,10 @@ describe("PanelSuspectLedgerService", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("returns empty quarantine list on first crash with one suspect panel below threshold", () => {
+  it("does not quarantine a panel after one strike", () => {
     const svc = new PanelSuspectLedgerService();
-    const result = svc.initialize([panel("a", true)]);
-    expect(result).toEqual([]);
+    svc.initialize([panel("a", true)]);
+    expect(svc.getQuarantinedPanelIds().size).toBe(0);
     const persisted = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
     expect(persisted.suspects.a).toBe(1);
   });
@@ -66,36 +66,40 @@ describe("PanelSuspectLedgerService", () => {
     let svc = new PanelSuspectLedgerService();
     svc.initialize([panel("a", true)]);
     svc = new PanelSuspectLedgerService();
-    const result = svc.initialize([panel("a", true)]);
-    expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("a");
-    expect(result[0].suspectCount).toBe(2);
+    svc.initialize([panel("a", true)]);
+    const ids = svc.getQuarantinedPanelIds();
+    expect(ids.has("a")).toBe(true);
+    expect(svc.getStrikeCount("a")).toBe(2);
   });
 
-  it("does not quarantine a panel that has only one strike", () => {
+  it("keeps a quarantined panel visible on the very next clean boot (no premature decay below threshold)", () => {
     let svc = new PanelSuspectLedgerService();
-    svc.initialize([panel("a", true), panel("b", false)]);
+    svc.initialize([panel("a", true)]);
     svc = new PanelSuspectLedgerService();
-    const result = svc.initialize([panel("a", false), panel("b", false)]);
-    expect(result).toEqual([]);
+    svc.initialize([panel("a", true)]);
+    expect(svc.getQuarantinedPanelIds().has("a")).toBe(true);
+    // A single clean boot should NOT restore the panel — it stays quarantined
+    // until PANEL_CLEAN_DECAY_COUNT clean launches have accumulated.
+    svc = new PanelSuspectLedgerService();
+    svc.recordCleanLaunch();
+    expect(svc.getQuarantinedPanelIds().has("a")).toBe(true);
   });
 
   it("decays strike count after the configured number of clean launches", () => {
     let svc = new PanelSuspectLedgerService();
-    // Two strikes — quarantined
     svc.initialize([panel("a", true)]);
     svc = new PanelSuspectLedgerService();
     svc.initialize([panel("a", true)]);
-    // The required number of clean launches via recordCleanLaunch
     for (let i = 0; i < PANEL_CLEAN_DECAY_COUNT; i++) {
       svc = new PanelSuspectLedgerService();
       svc.recordCleanLaunch();
     }
-    // Next crash boot should no longer quarantine
+    // After PANEL_CLEAN_DECAY_COUNT clean launches, strike count decremented by 1.
     svc = new PanelSuspectLedgerService();
-    const result = svc.initialize([panel("a", true)]);
-    // After decay (2 → 1) the new strike brings it back to 2 → quarantined
-    expect(result).toHaveLength(1);
+    svc.recordCleanLaunch();
+    expect(svc.getStrikeCount("a")).toBe(1);
+    // Below threshold now — not quarantined.
+    expect(svc.getQuarantinedPanelIds().size).toBe(0);
   });
 
   it("clears strike count when restorePanel is called", () => {
@@ -103,9 +107,9 @@ describe("PanelSuspectLedgerService", () => {
     svc.initialize([panel("a", true)]);
     svc = new PanelSuspectLedgerService();
     svc.initialize([panel("a", true)]);
-    expect(svc.getQuarantinedPanels()).toHaveLength(1);
+    expect(svc.getQuarantinedPanelIds().has("a")).toBe(true);
     svc.restorePanel("a");
-    expect(svc.getQuarantinedPanels()).toHaveLength(0);
+    expect(svc.getQuarantinedPanelIds().has("a")).toBe(false);
     const persisted = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
     expect(persisted.suspects.a).toBeUndefined();
   });
@@ -121,10 +125,12 @@ describe("PanelSuspectLedgerService", () => {
       "utf8"
     );
     const svc = new PanelSuspectLedgerService();
-    const result = svc.initialize([panel("a", false), panel("e", false)]);
-    // a survives at 2 with one decay credit (cleanCounts[a]=1, not yet decayed)
-    // e survives at 1 (Math.floor(1.7))
-    expect(result.map((p) => p.id)).toEqual(["a"]);
+    svc.initialize([panel("a", false), panel("e", false)]);
+    expect(svc.getStrikeCount("a")).toBe(2);
+    expect(svc.getStrikeCount("e")).toBe(1);
+    expect(svc.getStrikeCount("b")).toBe(0);
+    expect(svc.getStrikeCount("c")).toBe(0);
+    expect(svc.getStrikeCount("d")).toBe(0);
   });
 
   it("quarantines a corrupt ledger file and uses a fresh ledger", () => {
@@ -172,43 +178,99 @@ describe("PanelSuspectLedgerService", () => {
     expect(persisted.cleanCounts.b).toBeUndefined();
   });
 
+  it("does NOT purge ledger entries when initialize is called with an empty summary list", () => {
+    fs.writeFileSync(
+      ledgerPath,
+      JSON.stringify({
+        version: 1,
+        suspects: { a: 2, b: 1 },
+        cleanCounts: { a: 1 },
+      }),
+      "utf8"
+    );
+    const svc = new PanelSuspectLedgerService();
+    svc.initialize([]);
+    const persisted = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
+    expect(persisted.suspects.a).toBe(2);
+    expect(persisted.suspects.b).toBe(1);
+    // Quarantine ID set must still surface the above-threshold entry.
+    expect(svc.getQuarantinedPanelIds().has("a")).toBe(true);
+  });
+
+  it("counts duplicate panel IDs in one snapshot as a single strike", () => {
+    const svc = new PanelSuspectLedgerService();
+    svc.initialize([panel("a", true), panel("a", true), panel("a", true)]);
+    expect(svc.getStrikeCount("a")).toBe(1);
+  });
+
   it("is idempotent — second initialize() in the same instance is a no-op", () => {
     const svc = new PanelSuspectLedgerService();
     svc.initialize([panel("a", true)]);
-    const result = svc.initialize([panel("a", true)]);
-    // Strike count should not have doubled
+    svc.initialize([panel("a", true)]);
     const persisted = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
     expect(persisted.suspects.a).toBe(1);
-    expect(result).toEqual(svc.getQuarantinedPanels());
   });
 
   it("clean launch on a fresh ledger does not produce quarantined panels", () => {
     const svc = new PanelSuspectLedgerService();
     svc.recordCleanLaunch();
-    expect(svc.getQuarantinedPanels()).toEqual([]);
+    expect(svc.getQuarantinedPanelIds().size).toBe(0);
   });
 
-  it("clean launches reset cleanCount streak when a strike interrupts decay", () => {
+  it("a non-suspect appearance in the snapshot accrues a clean-launch credit", () => {
+    let svc = new PanelSuspectLedgerService();
+    svc.initialize([panel("a", true)]);
+    expect(svc.getStrikeCount("a")).toBe(1);
+    svc = new PanelSuspectLedgerService();
+    svc.initialize([panel("a", false)]);
+    const persisted = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
+    expect(persisted.cleanCounts.a).toBe(1);
+  });
+
+  it("recordCleanLaunch surfaces above-threshold panels via getQuarantinedPanelIds", () => {
     let svc = new PanelSuspectLedgerService();
     svc.initialize([panel("a", true)]);
     svc = new PanelSuspectLedgerService();
     svc.initialize([panel("a", true)]);
-    // 1 clean launch (cleanCounts[a] = 1)
+    // Clean boot: quarantine ID set must still include "a".
     svc = new PanelSuspectLedgerService();
     svc.recordCleanLaunch();
-    let persisted = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
-    expect(persisted.cleanCounts.a).toBe(1);
-    // New strike resets cleanCounts[a]
-    svc = new PanelSuspectLedgerService();
-    svc.initialize([panel("a", true)]);
-    persisted = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
-    expect(persisted.cleanCounts.a).toBeUndefined();
-    expect(persisted.suspects.a).toBe(3);
+    expect(svc.getQuarantinedPanelIds().has("a")).toBe(true);
   });
 
-  it("getQuarantinedPanelIds returns an empty set when nothing is quarantined", () => {
-    const svc = new PanelSuspectLedgerService();
+  it("mergeQuarantined preserves quarantined panels from existing state", () => {
+    let svc = new PanelSuspectLedgerService();
     svc.initialize([panel("a", true)]);
-    expect(svc.getQuarantinedPanelIds().size).toBe(0);
+    svc = new PanelSuspectLedgerService();
+    svc.initialize([panel("a", true)]);
+    // "a" is quarantined; renderer's incoming list omits it.
+    const incoming = [{ id: "b" }, { id: "c" }];
+    const existing = [{ id: "a", extra: "snapshot" }, { id: "b" }, { id: "c" }];
+    const merged = svc.mergeQuarantined(incoming, existing);
+    expect(merged.map((t) => t.id).sort()).toEqual(["a", "b", "c"]);
+    const restored = merged.find((t) => t.id === "a") as { id: string; extra?: string };
+    expect(restored.extra).toBe("snapshot");
+  });
+
+  it("mergeQuarantined returns incoming unchanged when nothing is quarantined", () => {
+    const svc = new PanelSuspectLedgerService();
+    svc.initialize([]);
+    const incoming = [{ id: "x" }, { id: "y" }];
+    const result = svc.mergeQuarantined(incoming, [{ id: "z" }]);
+    expect(result).toBe(incoming);
+  });
+
+  it("mergeQuarantined drops renderer-sent entries for IDs that are quarantined", () => {
+    let svc = new PanelSuspectLedgerService();
+    svc.initialize([panel("a", true)]);
+    svc = new PanelSuspectLedgerService();
+    svc.initialize([panel("a", true)]);
+    // Renderer accidentally includes the quarantined ID; merge favors the
+    // existing-state snapshot.
+    const incoming = [{ id: "a", source: "renderer" }];
+    const existing = [{ id: "a", source: "existing" }];
+    const merged = svc.mergeQuarantined(incoming, existing);
+    expect(merged).toHaveLength(1);
+    expect((merged[0] as { source: string }).source).toBe("existing");
   });
 });

@@ -232,7 +232,7 @@ describe("SafeModeBanner", () => {
     expect(screen.getAllByRole("button", { name: /Restore panel/i })).toHaveLength(2);
   });
 
-  it("calls crashRecovery.restorePanel and removes the entry on click", async () => {
+  it("calls crashRecovery.restorePanel, removes the entry, and triggers a relaunch", async () => {
     useSafeModeStore.setState({
       safeMode: true,
       quarantinedPanels: [
@@ -253,6 +253,7 @@ describe("SafeModeBanner", () => {
     await waitFor(() => {
       expect(useSafeModeStore.getState().quarantinedPanels).toBeUndefined();
     });
+    expect(resetAndRelaunch).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the entry visible if restorePanel rejects", async () => {

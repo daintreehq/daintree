@@ -13,6 +13,7 @@ import {
   sanitizeDraftInputs,
 } from "../terminalLayout.js";
 import { sanitizeTabGroups } from "../../../schemas/index.js";
+import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerService.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { Project } from "../../../types/index.js";
 import type { ProjectSwitchOutgoingState } from "../../../../shared/types/ipc/project.js";
@@ -137,10 +138,17 @@ async function persistOutgoingProjectState(
         ) as TabGroup[])
       : undefined;
   const existing = await projectStore.getProjectState(previousProjectId);
+  // Re-merge quarantined panel snapshots from the previous on-disk state so
+  // a project switch save can't silently erase quarantined panel data the
+  // restore-panel flow still needs (#8704).
+  const mergedTerminals =
+    validTerminals !== undefined
+      ? getPanelSuspectLedger().mergeQuarantined(validTerminals, existing?.terminals ?? [])
+      : undefined;
   await projectStore.saveProjectState(previousProjectId, {
     ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
     projectId: previousProjectId,
-    ...(validTerminals !== undefined && { terminals: validTerminals }),
+    ...(mergedTerminals !== undefined && { terminals: mergedTerminals }),
     ...(validSizes !== undefined && { terminalSizes: validSizes }),
     ...(validDrafts !== undefined && { draftInputs: validDrafts }),
     ...(validTabGroups !== undefined && { tabGroups: validTabGroups }),

@@ -2,10 +2,7 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
-import type {
-  PanelSummary,
-  QuarantinedPanelInfo,
-} from "../../shared/types/ipc/crashRecovery.js";
+import type { PanelSummary } from "../../shared/types/ipc/crashRecovery.js";
 
 const LEDGER_FILENAME = "panel-suspect-ledger.json";
 
@@ -60,7 +57,6 @@ export class PanelSuspectLedgerService {
   private ledgerPath: string;
   private state: PanelLedgerState = freshLedger();
   private initialized = false;
-  private quarantined: QuarantinedPanelInfo[] = [];
 
   constructor() {
     this.userData = app.getPath("userData");
@@ -70,39 +66,57 @@ export class PanelSuspectLedgerService {
   /**
    * Reconcile the ledger against the pending crash's panel summaries.
    *
-   * Each panel marked `isSuspect` in the pre-crash backup gets a strike,
-   * its `cleanCount` resets. Panels present in the snapshot that weren't
-   * suspects accrue a clean-launch credit toward decay. Returns the list
-   * of panels whose strike count meets the quarantine threshold.
+   * Each unique panel marked `isSuspect` in the pre-crash backup gets a
+   * strike and its `cleanCount` resets. Panels present in the snapshot
+   * that weren't suspects accrue a clean-launch credit toward decay.
    *
    * Call once per boot, after `consumeMarker()` resolves and before
-   * `handleAppHydrate` returns — the result is what the renderer surfaces
-   * in the safe-mode banner.
+   * `handleAppHydrate` runs. The resulting quarantined-id set is queried
+   * via `getQuarantinedPanelIds()` whenever the hydrate handler needs it.
    */
-  initialize(panelSummaries: PanelSummary[]): QuarantinedPanelInfo[] {
+  initialize(panelSummaries: PanelSummary[]): void {
     if (this.initialized) {
-      return this.quarantined;
+      return;
     }
     this.initialized = true;
     this.state = this.readLedger();
 
+    if (panelSummaries.length === 0) {
+      // No information about current panels (e.g. backup snapshot
+      // missing or corrupt). Don't prune existing ledger entries —
+      // an unknown state must not be interpreted as "all panels are
+      // gone" because that silently erases accumulated strike history.
+      this.persist();
+      return;
+    }
+
     const seenIds = new Set<string>();
+    const struckIds = new Set<string>();
     for (const summary of panelSummaries) {
       if (typeof summary.id !== "string" || summary.id.length === 0) continue;
       seenIds.add(summary.id);
-      if (summary.isSuspect) {
-        const next = (this.state.suspects[summary.id] ?? 0) + 1;
-        this.state.suspects[summary.id] = next;
-        // A fresh strike invalidates whatever clean-launch streak existed.
-        delete this.state.cleanCounts[summary.id];
-      } else {
-        this.applyCleanCredit(summary.id);
-      }
+      if (!summary.isSuspect) continue;
+      // Dedupe: a malformed backup with two terminal snapshots sharing
+      // the same id must not double-strike in a single crash.
+      if (struckIds.has(summary.id)) continue;
+      struckIds.add(summary.id);
+      const next = (this.state.suspects[summary.id] ?? 0) + 1;
+      this.state.suspects[summary.id] = next;
+      // A fresh strike invalidates whatever clean-launch streak existed.
+      delete this.state.cleanCounts[summary.id];
+    }
+
+    // Apply a clean-launch credit to every previously-suspect panel that
+    // was present in the snapshot but did NOT get a strike this boot.
+    for (const summary of panelSummaries) {
+      if (typeof summary.id !== "string" || summary.id.length === 0) continue;
+      if (struckIds.has(summary.id)) continue;
+      if (this.state.suspects[summary.id] === undefined) continue;
+      this.applyCleanCredit(summary.id);
     }
 
     // Panels that no longer exist in the snapshot can't be quarantined or
-    // restored. Drop them so the ledger doesn't grow unbounded across
-    // panel-creation churn.
+    // restored, so drop them to keep the ledger bounded.
     for (const id of Object.keys(this.state.suspects)) {
       if (!seenIds.has(id)) {
         delete this.state.suspects[id];
@@ -115,15 +129,13 @@ export class PanelSuspectLedgerService {
       }
     }
 
-    this.quarantined = this.buildQuarantineList(panelSummaries);
     this.persist();
-    return this.quarantined;
   }
 
   /**
    * Decay every ledger entry by one clean-launch credit. Called on boots
    * where no crash marker was consumed — the previous session exited
-   * cleanly, so every panel that survived earns a tick toward decay.
+   * cleanly, so every panel with an active strike earns a tick toward decay.
    *
    * Idempotent because `initialized` is set on first call: a single boot
    * triggers either `initialize()` (after crash) or `recordCleanLaunch()`
@@ -138,14 +150,12 @@ export class PanelSuspectLedgerService {
       this.applyCleanCredit(id);
     }
 
-    this.quarantined = [];
     this.persist();
   }
 
   /**
-   * Clear a single panel's strike count so the next safe-mode boot
-   * restores it. Used by the per-panel "Restore panel" affordance in
-   * the safe-mode banner.
+   * Clear a single panel's strike count so the next boot restores it.
+   * Used by the per-panel "Restore panel" affordance in the safe-mode banner.
    */
   restorePanel(panelId: string): void {
     if (!this.initialized) {
@@ -161,29 +171,43 @@ export class PanelSuspectLedgerService {
       delete this.state.cleanCounts[panelId];
       mutated = true;
     }
-    this.quarantined = this.quarantined.filter((p) => p.id !== panelId);
     if (mutated) {
       this.persist();
     }
   }
 
-  /**
-   * Current quarantined panel list, populated by the most recent
-   * `initialize()` call. Empty after `recordCleanLaunch()`.
-   */
-  getQuarantinedPanels(): QuarantinedPanelInfo[] {
-    return this.quarantined;
+  /** Set of panel IDs whose strike count meets the quarantine threshold. */
+  getQuarantinedPanelIds(): Set<string> {
+    const out = new Set<string>();
+    for (const [id, count] of Object.entries(this.state.suspects)) {
+      if (count >= PANEL_SUSPECT_THRESHOLD) out.add(id);
+    }
+    return out;
   }
 
-  /** Set of panel IDs the hydrate handler must filter out of `terminalsToUse`. */
-  getQuarantinedPanelIds(): Set<string> {
-    return new Set(this.quarantined.map((p) => p.id));
+  /** Strike count for a single panel (0 if absent). */
+  getStrikeCount(panelId: string): number {
+    return this.state.suspects[panelId] ?? 0;
+  }
+
+  /**
+   * Replace quarantined panels in `incoming` with their authoritative
+   * snapshots from `existing`. Used by per-project state save handlers so
+   * the renderer's filtered terminals list can't silently erase quarantined
+   * panel data from disk — restore-panel later relies on the snapshot
+   * still being present in per-project state.
+   */
+  mergeQuarantined<T extends { id: string }>(incoming: T[], existing: T[]): T[] {
+    const quarantinedIds = this.getQuarantinedPanelIds();
+    if (quarantinedIds.size === 0) return incoming;
+    const incomingClean = incoming.filter((t) => !quarantinedIds.has(t.id));
+    const preserved = existing.filter((t) => quarantinedIds.has(t.id));
+    return [...incomingClean, ...preserved];
   }
 
   private applyCleanCredit(panelId: string): void {
     const currentStrikes = this.state.suspects[panelId];
     if (currentStrikes === undefined || currentStrikes <= 0) {
-      // No strikes — nothing to decay.
       delete this.state.cleanCounts[panelId];
       return;
     }
@@ -199,25 +223,6 @@ export class PanelSuspectLedgerService {
     } else {
       this.state.cleanCounts[panelId] = next;
     }
-  }
-
-  private buildQuarantineList(panelSummaries: PanelSummary[]): QuarantinedPanelInfo[] {
-    const out: QuarantinedPanelInfo[] = [];
-    const summaryById = new Map(panelSummaries.map((p) => [p.id, p]));
-    for (const [id, count] of Object.entries(this.state.suspects)) {
-      if (count < PANEL_SUSPECT_THRESHOLD) continue;
-      const summary = summaryById.get(id);
-      if (!summary) continue;
-      out.push({
-        id,
-        kind: summary.kind,
-        title: summary.title,
-        cwd: summary.cwd,
-        worktreeId: summary.worktreeId,
-        suspectCount: count,
-      });
-    }
-    return out;
   }
 
   private readLedger(): PanelLedgerState {

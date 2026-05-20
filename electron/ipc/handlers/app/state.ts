@@ -62,18 +62,32 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         // The prefetch was built before the quarantine filter — apply it
         // here so a project switch can't smuggle a repeat-suspect panel
         // back into restoration that the boot hydrate would have dropped.
-        const ledger = getPanelSuspectLedger();
-        const quarantined = ledger.getQuarantinedPanels();
+        const cacheLedger = getPanelSuspectLedger();
+        const cacheQuarantinedIds = cacheLedger.getQuarantinedPanelIds();
         let filteredCached = cached;
-        let cachedSkipped = 0;
-        if (quarantined.length > 0 && Array.isArray(cached.appState?.terminals)) {
-          const quarantinedIdSet = new Set(quarantined.map((p) => p.id));
-          const beforeCount = cached.appState.terminals.length;
-          const filteredTerminals = cached.appState.terminals.filter(
-            (t) => !quarantinedIdSet.has(t.id)
-          );
-          cachedSkipped = beforeCount - filteredTerminals.length;
-          if (cachedSkipped > 0) {
+        const cacheQuarantinedPanels: import(
+          "../../../../shared/types/ipc/crashRecovery.js"
+        ).QuarantinedPanelInfo[] = [];
+        if (cacheQuarantinedIds.size > 0 && Array.isArray(cached.appState?.terminals)) {
+          const filteredTerminals: typeof cached.appState.terminals = [];
+          for (const t of cached.appState.terminals) {
+            if (cacheQuarantinedIds.has(t.id)) {
+              cacheQuarantinedPanels.push({
+                id: t.id,
+                kind: typeof t.kind === "string" && t.kind.length > 0 ? t.kind : "terminal",
+                title: typeof t.title === "string" ? t.title : "",
+                cwd: typeof t.cwd === "string" && t.cwd.length > 0 ? t.cwd : undefined,
+                worktreeId:
+                  typeof t.worktreeId === "string" && t.worktreeId.length > 0
+                    ? t.worktreeId
+                    : undefined,
+                suspectCount: cacheLedger.getStrikeCount(t.id),
+              });
+            } else {
+              filteredTerminals.push(t);
+            }
+          }
+          if (cacheQuarantinedPanels.length > 0) {
             filteredCached = {
               ...cached,
               appState: { ...cached.appState, terminals: filteredTerminals },
@@ -82,8 +96,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         }
         return {
           ...filteredCached,
-          skippedPanelCount: cachedSkipped,
-          quarantinedPanels: quarantined,
+          skippedPanelCount: cacheQuarantinedPanels.length,
+          quarantinedPanels: cacheQuarantinedPanels,
           crashCount: cacheGuard.getCrashCount(),
           lastCrashAt: cacheGuard.getLastCrashTimestamp(),
           settingsRecovery: consumePendingSettingsRecovery(),
@@ -264,13 +278,31 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // global-fallback paths (#4911 phantom-restore pattern).
     const guard = getCrashLoopGuard();
     const inSafeMode = guard.isSafeMode();
-    const quarantinedPanels = getPanelSuspectLedger().getQuarantinedPanels();
-    const quarantinedIds = new Set(quarantinedPanels.map((p) => p.id));
+    const ledger = getPanelSuspectLedger();
+    const quarantinedIds = ledger.getQuarantinedPanelIds();
+    const quarantinedPanels: import(
+      "../../../../shared/types/ipc/crashRecovery.js"
+    ).QuarantinedPanelInfo[] = [];
     let skippedPanelCount = 0;
     if (quarantinedIds.size > 0) {
-      const before = terminalsToUse.length;
-      terminalsToUse = terminalsToUse.filter((t) => !quarantinedIds.has(t.id));
-      skippedPanelCount = before - terminalsToUse.length;
+      const filtered: typeof terminalsToUse = [];
+      for (const t of terminalsToUse) {
+        if (quarantinedIds.has(t.id)) {
+          quarantinedPanels.push({
+            id: t.id,
+            kind: typeof t.kind === "string" && t.kind.length > 0 ? t.kind : "terminal",
+            title: typeof t.title === "string" ? t.title : "",
+            cwd: typeof t.cwd === "string" && t.cwd.length > 0 ? t.cwd : undefined,
+            worktreeId:
+              typeof t.worktreeId === "string" && t.worktreeId.length > 0 ? t.worktreeId : undefined,
+            suspectCount: ledger.getStrikeCount(t.id),
+          });
+        } else {
+          filtered.push(t);
+        }
+      }
+      terminalsToUse = filtered;
+      skippedPanelCount = quarantinedPanels.length;
       if (skippedPanelCount > 0) {
         terminalsSource = "quarantine";
         console.log(

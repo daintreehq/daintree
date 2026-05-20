@@ -54,6 +54,11 @@ export function SafeModeBanner() {
     try {
       await window.electron.crashRecovery.restorePanel(panelId);
       removeQuarantinedPanel(panelId);
+      // Trigger a relaunch so the panel comes back before any in-session
+      // save can overwrite per-project state with the renderer's filtered
+      // terminal list. Mirrors the "Restart normally" pattern — the ledger
+      // entry is already cleared, so the next boot will restore the panel.
+      await window.electron.app.resetAndRelaunch();
     } catch (error) {
       logError("Failed to restore quarantined panel", error);
       setPendingRestoreIds((prev) => {
