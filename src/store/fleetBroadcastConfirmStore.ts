@@ -15,6 +15,12 @@ export interface PendingFleetBroadcastTarget {
   overridden: boolean;
   /** True when the user veto-skipped this target in the popover. */
   skipped: boolean;
+  /**
+   * True when the target was excluded by eligibility at snapshot time
+   * (PTY exited, panel disposed). Rendered in the dialog as context, never
+   * counted in the active-target tally, never submitted.
+   */
+  excluded: boolean;
   /** Variables in the draft that couldn't be resolved for this target. */
   unresolvedVars: string[];
 }

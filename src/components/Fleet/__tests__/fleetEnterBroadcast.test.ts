@@ -408,23 +408,28 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     expect(onSent).toHaveBeenCalled();
   });
 
-  it("re-reads override state inside doSend so late edits take effect", async () => {
+  it("submits the snapshot — live overrides cleared after confirm opens are ignored", async () => {
+    // Regression: when the divergence ConfirmDialog mounts it traps focus,
+    // which causes the popover to close, which causes the popover's
+    // useEffect to clear the overrides store. The broadcast must submit
+    // what the user reviewed in the dialog, not the cleared store
+    // (#8691, D2 silent-fallback safeguard).
     arm(["a", "b", "c"]);
-    // Start with an override on b (creates divergence → confirm)
-    useFleetTargetOverridesStore.getState().setPayloadOverride("b", "first");
+    useFleetTargetOverridesStore.getState().setPayloadOverride("b", "reviewed");
     tryFleetBroadcastFromEditor("a", "hello", vi.fn());
     expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
 
-    // While the confirm is open, change b's override and add a skip on c.
-    useFleetTargetOverridesStore.getState().setPayloadOverride("b", "final");
-    useFleetTargetOverridesStore.getState().setSkipped("c", true);
+    // Simulate the popover-close clear that fires when the ConfirmDialog
+    // grabs focus.
+    useFleetTargetOverridesStore.getState().clear();
 
     resolveFleetBroadcastConfirmation();
     await flush();
     await flush();
 
-    expect(submitMock).toHaveBeenCalledWith("b", "final");
-    expect(submitMock).not.toHaveBeenCalledWith("c", expect.anything());
+    // The submission must use the snapshot ("reviewed"), not the cleared
+    // live store ("hello" — the default).
+    expect(submitMock).toHaveBeenCalledWith("b", "reviewed");
   });
 
   it("clears the overrides store in the finally block after broadcast", async () => {
@@ -436,5 +441,55 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     await flush();
     expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({});
     expect(useFleetTargetOverridesStore.getState().skippedIds.size).toBe(0);
+  });
+
+  it("clears overrides and calls onSent when all initial targets are skipped", () => {
+    arm(["a", "b"]);
+    useFleetTargetOverridesStore.getState().setPayloadOverride("a", "x");
+    useFleetTargetOverridesStore.getState().setSkipped("a", true);
+    useFleetTargetOverridesStore.getState().setSkipped("b", true);
+    const onSent = vi.fn();
+    tryFleetBroadcastFromEditor("a", "hello", onSent);
+    expect(onSent).toHaveBeenCalled();
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({});
+    expect(useFleetTargetOverridesStore.getState().skippedIds.size).toBe(0);
+  });
+
+  it("clears overrides and calls onSent when targets drain to zero during confirm", async () => {
+    arm(["a", "b"]);
+    useFleetTargetOverridesStore.getState().setPayloadOverride("b", "x");
+    const onSent = vi.fn();
+    tryFleetBroadcastFromEditor("a", "hello", onSent);
+    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
+
+    // Simulate disarming every terminal during the confirm pause.
+    useFleetArmingStore.setState({
+      armedIds: new Set<string>(),
+      armOrder: [],
+      armOrderById: {},
+      lastArmedId: null,
+    });
+
+    resolveFleetBroadcastConfirmation();
+    await flush();
+    await flush();
+
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(onSent).toHaveBeenCalled();
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({});
+  });
+
+  it("does not force a confirm for overrides on disarmed terminals", async () => {
+    // A user could leave a stale override for a terminal that later
+    // disarmed — that shouldn't surface a spurious divergence dialog
+    // when the user broadcasts an unrelated draft to the remaining fleet.
+    useFleetTargetOverridesStore.getState().setPayloadOverride("ghost", "stale");
+    arm(["a", "b"]);
+    const onSent = vi.fn();
+    tryFleetBroadcastFromEditor("a", "hello", onSent);
+    expect(useFleetBroadcastConfirmStore.getState().pending).toBeNull();
+    await flush();
+    expect(submitMock).toHaveBeenCalledTimes(2);
+    expect(onSent).toHaveBeenCalled();
   });
 });

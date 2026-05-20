@@ -56,6 +56,7 @@ describe("fleetBroadcastConfirmStore", () => {
               payload: "deploy feature-x",
               overridden: false,
               skipped: false,
+              excluded: false,
               unresolvedVars: [],
             },
             {
@@ -64,6 +65,7 @@ describe("fleetBroadcastConfirmStore", () => {
               payload: "deploy",
               overridden: false,
               skipped: false,
+              excluded: false,
               unresolvedVars: ["branch_name"],
             },
           ],

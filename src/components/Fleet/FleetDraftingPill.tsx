@@ -3,6 +3,7 @@ import { RadioTower, ChevronDown, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetBroadcastConfirmStore } from "@/store/fleetBroadcastConfirmStore";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
@@ -28,16 +29,20 @@ export function FleetDraftingPill(): ReactElement | null {
 
   useEscapeStack(open, () => setOpen(false));
 
-  // Per-target overrides are ephemeral per-broadcast (#8691). Clearing them
-  // when the popover closes — by user dismiss or by the draft losing all
-  // recipe variables — keeps them from leaking into the next broadcast.
-  // The broadcast pipeline also clears in its `finally`, so this covers
-  // the "user opened, edited, then dismissed without sending" case.
+  // Per-target overrides are ephemeral per-broadcast (#8691). The broadcast
+  // pipeline (fleetEnterBroadcast.doSend) reads the snapshot taken at
+  // Enter-press time and clears in its `finally`, so this effect only
+  // covers the "user opened, edited, then dismissed without sending" case.
+  // Gated on `pending === null` defensively: while a confirm is in flight
+  // the snapshot is what matters, but keeping the live store in sync with
+  // the snapshot avoids surprising the user with stale state if they then
+  // cancel the dialog and reopen the popover.
+  const pendingBroadcast = useFleetBroadcastConfirmStore((s) => s.pending);
   useEffect(() => {
-    if (!open) {
+    if (!open && pendingBroadcast === null) {
       useFleetTargetOverridesStore.getState().clear();
     }
-  }, [open]);
+  }, [open, pendingBroadcast]);
 
   if (peerCount < 1) return null;
 

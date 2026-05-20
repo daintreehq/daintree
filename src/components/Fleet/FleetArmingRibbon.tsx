@@ -483,7 +483,7 @@ export function FleetArmingRibbon(): ReactElement | null {
   const isBroadcastConfirmActive = pendingBroadcast !== null && !isDivergenceConfirmActive;
 
   const divergenceTargets = pendingBroadcast?.divergence?.targets ?? [];
-  const activeDivergenceTargets = divergenceTargets.filter((t) => !t.skipped);
+  const activeDivergenceTargets = divergenceTargets.filter((t) => !t.skipped && !t.excluded);
   const divergenceConfirmDescription = pendingBroadcast?.warningReasons.length
     ? `${pendingBroadcast.warningReasons.join(", ")}. Review what each target will receive.`
     : "Per-target payloads diverge from your draft. Review what each target will receive.";
