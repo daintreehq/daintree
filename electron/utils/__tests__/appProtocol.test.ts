@@ -23,6 +23,7 @@ describe("appProtocol utilities", () => {
       expect(getMimeType("module.wasm")).toBe("application/wasm");
       expect(getMimeType("photo.webp")).toBe("image/webp");
       expect(getMimeType("image.bmp")).toBe("image/bmp");
+      expect(getMimeType("hero.avif")).toBe("image/avif");
     });
 
     it("should return default MIME type for unknown extensions", () => {
@@ -115,6 +116,24 @@ describe("appProtocol utilities", () => {
       expect(headers["Cache-Control"]).toBe("no-cache, must-revalidate");
     });
 
+    it("always emits Last-Modified when stats are provided (304 path contract)", () => {
+      const mtime = new Date("2025-06-03T12:34:56Z");
+      const variants = [
+        buildHeaders("text/html", { stats: { mtime }, filePath: "index.html" }),
+        buildHeaders("text/javascript", {
+          stats: { mtime },
+          filePath: "dist/assets/app-12345678.js",
+        }),
+        buildHeaders("text/css", {
+          stats: { mtime },
+          filePath: "dist/assets/styles-12345678.css",
+        }),
+      ];
+      for (const headers of variants) {
+        expect(headers["Last-Modified"]).toBe("Tue, 03 Jun 2025 12:34:56 GMT");
+      }
+    });
+
     it("preserves the full security header set on every variant", () => {
       const variants = [
         buildHeaders("text/plain"),
@@ -144,6 +163,10 @@ describe("appProtocol utilities", () => {
 
     it("matches Vite content-hashed CSS chunks under assets/", () => {
       expect(isImmutableAppAsset("dist/assets/index-12345678.css")).toBe(true);
+    });
+
+    it("matches content-hashed AVIF images (paired with image/avif MIME)", () => {
+      expect(isImmutableAppAsset("dist/assets/hero-a1b2c3d4.avif")).toBe(true);
     });
 
     it("matches base64url hash characters (underscore, hyphen)", () => {

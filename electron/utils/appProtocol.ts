@@ -40,6 +40,7 @@ const MIME_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
   ".webp": "image/webp",
+  ".avif": "image/avif",
   ".bmp": "image/bmp",
   ".woff": "font/woff",
   ".woff2": "font/woff2",
