@@ -169,18 +169,102 @@ describe("RecoveryBannerCoordinator", () => {
     expect(useRestoreConfirmationStore.getState().visible).toBe(false);
   });
 
-  it("switches from restore to safe mode when safe mode activates", () => {
+  it("switches from restore to safe mode reactively via store subscription", async () => {
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
-    const { rerender } = render(<RecoveryBannerCoordinator />);
+    render(<RecoveryBannerCoordinator />);
     expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
 
     act(() => {
       useSafeModeStore.setState({ safeMode: true, dismissed: false });
     });
 
-    rerender(<RecoveryBannerCoordinator />);
-
-    expect(screen.getByText("Safe mode — panels weren't restored")).toBeTruthy();
+    expect(await screen.findByText("Safe mode — panels weren't restored")).toBeTruthy();
     expect(screen.queryByText(/Session recovered after unexpected exit/)).toBeNull();
+  });
+
+  it("does not auto-dismiss the restore banner while suppressed by safe mode", () => {
+    vi.useFakeTimers();
+    useSafeModeStore.setState({ safeMode: true, dismissed: false });
+    useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
+
+    render(<RecoveryBannerCoordinator />);
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(useRestoreConfirmationStore.getState().visible).toBe(true);
+  });
+
+  it("drains the stack: host-crash -> safe-mode -> restore with a fresh timer each step", () => {
+    vi.useFakeTimers();
+    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    useSafeModeStore.setState({ safeMode: true, dismissed: false });
+    useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
+
+    render(<RecoveryBannerCoordinator />);
+
+    expect(screen.getByText("Terminal service crashed")).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    expect(useRestoreConfirmationStore.getState().visible).toBe(true);
+
+    act(() => {
+      usePanelStore.setState({ backendStatus: "connected", lastCrashType: null });
+    });
+    expect(screen.getByText("Safe mode — panels weren't restored")).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    expect(useRestoreConfirmationStore.getState().visible).toBe(true);
+
+    act(() => {
+      useSafeModeStore.setState({ dismissed: true });
+    });
+    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(useRestoreConfirmationStore.getState().visible).toBe(false);
+  });
+
+  it("does not auto-dismiss a suspect-count restore after promotion", () => {
+    vi.useFakeTimers();
+    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    useRestoreConfirmationStore.setState({ visible: true, suspectCount: 2, crashCount: 1 });
+
+    render(<RecoveryBannerCoordinator />);
+
+    act(() => {
+      usePanelStore.setState({ backendStatus: "connected", lastCrashType: null });
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(useRestoreConfirmationStore.getState().visible).toBe(true);
+  });
+
+  it("documents Doherty-gated recovering behavior: nothing shown for <400ms, then host-crash recovering banner", () => {
+    vi.useFakeTimers();
+    usePanelStore.setState({ backendStatus: "recovering" });
+    useSafeModeStore.setState({ safeMode: true, dismissed: false });
+
+    const { container } = render(<RecoveryBannerCoordinator />);
+
+    expect(container.firstChild).toBeNull();
+    expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(screen.getByText("Terminal service restarting")).toBeTruthy();
+    expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
   });
 });

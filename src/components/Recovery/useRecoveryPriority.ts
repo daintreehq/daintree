@@ -17,9 +17,12 @@ export type RecoveryBannerSlot =
 // Watchdog sits below host-crash because a live host failure is more urgent
 // than a downed monitor, and above safe-mode because the watchdog protects
 // against the next crash whereas safe-mode is a consequence of the previous
-// one. A non-connected backendStatus always wins the slot — HostCrashBanner's
-// internal 400ms Doherty gate produces a brief empty slot rather than a
-// flicker through to a lower-priority banner.
+// one. Any non-connected backend state — `"disconnected"` or `"recovering"` —
+// wins the slot. HostCrashBanner internally gates the `"recovering"` variant
+// behind the 400ms Doherty threshold and renders nothing under it; during
+// that gate the coordinator shows nothing rather than flashing the
+// lower-priority banner back in, matching the Doherty anti-flicker pattern
+// used elsewhere in the app.
 export function useRecoveryPriority(): RecoveryBannerSlot {
   const backendStatus = usePanelStore((s) => s.backendStatus);
   const watchdogStatus = usePanelStore((s) => s.watchdogStatus);
