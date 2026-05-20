@@ -761,7 +761,8 @@ export default tseslint.config(
   // files were using the legacy typedHandle* registration pattern when
   // the gate landed; their call sites surface as ratchetable warnings
   // via eslint-warnings-baseline.json. Remove a file from this list as
-  // it migrates to defineIpcNamespace.
+  // it migrates to defineIpcNamespace — do NOT add new files. New
+  // handlers must use defineIpcNamespace and stay in the error tier.
   //
   // Explicit named-file list (not glob) so new files added to the same
   // directories land in the error tier automatically. The 6 selectors
