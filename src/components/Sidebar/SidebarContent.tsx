@@ -444,7 +444,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   });
   const skeletonRowCount = Math.max(
     MIN_SKELETON_ROWS,
-    Math.floor(skeletonHeight / SKELETON_ROW_HEIGHT_PX)
+    Number.isFinite(skeletonHeight) ? Math.floor(skeletonHeight / SKELETON_ROW_HEIGHT_PX) : 0
   );
   useEffect(() => {
     if (!error) setIsRestartConfirmOpen(false);
@@ -1232,7 +1232,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <div className="flex items-center px-4 py-4 border-b border-divider shrink-0">
           <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
         </div>
-        <div className="flex-1 min-h-0 relative" ref={skeletonContainerRef}>
+        <div className="flex-1 min-h-0 relative overflow-hidden pb-8" ref={skeletonContainerRef}>
           <Skeleton label="Loading worktrees">
             {Array.from({ length: skeletonRowCount }).map((_, i) => (
               <div
