@@ -1126,6 +1126,9 @@ const api: ElectronAPI = {
 
     resetAndRelaunch: () => _unwrappingInvoke(CHANNELS.APP_RESET_AND_RELAUNCH),
 
+    clearQuarantinedPanel: (panelId: string) =>
+      _unwrappingInvoke(CHANNELS.APP_CLEAR_QUARANTINED_PANEL, panelId),
+
     notifyFirstInteractive: () => _unwrappingInvoke(CHANNELS.APP_FIRST_INTERACTIVE),
 
     notifyViewPainted: () => _unwrappingInvoke(CHANNELS.APP_VIEW_PAINTED),

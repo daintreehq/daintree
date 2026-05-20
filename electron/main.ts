@@ -86,6 +86,7 @@ import { initializeTrashedPidCleanup } from "./services/TrashedPidTracker.js";
 import { initializeScratchCleanup } from "./services/ScratchCleanupService.js";
 import { startAssistantScratchCleanup } from "./services/AssistantScratchService.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
+import { initializePanelSuspectLedger } from "./services/PanelSuspectLedgerService.js";
 import { initializeDatabaseMaintenance } from "./services/DatabaseMaintenanceService.js";
 import { readLastActiveProjectIdSync } from "./services/persistence/readLastProjectId.js";
 import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
@@ -168,6 +169,12 @@ if (!gotTheLock) {
   const distPath = path.join(__dirname, "../../dist");
 
   initializeCrashRecoveryService();
+  // Fold the pending-crash panel summaries into the suspect ledger immediately
+  // after CrashRecoveryService consumes the marker. Per-panel decay (clean
+  // launches, TTL) is applied during this same call. The hydration handler
+  // reads `getQuarantinedPanelIds()` to filter terminals out of the safe-mode
+  // restore set; surfacing per-panel quarantine to the renderer.
+  initializePanelSuspectLedger(getCrashRecoveryService().getPendingCrash());
   initializeDatabaseMaintenance();
   initializeTrashedPidCleanup();
   initializeScratchCleanup();

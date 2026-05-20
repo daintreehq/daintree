@@ -5,6 +5,7 @@ import { SafeModeBanner } from "../SafeModeBanner";
 import { useSafeModeStore } from "@/store/safeModeStore";
 
 const resetAndRelaunch = vi.fn();
+const clearQuarantinedPanel = vi.fn();
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
@@ -50,12 +51,14 @@ beforeAll(() => {
 beforeEach(() => {
   resetAndRelaunch.mockReset();
   resetAndRelaunch.mockResolvedValue(undefined);
+  clearQuarantinedPanel.mockReset();
+  clearQuarantinedPanel.mockResolvedValue({ cleared: true });
   mockedDispatch.mockReset();
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   mockedDispatch.mockResolvedValue({ ok: true, result: undefined } as never);
   // Minimal stub of window.electron.app for the restart action
   Object.defineProperty(window, "electron", {
-    value: { app: { resetAndRelaunch } },
+    value: { app: { resetAndRelaunch, clearQuarantinedPanel } },
     writable: true,
     configurable: true,
   });
@@ -65,6 +68,7 @@ beforeEach(() => {
     crashCount: undefined,
     skippedPanelCount: undefined,
     lastCrashAt: undefined,
+    quarantinedPanels: undefined,
   });
   cleanup();
 });
@@ -225,6 +229,91 @@ describe("SafeModeBanner", () => {
     const region = screen.getByRole("status");
     expect(region).toBeTruthy();
     expect(region.hasAttribute("aria-live")).toBe(false);
+  });
+
+  it("renders one row per quarantined panel inside the popover", () => {
+    useSafeModeStore.setState({
+      safeMode: true,
+      crashCount: 3,
+      skippedPanelCount: 2,
+      quarantinedPanels: [
+        { id: "p1", kind: "terminal", title: "Crashy build", cwd: "/repo/foo" },
+        { id: "p2", kind: "terminal", title: "Another", worktreeId: "wt-issue-1" },
+      ],
+    });
+    render(<SafeModeBanner />);
+    fireEvent.click(screen.getByRole("button", { name: /Show details/i }));
+    expect(screen.getByText("Crashy build")).toBeTruthy();
+    expect(screen.getByText("Another")).toBeTruthy();
+    expect(screen.getByText("/repo/foo")).toBeTruthy();
+    expect(screen.getByText("wt-issue-1")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /Restore panel/ })).toHaveLength(2);
+  });
+
+  it("falls back to count-only copy when ledger has no quarantined entries", () => {
+    useSafeModeStore.setState({
+      safeMode: true,
+      skippedPanelCount: 4,
+      quarantinedPanels: [],
+    });
+    render(<SafeModeBanner />);
+    fireEvent.click(screen.getByRole("button", { name: /Show details/i }));
+    expect(screen.getByText(/4 panels were skipped/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Restore panel/ })).toBeNull();
+  });
+
+  it("clicking Restore panel calls clearQuarantinedPanel and shows the restoring hint", async () => {
+    useSafeModeStore.setState({
+      safeMode: true,
+      crashCount: 2,
+      skippedPanelCount: 1,
+      quarantinedPanels: [{ id: "p1", kind: "terminal", title: "Bad" }],
+    });
+    render(<SafeModeBanner />);
+    fireEvent.click(screen.getByRole("button", { name: /Show details/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Restore panel/ }));
+    await waitFor(() => {
+      expect(clearQuarantinedPanel).toHaveBeenCalledWith("p1");
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/Restoring on next launch/)).toBeTruthy();
+    });
+  });
+
+  it("Retry button calls clearQuarantinedPanel again after a failure", async () => {
+    clearQuarantinedPanel.mockReset();
+    clearQuarantinedPanel.mockResolvedValueOnce({ cleared: false });
+    clearQuarantinedPanel.mockResolvedValueOnce({ cleared: true });
+    useSafeModeStore.setState({
+      safeMode: true,
+      skippedPanelCount: 1,
+      quarantinedPanels: [{ id: "p1", kind: "terminal", title: "Tricky" }],
+    });
+    render(<SafeModeBanner />);
+    fireEvent.click(screen.getByRole("button", { name: /Show details/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Restore panel/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Retry/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Retry/ }));
+    await waitFor(() => {
+      expect(clearQuarantinedPanel).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/Restoring on next launch/)).toBeTruthy();
+    });
+  });
+
+  it("uses the singular phrasing for one quarantined panel", () => {
+    useSafeModeStore.setState({
+      safeMode: true,
+      crashCount: 2,
+      skippedPanelCount: 1,
+      quarantinedPanels: [{ id: "p1", kind: "terminal", title: "Solo" }],
+    });
+    render(<SafeModeBanner />);
+    fireEvent.click(screen.getByRole("button", { name: /Show details/i }));
+    expect(screen.getByText(/^1 panel was quarantined/)).toBeTruthy();
   });
 
   it("hides the banner when dismiss is clicked", () => {

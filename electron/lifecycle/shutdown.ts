@@ -13,6 +13,7 @@ import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { disposeMainProcessWatchdog } from "../services/MainProcessWatchdogClient.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
+import { getPanelSuspectLedger } from "../services/PanelSuspectLedgerService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { getHibernationService } from "../services/HibernationService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
@@ -410,6 +411,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           getCrashLoopGuard().markCleanExit();
         } catch (err) {
           console.warn("[MAIN] CrashLoopGuard.markCleanExit failed:", err);
+        }
+        try {
+          getPanelSuspectLedger().markCleanLaunch();
+        } catch (err) {
+          console.warn("[MAIN] PanelSuspectLedger.markCleanLaunch failed:", err);
         }
         // Defuse the signal-handler safety-belt the moment we've committed to a
         // clean exit. closeTelemetry below has a 2500ms internal cap, but
