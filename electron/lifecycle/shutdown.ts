@@ -14,6 +14,32 @@ import { disposeMainProcessWatchdog } from "../services/MainProcessWatchdogClien
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
+import { getHibernationService } from "../services/HibernationService.js";
+import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
+import { getSystemSleepService } from "../services/SystemSleepService.js";
+import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
+import {
+  agentConnectivityService,
+  getServiceConnectivityRegistry,
+} from "../services/connectivity/index.js";
+import { notificationService } from "../services/NotificationService.js";
+import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
+import {
+  getCcrConfigService,
+  setCcrConfigService,
+  getResourceProfileService,
+  setResourceProfileService,
+  getWorktreePortBrokerRef,
+  setWorktreePortBrokerRef,
+  getMainProcessWatchdogClientRef,
+  setMainProcessWatchdogClientRef,
+  getAgentNotificationServiceRef,
+  setAgentNotificationServiceRef,
+  getAutoUpdaterServiceRef,
+  setAutoUpdaterServiceRef,
+  getWindowsStoreNotifierServiceRef,
+  setWindowsStoreNotifierServiceRef,
+} from "../window/serviceRefs.js";
 import { closeSharedDb } from "../services/persistence/db.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
@@ -144,7 +170,88 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           import("../services/HelpSessionService.js")
             .then(({ helpSessionService }) => helpSessionService.revokeAll())
             .catch(() => {}),
+          // CCR config watcher is async — stop before nulling the PluginService
+          // WorkspaceClient ref to keep file-change callbacks from racing teardown.
+          (async () => {
+            const ccr = getCcrConfigService();
+            if (!ccr) return;
+            try {
+              await ccr.stopWatching();
+            } catch (err) {
+              console.warn("[MAIN] CcrConfigService.stopWatching failed:", err);
+            }
+            setCcrConfigService(null);
+          })(),
+          // Drop PluginService's WorkspaceClient reference so plugin event
+          // handlers can't fire into the disposed instance during late
+          // teardown. Dynamically imported to match the lazy load pattern used
+          // when the WorkspaceClient was wired in (see windowServices.ts).
+          import("../services/PluginService.js")
+            .then(({ pluginService }) => pluginService.setWorkspaceClient(null))
+            .catch(() => {}),
           new Promise<void>((resolve) => {
+            // Global singletons that previously tore down on last-window-close
+            // (electron/window/windowServices.ts) live here now so they cover
+            // the macOS dock-reactivate path without racing a new window's
+            // re-init. Order: stop monitors and timers, then dispose clients,
+            // then null refs so any late callbacks no-op.
+            getResourceProfileService()?.stop();
+            setResourceProfileService(null);
+
+            try {
+              getHibernationService().stop();
+            } catch (err) {
+              console.warn("[MAIN] HibernationService.stop failed:", err);
+            }
+            try {
+              getIdleTerminalNotificationService().stop();
+            } catch (err) {
+              console.warn("[MAIN] IdleTerminalNotificationService.stop failed:", err);
+            }
+            try {
+              getSystemSleepService().dispose();
+            } catch (err) {
+              console.warn("[MAIN] SystemSleepService.dispose failed:", err);
+            }
+
+            try {
+              gitHubTokenHealthService.dispose();
+            } catch (err) {
+              console.warn("[MAIN] gitHubTokenHealthService.dispose failed:", err);
+            }
+            try {
+              agentConnectivityService.dispose();
+            } catch (err) {
+              console.warn("[MAIN] agentConnectivityService.dispose failed:", err);
+            }
+            try {
+              getServiceConnectivityRegistry().dispose();
+            } catch (err) {
+              console.warn("[MAIN] ServiceConnectivityRegistry.dispose failed:", err);
+            }
+
+            try {
+              notificationService.dispose();
+            } catch (err) {
+              console.warn("[MAIN] notificationService.dispose failed:", err);
+            }
+            getAgentNotificationServiceRef()?.dispose();
+            setAgentNotificationServiceRef(null);
+            try {
+              preAgentSnapshotService.dispose();
+            } catch (err) {
+              console.warn("[MAIN] preAgentSnapshotService.dispose failed:", err);
+            }
+            getAutoUpdaterServiceRef()?.dispose();
+            setAutoUpdaterServiceRef(null);
+            getWindowsStoreNotifierServiceRef()?.dispose();
+            setWindowsStoreNotifierServiceRef(null);
+
+            // Port broker holds a WorkspaceClient reference — dispose before
+            // the WorkspaceClient module-level singleton is killed below.
+            getWorktreePortBrokerRef()?.dispose();
+            setWorktreePortBrokerRef(null);
+
             disposePowerSaveBlockerService();
             disposeAgentAvailabilityStore();
             if (ptyClient) {
@@ -153,6 +260,8 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
             }
             disposePtyClient();
             disposeWorkspaceClient();
+            getMainProcessWatchdogClientRef()?.dispose();
+            setMainProcessWatchdogClientRef(null);
             disposeMainProcessWatchdog();
             resolve();
           }),
