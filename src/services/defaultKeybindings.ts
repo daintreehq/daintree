@@ -677,6 +677,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Navigation",
   },
   {
+    actionId: "nav.toggleFocusMode",
+    combo: "Cmd+K Z",
+    scope: "global",
+    priority: 0,
+    description: "Toggle focus mode (hide sidebar and assistant)",
+    category: "Navigation",
+  },
+  {
     actionId: "worktree.switch1",
     combo: "Cmd+Alt+1",
     scope: "global",

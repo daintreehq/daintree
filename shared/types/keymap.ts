@@ -28,6 +28,7 @@ export type BuiltInKeyAction =
   | "nav.collapse"
   | "nav.primary"
   | "nav.toggleSidebar"
+  | "nav.toggleFocusMode"
   | "nav.quickSwitcher"
   | "nav.focusRegion.next"
   | "nav.focusRegion.prev"
@@ -216,6 +217,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "nav.collapse",
   "nav.primary",
   "nav.toggleSidebar",
+  "nav.toggleFocusMode",
   "nav.quickSwitcher",
   "nav.focusRegion.next",
   "nav.focusRegion.prev",

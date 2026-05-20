@@ -35,12 +35,13 @@ export function registerNavigationActions(
   actions.set("nav.toggleFocusMode", () => ({
     id: "nav.toggleFocusMode",
     title: "Toggle Focus Mode",
-    description: "Toggle focus mode (hide sidebar)",
+    description: "Toggle focus mode (hide sidebar and assistant panel)",
     category: "navigation",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     nonRepeatable: true,
+    keywords: ["zen", "focus", "distraction-free"],
     run: async () => {
       callbacks.onToggleFocusMode();
     },
