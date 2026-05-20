@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { SEARCH_HIGHLIGHT_LIMIT } from "@/services/terminal/TerminalAddonManager";
+import { useTerminalSearchHistoryStore } from "@/store/terminalSearchHistoryStore";
 import { validateRegexTerm, buildSearchOptions, type SearchStatus } from "./terminalSearchUtils";
 
 interface MatchResults {
@@ -22,15 +23,28 @@ interface TerminalSearchBarProps {
 }
 
 export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSearchBarProps) {
-  const [searchTerm, setSearchTerm] = useState("");
-  const [caseSensitive, setCaseSensitive] = useState(false);
-  const [regexEnabled, setRegexEnabled] = useState(false);
+  const addSearch = useTerminalSearchHistoryStore((s) => s.addSearch);
+  const setToggles = useTerminalSearchHistoryStore((s) => s.setToggles);
+
+  const [searchTerm, setSearchTerm] = useState(
+    () => useTerminalSearchHistoryStore.getState().searches[0] ?? ""
+  );
+  const [caseSensitive, setCaseSensitive] = useState(
+    () => useTerminalSearchHistoryStore.getState().caseSensitive
+  );
+  const [regexEnabled, setRegexEnabled] = useState(
+    () => useTerminalSearchHistoryStore.getState().regexEnabled
+  );
   const [wholeWord, setWholeWord] = useState(false);
   const [searchStatus, setSearchStatus] = useState<SearchStatus>("idle");
   const [matchResults, setMatchResults] = useState<MatchResults | null>(null);
   const [regexError, setRegexError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const historyIndexRef = useRef(-1);
+  const draftBeforeHistoryRef = useRef("");
+  const initialTermRef = useRef(searchTerm);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -131,6 +145,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const term = e.target.value;
+      historyIndexRef.current = -1;
       setSearchTerm(term);
 
       if (debounceRef.current) {
@@ -152,35 +167,82 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.altKey && !e.metaKey && !e.ctrlKey) {
+        const history = useTerminalSearchHistoryStore.getState().searches;
+        if (history.length === 0) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (debounceRef.current) {
+          clearTimeout(debounceRef.current);
+          debounceRef.current = null;
+        }
+
+        if (e.key === "ArrowUp") {
+          if (historyIndexRef.current < 0) {
+            draftBeforeHistoryRef.current = searchTerm;
+          }
+          if (historyIndexRef.current < history.length - 1) {
+            historyIndexRef.current++;
+            const term = history[historyIndexRef.current]!;
+            setSearchTerm(term);
+            performSearch(term, "next");
+          }
+        } else {
+          if (historyIndexRef.current < 0) return;
+          historyIndexRef.current--;
+          if (historyIndexRef.current < 0) {
+            const draft = draftBeforeHistoryRef.current;
+            setSearchTerm(draft);
+            if (draft) {
+              performSearch(draft, "next");
+            } else {
+              clearSearch();
+            }
+          } else {
+            const term = history[historyIndexRef.current]!;
+            setSearchTerm(term);
+            performSearch(term, "next");
+          }
+        }
+        return;
+      }
+
       if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
         performSearch(searchTerm, e.shiftKey ? "prev" : "next");
+        addSearch(searchTerm);
+        historyIndexRef.current = -1;
       } else if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
+        addSearch(searchTerm);
         clearSearch();
         onClose();
       }
     },
-    [searchTerm, performSearch, clearSearch, onClose]
+    [searchTerm, performSearch, clearSearch, onClose, addSearch]
   );
 
   const handleClose = useCallback(() => {
+    addSearch(searchTerm);
     clearSearch();
     onClose();
-  }, [clearSearch, onClose]);
+  }, [searchTerm, addSearch, clearSearch, onClose]);
 
   const handleCaseSensitiveToggle = useCallback(() => {
     setCaseSensitive((prev) => {
       const nextCaseSensitive = !prev;
+      setToggles(nextCaseSensitive, regexEnabled);
       if (searchTerm) {
         cancelPendingSearch();
         performSearch(searchTerm, "next", { caseSensitive: nextCaseSensitive });
       }
       return nextCaseSensitive;
     });
-  }, [searchTerm, performSearch, cancelPendingSearch]);
+  }, [searchTerm, performSearch, cancelPendingSearch, setToggles, regexEnabled]);
 
   const handleRegexToggle = useCallback(() => {
     setRegexEnabled((prev) => {
@@ -188,13 +250,14 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       if (!nextRegexEnabled) {
         setRegexError(null);
       }
+      setToggles(caseSensitive, nextRegexEnabled);
       if (searchTerm) {
         cancelPendingSearch();
         performSearch(searchTerm, "next", { regexEnabled: nextRegexEnabled });
       }
       return nextRegexEnabled;
     });
-  }, [searchTerm, performSearch, cancelPendingSearch]);
+  }, [searchTerm, performSearch, cancelPendingSearch, setToggles, caseSensitive]);
 
   const handleWholeWordToggle = useCallback(() => {
     setWholeWord((prev) => {
@@ -206,6 +269,14 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       return nextWholeWord;
     });
   }, [searchTerm, performSearch, cancelPendingSearch]);
+
+  useEffect(() => {
+    if (initialTermRef.current) {
+      performSearch(initialTermRef.current, "next");
+    }
+    // Run once on mount with the pre-populated history term.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     return () => {

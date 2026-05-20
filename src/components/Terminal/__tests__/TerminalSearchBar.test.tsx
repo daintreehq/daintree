@@ -17,6 +17,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 import { TerminalSearchBar } from "../TerminalSearchBar";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { useTerminalSearchHistoryStore } from "@/store/terminalSearchHistoryStore";
 
 type ResultsListener = (event: { resultIndex: number; resultCount: number }) => void;
 
@@ -47,11 +48,21 @@ function createMockManaged(findNextResult = true) {
 describe("TerminalSearchBar", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    useTerminalSearchHistoryStore.setState({
+      searches: [],
+      caseSensitive: false,
+      regexEnabled: false,
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    useTerminalSearchHistoryStore.setState({
+      searches: [],
+      caseSensitive: false,
+      regexEnabled: false,
+    });
   });
 
   function renderSearchBar() {
@@ -399,5 +410,317 @@ describe("TerminalSearchBar", () => {
 
     unmount();
     expect(mock._resultsListeners.length).toBe(0);
+  });
+
+  describe("history recall", () => {
+    it("pre-populates the input with the most recent search on reopen", () => {
+      useTerminalSearchHistoryStore.setState({
+        searches: ["recent", "older"],
+        caseSensitive: false,
+        regexEnabled: false,
+      });
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      renderSearchBar();
+      const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+      expect(input.value).toBe("recent");
+    });
+
+    it("fires the search on mount when pre-populated from history", () => {
+      useTerminalSearchHistoryStore.setState({
+        searches: ["recent"],
+        caseSensitive: false,
+        regexEnabled: false,
+      });
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      renderSearchBar();
+      expect(mock.searchAddon.findNext).toHaveBeenCalledWith("recent", expect.any(Object));
+    });
+
+    it("does not fire a search on mount when history is empty", () => {
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      renderSearchBar();
+      expect(mock.searchAddon.findNext).not.toHaveBeenCalled();
+    });
+
+    it("ArrowUp recalls older entries; ArrowDown restores the draft", async () => {
+      useTerminalSearchHistoryStore.setState({
+        searches: ["second", "first"],
+        caseSensitive: false,
+        regexEnabled: false,
+      });
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      renderSearchBar();
+      const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+
+      // Replace pre-populated term with a draft.
+      await act(() => {
+        fireEvent.change(input, { target: { value: "draft" } });
+      });
+      expect(input.value).toBe("draft");
+
+      // ArrowUp → most recent ("second").
+      await act(() => {
+        fireEvent.keyDown(input, { key: "ArrowUp" });
+      });
+      expect(input.value).toBe("second");
+
+      // ArrowUp → older ("first").
+      await act(() => {
+        fireEvent.keyDown(input, { key: "ArrowUp" });
+      });
+      expect(input.value).toBe("first");
+
+      // ArrowUp at oldest entry → stays on "first".
+      await act(() => {
+        fireEvent.keyDown(input, { key: "ArrowUp" });
+      });
+      expect(input.value).toBe("first");
+
+      // ArrowDown → back to "second".
+      await act(() => {
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+      });
+      expect(input.value).toBe("second");
+
+      // ArrowDown → restores the stashed draft.
+      await act(() => {
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+      });
+      expect(input.value).toBe("draft");
+    });
+
+    it("ArrowUp with empty history does nothing", async () => {
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      renderSearchBar();
+      const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+
+      await act(() => {
+        fireEvent.keyDown(input, { key: "ArrowUp" });
+      });
+      expect(input.value).toBe("");
+    });
+
+    it("Enter commits the current term to history", async () => {
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      renderSearchBar();
+      const input = screen.getByPlaceholderText("Find in terminal");
+
+      await act(() => {
+        fireEvent.change(input, { target: { value: "hello" } });
+      });
+      await act(() => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+
+      expect(useTerminalSearchHistoryStore.getState().searches).toEqual(["hello"]);
+    });
+
+    it("close button commits the current term to history", async () => {
+      const onClose = vi.fn();
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      render(<TerminalSearchBar terminalId="test-terminal" onClose={onClose} />);
+      const input = screen.getByPlaceholderText("Find in terminal");
+      await act(() => {
+        fireEvent.change(input, { target: { value: "world" } });
+      });
+
+      await act(() => {
+        fireEvent.click(screen.getByLabelText("Close search"));
+      });
+
+      expect(useTerminalSearchHistoryStore.getState().searches).toEqual(["world"]);
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it("Escape commits the current term to history", async () => {
+      const onClose = vi.fn();
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      render(<TerminalSearchBar terminalId="test-terminal" onClose={onClose} />);
+      const input = screen.getByPlaceholderText("Find in terminal");
+      await act(() => {
+        fireEvent.change(input, { target: { value: "needle" } });
+      });
+
+      await act(() => {
+        fireEvent.keyDown(input, { key: "Escape" });
+      });
+
+      expect(useTerminalSearchHistoryStore.getState().searches).toEqual(["needle"]);
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it("deduplicates repeated terms; most recent moves to front", async () => {
+      useTerminalSearchHistoryStore.setState({
+        searches: ["alpha", "beta"],
+        caseSensitive: false,
+        regexEnabled: false,
+      });
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      renderSearchBar();
+      const input = screen.getByPlaceholderText("Find in terminal");
+
+      await act(() => {
+        fireEvent.change(input, { target: { value: "beta" } });
+      });
+      await act(() => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+
+      expect(useTerminalSearchHistoryStore.getState().searches).toEqual(["beta", "alpha"]);
+    });
+
+    it("does not commit empty or whitespace terms to history", async () => {
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      render(<TerminalSearchBar terminalId="test-terminal" onClose={vi.fn()} />);
+      const input = screen.getByPlaceholderText("Find in terminal");
+
+      await act(() => {
+        fireEvent.change(input, { target: { value: "   " } });
+      });
+      await act(() => {
+        fireEvent.click(screen.getByLabelText("Close search"));
+      });
+
+      expect(useTerminalSearchHistoryStore.getState().searches).toEqual([]);
+    });
+
+    it("persists case-sensitive toggle state across mounts", async () => {
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      const { unmount } = renderSearchBar();
+      await act(() => {
+        fireEvent.click(screen.getByLabelText("Toggle case sensitivity"));
+      });
+      expect(useTerminalSearchHistoryStore.getState().caseSensitive).toBe(true);
+      unmount();
+
+      renderSearchBar();
+      const toggle = screen.getByLabelText("Toggle case sensitivity");
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("persists regex toggle state across mounts", async () => {
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      const { unmount } = renderSearchBar();
+      await act(() => {
+        fireEvent.click(screen.getByLabelText("Toggle regex mode"));
+      });
+      expect(useTerminalSearchHistoryStore.getState().regexEnabled).toBe(true);
+      unmount();
+
+      renderSearchBar();
+      const toggle = screen.getByLabelText("Toggle regex mode");
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("typing exits history-navigation mode (subsequent ArrowDown does not restore draft)", async () => {
+      useTerminalSearchHistoryStore.setState({
+        searches: ["second", "first"],
+        caseSensitive: false,
+        regexEnabled: false,
+      });
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      renderSearchBar();
+      const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+
+      // ArrowUp into history.
+      await act(() => {
+        fireEvent.keyDown(input, { key: "ArrowUp" });
+      });
+      expect(input.value).toBe("second");
+
+      // Type something — this resets the history index.
+      await act(() => {
+        fireEvent.change(input, { target: { value: "typed" } });
+      });
+      expect(input.value).toBe("typed");
+
+      // ArrowDown should be a no-op now (index is back at -1).
+      await act(() => {
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+      });
+      expect(input.value).toBe("typed");
+    });
+
+    it("ignores ArrowUp when a modifier key is pressed", async () => {
+      useTerminalSearchHistoryStore.setState({
+        searches: ["history"],
+        caseSensitive: false,
+        regexEnabled: false,
+      });
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      renderSearchBar();
+      const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+
+      // Replace pre-populated term so we can detect navigation.
+      await act(() => {
+        fireEvent.change(input, { target: { value: "draft" } });
+      });
+
+      await act(() => {
+        fireEvent.keyDown(input, { key: "ArrowUp", metaKey: true });
+      });
+      expect(input.value).toBe("draft");
+
+      await act(() => {
+        fireEvent.keyDown(input, { key: "ArrowUp", altKey: true });
+      });
+      expect(input.value).toBe("draft");
+    });
   });
 });
