@@ -4,7 +4,12 @@ import { PROJECT_HEALTH_QUERY, MERGE_VELOCITY_QUERY } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { rateLimitMessage, parseGitHubError } from "./GitHubErrors.js";
 import { getRepoContext, isRepoNotFoundError } from "./GitHubRepoContext.js";
-import { repoContextCache, projectHealthCache, repoStatsCache, velocityCache } from "./GitHubCaches.js";
+import {
+  repoContextCache,
+  projectHealthCache,
+  repoStatsCache,
+  velocityCache,
+} from "./GitHubCaches.js";
 import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
 import type { CIStatus, ProjectHealth, ProjectHealthResult } from "./types.js";
 import type { ProjectHealthData } from "../../../../electron/types/index.js";

@@ -190,9 +190,8 @@ async function fetchActivityProbe(
     const repository = result?.repository;
     if (!repository) return null;
 
-    const issueNode = (
-      repository.issues as { nodes?: Array<{ updatedAt?: string }> } | undefined
-    )?.nodes?.[0];
+    const issueNode = (repository.issues as { nodes?: Array<{ updatedAt?: string }> } | undefined)
+      ?.nodes?.[0];
     const prNode = (
       repository.pullRequests as { nodes?: Array<{ updatedAt?: string }> } | undefined
     )?.nodes?.[0];

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
 
 // `getRepoStatsAndPage` is an orchestration boundary — mock the
 // network/auth/repo dependencies and leave the real caches in place so the
@@ -31,14 +32,23 @@ vi.mock("../GitHubRepoContext.js", () => ({
 
 vi.mock("../GitHubErrors.js", () => ({
   rateLimitMessage: vi.fn(() => "rate limited"),
-  parseGitHubError: (e: unknown) => (e instanceof Error ? e.message : "error"),
+  parseGitHubError: (e: unknown) => formatErrorMessage(e, "error"),
 }));
 
 const mockStatsCache = {
-  get: vi.fn(() => undefined),
+  get: vi.fn<
+    (
+      repoKey: string
+    ) => { issueCount: number; prCount: number; lastUpdated: number; projectPath: string } | null
+  >(() => null),
   set: vi.fn(),
   clear: vi.fn(),
-  getForBootstrap: vi.fn(() => undefined),
+  getForBootstrap: vi.fn<
+    (
+      repoKey: string,
+      maxAgeMs?: number
+    ) => { issueCount: number; prCount: number; lastUpdated: number; projectPath: string } | null
+  >(() => null),
 };
 vi.mock("../../../../../electron/services/GitHubStatsCache.js", () => ({
   GitHubStatsCache: { getInstance: () => mockStatsCache },
@@ -111,7 +121,7 @@ describe("getRepoStatsAndPage — activity-probe gate (issue #8757)", () => {
     mockGetRepoContext.mockReset();
     mockGetRepoContext.mockResolvedValue({ owner: "testowner", repo: "testrepo" });
     mockStatsCache.get.mockReset();
-    mockStatsCache.get.mockReturnValue(undefined);
+    mockStatsCache.get.mockReturnValue(null);
     repoStatsCache.clear();
     issueListCache.clear();
     prListCache.clear();

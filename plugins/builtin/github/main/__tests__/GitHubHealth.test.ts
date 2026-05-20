@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
 
 // `getProjectHealth` is an orchestration boundary — mock the network/auth/repo
 // dependencies and leave the real caches (`GitHubCaches`) and query strings
@@ -32,14 +33,23 @@ vi.mock("../GitHubRepoContext.js", () => ({
 
 vi.mock("../GitHubErrors.js", () => ({
   rateLimitMessage: vi.fn(() => "rate limited"),
-  parseGitHubError: (e: unknown) => (e instanceof Error ? e.message : "error"),
+  parseGitHubError: (e: unknown) => formatErrorMessage(e, "error"),
 }));
 
 const mockStatsCache = {
-  get: vi.fn(() => undefined),
+  get: vi.fn<
+    (
+      repoKey: string
+    ) => { issueCount: number; prCount: number; lastUpdated: number; projectPath: string } | null
+  >(() => null),
   set: vi.fn(),
   clear: vi.fn(),
-  getForBootstrap: vi.fn(() => undefined),
+  getForBootstrap: vi.fn<
+    (
+      repoKey: string,
+      maxAgeMs?: number
+    ) => { issueCount: number; prCount: number; lastUpdated: number; projectPath: string } | null
+  >(() => null),
 };
 vi.mock("../../../../../electron/services/GitHubStatsCache.js", () => ({
   GitHubStatsCache: { getInstance: () => mockStatsCache },
@@ -84,7 +94,7 @@ describe("getProjectHealth — issue/PR count dedup", () => {
     mockGetRepoContext.mockReset();
     mockGetRepoContext.mockResolvedValue({ owner: "testowner", repo: "testrepo" });
     mockStatsCache.get.mockReset();
-    mockStatsCache.get.mockReturnValue(undefined);
+    mockStatsCache.get.mockReturnValue(null);
     repoStatsCache.clear();
     velocityCache.clear();
     projectHealthCache.clear();
@@ -105,7 +115,12 @@ describe("getProjectHealth — issue/PR count dedup", () => {
   });
 
   it("falls back to the disk stats cache when the memory cache is empty", async () => {
-    mockStatsCache.get.mockReturnValue({ issueCount: 9, prCount: 4, lastUpdated: Date.now() });
+    mockStatsCache.get.mockReturnValue({
+      issueCount: 9,
+      prCount: 4,
+      lastUpdated: Date.now(),
+      projectPath: "/test",
+    });
     warmVelocity();
     mockClient.mockResolvedValue(healthResponse());
 
@@ -132,7 +147,7 @@ describe("getProjectHealth — merged-PR velocity cadence", () => {
     mockGetRepoContext.mockReset();
     mockGetRepoContext.mockResolvedValue({ owner: "testowner", repo: "testrepo" });
     mockStatsCache.get.mockReset();
-    mockStatsCache.get.mockReturnValue(undefined);
+    mockStatsCache.get.mockReturnValue(null);
     repoStatsCache.clear();
     velocityCache.clear();
     projectHealthCache.clear();
