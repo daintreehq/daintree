@@ -274,7 +274,7 @@ export class TerminalRestoreController {
   }
 
   private yieldToUI(): Promise<void> {
-    if (typeof scheduler !== "undefined") {
+    if (typeof scheduler !== "undefined" && scheduler !== null) {
       // Prefer scheduler.yield() — its continuation runs ahead of newly-queued
       // same-priority tasks, giving a tighter inter-chunk budget than postTask,
       // which would queue behind any background work already in flight.

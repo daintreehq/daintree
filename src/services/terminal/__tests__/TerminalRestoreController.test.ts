@@ -303,6 +303,7 @@ describe("TerminalRestoreController", () => {
       const chunks = mockTerminal.write.mock.calls.map((call: [string, ...unknown[]]) => call[0]);
       const totalWritten = chunks.reduce((sum: number, c: string) => sum + c.length, 0);
       expect(totalWritten).toBe(state.length);
+      expect((chunks as string[]).join("")).toBe(state);
 
       for (const chunk of chunks as string[]) {
         if (chunk.length === 0) continue;
