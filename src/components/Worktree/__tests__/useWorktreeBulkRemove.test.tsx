@@ -70,10 +70,7 @@ describe("useWorktreeBulkRemove — confirm derivation", () => {
   });
 
   it("does not open the dialog when every selection is the main worktree", () => {
-    const { hook, clearSelection } = setup(
-      ["main"],
-      [wt("main", { isMainWorktree: true })]
-    );
+    const { hook, clearSelection } = setup(["main"], [wt("main", { isMainWorktree: true })]);
 
     act(() => hook.result.current.handleRemoveClick());
 
@@ -182,9 +179,7 @@ describe("useWorktreeBulkRemove — execution", () => {
       await hook.result.current.handleConfirm();
     });
 
-    const error = notifyMock.mock.calls.find(
-      (c) => (c[0] as { type: string }).type === "error"
-    );
+    const error = notifyMock.mock.calls.find((c) => (c[0] as { type: string }).type === "error");
     expect(error).toBeDefined();
     const payload = error![0] as { title: string; message: string };
     expect(payload.title).toBe("Couldn't remove worktree");
@@ -214,10 +209,7 @@ describe("useWorktreeBulkRemove — execution", () => {
   });
 
   it("handleCancel clears the snapshot so the next click derives fresh targets", () => {
-    const { hook } = setup(
-      ["a", "b", "c"],
-      [wt("a"), wt("b"), wt("c")]
-    );
+    const { hook } = setup(["a", "b", "c"], [wt("a"), wt("b"), wt("c")]);
 
     act(() => hook.result.current.handleRemoveClick());
     expect(hook.result.current.typedNameTarget).toBe("3 worktrees");
@@ -231,7 +223,10 @@ describe("useWorktreeBulkRemove — execution", () => {
   it("guards against rapid double-click via the isExecutingRef gate", async () => {
     let resolveFirst: (() => void) | undefined;
     worktreeClientMock.delete.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { resolveFirst = resolve; })
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        })
     );
     const { hook } = setup(["a"], [wt("a")]);
 

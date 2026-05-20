@@ -3,6 +3,7 @@ import PQueue from "p-queue";
 import { worktreeClient } from "@/clients/worktreeClient";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { WorktreeState } from "@/types";
 
 export interface BulkRemoveTarget {
@@ -176,7 +177,7 @@ export function useWorktreeBulkRemove({
             await worktreeClient.delete(target.id, true, false);
             successCount++;
           } catch (err) {
-            const reason = err instanceof Error ? err.message : String(err);
+            const reason = formatErrorMessage(err, "Removal failed");
             failures.push({ name: target.branch ?? target.name, reason });
             logError(`Bulk remove failed for ${target.id}`, err);
           }
@@ -184,6 +185,10 @@ export function useWorktreeBulkRemove({
       );
 
       if (failures.length === 0) {
+        // Transient: the overview grid already reflects the removed
+        // worktrees disappearing — the toast is a one-shot confirmation,
+        // not something the user needs to revisit from the notification
+        // inbox (#8249).
         notify({
           type: "success",
           title: total === 1 ? "Removed 1 worktree" : `Removed ${total} worktrees`,
@@ -191,6 +196,7 @@ export function useWorktreeBulkRemove({
             total === 1
               ? "The worktree directory was deleted from disk."
               : `${total} worktree directories were deleted from disk.`,
+          transient: true,
         });
       } else if (successCount === 0) {
         // Total failure — no recovery action attached because the modal
@@ -204,12 +210,14 @@ export function useWorktreeBulkRemove({
         });
       } else {
         // Partial — warning type so the success half isn't lost in red.
+        // Warning toasts aren't gated by the success-toast rule, so no
+        // eslint-disable is needed here (the rule fires only on `type:
+        // "success"` and `type: "error"` without protection).
         const firstFailure = failures[0];
         const partialMessage =
           failures.length === 1 && firstFailure
             ? `${firstFailure.name} failed: ${firstFailure.reason}`
             : `${failures.length} failed.`;
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "warning",
           title: `Removed ${successCount} of ${total} worktrees`,
