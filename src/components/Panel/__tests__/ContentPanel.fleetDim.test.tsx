@@ -128,10 +128,12 @@ describe("ContentPanel fleet-dim unmatched panes (#8696)", () => {
     });
     let panel = container.querySelector('[data-panel-id="t-1"]');
     expect(panel?.getAttribute("data-fleet-dimmed")).toBe("true");
+    expect(panel?.className.includes("fleet-pane-dimmed")).toBe(true);
     act(() => {
       useFleetArmingStore.setState({ previewArmedIds: new Set<string>() });
     });
     panel = container.querySelector('[data-panel-id="t-1"]');
     expect(panel?.getAttribute("data-fleet-dimmed")).toBeNull();
+    expect(panel?.className.includes("fleet-pane-dimmed")).toBe(false);
   });
 });
