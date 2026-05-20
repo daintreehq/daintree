@@ -13,11 +13,14 @@ type InvokeResult<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["result"];
  * Type-level contract for hand-typed IPC channels in `shared/types/ipc/maps.ts`.
  *
  * `typedHandle` already constrains handler signatures against `IpcInvokeMap[K]`,
- * but its checks are one-directional: a handler whose declared return type is
- * narrower than the map entry (covariant drift) is silently accepted, and a
- * handler whose parameter is typed `unknown` accepts any args tuple regardless
- * of what `maps.ts` advertises. These assertions close those gaps by pinning
- * the map entry to the exact shape callers and handlers agreed on.
+ * but its checks are one-directional and silent against `unknown`. These
+ * assertions pin each covered map entry to the exact shape callers expect, so
+ * structural drift in `maps.ts` (a result widening from `string | null` to
+ * `unknown`, an arg payload losing a field, a generic swap from `Page<Issue>`
+ * to `Page<PR>`) trips `tsc --noEmit` instead of slipping through. Verifying
+ * the handler side of the contract is tracked separately — handlers are
+ * closures inside their register functions, not exported, so this file stays
+ * within `shared/`.
  *
  * Coverage is intentionally representative — one or two channels per domain.
  * Generated channels (inherited via `GeneratedIpcInvokeMap`) are out of scope:
@@ -119,15 +122,16 @@ describe("hand-typed IPC handler contracts", () => {
   });
 
   /**
-   * Result-only coverage. The handlers behind these channels declare their
-   * single parameter as `unknown` and validate at runtime, so the `args` tuple
-   * in `maps.ts` is the only source of truth callers see — there's nothing on
-   * the handler side to compare against. Argument-tuple assertions are
-   * intentionally omitted here; tightening these handler signatures is tracked
-   * separately by #8578. The result shapes are non-trivial and worth pinning.
+   * Zero-arg channels with non-trivial result shapes. Sibling write channels
+   * in these domains (`privacy:set-telemetry-level`, `privacy:set-log-retention`,
+   * `shortcut-hints:increment-count`) still declare `unknown` parameters and
+   * validate at runtime; tightening those is tracked separately by #8578.
+   * Asserting `[]` for the GETs is cheap and forces a maintainer who adds an
+   * arg to update the test instead of the assertion drifting silently.
    */
-  describe("result-only (unknown-arg legacy channels)", () => {
-    it("privacy:get-settings — result", () => {
+  describe("zero-arg getters with non-trivial result shapes", () => {
+    it("privacy:get-settings — args + result", () => {
+      expectTypeOf<InvokeArgs<"privacy:get-settings">>().toEqualTypeOf<[]>();
       expectTypeOf<InvokeResult<"privacy:get-settings">>().toEqualTypeOf<{
         telemetryLevel: "off" | "errors" | "full";
         logRetentionDays: 0 | 7 | 30 | 90;
@@ -135,14 +139,16 @@ describe("hand-typed IPC handler contracts", () => {
       }>();
     });
 
-    it("sentry:get-consent-state — result", () => {
+    it("sentry:get-consent-state — args + result", () => {
+      expectTypeOf<InvokeArgs<"sentry:get-consent-state">>().toEqualTypeOf<[]>();
       expectTypeOf<InvokeResult<"sentry:get-consent-state">>().toEqualTypeOf<{
         level: "off" | "errors" | "full";
         hasSeenPrompt: boolean;
       }>();
     });
 
-    it("shortcut-hints:get-counts — result", () => {
+    it("shortcut-hints:get-counts — args + result", () => {
+      expectTypeOf<InvokeArgs<"shortcut-hints:get-counts">>().toEqualTypeOf<[]>();
       expectTypeOf<InvokeResult<"shortcut-hints:get-counts">>().toEqualTypeOf<
         Record<string, number>
       >();
