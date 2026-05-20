@@ -28,6 +28,7 @@ const browserWindowMock = vi.hoisted(() => ({
 
 const utilsMock = vi.hoisted(() => ({
   resilientAtomicWriteFileSync: vi.fn(),
+  resilientRenameSync: vi.fn(),
 }));
 
 vi.mock("../../utils/fs.js", () => utilsMock);
@@ -95,6 +96,9 @@ describe("CrashRecoveryService adversarial", () => {
         fs.writeFileSync(fp, data, enc ?? "utf-8");
       }
     );
+    utilsMock.resilientRenameSync.mockImplementation((src: string, dest: string) => {
+      fs.renameSync(src, dest);
+    });
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -132,7 +136,11 @@ describe("CrashRecoveryService adversarial", () => {
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
-  it("CACHED_PRE_CRASH_SNAPSHOT_WINS", () => {
+  it("RENAMED_BACKUP_SURVIVES_TIMER_OVERWRITE", () => {
+    // Issue #8681: consumeMarker renames the live backup to a timestamped
+    // crashed-* path so the new session's backup tick can write a fresh
+    // session-state.json without clobbering the pre-crash snapshot. The
+    // renamed file is the durable cache — no in-memory state to drift.
     writeBackup(tmpDir, {
       capturedAt: Date.now(),
       appState: {
@@ -147,6 +155,8 @@ describe("CrashRecoveryService adversarial", () => {
     const service = makeService();
     service.initialize();
 
+    // Simulate the backup timer recreating session-state.json with the empty
+    // current session after the marker has been consumed.
     writeBackup(tmpDir, {
       capturedAt: Date.now(),
       appState: {
@@ -163,13 +173,11 @@ describe("CrashRecoveryService adversarial", () => {
     });
   });
 
-  it("PANEL_SUMMARIES_USE_CACHED_SNAPSHOT", () => {
-    // Bug #7113: extractPanelSummaries used to re-read backupPath from disk
-    // even though consumeMarker had already populated cachedBackupSnapshot
-    // for exactly this purpose. If anything overwrote the file between those
-    // reads (concurrent backup, external process, racy test fixtures), the
-    // pending crash's panel summaries diverged from the snapshot restoreBackup
-    // would later use. Both paths must see the same cached snapshot.
+  it("PANEL_SUMMARIES_READ_RENAMED_FILE_NOT_LIVE_PATH", () => {
+    // Issue #8681: extractPanelSummaries must read from the renamed
+    // crashed-* file, not from session-state.json — otherwise a concurrent
+    // overwrite (backup tick, external process) would silently swap
+    // pre-crash panels for the empty post-crash session.
     writeBackup(tmpDir, {
       capturedAt: Date.now(),
       appState: {
@@ -178,41 +186,50 @@ describe("CrashRecoveryService adversarial", () => {
     });
     writeMarker(tmpDir);
 
-    const realRead = fs.readFileSync.bind(fs);
-    let backupReadCount = 0;
-    const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation(((
-      target: fs.PathOrFileDescriptor,
-      options?: unknown
-    ) => {
-      if (typeof target === "string" && target.endsWith("session-state.json")) {
-        backupReadCount++;
-        if (backupReadCount > 1) {
-          // Any *re-read* of the backup must come back with overwritten
-          // content. If production code re-reads the file here, the
-          // panels assertion below will see empty terminals.
-          return JSON.stringify({
-            capturedAt: Date.now(),
-            appState: { terminals: [] },
-          });
-        }
-      }
-      return (realRead as (...a: unknown[]) => string | Buffer)(target, options);
-    }) as typeof fs.readFileSync);
-
     const service = makeService();
     service.initialize();
 
-    expect(backupReadCount).toBe(1);
+    // Overwrite the live path right after consumeMarker. Panel summaries
+    // were captured during initialize and stored on PendingCrash; they
+    // must still reflect the pre-crash terminals.
+    writeBackup(tmpDir, {
+      capturedAt: Date.now(),
+      appState: { terminals: [] },
+    });
+
     const pending = service.getPendingCrash();
     expect(pending).not.toBeNull();
     expect(pending!.panels).toBeDefined();
     expect(pending!.panels!.length).toBe(1);
-    expect(pending!.panels![0]).toMatchObject({
-      id: "agent-1",
-      title: "Pre-Crash",
+    expect(pending!.panels![0]).toMatchObject({ id: "agent-1", title: "Pre-Crash" });
+  });
+
+  it("RENAME_FAILURE_FALLS_BACK_TO_COPY_PLUS_UNLINK", () => {
+    // Windows antivirus and search indexers can hold session-state.json
+    // open long enough that resilientRenameSync exhausts its 500ms retry
+    // budget. The fallback copies content to the crashed-* path and
+    // unlinks the original so the pre-crash snapshot is never lost.
+    writeBackup(tmpDir, {
+      capturedAt: Date.now(),
+      appState: {
+        terminals: [{ id: "agent-1", kind: "terminal", title: "Lock-Bypass" }],
+      },
+    });
+    writeMarker(tmpDir);
+
+    utilsMock.resilientRenameSync.mockImplementationOnce(() => {
+      const err = new Error("EBUSY: resource busy or locked") as NodeJS.ErrnoException;
+      err.code = "EBUSY";
+      throw err;
     });
 
-    readSpy.mockRestore();
+    const service = makeService();
+    service.initialize();
+
+    expect(service.restoreBackup()).toBe(true);
+    expect(storeMock.set).toHaveBeenCalledWith("appState", {
+      terminals: [{ id: "agent-1", kind: "terminal", title: "Lock-Bypass" }],
+    });
   });
 
   it("FILTERED_RESTORE_DOES_NOT_NARROW_CACHE_ON_FAILURE", () => {
