@@ -76,6 +76,7 @@ import type {
   WorktreePortRequestArgs,
   WorktreePortResult,
 } from "../shared/types/worktree-port.js";
+import { resolveWorktreePortTimeout } from "./utils/worktreePortTimeouts.js";
 import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
@@ -368,7 +369,7 @@ class WorktreePortClient {
   request<K extends WorktreePortAction>(
     action: K,
     payload?: WorktreePortPayload<K>,
-    timeoutMs = 10000
+    timeoutMs?: number
   ): Promise<WorktreePortResult<K>> {
     return new Promise<WorktreePortResult<K>>((resolve, reject) => {
       if (!this.port) {
@@ -377,10 +378,11 @@ class WorktreePortClient {
       }
 
       const id = crypto.randomUUID();
+      const effectiveTimeout = resolveWorktreePortTimeout(action, timeoutMs);
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Worktree port request timed out: ${String(action)}`));
-      }, timeoutMs);
+      }, effectiveTimeout);
 
       this.pending.set(id, {
         resolve: resolve as (value: unknown) => void,
