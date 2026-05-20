@@ -60,8 +60,27 @@ vi.mock("../TerminalReflowController", async () => {
   };
 });
 
+type ManagedTerminalMock = {
+  isOpened: boolean;
+  isAttaching: boolean;
+  isHibernated: boolean;
+  isFocused: boolean;
+  isVisible: boolean;
+  isResizeSuppressed: boolean;
+  resizeSuppressionEndTime: number | undefined;
+  latestCols: number;
+  latestRows: number;
+  terminal: {
+    cols: number;
+    rows: number;
+    element: HTMLElement;
+    refresh: ReturnType<typeof vi.fn>;
+  };
+  hostElement: HTMLElement;
+};
+
 type FullWakeTestService = {
-  instances: Map<string, any>;
+  instances: Map<string, ManagedTerminalMock>;
   wakeManager: { wakeAndRestore: (id: string) => Promise<boolean> };
   resizeController: {
     applyDeferredResize: (id: string) => void;
@@ -73,7 +92,7 @@ type FullWakeTestService = {
   fullWakeForVisibilityRestore: (id: string) => Promise<void>;
 };
 
-function makeInstance(overrides: Partial<any> = {}) {
+function makeInstance(overrides: Partial<ManagedTerminalMock> = {}): ManagedTerminalMock {
   return {
     isOpened: true,
     isAttaching: false,
@@ -101,10 +120,9 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     forceXtermReflowMock.mockReset();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: FullWakeTestService;
-      });
+    const imported = await import("../TerminalInstanceService");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    service = imported.terminalInstanceService as unknown as FullWakeTestService;
     service.instances.clear();
   });
 
