@@ -715,10 +715,12 @@ describe("ProjectViewManager — telemetry", () => {
     expect(revivalCalls[0][1]).toMatchObject({
       projectId: "proj-a",
       timeSinceEvictionMs: expect.any(Number),
+      visibleMs: expect.any(Number),
     });
     expect(
       (revivalCalls[0][1] as { timeSinceEvictionMs: number }).timeSinceEvictionMs
     ).toBeGreaterThanOrEqual(0);
+    expect((revivalCalls[0][1] as { visibleMs: number }).visibleMs).toBeGreaterThanOrEqual(0);
   });
 
   it("does not emit projectview.revival a second time for the same project without a new eviction (timestamp is consumed on read)", async () => {
@@ -798,6 +800,250 @@ describe("ProjectViewManager — telemetry", () => {
     // dispose should not throw and should clear internal state
     expect(() => manager.dispose()).not.toThrow();
     expect(manager.getAllViews().length).toBe(0);
+  });
+
+  it("does not emit projectview.warm-swap on cold-start switches (no prior cached view)", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    vi.mocked(logInfo).mockClear();
+
+    // Cold start to proj-b — no cached view exists, so warm-swap must not fire.
+    await manager.switchTo("proj-b", "/path/b");
+
+    const warmSwapCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.warm-swap");
+    expect(warmSwapCalls.length).toBe(0);
+  });
+
+  it("emits projectview.warm-swap on every cache-hit reactivation with visibleMs", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    vi.mocked(logInfo).mockClear();
+
+    // Cache hit on proj-a — no prior eviction, so revival does NOT fire,
+    // but warm-swap MUST fire with the activation latency.
+    await manager.switchTo("proj-a", "/path/a");
+
+    const warmSwapCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.warm-swap");
+    const revivalCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.revival");
+    expect(warmSwapCalls.length).toBe(1);
+    expect(revivalCalls.length).toBe(0);
+    expect(warmSwapCalls[0][1]).toMatchObject({
+      projectId: "proj-a",
+      visibleMs: expect.any(Number),
+    });
+    expect((warmSwapCalls[0][1] as { visibleMs: number }).visibleMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("sampleCachedViewMemory emits projectview.cached-memory for non-active cached views", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")?.view
+      .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
+      { pid: wcB.osPid, memory: { privateBytes: 300 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    vi.mocked(logInfo).mockClear();
+
+    (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    // proj-b is the active view; only proj-a (cached) should be sampled
+    expect(memoryCalls.length).toBe(1);
+    expect(memoryCalls[0][1]).toMatchObject({
+      projectId: "proj-a",
+      memoryKb: 250 * 1024,
+      pid: wcA.osPid,
+    });
+  });
+
+  it("sampleCachedViewMemory is a no-op when no views are cached", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    vi.mocked(logInfo).mockClear();
+
+    (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(0);
+  });
+
+  it("sampleCachedViewMemory skips views whose pid lookup is missing", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    // Metrics return nothing for proj-a's pid — sampler must skip silently.
+    mockGetAppMetrics.mockReturnValue([]);
+
+    vi.mocked(logInfo).mockClear();
+
+    (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(0);
+  });
+
+  it("sampleCachedViewMemory keeps sampling remaining views when one per-view call throws", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      cachedProjectViews: 4,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    await manager.switchTo("proj-c", "/path/c");
+    // proj-c is now active; proj-a and proj-b are cached.
+    const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")?.view
+      .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    // proj-a's getOSProcessId throws — the iteration over proj-a must be skipped,
+    // but proj-b must still be sampled.
+    wcA.getOSProcessId = vi.fn(() => {
+      throw new Error("view glitch");
+    });
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcB.osPid, memory: { privateBytes: 400 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    vi.mocked(logInfo).mockClear();
+
+    expect(() =>
+      (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory()
+    ).not.toThrow();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(1);
+    expect(memoryCalls[0][1]).toMatchObject({
+      projectId: "proj-b",
+      memoryKb: 400 * 1024,
+    });
+  });
+
+  it("sampleCachedViewMemory swallows app.getAppMetrics() failures", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    mockGetAppMetrics.mockImplementation(() => {
+      throw new Error("metrics unavailable");
+    });
+
+    expect(() =>
+      (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory()
+    ).not.toThrow();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(0);
+  });
+
+  it("dispose cancels the cached-memory sampler", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    manager.dispose();
+
+    vi.mocked(logInfo).mockClear();
+
+    // Manually invoke the sampler post-dispose — even if a stale interval tick
+    // were to fire, the sampler must not emit because views were cleared.
+    (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(0);
   });
 });
 

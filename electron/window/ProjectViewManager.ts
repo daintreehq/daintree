@@ -34,6 +34,7 @@ import {
 } from "./rendererConsoleCapture.js";
 import { freezeWebContents, unfreezeWebContents } from "../utils/webContentsLifecycle.js";
 import { ACTIVE_AGENT_STATES } from "../../shared/types/agent.js";
+import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import {
   beginWindowRecreating,
   endWindowRecreating,
@@ -57,6 +58,13 @@ const EFFICIENCY_FREEZE_DEBOUNCE_MS = 500;
  * comfortably covering the realistic worst case (~1s on cold disk).
  */
 const PAINT_GATE_TIMEOUT_MS = 3_000;
+/**
+ * Period between renderer-memory samples for cached (non-active) views. 30 s
+ * matches `ProcessMemoryMonitor` and keeps the synchronous `app.getAppMetrics()`
+ * call (5–50 ms per invocation) out of the budget that would risk main-thread
+ * jank. The sampler is silent telemetry only — no behaviour change.
+ */
+const CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS = 30_000;
 
 type ViewState = "loading" | "active" | "cached";
 
@@ -139,6 +147,8 @@ export class ProjectViewManager {
     projectId: string;
     intent: "focus-next-waiting";
   } | null = null;
+  private disposed = false;
+  private cachedMemoryTimerCleanup: (() => void) | null = null;
 
   constructor(win: BrowserWindow, opts: ProjectViewManagerOptions) {
     this.win = win;
@@ -179,6 +189,23 @@ export class ProjectViewManager {
     win.on("unmaximize", this.resizeHandler);
     win.on("enter-full-screen", this.resizeHandler);
     win.on("leave-full-screen", this.resizeHandler);
+
+    // Outer try/catch is load-bearing: `setAlignedInterval` calls the callback
+    // synchronously on the first aligned tick BEFORE installing the recurring
+    // `setInterval`. If the first tick throws, the recurring interval is never
+    // installed and all subsequent sampling is silently lost. Any uncaught throw
+    // also reaches `uncaughtException`. Sampling failures are pure telemetry
+    // and must never destabilise the manager.
+    this.cachedMemoryTimerCleanup = setAlignedInterval(() => {
+      if (this.disposed) return;
+      try {
+        this.sampleCachedViewMemory();
+      } catch (error) {
+        logWarn("projectview.cached-memory.error", {
+          error: formatErrorMessage(error, "sampleCachedViewMemory threw"),
+        });
+      }
+    }, CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS);
   }
 
   /**
@@ -259,14 +286,25 @@ export class ProjectViewManager {
       // observable at the project level. Consumed on read to fire only once per
       // eviction → return cycle.
       const evictedAt = this.evictionTimestamps.get(projectId);
+      // `activateView` re-attaches the already-painted renderer; `notifyViewPainted`
+      // is one-shot per V8 context and will not re-fire, so the synchronous
+      // attach window is the only measurable "made visible" delta available.
+      // Lower bound (DOM attach, not GPU paint) but consistent across cache hits.
+      const warmStart = performance.now();
+      this.activateView(cached);
+      const visibleMs = Math.round(performance.now() - warmStart);
       if (evictedAt !== undefined) {
         logInfo("projectview.revival", {
           projectId,
           timeSinceEvictionMs: Date.now() - evictedAt,
+          visibleMs,
         });
         this.evictionTimestamps.delete(projectId);
       }
-      this.activateView(cached);
+      logInfo("projectview.warm-swap", {
+        projectId,
+        visibleMs,
+      });
       const cachedIntent = this.consumePendingFocusIntent(projectId);
       if (cachedIntent) {
         this.deliverFocusIntent(cached.view, cachedIntent);
@@ -321,7 +359,7 @@ export class ProjectViewManager {
     // pre-arming, every fast cold switch would fall through to the timeout.
     const paintGatePromise = this.waitForPaint(view.webContents.id, previousEntry);
 
-    let visibleAt = 0;
+    let visibleAt: number;
     try {
       // Load the renderer with projectId context
       await this.loadView(view, projectId);
@@ -578,6 +616,13 @@ export class ProjectViewManager {
   }
 
   dispose(): void {
+    this.disposed = true;
+
+    if (this.cachedMemoryTimerCleanup) {
+      this.cachedMemoryTimerCleanup();
+      this.cachedMemoryTimerCleanup = null;
+    }
+
     // Remove window-level listeners
     if (this.resizeHandler) {
       this.win.removeListener("resize", this.resizeHandler);
@@ -1193,6 +1238,54 @@ export class ProjectViewManager {
       logInfo("projectview.eviction", ctx);
       this.evictionTimestamps.set(projectId, Date.now());
       this.cleanupEntry(projectId);
+    }
+  }
+
+  /**
+   * Periodic renderer-memory sample for cached (non-active) project views.
+   * Silent telemetry only — emits one `projectview.cached-memory` event per
+   * cached view per tick so the keep-warm cost is observable in logs without
+   * any user-visible behaviour change. Skips when the cache holds only the
+   * active view (or fewer) so a single-project session generates no events.
+   */
+  private sampleCachedViewMemory(): void {
+    if (this.views.size <= 1) return;
+    const activeProjectId = this.activeProjectId;
+
+    const memoryByPid = new Map<number, number>();
+    try {
+      for (const proc of app.getAppMetrics()) {
+        const kb = proc.memory.privateBytes ?? proc.memory.workingSetSize;
+        if (typeof kb === "number" && kb > 0) {
+          memoryByPid.set(proc.pid, kb);
+        }
+      }
+    } catch {
+      // app.getAppMetrics() throwing is non-fatal — skip this tick.
+      return;
+    }
+
+    for (const [projectId, entry] of this.views) {
+      if (projectId === activeProjectId) continue;
+      // Per-view try/catch keeps a TOCTOU-killed renderer (or any other
+      // per-view glitch) from skipping the rest of the cache in this tick.
+      try {
+        const wc = entry.view.webContents;
+        if (wc.isDestroyed()) continue;
+        const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
+        if (typeof getPid !== "function") continue;
+        const pid = getPid.call(wc);
+        if (typeof pid !== "number" || pid <= 0) continue;
+        const memoryKb = memoryByPid.get(pid);
+        if (typeof memoryKb !== "number" || memoryKb <= 0) continue;
+        logInfo("projectview.cached-memory", {
+          projectId,
+          memoryKb,
+          pid,
+        });
+      } catch {
+        // Telemetry only — skip this view and continue with the rest.
+      }
     }
   }
 
