@@ -806,7 +806,7 @@ describe("FleetArmingRibbon", () => {
       expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
     });
 
-    it("does not render when total is below the visibility threshold", () => {
+    it("does not render until the Doherty threshold elapses", () => {
       // Count no longer gates visibility — duration does. Counter hidden
       // until the Doherty threshold (400ms) elapses.
       vi.useFakeTimers();
@@ -948,6 +948,7 @@ describe("FleetArmingRibbon", () => {
         });
         const cancel = screen.getByTestId("fleet-broadcast-cancel");
         expect(cancel.getAttribute("aria-label")).toBe("Cancel broadcast");
+        expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
       } finally {
         vi.useRealTimers();
       }
