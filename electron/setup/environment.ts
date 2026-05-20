@@ -129,6 +129,22 @@ function getGpuTileMemoryCapMb(): string {
 
 app.commandLine.appendSwitch("force-gpu-mem-available-mb", getGpuTileMemoryCapMb());
 
+// Lift Chromium's 16-active-WebGL-context per-renderer ceiling so the terminal pool
+// can keep more xterm panes on the WebGL renderer before LRU eviction drops them to
+// DOM. Scales with system RAM on the same tiers as the tile-memory budget above.
+// Each xterm WebGL context is small (no 3D geometry, no MSAA) so headroom for 24-32
+// is safe within the raised tile budget. Memory-pressure context loss is still
+// possible at the OS/GPU-budget level (Chromium 465176577) — the existing
+// TerminalWebGLManager circuit breaker handles that path independently.
+function getMaxWebGLContexts(): string {
+  const totalMem = os.totalmem();
+  if (totalMem <= 8 * 1024 ** 3) return "24";
+  if (totalMem <= 16 * 1024 ** 3) return "28";
+  return "32";
+}
+
+app.commandLine.appendSwitch("max-active-webgl-contexts", getMaxWebGLContexts());
+
 if (process.platform === "win32") {
   const extraPaths = getWindowsExtraPaths();
   const current = process.env.PATH || "";

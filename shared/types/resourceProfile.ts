@@ -45,8 +45,8 @@ export interface ResourceProfilePayload {
  * - pollIntervalBackground: 10000 (WorkspaceService DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS)
  * - processTreePollInterval: 2500 (ProcessTreeCache constructor default)
  * - projectStatsPollInterval: 5000 (ProjectStatsService DEFAULT_POLL_INTERVAL_MS)
- * - maxWebGLContexts: 12 (TerminalWebGLManager MAX_CONTEXTS)
- * - passiveWebGLThreshold: 8 (TerminalWebGLConfig initial value)
+ * - maxWebGLContexts: 16 (TerminalWebGLConfig initial value)
+ * - passiveWebGLThreshold: 12 (TerminalWebGLConfig initial value)
  * - memoryPressureInactiveMs: 1800000 (HibernationService MEMORY_PRESSURE_INACTIVE_MS = 30min)
  */
 export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileConfig> = {
@@ -55,8 +55,11 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     pollIntervalBackground: 5000,
     processTreePollInterval: 2000,
     projectStatsPollInterval: 5000,
-    maxWebGLContexts: 16,
-    passiveWebGLThreshold: 16,
+    // Performance mode disables the passive gate (threshold == max) so all
+    // slots fill before DOM fallback kicks in. Only reached under low-pressure
+    // conditions, so coexisting WebGL consumers have ample budget.
+    maxWebGLContexts: 24,
+    passiveWebGLThreshold: 24,
     memoryPressureInactiveMs: 60 * 60 * 1000, // 60 min
     lowMemoryFreeThresholdMb: null,
     fetchIntervalActiveMs: 20_000,
@@ -67,8 +70,8 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     pollIntervalBackground: 10000,
     processTreePollInterval: 2500,
     projectStatsPollInterval: 5000,
-    maxWebGLContexts: 12,
-    passiveWebGLThreshold: 8,
+    maxWebGLContexts: 16,
+    passiveWebGLThreshold: 12,
     memoryPressureInactiveMs: 30 * 60 * 1000, // 30 min
     lowMemoryFreeThresholdMb: 768,
     fetchIntervalActiveMs: 30_000,
@@ -79,8 +82,8 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     pollIntervalBackground: 20000,
     processTreePollInterval: 5000,
     projectStatsPollInterval: 25000,
-    maxWebGLContexts: 6,
-    passiveWebGLThreshold: 6,
+    maxWebGLContexts: 8,
+    passiveWebGLThreshold: 8,
     memoryPressureInactiveMs: 15 * 60 * 1000, // 15 min
     lowMemoryFreeThresholdMb: 1024,
     fetchIntervalActiveMs: 45_000,

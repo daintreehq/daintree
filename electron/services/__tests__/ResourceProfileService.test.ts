@@ -628,9 +628,23 @@ describe("ResourceProfileService", () => {
     expect(balanced.pollIntervalBackground).toBe(10000);
     expect(balanced.processTreePollInterval).toBe(2500);
     expect(balanced.projectStatsPollInterval).toBe(5000);
-    expect(balanced.maxWebGLContexts).toBe(12);
+    expect(balanced.maxWebGLContexts).toBe(16);
+    expect(balanced.passiveWebGLThreshold).toBe(12);
     expect(balanced.memoryPressureInactiveMs).toBe(30 * 60 * 1000);
     expect(balanced.lowMemoryFreeThresholdMb).toBe(768);
+  });
+
+  it("performance and efficiency WebGL ceilings stay pinned", () => {
+    expect(RESOURCE_PROFILE_CONFIGS.performance.maxWebGLContexts).toBe(24);
+    expect(RESOURCE_PROFILE_CONFIGS.performance.passiveWebGLThreshold).toBe(24);
+    expect(RESOURCE_PROFILE_CONFIGS.efficiency.maxWebGLContexts).toBe(8);
+    expect(RESOURCE_PROFILE_CONFIGS.efficiency.passiveWebGLThreshold).toBe(8);
+  });
+
+  it("every profile keeps passiveWebGLThreshold <= maxWebGLContexts", () => {
+    for (const config of Object.values(RESOURCE_PROFILE_CONFIGS)) {
+      expect(config.passiveWebGLThreshold).toBeLessThanOrEqual(config.maxWebGLContexts);
+    }
   });
 
   it("battery on its own contributes to pressure score", () => {
