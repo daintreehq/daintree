@@ -9,7 +9,7 @@ const REPO_ROOT = join(__dirname, "..");
 const MAPS_FILE = join(REPO_ROOT, "shared", "types", "ipc", "maps.ts");
 const BASELINE_FILE = join(REPO_ROOT, "ipc-handwritten-baseline.json");
 
-const HEADER = 'export interface IpcInvokeMap extends GeneratedIpcInvokeMap {';
+const HEADER = "export interface IpcInvokeMap extends GeneratedIpcInvokeMap {";
 
 function buildMaps(body) {
   return `import type { GeneratedIpcInvokeMap } from "./generated.js";\n\n${HEADER}\n${body}\n}\n\nexport interface IpcEventMap {\n  "other:event": { x: number };\n}\n`;
@@ -54,12 +54,7 @@ describe("countHandWrittenEntries", () => {
   });
 
   it("counts channels that contain colons in the name", () => {
-    const body = [
-      `  "a:b:c": {`,
-      `    args: [];`,
-      `    result: void;`,
-      `  };`,
-    ].join("\n");
+    const body = [`  "a:b:c": {`, `    args: [];`, `    result: void;`, `  };`].join("\n");
     expect(countHandWrittenEntries(buildMaps(body))).toBe(1);
   });
 
