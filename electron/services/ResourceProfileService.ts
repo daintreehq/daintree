@@ -137,6 +137,12 @@ export class ResourceProfileService {
   private lagEnterTicks = 0;
   private lagExitWindow: boolean[] = [];
   private lagPressureStartedAt: number | null = null;
+  // Memory sub-score captured from the most recent computeTargetProfile() run.
+  // Gates the setCachedViewLimit(1) clamp on efficiency entry so non-memory
+  // efficiency triggers (battery + thermal/CPU + worktrees) don't pay the
+  // cost of destroying cached WebContentsViews. sampleLag() bypasses
+  // computeTargetProfile() and must zero this before calling applyProfile().
+  private lastMemoryScore = 0;
 
   constructor(private deps: ResourceProfileDeps) {
     const totalRamMb = os.totalmem() / 1024 / 1024;
@@ -402,6 +408,11 @@ export class ResourceProfileService {
         utilization: Math.round(utilization * 100) / 100,
       });
       if (this.currentProfile !== "efficiency") {
+        // Severe-spike lag entry bypasses computeTargetProfile(), so
+        // lastMemoryScore holds whatever the previous eval recorded (stale).
+        // The trigger here is CPU/event-loop, not memory — zero it so the
+        // setCachedViewLimit(1) clamp in applyProfile() stays off.
+        this.lastMemoryScore = 0;
         this.applyProfile("efficiency");
       }
       return;
@@ -420,6 +431,11 @@ export class ResourceProfileService {
           utilization: Math.round(utilization * 100) / 100,
         });
         if (this.currentProfile !== "efficiency") {
+          // Lag-triggered efficiency entry bypasses computeTargetProfile(), so
+          // lastMemoryScore holds whatever the previous eval recorded (stale).
+          // The trigger here is CPU/event-loop, not memory — zero it so the
+          // setCachedViewLimit(1) clamp in applyProfile() stays off.
+          this.lastMemoryScore = 0;
           this.applyProfile("efficiency");
         }
       }
@@ -530,6 +546,7 @@ export class ResourceProfileService {
     }
     this.lagPreviousElu = null;
     this.clearLagPressure();
+    this.lastMemoryScore = 0;
     this.thermalState = "unknown";
     this.isOnBattery = false;
     this.speedLimit = 100;
@@ -571,6 +588,7 @@ export class ResourceProfileService {
 
   private computeTargetProfile(): ResourceProfile {
     let pressureScore = 0;
+    let memoryScore = 0;
 
     // Memory signal
     try {
@@ -581,13 +599,15 @@ export class ResourceProfileService {
       }
 
       if (totalPrivateMb > this.memoryThresholdHighMb) {
-        pressureScore += 2;
+        memoryScore = 2;
       } else if (totalPrivateMb > this.memoryThresholdLowMb) {
-        pressureScore += 1;
+        memoryScore = 1;
       }
     } catch {
-      // Skip memory signal on error
+      // Skip memory signal on error — memoryScore stays 0 (correct: no measurement, no clamp)
     }
+    pressureScore += memoryScore;
+    this.lastMemoryScore = memoryScore;
 
     // Battery signal (cached from startup + transition events)
     if (this.isOnBattery) {
@@ -711,10 +731,17 @@ export class ResourceProfileService {
       // isolation applies per-PVM: a failure on one window must not skip the
       // remaining windows in the iteration.
       if (profile === "efficiency") {
-        try {
-          pvm.setCachedViewLimit(1);
-        } catch {
-          // non-critical
+        // Only destroy cached WebContentsViews when memory actually contributed
+        // to entering efficiency. Battery + thermal/CPU-only triggers are
+        // handled by setEfficiencyFreeze(true) alone, and evictStaleViews()
+        // has its own lowMemoryFreeThresholdMb floor that clamps to 1 when
+        // free RAM really is low (independent of profile).
+        if (this.lastMemoryScore > 0) {
+          try {
+            pvm.setCachedViewLimit(1);
+          } catch {
+            // non-critical
+          }
         }
         try {
           // Freeze cached project views' renderers via CDP under efficiency to
