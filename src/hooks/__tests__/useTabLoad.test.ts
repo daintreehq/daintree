@@ -142,9 +142,7 @@ describe("useTabLoad", () => {
   it("does not update state after unmount", async () => {
     vi.useFakeTimers();
     const initialize = vi.fn(() => new Promise<void>(() => {}));
-    const { unmount } = renderHook(() =>
-      useTabLoad({ initialize, timeoutMs: 50 })
-    );
+    const { unmount } = renderHook(() => useTabLoad({ initialize, timeoutMs: 50 }));
     unmount();
     expect(() => {
       act(() => {

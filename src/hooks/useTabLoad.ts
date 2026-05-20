@@ -70,7 +70,8 @@ export function useTabLoad(options: UseTabLoadOptions): UseTabLoadResult {
     setIsLoading(true);
     setLoadError(null);
 
-    const fn = retryNonce === 0 ? initializeRef.current : (retryRef.current ?? initializeRef.current);
+    const fn =
+      retryNonce === 0 ? initializeRef.current : (retryRef.current ?? initializeRef.current);
 
     const timer = setTimeout(() => {
       if (cancelled || myEpoch !== loadEpochRef.current) return;
