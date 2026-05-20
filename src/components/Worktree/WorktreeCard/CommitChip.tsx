@@ -4,6 +4,7 @@ import { CAT_COLOR_CLASSES } from "@/config/categoryColors";
 import { AGENT_REGISTRY, type AgentIconProps } from "@/config/agents";
 import { getGravatarUrl, isBotAuthor } from "@/utils/gravatar";
 import { LiveTimeAgo } from "../LiveTimeAgo";
+import { AvatarFreshnessRing } from "../AvatarFreshnessRing";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export interface CommitAuthor {
@@ -24,8 +25,9 @@ export interface CommitChipProps {
    */
   forgeAvatarUrl?: string;
   /**
-   * Reserved seat for the avatar freshness-ring issue. Accepted but unused
-   * here so the ring work layers on without changing this API.
+   * Drives the avatar freshness ring — an outset box-shadow that fades from
+   * accent to idle over the decay window. When absent the ring renders at the
+   * muted idle colour with no timer armed.
    */
   lastActivityTimestamp?: number | null;
 }
@@ -64,6 +66,14 @@ export function resolveCommitAgentIcon(author: CommitAuthor): ComponentType<Agen
     if (id.length >= 4 && segments.includes(id)) return agent.icon;
   }
   return null;
+}
+
+/**
+ * Square for AI agents and bots, circle for humans. Shared by the avatar
+ * renderer and the freshness ring so both keep the same silhouette.
+ */
+function commitAvatarIsSquare(author: CommitAuthor): boolean {
+  return resolveCommitAgentIcon(author) != null || isBotAuthor(author.name);
 }
 
 function djb2(input: string): number {
@@ -127,7 +137,7 @@ function CommitChipAvatar({
   forgeAvatarUrl?: string;
 }) {
   const AgentIcon = resolveCommitAgentIcon(author);
-  const square = AgentIcon != null || isBotAuthor(author.name);
+  const square = commitAvatarIsSquare(author);
 
   // Ordered image tiers tried before initials: forge picture, then a
   // `d=404` Gravatar probe. Skip Gravatar when offline — the request would
@@ -182,6 +192,7 @@ export function CommitChip({
   author,
   commitMessage,
   forgeAvatarUrl,
+  lastActivityTimestamp,
 }: CommitChipProps) {
   const relative = relativeCommitPhrase(Date.now() - lastCommitTimestampMs);
   const absolute = new Date(lastCommitTimestampMs).toLocaleString();
@@ -190,6 +201,11 @@ export function CommitChip({
     : `Committed ${relative} (${absolute})`;
   const accessibleName = author ? `Last commit by ${author.name}` : "Last commit";
 
+  // The freshness ring is an avatar treatment — it only makes sense when a
+  // real avatar image (forge picture or Gravatar) hosts it. A branded agent
+  // icon is its own self-contained mark, so the ring is suppressed there.
+  const hasAvatarHost = author != null && resolveCommitAgentIcon(author) == null;
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -197,7 +213,17 @@ export function CommitChip({
           className="relative z-10 ml-3 flex shrink-0 items-center gap-1 text-xs text-text-muted"
           aria-label={accessibleName}
         >
-          {author && <CommitChipAvatar author={author} forgeAvatarUrl={forgeAvatarUrl} />}
+          {author &&
+            (hasAvatarHost ? (
+              <AvatarFreshnessRing
+                lastActivityTimestamp={lastActivityTimestamp}
+                shape={commitAvatarIsSquare(author) ? "square" : "circle"}
+              >
+                <CommitChipAvatar author={author} forgeAvatarUrl={forgeAvatarUrl} />
+              </AvatarFreshnessRing>
+            ) : (
+              <CommitChipAvatar author={author} forgeAvatarUrl={forgeAvatarUrl} />
+            ))}
           <LiveTimeAgo timestamp={lastCommitTimestampMs} noTooltip />
         </div>
       </TooltipTrigger>

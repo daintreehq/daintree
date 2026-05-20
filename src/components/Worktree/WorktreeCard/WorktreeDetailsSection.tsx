@@ -435,6 +435,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       author={worktree.worktreeChanges.lastCommitAuthor}
                       commitMessage={worktree.worktreeChanges.lastCommitMessage}
                       forgeAvatarUrl={forgeAuthorAvatarUrl}
+                      lastActivityTimestamp={worktree.lastActivityTimestamp}
                     />
                   )}
               </div>
