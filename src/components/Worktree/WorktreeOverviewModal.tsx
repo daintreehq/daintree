@@ -476,7 +476,16 @@ export function WorktreeOverviewModal({
   // (lesson #4729) — only deliberate actions reset it.
   const selectionAnchorRef = useRef<string | null>(null);
 
-  const visibleIds = useMemo(() => filteredWorktrees.map((w) => w.id), [filteredWorktrees]);
+  // Must mirror DOM render order so keyboard navigation indexes into the right
+  // cell. When grouped, the DOM flattens groupedSections in section order; the
+  // flat sorted order in filteredWorktrees does not match.
+  const visibleIds = useMemo(
+    () =>
+      groupedSections
+        ? groupedSections.flatMap((s) => s.worktrees.map((w) => w.id))
+        : filteredWorktrees.map((w) => w.id),
+    [groupedSections, filteredWorktrees]
+  );
   const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
 
   // Drop selections that are no longer visible (filter narrowed). Anchor is
