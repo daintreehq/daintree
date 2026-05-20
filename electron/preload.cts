@@ -51,6 +51,10 @@ import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.
 import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
+import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
+import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
+import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayout.preload.js";
+import { buildTerminalConfigPreloadBindings } from "./ipc/handlers/terminalConfig.preload.js";
 
 import type {
   WorktreeState,
@@ -1001,20 +1005,7 @@ const api: ElectronAPI = {
   },
 
   // Editor API
-  editor: {
-    getConfig: (projectId?: string) => _unwrappingInvoke(CHANNELS.EDITOR_GET_CONFIG, projectId),
-
-    setConfig: (payload: {
-      editor: { id: string; customCommand?: string; customTemplate?: string };
-      projectId?: string;
-    }) =>
-      _unwrappingInvoke(
-        CHANNELS.EDITOR_SET_CONFIG,
-        payload as import("../shared/types/editor.js").EditorSetConfigPayload
-      ),
-
-    discover: () => _unwrappingInvoke(CHANNELS.EDITOR_DISCOVER),
-  },
+  editor: buildEditorConfigPreloadBindings(_unwrappingInvoke),
 
   // System API
   system: {
@@ -1393,55 +1384,7 @@ const api: ElectronAPI = {
     ): Promise<Record<string, import("../shared/config/agentRegistry.js").AgentPreset[]>> =>
       _unwrappingInvoke(CHANNELS.PROJECT_GET_INREPO_PRESETS, projectId),
 
-    getTerminals: (
-      projectId: string
-    ): Promise<import("../shared/types/index.js").TerminalSnapshot[]> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_GET_TERMINALS, projectId),
-
-    setTerminals: (
-      projectId: string,
-      terminals: import("../shared/types/index.js").TerminalSnapshot[]
-    ): Promise<void> => _unwrappingInvoke(CHANNELS.PROJECT_SET_TERMINALS, { projectId, terminals }),
-
-    getTerminalSizes: (
-      projectId: string
-    ): Promise<Record<string, { cols: number; rows: number }>> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_GET_TERMINAL_SIZES, projectId),
-
-    setTerminalSizes: (
-      projectId: string,
-      terminalSizes: Record<string, { cols: number; rows: number }>
-    ): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_SET_TERMINAL_SIZES, { projectId, terminalSizes }),
-
-    getDraftInputs: (projectId: string): Promise<Record<string, string>> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_GET_DRAFT_INPUTS, projectId),
-
-    setDraftInputs: (projectId: string, draftInputs: Record<string, string>): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_SET_DRAFT_INPUTS, { projectId, draftInputs }),
-
-    getTabGroups: (projectId: string): Promise<import("../shared/types/index.js").TabGroup[]> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_GET_TAB_GROUPS, projectId),
-
-    setTabGroups: (
-      projectId: string,
-      tabGroups: import("../shared/types/index.js").TabGroup[]
-    ): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_SET_TAB_GROUPS, { projectId, tabGroups }),
-
-    getFocusMode: (
-      projectId: string
-    ): Promise<{
-      focusMode: boolean;
-      focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
-    }> => _unwrappingInvoke(CHANNELS.PROJECT_GET_FOCUS_MODE, projectId),
-
-    setFocusMode: (
-      projectId: string,
-      focusMode: boolean,
-      focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
-    ): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_SET_FOCUS_MODE, { projectId, focusMode, focusPanelState }),
+    ...buildTerminalLayoutPreloadBindings(_unwrappingInvoke),
 
     readClaudeMd: (projectId: string): Promise<string | null> =>
       _unwrappingInvoke(CHANNELS.PROJECT_READ_CLAUDE_MD, projectId),
@@ -1736,51 +1679,9 @@ const api: ElectronAPI = {
 
   // Terminal Config API
   terminalConfig: {
-    get: () => _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_GET),
-
-    setScrollback: (scrollbackLines: number) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_SCROLLBACK, scrollbackLines),
-
-    setPerformanceMode: (performanceMode: boolean) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_PERFORMANCE_MODE, performanceMode),
-
-    setFontSize: (fontSize: number) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_FONT_SIZE, fontSize),
-
-    setFontFamily: (fontFamily: string) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_FONT_FAMILY, fontFamily),
-
-    setHybridInputEnabled: (enabled: boolean) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_ENABLED, enabled),
-
-    setHybridInputAutoFocus: (enabled: boolean) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS, enabled),
-
-    setColorScheme: (schemeId: string) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_COLOR_SCHEME, schemeId),
-
-    setCustomSchemes: (schemes: unknown) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES, schemes),
-
-    setRecentSchemeIds: (ids: string[]) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS, ids),
+    ...buildTerminalConfigPreloadBindings(_unwrappingInvoke),
 
     importColorScheme: () => _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME),
-
-    setScreenReaderMode: (mode: "auto" | "on" | "off") =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_SCREEN_READER_MODE, mode),
-
-    setResourceMonitoring: (enabled: boolean) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_RESOURCE_MONITORING, enabled),
-
-    setMemoryLeakDetection: (enabled: boolean) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION, enabled),
-
-    setMemoryLeakAutoRestartThresholdMb: (thresholdMb: number) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART, thresholdMb),
-
-    setCachedProjectViews: (cachedProjectViews: number) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS, cachedProjectViews),
   },
 
   // Accessibility API
@@ -1951,18 +1852,7 @@ const api: ElectronAPI = {
   },
 
   // Worktree Config API
-  worktreeConfig: {
-    get: () => _unwrappingInvoke(CHANNELS.WORKTREE_CONFIG_GET),
-
-    setPattern: (pattern: string) =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_CONFIG_SET_PATTERN, { pattern }),
-
-    setWslGit: (worktreeId: string, enabled: boolean) =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_CONFIG_SET_WSL_GIT, { worktreeId, enabled }),
-
-    dismissWslBanner: (worktreeId: string) =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_CONFIG_DISMISS_WSL_BANNER, { worktreeId }),
-  },
+  worktreeConfig: buildWorktreeConfigPreloadBindings(_unwrappingInvoke),
 
   // Window API
   window: {

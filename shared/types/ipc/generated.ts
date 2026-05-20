@@ -212,6 +212,21 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewStopByPanelRequest];
     result: void;
   };
+  "editor:discover": {
+    args: [];
+    result: import("../editor.js").DiscoveredEditor[];
+  };
+  "editor:get-config": {
+    args: [projectId?: string | undefined];
+    result: {
+      preferredEditor: import("../editor.js").EditorConfig | null;
+      discoveredEditors: import("../editor.js").DiscoveredEditor[];
+    };
+  };
+  "editor:set-config": {
+    args: [payload: import("../editor.js").EditorSetConfigPayload];
+    result: void;
+  };
   "event-inspector:clear": {
     args: [];
     result: void;
@@ -596,6 +611,57 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./gitClone.js").CloneRepoOptions];
     result: import("./gitClone.js").CloneRepoResult;
   };
+  "project:get-draft-inputs": {
+    args: [projectId: string];
+    result: Record<string, string>;
+  };
+  "project:get-focus-mode": {
+    args: [projectId: string];
+    result: {
+      focusMode: boolean;
+      focusPanelState: import("../project.js").FocusPanelState | undefined;
+    };
+  };
+  "project:get-tab-groups": {
+    args: [projectId: string];
+    result: import("../panel.js").TabGroup[];
+  };
+  "project:get-terminal-sizes": {
+    args: [projectId: string];
+    result: Record<string, { cols: number; rows: number }>;
+  };
+  "project:get-terminals": {
+    args: [projectId: string];
+    result: import("../project.js").PanelSnapshot[];
+  };
+  "project:set-draft-inputs": {
+    args: [payload: { projectId: string; draftInputs: Record<string, string> }];
+    result: void;
+  };
+  "project:set-focus-mode": {
+    args: [
+      payload: {
+        projectId: string;
+        focusMode: boolean;
+        focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean } | undefined;
+      },
+    ];
+    result: void;
+  };
+  "project:set-tab-groups": {
+    args: [payload: { projectId: string; tabGroups: import("../panel.js").TabGroup[] }];
+    result: void;
+  };
+  "project:set-terminal-sizes": {
+    args: [
+      payload: { projectId: string; terminalSizes: Record<string, { cols: number; rows: number }> },
+    ];
+    result: void;
+  };
+  "project:set-terminals": {
+    args: [payload: { projectId: string; terminals: import("../project.js").PanelSnapshot[] }];
+    result: void;
+  };
   "scratch:create": {
     args: [name?: string | undefined];
     result: import("../scratch.js").Scratch;
@@ -677,6 +743,66 @@ export interface GeneratedIpcInvokeMap {
   };
   "telemetry:track": {
     args: [eventName: string, properties: Record<string, unknown>];
+    result: void;
+  };
+  "terminal-config:get": {
+    args: [];
+    result: import("./config.js").TerminalConfig;
+  };
+  "terminal-config:set-cached-project-views": {
+    args: [cachedProjectViews: number];
+    result: void;
+  };
+  "terminal-config:set-color-scheme": {
+    args: [schemeId: string];
+    result: void;
+  };
+  "terminal-config:set-custom-schemes": {
+    args: [schemes: unknown];
+    result: void;
+  };
+  "terminal-config:set-font-family": {
+    args: [fontFamily: string];
+    result: void;
+  };
+  "terminal-config:set-font-size": {
+    args: [fontSize: number];
+    result: void;
+  };
+  "terminal-config:set-hybrid-input-auto-focus": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "terminal-config:set-hybrid-input-enabled": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "terminal-config:set-memory-leak-auto-restart": {
+    args: [thresholdMb: number];
+    result: void;
+  };
+  "terminal-config:set-memory-leak-detection": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "terminal-config:set-performance-mode": {
+    args: [performanceMode: boolean];
+    result: void;
+  };
+  "terminal-config:set-recent-scheme-ids": {
+    args: [ids: unknown];
+    result: void;
+  };
+  "terminal-config:set-resource-monitoring": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "terminal-config:set-screen-reader-mode": {
+    args: [mode: unknown];
+    result: void;
+  };
+  "terminal-config:set-scrollback": {
+    args: [scrollbackLines: number];
     result: void;
   };
   "terminal:force-resume": {
@@ -788,6 +914,22 @@ export interface GeneratedIpcInvokeMap {
   };
   "watchdog:restart": {
     args: [];
+    result: void;
+  };
+  "worktree-config:dismiss-wsl-banner": {
+    args: [payload: { worktreeId: string }];
+    result: void;
+  };
+  "worktree-config:get": {
+    args: [];
+    result: import("./worktree.js").WorktreeConfig;
+  };
+  "worktree-config:set-pattern": {
+    args: [payload: { pattern: string }];
+    result: import("./worktree.js").WorktreeConfig;
+  };
+  "worktree-config:set-wsl-git": {
+    args: [payload: { worktreeId: string; enabled: boolean }];
     result: void;
   };
   "worktree:attach-issue": {

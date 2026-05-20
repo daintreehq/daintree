@@ -1,15 +1,8 @@
 import type { StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
 import type { VoiceInputStatus } from "../voice.js";
-import type { TabGroup } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
-import type {
-  Project,
-  ProjectSettings,
-  RunCommand,
-  TerminalRecipe,
-  TerminalSnapshot,
-} from "../project.js";
+import type { Project, ProjectSettings, RunCommand, TerminalRecipe } from "../project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { PushProgressEvent } from "./gitPush.js";
 import type { AgentSettings } from "../agentSettings.js";
@@ -23,7 +16,6 @@ import type {
   VoiceInputSettings,
 } from "./api.js";
 
-import type { WorktreeConfig } from "./worktree.js";
 import type { TerminalActivityPayload } from "./terminal.js";
 import type {
   AgentStateChangePayload,
@@ -102,7 +94,6 @@ import type {
   SnapshotInfo,
   SnapshotRevertResult,
 } from "./git.js";
-import type { TerminalConfig } from "./config.js";
 import type {
   FileSearchPayload,
   FileSearchResult,
@@ -273,20 +264,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "copytree:test-config": {
     args: [payload: CopyTreeTestConfigPayload];
     result: CopyTreeTestConfigResult;
-  };
-
-  // Editor channels
-  "editor:get-config": {
-    args: [projectId?: string];
-    result: import("../editor.js").EditorGetConfigResult;
-  };
-  "editor:set-config": {
-    args: [payload: import("../editor.js").EditorSetConfigPayload];
-    result: void;
-  };
-  "editor:discover": {
-    args: [];
-    result: import("../editor.js").DiscoveredEditor[];
   };
 
   // System channels
@@ -677,49 +654,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [payload: { projectId: string; recipeId: string }];
     result: void;
   };
-  "project:get-terminals": {
-    args: [projectId: string];
-    result: TerminalSnapshot[];
-  };
-  "project:set-terminals": {
-    args: [payload: { projectId: string; terminals: TerminalSnapshot[] }];
-    result: void;
-  };
-  "project:get-terminal-sizes": {
-    args: [projectId: string];
-    result: Record<string, { cols: number; rows: number }>;
-  };
-  "project:set-terminal-sizes": {
-    args: [
-      payload: { projectId: string; terminalSizes: Record<string, { cols: number; rows: number }> },
-    ];
-    result: void;
-  };
-  "project:get-tab-groups": {
-    args: [projectId: string];
-    result: TabGroup[];
-  };
-  "project:set-tab-groups": {
-    args: [payload: { projectId: string; tabGroups: TabGroup[] }];
-    result: void;
-  };
-  "project:get-focus-mode": {
-    args: [projectId: string];
-    result: {
-      focusMode: boolean;
-      focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
-    };
-  };
-  "project:set-focus-mode": {
-    args: [
-      payload: {
-        projectId: string;
-        focusMode: boolean;
-        focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
-      },
-    ];
-    result: void;
-  };
   "project:read-claude-md": {
     args: [projectId: string];
     result: string | null;
@@ -869,42 +803,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
 
   // Terminal config channels
-  "terminal-config:get": {
-    args: [];
-    result: TerminalConfig;
-  };
-  "terminal-config:set-scrollback": {
-    args: [scrollbackLines: number];
-    result: void;
-  };
-  "terminal-config:set-performance-mode": {
-    args: [performanceMode: boolean];
-    result: void;
-  };
-  "terminal-config:set-font-size": {
-    args: [fontSize: number];
-    result: void;
-  };
-  "terminal-config:set-font-family": {
-    args: [fontFamily: string];
-    result: void;
-  };
-  "terminal-config:set-hybrid-input-enabled": {
-    args: [enabled: boolean];
-    result: void;
-  };
-  "terminal-config:set-hybrid-input-auto-focus": {
-    args: [enabled: boolean];
-    result: void;
-  };
-  "terminal-config:set-color-scheme": {
-    args: [schemeId: string];
-    result: void;
-  };
-  "terminal-config:set-custom-schemes": {
-    args: [schemes: unknown];
-    result: void;
-  };
   "terminal-config:import-color-scheme": {
     args: [];
     result:
@@ -918,11 +816,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
           };
         }
       | { ok: false; errors: string[] };
-  };
-
-  "terminal-config:set-screen-reader-mode": {
-    args: [mode: "auto" | "on" | "off"];
-    result: void;
   };
 
   // Accessibility channels
@@ -1095,24 +988,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "keybinding:import-profile": {
     args: [];
     result: KeybindingImportResult;
-  };
-
-  // Worktree Config channels
-  "worktree-config:get": {
-    args: [];
-    result: WorktreeConfig;
-  };
-  "worktree-config:set-pattern": {
-    args: [payload: { pattern: string }];
-    result: WorktreeConfig;
-  };
-  "worktree-config:set-wsl-git": {
-    args: [payload: { worktreeId: string; enabled: boolean }];
-    result: void;
-  };
-  "worktree-config:dismiss-wsl-banner": {
-    args: [payload: { worktreeId: string }];
-    result: void;
   };
 
   // Plugin channels
@@ -1492,16 +1367,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: Record<string, Partial<NotificationSettings>>;
   };
 
-  // Draft inputs
-  "project:get-draft-inputs": {
-    args: [projectId: string];
-    result: Record<string, string>;
-  };
-  "project:set-draft-inputs": {
-    args: [payload: { projectId: string; draftInputs: Record<string, string> }];
-    result: void;
-  };
-
   // In-repo recipe channels
   "project:get-inrepo-recipes": {
     args: [projectId: string];
@@ -1568,28 +1433,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "system:health-check-specs": {
     args: [agentIds?: string[]];
     result: PrerequisiteSpec[];
-  };
-
-  // Additional terminal config channels
-  "terminal-config:set-resource-monitoring": {
-    args: [enabled: boolean];
-    result: void;
-  };
-  "terminal-config:set-memory-leak-detection": {
-    args: [enabled: boolean];
-    result: void;
-  };
-  "terminal-config:set-memory-leak-auto-restart": {
-    args: [thresholdMb: number];
-    result: void;
-  };
-  "terminal-config:set-cached-project-views": {
-    args: [cachedProjectViews: number];
-    result: void;
-  };
-  "terminal-config:set-recent-scheme-ids": {
-    args: [ids: unknown];
-    result: void;
   };
 
   // Webview lifecycle / dialog / OAuth channels
