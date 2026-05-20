@@ -65,9 +65,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         const cacheLedger = getPanelSuspectLedger();
         const cacheQuarantinedIds = cacheLedger.getQuarantinedPanelIds();
         let filteredCached = cached;
-        const cacheQuarantinedPanels: import(
-          "../../../../shared/types/ipc/crashRecovery.js"
-        ).QuarantinedPanelInfo[] = [];
+        const cacheQuarantinedPanels: import("../../../../shared/types/ipc/crashRecovery.js").QuarantinedPanelInfo[] =
+          [];
         if (cacheQuarantinedIds.size > 0 && Array.isArray(cached.appState?.terminals)) {
           const filteredTerminals: typeof cached.appState.terminals = [];
           for (const t of cached.appState.terminals) {
@@ -280,9 +279,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     const inSafeMode = guard.isSafeMode();
     const ledger = getPanelSuspectLedger();
     const quarantinedIds = ledger.getQuarantinedPanelIds();
-    const quarantinedPanels: import(
-      "../../../../shared/types/ipc/crashRecovery.js"
-    ).QuarantinedPanelInfo[] = [];
+    const quarantinedPanels: import("../../../../shared/types/ipc/crashRecovery.js").QuarantinedPanelInfo[] =
+      [];
     let skippedPanelCount = 0;
     if (quarantinedIds.size > 0) {
       const filtered: typeof terminalsToUse = [];
@@ -294,7 +292,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             title: typeof t.title === "string" ? t.title : "",
             cwd: typeof t.cwd === "string" && t.cwd.length > 0 ? t.cwd : undefined,
             worktreeId:
-              typeof t.worktreeId === "string" && t.worktreeId.length > 0 ? t.worktreeId : undefined,
+              typeof t.worktreeId === "string" && t.worktreeId.length > 0
+                ? t.worktreeId
+                : undefined,
             suspectCount: ledger.getStrikeCount(t.id),
           });
         } else {
@@ -319,9 +319,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       skippedPanelCount += remaining;
       terminalsToUse = [];
       terminalsSource = "safe-mode";
-      console.log(
-        `[AppHydrate] Safe mode active — dropping remaining ${remaining} terminal(s)`
-      );
+      console.log(`[AppHydrate] Safe mode active — dropping remaining ${remaining} terminal(s)`);
     }
 
     // Apply one-shot crash recovery panel filter if set

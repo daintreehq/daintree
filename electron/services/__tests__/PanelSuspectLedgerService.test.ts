@@ -26,7 +26,11 @@ import {
   PanelSuspectLedgerService,
 } from "../PanelSuspectLedgerService.js";
 
-function panel(id: string, isSuspect: boolean, overrides: Partial<PanelSummary> = {}): PanelSummary {
+function panel(
+  id: string,
+  isSuspect: boolean,
+  overrides: Partial<PanelSummary> = {}
+): PanelSummary {
   return {
     id,
     kind: "terminal",
@@ -146,11 +150,7 @@ describe("PanelSuspectLedgerService", () => {
   });
 
   it("treats a missing version as invalid and quarantines the file", () => {
-    fs.writeFileSync(
-      ledgerPath,
-      JSON.stringify({ suspects: { a: 5 }, cleanCounts: {} }),
-      "utf8"
-    );
+    fs.writeFileSync(ledgerPath, JSON.stringify({ suspects: { a: 5 }, cleanCounts: {} }), "utf8");
     const svc = new PanelSuspectLedgerService();
     svc.initialize([panel("a", true)]);
     const entries = fs

@@ -243,7 +243,9 @@ export class PanelSuspectLedgerService {
       this.quarantineCorruptLedger();
       return freshLedger();
     } catch {
-      console.warn("[PanelSuspectLedger] Failed to read ledger file, quarantining and using fresh state");
+      console.warn(
+        "[PanelSuspectLedger] Failed to read ledger file, quarantining and using fresh state"
+      );
       this.quarantineCorruptLedger();
       return freshLedger();
     }
@@ -266,11 +268,7 @@ export class PanelSuspectLedgerService {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      resilientAtomicWriteFileSync(
-        this.ledgerPath,
-        JSON.stringify(this.state),
-        "utf-8"
-      );
+      resilientAtomicWriteFileSync(this.ledgerPath, JSON.stringify(this.state), "utf-8");
     } catch (err) {
       console.error("[PanelSuspectLedger] Failed to persist ledger:", err);
     }
