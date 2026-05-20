@@ -196,6 +196,16 @@ export interface ManagedTerminal {
 
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;
 
+// Hysteresis specifically for downgrades caused by *another* working agent
+// arriving in the fleet (issue #8596). A working-agent demotion from FOCUSED
+// to VISIBLE can chain across long-running sub-process pipelines (build →
+// linter → bundler) where each transition is a fast working/idle flip; the
+// 500ms single-terminal hysteresis is too tight for that pattern and produces
+// visible cadence oscillation across the fleet. 1000ms gives the demoted
+// sibling a full second of stable VISIBLE cadence before being eligible for
+// another downgrade pass.
+export const FLEET_DOWNGRADE_HYSTERESIS_MS = 1000;
+
 // Idle window after the last PTY write before the BURST tier decays back to
 // the panel's natural tier (FOCUSED/VISIBLE/...). Independent of
 // TIER_DOWNGRADE_HYSTERESIS_MS — that is the policy's downgrade debounce

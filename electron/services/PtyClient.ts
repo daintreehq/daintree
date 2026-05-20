@@ -709,8 +709,8 @@ export class PtyClient extends EventEmitter {
     return wasTracked;
   }
 
-  setActivityTier(id: string, tier: PtyHostActivityTier): void {
-    this.send({ type: "set-activity-tier", id, tier });
+  setActivityTier(id: string, tier: PtyHostActivityTier, pollingIntervalMs?: number): void {
+    this.send({ type: "set-activity-tier", id, tier, pollingIntervalMs });
   }
 
   setResourceMonitoring(enabled: boolean): void {

@@ -57,8 +57,19 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
 
       const terminal = ptyManager.getTerminal(msg.id);
       if (terminal) {
-        // Apply tier-driven ActivityMonitor polling: 50ms active, 500ms background
-        const pollingInterval = tier === "active" ? 50 : 500;
+        // Tier-driven ActivityMonitor polling. The renderer-supplied hint
+        // (issue #8596 — 200ms for VISIBLE-unfocused panes) takes precedence
+        // when present and finite; otherwise fall back to the binary tier
+        // default (50ms active, 500ms background).
+        const hintedInterval = msg.pollingIntervalMs;
+        const pollingInterval =
+          typeof hintedInterval === "number" &&
+          Number.isFinite(hintedInterval) &&
+          hintedInterval > 0
+            ? hintedInterval
+            : tier === "active"
+              ? 50
+              : 500;
         ptyManager.setActivityMonitorTier(msg.id, pollingInterval);
       }
 
