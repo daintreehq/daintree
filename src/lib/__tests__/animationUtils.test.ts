@@ -148,8 +148,20 @@ describe("--anti-flicker-delay CSS contract", () => {
   // the build pipeline (Tailwind, autoprefixer) doesn't affect these regexes.
   const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
 
-  it("declares --anti-flicker-delay in :root", () => {
-    expect(css).toMatch(/--anti-flicker-delay\s*:\s*\d+ms/);
+  it("declares --anti-flicker-delay inside the :root block", () => {
+    // Scope matters: a stray declaration in a narrower selector would let
+    // var() fall through to its initial value for consumers outside that
+    // scope. Anchor the property to the :root block so the test fails if it
+    // ever migrates out.
+    expect(css).toMatch(/:root\s*\{[^}]*--anti-flicker-delay\s*:\s*\d+ms/);
+  });
+
+  it("declares --anti-flicker-delay exactly once", () => {
+    // A second declaration in a media query or duplicate :root would let the
+    // cascade resolve to a different value while the first-match parity test
+    // below still passes — guard against that.
+    const declarations = css.match(/--anti-flicker-delay\s*:/g) ?? [];
+    expect(declarations.length).toBe(1);
   });
 
   it("token value matches UI_DOHERTY_THRESHOLD", () => {
