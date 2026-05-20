@@ -289,6 +289,23 @@ describe("TerminalHibernationManager", () => {
       expect(deps.clearSettledTimer).toHaveBeenCalledWith("t1");
     });
 
+    it("notifies onHibernationChanged after the flag is written", () => {
+      let seenFlag: boolean | undefined;
+      (deps.onHibernationChanged as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        seenFlag = managed.isHibernated;
+      });
+      manager.hibernate("t1");
+      expect(deps.onHibernationChanged).toHaveBeenCalledTimes(1);
+      expect(deps.onHibernationChanged).toHaveBeenCalledWith("t1");
+      expect(seenFlag).toBe(true);
+    });
+
+    it("does not notify onHibernationChanged when the call short-circuits", () => {
+      managed.isHibernated = true;
+      manager.hibernate("t1");
+      expect(deps.onHibernationChanged).not.toHaveBeenCalled();
+    });
+
     it("should dispose addons and null them", () => {
       const imageDispose = (managed.imageAddon as unknown as { dispose: ReturnType<typeof vi.fn> })
         .dispose;
@@ -449,6 +466,23 @@ describe("TerminalHibernationManager", () => {
       managed.lastReflowAt = 99999;
       manager.unhibernate("t1");
       expect(managed.lastReflowAt).toBe(0);
+    });
+
+    it("notifies onHibernationChanged after the flag is cleared", () => {
+      let seenFlag: boolean | undefined;
+      (deps.onHibernationChanged as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        seenFlag = managed.isHibernated;
+      });
+      manager.unhibernate("t1");
+      expect(deps.onHibernationChanged).toHaveBeenCalledTimes(1);
+      expect(deps.onHibernationChanged).toHaveBeenCalledWith("t1");
+      expect(seenFlag).toBe(false);
+    });
+
+    it("does not notify onHibernationChanged when the terminal is not hibernated", () => {
+      managed.isHibernated = false;
+      manager.unhibernate("t1");
+      expect(deps.onHibernationChanged).not.toHaveBeenCalled();
     });
 
     it("should not throw if terminal.open throws (bad host)", () => {

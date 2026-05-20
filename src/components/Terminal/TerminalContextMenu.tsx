@@ -11,6 +11,7 @@ import { actionService } from "@/services/ActionService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isBrowserPanel, isDevPreviewPanel, isReviewPanel } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
@@ -91,6 +92,7 @@ export function TerminalContextMenu({
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
+  const isHibernated = useIsHibernated(terminalId);
   // Pull the panel directly here (rather than indexing through the shallow
   // selector above) so the eligibility check sees the live record. The
   // dropdown only renders fleet items when the panel is fleet-arm-eligible
@@ -756,7 +758,10 @@ export function TerminalContextMenu({
             Send to Background
           </ContextMenuItem>
           {hasPty && (
-            <ContextMenuItem onSelect={() => handleAction("hibernate")}>
+            <ContextMenuItem
+              disabled={isHibernated || terminalHasRunningAgentSession(terminal)}
+              onSelect={() => handleAction("hibernate")}
+            >
               <Moon className={ICON_CLASS} aria-hidden="true" />
               Sleep Terminal
             </ContextMenuItem>
