@@ -80,6 +80,14 @@ export function CrashRecoveryDialog({
       setResolving(true);
       try {
         await onResolve(action);
+      } catch (err) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Recovery failed",
+          message: formatErrorMessage(err, "Couldn't complete recovery action"),
+          duration: 6000,
+        });
       } finally {
         setResolving(false);
       }
@@ -455,7 +463,9 @@ export function CrashRecoveryDialog({
         description={
           hasPanels
             ? "All open panels listed below will be closed and their state will be discarded."
-            : "Your session will start with a clean layout."
+            : crash.hasBackup
+              ? "Your session will start with a clean layout and the existing session backup will be discarded."
+              : "Your session will start with a clean layout."
         }
         confirmLabel="Reset to clean layout"
         variant="destructive"

@@ -282,9 +282,19 @@ describe("CrashRecoveryDialog", () => {
     });
 
     it("destructive confirm dialog does not show panel preview when panels is empty", () => {
-      setup({ crash: { panels: [] } });
+      setup({ crash: { panels: [], hasBackup: false } });
       fireEvent.click(screen.getByTestId("fresh-button"));
       expect(screen.getByText("Your session will start with a clean layout.")).toBeTruthy();
+    });
+
+    it("destructive confirm warns about discarded backup when panels empty but backup exists", () => {
+      setup({ crash: { panels: [], hasBackup: true } });
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      expect(
+        screen.getByText(
+          "Your session will start with a clean layout and the existing session backup will be discarded."
+        )
+      ).toBeTruthy();
     });
 
     it("toggle all deselects when all are selected", () => {
