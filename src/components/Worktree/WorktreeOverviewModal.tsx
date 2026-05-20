@@ -576,8 +576,10 @@ export function WorktreeOverviewModal({
                 </TooltipContent>
               </Tooltip>
             )}
-            {/* Filter Popover */}
-            <WorktreeFilterPopover hideSearchInput chipCounts={chipCounts} />
+            {/* Filter Popover — only shown in header when the search bar (with its own popover) is absent */}
+            {!hasNonMainWorktrees && (
+              <WorktreeFilterPopover hideSearchInput chipCounts={chipCounts} />
+            )}
             {/* Clear Filters Button - only shown when filters are active */}
             {hasActiveFilters() && (
               <Tooltip>
@@ -652,7 +654,7 @@ export function WorktreeOverviewModal({
                   variant="subtle"
                   size="sm"
                   onClick={() => {
-                    actionService.dispatch("worktree.createDialog.open", undefined, {
+                    void actionService.dispatch("worktree.createDialog.open", undefined, {
                       source: "user",
                     });
                   }}
