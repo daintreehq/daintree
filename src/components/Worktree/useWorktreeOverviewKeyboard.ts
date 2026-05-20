@@ -24,9 +24,115 @@ function parseColumnCount(template: string): number {
   return Math.max(1, trimmed.split(/\s+/).length);
 }
 
+/**
+ * Resolve the target index for ArrowUp/Down across section-aware layouts.
+ *
+ * When `sectionSizes` is provided, section breaks render as full-width
+ * separators (CSS `col-[1/-1]`) that force a row break. A naive
+ * `currentIndex ± columnCount` jump miscounts whenever a section ends on a
+ * partial row, because the visually-adjacent cell in the next section is
+ * not `columnCount` away in the flat ordering.
+ *
+ * Algorithm:
+ *  - Locate which section contains `fromIndex` and the local row/column.
+ *  - Try to stay in the same section: target row ± 1 at the same column.
+ *  - If that row doesn't exist in the current section, fall through to the
+ *    neighbouring section: target = first/last visual row at the same
+ *    column (clamped to that section's actual width).
+ *  - If no neighbour exists, return `fromIndex` (caller clamps).
+ *
+ * `delta` is +1 for ArrowDown, -1 for ArrowUp.
+ */
+export function computeVerticalMove(
+  fromIndex: number,
+  delta: 1 | -1,
+  columnCount: number,
+  total: number,
+  sectionSizes: readonly number[] | undefined
+): number {
+  if (total <= 0 || fromIndex < 0 || fromIndex >= total) return fromIndex;
+  if (columnCount <= 0) columnCount = 1;
+
+  // No section grouping → single-section stride math.
+  const sizes = sectionSizes && sectionSizes.length > 0 ? sectionSizes : [total];
+
+  // Find which section owns fromIndex and the local offset within it.
+  let sectionIdx = 0;
+  let sectionStart = 0;
+  for (; sectionIdx < sizes.length; sectionIdx++) {
+    const size = sizes[sectionIdx] ?? 0;
+    if (fromIndex < sectionStart + size) break;
+    sectionStart += size;
+  }
+  const sectionSize = sizes[sectionIdx] ?? 0;
+  if (sectionSize === 0) return fromIndex;
+  const localIdx = fromIndex - sectionStart;
+  const localRow = Math.floor(localIdx / columnCount);
+  const localCol = localIdx % columnCount;
+
+  // Try staying in the current section.
+  const nextLocalRow = localRow + delta;
+  if (nextLocalRow >= 0) {
+    const nextLocal = nextLocalRow * columnCount + localCol;
+    if (nextLocal < sectionSize) {
+      return sectionStart + nextLocal;
+    }
+    // ArrowDown past last row of this section but the row exists past the
+    // column boundary — fall through to the last cell of this section
+    // before moving to the next section.
+    if (delta === 1) {
+      const lastLocal = sectionSize - 1;
+      // Only step partway down if it's strictly below the current row;
+      // otherwise let the cross-section branch handle it.
+      const lastLocalRow = Math.floor(lastLocal / columnCount);
+      if (lastLocalRow > localRow) {
+        return sectionStart + lastLocal;
+      }
+    }
+  }
+
+  // Cross-section move.
+  if (delta === 1) {
+    const nextSectionIdx = sectionIdx + 1;
+    if (nextSectionIdx >= sizes.length) return fromIndex;
+    const nextSectionStart = sectionStart + sectionSize;
+    const nextSectionSize = sizes[nextSectionIdx] ?? 0;
+    if (nextSectionSize === 0) return fromIndex;
+    const targetLocal = Math.min(localCol, nextSectionSize - 1);
+    return nextSectionStart + targetLocal;
+  }
+
+  // ArrowUp — previous section's last visual row, same column where
+  // available, otherwise the last cell of that section's final row.
+  const prevSectionIdx = sectionIdx - 1;
+  if (prevSectionIdx < 0) return fromIndex;
+  let prevSectionStart = 0;
+  for (let i = 0; i < prevSectionIdx; i++) prevSectionStart += sizes[i] ?? 0;
+  const prevSectionSize = sizes[prevSectionIdx] ?? 0;
+  if (prevSectionSize === 0) return fromIndex;
+  const prevLastRow = Math.floor((prevSectionSize - 1) / columnCount);
+  const candidateLocal = prevLastRow * columnCount + localCol;
+  if (candidateLocal < prevSectionSize) {
+    return prevSectionStart + candidateLocal;
+  }
+  // Column has no cell in that visual row (partial-tail row) — clamp to
+  // last cell of the previous section.
+  return prevSectionStart + prevSectionSize - 1;
+}
+
 export interface UseWorktreeOverviewKeyboardOptions {
   /** Ordered list of worktree ids visible in the current filter set. */
   worktreeIds: readonly string[];
+  /**
+   * Sizes of visual section blocks in order, summing to worktreeIds.length.
+   * Each entry is the number of cards in one grouped section. When omitted
+   * the list is treated as a single section. Section headers force a CSS
+   * row break (col-[1/-1]), so naive flat-index stride math (idx ± columns)
+   * skips into the wrong column whenever a section ends on a partial row.
+   * Passing sizes lets the hook resolve ArrowUp/Down to the visually
+   * adjacent cell instead.
+   */
+  sectionSizes?: readonly number[];
   /** The grid container element that carries the role="grid" + tabIndex. */
   gridRef: React.RefObject<HTMLDivElement | null>;
   /**
@@ -72,6 +178,7 @@ export interface UseWorktreeOverviewKeyboardReturn {
  */
 export function useWorktreeOverviewKeyboard({
   worktreeIds,
+  sectionSizes,
   gridRef,
   selectionAnchorRef,
   onActivate,
@@ -108,6 +215,10 @@ export function useWorktreeOverviewKeyboard({
   const worktreeIdsRef = useRef(worktreeIds);
   useEffect(() => {
     worktreeIdsRef.current = worktreeIds;
+  });
+  const sectionSizesRef = useRef(sectionSizes);
+  useEffect(() => {
+    sectionSizesRef.current = sectionSizes;
   });
   const hasSelectionRef = useRef(hasSelection);
   useEffect(() => {
@@ -153,6 +264,13 @@ export function useWorktreeOverviewKeyboard({
 
   const handleGridKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
+      // Only process events that originated on the grid container itself.
+      // Keys typed in an inner card button (terminal action, menu trigger)
+      // would otherwise bubble here and re-trigger selection from the
+      // grid's perspective — Space on an inner button would both click
+      // the button AND toggle the gridcell selection.
+      if (e.target !== gridRef.current) return;
+
       const ids = worktreeIdsRef.current;
       const callbacks = callbacksRef.current;
 
@@ -206,16 +324,24 @@ export function useWorktreeOverviewKeyboard({
         case "ArrowLeft":
           targetIndex = Math.max(0, currentIndex - 1);
           break;
-        case "ArrowDown": {
-          const next = currentIndex + columnCount;
-          targetIndex = next < total ? next : total - 1;
+        case "ArrowDown":
+          targetIndex = computeVerticalMove(
+            currentIndex,
+            1,
+            columnCount,
+            total,
+            sectionSizesRef.current
+          );
           break;
-        }
-        case "ArrowUp": {
-          const next = currentIndex - columnCount;
-          targetIndex = next >= 0 ? next : 0;
+        case "ArrowUp":
+          targetIndex = computeVerticalMove(
+            currentIndex,
+            -1,
+            columnCount,
+            total,
+            sectionSizesRef.current
+          );
           break;
-        }
         case "Home":
           targetIndex = 0;
           break;
@@ -257,20 +383,24 @@ export function useWorktreeOverviewKeyboard({
       // Shift+Arrow extends selection from the persistent anchor; pure arrow
       // movement just moves focus without touching selection. The anchor is
       // set when the user makes their first deliberate selection action
-      // (Space, click, Ctrl/Cmd+A) — Shift+Arrow without a prior anchor
-      // bootstraps it at the current cell so the range has a stable origin.
+      // (Space, click, Ctrl/Cmd+A) — Shift+Arrow without a prior anchor, OR
+      // with an anchor that no longer points at a visible cell (filter
+      // narrowed it away), bootstraps from the current cell so the range
+      // has a stable origin.
       if (e.shiftKey && targetIndex !== currentIndex) {
-        if (selectionAnchorRef.current === null) {
+        const storedAnchor = selectionAnchorRef.current;
+        const anchorVisible = storedAnchor !== null && ids.indexOf(storedAnchor) !== -1;
+        if (!anchorVisible) {
           selectionAnchorRef.current = currentId;
         }
-        callbacks.onSelectRange(selectionAnchorRef.current, targetId);
+        callbacks.onSelectRange(selectionAnchorRef.current!, targetId);
       }
 
       if (targetIndex !== currentIndex) {
         setActiveWorktreeId(targetId);
       }
     },
-    [activeWorktreeId, selectionAnchorRef]
+    [activeWorktreeId, selectionAnchorRef, gridRef]
   );
 
   return {

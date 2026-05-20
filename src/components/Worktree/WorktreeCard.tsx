@@ -702,6 +702,11 @@ export function WorktreeCard({
           <button
             type="button"
             tabIndex={variant === "grid" ? -1 : undefined}
+            // Grid variant: suppress focus shift on click so the role="grid"
+            // container retains the keyboard tab stop after a modifier-click.
+            onMouseDown={
+              variant === "grid" ? (e: React.MouseEvent) => e.preventDefault() : undefined
+            }
             className={cn(
               "absolute inset-0 z-0 outline-hidden",
               variant === "grid" && "rounded-lg",

@@ -562,8 +562,20 @@ export function WorktreeOverviewModal({
   const gridRef = useRef<HTMLDivElement | null>(null);
   const closeModal = useCallback(() => onClose(), [onClose]);
 
+  // Section sizes drive section-aware Arrow navigation across the col-[1/-1]
+  // header breaks. Undefined when ungrouped — the hook degrades to flat-list
+  // stride math.
+  const sectionSizes = useMemo<readonly number[] | undefined>(
+    () =>
+      groupedSections
+        ? groupedSections.map((s: GroupedSection<WorktreeState>) => s.worktrees.length)
+        : undefined,
+    [groupedSections]
+  );
+
   const { activeDescendantId, handleGridKeyDown, handleGridFocus } = useWorktreeOverviewKeyboard({
     worktreeIds: visibleIds,
+    sectionSizes,
     gridRef,
     selectionAnchorRef,
     onActivate: activateWorktree,
@@ -892,7 +904,6 @@ export function WorktreeOverviewModal({
               tabIndex={0}
               aria-multiselectable="true"
               aria-activedescendant={activeDescendantId}
-              aria-rowcount={filteredWorktrees.length}
               onKeyDown={handleGridKeyDown}
               onFocus={handleGridFocus}
               className={cn(

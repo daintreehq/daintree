@@ -252,5 +252,23 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     it("resets the anchor on window blur to avoid stuck Shift from Cmd+Tab (#4591)", () => {
       expect(source).toMatch(/handleWindowBlur[\s\S]*?selectionAnchorRef\.current\s*=\s*null/);
     });
+
+    it("does NOT set aria-rowcount on the grid (rows are not virtualized — spec says omit)", () => {
+      // aria-rowcount is only meaningful when some rows aren't in the DOM.
+      // For the overview grid every cell is rendered, so the attribute must
+      // not be present — including it would announce the wrong row count
+      // since each card maps to one ARIA row in this layout.
+      expect(source).not.toContain("aria-rowcount");
+    });
+
+    it("passes sectionSizes to the keyboard hook so arrow navigation crosses section boundaries correctly", () => {
+      // The hook needs section sizes to compute visually-adjacent cells
+      // across col-[1/-1] header breaks; without it, ArrowDown miscounts
+      // whenever a section ends on a partial row.
+      expect(source).toMatch(/sectionSizes/);
+      expect(source).toMatch(
+        /sectionSizes\s*=\s*useMemo[\s\S]*?groupedSections\.map[\s\S]*?\.worktrees\.length/
+      );
+    });
   });
 });

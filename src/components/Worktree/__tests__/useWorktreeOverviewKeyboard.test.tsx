@@ -5,6 +5,7 @@ import { useRef } from "react";
 import {
   useWorktreeOverviewKeyboard,
   getWorktreeOverviewCellId,
+  computeVerticalMove,
 } from "../useWorktreeOverviewKeyboard";
 
 // jsdom has no layout engine — patch getComputedStyle so the hook can sample
@@ -35,6 +36,7 @@ window.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
 
 interface HarnessProps {
   worktreeIds: string[];
+  sectionSizes?: readonly number[];
   hasSelection?: boolean;
   onActivate?: (id: string) => void;
   onToggleSelection?: (id: string) => void;
@@ -47,6 +49,7 @@ interface HarnessProps {
 
 function Harness({
   worktreeIds,
+  sectionSizes,
   hasSelection = false,
   onActivate = () => {},
   onToggleSelection = () => {},
@@ -60,6 +63,7 @@ function Harness({
   const anchorRef = useRef<string | null>(initialAnchor);
   const { activeDescendantId, handleGridKeyDown, handleGridFocus } = useWorktreeOverviewKeyboard({
     worktreeIds,
+    sectionSizes,
     gridRef,
     selectionAnchorRef: anchorRef,
     onActivate,
@@ -83,7 +87,7 @@ function Harness({
     >
       {worktreeIds.map((id) => (
         <div key={id} role="gridcell" id={getWorktreeOverviewCellId(id)} data-testid={`cell-${id}`}>
-          {id}
+          <button data-testid={`btn-${id}`}>inner-{id}</button>
         </div>
       ))}
     </div>
@@ -284,5 +288,126 @@ describe("getWorktreeOverviewCellId", () => {
     expect(getWorktreeOverviewCellId("/Users/me/dev/worktree foo")).toBe(
       "worktree-overview-cell-%2FUsers%2Fme%2Fdev%2Fworktree%20foo"
     );
+  });
+});
+
+describe("useWorktreeOverviewKeyboard — target-self guard", () => {
+  it("ignores keys that bubble up from descendants (inner card buttons)", () => {
+    // Space pressed on an inner button used to bubble to the grid and
+    // toggle the active gridcell's selection — confirm that no longer
+    // happens after the e.target gate.
+    const onToggleSelection = vi.fn();
+    const onActivate = vi.fn();
+    const { getByTestId } = render(
+      <Harness
+        worktreeIds={["a", "b", "c"]}
+        onToggleSelection={onToggleSelection}
+        onActivate={onActivate}
+      />
+    );
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    const innerButton = getByTestId("btn-a");
+    fireEvent.keyDown(innerButton, { key: " " });
+    fireEvent.keyDown(innerButton, { key: "Enter" });
+    expect(onToggleSelection).not.toHaveBeenCalled();
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+});
+
+describe("useWorktreeOverviewKeyboard — stale anchor recovery", () => {
+  it("Shift+Arrow with a hidden anchor re-seeds from the current cell", () => {
+    const onSelectRange = vi.fn();
+    const { getByTestId, rerender } = render(
+      <Harness worktreeIds={["a", "b", "c", "d", "e", "f"]} initialAnchor="f" />
+    );
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    // Filter narrows: f is no longer visible. Anchor ref still points at f.
+    rerender(
+      <Harness
+        worktreeIds={["a", "b", "c"]}
+        initialAnchor="f"
+        onSelectRange={onSelectRange}
+      />
+    );
+    fireEvent.keyDown(grid, { key: "ArrowRight", shiftKey: true });
+    // The hook bootstraps the anchor at the current cell (a) and extends to b.
+    expect(onSelectRange).toHaveBeenCalledWith("a", "b");
+  });
+});
+
+describe("computeVerticalMove — section-aware 2D math", () => {
+  // 3-column grid; section sizes [2, 3]. Flat order:
+  // Section 0: A(0)=a B(1)=b
+  // Section 1: C(0)=c D(1)=d E(2)=e
+  const SECTION_SIZES = [2, 3];
+
+  it("ArrowDown from a (0,0) in section 0 (partial-tail row) lands at c, column 0 of section 1", () => {
+    expect(computeVerticalMove(0, 1, 3, 5, SECTION_SIZES)).toBe(2);
+  });
+
+  it("ArrowDown from b (0,1) crosses to section 1, column 1 → d (index 3)", () => {
+    expect(computeVerticalMove(1, 1, 3, 5, SECTION_SIZES)).toBe(3);
+  });
+
+  it("ArrowDown from e (last cell, last section) clamps at e (no further sections)", () => {
+    expect(computeVerticalMove(4, 1, 3, 5, SECTION_SIZES)).toBe(4);
+  });
+
+  it("ArrowUp from d (1,1) in section 1 returns to b (0,1) in section 0", () => {
+    expect(computeVerticalMove(3, -1, 3, 5, SECTION_SIZES)).toBe(1);
+  });
+
+  it("ArrowUp from c (column 0) returns to a (column 0)", () => {
+    expect(computeVerticalMove(2, -1, 3, 5, SECTION_SIZES)).toBe(0);
+  });
+
+  it("ArrowUp from a (first cell, first section) clamps at a", () => {
+    expect(computeVerticalMove(0, -1, 3, 5, SECTION_SIZES)).toBe(0);
+  });
+
+  it("ArrowDown within a section moves by columnCount", () => {
+    // 6 items in one section, 3 columns → row 0 to row 1
+    expect(computeVerticalMove(0, 1, 3, 6, [6])).toBe(3);
+  });
+
+  it("ArrowDown from partial-tail column with no neighbour clamps to last cell of next section", () => {
+    // Sections [4, 2], 3-column grid:
+    // Section 0: indices 0-3 (rows: [0,1,2] / [3])
+    // Section 1: indices 4-5 (row [4,5])
+    // ArrowDown from index 2 (col 2) → section 0 next row is [3] which is
+    // col 0 only; the cross-section branch should land at section 1's column 2,
+    // but section 1 only has 2 cells → clamp to last cell of section 1 (index 5).
+    expect(computeVerticalMove(2, 1, 3, 6, [4, 2])).toBe(3);
+    // ArrowDown from index 3 (last in section 0) → section 1 column 0 = index 4
+    expect(computeVerticalMove(3, 1, 3, 6, [4, 2])).toBe(4);
+  });
+
+  it("with no section sizes provided, treats the list as a single section", () => {
+    expect(computeVerticalMove(0, 1, 3, 6, undefined)).toBe(3);
+    expect(computeVerticalMove(3, -1, 3, 6, undefined)).toBe(0);
+  });
+
+  it("clamps when fromIndex is at end and ArrowDown overshoots within section", () => {
+    // 5 items in one section, 3 columns. row 0: [0,1,2]; row 1: [3,4].
+    // ArrowDown from 0 (col 0) → 3 (col 0, row 1). Good.
+    expect(computeVerticalMove(0, 1, 3, 5, [5])).toBe(3);
+    // ArrowDown from 2 (col 2, row 0) → row 1 col 2 doesn't exist → clamp last
+    expect(computeVerticalMove(2, 1, 3, 5, [5])).toBe(4);
+  });
+});
+
+describe("useWorktreeOverviewKeyboard — section-aware behavior in harness", () => {
+  it("ArrowDown from the partial-tail row of section 1 jumps to column 0 of section 2", () => {
+    // Sections [2, 3]: a,b in section 0; c,d,e in section 1.
+    // Mock returns 3 columns. From a (index 0) ArrowDown → c (index 2).
+    const { getByTestId } = render(
+      <Harness worktreeIds={["a", "b", "c", "d", "e"]} sectionSizes={[2, 3]} />
+    );
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("c"));
   });
 });
