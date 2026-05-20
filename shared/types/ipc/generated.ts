@@ -36,6 +36,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { worktreeId?: string | undefined }];
     result: import("./agentSessionHistory.js").AgentSessionRecord[];
   };
+  "app:clear-quarantined-panel": {
+    args: [panelId: string];
+    result: { cleared: boolean };
+  };
   "artifact:apply-patch": {
     args: [options: import("./agent.js").ApplyPatchOptions];
     result: import("./agent.js").ApplyPatchResult;

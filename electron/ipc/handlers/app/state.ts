@@ -674,15 +674,6 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
   };
   handlers.push(typedHandle(CHANNELS.APP_FORCE_QUIT, handleAppForceQuit));
 
-  const handleAppClearQuarantinedPanel = async (panelId: unknown) => {
-    if (typeof panelId !== "string" || panelId.length === 0) {
-      return { cleared: false };
-    }
-    const cleared = getPanelSuspectLedger().clearQuarantinedPanel(panelId);
-    return { cleared };
-  };
-  handlers.push(typedHandle(CHANNELS.APP_CLEAR_QUARANTINED_PANEL, handleAppClearQuarantinedPanel));
-
   const handleAppResetAndRelaunch = async () => {
     // Clear the crash-loop sentinel before relaunch so the next boot starts
     // fresh. Mirrors the gpu.ts pattern: prepare state -> relaunch -> close
