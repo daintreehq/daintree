@@ -202,6 +202,13 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // preview is unmistakable but doesn't squat on the focus anchor color.
   const isFleetPreviewed = useFleetArmingStore((s) => s.previewArmedIds.has(id));
 
+  // Inverse of isFleetPreviewed: when a preset hover is *active* and this
+  // pane is NOT in the would-be-armed set, dim it so the matched panes
+  // stand out without competing visual chrome on the rest of the grid.
+  const isFleetDimmed = useFleetArmingStore(
+    (s) => s.previewArmedIds.size > 0 && !s.previewArmedIds.has(id)
+  );
+
   // One-shot ring pulse when this pane becomes the new primary on fleet
   // exit. Listens for the CustomEvent dispatched from FleetArmingRibbon's
   // exitFleet — keeps the cosmetic event out of any persistent store.
@@ -414,6 +421,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         data-runtime-icon-id={terminalChrome.iconId || undefined}
         data-selected={isSelected || undefined}
         data-hibernated={isHibernated || undefined}
+        data-fleet-dimmed={isFleetDimmed || undefined}
         style={{
           contain: "content",
           ...(worktreeAccentColor
@@ -440,6 +448,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
                     : "border-overlay hover:border-tint/[0.08]"),
           location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
           worktreeAccentColor && location === "grid" && !isMaximized && "panel-worktree-identity",
+          isFleetDimmed && "fleet-pane-dimmed",
           className
         )}
         onClick={handleClick}
