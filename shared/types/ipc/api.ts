@@ -1323,6 +1323,8 @@ export interface ElectronAPI {
     openCommits(cwd: string, branch?: string): Promise<void>;
     /** Open a single issue in the system browser via the resolved forge provider. */
     openIssue(payload: { cwd: string; issueNumber: number }): Promise<void>;
+    /** Resolve the canonical URL for a single issue via the resolved forge provider. */
+    getIssueUrl(payload: { cwd: string; issueNumber: number }): Promise<string>;
     /** Assign an issue to a user via the resolved forge provider. */
     assignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
     /** Validate a token against the global default forge provider. */

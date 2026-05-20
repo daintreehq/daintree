@@ -2387,6 +2387,8 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.FORGE_OPEN_COMMITS, cwd, branch),
     openIssue: (payload: { cwd: string; issueNumber: number }) =>
       _unwrappingInvoke(CHANNELS.FORGE_OPEN_ISSUE, payload),
+    getIssueUrl: (payload: { cwd: string; issueNumber: number }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_URL, payload),
     assignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
       _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
     validateToken: (token: string) => _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, token),

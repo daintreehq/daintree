@@ -26,6 +26,7 @@ const forgeClientMock = vi.hoisted(() => ({
   openPRs: vi.fn(),
   openCommits: vi.fn(),
   openIssue: vi.fn(),
+  getIssueUrl: vi.fn(),
   assignIssue: vi.fn(),
   validateToken: vi.fn(),
 }));
@@ -403,7 +404,6 @@ describe("githubClient import boundary", () => {
 
   const allowlist = new Set([
     "src/services/actions/definitions/githubActions.ts",
-    "src/services/actions/definitions/worktreeGitHubActions.ts",
     "src/services/actions/definitions/workflowCreationActions.ts",
     "src/hooks/useRepositoryStats.ts",
     "src/hooks/useGitHubRateLimit.ts",

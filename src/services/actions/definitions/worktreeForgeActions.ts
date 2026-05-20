@@ -2,13 +2,12 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
-// eslint-disable-next-line no-restricted-imports
-import { githubClient } from "@/clients";
+import { forgeClient, systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { logError, logWarn } from "@/utils/logger";
 
-export function registerWorktreeGitHubActions(
+export function registerWorktreeForgeActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
 ): void {
@@ -16,7 +15,7 @@ export function registerWorktreeGitHubActions(
     defineAction({
       id: "worktree.openIssue",
       title: "Open Worktree Issue",
-      description: "Open the GitHub issue associated with a worktree",
+      description: "Open the issue associated with a worktree",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -28,7 +27,7 @@ export function registerWorktreeGitHubActions(
         if (!targetWorktreeId) return;
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
         if (!worktree?.issueNumber) return;
-        await githubClient.openIssue(worktree.path, worktree.issueNumber);
+        await forgeClient.openIssue(worktree.path, worktree.issueNumber);
       },
     })
   );
@@ -37,7 +36,7 @@ export function registerWorktreeGitHubActions(
     defineAction({
       id: "worktree.openPR",
       title: "Open Worktree Pull Request",
-      description: "Open the GitHub pull request associated with a worktree",
+      description: "Open the pull request associated with a worktree",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -49,7 +48,19 @@ export function registerWorktreeGitHubActions(
         if (!targetWorktreeId) return;
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
         if (!worktree?.linked?.pr?.url) return;
-        await githubClient.openPR(worktree.linked.pr.url);
+
+        try {
+          const url = new URL(worktree.linked.pr.url);
+          if (!["https:", "http:"].includes(url.protocol)) {
+            logWarn(`Invalid PR URL protocol: ${url.protocol}`);
+            return;
+          }
+        } catch (error) {
+          logError(`Invalid PR URL: ${worktree.linked.pr.url}`, error);
+          return;
+        }
+
+        await systemClient.openExternal(worktree.linked.pr.url);
       },
     })
   );
@@ -58,7 +69,7 @@ export function registerWorktreeGitHubActions(
     defineAction({
       id: "worktree.openPRInPortal",
       title: "Open Worktree PR in Portal",
-      description: "Open the worktree's GitHub pull request in the integrated browser",
+      description: "Open the worktree's pull request in the integrated browser",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -119,7 +130,7 @@ export function registerWorktreeGitHubActions(
     defineAction({
       id: "worktree.openIssueInPortal",
       title: "Open Worktree Issue in Portal",
-      description: "Open the worktree's GitHub issue in the integrated browser",
+      description: "Open the worktree's issue in the integrated browser",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -133,8 +144,19 @@ export function registerWorktreeGitHubActions(
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
         if (!worktree?.issueNumber) return;
 
-        const issueUrl = await githubClient.getIssueUrl(worktree.path, worktree.issueNumber);
+        const issueUrl = await forgeClient.getIssueUrl(worktree.path, worktree.issueNumber);
         if (!issueUrl) return;
+
+        try {
+          const parsed = new URL(issueUrl);
+          if (!["https:", "http:"].includes(parsed.protocol)) {
+            logWarn(`Invalid issue URL protocol: ${parsed.protocol}`);
+            return;
+          }
+        } catch (error) {
+          logError(`Invalid issue URL: ${issueUrl}`, error);
+          return;
+        }
 
         await actionService.dispatch(
           "portal.openUrl",

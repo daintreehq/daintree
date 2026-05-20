@@ -1646,6 +1646,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; issueNumber: number }];
     result: void;
   };
+  "forge:get-issue-url": {
+    args: [payload: { cwd: string; issueNumber: number }];
+    result: string;
+  };
   "forge:assign-issue": {
     args: [payload: { cwd: string; issueNumber: number; username: string }];
     result: void;

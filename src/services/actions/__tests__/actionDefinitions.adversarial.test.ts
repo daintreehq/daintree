@@ -80,6 +80,11 @@ const mocks = vi.hoisted(() => {
     getIssueUrl: vi.fn(),
   };
 
+  const forgeClient = {
+    openIssue: vi.fn(),
+    getIssueUrl: vi.fn(),
+  };
+
   const actionService = {
     dispatch: vi.fn(),
   };
@@ -183,6 +188,7 @@ const mocks = vi.hoisted(() => {
     worktreeClient,
     copyTreeClient,
     githubClient,
+    forgeClient,
     actionService,
     terminalInstanceService,
     portal,
@@ -203,6 +209,7 @@ vi.mock("@/clients", () => ({
   worktreeClient: mocks.worktreeClient,
   copyTreeClient: mocks.copyTreeClient,
   githubClient: mocks.githubClient,
+  forgeClient: mocks.forgeClient,
   agentSettingsClient: {
     get: vi.fn().mockResolvedValue(null),
   },
@@ -1082,11 +1089,11 @@ describe("worktree action hardening", () => {
         ],
       ]),
     } as never);
-    mocks.githubClient.getIssueUrl.mockResolvedValueOnce(null);
+    mocks.forgeClient.getIssueUrl.mockResolvedValueOnce(null);
 
     await openIssueInPortal.run(undefined, { activeWorktreeId: "wt-3" } as never);
 
-    expect(mocks.githubClient.getIssueUrl).toHaveBeenCalledWith("/repo", 44);
+    expect(mocks.forgeClient.getIssueUrl).toHaveBeenCalledWith("/repo", 44);
     expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
   });
 
