@@ -124,7 +124,9 @@ app.commandLine.appendSwitch(
 );
 
 // Allow autoplay without user gesture (voice input, media panels).
-// Per-view throttling is managed by ProjectViewManager.setBackgroundThrottling().
+// Per-view CPU throttling for cached views is managed by ProjectViewManager
+// via CDP Emulation.setCPUThrottlingRate (per-renderer; window-wide
+// setBackgroundThrottling is unsuitable since Electron 28 — #8599).
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // BackForwardCache wastes memory in an Electron app (no browser navigation history).
 const disabledFeatures = ["BackForwardCache"];
@@ -231,10 +233,10 @@ if (!gotTheLock) {
       },
       onViewCached: (wcId) => {
         // Same producer cleanup as eviction: a cached view becomes
-        // freeze-eligible once setBackgroundThrottling(true) is applied.
-        // Live worktree/workspace ports would otherwise queue messages
-        // into a frozen renderer (#6273). Reactivation re-brokers a fresh
-        // port via activateProjectView in projectCrud/switch.ts.
+        // freeze-eligible once CPU throttling lands. Live worktree/workspace
+        // ports would otherwise queue messages into a frozen renderer
+        // (#6273). Reactivation re-brokers a fresh port via
+        // activateProjectView in projectCrud/switch.ts.
         // Each cleanup is isolated so a throw in one path can't leave the
         // other producer alive — that's the exact failure mode this PR
         // exists to prevent.

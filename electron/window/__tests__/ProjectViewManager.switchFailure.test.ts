@@ -129,6 +129,8 @@ vi.mock("../skeletonCss.js", () => ({
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
+  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
+  unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../utils/logger.js", () => ({

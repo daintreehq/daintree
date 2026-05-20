@@ -122,6 +122,8 @@ vi.mock("../rendererConsoleCapture.js", () => ({
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
+  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
+  unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../utils/logger.js", () => ({
@@ -145,6 +147,7 @@ import { ProjectViewManager } from "../ProjectViewManager.js";
 import { logInfo } from "../../utils/logger.js";
 import { forgetBlinkSample, forgetEluSample } from "../../services/ProcessMemoryMonitor.js";
 import { detachRendererConsoleCapture } from "../rendererConsoleCapture.js";
+import { throttleCpuWebContents } from "../../utils/webContentsLifecycle.js";
 
 function createMockWindow() {
   return {
@@ -1123,7 +1126,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     expect(onViewCached).not.toHaveBeenCalledWith(wcB.id);
   });
 
-  it("fires onViewCached BEFORE setBackgroundThrottling(true) so ports close before freeze becomes possible", async () => {
+  it("fires onViewCached BEFORE CPU throttle so ports close before freeze becomes possible", async () => {
     const onViewCached = vi.fn();
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -1136,14 +1139,18 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     const viewA = { webContents: wcA, setBounds: vi.fn() };
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
+    const throttleMock = vi.mocked(throttleCpuWebContents);
+    throttleMock.mockClear();
+
     await manager.switchTo("proj-b", "/path/b");
 
     const cachedOrder = onViewCached.mock.invocationCallOrder[0];
-    const throttleOrder = wcA.setBackgroundThrottling.mock.invocationCallOrder[0];
+    const throttleCall = throttleMock.mock.calls.findIndex((args) => args[0] === wcA);
+    const throttleOrder = throttleMock.mock.invocationCallOrder[throttleCall];
     expect(cachedOrder).toBeDefined();
     expect(throttleOrder).toBeDefined();
     expect(cachedOrder!).toBeLessThan(throttleOrder);
-    expect(wcA.setBackgroundThrottling).toHaveBeenCalledWith(true);
+    expect(throttleMock).toHaveBeenCalledWith(wcA);
   });
 
   it("invokes onViewCached for each cached view across rapid switches A→B→C (never for the active C)", async () => {
@@ -1248,9 +1255,9 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     await expect(manager.switchTo("proj-b", "/path/b")).resolves.toMatchObject({ isNew: true });
     expect(manager.getActiveProjectId()).toBe("proj-b");
     expect(onViewCached).toHaveBeenCalledWith(wcA.id);
-    // Throttling must still happen even if the callback throws — the catch
+    // CPU throttle must still happen even if the callback throws — the catch
     // is around onViewCached only, not the surrounding deactivate flow.
-    expect(wcA.setBackgroundThrottling).toHaveBeenCalledWith(true);
+    expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(wcA);
   });
 
   it("manager works without onViewCached configured (option is optional)", async () => {
@@ -1265,7 +1272,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await expect(manager.switchTo("proj-b", "/path/b")).resolves.toMatchObject({ isNew: true });
-    expect(wcA.setBackgroundThrottling).toHaveBeenCalledWith(true);
+    expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(wcA);
   });
 });
 
