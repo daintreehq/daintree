@@ -121,70 +121,66 @@ export function ImageViewerTab() {
         description="Choose the application that opens when you click 'Open in Image Viewer' in the file viewer."
       >
         <div className="space-y-4">
-          {isLoading ? (
-            <p className="text-xs text-daintree-text/40">Loading…</p>
-          ) : (
-            <>
-              <div className="space-y-2">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="imageViewerMode"
-                    value="os"
-                    checked={mode === "os"}
-                    onChange={() => handleModeChange("os")}
-                    className="accent-daintree-accent"
-                  />
-                  <span className="text-sm text-daintree-text">Use OS default</span>
-                </label>
-                <p className="text-xs text-daintree-text/40 ml-6">
-                  Opens images with your system default viewer (Preview on macOS, Photos on
-                  Windows).
-                </p>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="imageViewerMode"
+                value="os"
+                checked={mode === "os"}
+                onChange={() => handleModeChange("os")}
+                disabled={isLoading}
+                className="accent-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed"
+              />
+              <span className="text-sm text-daintree-text">Use OS default</span>
+            </label>
+            <p className="text-xs text-daintree-text/40 ml-6">
+              Opens images with your system default viewer (Preview on macOS, Photos on Windows).
+            </p>
 
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="imageViewerMode"
-                    value="custom"
-                    checked={mode === "custom"}
-                    onChange={() => handleModeChange("custom")}
-                    className="accent-daintree-accent"
-                  />
-                  <span className="text-sm text-daintree-text">Custom command</span>
-                </label>
-              </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="imageViewerMode"
+                value="custom"
+                checked={mode === "custom"}
+                onChange={() => handleModeChange("custom")}
+                disabled={isLoading}
+                className="accent-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed"
+              />
+              <span className="text-sm text-daintree-text">Custom command</span>
+            </label>
+          </div>
 
-              {mode === "custom" && (
-                <div className="space-y-1 ml-6">
-                  <label className="text-xs text-daintree-text/60">Command</label>
-                  <input
-                    type="text"
-                    value={customCommand}
-                    onChange={(e) => handleCommandChange(e.target.value)}
-                    placeholder="e.g. open -a Photoshop, gimp"
-                    className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent transition-colors font-mono"
-                  />
-                  <p className="text-xs text-daintree-text/40">
-                    The file path will be appended as the last argument.
-                  </p>
-                </div>
-              )}
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleSave}
-                  disabled={isSaving || isLoading}
-                  className="px-4 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-daintree-bg text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
-                >
-                  {isSaving ? "Saving…" : "Save"}
-                </button>
-                {saved && <span className="text-xs text-status-success">Saved</span>}
-              </div>
-
-              {saveError && <p className="text-xs text-status-error">{saveError}</p>}
-            </>
+          {mode === "custom" && (
+            <div className="space-y-1 ml-6">
+              <label className="text-xs text-daintree-text/60">Command</label>
+              <input
+                type="text"
+                value={customCommand}
+                onChange={(e) => handleCommandChange(e.target.value)}
+                disabled={isLoading}
+                placeholder="e.g. open -a Photoshop, gimp"
+                className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent transition-colors font-mono disabled:opacity-50 disabled:cursor-not-allowed"
+              />
+              <p className="text-xs text-daintree-text/40">
+                The file path will be appended as the last argument.
+              </p>
+            </div>
           )}
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleSave}
+              disabled={isSaving || isLoading}
+              className="px-4 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-daintree-bg text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
+            >
+              {isSaving ? "Saving…" : "Save"}
+            </button>
+            {saved && <span className="text-xs text-status-success">Saved</span>}
+          </div>
+
+          {saveError && <p className="text-xs text-status-error">{saveError}</p>}
         </div>
       </SettingsSection>
     </div>
