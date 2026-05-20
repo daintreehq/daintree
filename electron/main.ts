@@ -413,7 +413,6 @@ if (!gotTheLock) {
         }
       }
       await createWindow(undefined, lastActiveProjectId ?? undefined);
-      getCrashLoopGuard().startStabilityTimer();
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
       // Startup crashes hard-exit without running before-quit, which means

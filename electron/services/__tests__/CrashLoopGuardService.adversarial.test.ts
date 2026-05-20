@@ -95,12 +95,16 @@ describe("CrashLoopGuardService adversarial", () => {
     expect(stateAfterFailure).toEqual(stateBeforeFailure);
   });
 
-  it("counts only launches strictly inside the rapid-crash window boundary", () => {
+  it("counts only launches strictly inside the crash-window boundary", () => {
     const now = Date.now();
+    const window = 30 * 60_000;
+    // One launch exactly at the window edge (excluded by strict `<`), one
+    // 1ms inside (included). Stale `crashes: 9` is ignored — derived from
+    // the filtered launches array, not trusted from disk.
     writeStateFile(statePath, {
       version: 1,
       crashes: 9,
-      launches: [now - 300_000, now - 299_999],
+      launches: [now - window, now - (window - 1)],
       cleanExit: false,
       lastReset: now - 5_000,
     });
@@ -113,23 +117,41 @@ describe("CrashLoopGuardService adversarial", () => {
     expect(readStateFile(statePath).crashes).toBe(1);
   });
 
-  it("keeps clean-exit state fresh when markCleanExit wins before the stability timer fires", () => {
+  it("markCleanExit writes a clean state independent of any prior timer (regression #8683)", () => {
     const guard = new CrashLoopGuardService();
     guard.initialize();
-    guard.startStabilityTimer();
     guard.markCleanExit();
 
-    vi.advanceTimersByTime(5 * 60 * 1000);
+    // Advance well past the prior stability-timer deadline — there should
+    // be no timer to fire, no late write that could clobber the clean state.
+    vi.advanceTimersByTime(30 * 60 * 1000);
 
     const parsed = readStateFile(statePath);
     expect(parsed).toMatchObject({
       version: 1,
-      crashes: 0,
       cleanExit: true,
-      launches: [],
     });
     expect(guard.isSafeMode()).toBe(false);
     expect(guard.shouldRelaunch()).toBe(true);
+  });
+
+  it("slow flap of four 6-minute-spaced crashes accumulates safe mode (regression #8683)", () => {
+    const start = new Date("2026-04-13T12:00:00.000Z").getTime();
+
+    // Three prior unclean boots, then a fourth that reads the prior three
+    // as crashes-from-disk and trips safe mode. Under the prior 5-min
+    // rapid window those earlier entries had decayed and the fourth boot
+    // would have stayed normal.
+    for (let i = 0; i < 3; i++) {
+      vi.setSystemTime(start + i * 6 * 60_000);
+      new CrashLoopGuardService().initialize();
+    }
+
+    vi.setSystemTime(start + 3 * 6 * 60_000);
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+    expect(guard.isSafeMode()).toBe(true);
+    expect(guard.getCrashCount()).toBe(3);
   });
 
   it("replaces partially valid persisted state with a fully valid shape", () => {
@@ -248,21 +270,23 @@ describe("CrashLoopGuardService adversarial", () => {
     );
   });
 
-  it("does not keep relaunch disabled after old launches roll out of the hard-stop window", () => {
+  it("does not keep relaunch disabled after old launches roll out of the crash window", () => {
     const now = Date.now();
+    // Four launches outside the 30-min window (decayed) plus two inside —
+    // safe mode and relaunch should reflect only the recent two.
     writeStateFile(statePath, {
       version: 1,
       crashes: 5,
       launches: [
-        now - 320_000,
-        now - 310_000,
-        now - 305_000,
-        now - 301_000,
+        now - 35 * 60_000,
+        now - 34 * 60_000,
+        now - 33 * 60_000,
+        now - 31 * 60_000,
         now - 1_000,
         now - 500,
       ],
       cleanExit: false,
-      lastReset: now - 120_000,
+      lastReset: now - 2 * 60_000,
     });
 
     const guard = new CrashLoopGuardService();
