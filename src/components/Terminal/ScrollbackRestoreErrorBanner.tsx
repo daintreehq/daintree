@@ -34,7 +34,10 @@ function getErrorTitle(type: TerminalScrollbackRestoreError["type"]): string {
   }
 }
 
-function getErrorDescription(type: TerminalScrollbackRestoreError["type"], message: string): string {
+function getErrorDescription(
+  type: TerminalScrollbackRestoreError["type"],
+  message: string
+): string {
   // The terminal itself is still operational — only the replayed buffer is
   // missing — so lead with that reassurance. The raw message is only useful
   // for the generic "error" case, where the title doesn't already convey

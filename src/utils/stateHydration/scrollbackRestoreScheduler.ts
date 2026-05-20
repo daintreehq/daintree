@@ -66,9 +66,7 @@ export function scheduleScrollbackRestore(
         if (restoreError) {
           managed.scrollbackRestoreState = "none";
           if (isCurrent()) {
-            usePanelStore
-              .getState()
-              .setScrollbackRestoreError(task.terminalId, restoreError);
+            usePanelStore.getState().setScrollbackRestoreError(task.terminalId, restoreError);
           }
           logWarn(`Scrollback restore failed for ${task.label}`, { error: restoreError });
         } else {

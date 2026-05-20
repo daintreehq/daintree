@@ -325,9 +325,7 @@ function TerminalPaneComponent({
   const removePanel = usePanelStore((state) => state.removePanel);
   const backendStatus = usePanelStore((state) => state.backendStatus);
   const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
-  const clearScrollbackRestoreError = usePanelStore(
-    (state) => state.clearScrollbackRestoreError
-  );
+  const clearScrollbackRestoreError = usePanelStore((state) => state.clearScrollbackRestoreError);
 
   const cliDetails = useCliAvailabilityStore((state) => state.details);
   const getPanelCliDetail = (): AgentCliDetail | undefined => {
