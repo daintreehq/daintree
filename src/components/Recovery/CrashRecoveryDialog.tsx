@@ -613,6 +613,20 @@ function buildClipboardText(crash: PendingCrash): string {
 
   lines.push(`- **Crashed at**: ${new Date(e.timestamp).toISOString()}`);
 
+  if (e.cause === "watchdog-deadlock") {
+    const causeParts: string[] = [`**Cause**: Watchdog deadlock (SIGKILL)`];
+    if (e.watchdogMissedBeats !== undefined) {
+      causeParts.push(`${e.watchdogMissedBeats} missed heartbeats`);
+    }
+    if (e.watchdogKilledAt !== undefined) {
+      causeParts.push(`killed at ${new Date(e.watchdogKilledAt).toISOString()}`);
+    }
+    if (e.watchdogMainPid !== undefined) {
+      causeParts.push(`main PID ${e.watchdogMainPid}`);
+    }
+    lines.push(`- ${causeParts.join(" — ")}`);
+  }
+
   if (e.errorMessage) {
     lines.push(``, `**Error:** ${e.errorMessage}`);
   }

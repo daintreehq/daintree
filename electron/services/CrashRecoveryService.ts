@@ -355,16 +355,23 @@ export class CrashRecoveryService {
         return null;
       }
 
-      if (!app.isPackaged && marker.isPackaged === false && !marker.crashLogPath) {
+      // Read the watchdog kill flag BEFORE the dev-mode discard branch — even
+      // an orphaned dev marker may have a fresh flag (real watchdog kill in
+      // dev). Consume it unconditionally so a stale flag can't linger across
+      // dev restarts. The mtime guard inside consumeWatchdogKillFlag ensures
+      // only a fresh flag is treated as an annotation.
+      const watchdogAnnotation = this.consumeWatchdogKillFlag(marker);
+
+      if (
+        !app.isPackaged &&
+        marker.isPackaged === false &&
+        !marker.crashLogPath &&
+        !watchdogAnnotation
+      ) {
         console.log("[CrashRecovery] Orphaned dev-mode marker — discarding (not a crash)");
         this.deleteMarker();
         return null;
       }
-
-      // Read the watchdog kill flag BEFORE deleteMarker — the flag's mtime is
-      // validated against marker.sessionStartMs to reject stale flags from a
-      // prior session that survived an unlink failure.
-      const watchdogAnnotation = this.consumeWatchdogKillFlag(marker);
 
       // Move the live backup aside BEFORE deleting the marker. A kill
       // between the two operations would otherwise wipe the marker (and
@@ -393,6 +400,17 @@ export class CrashRecoveryService {
         entry.watchdogKilledAt = watchdogAnnotation.killedAt;
         entry.watchdogMissedBeats = watchdogAnnotation.missedBeats;
         entry.watchdogMainPid = watchdogAnnotation.mainPid;
+        // Persist the annotation onto the on-disk crash log too, so a user
+        // who opens the JSON file directly (via the dialog's "open log file"
+        // affordance, or for support) sees the watchdog attribution. Failure
+        // is non-fatal — the in-memory entry is the source of truth.
+        if (logPath) {
+          try {
+            resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8");
+          } catch (err) {
+            console.error("[CrashRecovery] Failed to persist watchdog annotation:", err);
+          }
+        }
       }
       const panels =
         this.crashedBackupPath !== null ? this.extractPanelSummaries(entry.timestamp) : undefined;
@@ -411,6 +429,7 @@ export class CrashRecoveryService {
     }
   }
 
+  /**
    * Renames `session-state.json` to a timestamped `session-state.crashed-*.json`
    * so the new session's backup tick cannot clobber it.
    *
@@ -515,10 +534,18 @@ export class CrashRecoveryService {
       if (isFresh) {
         const raw = fs.readFileSync(flagPath, "utf8");
         const parsed = JSON.parse(raw) as Partial<WatchdogKillAnnotation>;
+        // Defensive range checks: a corrupted flag with all-zero numbers
+        // would pass a bare `typeof === "number"` check and produce a
+        // misleading attribution. Real values from buildWatchdogKillPayload
+        // are always positive (killedAt = Date.now(), missedBeats >= 1,
+        // mainPid > 0).
         if (
           typeof parsed.killedAt === "number" &&
+          parsed.killedAt > 0 &&
           typeof parsed.missedBeats === "number" &&
-          typeof parsed.mainPid === "number"
+          parsed.missedBeats >= 1 &&
+          typeof parsed.mainPid === "number" &&
+          parsed.mainPid > 0
         ) {
           annotation = {
             killedAt: parsed.killedAt,

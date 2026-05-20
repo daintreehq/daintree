@@ -1641,5 +1641,141 @@ describe("CrashRecoveryService", () => {
       expect(pending!.entry.cause).toBe("watchdog-deadlock");
       expect(pending!.entry.watchdogMissedBeats).toBe(3);
     });
+
+    it("persists the annotation back onto the on-disk crash log file", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      const crashDir = path.join(userData, "crashes");
+      fs.mkdirSync(crashDir, { recursive: true });
+      const crashLogPath = path.join(crashDir, "crash-disk-update.json");
+      fs.writeFileSync(
+        crashLogPath,
+        JSON.stringify({
+          id: "disk-update",
+          timestamp: Date.now() - 10_000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          osVersion: "23.0",
+          arch: "arm64",
+        })
+      );
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          crashLogPath,
+        })
+      );
+      const killedAt = sessionStartMs + 16_000;
+      writeWatchdogFlag({ killedAt, missedBeats: 3, mainPid: 4242 }, killedAt);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const onDisk = JSON.parse(fs.readFileSync(crashLogPath, "utf8"));
+      expect(onDisk.cause).toBe("watchdog-deadlock");
+      expect(onDisk.watchdogKilledAt).toBe(killedAt);
+      expect(onDisk.watchdogMissedBeats).toBe(3);
+      expect(onDisk.watchdogMainPid).toBe(4242);
+    });
+
+    it("surfaces a dev-mode crash with a fresh watchdog flag (otherwise discarded as orphan)", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      // Dev-mode orphan marker — no crashLogPath, isPackaged: false — that
+      // would normally be discarded. The fresh watchdog flag must promote it
+      // to a genuine watchdog-deadlock crash and the flag must be unlinked.
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          isPackaged: false,
+        })
+      );
+      const killedAt = sessionStartMs + 16_000;
+      const flagPath = writeWatchdogFlag({ killedAt, missedBeats: 3, mainPid: 4242 }, killedAt);
+
+      appMock.isPackaged = false;
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.cause).toBe("watchdog-deadlock");
+      expect(pending!.entry.watchdogMissedBeats).toBe(3);
+      expect(fs.existsSync(flagPath)).toBe(false);
+    });
+
+    it("unlinks a stale flag even when the dev-mode marker is discarded as orphaned", () => {
+      const sessionStartMs = Date.now() - 1000;
+      // Dev orphan marker + stale flag from a prior session — the orphan is
+      // correctly discarded but the stale flag must still be cleaned up so
+      // it doesn't poison the next launch.
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          isPackaged: false,
+        })
+      );
+      const staleMtime = sessionStartMs - 3_600_000;
+      const flagPath = writeWatchdogFlag(
+        { killedAt: staleMtime, missedBeats: 3, mainPid: 4242 },
+        staleMtime
+      );
+
+      appMock.isPackaged = false;
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()).toBeNull();
+      expect(fs.existsSync(flagPath)).toBe(false);
+    });
+
+    it("rejects flag payloads with non-positive numeric values", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      const mtime = sessionStartMs + 16_000;
+      // All-zero numbers: pass `typeof === "number"` but are not real values
+      // produced by buildWatchdogKillPayload (killedAt = Date.now() > 0,
+      // missedBeats >= 1, mainPid > 0).
+      writeWatchdogFlag({ killedAt: 0, missedBeats: 0, mainPid: 0 }, mtime);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending!.entry.cause).toBeUndefined();
+      expect(console.warn).toHaveBeenCalled();
+    });
+
+    it("accepts a flag at the exact inclusive mtime boundary (sessionStartMs - 5000)", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      const boundaryMtime = sessionStartMs - 5_000;
+      writeWatchdogFlag({ killedAt: boundaryMtime, missedBeats: 3, mainPid: 4242 }, boundaryMtime);
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()!.entry.cause).toBe("watchdog-deadlock");
+    });
+
+    it("rejects a flag whose mtime is just outside the grace window", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      // 1ms before the inclusive boundary — should be rejected.
+      const outsideMtime = sessionStartMs - 5_001;
+      writeWatchdogFlag({ killedAt: outsideMtime, missedBeats: 3, mainPid: 4242 }, outsideMtime);
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()!.entry.cause).toBeUndefined();
+    });
   });
 });

@@ -614,4 +614,33 @@ describe("CrashRecoveryDialog", () => {
     setup({ crash: { hasBackup: false, backupTimestamp: undefined, panels: undefined } });
     expect(screen.getByText(/No backup available/)).toBeTruthy();
   });
+
+  it("clipboard surfaces watchdog deadlock cause when present", async () => {
+    setup({
+      crash: {
+        entry: {
+          id: "wd-123",
+          timestamp: 1700000000000,
+          appVersion: "1.0.0",
+          platform: "linux",
+          osVersion: "5.15.0",
+          arch: "x64",
+          cause: "watchdog-deadlock",
+          watchdogKilledAt: 1700000016000,
+          watchdogMissedBeats: 3,
+          watchdogMainPid: 4242,
+        },
+      },
+    });
+    fireEvent.click(screen.getByTestId("details-toggle"));
+    fireEvent.click(screen.getByTestId("report-button"));
+    fireEvent.click(screen.getByTestId("report-button"));
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
+    const clipText = (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as string;
+    expect(clipText).toContain("Watchdog deadlock");
+    expect(clipText).toContain("3 missed heartbeats");
+    expect(clipText).toContain("main PID 4242");
+  });
 });
