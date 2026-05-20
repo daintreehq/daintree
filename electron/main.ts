@@ -184,6 +184,7 @@ if (!gotTheLock) {
 
   const windowRegistry = new WindowRegistry();
   setWindowRegistry(windowRegistry);
+  windowRegistry.wireFocusTracking(app);
 
   // Read last-active projectId synchronously from SQLite BEFORE creating any window.
   // This allows the initial WebContentsView to use the correct session partition,
