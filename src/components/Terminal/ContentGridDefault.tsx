@@ -2,11 +2,12 @@ import React from "react";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { LayoutGroup } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { MIN_TERMINAL_HEIGHT_PX } from "@/lib/terminalLayout";
+import { MIN_TERMINAL_HEIGHT_PX, MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
 import { GridNotificationBar } from "./GridNotificationBar";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
 import { GridFullOverlay } from "./GridFullOverlay";
+import { OverflowStatusStrip } from "./OverflowStatusStrip";
 import {
   SortableTerminal,
   GRID_PLACEHOLDER_ID,
@@ -58,7 +59,7 @@ export function ContentGridDefault({
               )}
               style={{
                 display: "grid",
-                gridTemplateColumns: `repeat(${ctx.gridCols}, minmax(0, 1fr))`,
+                gridTemplateColumns: `repeat(${ctx.gridCols}, minmax(min(100%, ${MIN_TERMINAL_WIDTH_PX}px), 1fr))`,
                 gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
                 gap: "4px",
                 backgroundColor: "var(--color-grid-bg)",
@@ -89,7 +90,7 @@ export function ContentGridDefault({
                 </div>
               ) : (
                 <LayoutGroup id="main-grid">
-                  {ctx.tabGroups.map((group, index) => {
+                  {ctx.visibleTabGroups.map((group, index) => {
                     const groupPanels = ctx.getTabGroupPanels(group.id, "grid");
                     if (groupPanels.length === 0) return null;
 
@@ -152,7 +153,7 @@ export function ContentGridDefault({
                   })}
                   {ctx.showPlaceholder &&
                     ctx.placeholderInGrid &&
-                    ctx.placeholderIndex === ctx.tabGroups.length && (
+                    ctx.placeholderIndex === ctx.visibleTabGroups.length && (
                       <SortableGridPlaceholder key={GRID_PLACEHOLDER_ID} />
                     )}
                 </LayoutGroup>
@@ -163,6 +164,7 @@ export function ContentGridDefault({
 
         <GridFullOverlay maxTerminals={ctx.maxGridCapacity} show={ctx.showGridFullOverlay} />
       </div>
+      <OverflowStatusStrip groups={ctx.overflowTabGroups} />
     </div>
   );
 }
