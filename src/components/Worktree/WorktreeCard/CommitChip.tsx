@@ -201,6 +201,11 @@ export function CommitChip({
     : `Committed ${relative} (${absolute})`;
   const accessibleName = author ? `Last commit by ${author.name}` : "Last commit";
 
+  // The freshness ring is an avatar treatment — it only makes sense when a
+  // real avatar image (forge picture or Gravatar) hosts it. A branded agent
+  // icon is its own self-contained mark, so the ring is suppressed there.
+  const hasAvatarHost = author != null && resolveCommitAgentIcon(author) == null;
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -208,14 +213,17 @@ export function CommitChip({
           className="relative z-10 ml-3 flex shrink-0 items-center gap-1 text-xs text-text-muted"
           aria-label={accessibleName}
         >
-          {author && (
-            <AvatarFreshnessRing
-              lastActivityTimestamp={lastActivityTimestamp}
-              shape={commitAvatarIsSquare(author) ? "square" : "circle"}
-            >
+          {author &&
+            (hasAvatarHost ? (
+              <AvatarFreshnessRing
+                lastActivityTimestamp={lastActivityTimestamp}
+                shape={commitAvatarIsSquare(author) ? "square" : "circle"}
+              >
+                <CommitChipAvatar author={author} forgeAvatarUrl={forgeAvatarUrl} />
+              </AvatarFreshnessRing>
+            ) : (
               <CommitChipAvatar author={author} forgeAvatarUrl={forgeAvatarUrl} />
-            </AvatarFreshnessRing>
-          )}
+            ))}
           <LiveTimeAgo timestamp={lastCommitTimestampMs} noTooltip />
         </div>
       </TooltipTrigger>
