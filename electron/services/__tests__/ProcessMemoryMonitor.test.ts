@@ -446,6 +446,21 @@ describe("ProcessMemoryMonitor", () => {
       );
     });
 
+    it("64 GB machine still warns when Browser exceeds the scaled 2400 MB threshold", () => {
+      vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 * 1024 * 1024);
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 2401 * 1024, 100)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      expect(logWarn).toHaveBeenCalledWith("process-memory-threshold-exceeded", {
+        pid: 100,
+        type: "Browser",
+        mb: 2401,
+        thresholdMb: 2400,
+      });
+    });
+
     it("scales Tab threshold down on a 4 GB machine — 400 MB now warns", () => {
       // 4 GB * (768/8192) = 384 MB Tab threshold; 400 MB exceeds it.
       vi.spyOn(os, "totalmem").mockReturnValue(4 * 1024 * 1024 * 1024);
@@ -460,6 +475,18 @@ describe("ProcessMemoryMonitor", () => {
         mb: 400,
         thresholdMb: 384,
       });
+    });
+
+    it("does NOT warn at exactly the threshold (strict >)", () => {
+      // 8 GB → Browser threshold is exactly 300 MB; 300 MB sample should not warn.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 300 * 1024, 100)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      expect(logWarn).not.toHaveBeenCalledWith(
+        "process-memory-threshold-exceeded",
+        expect.anything()
+      );
     });
   });
 
@@ -532,6 +559,138 @@ describe("ProcessMemoryMonitor", () => {
 
       await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
 
+      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+    });
+
+    it("escalates aggregate-only pressure to tier 2 after sustained polls", async () => {
+      // Same 5-Tab × 500 MB setup, but advance enough polls for tier 2.
+      mockGetAppMetrics.mockReturnValue([
+        makeMetric("Tab", 500 * 1024, 201),
+        makeMetric("Tab", 500 * 1024, 202),
+        makeMetric("Tab", 500 * 1024, 203),
+        makeMetric("Tab", 500 * 1024, 204),
+        makeMetric("Tab", 500 * 1024, 205),
+      ]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+
+    it("resets consecutive count when aggregate drops below threshold", async () => {
+      // Above-threshold setup.
+      const overThreshold = [
+        makeMetric("Tab", 500 * 1024, 201),
+        makeMetric("Tab", 500 * 1024, 202),
+        makeMetric("Tab", 500 * 1024, 203),
+        makeMetric("Tab", 500 * 1024, 204),
+        makeMetric("Tab", 500 * 1024, 205),
+      ];
+      mockGetAppMetrics.mockReturnValue(overThreshold);
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Past warmup + (PRESSURE_COUNT_TIER2 - 1) polls of aggregate pressure.
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 - 1);
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+
+      // Drop aggregate below threshold for one poll.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Tab", 100 * 1024, 201)]);
+      await advancePolls(1);
+
+      // Resume aggregate pressure — count restarted, should still need PRESSURE_COUNT_TIER2.
+      mockGetAppMetrics.mockReturnValue(overThreshold);
+      await advancePolls(PRESSURE_COUNT_TIER2 - 1);
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("system-wide low-memory signal (issue #8633)", () => {
+    let mockActions: MemoryPressureActions;
+    let originalGetSystemMemoryInfo: unknown;
+
+    beforeEach(() => {
+      mockActions = {
+        clearCaches: vi.fn().mockResolvedValue(undefined),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+      };
+      originalGetSystemMemoryInfo = (process as { getSystemMemoryInfo?: unknown })
+        .getSystemMemoryInfo;
+    });
+
+    afterEach(() => {
+      if (originalGetSystemMemoryInfo === undefined) {
+        delete (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo;
+      } else {
+        (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo =
+          originalGetSystemMemoryInfo;
+      }
+    });
+
+    async function advancePolls(n: number): Promise<void> {
+      for (let i = 0; i < n; i++) {
+        vi.advanceTimersByTime(30_000);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    function stubSystemMemoryInfo(freeKb: number, purgeableKb = 0): void {
+      (
+        process as {
+          getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+        }
+      ).getSystemMemoryInfo = () => ({
+        free: freeKb,
+        purgeable: purgeableKb,
+        total: EIGHT_GB / 1024,
+      });
+    }
+
+    it("triggers mitigation when free + purgeable drops below 10% of total RAM", async () => {
+      // 8 GB * 0.10 = 819.2 MB threshold. Report 500 MB free + 100 MB purgeable
+      // = 600 MB available, below threshold. No process exceeds its threshold.
+      stubSystemMemoryInfo(500 * 1024, 100 * 1024);
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(mockActions.clearCaches).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT trigger mitigation when free + purgeable stays above threshold", async () => {
+      // 1500 MB free, well above the 819 MB threshold.
+      stubSystemMemoryInfo(1500 * 1024);
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
+
+      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+    });
+
+    it("counts purgeable toward available on macOS — free alone below threshold but purgeable rescues", async () => {
+      // 500 MB free + 500 MB purgeable = 1000 MB available, > 819 MB threshold.
+      // Without the purgeable summation this would falsely trigger on macOS.
+      stubSystemMemoryInfo(500 * 1024, 500 * 1024);
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
+
+      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+    });
+
+    it("skips the signal when getSystemMemoryInfo is unavailable", async () => {
+      // Remove the API entirely to simulate test/sandbox environments.
+      delete (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo;
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
+
+      // No throw, no mitigation triggered.
       expect(mockActions.clearCaches).not.toHaveBeenCalled();
     });
   });

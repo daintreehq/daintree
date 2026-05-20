@@ -27,6 +27,12 @@ const UTILITY_MEMORY_FRACTION = 500 / 8192;
 // where several processes individually stay below their own limits.
 const AGGREGATE_MEMORY_FRACTION = 0.25;
 
+// System-wide available-memory floor. Triggers pressure when free + purgeable
+// drops below this fraction of total RAM regardless of how Daintree's own
+// processes are doing — catches the case where the OS is starved by non-
+// Daintree workloads, swap exhaustion, or shrinking purgeable caches on macOS.
+const SYSTEM_LOW_MEMORY_FRACTION = 0.1;
+
 const SNAPSHOT_THRESHOLD_MB = 600;
 
 const MONITORED_TYPES = new Set(["Browser", "Tab", "Utility"]);
@@ -248,6 +254,34 @@ function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
   return proc.memory.workingSetSize / 1024;
 }
 
+/**
+ * Read system-wide available memory in MB. On macOS, "available" = free +
+ * purgeable, because Darwin holds reclaimable pages as purgeable rather than
+ * free — using `free` alone would fire false positives on every healthy mac.
+ * On Windows/Linux, `free` alone is accurate. Returns null when the Chromium
+ * API is unavailable (e.g., under test mocks). Mirrors the pattern in
+ * ProjectViewManager.getAvailableMemoryMb so the two memory floors stay in
+ * sync.
+ */
+function readAvailableMemoryMb(): number | null {
+  try {
+    const getInfo = (
+      process as {
+        getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+      }
+    ).getSystemMemoryInfo;
+    if (typeof getInfo !== "function") return null;
+    const info = getInfo.call(process);
+    const freeKb = typeof info.free === "number" ? info.free : 0;
+    const purgeableKb = typeof info.purgeable === "number" ? info.purgeable : 0;
+    const availableKb = freeKb + purgeableKb;
+    if (availableKb <= 0) return null;
+    return availableKb / 1024;
+  } catch {
+    return null;
+  }
+}
+
 let currentAppMetricsPollIntervalMs = POLL_INTERVAL_MS;
 let rearmAppMetricsTimer: (() => void) | null = null;
 let appMetricsPollFn: (() => void) | null = null;
@@ -273,6 +307,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
     Utility: totalMemMb * UTILITY_MEMORY_FRACTION,
   };
   const aggregateWarnThresholdMb = totalMemMb * AGGREGATE_MEMORY_FRACTION;
+  const systemLowMemoryThresholdMb = totalMemMb * SYSTEM_LOW_MEMORY_FRACTION;
 
   const snapshotCooldowns = new Map<number, number>();
   const trendState = new Map<number, PidTrendState>();
@@ -406,6 +441,17 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       // mitigation pipeline handles the response — no separate log emission to
       // avoid noisy parallel warnings alongside per-process notices.
       if (aggregateMb > aggregateWarnThresholdMb) {
+        hasPressure = true;
+      }
+
+      // System-wide signal: trigger pressure when free + purgeable drops below
+      // SYSTEM_LOW_MEMORY_FRACTION of total RAM. Catches OS-level starvation
+      // (heavy non-Daintree workloads, swap exhaustion, shrinking purgeable
+      // caches) that the per-process and aggregate checks cannot see. Null
+      // return means the Chromium API is unavailable (tests / sandboxed forks)
+      // and the signal is skipped.
+      const availableMb = readAvailableMemoryMb();
+      if (availableMb !== null && availableMb < systemLowMemoryThresholdMb) {
         hasPressure = true;
       }
 
