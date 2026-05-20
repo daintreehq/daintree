@@ -80,6 +80,16 @@ vi.mock("../../services/CrashLoopGuardService.js", () => ({
   getCrashLoopGuard: () => crashGuard,
 }));
 
+const panelSuspectLedger = {
+  getQuarantinedPanelIds: vi.fn(() => new Set<string>()),
+  getQuarantinedPanels: vi.fn(() => [] as Array<Record<string, unknown>>),
+  clearQuarantinedPanel: vi.fn((_panelId: string) => false),
+};
+
+vi.mock("../../services/PanelSuspectLedgerService.js", () => ({
+  getPanelSuspectLedger: () => panelSuspectLedger,
+}));
+
 vi.mock("../../services/TelemetryService.js", () => ({
   closeTelemetry: vi.fn(),
 }));
@@ -368,6 +378,130 @@ describe("app:boot handler", () => {
     expect(result.crashLoopStateRecovery).toBeNull();
   });
 
+  it("filters out quarantined panels in safe mode while keeping stable ones", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["panel-bad"]));
+    panelSuspectLedger.getQuarantinedPanels.mockReturnValue([
+      { id: "panel-bad", kind: "terminal", title: "Misbehaving" },
+    ]);
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+      if (key === "appState") {
+        return {
+          terminals: [
+            { id: "panel-good", kind: "terminal", title: "Good", location: "grid", cwd: "/tmp" },
+            { id: "panel-bad", kind: "terminal", title: "Bad", location: "grid", cwd: "/tmp" },
+          ],
+          sidebarWidth: 350,
+        };
+      }
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    });
+
+    const result = (await invokeBoot()) as {
+      appState: { terminals: Array<{ id: string }> };
+      skippedPanelCount: number;
+      quarantinedPanels: Array<{ id: string }>;
+    };
+    expect(result.appState.terminals.map((t) => t.id)).toEqual(["panel-good"]);
+    expect(result.skippedPanelCount).toBe(1);
+    expect(result.quarantinedPanels).toEqual([
+      expect.objectContaining({ id: "panel-bad", title: "Misbehaving" }),
+    ]);
+  });
+
+  it("falls back to the all-or-nothing wipe when every saved panel is quarantined", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["a", "b"]));
+    panelSuspectLedger.getQuarantinedPanels.mockReturnValue([
+      { id: "a", kind: "terminal", title: "A" },
+      { id: "b", kind: "terminal", title: "B" },
+    ]);
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+      if (key === "appState") {
+        return {
+          terminals: [
+            { id: "a", kind: "terminal", title: "A", location: "grid", cwd: "/tmp" },
+            { id: "b", kind: "terminal", title: "B", location: "grid", cwd: "/tmp" },
+          ],
+          sidebarWidth: 350,
+        };
+      }
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    });
+
+    const result = (await invokeBoot()) as {
+      appState: { terminals: unknown[] };
+      skippedPanelCount: number;
+    };
+    expect(result.appState.terminals).toEqual([]);
+    expect(result.skippedPanelCount).toBe(2);
+  });
+
+  it("falls back to the all-or-nothing wipe when ledger is empty (legacy path)", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set());
+    panelSuspectLedger.getQuarantinedPanels.mockReturnValue([]);
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+      if (key === "appState") {
+        return {
+          terminals: [{ id: "a", kind: "terminal", title: "A", location: "grid", cwd: "/tmp" }],
+          sidebarWidth: 350,
+        };
+      }
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    });
+
+    const result = (await invokeBoot()) as {
+      appState: { terminals: unknown[] };
+      skippedPanelCount: number;
+      quarantinedPanels: unknown[];
+    };
+    expect(result.appState.terminals).toEqual([]);
+    expect(result.skippedPanelCount).toBe(1);
+    expect(result.quarantinedPanels).toEqual([]);
+  });
+
+  it("does not consult the ledger filter outside of safe mode", async () => {
+    crashGuard.isSafeMode.mockReturnValue(false);
+    panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["a"]));
+    panelSuspectLedger.getQuarantinedPanels.mockReturnValue([
+      { id: "a", kind: "terminal", title: "A" },
+    ]);
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+      if (key === "appState") {
+        return {
+          terminals: [
+            { id: "a", kind: "terminal", title: "A", location: "grid", cwd: "/tmp" },
+            { id: "b", kind: "terminal", title: "B", location: "grid", cwd: "/tmp" },
+          ],
+          sidebarWidth: 350,
+        };
+      }
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    });
+
+    const result = (await invokeBoot()) as {
+      appState: { terminals: Array<{ id: string }> };
+      skippedPanelCount: number;
+      quarantinedPanels: unknown[];
+    };
+    expect(result.appState.terminals.map((t) => t.id).sort()).toEqual(["a", "b"]);
+    expect(result.skippedPanelCount).toBe(0);
+    expect(result.quarantinedPanels).toEqual([]);
+  });
+
   it("propagates the cache-hit fast path from handleAppHydrate (no disk read)", async () => {
     const cachedResult = {
       appState: { terminals: [], sidebarWidth: 350 },
@@ -484,5 +618,49 @@ describe("app:boot handler", () => {
     expect(result.project).toBeNull();
     expect(projectStore.getProjectStateWithRecovery).not.toHaveBeenCalled();
     expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
+  });
+});
+
+describe("app:clear-quarantined-panel handler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ipcHandlers.clear();
+    panelSuspectLedger.clearQuarantinedPanel.mockReset();
+  });
+
+  async function invokeClear(panelId: unknown) {
+    const cleanup = registerAppStateHandlers();
+    const handler = ipcHandlers.get("app:clear-quarantined-panel");
+    if (!handler) throw new Error("app:clear-quarantined-panel handler not registered");
+    // ipcMain.handle passes (event, ...args) — the test's handler captures the
+    // identity of the wrapped callback, so we must reproduce the IPC-event arg.
+    const result = (await handler({}, panelId)) as { cleared: boolean };
+    cleanup();
+    return result;
+  }
+
+  it("forwards the request to the ledger when given a non-empty string id", async () => {
+    panelSuspectLedger.clearQuarantinedPanel.mockReturnValue(true);
+    const result = await invokeClear("panel-1");
+    expect(panelSuspectLedger.clearQuarantinedPanel).toHaveBeenCalledWith("panel-1");
+    expect(result).toEqual({ cleared: true });
+  });
+
+  it("reports cleared=false when the ledger had no record", async () => {
+    panelSuspectLedger.clearQuarantinedPanel.mockReturnValue(false);
+    const result = await invokeClear("missing-panel");
+    expect(result).toEqual({ cleared: false });
+  });
+
+  it("rejects an empty string id without calling the ledger", async () => {
+    const result = await invokeClear("");
+    expect(panelSuspectLedger.clearQuarantinedPanel).not.toHaveBeenCalled();
+    expect(result).toEqual({ cleared: false });
+  });
+
+  it("rejects non-string ids without calling the ledger", async () => {
+    const result = await invokeClear(42);
+    expect(panelSuspectLedger.clearQuarantinedPanel).not.toHaveBeenCalled();
+    expect(result).toEqual({ cleared: false });
   });
 });

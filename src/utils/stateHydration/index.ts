@@ -190,6 +190,7 @@ export async function hydrateAppState(
         crashCount: hydrateResult.crashCount,
         skippedPanelCount: hydrateResult.skippedPanelCount,
         lastCrashAt: hydrateResult.lastCrashAt,
+        quarantinedPanels: hydrateResult.quarantinedPanels,
       });
     } else {
       // Clear stale state when the main process has exited safe mode

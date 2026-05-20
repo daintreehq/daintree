@@ -140,6 +140,14 @@ export interface HydrateResult {
   isWindowsStore: boolean;
   /** Number of saved panels skipped due to safe-mode boot (0 when safe mode is inactive). */
   skippedPanelCount?: number;
+  /**
+   * Per-panel quarantine entries surfaced when safe mode is active. Each entry
+   * is a panel the suspect ledger has flagged on enough consecutive crashed
+   * boots to cross the quarantine threshold; those panels are skipped from
+   * restore while the rest of the saved session is preserved. Empty array (or
+   * absent) when no panels are quarantined.
+   */
+  quarantinedPanels?: import("./crashRecovery.js").QuarantinedPanelSummary[];
   /** Consecutive recent unclean launches counted by the crash-loop guard. */
   crashCount?: number;
   /** Timestamp (ms since epoch) of the most recent unclean launch prior to this boot. */

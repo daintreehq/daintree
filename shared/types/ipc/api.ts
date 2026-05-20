@@ -393,6 +393,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     quit(): Promise<void>;
     forceQuit(): Promise<void>;
     resetAndRelaunch(): Promise<void>;
+    /**
+     * Clear a single panel's quarantine entry from the suspect ledger so it
+     * hydrates normally on the next launch. Returns `{ cleared: true }` if the
+     * ledger had a record for the given panel ID, `false` otherwise (e.g.,
+     * already cleared or never quarantined). Next-restart-only — does not
+     * re-hydrate the panel in the current session.
+     */
+    clearQuarantinedPanel(panelId: string): Promise<{ cleared: boolean }>;
     notifyFirstInteractive(): Promise<void>;
     notifyViewPainted(): Promise<void>;
     onMenuAction(callback: (payload: { actionId: string; args?: unknown }) => void): () => void;

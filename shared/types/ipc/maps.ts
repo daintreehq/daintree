@@ -460,6 +460,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "app:clear-quarantined-panel": {
+    args: [panelId: string];
+    result: { cleared: boolean };
+  };
   "app:first-interactive": {
     args: [];
     result: void;

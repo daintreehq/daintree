@@ -28,6 +28,7 @@ import {
   isGpuAngleFallbackApplied,
 } from "../../../services/GpuCrashMonitorService.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
+import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerService.js";
 import { closeTelemetry } from "../../../services/TelemetryService.js";
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
 import { typedHandle, typedHandleWithContext } from "../../utils.js";
@@ -262,19 +263,45 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       terminalsSource = "global-fallback";
     }
 
-    // In safe mode, skip terminal restoration to break crash loops.
-    // Capture the count of panels we're about to drop so the renderer
-    // banner can tell users how much was deferred.
+    // In safe mode, filter out panels the suspect ledger has quarantined
+    // (panels flagged `isSuspect` on enough consecutive crashed boots to
+    // cross the threshold) — stable panels survive the safe-mode boot. If
+    // every saved panel is quarantined we fall back to the original
+    // all-or-nothing wipe so a chronic crash loop where everything is suspect
+    // still surfaces an empty workspace rather than restoring suspects in a
+    // partial way. `quarantinedPanels` is surfaced to the renderer so
+    // `SafeModeBanner` can list them with a "Restore panel" affordance.
     const guard = getCrashLoopGuard();
+    const ledger = getPanelSuspectLedger();
     const inSafeMode = guard.isSafeMode();
     let skippedPanelCount = 0;
+    let quarantinedPanels: import("../../../../shared/types/ipc/crashRecovery.js").QuarantinedPanelSummary[] =
+      [];
     if (inSafeMode) {
-      skippedPanelCount = terminalsToUse.length;
-      terminalsToUse = [];
-      terminalsSource = "safe-mode";
-      console.log(
-        `[AppHydrate] Safe mode active — skipping ${skippedPanelCount} terminal(s) restoration`
-      );
+      const quarantinedIds = ledger.getQuarantinedPanelIds();
+      const original = terminalsToUse;
+      const survivors = original.filter((t) => !quarantinedIds.has(t.id));
+      const skippedToQuarantine = original.length - survivors.length;
+      if (skippedToQuarantine > 0 && survivors.length > 0) {
+        // Partial quarantine — keep the stable panels, drop only the suspects.
+        terminalsToUse = survivors;
+        skippedPanelCount = skippedToQuarantine;
+        terminalsSource = "safe-mode-quarantine";
+        console.log(
+          `[AppHydrate] Safe mode active — quarantining ${skippedToQuarantine} suspect panel(s), restoring ${survivors.length} stable panel(s)`
+        );
+      } else {
+        // Either nothing was quarantined (legacy path: ledger empty, e.g.
+        // first crash loop after upgrade) or every saved panel is suspect.
+        // Both collapse to the original all-or-nothing wipe.
+        skippedPanelCount = original.length;
+        terminalsToUse = [];
+        terminalsSource = "safe-mode";
+        console.log(
+          `[AppHydrate] Safe mode active — skipping ${skippedPanelCount} terminal(s) restoration`
+        );
+      }
+      quarantinedPanels = ledger.getQuarantinedPanels();
     }
 
     // Apply one-shot crash recovery panel filter if set
@@ -324,6 +351,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       isWindowsStore:
         (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
       skippedPanelCount,
+      quarantinedPanels,
       crashCount: guard.getCrashCount(),
       lastCrashAt: guard.getLastCrashTimestamp(),
       settingsRecovery: consumePendingSettingsRecovery(),
@@ -621,6 +649,15 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     app.exit(0);
   };
   handlers.push(typedHandle(CHANNELS.APP_FORCE_QUIT, handleAppForceQuit));
+
+  const handleAppClearQuarantinedPanel = async (panelId: unknown) => {
+    if (typeof panelId !== "string" || panelId.length === 0) {
+      return { cleared: false };
+    }
+    const cleared = getPanelSuspectLedger().clearQuarantinedPanel(panelId);
+    return { cleared };
+  };
+  handlers.push(typedHandle(CHANNELS.APP_CLEAR_QUARANTINED_PANEL, handleAppClearQuarantinedPanel));
 
   const handleAppResetAndRelaunch = async () => {
     // Clear the crash-loop sentinel before relaunch so the next boot starts

@@ -91,6 +91,20 @@ export interface PanelSummary {
   lastStateChange?: number;
 }
 
+/**
+ * Renderer-facing summary of a panel that the suspect ledger is currently
+ * quarantining — i.e., the panel was flagged `isSuspect` on enough consecutive
+ * crashed boots to cross the quarantine threshold. Skipped from restore in
+ * safe mode and surfaced in `SafeModeBanner` with a "Restore panel" affordance.
+ */
+export interface QuarantinedPanelSummary {
+  id: string;
+  kind: string;
+  title: string;
+  cwd?: string;
+  worktreeId?: string;
+}
+
 export interface PendingCrash {
   logPath: string;
   entry: CrashLogEntry;
