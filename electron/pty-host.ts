@@ -60,6 +60,14 @@ import {
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
 import { SCROLLBACK_MIN } from "../shared/config/scrollback.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
+import { PERF_MARKS } from "../shared/perf/marks.js";
+import { markHostPerformance } from "./utils/hostPerformance.js";
+
+// First user-code statement after all imports settle. ESM hoists native
+// module dlopen (node-pty, ProcessTreeCache native deps) ahead of any
+// statement here, so this is the earliest feasible proxy for "native modules
+// loaded". The exact dlopen instant is not reachable from ESM.
+markHostPerformance(PERF_MARKS.PTY_HOST_NATIVE_MODULE_READY);
 
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
@@ -970,6 +978,7 @@ async function initialize(): Promise<void> {
     console.log("[PtyHost] ProcessTreeCache started");
 
     // Notify Main that we're ready (after cache is initialized, before pool is warmed)
+    markHostPerformance(PERF_MARKS.PTY_HOST_READY_POSTED);
     sendEvent({ type: "ready" });
     console.log("[PtyHost] Initialized and ready (accepting IPC)");
 

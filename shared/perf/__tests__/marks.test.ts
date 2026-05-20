@@ -32,6 +32,20 @@ describe("PERF_MARKS", () => {
     expect(PERF_MARKS.PROJECT_STATE_WRITE).toBe("project_state_write");
     expect(PERF_MARKS.PROJECT_STATE_READ).toBe("project_state_read");
     expect(PERF_MARKS.PROJECT_STATE_QUARANTINE).toBe("project_state_quarantine");
+
+    expect(PERF_MARKS.PTY_HOST_FORK_DISPATCHED).toBe("pty_host_fork_dispatched");
+    expect(PERF_MARKS.PTY_HOST_MODULE_EVAL_COMPLETE).toBe("pty_host_module_eval_complete");
+    expect(PERF_MARKS.PTY_HOST_NATIVE_MODULE_READY).toBe("pty_host_native_module_ready");
+    expect(PERF_MARKS.PTY_HOST_READY_POSTED).toBe("pty_host_ready_posted");
+
+    expect(PERF_MARKS.WORKSPACE_HOST_FORK_DISPATCHED).toBe("workspace_host_fork_dispatched");
+    expect(PERF_MARKS.WORKSPACE_HOST_MODULE_EVAL_COMPLETE).toBe(
+      "workspace_host_module_eval_complete"
+    );
+    expect(PERF_MARKS.WORKSPACE_HOST_NATIVE_MODULE_READY).toBe(
+      "workspace_host_native_module_ready"
+    );
+    expect(PERF_MARKS.WORKSPACE_HOST_READY_POSTED).toBe("workspace_host_ready_posted");
   });
 
   it("has unique values", () => {
