@@ -205,8 +205,11 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // Inverse of isFleetPreviewed: when a preset hover is *active* and this
   // pane is NOT in the would-be-armed set, dim it so the matched panes
   // stand out without competing visual chrome on the rest of the grid.
+  // Gated on kind === "terminal" so browser, dev-preview, and other
+  // non-fleet panels (which are never in previewArmedIds) stay at full
+  // opacity — dimming them would imply they could have been armed.
   const isFleetDimmed = useFleetArmingStore(
-    (s) => s.previewArmedIds.size > 0 && !s.previewArmedIds.has(id)
+    (s) => kind === "terminal" && s.previewArmedIds.size > 0 && !s.previewArmedIds.has(id)
   );
 
   // One-shot ring pulse when this pane becomes the new primary on fleet
