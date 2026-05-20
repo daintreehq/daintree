@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { usePanelStore } from "@/store";
+import { usePanelStore, type TerminalInstance } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   getPanelKindDefinition,
@@ -35,7 +35,16 @@ export interface GridPanelProps {
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
   onTabRename?: (tabId: string, newTitle: string) => void;
+  // No-arg add-tab callback. Used by GridTabGroup, which owns the active panel
+  // and supplies its own handler. Single-panel call sites should prefer
+  // `onAddTabForPanel` so the inline `(terminal) => ...` closure can be
+  // composed inside GridPanel against the store-subscribed terminal — that
+  // keeps the prop reference stable across parent re-renders.
   onAddTab?: () => void;
+  // Panel-aware add-tab callback. Receives the subscribed terminal. Pass a
+  // stable handler (e.g., `ctx.handleAddTabForPanel`) — GridPanel composes
+  // the no-arg shape internally and skips it in fleet scope.
+  onAddTabForPanel?: (terminal: TerminalInstance) => void | Promise<void>;
   onTabReorder?: (newOrder: string[]) => void;
 }
 
@@ -54,6 +63,7 @@ export const GridPanel = React.memo(function GridPanel({
   onTabClose,
   onTabRename,
   onAddTab,
+  onAddTabForPanel,
   onTabReorder,
 }: GridPanelProps) {
   // Subscribe to the terminal slice keyed by id. `useShallow` does per-field
@@ -107,6 +117,21 @@ export const GridPanel = React.memo(function GridPanel({
   // panel kind hot-swaps the PluginMissingPanel placeholder without a reload.
   useSyncExternalStore(subscribeToPanelKindDefinitions, getPanelKindDefinitionsSnapshot);
 
+  // Compose the effective add-tab handler. Fleet scope disables it (would
+  // create a cross-worktree tab group). For single-panel and two-pane callers
+  // that supply `onAddTabForPanel`, we bind it to the subscribed terminal here
+  // so the parent can pass a stable callback reference.
+  const composedOnAddTab = useMemo<(() => void) | undefined>(() => {
+    if (isFleetScope) return undefined;
+    if (onAddTab) return onAddTab;
+    if (onAddTabForPanel && terminal) {
+      return () => {
+        void onAddTabForPanel(terminal);
+      };
+    }
+    return undefined;
+  }, [isFleetScope, onAddTab, onAddTabForPanel, terminal]);
+
   const kind = terminal?.kind ?? "terminal";
   const definition = getPanelKindDefinition(kind);
 
@@ -132,9 +157,7 @@ export const GridPanel = React.memo(function GridPanel({
         onTabClick,
         onTabClose,
         onTabRename,
-        // Adding a new tab in scope would create a cross-worktree tab group,
-        // which violates the tab-group invariant in shared/types/panel.ts.
-        onAddTab: isFleetScope ? undefined : onAddTab,
+        onAddTab: composedOnAddTab,
         onTabReorder,
         ...(isFleetScope ? { isInputLocked: true } : undefined),
         ...(titleOverride !== undefined ? { title: titleOverride } : undefined),
@@ -156,7 +179,7 @@ export const GridPanel = React.memo(function GridPanel({
     onTabClick,
     onTabClose,
     onTabRename,
-    onAddTab,
+    composedOnAddTab,
     onTabReorder,
     isFleetScope,
     titleOverride,
@@ -193,7 +216,7 @@ export const GridPanel = React.memo(function GridPanel({
         onTabClick={onTabClick}
         onTabClose={onTabClose}
         onTabRename={onTabRename}
-        onAddTab={onAddTab}
+        onAddTab={composedOnAddTab}
         onTabReorder={onTabReorder}
       >
         {isPluginOwned ? (

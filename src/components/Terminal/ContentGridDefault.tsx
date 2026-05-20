@@ -121,7 +121,7 @@ export function ContentGridDefault({
                             isFocused={terminal.id === ctx.focusedId}
                             gridPanelCount={ctx.gridItemCount}
                             gridCols={ctx.gridCols}
-                            onAddTab={() => ctx.handleAddTabForPanel(terminal)}
+                            onAddTabForPanel={ctx.handleAddTabForPanel}
                           />
                         </SortableTerminal>
                       );
