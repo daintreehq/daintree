@@ -21,7 +21,7 @@ export interface GlobalRecipesPreloadBindings {
   addRecipe(recipe: TerminalRecipe): Promise<void>;
   updateRecipe(
     recipeId: string,
-    updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
+    updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt" | "worktreeId">>
   ): Promise<void>;
   deleteRecipe(recipeId: string): Promise<void>;
 }
