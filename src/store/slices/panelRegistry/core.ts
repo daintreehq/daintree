@@ -187,6 +187,20 @@ export const createCorePanelActions = (
         return state;
       }
 
+      // Equality short-circuit: skip the write (and crucially `lastStateChange`)
+      // when no user-visible field changed. `lastStateChange` gates the
+      // window-blur badge filter (useTerminalSelectors) and the elapsed-time
+      // header display (TerminalHeaderContent) — bumping it on duplicate
+      // events would falsely reset both. See #8592.
+      const nextWaitingReason = agentState === "waiting" ? waitingReason : undefined;
+      if (
+        terminal.agentState === agentState &&
+        terminal.error === error &&
+        terminal.waitingReason === nextWaitingReason
+      ) {
+        return state;
+      }
+
       return {
         panelsById: {
           ...state.panelsById,
@@ -197,7 +211,7 @@ export const createCorePanelActions = (
             lastStateChange: lastStateChange ?? Date.now(),
             stateChangeTrigger: trigger,
             stateChangeConfidence: confidence,
-            waitingReason: agentState === "waiting" ? waitingReason : undefined,
+            waitingReason: nextWaitingReason,
             sessionCost:
               (agentState === "completed" || agentState === "exited") && sessionCost != null
                 ? sessionCost
