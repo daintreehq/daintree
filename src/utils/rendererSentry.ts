@@ -67,13 +67,22 @@ export function initRendererSentry(): void {
     snapshotPromise
       .then((state) => {
         if (state && !liveUpdateReceived) consentState = state;
+        // Install the steady-state listener BEFORE unsubscribing the
+        // hydration-aware one so we never have a coverage gap — if the
+        // re-subscribe throws, the hydration listener stays active and
+        // future broadcasts still update `consentState`.
+        const steadyStateUnsubscribe = window.electron?.privacy?.onTelemetryConsentChanged?.(
+          (payload) => {
+            consentState = payload;
+          }
+        );
         consentUnsubscribe?.();
-        consentUnsubscribe = window.electron?.privacy?.onTelemetryConsentChanged?.((payload) => {
-          consentState = payload;
-        });
+        consentUnsubscribe = steadyStateUnsubscribe;
       })
       .catch(() => {
-        // IPC may not be available (e.g. test environments). Leave gate closed.
+        // IPC may not be available (e.g. test environments). Leave gate
+        // closed; the hydration-aware listener registered above stays
+        // active, so future broadcasts can still open it.
       });
   }
 }
