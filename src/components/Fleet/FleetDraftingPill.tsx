@@ -263,7 +263,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
               aria-label={`Override payload for ${title}`}
               className={cn(
                 "flex-1 resize-y bg-transparent text-[11px] leading-relaxed break-all text-daintree-text",
-                "rounded-sm border border-transparent px-1 py-0.5 outline-none transition-colors duration-150",
+                "rounded-sm border border-transparent px-1 py-0.5 outline-hidden transition-colors duration-150",
                 "hover:border-border-subtle focus:border-border-subtle",
                 isSkipped && "cursor-not-allowed line-through",
                 resolvedPayload === "" && !isOverridden && "text-daintree-text/40"
