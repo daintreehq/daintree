@@ -38,7 +38,6 @@ export function ContentGridMaximizedGroup({
       <div className="relative min-h-0 flex-1">
         <GridTabGroup
           group={group}
-          panels={groupPanels}
           focusedId={effectiveFocusedId}
           gridPanelCount={1}
           gridCols={1}

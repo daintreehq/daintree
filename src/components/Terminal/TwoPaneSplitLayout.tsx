@@ -21,8 +21,9 @@ interface TwoPaneSplitLayoutProps {
   focusedId: string | null;
   activeWorktreeId: string | null;
   isInTrash: (id: string) => boolean;
-  onAddTabLeft?: () => void;
-  onAddTabRight?: () => void;
+  // Stable panel-aware add-tab callback. GridPanel binds it to the
+  // subscribed terminal internally so we never recreate inline closures here.
+  onAddTabForPanel?: (terminal: TerminalInstance) => void | Promise<void>;
 }
 
 export function TwoPaneSplitLayout({
@@ -30,8 +31,7 @@ export function TwoPaneSplitLayout({
   focusedId,
   activeWorktreeId,
   isInTrash,
-  onAddTabLeft,
-  onAddTabRight,
+  onAddTabForPanel,
 }: TwoPaneSplitLayoutProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState<number>(0);
@@ -343,11 +343,11 @@ export function TwoPaneSplitLayout({
               disabled={isInTrash(terminals[0].id)}
             >
               <GridPanel
-                terminal={terminals[0]}
+                terminalId={terminals[0].id}
                 isFocused={terminals[0].id === focusedId}
                 gridPanelCount={2}
                 gridCols={2}
-                onAddTab={onAddTabLeft}
+                onAddTabForPanel={onAddTabForPanel}
               />
             </SortableTerminal>
           </div>
@@ -371,11 +371,11 @@ export function TwoPaneSplitLayout({
               disabled={isInTrash(terminals[1].id)}
             >
               <GridPanel
-                terminal={terminals[1]}
+                terminalId={terminals[1].id}
                 isFocused={terminals[1].id === focusedId}
                 gridPanelCount={2}
                 gridCols={2}
-                onAddTab={onAddTabRight}
+                onAddTabForPanel={onAddTabForPanel}
               />
             </SortableTerminal>
           </div>

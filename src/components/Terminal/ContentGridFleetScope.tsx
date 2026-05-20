@@ -96,7 +96,7 @@ export function ContentGridFleetScope({
                       className="h-full min-w-0"
                     >
                       <GridPanel
-                        terminal={terminal}
+                        terminalId={terminal.id}
                         isFocused={terminal.id === ctx.focusedId}
                         gridPanelCount={ctx.fleetPanels.length}
                         gridCols={ctx.fleetGridCols}
