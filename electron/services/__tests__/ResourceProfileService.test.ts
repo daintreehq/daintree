@@ -481,6 +481,30 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
+  it("still freezes when setCachedViewLimit throws on the entry path", () => {
+    // Split try/catch on entry mirrors the exit path: a throw from
+    // setCachedViewLimit(1) (e.g. an onViewEvicted callback failing inside
+    // evictStaleViews) must not block setEfficiencyFreeze(true) — leaving
+    // efficiency unfrozen defeats the CPU/timer-wake suppression that
+    // efficiency is supposed to provide.
+    const deps = createDeps();
+    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const service = new ResourceProfileService(deps);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    service.start();
+
+    pvm.setCachedViewLimit.mockImplementationOnce(() => {
+      throw new Error("simulated eviction failure");
+    });
+
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+    expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
+
+    service.stop();
+  });
+
   it("still unfreezes when setCachedViewLimit throws on the exit path", () => {
     const deps = createDeps({ getUserCachedViewLimit: () => 2 });
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;

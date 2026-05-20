@@ -984,6 +984,54 @@ describe("ResourceProfileService adversarial", () => {
       service.stop();
     });
 
+    it("lag-only efficiency entry still unfreezes and restores limit on exit", () => {
+      // Lag enters efficiency without clamping (no memory contribution). On
+      // exit, the always-unconditional restore branch must still fire so
+      // renderers don't stay frozen and the user-configured limit is reasserted
+      // (even though entry never clamped — PVM's own evictStaleViews floor may
+      // have clamped during the efficiency window).
+      const pvm = {
+        setCachedViewLimit: vi.fn(),
+        setLowMemoryFreeThresholdMb: vi.fn(),
+        setEfficiencyFreeze: vi.fn(),
+      };
+      const { deps } = createDeps({
+        getProjectViewManager: () =>
+          pvm as unknown as ReturnType<ResourceProfileDeps["getProjectViewManager"]>,
+        getUserCachedViewLimit: () => 4,
+      });
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      mockGetAppMetrics.mockReturnValue([]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("efficiency");
+      expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
+      expect(pvm.setEfficiencyFreeze).toHaveBeenLastCalledWith(true);
+
+      // Recover from lag.
+      setLag(50, 0.1);
+      for (let i = 0; i < 9; i++) {
+        vi.advanceTimersByTime(5_000);
+      }
+
+      // Drive normal scoring back up.
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+      expect(service.getProfile()).toBe("performance");
+
+      expect(pvm.setEfficiencyFreeze).toHaveBeenLastCalledWith(false);
+      expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(4);
+
+      service.stop();
+    });
+
     it("getCurrentThermalState throwing does not crash start", () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
       mockGetCurrentThermalState.mockImplementation(() => {
