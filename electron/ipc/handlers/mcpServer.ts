@@ -31,10 +31,13 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
 export const mcpServerNamespace = defineIpcNamespace({
   name: "mcpServer",
   ops: {
-    getStatus: op(MCP_SERVER_METHOD_CHANNELS.getStatus, async (): Promise<McpServerStatusSnapshot> => {
-      const svc = await getMcpServerService();
-      return svc.getStatus();
-    }),
+    getStatus: op(
+      MCP_SERVER_METHOD_CHANNELS.getStatus,
+      async (): Promise<McpServerStatusSnapshot> => {
+        const svc = await getMcpServerService();
+        return svc.getStatus();
+      }
+    ),
     setEnabled: op(
       MCP_SERVER_METHOD_CHANNELS.setEnabled,
       async (enabled: boolean): Promise<McpServerStatusSnapshot> => {
@@ -62,13 +65,10 @@ export const mcpServerNamespace = defineIpcNamespace({
       const svc = await getMcpServerService();
       return await svc.rotateApiKey();
     }),
-    getConfigSnippet: op(
-      MCP_SERVER_METHOD_CHANNELS.getConfigSnippet,
-      async (): Promise<string> => {
-        const svc = await getMcpServerService();
-        return svc.getConfigSnippet();
-      }
-    ),
+    getConfigSnippet: op(MCP_SERVER_METHOD_CHANNELS.getConfigSnippet, async (): Promise<string> => {
+      const svc = await getMcpServerService();
+      return svc.getConfigSnippet();
+    }),
     getAuditRecords: op(
       MCP_SERVER_METHOD_CHANNELS.getAuditRecords,
       async (): Promise<McpAuditRecord[]> => {
@@ -199,10 +199,7 @@ export const mcpServerNamespace = defineIpcNamespace({
     ),
     issueGrant: op(
       MCP_SERVER_METHOD_CHANNELS.issueGrant,
-      async (
-        ctx,
-        payload: { sessionId: string; toolId: string }
-      ): Promise<McpIssueGrantResult> => {
+      async (ctx, payload: { sessionId: string; toolId: string }): Promise<McpIssueGrantResult> => {
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -222,10 +219,7 @@ export const mcpServerNamespace = defineIpcNamespace({
     ),
     revokeSessionGrants: op(
       MCP_SERVER_METHOD_CHANNELS.revokeSessionGrants,
-      async (
-        ctx,
-        payload: { sessionId: string }
-      ): Promise<McpRevokeSessionGrantsResult> => {
+      async (ctx, payload: { sessionId: string }): Promise<McpRevokeSessionGrantsResult> => {
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -254,12 +248,16 @@ export function registerMcpServerHandlers(): () => void {
   // miss the unsubscribe and leak a `runtimeStateListeners` entry.
   let cancelled = false;
   let pendingUnsubscribe: (() => void) | null = null;
-  void getMcpServerService().then((svc) => {
-    if (cancelled) return;
-    pendingUnsubscribe = svc.onRuntimeStateChange((snapshot) => {
-      broadcastToRenderer(CHANNELS.MCP_SERVER_RUNTIME_STATE_CHANGED, snapshot);
+  void getMcpServerService()
+    .then((svc) => {
+      if (cancelled) return;
+      pendingUnsubscribe = svc.onRuntimeStateChange((snapshot) => {
+        broadcastToRenderer(CHANNELS.MCP_SERVER_RUNTIME_STATE_CHANGED, snapshot);
+      });
+    })
+    .catch((err) => {
+      console.warn("[McpServerHandlers] Failed to subscribe to runtime-state changes:", err);
     });
-  });
 
   return () => {
     cancelled = true;

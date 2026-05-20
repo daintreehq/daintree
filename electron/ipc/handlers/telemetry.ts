@@ -78,13 +78,10 @@ function broadcastPreviewState(): void {
 export const telemetryNamespace = defineIpcNamespace({
   name: "telemetry",
   ops: {
-    get: op(
-      TELEMETRY_METHOD_CHANNELS.get,
-      (): { enabled: boolean; hasSeenPrompt: boolean } => ({
-        enabled: isTelemetryEnabled(),
-        hasSeenPrompt: hasTelemetryPromptBeenShown(),
-      })
-    ),
+    get: op(TELEMETRY_METHOD_CHANNELS.get, (): { enabled: boolean; hasSeenPrompt: boolean } => ({
+      enabled: isTelemetryEnabled(),
+      hasSeenPrompt: hasTelemetryPromptBeenShown(),
+    })),
     setEnabled: op(
       TELEMETRY_METHOD_CHANNELS.setEnabled,
       async (enabled: boolean): Promise<void> => {
@@ -138,14 +135,16 @@ export const telemetryNamespace = defineIpcNamespace({
 });
 
 export function registerTelemetryHandlers(): () => void {
+  // Register the IPC namespace first so a duplicate-channel throw doesn't
+  // leave the broadcaster's enqueue pointer wired to a handler whose IPC
+  // surface failed to mount. Order matters in dev/hot-reload only.
   const cleanups: Array<() => void> = [];
+  cleanups.push(telemetryNamespace.register());
 
   // Wire the broadcaster's enqueue function at handler-register time. This
   // is the single point where the service gets a direct callback into the
   // IPC layer without needing to import IPC modules itself.
   setTelemetryPreviewEnqueue(queuePreviewEvent);
-
-  cleanups.push(telemetryNamespace.register());
 
   const handleSubscribe = (event: Electron.IpcMainEvent) => {
     const sender = event.sender;
