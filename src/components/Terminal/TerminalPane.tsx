@@ -755,7 +755,7 @@ function TerminalPaneComponent({
     // pointerdown still lets drag motion leak into PTY mouse-reporting modes
     // (DECSET 1002/1003) as escape sequences.
     try {
-      e.currentTarget.setPointerCapture(e.nativeEvent.pointerId);
+      e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
       // Element was detached (e.g. LRU view eviction). Safe to ignore.
     }

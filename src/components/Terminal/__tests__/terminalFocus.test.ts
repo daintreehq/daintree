@@ -149,4 +149,15 @@ describe("shouldSuppressUnfocusedClick", () => {
       })
     ).toBe(false);
   });
+
+  it("does not suppress shift+click — xterm uses shift to bypass PTY mouse reporting for native selection", () => {
+    expect(
+      shouldSuppressUnfocusedClick({
+        location: "grid",
+        isFocused: false,
+        isCursorPointer: false,
+        isShiftKey: true,
+      })
+    ).toBe(false);
+  });
 });
