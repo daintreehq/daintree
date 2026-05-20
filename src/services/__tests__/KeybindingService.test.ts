@@ -511,15 +511,12 @@ describe("KeybindingService", () => {
     expect(service.getBinding("terminal.new")?.combo).toBe("Cmd+Alt+T");
   });
 
-  it("binds project MRU plus by default and leaves minus unbound", () => {
+  it("binds project MRU plus (older) and shift+plus (newer) by default; minus stays unbound", () => {
     setPlatform("MacIntel");
     const service = new KeybindingService();
 
     expect(service.getBinding("project.mruCycleOlder")?.combo).toBe("Cmd+Alt+=");
-    expect(service.getBinding("project.mruCycleNewer")).toBeUndefined();
-    expect(
-      DEFAULT_KEYBINDINGS.filter((b) => b.actionId === "project.mruCycleOlder").map((b) => b.combo)
-    ).toContain("Cmd+Shift+Alt+=");
+    expect(service.getBinding("project.mruCycleNewer")?.combo).toBe("Cmd+Shift+Alt+=");
 
     const plus = createKeyboardEvent({
       key: "≠",
@@ -536,7 +533,7 @@ describe("KeybindingService", () => {
       altKey: true,
       shiftKey: true,
     });
-    expect(service.findMatchingAction(shiftedPlus)?.actionId).toBe("project.mruCycleOlder");
+    expect(service.findMatchingAction(shiftedPlus)?.actionId).toBe("project.mruCycleNewer");
 
     const minus = createKeyboardEvent({
       key: "–",

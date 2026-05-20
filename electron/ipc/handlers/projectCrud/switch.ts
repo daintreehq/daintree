@@ -5,6 +5,7 @@ import { distributePortsToView } from "../../../window/portDistribution.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js";
+import { broadcastProjectSwitchUpdates } from "../../projectSwitchBroadcast.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import {
   sanitizeTerminals,
@@ -179,12 +180,23 @@ async function activateProjectView(
     console.warn("[ProjectSwitch] Failed to clear active scratch:", err);
   }
 
+  // Capture the outgoing project id before the pointer flips so we can
+  // broadcast its bumped `lastOpened` to every cached view (#8561).
+  const previousProjectId = projectStore.getCurrentProjectId();
+
   // Update the main process global state
   await projectStore.setCurrentProject(projectId);
 
   if (options.markActive) {
     projectStore.updateProjectStatus(projectId, "active");
   }
+
+  // Push the persisted `lastOpened`/`status` updates to every renderer.
+  // `setCurrentProject` writes both the departing and activated rows inside a
+  // single transaction but does not emit IPC; without this broadcast, cached
+  // WebContentsView stores keep stale MRU timestamps and the next
+  // `Cmd+Alt+=` / project switcher pick targets the wrong project.
+  broadcastProjectSwitchUpdates(previousProjectId, projectId);
 
   // Reopen requires the workspace host to be resumed BEFORE loadProject so
   // the host is ready to accept worktree IPC from the newly-active view.

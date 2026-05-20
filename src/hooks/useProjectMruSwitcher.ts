@@ -13,7 +13,9 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 function getTriggerDirection(event: KeyboardEvent): ProjectMruCycleDirection | null {
-  if (event.code === "Equal" || event.code === "NumpadAdd") return "older";
+  if (event.code === "Equal" || event.code === "NumpadAdd") {
+    return event.shiftKey ? "newer" : "older";
+  }
   return null;
 }
 

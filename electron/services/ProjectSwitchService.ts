@@ -7,6 +7,7 @@ import { gitServiceCache } from "./GitServiceCache.js";
 import { contextInjectionTracker } from "./ContextInjectionTracker.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
+import { broadcastProjectSwitchUpdates } from "../ipc/projectSwitchBroadcast.js";
 import { randomUUID } from "crypto";
 import { store } from "../store.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
@@ -78,6 +79,12 @@ export class ProjectSwitchService {
       // Apply portable project identity from .daintree/project.json if the user
       // hasn't customised the project name/emoji (still has defaults).
       await this.applyInRepoIdentity(project);
+
+      // Fan out the persisted `lastOpened`/`status` flips to every renderer,
+      // including LRU-cached project views. PROJECT_ON_SWITCH below only
+      // carries the active project; the departing project's bumped
+      // `lastOpened` would otherwise stay stale in cached stores (#8561).
+      broadcastProjectSwitchUpdates(previousProjectId, projectId);
 
       const updatedProject = projectStore.getProjectById(projectId);
       if (!updatedProject) {
