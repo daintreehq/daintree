@@ -74,7 +74,7 @@ describe("useAppBoot", () => {
     expect(hook.current.error?.message).toBe("boom");
   });
 
-  it("fires boot() exactly once under double-mount", async () => {
+  it("fires boot() exactly once across rerenders", async () => {
     const bootFn = installElectron(async () => makeBootResult());
 
     const { rerender } = renderHook(() => useAppBoot());
@@ -84,6 +84,24 @@ describe("useAppBoot", () => {
     });
     rerender();
     await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(bootFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires boot() exactly once under React StrictMode double-mount", async () => {
+    const bootFn = installElectron(async () => makeBootResult());
+
+    // Strict mode mounts the component twice in dev. Simulate by rendering
+    // inside <StrictMode>. The hook's useRef guard must survive the unmount
+    // /remount caused by Strict Mode's intentional double invocation of the
+    // effect setup phase.
+    const { StrictMode } = await import("react");
+    renderHook(() => useAppBoot(), { wrapper: StrictMode });
+
+    await act(async () => {
+      await Promise.resolve();
       await Promise.resolve();
     });
 

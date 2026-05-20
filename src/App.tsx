@@ -488,8 +488,15 @@ function App() {
 
   const crashResolved = crashState.status !== "loading" && crashState.status !== "pending";
 
+  // When crash recovery was pending at boot, the resolve path (`restoreBackup`
+  // or `resetToFresh` in CrashRecoveryService) mutates `store.appState` after
+  // `boot.result` was captured. Passing the stale prefetched payload would
+  // hydrate from the pre-resolution terminal list and skip the one-shot
+  // `consumePanelFilter` the restore path queued. Force the live IPC path in
+  // that case so hydration reads the post-resolution store.
+  const hadPendingCrash = boot.result?.crashPending != null;
   // App lifecycle hooks
-  const { isStateLoaded } = useAppHydration(crashResolved, boot.result);
+  const { isStateLoaded } = useAppHydration(crashResolved, hadPendingCrash ? null : boot.result);
   useEffect(() => {
     if (isStateLoaded) removeStartupSkeleton();
   }, [isStateLoaded]);

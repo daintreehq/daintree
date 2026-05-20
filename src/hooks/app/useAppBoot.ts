@@ -36,23 +36,23 @@ export function useAppBoot(): AppBootState {
     if (!isElectronAvailable() || hasFired.current) return;
     hasFired.current = true;
 
-    let cancelled = false;
+    // No cancellation flag here on purpose. Under React 19 Strict Mode the
+    // effect runs setup → cleanup → setup once on mount; if cleanup sets
+    // `cancelled=true`, the boot() promise resolves into a stale closure and
+    // the hook is stuck in "loading" forever. The setState below is
+    // idempotent and React 18+ silently ignores updates after a real unmount,
+    // so the no-cancellation form is correct and matches `useAppHydration`'s
+    // pattern at src/hooks/app/useAppHydration.ts.
     window.electron.app
       .boot()
       .then((result) => {
-        if (cancelled) return;
         setState({ result, error: null, settled: true });
       })
       .catch((error) => {
-        if (cancelled) return;
         const wrapped = error instanceof Error ? error : new Error(String(error));
         logError("Failed to fetch boot payload", wrapped);
         setState({ result: null, error: wrapped, settled: true });
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   return state;

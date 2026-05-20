@@ -44,27 +44,48 @@ export function usePanelStoreBootstrap(terminalConfig?: TerminalConfig | null) {
   }, []);
 
   useEffect(() => {
-    if (!isElectronAvailable() || !terminalConfig || hasHydratedConfig.current) return;
-    hasHydratedConfig.current = true;
+    if (!isElectronAvailable() || hasHydratedConfig.current) return;
 
-    const resourceEnabled = terminalConfig.resourceMonitoringEnabled === true;
-    useResourceMonitoringStore.getState().setEnabled(resourceEnabled);
-    if (resourceEnabled) {
-      window.electron.terminalConfig.setResourceMonitoring(true);
+    const applyConfig = (config: TerminalConfig) => {
+      const resourceEnabled = config.resourceMonitoringEnabled === true;
+      useResourceMonitoringStore.getState().setEnabled(resourceEnabled);
+      if (resourceEnabled) {
+        window.electron.terminalConfig.setResourceMonitoring(true);
+      }
+      // Memory leak detection defaults to on when resource monitoring is on
+      const leakEnabled = config.memoryLeakDetectionEnabled ?? resourceEnabled;
+      useMemoryLeakConfigStore.getState().setEnabled(leakEnabled);
+      useMemoryLeakConfigStore
+        .getState()
+        .setAutoRestartThresholdMb(
+          config.memoryLeakAutoRestartThresholdMb ?? DEFAULT_AUTO_RESTART_THRESHOLD_MB
+        );
+      useCachedProjectViewsStore.getState().setCachedProjectViews(config.cachedProjectViews ?? 1);
+    };
+
+    if (terminalConfig) {
+      hasHydratedConfig.current = true;
+      applyConfig(terminalConfig);
+      return;
     }
 
-    // Memory leak detection defaults to on when resource monitoring is on
-    const leakEnabled = terminalConfig.memoryLeakDetectionEnabled ?? resourceEnabled;
-    useMemoryLeakConfigStore.getState().setEnabled(leakEnabled);
-    useMemoryLeakConfigStore
-      .getState()
-      .setAutoRestartThresholdMb(
-        terminalConfig.memoryLeakAutoRestartThresholdMb ?? DEFAULT_AUTO_RESTART_THRESHOLD_MB
-      );
+    // Fallback when the boot payload didn't include terminalConfig (boot IPC
+    // failed). The previous fan-out path always fetched terminal-config
+    // independently, so resource monitoring/leak detection defaults must not
+    // silently regress on that error path.
+    let cancelled = false;
+    window.electron.terminalConfig
+      .get()
+      .then((config) => {
+        if (cancelled || hasHydratedConfig.current) return;
+        hasHydratedConfig.current = true;
+        applyConfig(config);
+      })
+      .catch(() => {});
 
-    useCachedProjectViewsStore
-      .getState()
-      .setCachedProjectViews(terminalConfig.cachedProjectViews ?? 1);
+    return () => {
+      cancelled = true;
+    };
   }, [terminalConfig]);
 
   useMemoryLeakDetection(leakDetectionEnabled, autoRestartThresholdMb);
