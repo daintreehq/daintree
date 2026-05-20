@@ -428,6 +428,11 @@ export class TerminalResizeController {
       const current = this.deps.getInstance(id);
       if (current) {
         current.resizeDebounceTimer = undefined;
+        // Mirror the applyResize guard: if a new lock landed between the
+        // debounce schedule and fire, a fresh layout transition is in flight
+        // and we must not write mid-transition. The lock release path will
+        // requeue via batchResize when it ends.
+        if (this.isResizeLocked(id)) return;
         this.deps.dataBuffer.flushForTerminal(id);
         this.deps.dataBuffer.resetForTerminal(id);
         this.resizeTerminal(current, cols, rows);

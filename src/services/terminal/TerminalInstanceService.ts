@@ -693,8 +693,14 @@ class TerminalInstanceService {
       for (const id of panelIds) {
         if (!this.instances.has(id)) continue;
         this.resizeController.lockResize(id, false);
-        this.resizeController.fit(id);
       }
+      // ResizeObserver doesn't retroactively fire when a lock releases, so a
+      // corrective pass is required to pick up the post-transition geometry.
+      // batchResize runs the read-all / write-all pass in a single task —
+      // safe to call inline since locks above release synchronously (#8597).
+      // The grid hook (useContentGridContext) also schedules a batch ~50ms
+      // later when grid deps change; the resize() dedup guard absorbs that.
+      this.batchResize(panelIds);
     }, durationMs);
   }
 
@@ -1427,6 +1433,55 @@ class TerminalInstanceService {
     options: { immediate?: boolean } = {}
   ): { cols: number; rows: number } | null {
     return this.resizeController.resize(id, width, height, options);
+  }
+
+  /**
+   * Resize a set of panels in a single read-all / write-all pass (#8597).
+   *
+   * The previous grid-fit batch chained one `fit()` per requestAnimationFrame,
+   * which (a) spread the visual settle across N frames and (b) interleaved
+   * `fitAddon.fit()`'s `getComputedStyle` read with the per-panel xterm write
+   * for every panel — classic layout thrash. Here we phase the work: phase 1
+   * reads `getBoundingClientRect()` for every eligible panel up front (cheap
+   * thanks to per-panel `contain: layout style`), phase 2 calls
+   * `resizeController.resize()` for each collected rect. `resize()` computes
+   * cols/rows from cached cell metrics without touching the DOM, so the write
+   * phase performs no further layout reads. The whole pass completes in a
+   * single task.
+   *
+   * Eligibility guards mirror the per-panel checks the old chained-fit loop
+   * relied on: instance must exist, host element must be connected and
+   * visible (xterm's `fit()` path checks `checkVisibility()`, but `resize()`
+   * does not, so we apply it here), and the panel must not be resize-locked.
+   * Caller is responsible for the `isDragging` guard since the React ref
+   * holding that state is owned by the grid hook.
+   */
+  batchResize(ids: string[]): void {
+    if (ids.length === 0) return;
+
+    type Pending = { id: string; width: number; height: number };
+    const seen = new Set<string>();
+    const pending: Pending[] = [];
+
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+
+      const managed = this.instances.get(id);
+      if (!managed) continue;
+      if (!managed.hostElement.isConnected) continue;
+      if (!managed.hostElement.checkVisibility()) continue;
+      if (this.resizeController.isResizeLocked(id)) continue;
+
+      const rect = managed.hostElement.getBoundingClientRect();
+      if (rect.width < 50 || rect.height < 50) continue;
+
+      pending.push({ id, width: rect.width, height: rect.height });
+    }
+
+    for (const { id, width, height } of pending) {
+      this.resizeController.resize(id, width, height);
+    }
   }
 
   scrollToBottom(id: string): void {

@@ -635,47 +635,20 @@ export function useContentGridContext({
         GRID_TRANSITION_DURATION_MS
       );
     }
-    const cancelRef = { cancelled: false };
     const timeoutId = window.setTimeout(() => {
       if (isDraggingRef.current) return;
-      let index = 0;
-      const processNext = () => {
-        if (cancelRef.cancelled || index >= ids.length) return;
-        if (isDraggingRef.current) return;
-        const id = ids[index++]!;
-        const managed = terminalInstanceService.get(id);
-        if (managed?.hostElement.isConnected) {
-          terminalInstanceService.fit(id);
-        }
-        requestAnimationFrame(processNext);
-      };
-      processNext();
+      terminalInstanceService.batchResize(ids);
     }, GRID_FIT_DELAY_MS);
     return () => {
-      cancelRef.cancelled = true;
       clearTimeout(timeoutId);
     };
   }, [isFleetScopeRender, fleetPanels, fleetGridCols, layoutConfig.strategy]);
 
-  const startBatchFit = useEffectEvent((cancelRef: { cancelled: boolean }) => {
+  const startBatchFit = useEffectEvent(() => {
     const ids = gridTerminals.map((t) => t.id);
     return window.setTimeout(() => {
       if (isDraggingRef.current) return;
-
-      let index = 0;
-      const processNext = () => {
-        if (cancelRef.cancelled || index >= ids.length) return;
-        if (isDraggingRef.current) return;
-
-        const id = ids[index++]!;
-        const managed = terminalInstanceService.get(id);
-
-        if (managed?.hostElement.isConnected) {
-          terminalInstanceService.fit(id);
-        }
-        requestAnimationFrame(processNext);
-      };
-      processNext();
+      terminalInstanceService.batchResize(ids);
     }, GRID_FIT_DELAY_MS);
   });
   const prevGridColsRef = useRef(gridCols);
@@ -698,11 +671,9 @@ export function useContentGridContext({
       }
     }
 
-    const cancelRef = { cancelled: false };
-    const timeoutId = startBatchFit(cancelRef);
+    const timeoutId = startBatchFit();
 
     return () => {
-      cancelRef.cancelled = true;
       clearTimeout(timeoutId);
     };
   }, [gridCols, panelIds, isProjectSwitching, layoutConfig.strategy, showPlaceholder]);
