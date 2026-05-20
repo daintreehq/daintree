@@ -201,6 +201,31 @@ describe("useCrashRecoveryGate", () => {
     expect(result.current.state.status).toBe("none");
   });
 
+  it("surfaces the dialog instead of silent-restoring when hasBackup is false", async () => {
+    const resolve = vi.fn(async () => {});
+    installElectronStub({ resolve });
+
+    const { result } = renderHook(() =>
+      useCrashRecoveryGate(
+        makeBoot({
+          settled: true,
+          result: makeBootResult({
+            crashPending: { ...mockCrash, hasBackup: false },
+            crashConfig: { autoRestoreOnCrash: true },
+          }),
+        })
+      )
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(result.current.state.status).toBe("pending");
+  });
+
   it("auto-restores with empty panelIds when no panels available", async () => {
     const resolve = vi.fn(async () => {});
     installElectronStub({ resolve });

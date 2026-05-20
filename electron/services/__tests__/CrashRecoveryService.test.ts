@@ -874,6 +874,12 @@ describe("CrashRecoveryService", () => {
       expect(svc.getConfig().autoRestoreOnCrash).toBe(true);
     });
 
+    it("defaults to true when stored value is undefined", () => {
+      storeMock.get.mockReturnValue(undefined);
+      const svc = makeService();
+      expect(svc.getConfig().autoRestoreOnCrash).toBe(true);
+    });
+
     it("setConfig persists to store", () => {
       storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
       const svc = makeService();
@@ -881,6 +887,17 @@ describe("CrashRecoveryService", () => {
 
       expect(result.autoRestoreOnCrash).toBe(true);
       expect(storeMock.set).toHaveBeenCalledWith("crashRecovery", { autoRestoreOnCrash: true });
+    });
+
+    it("setConfig ignores non-boolean autoRestoreOnCrash so an opt-out survives a malformed patch", () => {
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+      const svc = makeService();
+      const result = svc.setConfig({
+        autoRestoreOnCrash: undefined as unknown as boolean,
+      });
+
+      expect(result.autoRestoreOnCrash).toBe(false);
+      expect(storeMock.set).toHaveBeenCalledWith("crashRecovery", { autoRestoreOnCrash: false });
     });
   });
 
