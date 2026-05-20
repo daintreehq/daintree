@@ -47,7 +47,13 @@ function ensureLatin400Preload(href: string) {
 ensureLatin400Preload(latin400Woff2Url);
 
 async function bootstrap() {
-  await initRendererSentry();
+  // Fire-and-forget — `Sentry.init` runs synchronously inside, then the
+  // consent snapshot hydrates as a detached IPC continuation. Awaiting
+  // here would block the first React render on a renderer→main round-trip
+  // (#8632); the SDK is ready for `captureException` the moment this
+  // call returns, and `bootstrap().catch()` below has its own dynamic
+  // import fallback in case this throws before init.
+  initRendererSentry();
 
   cleanupGlobalErrorHandlers = registerRendererGlobalErrorHandlers();
 

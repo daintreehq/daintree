@@ -17,6 +17,14 @@ vi.mock("@sentry/electron/renderer", () => ({
 
 type ConsentPayload = { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
 
+// `initRendererSentry` runs `Sentry.init` synchronously and detaches the
+// consent IPC hydration as a `.then()` continuation, so callers (bootstrap)
+// don't block on the round-trip. Tests that assert post-hydration state must
+// flush pending microtasks first.
+async function flushMicrotasks(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 0));
+}
+
 describe("rendererSentry", () => {
   let consentListener: ((payload: ConsentPayload) => void) | undefined;
   let getConsentState: ReturnType<typeof vi.fn>;
@@ -138,20 +146,64 @@ describe("rendererSentry", () => {
     );
 
     const mod = await import("../rendererSentry");
-    const initPromise = mod.initRendererSentry();
+    mod.initRendererSentry();
 
-    // Broadcast fires while snapshot is still pending
-    await Promise.resolve();
+    // The consent listener is registered synchronously inside init, so the
+    // broadcast lands on the hydration-aware subscription (which sets
+    // `liveUpdateReceived = true`) before the snapshot resolves.
     consentListener?.({ level: "off", hasSeenPrompt: true });
 
-    // Now the stale snapshot resolves
+    // Now the stale snapshot resolves; the post-hydration `.then` must
+    // observe `liveUpdateReceived` and refuse to overwrite the fresher
+    // broadcast value.
     resolveSnapshot({ level: "errors", hasSeenPrompt: true });
-    await initPromise;
+    await flushMicrotasks();
 
     const opts = sentryInit.mock.calls[0]![0];
     // The live broadcast must have won; beforeSend must still drop events.
     expect(opts.beforeSend!({ message: "x" })).toBeNull();
     expect(mod.getRendererSentryConsent()).toEqual({ level: "off", hasSeenPrompt: true });
+  });
+
+  it("calls Sentry.init synchronously before the consent IPC resolves (#8632)", async () => {
+    // The first React render must not be blocked on the renderer→main
+    // round-trip for consent state — Sentry.init runs up front, consent
+    // hydrates as a detached continuation.
+    let resolveSnapshot: (v: ConsentPayload) => void = () => {};
+    getConsentState.mockImplementationOnce(
+      () => new Promise<ConsentPayload>((r) => (resolveSnapshot = r))
+    );
+
+    const mod = await import("../rendererSentry");
+    mod.initRendererSentry();
+
+    // Sentry.init must have been called before the IPC promise resolves.
+    expect(sentryInit).toHaveBeenCalledTimes(1);
+
+    // Until the snapshot resolves the gate stays closed (consent defaults
+    // to `off`/`!hasSeenPrompt`), so events are dropped even though the
+    // SDK is fully initialized.
+    const opts = sentryInit.mock.calls[0]![0];
+    expect(opts.beforeSend!({ message: "pre-hydrate" })).toBeNull();
+
+    resolveSnapshot({ level: "full", hasSeenPrompt: true });
+    await flushMicrotasks();
+
+    expect(opts.beforeSend!({ message: "post-hydrate" })).toEqual({ message: "post-hydrate" });
+  });
+
+  it("consent IPC rejection does not produce an unhandled rejection", async () => {
+    getConsentState.mockRejectedValueOnce(new Error("IPC down"));
+
+    const mod = await import("../rendererSentry");
+    mod.initRendererSentry();
+    await flushMicrotasks();
+
+    // Sentry.init ran regardless; gate stays closed because consent never
+    // hydrated.
+    expect(sentryInit).toHaveBeenCalledTimes(1);
+    const opts = sentryInit.mock.calls[0]![0];
+    expect(opts.beforeSend!({ message: "x" })).toBeNull();
   });
 
   it("captureRendererException returns the Sentry event ID when capture succeeds", async () => {
