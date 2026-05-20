@@ -68,12 +68,12 @@ vi.mock("@/components/ui/tooltip", () => ({
 import { ContentPanel } from "../ContentPanel";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
-function renderPanel(id: string) {
+function renderPanel(id: string, kind: "terminal" | "browser" | "dev-preview" = "terminal") {
   return render(
     <ContentPanel
       id={id}
       title={`Panel ${id}`}
-      kind="dev-preview"
+      kind={kind}
       isFocused={false}
       onFocus={() => {}}
       onClose={() => {}}
@@ -119,6 +119,22 @@ describe("ContentPanel fleet-dim unmatched panes (#8696)", () => {
     const panel = container.querySelector('[data-panel-id="t-1"]');
     expect(panel?.getAttribute("data-fleet-dimmed")).toBeNull();
     expect(panel?.className.includes("fleet-pane-dimmed")).toBe(false);
+  });
+
+  it("never dims non-terminal panes (browser, dev-preview)", () => {
+    // Browser and dev-preview panes are never arm-eligible, so dimming
+    // them during a fleet preview would imply they could have been armed.
+    const { container: browser } = renderPanel("b-1", "browser");
+    const { container: devPreview } = renderPanel("d-1", "dev-preview");
+    act(() => {
+      useFleetArmingStore.setState({ previewArmedIds: new Set(["t-2"]) });
+    });
+    expect(
+      browser.querySelector('[data-panel-id="b-1"]')?.getAttribute("data-fleet-dimmed")
+    ).toBeNull();
+    expect(
+      devPreview.querySelector('[data-panel-id="d-1"]')?.getAttribute("data-fleet-dimmed")
+    ).toBeNull();
   });
 
   it("returns to undimmed when the preview clears", () => {
