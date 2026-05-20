@@ -42,6 +42,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
 
   const setFocused = usePanelStore((state) => state.setFocused);
   const setActiveTab = usePanelStore((state) => state.setActiveTab);
+  const stampLastActive = usePanelStore((state) => state.stampLastActive);
   const setMaximizedId = usePanelStore((state) => state.setMaximizedId);
   const trashPanel = usePanelStore((state) => state.trashPanel);
   const addPanel = usePanelStore((state) => state.addPanel);
@@ -187,6 +188,13 @@ export const GridTabGroup = React.memo(function GridTabGroup({
       // This prevents single-click from activating focus/maximize mode
       if (isGroupFocused) {
         setFocused(tabId);
+      } else {
+        // The focus path stamps lastActiveAt via setFocused. When the group is
+        // unfocused, tab-switching is still user intent to view this panel —
+        // stamp explicitly so the restore predicate (issue #8703) sees the
+        // last-clicked tab as the worktree's recent panel even if the user
+        // quits before clicking the body to claim focus.
+        stampLastActive(tabId);
       }
       // If this group is maximized, update maximizedId to the new tab
       // so "Exit Focus" works correctly
@@ -194,7 +202,15 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         setMaximizedId(tabId);
       }
     },
-    [group.id, setActiveTab, setFocused, isGroupFocused, isMaximized, setMaximizedId]
+    [
+      group.id,
+      setActiveTab,
+      setFocused,
+      stampLastActive,
+      isGroupFocused,
+      isMaximized,
+      setMaximizedId,
+    ]
   );
 
   // Handle tab rename

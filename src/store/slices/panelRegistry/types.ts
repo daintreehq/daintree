@@ -101,6 +101,13 @@ export interface PanelRegistrySlice {
   ) => void;
   updateLastCommand: (id: string, lastCommand: string) => void;
   updateVisibility: (id: string, isVisible: boolean) => void;
+  /**
+   * Stamp `lastActiveAt = Date.now()` on the panel. Called from user-intent
+   * focus paths (`setFocused`, `activateTerminal`, `openDockTerminal`) so
+   * panel restore can promote the most-recently-active panel per worktree
+   * to the priority tier. Idempotent on missing panels.
+   */
+  stampLastActive: (id: string) => void;
   getTerminal: (id: string) => TerminalInstance | undefined;
 
   moveTerminalToDock: (id: string) => void;

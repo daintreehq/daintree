@@ -42,6 +42,7 @@ export const createCorePanelActions = (
   | "updateActivity"
   | "updateLastCommand"
   | "updateVisibility"
+  | "stampLastActive"
   | "getTerminal"
   | "moveTerminalToDock"
   | "moveTerminalToGrid"
@@ -299,6 +300,19 @@ export const createCorePanelActions = (
           [id]: { ...terminal, isVisible, runtimeStatus },
         },
       };
+    });
+  },
+
+  stampLastActive: (id) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, lastActiveAt: Date.now() },
+      };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
     });
   },
 

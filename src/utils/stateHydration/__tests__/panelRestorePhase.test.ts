@@ -418,6 +418,138 @@ describe("restorePanelsPhase — withHydrationBatch wrapper", () => {
   });
 });
 
+describe("restorePanelsPhase — lastActiveAt promotion (issue #8703)", () => {
+  // Priority tasks restore sequentially before background tasks (both phases
+  // iterate in saved order within their filter). The addPanel call order is
+  // the observable that pins which panels landed in which phase.
+
+  it("promotes the highest-lastActiveAt panel per non-active worktree to the priority tier", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("b1", { worktreeId: "wB", lastActiveAt: 50 }),
+        panel("a1", { worktreeId: "wA", lastActiveAt: 100 }),
+        panel("b2", { worktreeId: "wB", lastActiveAt: 200 }),
+      ],
+      ctx
+    );
+    const ids = ctx.addPanel.mock.calls.map((c) => (c[0] as { existingId?: string }).existingId);
+    // Priority (saved order): a1 (active), b2 (max lastActiveAt in wB).
+    // Background: b1 (lower lastActiveAt in wB).
+    expect(ids).toEqual(["a1", "b2", "b1"]);
+  });
+
+  it("does not promote any non-active panels when none have lastActiveAt (legacy snapshot)", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("b1", { worktreeId: "wB" }),
+        panel("a1", { worktreeId: "wA" }),
+        panel("b2", { worktreeId: "wB" }),
+      ],
+      ctx
+    );
+    const ids = ctx.addPanel.mock.calls.map((c) => (c[0] as { existingId?: string }).existingId);
+    // Only the active worktree's panel is priority; b1/b2 go to background.
+    expect(ids).toEqual(["a1", "b1", "b2"]);
+  });
+
+  it("treats lastActiveAt <= 0 as 'no stamp' and does not promote", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("b1", { worktreeId: "wB", lastActiveAt: 0 }),
+        panel("a1", { worktreeId: "wA" }),
+        panel("b2", { worktreeId: "wB", lastActiveAt: 0 }),
+      ],
+      ctx
+    );
+    const ids = ctx.addPanel.mock.calls.map((c) => (c[0] as { existingId?: string }).existingId);
+    // Same shape as the legacy-snapshot case — zero stamps do not promote.
+    expect(ids).toEqual(["a1", "b1", "b2"]);
+  });
+
+  it("promotes both panels when two share the same max non-zero lastActiveAt (tie)", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("b1", { worktreeId: "wB", lastActiveAt: 100 }),
+        panel("a1", { worktreeId: "wA" }),
+        panel("b2", { worktreeId: "wB", lastActiveAt: 100 }),
+      ],
+      ctx
+    );
+    const ids = ctx.addPanel.mock.calls.map((c) => (c[0] as { existingId?: string }).existingId);
+    // All three promote into the priority tier in saved order — b1 lands
+    // before a1 because the priority filter preserves savedIndex.
+    expect(ids).toEqual(["b1", "a1", "b2"]);
+  });
+
+  it("does not promote panels without a worktreeId even with a real lastActiveAt", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("nw", backend("nw"));
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    await restorePanelsPhase(
+      [
+        panel("nw", { worktreeId: undefined, lastActiveAt: 9999 }),
+        panel("a1", { worktreeId: "wA" }),
+      ],
+      ctx
+    );
+    const ids = ctx.addPanel.mock.calls.map((c) => (c[0] as { existingId?: string }).existingId);
+    // a1 priority, nw background — nw is excluded from the per-worktree max map.
+    expect(ids).toEqual(["a1", "nw"]);
+  });
+
+  it("rejects NaN and ±Infinity lastActiveAt — corrupted values never seed the max map", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("b1", { worktreeId: "wB", lastActiveAt: Number.NaN }),
+        panel("a1", { worktreeId: "wA" }),
+        panel("b2", { worktreeId: "wB", lastActiveAt: Number.POSITIVE_INFINITY }),
+      ],
+      ctx
+    );
+    const ids = ctx.addPanel.mock.calls.map((c) => (c[0] as { existingId?: string }).existingId);
+    // Neither NaN nor Infinity enters the map; both b1 and b2 stay background.
+    expect(ids).toEqual(["a1", "b1", "b2"]);
+  });
+
+  it("promotes the single panel in each non-active worktree when it has a real timestamp", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("c1", backend("c1"));
+    await restorePanelsPhase(
+      [
+        panel("b1", { worktreeId: "wB", lastActiveAt: 10 }),
+        panel("a1", { worktreeId: "wA" }),
+        panel("c1", { worktreeId: "wC", lastActiveAt: 20 }),
+      ],
+      ctx
+    );
+    const ids = ctx.addPanel.mock.calls.map((c) => (c[0] as { existingId?: string }).existingId);
+    // All three promote; saved-order placement is preserved in the priority filter.
+    expect(ids).toEqual(["b1", "a1", "c1"]);
+  });
+});
+
 describe("restorePanelsPhase — matched backend not re-appended as orphan", () => {
   it("matched backend terminals are removed from the map before orphan scan (no double restore)", async () => {
     // Pins backendTerminalMap.delete() inside the saved-panels execute() — if the

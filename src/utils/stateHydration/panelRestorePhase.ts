@@ -93,6 +93,27 @@ export async function restorePanelsPhase(
   const restoreTasks: TerminalRestoreTask[] = [];
 
   if (savedPanels && savedPanels.length > 0) {
+    // Build a single-pass map of worktreeId → highest lastActiveAt across saved
+    // panels. The restore predicate uses this to promote each non-active
+    // worktree's most-recently-focused panel to the priority sequential tier,
+    // matching browser tab-restore behavior. Panels without a worktreeId are
+    // excluded — they never participate in per-worktree promotion. Old
+    // snapshots (no lastActiveAt stamp) leave a worktree with no entry in the
+    // map, which short-circuits promotion below via `!== undefined`.
+    // `Number.isFinite` rejects NaN and ±Infinity so corrupted persisted
+    // values never seed the map with values that would silently mis-promote.
+    const maxLastActiveAtByWorktree = new Map<string, number>();
+    for (const saved of savedPanels) {
+      if (saved === undefined) continue;
+      if (saved.worktreeId === undefined) continue;
+      if (!Number.isFinite(saved.lastActiveAt) || (saved.lastActiveAt ?? 0) <= 0) continue;
+      const ts = saved.lastActiveAt as number;
+      const current = maxLastActiveAtByWorktree.get(saved.worktreeId);
+      if (current === undefined || ts > current) {
+        maxLastActiveAtByWorktree.set(saved.worktreeId, ts);
+      }
+    }
+
     const panelTasks: PanelRestoreTaskEntry[] = [];
     const restoredIdsByIndex = new Map<number, string>();
 
@@ -106,7 +127,15 @@ export async function restorePanelsPhase(
 
       const savedWorktreeId = saved.worktreeId ?? null;
       const isActiveWorktree = savedWorktreeId === activeWorktreeId;
-      const priority = isActiveWorktree ? 0 : 1;
+      // A non-active worktree's last-focused panel earns priority restore so
+      // each worktree's last active panel reactivates quickly on return.
+      const isMostRecentInOtherWorktree =
+        !isActiveWorktree &&
+        saved.worktreeId !== undefined &&
+        Number.isFinite(saved.lastActiveAt) &&
+        (saved.lastActiveAt ?? 0) > 0 &&
+        saved.lastActiveAt === maxLastActiveAtByWorktree.get(saved.worktreeId);
+      const priority = isActiveWorktree || isMostRecentInOtherWorktree ? 0 : 1;
 
       // Determine isPty at task-build time so we can partition tasks
       // for concurrent (non-PTY) vs staggered (PTY) execution.

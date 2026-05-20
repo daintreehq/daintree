@@ -151,7 +151,8 @@ export interface TerminalFocusSlice {
 export const createTerminalFocusSlice =
   (
     getTerminals: () => TerminalInstance[],
-    getActiveWorktreeId: () => string | null
+    getActiveWorktreeId: () => string | null,
+    stampLastActive: (id: string) => void
   ): StateCreator<TerminalFocusSlice, [], [], TerminalFocusSlice> =>
   (set, get) => {
     let pingTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -190,6 +191,9 @@ export const createTerminalFocusSlice =
               activeDockTerminalId: null,
               ...(focusActuallyChanged && { previousFocusedId }),
             });
+          }
+          if (terminal) {
+            stampLastActive(id);
           }
           // Wake-on-focus: sync terminal state from backend when focused.
           // Skip wake for non-PTY panels - they don't have backend PTY processes.
@@ -423,6 +427,7 @@ export const createTerminalFocusSlice =
           focusedId: id,
           ...(focusActuallyChanged && { previousFocusedId }),
         });
+        stampLastActive(id);
       },
 
       closeDockTerminal: () => set({ activeDockTerminalId: null }),
@@ -464,6 +469,7 @@ export const createTerminalFocusSlice =
             ...(focusActuallyChanged && { previousFocusedId }),
           });
         }
+        stampLastActive(id);
       },
 
       focusAlternate: () => {
