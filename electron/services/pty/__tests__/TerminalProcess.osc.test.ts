@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
+import { ActivityMonitor } from "../../ActivityMonitor.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 
 let ptyWriteMock: ReturnType<typeof vi.fn<(data: string) => void>>;
@@ -281,5 +282,106 @@ describe("TerminalProcess OSC color query responder", () => {
 
     // OSC 10 was handled → stripped. OSC 11 failed → left in the stream.
     expect(emitDataMock).toHaveBeenCalledWith("t1", "\x1b]11;?\x07");
+  });
+});
+
+describe("TerminalProcess OSC 9;4 progress signal wiring (Issue #8701)", () => {
+  // Launched agents start in "busy" from startPolling(), so we can't observe
+  // OSC working as a state transition without driving the monitor to idle first
+  // (slow path through boot detection + 8s debounce). Instead, spy on the
+  // monitor's OSC handlers and assert they're invoked — this directly
+  // verifies the parser-to-monitor wiring in TerminalProcess.handlePtyData.
+  let workingSpy: ReturnType<typeof vi.spyOn>;
+  let idleSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    emitDataMock = vi.fn<(id: string, data: string | Uint8Array) => void>();
+    ptyOnDataCallback = null;
+    workingSpy = vi.spyOn(ActivityMonitor.prototype, "onOscProgressWorking");
+    idleSpy = vi.spyOn(ActivityMonitor.prototype, "onOscProgressIdle");
+    // vi.spyOn may return the same spy across tests when the prop has been
+    // spied before; clear history explicitly so each test starts fresh.
+    workingSpy.mockClear();
+    idleSpy.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("forwards OSC 9;4 state=1 to the activity monitor as a working signal", () => {
+    createAgentTerminal("claude");
+    expect(ptyOnDataCallback).not.toBeNull();
+    workingSpy.mockClear();
+
+    ptyOnDataCallback!("\x1b]9;4;1;50\x07");
+
+    expect(workingSpy).toHaveBeenCalledTimes(1);
+    expect(idleSpy).not.toHaveBeenCalled();
+  });
+
+  it("forwards OSC 9;4 state=3 (indeterminate) as a working signal", () => {
+    createAgentTerminal("claude");
+    workingSpy.mockClear();
+
+    ptyOnDataCallback!("\x1b]9;4;3\x07");
+
+    expect(workingSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards OSC 9;4 state=0 as an idle signal", () => {
+    createAgentTerminal("claude");
+    idleSpy.mockClear();
+
+    ptyOnDataCallback!("\x1b]9;4;0\x07");
+
+    expect(idleSpy).toHaveBeenCalledTimes(1);
+    expect(workingSpy).not.toHaveBeenCalled();
+  });
+
+  it("recognizes OSC 9;4 sequences split across two PTY chunks", () => {
+    createAgentTerminal("claude");
+    workingSpy.mockClear();
+
+    // First chunk has only the prefix — must NOT fire on its own.
+    ptyOnDataCallback!("\x1b]9;4;1;5");
+    expect(workingSpy).not.toHaveBeenCalled();
+
+    // Second chunk completes the sequence.
+    ptyOnDataCallback!("0\x07");
+    expect(workingSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire OSC handlers when data has no OSC 9;4 sequence", () => {
+    createAgentTerminal("claude");
+    workingSpy.mockClear();
+    idleSpy.mockClear();
+
+    ptyOnDataCallback!("just some normal output\n");
+    ptyOnDataCallback!("\x1b]0;Window Title\x07"); // OSC 0 — unrelated
+    ptyOnDataCallback!("\x1b[31mred\x1b[0m"); // SGR — unrelated
+
+    expect(workingSpy).not.toHaveBeenCalled();
+    expect(idleSpy).not.toHaveBeenCalled();
+  });
+
+  it("forwards OSC 9;4 bytes to the renderer (xterm.js renders the progress bar)", () => {
+    // Confirm the OSC 9;4 stays in the renderer-bound emit. Stripping happens
+    // downstream inside ActivityMonitor's byte-volume gate via IdleSequenceFilter,
+    // not in TerminalProcess.
+    createAgentTerminal("claude");
+    const payload = "\x1b]9;4;1;50\x07";
+    ptyOnDataCallback!(payload);
+    expect(emitDataMock).toHaveBeenCalledWith("t1", payload);
+  });
+
+  it("does not throw for plain (non-agent) terminals — the parser feeds but the callback no-ops", () => {
+    // Plain terminals have no activity monitor at spawn (only after promotion).
+    // The optional-chaining guard in TerminalProcess.osc94Parser callbacks
+    // makes the OSC parse a safe no-op.
+    createPlainTerminal();
+    expect(() => ptyOnDataCallback!("\x1b]9;4;1;42\x07")).not.toThrow();
+    expect(workingSpy).not.toHaveBeenCalled();
   });
 });
