@@ -10,6 +10,11 @@ export interface PackagedLaunchResult {
   metrics: Record<string, number>;
   ndjsonPath: string;
   notes?: string;
+  // True only when the headline durationMs came from a wall-clock fallback
+  // (RENDERER_READY mark missing entirely). An RR-fallback (FI missing but
+  // RR present) is annotated via `notes` but the marks are still aggregatable
+  // and `degraded` stays false.
+  degraded?: boolean;
 }
 
 interface MarkRecord {
@@ -138,9 +143,10 @@ async function waitForNdjsonMark(
   return null;
 }
 
-function parseBootDuration(ndjsonPath: string): {
+export function parseBootDuration(ndjsonPath: string): {
   durationMs: number;
   metrics: Record<string, number>;
+  degraded?: string;
 } {
   if (!fs.existsSync(ndjsonPath)) {
     return { durationMs: -1, metrics: {} };
@@ -160,16 +166,20 @@ function parseBootDuration(ndjsonPath: string): {
   }
 
   const bootStart = marks.get(PERF_MARKS.APP_BOOT_START);
-  const rendererReady = marks.get(PERF_MARKS.RENDERER_READY);
-
-  if (!bootStart || !rendererReady) {
+  if (!bootStart) {
     return { durationMs: -1, metrics: {} };
   }
 
-  const durationMs = rendererReady.elapsedMs - bootStart.elapsedMs;
+  // RENDERER_FIRST_INTERACTIVE fires post-hydration after 2x rAF + the
+  // notifyFirstInteractive IPC round-trip. That is what users perceive as
+  // "interactive". RENDERER_READY only signals did-finish-load (DOM ready,
+  // pre-hydration) and is reserved as a degraded fallback. See #8612.
+  const firstInteractive = marks.get(PERF_MARKS.RENDERER_FIRST_INTERACTIVE);
+  const rendererReady = marks.get(PERF_MARKS.RENDERER_READY);
+
   const metrics: Record<string, number> = {};
 
-  // Extract key phase durations
+  // Extract key phase durations regardless of which terminal mark we use.
   const serviceInitStart = marks.get(PERF_MARKS.SERVICE_INIT_START);
   const serviceInitComplete = marks.get(PERF_MARKS.SERVICE_INIT_COMPLETE);
   if (serviceInitStart && serviceInitComplete) {
@@ -182,7 +192,24 @@ function parseBootDuration(ndjsonPath: string): {
     metrics.hydrateMs = hydrateComplete.elapsedMs - hydrateStart.elapsedMs;
   }
 
-  return { durationMs, metrics };
+  if (rendererReady) {
+    metrics.rendererReadyMs = rendererReady.elapsedMs - bootStart.elapsedMs;
+  }
+
+  if (firstInteractive) {
+    return { durationMs: firstInteractive.elapsedMs - bootStart.elapsedMs, metrics };
+  }
+
+  if (rendererReady) {
+    return {
+      durationMs: rendererReady.elapsedMs - bootStart.elapsedMs,
+      metrics,
+      degraded:
+        "RENDERER_FIRST_INTERACTIVE mark not captured — falling back to RENDERER_READY (pre-hydration)",
+    };
+  }
+
+  return { durationMs: -1, metrics };
 }
 
 export async function launchPackagedAndMeasure(
@@ -241,10 +268,15 @@ export async function launchPackagedAndMeasure(
 
     await waitForNdjsonMark(ndjsonPath, PERF_MARKS.RENDERER_READY, timeoutMs);
 
-    // Allow a brief settling period for any remaining marks to flush
-    await new Promise((r) => setTimeout(r, 500));
+    // After RENDERER_READY arrives, wait for RENDERER_FIRST_INTERACTIVE — the
+    // post-hydration interactive signal. It typically arrives within 100ms of
+    // RENDERER_READY (2x rAF + IPC round-trip) but CI runners under CPU
+    // contention can push it past 500ms, so a deterministic mark wait is
+    // safer than a fixed sleep. 5s is generous; if it doesn't arrive,
+    // parseBootDuration falls back to RENDERER_READY with a degraded note.
+    await waitForNdjsonMark(ndjsonPath, PERF_MARKS.RENDERER_FIRST_INTERACTIVE, 5_000);
 
-    const { durationMs, metrics } = parseBootDuration(ndjsonPath);
+    const { durationMs, metrics, degraded } = parseBootDuration(ndjsonPath);
     const wallClockMs = performance.now() - startMs;
 
     if (durationMs < 0) {
@@ -254,10 +286,11 @@ export async function launchPackagedAndMeasure(
         metrics,
         ndjsonPath,
         notes: "RENDERER_READY mark not captured — using wall-clock fallback",
+        degraded: true,
       };
     }
 
-    return { durationMs, metrics, ndjsonPath };
+    return { durationMs, metrics, ndjsonPath, notes: degraded };
   } finally {
     if (app) {
       try {

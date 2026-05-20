@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregate, type RunData } from "../lib/coldStartAggregate";
+import { aggregate, normalizeLoafSourceURL, type RunData } from "../lib/coldStartAggregate";
 import { PERF_MARKS } from "../../../shared/perf/marks";
 
 function makeRun(overrides: Partial<RunData>): RunData {
@@ -276,5 +276,159 @@ describe("cold-start aggregate", () => {
     // Degraded run's APP_BOOT_START is not visited for marks/osToAppBoot.
     expect(agg.osToAppBoot).toBeNull();
     expect(agg.marks[PERF_MARKS.RENDERER_READY]).toBeDefined();
+  });
+});
+
+describe("normalizeLoafSourceURL", () => {
+  it("strips 8-char lowercase hex Vite hash suffix before .js", () => {
+    expect(normalizeLoafSourceURL("app://./assets/vendor-xterm-BcD3kf9a.js")).toBe(
+      "app://./assets/vendor-xterm.js"
+    );
+    expect(normalizeLoafSourceURL("app://./assets/index-a1b2c3d4.js")).toBe(
+      "app://./assets/index.js"
+    );
+  });
+
+  it("strips hashes that include uppercase hex chars (case-insensitive)", () => {
+    expect(normalizeLoafSourceURL("app://./assets/vendor-react-ABCDEF12.js")).toBe(
+      "app://./assets/vendor-react.js"
+    );
+  });
+
+  it("strips hashes from .css chunks too", () => {
+    expect(normalizeLoafSourceURL("app://./assets/styles-deadbeef.css")).toBe(
+      "app://./assets/styles.css"
+    );
+  });
+
+  it("preserves query strings while stripping the hash", () => {
+    expect(normalizeLoafSourceURL("app://./assets/index-a1b2c3d4.js?v=1")).toBe(
+      "app://./assets/index.js?v=1"
+    );
+  });
+
+  it("does not modify URLs without a recognizable 8-char hash", () => {
+    // Short fake hash (3 chars) — does not match the 8-char pattern, passes through.
+    expect(normalizeLoafSourceURL("app://./assets/vendor-react-abc.js")).toBe(
+      "app://./assets/vendor-react-abc.js"
+    );
+    // No hash at all.
+    expect(normalizeLoafSourceURL("app://./assets/index.js")).toBe("app://./assets/index.js");
+    // Unknown sentinel.
+    expect(normalizeLoafSourceURL("<unknown>")).toBe("<unknown>");
+    // Empty string passes through.
+    expect(normalizeLoafSourceURL("")).toBe("");
+  });
+
+  it("only strips the trailing hash, not hash-like substrings elsewhere in the path", () => {
+    expect(normalizeLoafSourceURL("app://./assets/abcdef12/index.js")).toBe(
+      "app://./assets/abcdef12/index.js"
+    );
+  });
+});
+
+describe("LoAF aggregation with build-hash normalization", () => {
+  it("merges chunks from different builds with same logical name", () => {
+    const agg = aggregate([
+      makeRun({
+        marks: [
+          {
+            mark: "renderer_long_animation_frame",
+            timestamp: "t",
+            elapsedMs: 100,
+            meta: {
+              blockingDurationMs: 50,
+              topScripts: [{ sourceURL: "app://./assets/vendor-xterm-BcD3kf9a.js" }],
+            },
+          },
+          {
+            mark: "renderer_long_animation_frame",
+            timestamp: "t",
+            elapsedMs: 200,
+            meta: {
+              blockingDurationMs: 70,
+              topScripts: [{ sourceURL: "app://./assets/vendor-xterm-Ef5g6h7i.js" }],
+            },
+          },
+        ],
+      }),
+    ]);
+
+    expect(Object.keys(agg.loaf)).toEqual(["app://./assets/vendor-xterm.js"]);
+    expect(agg.loaf["app://./assets/vendor-xterm.js"].frames).toBe(2);
+    expect(agg.loaf["app://./assets/vendor-xterm.js"].totalBlockingMs).toBe(120);
+  });
+});
+
+describe("event_loop_lag aggregation", () => {
+  it("aggregates lagMs samples into samples/p50/p95/mean/max/total", () => {
+    const agg = aggregate([
+      makeRun({
+        marks: [
+          { mark: "event_loop_lag", timestamp: "t", elapsedMs: 6000, meta: { lagMs: 120 } },
+          { mark: "event_loop_lag", timestamp: "t", elapsedMs: 7000, meta: { lagMs: 250 } },
+          { mark: "event_loop_lag", timestamp: "t", elapsedMs: 8000, meta: { lagMs: 180 } },
+        ],
+      }),
+    ]);
+
+    expect(agg.eventLoopLag).not.toBeNull();
+    expect(agg.eventLoopLag!.samples).toBe(3);
+    expect(agg.eventLoopLag!.maxMs).toBe(250);
+    expect(agg.eventLoopLag!.totalAccumulatedMs).toBe(550);
+    expect(agg.eventLoopLag!.meanMs).toBeCloseTo(550 / 3, 3);
+  });
+
+  it("returns null eventLoopLag when no samples are present", () => {
+    const agg = aggregate([
+      makeRun({
+        marks: [
+          { mark: PERF_MARKS.APP_BOOT_START, timestamp: "t", elapsedMs: 0 },
+          { mark: PERF_MARKS.RENDERER_READY, timestamp: "t", elapsedMs: 500 },
+        ],
+      }),
+    ]);
+
+    expect(agg.eventLoopLag).toBeNull();
+  });
+
+  it("skips event_loop_lag records with malformed meta.lagMs", () => {
+    const agg = aggregate([
+      makeRun({
+        marks: [
+          { mark: "event_loop_lag", timestamp: "t", elapsedMs: 6000, meta: { lagMs: Number.NaN } },
+          {
+            mark: "event_loop_lag",
+            timestamp: "t",
+            elapsedMs: 7000,
+            meta: { lagMs: Number.POSITIVE_INFINITY },
+          },
+          { mark: "event_loop_lag", timestamp: "t", elapsedMs: 8000, meta: { lagMs: "200" } },
+          { mark: "event_loop_lag", timestamp: "t", elapsedMs: 9000, meta: {} },
+          { mark: "event_loop_lag", timestamp: "t", elapsedMs: 10000, meta: { lagMs: 150 } },
+          { mark: "event_loop_lag", timestamp: "t", elapsedMs: 11000, meta: { lagMs: -5 } },
+        ],
+      }),
+    ]);
+
+    expect(agg.eventLoopLag).not.toBeNull();
+    expect(agg.eventLoopLag!.samples).toBe(1);
+    expect(agg.eventLoopLag!.maxMs).toBe(150);
+  });
+
+  it("excludes event_loop_lag from the generic marks bucket", () => {
+    // Without the dedicated bucket, the generic markElapsed loop would record
+    // event_loop_lag.elapsedMs (since-boot timestamp) into agg.marks — which
+    // tells us nothing about lag severity. Confirm we suppress it.
+    const agg = aggregate([
+      makeRun({
+        marks: [
+          { mark: PERF_MARKS.APP_BOOT_START, timestamp: "t", elapsedMs: 0 },
+          { mark: "event_loop_lag", timestamp: "t", elapsedMs: 6000, meta: { lagMs: 150 } },
+        ],
+      }),
+    ]);
+
+    expect(agg.marks["event_loop_lag"]).toBeUndefined();
   });
 });
