@@ -513,6 +513,24 @@ describe("restorePanelsPhase — lastActiveAt promotion (issue #8703)", () => {
     expect(ids).toEqual(["a1", "nw"]);
   });
 
+  it("rejects NaN and ±Infinity lastActiveAt — corrupted values never seed the max map", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("b1", { worktreeId: "wB", lastActiveAt: Number.NaN }),
+        panel("a1", { worktreeId: "wA" }),
+        panel("b2", { worktreeId: "wB", lastActiveAt: Number.POSITIVE_INFINITY }),
+      ],
+      ctx
+    );
+    const ids = ctx.addPanel.mock.calls.map((c) => (c[0] as { existingId?: string }).existingId);
+    // Neither NaN nor Infinity enters the map; both b1 and b2 stay background.
+    expect(ids).toEqual(["a1", "b1", "b2"]);
+  });
+
   it("promotes the single panel in each non-active worktree when it has a real timestamp", async () => {
     const ctx = makeContext({ activeWorktreeId: "wA" });
     ctx.backendTerminalMap.set("b1", backend("b1"));

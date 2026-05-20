@@ -100,14 +100,17 @@ export async function restorePanelsPhase(
     // excluded — they never participate in per-worktree promotion. Old
     // snapshots (no lastActiveAt stamp) leave a worktree with no entry in the
     // map, which short-circuits promotion below via `!== undefined`.
+    // `Number.isFinite` rejects NaN and ±Infinity so corrupted persisted
+    // values never seed the map with values that would silently mis-promote.
     const maxLastActiveAtByWorktree = new Map<string, number>();
     for (const saved of savedPanels) {
       if (saved === undefined) continue;
       if (saved.worktreeId === undefined) continue;
-      if (saved.lastActiveAt === undefined || saved.lastActiveAt <= 0) continue;
+      if (!Number.isFinite(saved.lastActiveAt) || (saved.lastActiveAt ?? 0) <= 0) continue;
+      const ts = saved.lastActiveAt as number;
       const current = maxLastActiveAtByWorktree.get(saved.worktreeId);
-      if (current === undefined || saved.lastActiveAt > current) {
-        maxLastActiveAtByWorktree.set(saved.worktreeId, saved.lastActiveAt);
+      if (current === undefined || ts > current) {
+        maxLastActiveAtByWorktree.set(saved.worktreeId, ts);
       }
     }
 
@@ -129,8 +132,8 @@ export async function restorePanelsPhase(
       const isMostRecentInOtherWorktree =
         !isActiveWorktree &&
         saved.worktreeId !== undefined &&
-        saved.lastActiveAt !== undefined &&
-        saved.lastActiveAt > 0 &&
+        Number.isFinite(saved.lastActiveAt) &&
+        (saved.lastActiveAt ?? 0) > 0 &&
         saved.lastActiveAt === maxLastActiveAtByWorktree.get(saved.worktreeId);
       const priority = isActiveWorktree || isMostRecentInOtherWorktree ? 0 : 1;
 
