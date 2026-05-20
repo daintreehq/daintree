@@ -654,6 +654,227 @@ export default tseslint.config(
     rules: { "no-restricted-imports": "off" },
   },
 
+  // Block the legacy `typedHandle*` IPC registration helpers from new
+  // handler files. The codebase is migrating from typedHandle /
+  // typedHandleWithContext / typedHandleValidated / typedHandleWithContextValidated
+  // (defined in electron/ipc/utils.ts) to `defineIpcNamespace` (electron/ipc/define.ts).
+  // New handler files get a hard error; the existing 62 legacy files get
+  // a warn-level override below so they ratchet down via lint-ratchet.mjs.
+  //
+  // Re-lists all 5 selectors from the shared/**+electron/** warn block
+  // (lines 218-287) because flat-config is last-write-wins per rule —
+  // without them those guards silently drop for handlers/**. The severity
+  // promotion to error is intentional: new handler files should follow
+  // the strict global default, and existing handler usages of the 5
+  // patterns are either fixed or covered by the warn-level override below.
+  // See #8577.
+  {
+    files: ["electron/ipc/handlers/**/*.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "ConditionalExpression[test.type='BinaryExpression'][test.operator='instanceof'][test.right.name='Error'][consequent.type='MemberExpression'][consequent.property.name='message']",
+          message:
+            "Use formatErrorMessage(err, 'operation-specific fallback') from @shared/utils/errorMessage instead of the inline `instanceof Error ? .message : ...` ternary.",
+        },
+        {
+          selector:
+            "UnaryExpression[operator='void'] > CallExpression > MemberExpression:has(MemberExpression[object.name='window'][property.name='electron'])",
+          message:
+            "Don't use `void window.electron.X()` for fire-and-forget IPC — wrap the promise in safeFireAndForget(promise, { context }) from @/utils/safeFireAndForget so rejections reach reportRendererGlobalError with call-site context.",
+        },
+        {
+          selector:
+            "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) ObjectExpression > Property[key.name='message'] MemberExpression[property.name='message']:matches([object.name=/^(error|err|e)$/], [object.property.name=/^(error|err|e)$/])",
+          message:
+            "Don't pipe raw error.message into user-facing notifications. Use humanizeAppError(error) from @shared/utils/errorMessage to produce a friendly title and body, and stash the raw message in a 'Copy details' action. See #6050.",
+        },
+        {
+          selector:
+            "JSXAttribute[name.name='dangerouslySetInnerHTML'] > JSXExpressionContainer > ObjectExpression > Property[key.name='__html']:not(:has(CallExpression))",
+          message:
+            "Pass __html through createTrustedHTML(value) from @/lib/trustedTypesPolicy instead of a raw string. See #6392.",
+        },
+        {
+          selector:
+            "BinaryExpression[operator=/^(!==|===)$/]:matches([left.name='kind'], [left.property.name='kind'])[right.type='Literal'][right.value=/^(terminal|browser|dev-preview)$/]",
+          message:
+            "Don't compare panel.kind against string literals. Use registry helpers (panelKindHasPty, panelKindCanRestart) or sanctioned type guards (isPtyPanel, isBrowserPanel, isDevPreviewPanel) from @shared/types/panel. See #7672.",
+        },
+        {
+          selector:
+            "CallExpression[callee.name=/^(typedHandle|typedHandleWithContext|typedHandleValidated|typedHandleWithContextValidated)$/]",
+          message:
+            "Don't register IPC handlers with the legacy typedHandle* helpers from electron/ipc/utils. Use `defineIpcNamespace` from electron/ipc/define instead — it gives a single declarative surface for routing, validation, and error handling. See #8577.",
+        },
+      ],
+    },
+  },
+
+  // Test-file safety valve for handler tests. Tests legitimately import
+  // and call typedHandle* to exercise the legacy code paths; the
+  // production gate above is enforced on the handler files, not the
+  // tests. Re-lists the 5 inherited selectors at warn and omits the
+  // typedHandle* selector. See #8577.
+  {
+    files: ["electron/ipc/handlers/**/__tests__/**/*.ts", "electron/ipc/handlers/**/*.test.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "warn",
+        {
+          selector:
+            "ConditionalExpression[test.type='BinaryExpression'][test.operator='instanceof'][test.right.name='Error'][consequent.type='MemberExpression'][consequent.property.name='message']",
+          message:
+            "Use formatErrorMessage(err, 'operation-specific fallback') from @shared/utils/errorMessage instead of the inline `instanceof Error ? .message : ...` ternary.",
+        },
+        {
+          selector:
+            "UnaryExpression[operator='void'] > CallExpression > MemberExpression:has(MemberExpression[object.name='window'][property.name='electron'])",
+          message:
+            "Don't use `void window.electron.X()` for fire-and-forget IPC — wrap the promise in safeFireAndForget(promise, { context }) from @/utils/safeFireAndForget so rejections reach reportRendererGlobalError with call-site context.",
+        },
+        {
+          selector:
+            "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) ObjectExpression > Property[key.name='message'] MemberExpression[property.name='message']:matches([object.name=/^(error|err|e)$/], [object.property.name=/^(error|err|e)$/])",
+          message:
+            "Don't pipe raw error.message into user-facing notifications. Use humanizeAppError(error) from @shared/utils/errorMessage to produce a friendly title and body, and stash the raw message in a 'Copy details' action. See #6050.",
+        },
+        {
+          selector:
+            "JSXAttribute[name.name='dangerouslySetInnerHTML'] > JSXExpressionContainer > ObjectExpression > Property[key.name='__html']:not(:has(CallExpression))",
+          message:
+            "Pass __html through createTrustedHTML(value) from @/lib/trustedTypesPolicy instead of a raw string. See #6392.",
+        },
+        {
+          selector:
+            "BinaryExpression[operator=/^(!==|===)$/]:matches([left.name='kind'], [left.property.name='kind'])[right.type='Literal'][right.value=/^(terminal|browser|dev-preview)$/]",
+          message:
+            "Don't compare panel.kind against string literals. Use registry helpers (panelKindHasPty, panelKindCanRestart) or sanctioned type guards (isPtyPanel, isBrowserPanel, isDevPreviewPanel) from @shared/types/panel. See #7672.",
+        },
+      ],
+    },
+  },
+
+  // Legacy migration allowlist for #8577. These 62 production handler
+  // files were using the legacy typedHandle* registration pattern when
+  // the gate landed; their call sites surface as ratchetable warnings
+  // via eslint-warnings-baseline.json. Remove a file from this list as
+  // it migrates to defineIpcNamespace.
+  //
+  // Explicit named-file list (not glob) so new files added to the same
+  // directories land in the error tier automatically. The 6 selectors
+  // are re-listed at warn so the 5 inherited guards keep their existing
+  // warn-level behavior on these files.
+  {
+    files: [
+      "electron/ipc/handlers/agentCapabilities.ts",
+      "electron/ipc/handlers/agentCli.ts",
+      "electron/ipc/handlers/ai.ts",
+      "electron/ipc/handlers/app/crashRecovery.ts",
+      "electron/ipc/handlers/app/gpu.ts",
+      "electron/ipc/handlers/app/state.ts",
+      "electron/ipc/handlers/appAgent.ts",
+      "electron/ipc/handlers/appTheme.ts",
+      "electron/ipc/handlers/cli.ts",
+      "electron/ipc/handlers/connectivity.ts",
+      "electron/ipc/handlers/copyTree.ts",
+      "electron/ipc/handlers/diagnostics.ts",
+      "electron/ipc/handlers/editorConfig.ts",
+      "electron/ipc/handlers/events.ts",
+      "electron/ipc/handlers/files.ts",
+      "electron/ipc/handlers/forge.ts",
+      "electron/ipc/handlers/forgeData.ts",
+      "electron/ipc/handlers/forgeSettings.ts",
+      "electron/ipc/handlers/gemini.ts",
+      "electron/ipc/handlers/git-read.ts",
+      "electron/ipc/handlers/git-write.ts",
+      "electron/ipc/handlers/github.ts",
+      "electron/ipc/handlers/globalRecipes.ts",
+      "electron/ipc/handlers/helpAssistant.ts",
+      "electron/ipc/handlers/hibernation.ts",
+      "electron/ipc/handlers/idleTerminals.ts",
+      "electron/ipc/handlers/keybinding.ts",
+      "electron/ipc/handlers/logs.ts",
+      "electron/ipc/handlers/mcpServer.ts",
+      "electron/ipc/handlers/menu.ts",
+      "electron/ipc/handlers/milestones.ts",
+      "electron/ipc/handlers/notifications.ts",
+      "electron/ipc/handlers/onboarding.ts",
+      "electron/ipc/handlers/privacy.ts",
+      "electron/ipc/handlers/projectCrud/crud.ts",
+      "electron/ipc/handlers/projectCrud/gitClone.ts",
+      "electron/ipc/handlers/projectCrud/gitInit.ts",
+      "electron/ipc/handlers/projectCrud/prefetch.ts",
+      "electron/ipc/handlers/projectCrud/settings.ts",
+      "electron/ipc/handlers/projectCrud/stats.ts",
+      "electron/ipc/handlers/projectCrud/switch.ts",
+      "electron/ipc/handlers/projectInRepoSettings.ts",
+      "electron/ipc/handlers/projectPresets.ts",
+      "electron/ipc/handlers/projectRecipes.ts",
+      "electron/ipc/handlers/recovery.ts",
+      "electron/ipc/handlers/sentry.ts",
+      "electron/ipc/handlers/shortcutHints.ts",
+      "electron/ipc/handlers/systemShell.ts",
+      "electron/ipc/handlers/systemSleep.ts",
+      "electron/ipc/handlers/telemetry.ts",
+      "electron/ipc/handlers/terminal/artifacts.ts",
+      "electron/ipc/handlers/terminal/io.ts",
+      "electron/ipc/handlers/terminal/lifecycle.ts",
+      "electron/ipc/handlers/terminal/snapshots.ts",
+      "electron/ipc/handlers/terminalConfig.ts",
+      "electron/ipc/handlers/terminalLayout.ts",
+      "electron/ipc/handlers/voiceInput.ts",
+      "electron/ipc/handlers/webview.ts",
+      "electron/ipc/handlers/worktree/branches.ts",
+      "electron/ipc/handlers/worktree/lifecycle.ts",
+      "electron/ipc/handlers/worktree/pull-requests.ts",
+      "electron/ipc/handlers/worktreeConfig.ts",
+    ],
+    rules: {
+      "no-restricted-syntax": [
+        "warn",
+        {
+          selector:
+            "ConditionalExpression[test.type='BinaryExpression'][test.operator='instanceof'][test.right.name='Error'][consequent.type='MemberExpression'][consequent.property.name='message']",
+          message:
+            "Use formatErrorMessage(err, 'operation-specific fallback') from @shared/utils/errorMessage instead of the inline `instanceof Error ? .message : ...` ternary.",
+        },
+        {
+          selector:
+            "UnaryExpression[operator='void'] > CallExpression > MemberExpression:has(MemberExpression[object.name='window'][property.name='electron'])",
+          message:
+            "Don't use `void window.electron.X()` for fire-and-forget IPC — wrap the promise in safeFireAndForget(promise, { context }) from @/utils/safeFireAndForget so rejections reach reportRendererGlobalError with call-site context.",
+        },
+        {
+          selector:
+            "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) ObjectExpression > Property[key.name='message'] MemberExpression[property.name='message']:matches([object.name=/^(error|err|e)$/], [object.property.name=/^(error|err|e)$/])",
+          message:
+            "Don't pipe raw error.message into user-facing notifications. Use humanizeAppError(error) from @shared/utils/errorMessage to produce a friendly title and body, and stash the raw message in a 'Copy details' action. See #6050.",
+        },
+        {
+          selector:
+            "JSXAttribute[name.name='dangerouslySetInnerHTML'] > JSXExpressionContainer > ObjectExpression > Property[key.name='__html']:not(:has(CallExpression))",
+          message:
+            "Pass __html through createTrustedHTML(value) from @/lib/trustedTypesPolicy instead of a raw string. See #6392.",
+        },
+        {
+          selector:
+            "BinaryExpression[operator=/^(!==|===)$/]:matches([left.name='kind'], [left.property.name='kind'])[right.type='Literal'][right.value=/^(terminal|browser|dev-preview)$/]",
+          message:
+            "Don't compare panel.kind against string literals. Use registry helpers (panelKindHasPty, panelKindCanRestart) or sanctioned type guards (isPtyPanel, isBrowserPanel, isDevPreviewPanel) from @shared/types/panel. See #7672.",
+        },
+        {
+          selector:
+            "CallExpression[callee.name=/^(typedHandle|typedHandleWithContext|typedHandleValidated|typedHandleWithContextValidated)$/]",
+          message:
+            "Don't register IPC handlers with the legacy typedHandle* helpers from electron/ipc/utils. Use `defineIpcNamespace` from electron/ipc/define instead — it gives a single declarative surface for routing, validation, and error handling. See #8577.",
+        },
+      ],
+    },
+  },
+
   // Prettier must be last to override conflicting rules
   prettier,
 
