@@ -390,7 +390,7 @@ describe("applyFleetBroadcastResult", () => {
     applyFleetBroadcastResult({
       results: [
         { id: "t1", ok: true },
-        { id: "t2", ok: false, error: { code: "ENOSPC", message: "no space" } },
+        { id: "t2", ok: false, error: { code: "EAGAIN", message: "would block" } },
       ],
     });
 
@@ -421,6 +421,28 @@ describe("applyFleetBroadcastResult", () => {
     expect(arming.armedIds.has("t2")).toBe(false);
     expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
   });
+
+  it.each(["ENOTCONN", "ENXIO", "EINVAL"])(
+    "disarms the target on %s without recording a chip",
+    (code) => {
+      seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      broadcastFleetRawInput("t1", "x");
+
+      applyFleetBroadcastResult({
+        results: [
+          { id: "t1", ok: true },
+          { id: "t2", ok: false, error: { code, message: `write failure: ${code}` } },
+        ],
+      });
+
+      const arming = useFleetArmingStore.getState();
+      expect(arming.armedIds.has("t2")).toBe(false);
+      expect(arming.armedIds.has("t1")).toBe(true);
+      expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
+      expect(clearDirectingStateMock).toHaveBeenCalledWith("t2");
+    }
+  );
 
   it("handles a mixed batch — disarm permanent, record non-permanent", () => {
     seedPanels([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3"), makeTerminal("t4")]);

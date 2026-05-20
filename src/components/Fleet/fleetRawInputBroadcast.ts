@@ -19,6 +19,9 @@ const PERMANENT_FAILURE_CODES: ReadonlySet<string> = new Set([
   "EIO",
   "EBADF",
   "ECONNRESET",
+  "ENOTCONN",
+  "ENXIO",
+  "EINVAL",
 ]);
 
 function resolveLiveFleetTargetIds(): string[] {
@@ -117,7 +120,7 @@ export function broadcastFleetRawInput(originId: string, data: string): boolean 
  *   and we'd just thrash the store. An unknown errno is treated as permanent
  *   on purpose: the safer default is to stop typing into a target whose
  *   write semantics we can't reason about.
- * - Non-permanent failures (e.g., `ENOSPC`) leave arming alone and record a
+ * - Non-permanent failures (e.g., `EAGAIN`) leave arming alone and record a
  *   transient failure entry so the user sees the chip. The chip's "Retry
  *   failed" path is a no-op for the raw-input transport (single keystrokes
  *   are not meaningful to replay), and `recordFailure` is called with an
