@@ -47,9 +47,17 @@ function createMockDeps(overrides?: Partial<ResourceGovernorDeps>): ResourceGove
     sendEvent: vi.fn(),
     emitTerminalStatus: vi.fn(),
     getTerminalActivity: vi.fn().mockReturnValue([]),
+    trimBuffers: vi.fn(),
     ...overrides,
   };
 }
+
+// After the EMA + warmup + trim-first changes, engage requires 6 ticks:
+// ticks 1–4 build EMA warmup, tick 5 satisfies warmup and fires the one-shot
+// trim attempt, tick 6 escalates to pause. 6 × 2s = 12s.
+// Critical pressure (≥95% raw) bypasses warmup, trim, and cooldown — those
+// tests can keep advancing a single 2s tick.
+const ADVANCE_TO_ENGAGE_MS = 12000;
 
 const defaultLeakResult = {
   totalFds: 10,
@@ -181,7 +189,7 @@ describe("ResourceGovernor", () => {
       const governor = new ResourceGovernor(deps);
       governor.start();
 
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
 
       expect(raw.pause).toHaveBeenCalled();
       expect(coordinator.hasToken("resource-governor")).toBe(true);
@@ -222,9 +230,10 @@ describe("ResourceGovernor", () => {
 
       const governor = new ResourceGovernor(deps);
       governor.start();
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
 
-      // Drop memory below resume threshold
+      // Drop memory below resume threshold — disengage uses raw utilization
+      // so a single low tick resumes immediately.
       vi.spyOn(process, "memoryUsage").mockReturnValue({
         heapUsed: 500 * 1024 * 1024,
         rss: 1024 * 1024 * 1024,
@@ -271,7 +280,7 @@ describe("ResourceGovernor", () => {
 
       const governor = new ResourceGovernor(deps);
       governor.start();
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
 
       // Keep memory above resume threshold past force-resume timeout
       vi.advanceTimersByTime(12000);
@@ -307,7 +316,7 @@ describe("ResourceGovernor", () => {
 
       const governor = new ResourceGovernor(deps);
       governor.start();
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
 
       expect(coordinator.hasToken("resource-governor")).toBe(true);
       raw.resume.mockClear();
@@ -357,7 +366,7 @@ describe("ResourceGovernor", () => {
       governor.start();
 
       // Trigger engage
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
       expect(coordinator.hasToken("resource-governor")).toBe(true);
 
       // Simulate backpressure manager also holding a pause
@@ -795,7 +804,7 @@ describe("ResourceGovernor", () => {
 
       const governor = new ResourceGovernor(deps);
       governor.start();
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
 
       const emitCalls = (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mock.calls;
       const pausedOrder = emitCalls.map((c: unknown[]) => (c as string[])[0]);
@@ -867,7 +876,7 @@ describe("ResourceGovernor", () => {
         arrayBuffers: 0,
       } as ReturnType<typeof process.memoryUsage>);
 
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
 
       expect(coordinator.hasToken("resource-governor")).toBe(true);
 
@@ -897,7 +906,8 @@ describe("ResourceGovernor", () => {
         arrayBuffers: 0,
       } as ReturnType<typeof process.memoryUsage>);
 
-      vi.advanceTimersByTime(2000);
+      // Advance past warmup to verify no throttle ever fires on balanced.
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
 
       // Should NOT throttle at 75% on balanced profile
       expect(coordinator.hasToken("resource-governor")).toBe(false);
@@ -927,6 +937,452 @@ describe("ResourceGovernor", () => {
           isWarning: true,
         })
       );
+
+      governor.dispose();
+    });
+  });
+
+  describe("EMA smoothing and warmup", () => {
+    it("does not engage on a single-tick spike above threshold", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      // Baseline at 50% for first 5 ticks (warmup), then a single spike to 90%.
+      const memSpy = vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 512 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // Complete warmup at low memory.
+      vi.advanceTimersByTime(10000);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      // Single-tick spike to 90%.
+      memSpy.mockReturnValue({
+        heapUsed: 922 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+      vi.advanceTimersByTime(2000);
+
+      // Drop back. EMA pushes smoothed to ~0.18*90 + 0.82*50 = 57.2 — well below 85.
+      memSpy.mockReturnValue({
+        heapUsed: 512 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+      vi.advanceTimersByTime(4000);
+
+      // No throttle, no trim — smoothed never crossed 85%.
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+      expect(deps.trimBuffers).not.toHaveBeenCalled();
+
+      governor.dispose();
+    });
+
+    it("suppresses engage during warmup even under sustained high memory", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // Only 4 ticks (8s) — below WARMUP_TICKS=5.
+      vi.advanceTimersByTime(8000);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+      expect(deps.trimBuffers).not.toHaveBeenCalled();
+
+      governor.dispose();
+    });
+
+    it("calls trimBuffers once before pausing, then pauses on next tick", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // 5 ticks = warmup complete. The 5th tick fires trim, NOT engage.
+      vi.advanceTimersByTime(10000);
+      expect(deps.trimBuffers).toHaveBeenCalledTimes(1);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      // 6th tick: trim already attempted, escalate to pause.
+      vi.advanceTimersByTime(2000);
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      governor.dispose();
+    });
+
+    it("trims at most once per pressure episode", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // Engage, then advance many more ticks while still throttled.
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS + 6000);
+      expect(deps.trimBuffers).toHaveBeenCalledTimes(1);
+
+      governor.dispose();
+    });
+
+    it("eventually pauses even if trimBuffers throws", () => {
+      const { coordinator } = createMockCoordinator();
+      const trimBuffers = vi.fn().mockImplementation(() => {
+        throw new Error("trim failed");
+      });
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+        trimBuffers,
+      });
+
+      vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+      expect(trimBuffers).toHaveBeenCalled();
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      governor.dispose();
+    });
+
+    it("bypasses warmup, trim, and cooldown gates at critical pressure (≥95%)", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 980 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      vi.advanceTimersByTime(2000);
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+      expect(deps.trimBuffers).not.toHaveBeenCalled();
+
+      governor.dispose();
+    });
+  });
+
+  describe("re-engage cooldown", () => {
+    it("does not re-engage immediately after a force-resume even at high pressure", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // Engage + sustained pressure → force-resume after FORCE_RESUME_MS.
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS + 12000);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      const forceResumeEvent = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "host-throttled" &&
+          (c[0] as Record<string, unknown>)?.isThrottled === false &&
+          (c[0] as Record<string, unknown>)?.forced === true
+      );
+      expect(forceResumeEvent).toBeDefined();
+
+      // Pressure persists. Advance several ticks (~10s) — must NOT re-engage
+      // until REENGAGE_COOLDOWN_MS (30s) has elapsed.
+      raw.pause.mockClear();
+      vi.advanceTimersByTime(10000);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+      expect(raw.pause).not.toHaveBeenCalled();
+
+      governor.dispose();
+    });
+
+    it("re-engages after the cooldown elapses with sustained pressure", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // First engage + force-resume.
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS + 12000);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      // Wait out the cooldown (30s) plus enough time for trim + pause cycle.
+      // After force-resume, trimAttemptedForCurrentPressure resets, so the
+      // first tick past the cooldown gate re-fires trim, and the tick after
+      // that actually engages.
+      vi.advanceTimersByTime(34000);
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      governor.dispose();
+    });
+
+    it("threshold-based disengage also sets the cooldown gate", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      const memSpy = vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // Engage, then drop memory to threshold-clear.
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      memSpy.mockReturnValue({
+        heapUsed: 500 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+      vi.advanceTimersByTime(2000);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      // Pressure returns immediately. Cooldown gate must still block re-engage.
+      memSpy.mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+      raw.pause.mockClear();
+      vi.advanceTimersByTime(10000);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+      expect(raw.pause).not.toHaveBeenCalled();
+
+      governor.dispose();
+    });
+  });
+
+  describe("resume ordering", () => {
+    it("resumes idle terminals before working-agent terminals", () => {
+      const c1 = createMockCoordinator();
+      const c2 = createMockCoordinator();
+      const c3 = createMockCoordinator();
+      const coordinators: Record<string, ReturnType<typeof createMockCoordinator>> = {
+        t1: c1,
+        t2: c2,
+        t3: c3,
+      };
+
+      const memSpy = vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1", "t2", "t3"]),
+        getPauseCoordinator: vi.fn((id: string) => coordinators[id]?.coordinator),
+        getTerminalActivity: vi.fn().mockReturnValue([
+          { id: "t1", lastOutputTime: 1000, lastInputTime: 1000, agentState: "idle" },
+          { id: "t2", lastOutputTime: 3000, lastInputTime: 2000, agentState: "working" },
+          { id: "t3", lastOutputTime: 2000, lastInputTime: 1000, agentState: "idle" },
+        ]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // Engage, then clear pressure to trigger threshold-based disengage.
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+      (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mockClear();
+
+      memSpy.mockReturnValue({
+        heapUsed: 500 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+      vi.advanceTimersByTime(2000);
+
+      const resumeEmits = (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mock.calls
+        .filter((c: unknown[]) => (c as string[])[1] === "running")
+        .map((c: unknown[]) => (c as string[])[0]);
+
+      // t2 (working agent) must resume last.
+      expect(resumeEmits[resumeEmits.length - 1]).toBe("t2");
+
+      governor.dispose();
+    });
+
+    it("does not resume terminals not paused by the resource governor", () => {
+      const { coordinator: c1 } = createMockCoordinator();
+      const c2 = createMockCoordinator();
+      const coordinators: Record<string, ReturnType<typeof createMockCoordinator>> = {
+        t1: { coordinator: c1, raw: { pause: vi.fn(), resume: vi.fn() } },
+        t2: c2,
+      };
+
+      const memSpy = vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const deps = createMockDeps({
+        // Only t1 is visible to the governor when engage fires.
+        getTerminalIds: vi.fn().mockReturnValueOnce(["t1"]).mockReturnValue(["t1", "t2"]),
+        getPauseCoordinator: vi.fn((id: string) => coordinators[id]?.coordinator),
+        getTerminalActivity: vi.fn().mockReturnValue([
+          { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          { id: "t2", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+        ]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+      expect(c1.hasToken("resource-governor")).toBe(true);
+      expect(c2.coordinator.hasToken("resource-governor")).toBe(false);
+
+      // t2 came online while paused, governed by another pause holder.
+      c2.coordinator.pause("backpressure");
+
+      memSpy.mockReturnValue({
+        heapUsed: 500 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+      c2.raw.resume.mockClear();
+      vi.advanceTimersByTime(2000);
+
+      // t2 was never paused by the governor — its raw.resume must not be called.
+      expect(c2.raw.resume).not.toHaveBeenCalled();
+      expect(c2.coordinator.hasToken("backpressure")).toBe(true);
 
       governor.dispose();
     });

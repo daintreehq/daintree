@@ -27,6 +27,7 @@ export interface ResourceGovernorDeps {
     reason?: string
   ) => void;
   getTerminalActivity: () => TerminalActivityInfo[];
+  trimBuffers?: () => void;
   getPendingBytesSnapshot?: () => {
     totalPendingBytes: number;
     perTerminal: Array<{ terminalId: string; pendingBytes: number }>;
@@ -52,6 +53,18 @@ export class ResourceGovernor {
   private readonly EFFICIENCY_RESUME_PERCENT = 50;
   private readonly EFFICIENCY_WARNING_PERCENT = 55;
   private readonly EFFICIENCY_WARNING_CLEAR_PERCENT = 45;
+  // EMA: α = 2/(N+1) for an N-tick window. At 2s polls, N=10 gives a ~20s
+  // smoothing window that rejects single-tick GC sawtooth spikes while
+  // detecting sustained pressure within 4–5 ticks.
+  private readonly EMA_ALPHA = 2 / 11;
+  // Suppress engage during EMA warmup so a startup heap spike doesn't trigger
+  // before the smoothed signal has had time to stabilize.
+  private readonly WARMUP_TICKS = 5;
+  // After a force-resume (bounded-pause guarantee fires), block re-engagement
+  // for this long even if pressure persists. Prevents the pause(10s)/resume(2s)
+  // flap that issue #8616 reports — terminals keep running (possibly slowly
+  // under OS-level backpressure) rather than getting repeatedly hard-paused.
+  private readonly REENGAGE_COOLDOWN_MS = 30000;
   private isThrottling = false;
   private checkInterval: NodeJS.Timeout | null = null;
   private throttleStartTime = 0;
@@ -63,6 +76,13 @@ export class ResourceGovernor {
   private readonly pausedTerminalIds = new Set<string>();
   private isWarning = false;
   private profileOverride: ResourceProfile | null = null;
+  private smoothedUtilizationPercent: number | undefined = undefined;
+  private sampleCount = 0;
+  private lastDisengageAt = 0;
+  // Tracks whether buffer trimming has been attempted for the current pressure
+  // episode. Trim is a one-shot pre-pause reclaim — re-trimming on every tick
+  // would thrash scrollback without freeing additional heap.
+  private trimAttemptedForCurrentPressure = false;
 
   constructor(private readonly deps: ResourceGovernorDeps) {
     this.fdMonitor = new FdMonitor();
@@ -124,7 +144,23 @@ export class ResourceGovernor {
     const heapLimitMb = heapStats.heap_size_limit / 1024 / 1024;
     const utilizationPercent = (heapUsedMb / heapLimitMb) * 100;
 
-    // Warning band — fires once per transition, not per tick
+    // EMA smoothing — rejects single-tick GC sawtooth spikes. Seeded with the
+    // first real reading (not 0) to avoid a warmup ramp that falsely stays
+    // below threshold. Mirrors the seeding idiom used by prevThroughputTimestamp.
+    let smoothedPercent: number;
+    if (this.smoothedUtilizationPercent === undefined) {
+      this.smoothedUtilizationPercent = utilizationPercent;
+      smoothedPercent = utilizationPercent;
+    } else {
+      smoothedPercent =
+        this.EMA_ALPHA * utilizationPercent +
+        (1 - this.EMA_ALPHA) * this.smoothedUtilizationPercent;
+      this.smoothedUtilizationPercent = smoothedPercent;
+    }
+    this.sampleCount++;
+
+    // Warning band uses raw utilization — it's an advisory signal, not a
+    // throttle decision, so smoothing would only introduce unhelpful lag.
     const warnThreshold = this.warningThresholdPercent;
     const warnClear = this.warningClearPercent;
     if (!this.isWarning && utilizationPercent > warnThreshold) {
@@ -154,16 +190,48 @@ export class ResourceGovernor {
 
     const limitPercent = this.memoryLimitPercent;
     const resumePercent = this.resumeThresholdPercent;
+    // Critical pressure bypasses smoothing and the cooldown gate — if raw
+    // utilization is at 95%+, the next allocation could OOM the process,
+    // so engage immediately regardless of EMA warmup or recent disengage.
+    const isCritical = utilizationPercent >= this.CRITICAL_PERCENT;
 
-    if (!this.isThrottling && utilizationPercent > limitPercent) {
-      this.engageThrottle(heapUsedMb, utilizationPercent);
-    } else if (this.isThrottling) {
+    if (!this.isThrottling) {
+      const warmedUp = this.sampleCount >= this.WARMUP_TICKS;
+      const cooledDown = Date.now() - this.lastDisengageAt > this.REENGAGE_COOLDOWN_MS;
+      const aboveThreshold = smoothedPercent > limitPercent;
+
+      if (isCritical || (aboveThreshold && warmedUp && cooledDown)) {
+        if (!isCritical && !this.trimAttemptedForCurrentPressure && this.deps.trimBuffers) {
+          // Trim first as a one-shot reclaim — drops JS references synchronously
+          // so the next GC can collect old-gen scrollback strings. heapUsed won't
+          // drop in this tick (GC hasn't run yet) so we wait one tick before
+          // escalating to pause. Wrapped in try/catch because trim is best-effort:
+          // a failure shouldn't block the eventual pause path.
+          try {
+            this.deps.trimBuffers();
+            console.log(
+              `[ResourceGovernor] Trimmed buffers as pre-pause reclaim ` +
+                `(${utilizationPercent.toFixed(1)}% raw, ${smoothedPercent.toFixed(1)}% smoothed).`
+            );
+          } catch (err) {
+            console.warn("[ResourceGovernor] trimBuffers failed:", err);
+          }
+          this.trimAttemptedForCurrentPressure = true;
+        } else {
+          this.engageThrottle(heapUsedMb, utilizationPercent);
+        }
+      }
+    } else {
       const throttleDuration = Date.now() - this.throttleStartTime;
-      const shouldForceResume = throttleDuration > this.FORCE_RESUME_MS;
+      const maxPauseExceeded = throttleDuration > this.FORCE_RESUME_MS;
+      // Disengage uses RAW utilization (not smoothed) so terminals resume
+      // promptly when pressure truly clears. The 85→60% hysteresis band plus
+      // the REENGAGE_COOLDOWN_MS gate prevent any oscillation risk from a
+      // single-tick low reading triggering an early resume.
       const belowThreshold = utilizationPercent < resumePercent;
 
-      if (shouldForceResume || belowThreshold) {
-        this.disengageThrottle(heapUsedMb, utilizationPercent, shouldForceResume);
+      if (maxPauseExceeded || belowThreshold) {
+        this.disengageThrottle(heapUsedMb, utilizationPercent, maxPauseExceeded);
       }
     }
 
@@ -364,10 +432,35 @@ export class ResourceGovernor {
         `Resuming terminals after ${duration}ms.`
     );
     this.isThrottling = false;
+    this.lastDisengageAt = Date.now();
+    // Reset trim attempt — by the time REENGAGE_COOLDOWN_MS expires, the heap
+    // has had 30s to recover, so any subsequent pressure episode is genuinely
+    // new and warrants a fresh trim attempt.
+    this.trimAttemptedForCurrentPressure = false;
 
-    const ids = this.deps.getTerminalIds();
+    // Resume in idle-first, active-last order. Reverses the engage triage so
+    // working agents get the most runway after the heap has breathed. We
+    // iterate pausedTerminalIds (not getTerminalIds) so we only resume
+    // terminals this governor actually paused.
+    const activity = new Map(this.deps.getTerminalActivity().map((a) => [a.id, a] as const));
+    const orderedPausedIds = [...this.pausedTerminalIds].sort((a, b) => {
+      const aa = activity.get(a);
+      const bb = activity.get(b);
+      const aAgentActive = aa?.agentState === "working" || aa?.agentState === "directing";
+      const bAgentActive = bb?.agentState === "working" || bb?.agentState === "directing";
+      // Active-agent terminals sort last (resumed last — least likely to
+      // immediately re-pressure the heap).
+      if (aAgentActive && !bAgentActive) return 1;
+      if (!aAgentActive && bAgentActive) return -1;
+      // Among peers, least recently active sorts first (idle longer → less
+      // likely to immediately allocate on resume).
+      const aTime = aa?.lastOutputTime ?? 0;
+      const bTime = bb?.lastOutputTime ?? 0;
+      return aTime - bTime;
+    });
+
     let resumedCount = 0;
-    for (const id of ids) {
+    for (const id of orderedPausedIds) {
       const coordinator = this.deps.getPauseCoordinator(id);
       if (coordinator) {
         if (coordinator.hasToken("resource-governor")) {
@@ -384,7 +477,7 @@ export class ResourceGovernor {
       }
     }
     this.pausedTerminalIds.clear();
-    console.log(`[ResourceGovernor] Resumed ${resumedCount}/${ids.length} terminals`);
+    console.log(`[ResourceGovernor] Resumed ${resumedCount}/${orderedPausedIds.length} terminals`);
 
     this.deps.sendEvent({
       type: "host-throttled",
@@ -416,6 +509,10 @@ export class ResourceGovernor {
     this.isWarning = false;
     this.profileOverride = null;
     this.killedPids.clear();
+    this.smoothedUtilizationPercent = undefined;
+    this.sampleCount = 0;
+    this.lastDisengageAt = 0;
+    this.trimAttemptedForCurrentPressure = false;
     console.log("[ResourceGovernor] Disposed");
   }
 }
