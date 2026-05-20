@@ -708,6 +708,12 @@ export async function initGlobalServices(
   registerDeferredTask({
     name: "prune-old-logs",
     run: () => {
+      // Deferred (post first-interactive) so the synchronous fs scan doesn't
+      // block cold start. Note: `userData/debug/*.log` files have their mtimes
+      // refreshed by `clearDebugLogs` during `initializeLogger` (pre-deferral),
+      // so debug stubs effectively survive each prune cycle. They're empty
+      // (0 bytes) so the accumulation is harmless; `userData/logs/` is still
+      // pruned correctly because its files are appended-to, not truncated.
       const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
       if (retentionDays > 0) {
         pruneOldLogs(app.getPath("userData"), retentionDays);
