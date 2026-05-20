@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logInfo } from "@/utils/logger";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -59,6 +60,13 @@ vi.mock("@/store/performanceModeStore", () => ({
 const mockProjectSettingsStore: { settings: Record<string, unknown> | null } = { settings: null };
 vi.mock("@/store/projectSettingsStore", () => ({
   useProjectSettingsStore: { getState: () => mockProjectSettingsStore },
+}));
+
+vi.mock("@/utils/logger", () => ({
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
 }));
 
 type ScrollbackTestService = {
@@ -164,7 +172,7 @@ describe("TerminalInstanceService - Scrollback", () => {
       expect(managed.terminal.options.scrollback).toBe(300);
     });
 
-    it("reduces scrollback and writes notice when scrollback content exceeds target", () => {
+    it("reduces scrollback and logs info without writing to terminal when content exceeds target", () => {
       const managed = makeMockManaged();
       // 3000 total - 24 viewport = 2976 scrollback lines > 500 target
       managed.terminal.buffer.active.length = 3000;
@@ -173,11 +181,20 @@ describe("TerminalInstanceService - Scrollback", () => {
       service.reduceScrollback("t1", 500);
 
       expect(managed.terminal.options.scrollback).toBe(500);
-      expect(managed.writtenData).toHaveLength(1);
-      expect(managed.writtenData[0]).toContain("Scrollback reduced to 500 lines");
+      expect(managed.writtenData).toHaveLength(0);
+      expect(logInfo).toHaveBeenCalledTimes(1);
+      expect(logInfo).toHaveBeenCalledWith(
+        "Terminal scrollback reduced under memory pressure",
+        expect.objectContaining({
+          targetLines: 500,
+          scrollbackUsed: 2976,
+          previousScrollback: 5000,
+          rows: 24,
+        })
+      );
     });
 
-    it("reduces scrollback without notice when scrollback content is within target", () => {
+    it("reduces scrollback without logging when scrollback content is within target", () => {
       const managed = makeMockManaged();
       // 100 total - 24 viewport = 76 scrollback lines < 500 target
       managed.terminal.buffer.active.length = 100;
@@ -187,6 +204,7 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       expect(managed.terminal.options.scrollback).toBe(500);
       expect(managed.writtenData).toHaveLength(0);
+      expect(logInfo).not.toHaveBeenCalled();
     });
   });
 
