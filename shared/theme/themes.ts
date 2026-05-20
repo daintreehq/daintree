@@ -18,7 +18,7 @@ export const DEFAULT_APP_SCHEME_ID = "daintree";
 export const ANSI_MAGENTA_FALLBACK = "#a855f7";
 export const ANSI_CYAN_FALLBACK = "#22d3ee";
 
-const GITHUB_DARK_TOKENS: Pick<
+const PR_STATE_DARK_TOKENS: Pick<
   AppColorSchemeTokens,
   "pr-open" | "pr-merged" | "pr-closed" | "pr-draft"
 > = {
@@ -28,7 +28,7 @@ const GITHUB_DARK_TOKENS: Pick<
   "pr-draft": "#8b949e",
 };
 
-const GITHUB_LIGHT_TOKENS: Pick<
+const PR_STATE_LIGHT_TOKENS: Pick<
   AppColorSchemeTokens,
   "pr-open" | "pr-merged" | "pr-closed" | "pr-draft"
 > = {
@@ -107,7 +107,7 @@ export function createDaintreeTokens(
   const accentSecondaryMuted =
     tokens["accent-secondary-muted"] ?? withAlpha(accentSecondary, dark ? 0.25 : 0.18);
 
-  const githubDefaults = dark ? GITHUB_DARK_TOKENS : GITHUB_LIGHT_TOKENS;
+  const prStateDefaults = dark ? PR_STATE_DARK_TOKENS : PR_STATE_LIGHT_TOKENS;
 
   const searchHighlightBg =
     tokens["search-highlight-background"] ?? withAlpha(tokens["accent-primary"], dark ? 0.2 : 0.12);
@@ -155,7 +155,7 @@ export function createDaintreeTokens(
       };
 
   return {
-    ...githubDefaults,
+    ...prStateDefaults,
     ...categoryDefaults,
     "border-subtle": tokens["border-subtle"] ?? withAlpha(overlayTone, dark ? 0.08 : 0.05),
     "border-strong": tokens["border-strong"] ?? withAlpha(overlayTone, dark ? 0.14 : 0.14),

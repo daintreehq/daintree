@@ -774,7 +774,7 @@ These are used in badges, toast notifications, diff viewer gutters, and terminal
 
 ---
 
-## 16. GitHub Integration Colors
+## 16. PR State Colors
 
 ```
 [Open]    → pr-open (green)
@@ -783,7 +783,7 @@ These are used in badges, toast notifications, diff viewer gutters, and terminal
 [Draft]   → pr-draft (gray)
 ```
 
-Dark themes use GitHub's dark-mode palette; light themes use GitHub's light-mode palette. Each theme can override these individually.
+Provider-agnostic — these color any forge's PR/issue state. Defaults follow GitHub's dark/light palette; each theme can override them individually.
 
 ---
 

@@ -102,7 +102,7 @@ export const APP_THEME_TOKEN_KEYS = [
   "material-opacity",
   "radius-scale",
 
-  // GitHub PR/issue states
+  // PR/issue states (provider-agnostic)
   "pr-open",
   "pr-merged",
   "pr-closed",
