@@ -560,9 +560,11 @@ function _reconstructGitError(serialized: {
   return error;
 }
 
-// Typed overload: when `channel` is a key of `IpcInvokeMap`, args and result are
-// statically enforced against the central IPC contract. Falls back to a loose
-// signature for the function-value pass-through used by `build*PreloadBindings`.
+// Typed overload: when `channel` is a key of `IpcInvokeMap` and the args match,
+// the result is statically enforced against the central IPC contract. Calls
+// that don't match the typed overload — including the function-value
+// pass-through to `build*PreloadBindings` — fall through to the loose
+// signature below and return `Promise<any>`.
 function _unwrappingInvoke<K extends Extract<keyof IpcInvokeMap, string>>(
   channel: K,
   ...args: IpcInvokeMap[K]["args"]
