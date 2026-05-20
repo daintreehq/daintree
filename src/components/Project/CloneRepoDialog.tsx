@@ -14,6 +14,7 @@ import { validateFolderName } from "@shared/utils/folderName";
 import { isGitHubRemoteUrl } from "@shared/utils/githubUrl";
 import type { CloneRepoProgressEvent } from "@shared/types/ipc/gitClone";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
+import { isClientGitError } from "@/utils/clientGitError";
 
 interface CloneError {
   message: string;
@@ -168,11 +169,12 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       // CANCELLED is the user aborting via the cancel button — not a failure.
       const code = (err as { code?: string })?.code;
       if (code !== "CANCELLED") {
-        // `gitReason` is reattached duck-typed across the IPC realm boundary
-        // (see `deserializeError` in shared/utils/ipcErrorSerialization.ts);
-        // `instanceof GitOperationError` would fail here.
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- intentional duck-type read across IPC realm
-        const gitReason = (err as { gitReason?: GitOperationReason })?.gitReason;
+        // Decode the preload-injected `[GitError|...]` message prefix so we
+        // can branch on `gitReason`. contextBridge strips own Error properties
+        // when the preload's reconstructed error crosses to the renderer, so
+        // the prefix is the only reliable carrier; `isClientGitError` decodes
+        // it and reattaches `gitReason` onto the error.
+        const gitReason = isClientGitError(err) ? err.gitReason : undefined;
         setError({
           message: formatErrorMessage(err, "Failed to clone repository"),
           gitReason,

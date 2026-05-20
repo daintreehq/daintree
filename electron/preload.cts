@@ -521,6 +521,45 @@ function _reconstructAppError(serialized: {
   return error;
 }
 
+/**
+ * Reconstruct `GitOperationError` thrown in the main process. Same realm-
+ * boundary stripping as `_reconstructAppError`: contextBridge clones the Error
+ * and discards `gitReason`, `leaseSha`, and `branchName`. The renderer decodes
+ * this prefix via `isClientGitError` (`src/utils/clientGitError.ts`).
+ *
+ * Optional fields use a fixed three-slot positional layout so the renderer
+ * regex always matches; absent fields are empty between the pipes. `leaseSha`
+ * is hex (URL-safe) but encoded for consistency with `branchName`, which can
+ * contain `/` and other ref characters.
+ *
+ * Format: `[GitError|<reason>|<urlencoded leaseSha>|<urlencoded branchName>] <original message>`
+ */
+function _reconstructGitError(serialized: {
+  name: string;
+  message: string;
+  gitReason?: string;
+  leaseSha?: string;
+  branchName?: string;
+}): Error {
+  const reason = serialized.gitReason ?? "unknown";
+  const leaseShaPart = encodeURIComponent(serialized.leaseSha ?? "");
+  const branchNamePart = encodeURIComponent(serialized.branchName ?? "");
+  const encoded = `[GitError|${reason}|${leaseShaPart}|${branchNamePart}] ${serialized.message}`;
+  const error = new Error(encoded);
+  // Standard properties — set for callers in the same realm. They don't
+  // survive the contextBridge crossing; the message prefix is the source
+  // of truth on the renderer side.
+  error.name = "GitOperationError";
+  (error as Error & { gitReason: string }).gitReason = reason;
+  if (serialized.leaseSha !== undefined) {
+    (error as Error & { leaseSha: string }).leaseSha = serialized.leaseSha;
+  }
+  if (serialized.branchName !== undefined) {
+    (error as Error & { branchName: string }).branchName = serialized.branchName;
+  }
+  return error;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches ipcRenderer.invoke return type
 async function _unwrappingInvoke(channel: string, ...args: unknown[]): Promise<any> {
   const response = await ipcRenderer.invoke(channel, ...args);
@@ -529,6 +568,9 @@ async function _unwrappingInvoke(channel: string, ...args: unknown[]): Promise<a
       const serialized = response.error;
       if (serialized.name === "AppError" && typeof serialized.code === "string") {
         throw _reconstructAppError(serialized);
+      }
+      if (serialized.name === "GitOperationError" && typeof serialized.gitReason === "string") {
+        throw _reconstructGitError(serialized);
       }
       throw deserializeError(serialized);
     }
