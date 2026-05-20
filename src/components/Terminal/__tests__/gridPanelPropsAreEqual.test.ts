@@ -3,6 +3,7 @@ import { gridPanelPropsAreEqual, type GridPanelProps } from "../GridPanel";
 import type { TerminalInstance } from "@/store";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { buildPanelProps } from "@/utils/panelProps";
 
 const noop = () => {};
 
@@ -225,4 +226,175 @@ describe("gridPanelPropsAreEqual", () => {
     const next = baseProps({ titleOverride: "wt-a — Claude" });
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
   });
+
+  it("returns false when terminal.exitCode changes", () => {
+    const prev = baseProps({
+      terminal: { ...baseTerminal, exitCode: undefined } as TerminalInstance,
+    });
+    const next = baseProps({ terminal: { ...baseTerminal, exitCode: 137 } as TerminalInstance });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when terminal.agentPresetColor changes", () => {
+    const prev = baseProps({
+      terminal: { ...baseTerminal, agentPresetColor: "#ff00ff" } as TerminalInstance,
+    });
+    const next = baseProps({
+      terminal: { ...baseTerminal, agentPresetColor: "#00ffff" } as TerminalInstance,
+    });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when terminal.agentPresetId changes", () => {
+    const prev = baseProps({
+      terminal: { ...baseTerminal, agentPresetId: "preset-a" } as TerminalInstance,
+    });
+    const next = baseProps({
+      terminal: { ...baseTerminal, agentPresetId: "preset-b" } as TerminalInstance,
+    });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when terminal.agentLaunchFlags changes reference", () => {
+    const prev = baseProps({
+      terminal: { ...baseTerminal, agentLaunchFlags: ["--print"] } as TerminalInstance,
+    });
+    const next = baseProps({
+      terminal: {
+        ...baseTerminal,
+        agentLaunchFlags: ["--print", "--dangerously-skip-permissions"],
+      } as TerminalInstance,
+    });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when terminal.browserHistory changes reference", () => {
+    const prev = baseProps({
+      terminal: {
+        ...baseTerminal,
+        browserHistory: { past: [], present: "http://a", future: [] },
+      } as TerminalInstance,
+    });
+    const next = baseProps({
+      terminal: {
+        ...baseTerminal,
+        browserHistory: { past: ["http://a"], present: "http://x", future: [] },
+      } as TerminalInstance,
+    });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when terminal.browserZoom changes", () => {
+    const prev = baseProps({
+      terminal: { ...baseTerminal, browserZoom: 1.0 } as TerminalInstance,
+    });
+    const next = baseProps({
+      terminal: { ...baseTerminal, browserZoom: 1.25 } as TerminalInstance,
+    });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when tab presetColor changes", () => {
+    const prev = baseProps({ tabs: [{ ...baseTab, presetColor: "#ff00ff" }] });
+    const next = baseProps({ tabs: [{ ...baseTab, presetColor: "#00ffff" }] });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when tab isUsingFallback changes", () => {
+    const prev = baseProps({ tabs: [{ ...baseTab, isUsingFallback: false }] });
+    const next = baseProps({ tabs: [{ ...baseTab, isUsingFallback: true }] });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when tab fallbackTooltip changes", () => {
+    const prev = baseProps({ tabs: [{ ...baseTab, fallbackTooltip: undefined }] });
+    const next = baseProps({
+      tabs: [{ ...baseTab, fallbackTooltip: 'Using fallback "x" — "y" unavailable' }],
+    });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when tab hasDangerousFlags changes", () => {
+    const prev = baseProps({ tabs: [{ ...baseTab, hasDangerousFlags: false }] });
+    const next = baseProps({ tabs: [{ ...baseTab, hasDangerousFlags: true }] });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when tab chrome.hasExited changes (post-exit spinner suppression)", () => {
+    // Race: exitCode/runtimeStatus fires before agentState:"exited" arrives.
+    // Without hasExited in the descriptor equality, the stale working spinner
+    // survives the re-render gate.
+    const liveChrome = deriveTerminalChrome({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentState: "working",
+    });
+    const exitedChrome = deriveTerminalChrome({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentState: "working",
+      exitCode: 0,
+    });
+    const prev = baseProps({ tabs: [{ ...baseTab, chrome: liveChrome }] });
+    const next = baseProps({ tabs: [{ ...baseTab, chrome: exitedChrome }] });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  describe("drift coverage", () => {
+    // Wraps a terminal in a Proxy that records every property read, then drives
+    // buildPanelProps so the Proxy captures the full terminal.* surface
+    // (including transitive reads inside deriveTerminalChrome). For each
+    // recorded key, mutating it must force the comparator to return false.
+    // Fails automatically when buildPanelProps gains a new terminal.* field
+    // that the comparator does not check.
+    it("catches every terminal.* field buildPanelProps reads", () => {
+      const reads = new Set<string>();
+      const fixture: TerminalInstance = {
+        ...baseTerminal,
+        agentState: "idle",
+        runtimeStatus: "running",
+        agentLaunchFlags: ["--print"],
+        browserHistory: { past: [], present: "http://a", future: [] },
+        browserZoom: 1.0,
+      } as TerminalInstance;
+
+      const proxy = new Proxy(fixture, {
+        get(target, prop, receiver) {
+          if (typeof prop === "string") reads.add(prop);
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+
+      buildPanelProps({
+        terminal: proxy,
+        isFocused: false,
+        overrides: { onFocus: noop, onClose: noop },
+      });
+
+      const observed = [...reads];
+      expect(observed.length).toBeGreaterThan(0);
+
+      for (const key of observed) {
+        const prev = baseProps({ terminal: fixture });
+        const next = baseProps({
+          terminal: mutateTerminalField(fixture, key),
+        });
+        expect(
+          gridPanelPropsAreEqual(prev, next),
+          `gridPanelPropsAreEqual must return false when terminal.${key} changes`
+        ).toBe(false);
+      }
+    });
+  });
 });
+
+function mutateTerminalField(terminal: TerminalInstance, key: string): TerminalInstance {
+  const current = (terminal as unknown as Record<string, unknown>)[key];
+  let mutated: unknown;
+  if (typeof current === "string") mutated = `${current}__drift`;
+  else if (typeof current === "number") mutated = current + 1;
+  else if (typeof current === "boolean") mutated = !current;
+  else if (Array.isArray(current)) mutated = [...current, "__drift"];
+  else mutated = { __drift: true };
+  return { ...terminal, [key]: mutated } as TerminalInstance;
+}
