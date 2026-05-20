@@ -359,7 +359,7 @@ export class ProjectViewManager {
     // pre-arming, every fast cold switch would fall through to the timeout.
     const paintGatePromise = this.waitForPaint(view.webContents.id, previousEntry);
 
-    let visibleAt = 0;
+    let visibleAt: number;
     try {
       // Load the renderer with projectId context
       await this.loadView(view, projectId);
