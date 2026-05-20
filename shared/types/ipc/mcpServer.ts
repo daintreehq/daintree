@@ -14,6 +14,9 @@
  * - `dedup`: a duplicate creation-tool call was suppressed by the
  *   per-session idempotency guard and the cached or in-flight result was
  *   returned. No second dispatch was performed.
+ * - `rate_limited`: the per-`(session, toolId)` token bucket was exhausted
+ *   and the call was rejected before dispatch with a `retryAfter` hint. No
+ *   dispatch was performed — this is a runaway-loop guard, not a failure.
  */
 export type McpAuditResult =
   | "success"
@@ -21,7 +24,8 @@ export type McpAuditResult =
   | "confirmation-pending"
   | "unauthorized"
   | "dedup"
-  | "collision";
+  | "collision"
+  | "rate_limited";
 
 /**
  * Persisted audit record for a single MCP tool dispatch. Written once per
@@ -57,7 +61,8 @@ export type McpConfirmationDecision = "approved" | "rejected" | "timeout";
  *
  * - `info`: success or dedup — nominal dispatch.
  * - `notice`: confirmation-pending — gate waiting on user approval.
- * - `warning`: tier-rejected — legit user action blocked by policy.
+ * - `warning`: tier-rejected or rate-limited — legit user action blocked
+ *   by policy.
  * - `error`: dispatch threw, timed out, or returned an error other than
  *   confirmation-pending/unauthorized.
  * - `critical`: reserved for systemic failures (not yet emitted).
@@ -73,6 +78,7 @@ const SEVERITY_BY_RESULT: Record<McpAuditResult, McpAuditSeverity> = {
   unauthorized: "error",
   error: "error",
   collision: "warning",
+  rate_limited: "warning",
 };
 
 const SEVERITY_BY_ERROR_CODE: Record<string, McpAuditSeverity> = {

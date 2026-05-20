@@ -133,6 +133,7 @@ export const BINDING_STALE = "BINDING_STALE";
 export const SESSION_BINDING_GONE = "SESSION_BINDING_GONE";
 export const MCP_DEDUP_KEY_COLLISION_CODE = "MCP_DEDUP_KEY_COLLISION";
 export const PRE_AUTH_FAILED_CODE = "PRE_AUTH_FAILED";
+export const MCP_RATE_LIMITED_CODE = "MCP_RATE_LIMITED";
 
 /**
  * Application-level convention: codes here flag transient failures that a
@@ -144,6 +145,7 @@ export const PRE_AUTH_FAILED_CODE = "PRE_AUTH_FAILED";
 export const RETRIABLE_ERROR_CODES: ReadonlySet<string> = new Set([
   EXECUTION_ERROR_CODE,
   CONFIRMATION_TIMEOUT_CODE,
+  MCP_RATE_LIMITED_CODE,
 ]);
 
 export interface McpErrorPayload {
@@ -329,12 +331,22 @@ export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
 
 /**
  * Creation-tool allowlist for per-session idempotency dedup. LLMs replay
- * tool calls during multi-step planning, especially across reconnects. For
- * these four actions a duplicate call would silently produce a duplicate
- * resource — orphaned terminal, redundant agent, etc. Inside the TTL
- * window the duplicate returns the original result instead of redispatching.
+ * tool calls during multi-step planning, especially across reconnects.
+ * Inside the TTL window a duplicate call returns the original result
+ * instead of redispatching, with an args-hash guard rejecting same-key
+ * different-args replays as a collision (#8429).
  *
- * Deliberately narrow: blanket-applying dedup to all mutations would mask
+ * Inclusion criterion: a mutation tool belongs here when (a) an LLM
+ * retrying after a transient error or reconnect is realistic, and (b) a
+ * duplicate dispatch has an immediately user-visible side effect — an
+ * orphaned terminal, a redundant agent, a duplicate commit/push, or a
+ * duplicate issue/PR. The seed cohort (`terminal.new`,
+ * `worktree.createWithRecipe`, `agent.launch`, `recipe.run`) is widened
+ * to the git/forge mutations (`git.commit`, `git.push`, `forge.openIssue`,
+ * `github.openPR`) now that the args-hash collision guard (#8429) is in
+ * place to make the widening safe.
+ *
+ * Deliberately bounded: blanket-applying dedup to all mutations would mask
  * legitimate "do it again" cases (re-running the same git command, etc.).
  */
 export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
@@ -342,6 +354,10 @@ export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
   "worktree.createWithRecipe",
   "agent.launch",
   "recipe.run",
+  "git.commit",
+  "git.push",
+  "forge.openIssue",
+  "github.openPR",
 ]);
 
 /**
@@ -359,6 +375,62 @@ export const MCP_DEDUP_TTL_MS = 120_000;
  * insertion above this cap so memory stays bounded at session lifetime.
  */
 export const MCP_DEDUP_MAX_ENTRIES_PER_SESSION = 256;
+
+/**
+ * Token-bucket configuration for the per-`(session, toolId)` rate limiter
+ * that bounds runaway agent loops on the MCP CallTool path (#8468).
+ *
+ * - `capacity`: maximum burst — tokens available when the bucket is full.
+ * - `refillPerMs`: tokens regenerated per millisecond. Expressed per-ms so
+ *   the bucket can be recomputed lazily from elapsed wall-clock on each call
+ *   without a background timer.
+ */
+export interface RateLimitConfig {
+  capacity: number;
+  refillPerMs: number;
+}
+
+/**
+ * Rate-limit tiers. Intentionally conservative placeholders sized so that no
+ * legitimate agent workflow trips them — a runaway loop hits the burst cap,
+ * then `retryAfter` forces a minimum gap. Tuned post-ship from audit data.
+ *
+ * - `highFreqRead` (60/min): cheap read-only polling tools. The
+ *   `triage_terminals` recipe explicitly tells agents not to busy-loop;
+ *   60/min is generous for legitimate fleet-polling cadences.
+ * - `standard` (30/min): the default for any tool not in
+ *   {@link RATE_LIMIT_TOOL_MAP}.
+ * - `mutation` (10/min): side-effecting tools where a tight loop produces
+ *   duplicate resources (commits, pushes, issues, PRs).
+ */
+export const RATE_LIMIT_TIERS = {
+  highFreqRead: { capacity: 60, refillPerMs: 60 / 60_000 },
+  standard: { capacity: 30, refillPerMs: 30 / 60_000 },
+  mutation: { capacity: 10, refillPerMs: 10 / 60_000 },
+} as const satisfies Record<string, RateLimitConfig>;
+
+/**
+ * Per-tool tier overrides. Tools absent from this map fall back to
+ * {@link RATE_LIMIT_TIERS.standard}. Keep the mutation cohort aligned with
+ * {@link MCP_DEDUP_ALLOWLIST}'s git/forge entries.
+ */
+export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map([
+  ["terminal.getOutput", RATE_LIMIT_TIERS.highFreqRead],
+  ["terminal.getStatus", RATE_LIMIT_TIERS.highFreqRead],
+  ["actions.getContext", RATE_LIMIT_TIERS.highFreqRead],
+  ["git.commit", RATE_LIMIT_TIERS.mutation],
+  ["git.push", RATE_LIMIT_TIERS.mutation],
+  ["forge.openIssue", RATE_LIMIT_TIERS.mutation],
+  ["github.openPR", RATE_LIMIT_TIERS.mutation],
+] as Array<[string, RateLimitConfig]>);
+
+/**
+ * Resolve the rate-limit config for a tool — its explicit override or the
+ * `standard` fallback.
+ */
+export function rateLimitConfigForTool(toolId: string): RateLimitConfig {
+  return RATE_LIMIT_TOOL_MAP.get(toolId) ?? RATE_LIMIT_TIERS.standard;
+}
 
 /**
  * Compute the minimum non-external tier that permits the given tool. Used to

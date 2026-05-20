@@ -595,6 +595,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
+        this.deps.sessionStore.clearRateLimitState(sessionId);
         this.deps.abusePolicy.dropSession(sessionId);
         cleanupResourceSubscriptions(sessionId, this.deps.sessionStore);
       };
@@ -611,6 +612,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
+        this.deps.sessionStore.clearRateLimitState(sessionId);
         this.deps.abusePolicy.dropSession(sessionId);
         transport.onclose = undefined;
         await transport.close().catch(() => {});
@@ -721,6 +723,7 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionWebContentsMap.delete(id);
       this.deps.sessionStore.sessionContextMap.delete(id);
       this.deps.sessionStore.clearDedupState(id);
+      this.deps.sessionStore.clearRateLimitState(id);
       this.deps.abusePolicy.dropSession(id);
       cleanupResourceSubscriptions(id, this.deps.sessionStore);
     };
@@ -742,6 +745,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.delete(id);
         this.deps.sessionStore.sessionContextMap.delete(id);
         this.deps.sessionStore.clearDedupState(id);
+        this.deps.sessionStore.clearRateLimitState(id);
         this.deps.abusePolicy.dropSession(id);
         cleanupResourceSubscriptions(id, this.deps.sessionStore);
       } else {
@@ -750,6 +754,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.delete(newSessionId);
         this.deps.sessionStore.sessionContextMap.delete(newSessionId);
         this.deps.sessionStore.clearDedupState(newSessionId);
+        this.deps.sessionStore.clearRateLimitState(newSessionId);
         this.deps.abusePolicy.dropSession(newSessionId);
         cleanupResourceSubscriptions(newSessionId, this.deps.sessionStore);
       }

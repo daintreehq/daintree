@@ -44,6 +44,7 @@ import {
   MCP_DEDUP_TTL_MS,
   MCP_DEDUP_MAX_ENTRIES_PER_SESSION,
   MCP_DEDUP_KEY_COLLISION_CODE,
+  MCP_RATE_LIMITED_CODE,
   minimumPermittingTier,
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
@@ -272,6 +273,34 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // post-dispatch refresh can verify the entry wasn't revoked and
       // re-issued under us (race guard, lesson #2243).
       grantIssuedAt = grant.issuedAt;
+    }
+
+    // Runaway-loop guard (#8468): charge one token against the
+    // per-`(session, toolId)` bucket before dedup or dispatch. Placed
+    // after the tier/grant check (an unauthorized call shouldn't consume
+    // tokens) and before dedup (a tight loop replaying the same dedup key
+    // must still be bounded — dedup is an idempotency guard, not a
+    // rate-limit bypass). Rejection is an explicit retriable tool-error
+    // with a `retryAfter` hint, never a silent skip.
+    const rateLimit = sessionStore.consumeRateLimitToken(sessionId, actionId);
+    if (!rateLimit.allowed) {
+      try {
+        appendAuditRecord({
+          toolId: actionId,
+          sessionId,
+          tier,
+          args,
+          durationMs: Date.now() - startedAt,
+          outcome: { kind: "rate_limited", retryAfter: rateLimit.retryAfter },
+        });
+      } catch (err) {
+        console.error("[MCP] Failed to append audit record:", err);
+      }
+      return buildToolError({
+        code: MCP_RATE_LIMITED_CODE,
+        message: `Rate limit exceeded for '${actionId}'. Retry after ${rateLimit.retryAfter}s.`,
+        details: { retryAfter: rateLimit.retryAfter },
+      });
     }
 
     // Idempotency dedup for the creation-tool allowlist. Same-moment duplicates
