@@ -22,7 +22,10 @@ import {
   registerDaintreeFileProtocol,
   setupWebviewCSP,
 } from "./setup/protocols.js";
-import { registerAppLifecycleHandlers } from "./lifecycle/appLifecycle.js";
+import {
+  registerAppLifecycleHandlers,
+  registerWindowSessionEndHandler,
+} from "./lifecycle/appLifecycle.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
 import {
   setMainWindow,
@@ -339,6 +342,7 @@ if (!gotTheLock) {
     }
 
     registerWindowForFocusThrottle(win);
+    registerWindowSessionEndHandler(win);
   }
 
   registerAppLifecycleHandlers({
