@@ -531,6 +531,15 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
                 pressureRemains = true;
               }
             }
+            // Aggregate fan-out can hold the combined footprint above the safe
+            // ceiling even when no single process trips its per-type threshold.
+            // Mirror the main poll's aggregate gate here so aggregate-driven
+            // pressure can still escalate to tier 2 when tier 1 under-reclaims —
+            // without this, aggregate-only pressure triggers tier 1 forever but
+            // can never reach tier 2.
+            if (afterMb > aggregateWarnThresholdMb) {
+              pressureRemains = true;
+            }
           } catch {
             // Re-sample failed — assume pressure persists and treat reclaim
             // as zero so the gate falls through to escalation. Without

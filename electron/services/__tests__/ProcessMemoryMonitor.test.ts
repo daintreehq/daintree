@@ -563,7 +563,8 @@ describe("ProcessMemoryMonitor", () => {
     });
 
     it("escalates aggregate-only pressure to tier 2 after sustained polls", async () => {
-      // Same 5-Tab × 500 MB setup, but advance enough polls for tier 2.
+      // Same 5-Tab × 500 MB setup — aggregate 2500 MB stays above the 2048 MB
+      // ceiling, no single Tab trips its 768 MB per-type threshold.
       mockGetAppMetrics.mockReturnValue([
         makeMetric("Tab", 500 * 1024, 201),
         makeMetric("Tab", 500 * 1024, 202),
@@ -574,6 +575,12 @@ describe("ProcessMemoryMonitor", () => {
       stop = startAppMetricsMonitor(mockActions);
 
       await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+      // Tier 2 escalates inside the tier-1 mitigation cycle, gated on the
+      // post-mitigation re-sample that runs once the RECLAIM_SETTLE_MS settle
+      // window elapses. The block-level advancePolls only flushes microtasks,
+      // so drive the settle delay explicitly so the re-sample and tier-2
+      // decision run before the assertion.
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
 
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
     });

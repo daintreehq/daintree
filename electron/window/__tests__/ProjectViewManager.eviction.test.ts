@@ -401,6 +401,7 @@ describe("ProjectViewManager — eviction safety", () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -868,6 +869,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -890,6 +892,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -924,6 +927,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -960,6 +964,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -985,6 +990,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -1011,6 +1017,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 4,
     });
 
@@ -1054,6 +1061,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -1081,6 +1089,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
