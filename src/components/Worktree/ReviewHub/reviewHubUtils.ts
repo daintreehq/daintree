@@ -154,7 +154,7 @@ export function readGitErrorFields(err: unknown): {
   leaseSha?: string;
   branchName?: string;
 } {
-  if (typeof err !== "object" || err === null) return {};
+  if (!(err instanceof Error)) return {};
   isClientGitError(err);
   const gitReason = Reflect.get(err, "gitReason");
   const leaseSha = Reflect.get(err, "leaseSha");

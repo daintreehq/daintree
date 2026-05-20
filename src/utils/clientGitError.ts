@@ -42,6 +42,11 @@ export class ClientGitError extends Error {
 // Group 4: the original human-readable message after the closing `]`.
 // Encoded fields contain no literal `|` or `]` (encodeURIComponent escapes
 // them as `%7C`/`%5D`), so the positional character classes are safe.
+// `[a-z-]+` constrains the reason group to the lowercase-kebab shape of every
+// `GitOperationReason` union member. A future reason with underscores or
+// digits would fail to decode; the consumer-side `?? "unknown"` fallback
+// (see `readGitErrorFields` callers + `PUSH_BANNER_CONFIGS.unknown`) catches
+// that, but adding the new shape here must remain a coordinated change.
 const ENCODED_GIT_ERROR_PATTERN = /^\[GitError\|([a-z-]+)\|([^|]*)\|([^\]]*)\] (.*)$/s;
 
 function decodeOptional(encoded: string): string | undefined {

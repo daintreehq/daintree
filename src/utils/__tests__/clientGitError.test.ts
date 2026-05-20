@@ -69,6 +69,13 @@ describe("isClientGitError", () => {
     expect(err.message).toBe("[GitError|PUSH_REJECTED||] something");
   });
 
+  it("returns false for a reason containing underscores or digits (regex boundary)", () => {
+    const errUnderscore = new Error("[GitError|push_rejected||] msg");
+    expect(isClientGitError(errUnderscore)).toBe(false);
+    const errDigits = new Error("[GitError|reason42||] msg");
+    expect(isClientGitError(errDigits)).toBe(false);
+  });
+
   it("recognises a same-realm ClientGitError without a prefix", () => {
     const err = new ClientGitError("auth-failed", "fell over", undefined, undefined);
     expect(isClientGitError(err)).toBe(true);

@@ -47,6 +47,10 @@ describe("readGitErrorFields", () => {
     expect(readGitErrorFields(undefined)).toEqual({});
     expect(readGitErrorFields("oops")).toEqual({});
     expect(readGitErrorFields(42)).toEqual({});
+    // Plain object with the right shape — still not an Error instance.
+    // Tightening to instanceof Error keeps the surface area to actual thrown
+    // errors and prevents accidental coercion of unrelated payloads.
+    expect(readGitErrorFields({ gitReason: "push-rejected-outdated", leaseSha: "x" })).toEqual({});
   });
 
   it("returns empty object for a plain Error with no prefix and no own properties", () => {
