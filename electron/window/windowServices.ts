@@ -276,22 +276,22 @@ export async function setupWindowServices(
   // Workspace client is always "ready" — per-project hosts start on-demand via loadProject()
   const workspaceReady = true;
 
+  // Scratch store init is not needed for first interaction — fire-and-forget
+  // so it doesn't gate critical-path readiness. createScratch() does its own
+  // recursive mkdir, so the root dir doesn't have to exist before IPC handlers
+  // register.
+  scratchStore.initialize().catch((err) => {
+    console.warn("[MAIN] Scratch store init failed:", err);
+  });
+
   try {
     const results = await Promise.allSettled([
       getPtyClient()!.waitForReady(),
       projectStore.initialize(),
-      scratchStore.initialize(),
     ]);
 
     ptyReady = results[0].status === "fulfilled";
     const projectStoreReady = results[1].status === "fulfilled";
-    const scratchStoreReady = results[2].status === "fulfilled";
-    if (!scratchStoreReady) {
-      console.warn(
-        "[MAIN] Scratch store init failed:",
-        results[2].status === "rejected" ? results[2].reason : "unknown"
-      );
-    }
 
     if (ptyReady && workspaceReady && projectStoreReady) {
       console.log("[MAIN] All critical services ready");
