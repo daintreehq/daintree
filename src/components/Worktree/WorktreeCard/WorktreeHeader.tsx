@@ -10,12 +10,14 @@ import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { IssueBadge } from "./IssueBadge";
 import { EnvironmentPopover } from "./EnvironmentPopover";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
+import { CollapsedAlarmPill } from "./CollapsedAlarmPill";
 import { WorktreeActionsToolbar } from "./WorktreeActionsToolbar";
 import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
 import { NonMainSecondaryRow } from "./NonMainSecondaryRow";
 import { scheduleFlip } from "@/utils/flipScheduler";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
+import { computeAlarmTier } from "@/lib/worktreeAlarmTier";
 
 export interface WorktreeHeaderProps {
   worktree: WorktreeState;
@@ -271,6 +273,18 @@ export function WorktreeHeader({
   );
   const isMainStandardLayout = !!(isMainOnStandardBranch && !hasIssueTitle);
 
+  const ciState = worktree.linked?.pr?.ciStatus?.state;
+  const collapsedAlarm = useMemo(
+    () =>
+      computeAlarmTier({
+        ciState,
+        fetchAuthFailed: worktree.fetchAuthFailed,
+        behindCount: worktree.behindCount,
+        isDetached: worktree.isDetached,
+      }),
+    [ciState, worktree.fetchAuthFailed, worktree.behindCount, worktree.isDetached]
+  );
+
   const { visibleStates, sessionAriaLabel } = useMemo(() => {
     if (!sessionStates || !sessionTotal || sessionTotal === 0) {
       return { visibleStates: [] as { state: AgentState; count: number }[], sessionAriaLabel: "" };
@@ -340,6 +354,7 @@ export function WorktreeHeader({
               {gitStateIndicator.label}
             </span>
           )}
+          {isCollapsed && <CollapsedAlarmPill alarm={collapsedAlarm} />}
         </div>
 
         {((isPinned && !isMainWorktree) ||
