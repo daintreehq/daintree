@@ -28,7 +28,9 @@ function consumeEvent(event: KeyboardEvent): void {
 /**
  * Immediate MRU project switcher.
  *
- * Cmd+Alt+=/Plus switches down/forward in MRU order.
+ * `Cmd+Alt+=` cycles forward (most-recent non-current project).
+ * `Cmd+Shift+Alt+=` inverts direction and cycles backward (least-recent
+ * non-current project).
  *
  * Uses capture-phase window listeners so the event fires before xterm's
  * custom key handler and before `KeybindingService` dispatches the matching

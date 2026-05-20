@@ -166,14 +166,15 @@ describe("useProjectMruSwitcher", () => {
     expect(switchProjectMock).toHaveBeenCalledWith("p-recent");
   });
 
-  it("Cmd+Alt+Plus (Shift+Equal) switches forward through MRU", () => {
+  it("Cmd+Shift+Alt+= switches backward through MRU (Shift inverts direction)", () => {
     renderHook(() => useProjectMruSwitcher());
 
     act(() => {
       keyDown("Equal", { shiftKey: true });
     });
 
-    expect(switchProjectMock).toHaveBeenCalledWith("p-recent");
+    // Shift maps to "newer" → least-recently-opened non-current project
+    expect(switchProjectMock).toHaveBeenCalledWith("p-oldest");
   });
 
   it("numpad add switches forward and numpad subtract remains free", () => {

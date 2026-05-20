@@ -327,7 +327,13 @@ describe("ProjectSwitchService", () => {
 
     await service.switchProject("project-new");
 
-    const payload = sendToRendererMock.mock.calls[0][1];
+    // Use channel-aware lookup: broadcastProjectSwitchUpdates now fires
+    // PROJECT_UPDATED for the departing project before PROJECT_ON_SWITCH,
+    // so index 0 is no longer the switch payload.
+    const payload = sendToRendererMock.mock.calls.find(
+      (c: unknown[]) => c[0] === CHANNELS.PROJECT_ON_SWITCH
+    )?.[1];
+    expect(payload).toBeDefined();
     expect(payload.hydrateResult).toBeDefined();
     expect(payload.hydrateResult.settingsRecovery).toBeNull();
     expect(buildSwitchHydrateResultMock).toHaveBeenCalledWith("project-new");
@@ -339,7 +345,10 @@ describe("ProjectSwitchService", () => {
 
     await service.switchProject("project-new");
 
-    const payload = sendToRendererMock.mock.calls[0][1];
+    const payload = sendToRendererMock.mock.calls.find(
+      (c: unknown[]) => c[0] === CHANNELS.PROJECT_ON_SWITCH
+    )?.[1];
+    expect(payload).toBeDefined();
     expect(payload).not.toHaveProperty("hydrateResult");
     expect(payload.project).toMatchObject({ id: "project-new" });
     expect(payload.switchId).toBe("switch-id-1");
