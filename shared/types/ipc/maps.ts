@@ -1163,16 +1163,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-  // Gemini channels
-  "gemini:get-status": {
-    args: [];
-    result: { exists: boolean; alternateBufferEnabled: boolean; error?: string };
-  };
-  "gemini:enable-alternate-buffer": {
-    args: [];
-    result: { success: boolean };
-  };
-
   // Plugin channels
   // Dev Preview channels
   // Auto-update channels
@@ -1386,74 +1376,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
   };
 
-  // Onboarding
-  "onboarding:get": {
-    args: [];
-    result: OnboardingState;
-  };
-  "onboarding:set-step": {
-    args: [step: string | null | { step: string | null; agentSetupIds?: string[] }];
-    result: void;
-  };
-  "onboarding:complete": {
-    args: [];
-    result: void;
-  };
-  "onboarding:mark-toast-seen": {
-    args: [];
-    result: void;
-  };
-  "onboarding:mark-newsletter-seen": {
-    args: [];
-    result: void;
-  };
-  "onboarding:mark-waiting-nudge-seen": {
-    args: [];
-    result: void;
-  };
-  "onboarding:mark-agents-seen": {
-    args: [agentIds: string[]];
-    result: OnboardingState;
-  };
-  "onboarding:record-agent-first-seen": {
-    args: [agentIds: string[]];
-    result: OnboardingState;
-  };
-  "onboarding:dismiss-welcome-card": {
-    args: [];
-    result: OnboardingState;
-  };
-  "onboarding:dismiss-setup-banner": {
-    args: [];
-    result: OnboardingState;
-  };
-  "onboarding:checklist-get": {
-    args: [];
-    result: ChecklistState;
-  };
-  "onboarding:checklist-dismiss": {
-    args: [];
-    result: void;
-  };
-  "onboarding:checklist-mark-item": {
-    args: [item: ChecklistItemId];
-    result: void;
-  };
-  "onboarding:checklist-mark-celebration-shown": {
-    args: [];
-    result: void;
-  };
-
-  // Milestones
-  "milestones:get": {
-    args: [];
-    result: Record<string, boolean>;
-  };
-  "milestones:mark-shown": {
-    args: [milestoneId: string];
-    result: void;
-  };
-
   // Forge integration
   "forge:get-settings": {
     args: [];
@@ -1614,80 +1536,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "crash-recovery:set-config": {
     args: [config: Partial<import("./crashRecovery.js").CrashRecoveryConfig>];
     result: import("./crashRecovery.js").CrashRecoveryConfig;
-  };
-
-  // MCP Server channels
-  "mcp-server:get-status": {
-    args: [];
-    result: import("./mcpServer.js").McpServerStatusSnapshot;
-  };
-  "mcp-server:set-enabled": {
-    args: [enabled: boolean];
-    result: import("./mcpServer.js").McpServerStatusSnapshot;
-  };
-  "mcp-server:set-port": {
-    args: [port: number | null];
-    result: import("./mcpServer.js").McpServerStatusSnapshot;
-  };
-  "mcp-server:rotate-api-key": {
-    args: [];
-    result: string;
-  };
-  "mcp-server:get-config-snippet": {
-    args: [];
-    result: string;
-  };
-  "mcp-server:get-audit-records": {
-    args: [];
-    result: import("./mcpServer.js").McpAuditRecord[];
-  };
-  "mcp-server:get-audit-config": {
-    args: [];
-    result: { enabled: boolean; maxRecords: number };
-  };
-  "mcp-server:get-audit-stats": {
-    args: [];
-    result: import("./mcpServer.js").McpAuditStats;
-  };
-  "mcp-server:clear-audit-log": {
-    args: [];
-    result: void;
-  };
-  "mcp-server:get-turn-outcome-records": {
-    args: [];
-    result: import("./mcpServer.js").AssistantTurnRecord[];
-  };
-  "mcp-server:clear-turn-outcome-log": {
-    args: [];
-    result: void;
-  };
-  "mcp-server:set-audit-enabled": {
-    args: [enabled: boolean];
-    result: { enabled: boolean; maxRecords: number };
-  };
-  "mcp-server:set-audit-max-records": {
-    args: [max: number];
-    result: { enabled: boolean; maxRecords: number };
-  };
-  "mcp-server:get-runtime-state": {
-    args: [];
-    result: import("./mcpServer.js").McpRuntimeSnapshot;
-  };
-  "mcp-server:export-audit-log": {
-    args: [records: import("./mcpServer.js").McpAuditRecord[]];
-    result: boolean;
-  };
-  "mcp-server:set-session-tier": {
-    args: [payload: { sessionId: string; tier: "workbench" | "action" | "system" }];
-    result: { sessionId: string; tier: "workbench" | "action" | "system" };
-  };
-  "mcp-server:issue-grant": {
-    args: [payload: { sessionId: string; toolId: string }];
-    result: import("./mcpServer.js").McpIssueGrantResult;
-  };
-  "mcp-server:revoke-session-grants": {
-    args: [payload: { sessionId: string }];
-    result: import("./mcpServer.js").McpRevokeSessionGrantsResult;
   };
 
   // Webview console capture

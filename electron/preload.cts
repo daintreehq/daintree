@@ -14,7 +14,7 @@ import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
 import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
-import type { McpAuditRecord, McpRuntimeSnapshot } from "../shared/types/ipc/mcpServer.js";
+import type { McpRuntimeSnapshot } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import type { HelpAssistantTier } from "../shared/types/ipc/maps.js";
@@ -35,6 +35,10 @@ import { buildPortalPreloadBindings } from "./ipc/handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "./ipc/handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
+import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
+import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
+import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
+import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 
 import type {
   WorktreeState,
@@ -72,7 +76,6 @@ import type {
   AttachIssuePayload,
   IssueAssociation,
   VoiceInputStatus,
-  ChecklistItemId,
 } from "../shared/types/index.js";
 import type { ColorVisionMode, AppColorScheme } from "../shared/types/appTheme.js";
 import type {
@@ -2129,11 +2132,7 @@ const api: ElectronAPI = {
   },
 
   // Gemini API
-  gemini: {
-    getStatus: () => _unwrappingInvoke(CHANNELS.GEMINI_GET_STATUS),
-
-    enableAlternateBuffer: () => _unwrappingInvoke(CHANNELS.GEMINI_ENABLE_ALTERNATE_BUFFER),
-  },
+  gemini: buildGeminiPreloadBindings(_unwrappingInvoke),
 
   // Commands API
   commands: buildCommandsPreloadBindings(_unwrappingInvoke),
@@ -2320,34 +2319,14 @@ const api: ElectronAPI = {
   },
 
   onboarding: {
-    get: () => _unwrappingInvoke(CHANNELS.ONBOARDING_GET),
-    setStep: (step: string | null | { step: string | null; agentSetupIds?: string[] }) =>
-      _unwrappingInvoke(CHANNELS.ONBOARDING_SET_STEP, step),
-    complete: () => _unwrappingInvoke(CHANNELS.ONBOARDING_COMPLETE),
-    markToastSeen: () => _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_TOAST_SEEN),
-    markNewsletterSeen: () => _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN),
-    markWaitingNudgeSeen: () => _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_WAITING_NUDGE_SEEN),
-    markAgentsSeen: (agentIds: string[]) =>
-      _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_AGENTS_SEEN, agentIds),
-    recordAgentFirstSeen: (agentIds: string[]) =>
-      _unwrappingInvoke(CHANNELS.ONBOARDING_RECORD_AGENT_FIRST_SEEN, agentIds),
-    dismissWelcomeCard: () => _unwrappingInvoke(CHANNELS.ONBOARDING_DISMISS_WELCOME_CARD),
-    dismissSetupBanner: () => _unwrappingInvoke(CHANNELS.ONBOARDING_DISMISS_SETUP_BANNER),
-    getChecklist: () => _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_GET),
-    dismissChecklist: () => _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_DISMISS),
-    markChecklistItem: (item: ChecklistItemId) =>
-      _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, item),
-    markChecklistCelebrationShown: () =>
-      _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN),
+    ...buildOnboardingPreloadBindings(_unwrappingInvoke),
+
     onChecklistPush: (
       callback: (state: IpcEventMap["onboarding:checklist-push"]) => void
     ): (() => void) => _typedOn(CHANNELS.ONBOARDING_CHECKLIST_PUSH, callback),
   },
 
-  milestones: {
-    get: () => _unwrappingInvoke(CHANNELS.MILESTONES_GET),
-    markShown: (id: string) => _unwrappingInvoke(CHANNELS.MILESTONES_MARK_SHOWN, id),
-  },
+  milestones: buildMilestonesPreloadBindings(_unwrappingInvoke),
 
   shortcutHints: {
     getCounts: () => _unwrappingInvoke(CHANNELS.SHORTCUT_HINTS_GET_COUNTS),
@@ -2449,32 +2428,10 @@ const api: ElectronAPI = {
   },
 
   mcpServer: {
-    getStatus: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_STATUS),
-    setEnabled: (enabled: boolean) => _unwrappingInvoke(CHANNELS.MCP_SERVER_SET_ENABLED, enabled),
-    setPort: (port: number | null) => _unwrappingInvoke(CHANNELS.MCP_SERVER_SET_PORT, port),
-    rotateApiKey: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_ROTATE_API_KEY),
-    getConfigSnippet: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_CONFIG_SNIPPET),
-    getAuditRecords: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_AUDIT_RECORDS),
-    getAuditConfig: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_AUDIT_CONFIG),
-    getAuditStats: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_AUDIT_STATS),
-    clearAuditLog: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_CLEAR_AUDIT_LOG),
-    getTurnOutcomeRecords: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_TURN_OUTCOME_RECORDS),
-    clearTurnOutcomeLog: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_CLEAR_TURN_OUTCOME_LOG),
-    setAuditEnabled: (enabled: boolean) =>
-      _unwrappingInvoke(CHANNELS.MCP_SERVER_SET_AUDIT_ENABLED, enabled),
-    setAuditMaxRecords: (max: number) =>
-      _unwrappingInvoke(CHANNELS.MCP_SERVER_SET_AUDIT_MAX_RECORDS, max),
-    getRuntimeState: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_RUNTIME_STATE),
+    ...buildMcpServerPreloadBindings(_unwrappingInvoke),
+
     onRuntimeStateChanged: (callback: (snapshot: McpRuntimeSnapshot) => void) =>
       _typedOn(CHANNELS.MCP_SERVER_RUNTIME_STATE_CHANGED, callback),
-    exportAuditLog: (records: McpAuditRecord[]) =>
-      _unwrappingInvoke(CHANNELS.MCP_SERVER_EXPORT_AUDIT_LOG, records),
-    setSessionTier: (sessionId: string, tier: "workbench" | "action" | "system") =>
-      _unwrappingInvoke(CHANNELS.MCP_SERVER_SET_SESSION_TIER, { sessionId, tier }),
-    issueGrant: (sessionId: string, toolId: string) =>
-      _unwrappingInvoke(CHANNELS.MCP_SERVER_ISSUE_GRANT, { sessionId, toolId }),
-    revokeSessionGrants: (sessionId: string) =>
-      _unwrappingInvoke(CHANNELS.MCP_SERVER_REVOKE_SESSION_GRANTS, { sessionId }),
     onTierNotPermitted: (
       callback: (payload: {
         sessionId: string;

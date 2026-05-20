@@ -188,6 +188,14 @@ export interface GeneratedIpcInvokeMap {
     args: [filters: import("./events.js").EventFilterOptions];
     result: import("./events.js").EventRecord[];
   };
+  "gemini:enable-alternate-buffer": {
+    args: [];
+    result: { success: boolean };
+  };
+  "gemini:get-status": {
+    args: [];
+    result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
+  };
   "global-env:get": {
     args: [];
     result: Record<string, string>;
@@ -232,6 +240,142 @@ export interface GeneratedIpcInvokeMap {
   };
   "help:unmark-terminal": {
     args: [terminalId: string];
+    result: void;
+  };
+  "mcp-server:clear-audit-log": {
+    args: [];
+    result: void;
+  };
+  "mcp-server:clear-turn-outcome-log": {
+    args: [];
+    result: void;
+  };
+  "mcp-server:export-audit-log": {
+    args: [records: import("./mcpServer.js").McpAuditRecord[]];
+    result: boolean;
+  };
+  "mcp-server:get-audit-config": {
+    args: [];
+    result: { enabled: boolean; maxRecords: number };
+  };
+  "mcp-server:get-audit-records": {
+    args: [];
+    result: import("./mcpServer.js").McpAuditRecord[];
+  };
+  "mcp-server:get-audit-stats": {
+    args: [];
+    result: import("./mcpServer.js").McpAuditStats;
+  };
+  "mcp-server:get-config-snippet": {
+    args: [];
+    result: string;
+  };
+  "mcp-server:get-runtime-state": {
+    args: [];
+    result: import("./mcpServer.js").McpRuntimeSnapshot;
+  };
+  "mcp-server:get-status": {
+    args: [];
+    result: import("./mcpServer.js").McpServerStatusSnapshot;
+  };
+  "mcp-server:get-turn-outcome-records": {
+    args: [];
+    result: import("./mcpServer.js").AssistantTurnRecord[];
+  };
+  "mcp-server:issue-grant": {
+    args: [payload: { sessionId: string; toolId: string }];
+    result: import("./mcpServer.js").McpIssueGrantResult;
+  };
+  "mcp-server:revoke-session-grants": {
+    args: [payload: { sessionId: string }];
+    result: import("./mcpServer.js").McpRevokeSessionGrantsResult;
+  };
+  "mcp-server:rotate-api-key": {
+    args: [];
+    result: string;
+  };
+  "mcp-server:set-audit-enabled": {
+    args: [enabled: boolean];
+    result: { enabled: boolean; maxRecords: number };
+  };
+  "mcp-server:set-audit-max-records": {
+    args: [max: number];
+    result: { enabled: boolean; maxRecords: number };
+  };
+  "mcp-server:set-enabled": {
+    args: [enabled: boolean];
+    result: import("./mcpServer.js").McpServerStatusSnapshot;
+  };
+  "mcp-server:set-port": {
+    args: [port: number | null];
+    result: import("./mcpServer.js").McpServerStatusSnapshot;
+  };
+  "mcp-server:set-session-tier": {
+    args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
+    result: { sessionId: string; tier: "action" | "workbench" | "system" };
+  };
+  "milestones:get": {
+    args: [];
+    result: Record<string, boolean>;
+  };
+  "milestones:mark-shown": {
+    args: [milestoneId: string];
+    result: void;
+  };
+  "onboarding:checklist-dismiss": {
+    args: [];
+    result: void;
+  };
+  "onboarding:checklist-get": {
+    args: [];
+    result: import("./maps.js").ChecklistState;
+  };
+  "onboarding:checklist-mark-celebration-shown": {
+    args: [];
+    result: void;
+  };
+  "onboarding:checklist-mark-item": {
+    args: [item: import("./maps.js").ChecklistItemId];
+    result: void;
+  };
+  "onboarding:complete": {
+    args: [];
+    result: void;
+  };
+  "onboarding:dismiss-setup-banner": {
+    args: [];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:dismiss-welcome-card": {
+    args: [];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:get": {
+    args: [];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:mark-agents-seen": {
+    args: [agentIds: string[]];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:mark-newsletter-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:mark-toast-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:mark-waiting-nudge-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:record-agent-first-seen": {
+    args: [agentIds: string[]];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:set-step": {
+    args: [arg: string | { step: string | null; agentSetupIds?: string[] | undefined } | null];
     result: void;
   };
   "plugin:actions-get": {

@@ -1,11 +1,11 @@
-import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import type { StoreSchema } from "../../store.js";
-import { typedHandle } from "../utils.js";
+import { defineIpcNamespace, op } from "../define.js";
+import { ONBOARDING_METHOD_CHANNELS } from "./onboarding.preload.js";
 import { setOnboardingCompleteTag } from "../../services/TelemetryService.js";
+import type { ChecklistItemId, ChecklistState, OnboardingState } from "../../../shared/types/ipc/maps.js";
 
-type OnboardingState = StoreSchema["onboarding"];
-type ChecklistState = OnboardingState["checklist"];
+type StoredOnboardingState = StoreSchema["onboarding"];
 
 const DEFAULT_CHECKLIST: ChecklistState = {
   dismissed: false,
@@ -57,7 +57,7 @@ function getOnboardingState(): OnboardingState {
       },
     };
   }
-  const raw = store.get("onboarding");
+  const raw = store.get("onboarding") as StoredOnboardingState | undefined;
   if (!raw) {
     return {
       schemaVersion: 2,
@@ -105,145 +105,134 @@ function getChecklistState(): ChecklistState {
   return getOnboardingState().checklist;
 }
 
-export function registerOnboardingHandlers(): () => void {
-  const cleanups: Array<() => void> = [];
-
-  cleanups.push(typedHandle(CHANNELS.ONBOARDING_GET, () => getOnboardingState()));
-
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_SET_STEP, (arg: unknown) => {
-      if (arg !== null && typeof arg === "object" && !Array.isArray(arg)) {
-        const payload = arg as { step?: unknown; agentSetupIds?: unknown };
-        const step = typeof payload.step === "string" ? payload.step : null;
-        store.set("onboarding.currentStep", step);
-        if (Array.isArray(payload.agentSetupIds)) {
-          const agentSetupIds = (payload.agentSetupIds as unknown[]).filter(
-            (id): id is string => typeof id === "string"
-          );
-          store.set("onboarding.agentSetupIds", agentSetupIds);
+export const onboardingNamespace = defineIpcNamespace({
+  name: "onboarding",
+  ops: {
+    get: op(ONBOARDING_METHOD_CHANNELS.get, (): OnboardingState => getOnboardingState()),
+    setStep: op(
+      ONBOARDING_METHOD_CHANNELS.setStep,
+      (arg: string | null | { step: string | null; agentSetupIds?: string[] }): void => {
+        if (arg !== null && typeof arg === "object" && !Array.isArray(arg)) {
+          const payload = arg as { step?: unknown; agentSetupIds?: unknown };
+          const step = typeof payload.step === "string" ? payload.step : null;
+          store.set("onboarding.currentStep", step);
+          if (Array.isArray(payload.agentSetupIds)) {
+            const agentSetupIds = (payload.agentSetupIds as unknown[]).filter(
+              (id): id is string => typeof id === "string"
+            );
+            store.set("onboarding.agentSetupIds", agentSetupIds);
+          }
+        } else {
+          store.set("onboarding.currentStep", typeof arg === "string" ? arg : null);
         }
-      } else {
-        store.set("onboarding.currentStep", typeof arg === "string" ? arg : null);
       }
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_COMPLETE, () => {
+    ),
+    complete: op(ONBOARDING_METHOD_CHANNELS.complete, (): void => {
       store.set("onboarding.completed", true);
       store.set("onboarding.currentStep", null);
       store.set("onboarding.agentSetupIds", []);
       setOnboardingCompleteTag(true);
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_MARK_TOAST_SEEN, () => {
+    }),
+    markToastSeen: op(ONBOARDING_METHOD_CHANNELS.markToastSeen, (): void => {
       store.set("onboarding.firstRunToastSeen", true);
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN, () => {
+    }),
+    markNewsletterSeen: op(ONBOARDING_METHOD_CHANNELS.markNewsletterSeen, (): void => {
       store.set("onboarding.newsletterPromptSeen", true);
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_MARK_WAITING_NUDGE_SEEN, () => {
+    }),
+    markWaitingNudgeSeen: op(ONBOARDING_METHOD_CHANNELS.markWaitingNudgeSeen, (): void => {
       store.set("onboarding.waitingNudgeSeen", true);
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_MARK_AGENTS_SEEN, (payload: unknown) => {
-      const incoming = Array.isArray(payload)
-        ? (payload as unknown[]).filter((id): id is string => typeof id === "string")
-        : [];
-      const state = getOnboardingState();
-      if (incoming.length === 0) return state;
-      const existing = new Set(state.seenAgentIds);
-      let changed = false;
-      for (const id of incoming) {
-        if (!existing.has(id)) {
-          existing.add(id);
-          changed = true;
+    }),
+    markAgentsSeen: op(
+      ONBOARDING_METHOD_CHANNELS.markAgentsSeen,
+      (agentIds: string[]): OnboardingState => {
+        const incoming = Array.isArray(agentIds)
+          ? (agentIds as unknown[]).filter((id): id is string => typeof id === "string")
+          : [];
+        const state = getOnboardingState();
+        if (incoming.length === 0) return state;
+        const existing = new Set(state.seenAgentIds);
+        let changed = false;
+        for (const id of incoming) {
+          if (!existing.has(id)) {
+            existing.add(id);
+            changed = true;
+          }
         }
+        if (!changed) return state;
+        const seenAgentIds = Array.from(existing);
+        store.set("onboarding.seenAgentIds", seenAgentIds);
+        return { ...state, seenAgentIds };
       }
-      if (!changed) return state;
-      const seenAgentIds = Array.from(existing);
-      store.set("onboarding.seenAgentIds", seenAgentIds);
-      return { ...state, seenAgentIds };
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_RECORD_AGENT_FIRST_SEEN, (payload: unknown) => {
-      const incoming = Array.isArray(payload)
-        ? (payload as unknown[]).filter((id): id is string => typeof id === "string")
-        : [];
-      const state = getOnboardingState();
-      if (incoming.length === 0) return state;
-      const next = { ...state.availabilityFirstSeen };
-      const now = Date.now();
-      let changed = false;
-      for (const id of incoming) {
-        // Idempotent: never overwrite an existing timestamp. The TTL is
-        // anchored on the first time we ever saw the agent as available.
-        if (next[id] === undefined) {
-          next[id] = now;
-          changed = true;
+    ),
+    recordAgentFirstSeen: op(
+      ONBOARDING_METHOD_CHANNELS.recordAgentFirstSeen,
+      (agentIds: string[]): OnboardingState => {
+        const incoming = Array.isArray(agentIds)
+          ? (agentIds as unknown[]).filter((id): id is string => typeof id === "string")
+          : [];
+        const state = getOnboardingState();
+        if (incoming.length === 0) return state;
+        const next = { ...state.availabilityFirstSeen };
+        const now = Date.now();
+        let changed = false;
+        for (const id of incoming) {
+          // Idempotent: never overwrite an existing timestamp. The TTL is
+          // anchored on the first time we ever saw the agent as available.
+          if (next[id] === undefined) {
+            next[id] = now;
+            changed = true;
+          }
         }
+        if (!changed) return state;
+        store.set("onboarding.availabilityFirstSeen", next);
+        return { ...state, availabilityFirstSeen: next };
       }
-      if (!changed) return state;
-      store.set("onboarding.availabilityFirstSeen", next);
-      return { ...state, availabilityFirstSeen: next };
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_DISMISS_WELCOME_CARD, () => {
-      store.set("onboarding.welcomeCardDismissed", true);
-      return { ...getOnboardingState(), welcomeCardDismissed: true };
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_DISMISS_SETUP_BANNER, () => {
-      store.set("onboarding.setupBannerDismissed", true);
-      return { ...getOnboardingState(), setupBannerDismissed: true };
-    })
-  );
-
-  cleanups.push(typedHandle(CHANNELS.ONBOARDING_CHECKLIST_GET, () => getChecklistState()));
-
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_CHECKLIST_DISMISS, () => {
+    ),
+    dismissWelcomeCard: op(
+      ONBOARDING_METHOD_CHANNELS.dismissWelcomeCard,
+      (): OnboardingState => {
+        store.set("onboarding.welcomeCardDismissed", true);
+        return { ...getOnboardingState(), welcomeCardDismissed: true };
+      }
+    ),
+    dismissSetupBanner: op(
+      ONBOARDING_METHOD_CHANNELS.dismissSetupBanner,
+      (): OnboardingState => {
+        store.set("onboarding.setupBannerDismissed", true);
+        return { ...getOnboardingState(), setupBannerDismissed: true };
+      }
+    ),
+    getChecklist: op(ONBOARDING_METHOD_CHANNELS.getChecklist, (): ChecklistState =>
+      getChecklistState()
+    ),
+    dismissChecklist: op(ONBOARDING_METHOD_CHANNELS.dismissChecklist, (): void => {
       store.set("onboarding.checklist.dismissed", true);
-    })
-  );
+    }),
+    markChecklistItem: op(
+      ONBOARDING_METHOD_CHANNELS.markChecklistItem,
+      (item: ChecklistItemId): void => {
+        const validItems: ChecklistItemId[] = [
+          "openedProject",
+          "launchedAgent",
+          "createdWorktree",
+          "ranSecondParallelAgent",
+        ];
+        if (typeof item !== "string" || !validItems.includes(item)) return;
+        const state = getOnboardingState();
+        const key = item as keyof typeof state.checklist.items;
+        if (state.checklist.items[key]) return;
+        store.set(`onboarding.checklist.items.${key}`, true);
+      }
+    ),
+    markChecklistCelebrationShown: op(
+      ONBOARDING_METHOD_CHANNELS.markChecklistCelebrationShown,
+      (): void => {
+        store.set("onboarding.checklist.celebrationShown", true);
+      }
+    ),
+  },
+});
 
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN, () => {
-      store.set("onboarding.checklist.celebrationShown", true);
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, (item: unknown) => {
-      const validItems = [
-        "openedProject",
-        "launchedAgent",
-        "createdWorktree",
-        "ranSecondParallelAgent",
-      ];
-      if (typeof item !== "string" || !validItems.includes(item)) return;
-      const state = getOnboardingState();
-      const key = item as keyof typeof state.checklist.items;
-      if (state.checklist.items[key]) return;
-      store.set(`onboarding.checklist.items.${key}`, true);
-    })
-  );
-
-  return () => cleanups.forEach((c) => c());
+export function registerOnboardingHandlers(): () => void {
+  return onboardingNamespace.register();
 }

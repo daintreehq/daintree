@@ -11,13 +11,7 @@ import type {
   TerminalRecipe,
   TerminalSnapshot,
 } from "../project.js";
-import type {
-  OnboardingState,
-  ChecklistState,
-  ChecklistItemId,
-  HelpAssistantTier,
-  IpcEventBusMap,
-} from "./maps.js";
+import type { ChecklistState, HelpAssistantTier, IpcEventBusMap } from "./maps.js";
 import type { GeneratedElectronAPI } from "./generated-api.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
@@ -1097,12 +1091,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Toggle Store update notifications on/off. */
     setSettings(enabled: boolean): Promise<{ enabled: boolean }>;
   };
-  gemini: {
-    /** Get Gemini config status (exists, alternate buffer enabled) */
-    getStatus(): Promise<{ exists: boolean; alternateBufferEnabled: boolean; error?: string }>;
-    /** Enable alternate buffer in Gemini settings */
-    enableAlternateBuffer(): Promise<{ success: boolean }>;
-  };
+  // gemini is generated — see GeneratedElectronAPI.
   // commands is generated — see GeneratedElectronAPI.
   appAgent: {
     /** Get the current app agent config (without API key) */
@@ -1248,27 +1237,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       hasSeenPrompt: boolean;
     }>;
   };
-  onboarding: {
-    get(): Promise<OnboardingState>;
-    setStep(step: string | null | { step: string | null; agentSetupIds?: string[] }): Promise<void>;
-    complete(): Promise<void>;
-    markToastSeen(): Promise<void>;
-    markNewsletterSeen(): Promise<void>;
-    markWaitingNudgeSeen(): Promise<void>;
-    markAgentsSeen(agentIds: string[]): Promise<OnboardingState>;
-    recordAgentFirstSeen(agentIds: string[]): Promise<OnboardingState>;
-    dismissWelcomeCard(): Promise<OnboardingState>;
-    dismissSetupBanner(): Promise<OnboardingState>;
-    getChecklist(): Promise<ChecklistState>;
-    dismissChecklist(): Promise<void>;
-    markChecklistItem(item: ChecklistItemId): Promise<void>;
-    markChecklistCelebrationShown(): Promise<void>;
+  // Invoke methods come from GeneratedElectronAPI; onChecklistPush is a renderer-only subscription.
+  onboarding: GeneratedElectronAPI["onboarding"] & {
     onChecklistPush(callback: (state: ChecklistState) => void): () => void;
   };
-  milestones: {
-    get(): Promise<Record<string, boolean>>;
-    markShown(id: string): Promise<void>;
-  };
+  // milestones is generated — see GeneratedElectronAPI.
   shortcutHints: {
     getCounts(): Promise<Record<string, number>>;
     incrementCount(actionId: string): Promise<void>;
@@ -1398,100 +1371,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
     ): () => void;
   };
-  mcpServer: {
-    /** Get current MCP server status and configuration */
-    getStatus(): Promise<{
-      enabled: boolean;
-      port: number | null;
-      configuredPort: number | null;
-      apiKey: string;
-    }>;
-    /** Enable or disable the MCP server */
-    setEnabled(enabled: boolean): Promise<{
-      enabled: boolean;
-      port: number | null;
-      configuredPort: number | null;
-      apiKey: string;
-    }>;
-    /** Set a fixed port (null = auto-assign ephemeral port) */
-    setPort(port: number | null): Promise<{
-      enabled: boolean;
-      port: number | null;
-      configuredPort: number | null;
-      apiKey: string;
-    }>;
-    /**
-     * Mint a fresh bearer token, persist it to electron-store, and return the
-     * new key. Clients pick up the new key on their next request — no server
-     * restart is needed. External clients holding the old bearer in their own
-     * config break and must re-paste from Settings.
-     */
-    rotateApiKey(): Promise<string>;
-    /** Get the JSON config snippet to paste into an MCP client config */
-    getConfigSnippet(): Promise<string>;
-    /** Read the audit-log ring buffer (newest first). */
-    getAuditRecords(): Promise<import("./mcpServer.js").McpAuditRecord[]>;
-    /** Get the persisted audit-log configuration. */
-    getAuditConfig(): Promise<{ enabled: boolean; maxRecords: number }>;
-    /**
-     * Read the session-scoped audit health counters (currently the
-     * since-launch 401 counter). Resets on app restart.
-     */
-    getAuditStats(): Promise<import("./mcpServer.js").McpAuditStats>;
-    /** Clear all audit records from the ring buffer and persistence. */
-    clearAuditLog(): Promise<void>;
-    /** Read the turn-outcome ring buffer (newest first). */
-    getTurnOutcomeRecords(): Promise<import("./mcpServer.js").AssistantTurnRecord[]>;
-    /** Clear all turn-outcome records from the ring buffer and persistence. */
-    clearTurnOutcomeLog(): Promise<void>;
-    /** Toggle audit-log capture without losing existing records. */
-    setAuditEnabled(enabled: boolean): Promise<{ enabled: boolean; maxRecords: number }>;
-    /** Update the ring-buffer cap (clamped to MCP_AUDIT_MIN/MAX). */
-    setAuditMaxRecords(max: number): Promise<{ enabled: boolean; maxRecords: number }>;
-    /**
-     * Get the derived runtime-state snapshot
-     * (`disabled|starting|ready|failed`). Distinct from `getStatus()` —
-     * surfaces the dock-pip readiness state and last-failure reason.
-     */
-    getRuntimeState(): Promise<import("./mcpServer.js").McpRuntimeSnapshot>;
+  // Invoke methods come from GeneratedElectronAPI; the rest are
+  // renderer-only event subscriptions.
+  mcpServer: GeneratedElectronAPI["mcpServer"] & {
     /** Subscribe to runtime-state transitions. */
     onRuntimeStateChanged(
       callback: (snapshot: import("./mcpServer.js").McpRuntimeSnapshot) => void
     ): () => void;
     /**
-     * Elevate an active help-session's tier (Always allow — pairs with a
-     * project-level `daintreeMcpTier` write). Server-side validates that
-     * the new tier is not a downgrade. The per-tool "Approve once" flow
-     * uses {@link issueGrant} instead (#8442).
-     */
-    setSessionTier(
-      sessionId: string,
-      tier: "workbench" | "action" | "system"
-    ): Promise<{ sessionId: string; tier: "workbench" | "action" | "system" }>;
-    /**
-     * Mint a per-`(sessionId, toolId)` time-bounded grant — the "Approve
-     * once" pathway that replaces sticky session-tier elevation for one-
-     * off tool calls. Returns the TTL window so the renderer can render
-     * a countdown without polling (#8442).
-     */
-    issueGrant(
-      sessionId: string,
-      toolId: string
-    ): Promise<import("./mcpServer.js").McpIssueGrantResult>;
-    /**
-     * Drop every grant currently held by the session. Returns the count
-     * of revoked grants for the renderer's confirmation copy.
-     */
-    revokeSessionGrants(
-      sessionId: string
-    ): Promise<import("./mcpServer.js").McpRevokeSessionGrantsResult>;
-    /**
      * Subscribe to tier-not-permitted pushes for the pinned help-session in
      * this WebContents. The callback fires when a tool call is denied because
      * the session tier doesn't permit it.
      */
-    /** Export filtered audit records as scrubbed NDJSON via OS save dialog. Returns false if canceled. */
-    exportAuditLog(records: import("./mcpServer.js").McpAuditRecord[]): Promise<boolean>;
     onTierNotPermitted(
       callback: (payload: {
         sessionId: string;

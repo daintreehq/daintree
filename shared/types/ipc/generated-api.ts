@@ -84,6 +84,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["event-inspector:get-filtered"]["args"]
     ): Promise<IpcInvokeMap["event-inspector:get-filtered"]["result"]>;
   };
+  gemini: {
+    enableAlternateBuffer(
+      ...args: IpcInvokeMap["gemini:enable-alternate-buffer"]["args"]
+    ): Promise<IpcInvokeMap["gemini:enable-alternate-buffer"]["result"]>;
+    getStatus(
+      ...args: IpcInvokeMap["gemini:get-status"]["args"]
+    ): Promise<IpcInvokeMap["gemini:get-status"]["result"]>;
+  };
   help: {
     getFolderPath(
       ...args: IpcInvokeMap["help:get-folder-path"]["args"]
@@ -103,6 +111,114 @@ export interface GeneratedElectronAPI {
     unmarkTerminal(
       ...args: IpcInvokeMap["help:unmark-terminal"]["args"]
     ): Promise<IpcInvokeMap["help:unmark-terminal"]["result"]>;
+  };
+  mcpServer: {
+    clearAuditLog(
+      ...args: IpcInvokeMap["mcp-server:clear-audit-log"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:clear-audit-log"]["result"]>;
+    clearTurnOutcomeLog(
+      ...args: IpcInvokeMap["mcp-server:clear-turn-outcome-log"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:clear-turn-outcome-log"]["result"]>;
+    exportAuditLog(
+      ...args: IpcInvokeMap["mcp-server:export-audit-log"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:export-audit-log"]["result"]>;
+    getAuditConfig(
+      ...args: IpcInvokeMap["mcp-server:get-audit-config"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-audit-config"]["result"]>;
+    getAuditRecords(
+      ...args: IpcInvokeMap["mcp-server:get-audit-records"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-audit-records"]["result"]>;
+    getAuditStats(
+      ...args: IpcInvokeMap["mcp-server:get-audit-stats"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-audit-stats"]["result"]>;
+    getConfigSnippet(
+      ...args: IpcInvokeMap["mcp-server:get-config-snippet"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-config-snippet"]["result"]>;
+    getRuntimeState(
+      ...args: IpcInvokeMap["mcp-server:get-runtime-state"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-runtime-state"]["result"]>;
+    getStatus(
+      ...args: IpcInvokeMap["mcp-server:get-status"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-status"]["result"]>;
+    getTurnOutcomeRecords(
+      ...args: IpcInvokeMap["mcp-server:get-turn-outcome-records"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-turn-outcome-records"]["result"]>;
+    issueGrant(
+      ...args: IpcInvokeMap["mcp-server:issue-grant"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:issue-grant"]["result"]>;
+    revokeSessionGrants(
+      ...args: IpcInvokeMap["mcp-server:revoke-session-grants"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:revoke-session-grants"]["result"]>;
+    rotateApiKey(
+      ...args: IpcInvokeMap["mcp-server:rotate-api-key"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:rotate-api-key"]["result"]>;
+    setAuditEnabled(
+      ...args: IpcInvokeMap["mcp-server:set-audit-enabled"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:set-audit-enabled"]["result"]>;
+    setAuditMaxRecords(
+      ...args: IpcInvokeMap["mcp-server:set-audit-max-records"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:set-audit-max-records"]["result"]>;
+    setEnabled(
+      ...args: IpcInvokeMap["mcp-server:set-enabled"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:set-enabled"]["result"]>;
+    setPort(
+      ...args: IpcInvokeMap["mcp-server:set-port"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:set-port"]["result"]>;
+    setSessionTier(
+      ...args: IpcInvokeMap["mcp-server:set-session-tier"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:set-session-tier"]["result"]>;
+  };
+  milestones: {
+    get(
+      ...args: IpcInvokeMap["milestones:get"]["args"]
+    ): Promise<IpcInvokeMap["milestones:get"]["result"]>;
+    markShown(
+      ...args: IpcInvokeMap["milestones:mark-shown"]["args"]
+    ): Promise<IpcInvokeMap["milestones:mark-shown"]["result"]>;
+  };
+  onboarding: {
+    complete(
+      ...args: IpcInvokeMap["onboarding:complete"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:complete"]["result"]>;
+    dismissChecklist(
+      ...args: IpcInvokeMap["onboarding:checklist-dismiss"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:checklist-dismiss"]["result"]>;
+    dismissSetupBanner(
+      ...args: IpcInvokeMap["onboarding:dismiss-setup-banner"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:dismiss-setup-banner"]["result"]>;
+    dismissWelcomeCard(
+      ...args: IpcInvokeMap["onboarding:dismiss-welcome-card"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:dismiss-welcome-card"]["result"]>;
+    get(
+      ...args: IpcInvokeMap["onboarding:get"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:get"]["result"]>;
+    getChecklist(
+      ...args: IpcInvokeMap["onboarding:checklist-get"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:checklist-get"]["result"]>;
+    markAgentsSeen(
+      ...args: IpcInvokeMap["onboarding:mark-agents-seen"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:mark-agents-seen"]["result"]>;
+    markChecklistCelebrationShown(
+      ...args: IpcInvokeMap["onboarding:checklist-mark-celebration-shown"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:checklist-mark-celebration-shown"]["result"]>;
+    markChecklistItem(
+      ...args: IpcInvokeMap["onboarding:checklist-mark-item"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:checklist-mark-item"]["result"]>;
+    markNewsletterSeen(
+      ...args: IpcInvokeMap["onboarding:mark-newsletter-seen"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:mark-newsletter-seen"]["result"]>;
+    markToastSeen(
+      ...args: IpcInvokeMap["onboarding:mark-toast-seen"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:mark-toast-seen"]["result"]>;
+    markWaitingNudgeSeen(
+      ...args: IpcInvokeMap["onboarding:mark-waiting-nudge-seen"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:mark-waiting-nudge-seen"]["result"]>;
+    recordAgentFirstSeen(
+      ...args: IpcInvokeMap["onboarding:record-agent-first-seen"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:record-agent-first-seen"]["result"]>;
+    setStep(
+      ...args: IpcInvokeMap["onboarding:set-step"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:set-step"]["result"]>;
   };
   plugin: {
     getActions(

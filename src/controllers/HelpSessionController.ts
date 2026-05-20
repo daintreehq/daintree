@@ -636,7 +636,7 @@ export class HelpSessionController {
         // session — it does NOT elevate the session tier. The "Always
         // allow" path is the only remaining caller of `setSessionTier`
         // (#8442).
-        .issueGrant(sessionId, toolId)
+        .issueGrant({ sessionId, toolId })
         .then(() => {
           this._clearTierMismatchIfStillCurrent(sessionId, toolId);
         })
@@ -679,7 +679,7 @@ export class HelpSessionController {
           ...settings,
           daintreeMcpTier: targetTier,
         });
-        await window.electron.mcpServer.setSessionTier(sessionId, targetTier);
+        await window.electron.mcpServer.setSessionTier({ sessionId, tier: targetTier });
         this._clearTierMismatchIfStillCurrent(sessionId, toolId);
       })()
         .catch((err) => {
