@@ -23,6 +23,7 @@ function makeHydrateResult(overrides: Partial<HydrateResult>): HydrateResult {
     safeMode: false,
     settingsRecovery: null,
     projectStateRecovery: null,
+    crashLoopStateRecovery: null,
   };
   return Object.assign(base, overrides) as HydrateResult;
 }
@@ -127,15 +128,38 @@ describe("dispatchRecoveryNotifications", () => {
     });
   });
 
-  it("can fire all three notifications in one call", () => {
+  describe("crash-loop state recovery", () => {
+    it("notifies with the quarantined path", () => {
+      dispatchRecoveryNotifications(
+        makeHydrateResult({
+          crashLoopStateRecovery: { quarantinedPath: "/tmp/crash-loop.bad" },
+        })
+      );
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const arg = notifyMock.mock.calls[0]![0];
+      expect(arg.title).toBe("Crash-loop state corrupted");
+      expect(arg.message).toContain("/tmp/crash-loop.bad");
+      expect(arg.priority).toBe("high");
+      expect(arg.duration).toBe(0);
+    });
+
+    it("does not fire when crashLoopStateRecovery is null", () => {
+      dispatchRecoveryNotifications(makeHydrateResult({ crashLoopStateRecovery: null }));
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("can fire all four notifications in one call", () => {
     dispatchRecoveryNotifications(
       makeHydrateResult({
         gpuHardwareAccelerationDisabled: true,
         settingsRecovery: { kind: "restored-from-backup" },
         projectStateRecovery: { quarantinedPath: "/tmp/p" },
+        crashLoopStateRecovery: { quarantinedPath: "/tmp/c" },
       })
     );
 
-    expect(notifyMock).toHaveBeenCalledTimes(3);
+    expect(notifyMock).toHaveBeenCalledTimes(4);
   });
 });

@@ -71,6 +71,7 @@ const crashGuard = {
   isSafeMode: vi.fn(() => false),
   getCrashCount: vi.fn(() => 0),
   getLastCrashTimestamp: vi.fn(() => null),
+  getQuarantinedStatePath: vi.fn(() => null),
   resetForNormalBoot: vi.fn(),
 };
 

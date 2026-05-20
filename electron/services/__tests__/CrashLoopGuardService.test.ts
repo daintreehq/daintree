@@ -260,6 +260,59 @@ describe("CrashLoopGuardService", () => {
     expect(guard.shouldRelaunch()).toBe(true);
   });
 
+  it("quarantines a corrupt state file instead of silently discarding it", () => {
+    fs.writeFileSync(statePath, "not valid json!!!", "utf8");
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    const quarantinedPath = guard.getQuarantinedStatePath();
+    expect(quarantinedPath).toMatch(/crash-loop-state\.json\.corrupted\.\d+$/);
+    expect(fs.existsSync(quarantinedPath!)).toBe(true);
+    // The quarantined file still contains the original corrupt bytes.
+    expect(fs.readFileSync(quarantinedPath!, "utf8")).toBe("not valid json!!!");
+  });
+
+  it("quarantines a state file with an invalid structure", () => {
+    writeState({ version: 2, foo: "bar" });
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    const quarantinedPath = guard.getQuarantinedStatePath();
+    expect(quarantinedPath).toMatch(/crash-loop-state\.json\.corrupted\.\d+$/);
+    expect(fs.existsSync(quarantinedPath!)).toBe(true);
+  });
+
+  it("does not quarantine when the state file is missing (first run)", () => {
+    expect(fs.existsSync(statePath)).toBe(false);
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toBeNull();
+    // No `.corrupted.*` siblings created.
+    const siblings = fs
+      .readdirSync(tmpDir)
+      .filter((e) => e.startsWith("crash-loop-state.json.corrupted."));
+    expect(siblings).toHaveLength(0);
+  });
+
+  it("does not quarantine a valid state file", () => {
+    writeState({
+      version: 1,
+      crashes: 0,
+      launches: [],
+      cleanExit: true,
+      lastReset: Date.now(),
+    });
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toBeNull();
+  });
+
   it("handles invalid state structure gracefully", () => {
     writeState({ version: 2, foo: "bar" });
 
@@ -268,6 +321,95 @@ describe("CrashLoopGuardService", () => {
 
     expect(guard.isSafeMode()).toBe(false);
     expect(guard.shouldRelaunch()).toBe(true);
+  });
+
+  describe("stale tmp sweep", () => {
+    it("deletes a stale `.tmp` left by a crashed atomic write", () => {
+      const staleTs = Date.now() - 6 * 60 * 1000; // 6 min ago, beyond 5-min TTL
+      const tmpPath = path.join(tmpDir, `crash-loop-state.json.${staleTs}-abc123.tmp`);
+      fs.writeFileSync(tmpPath, "stale data", "utf8");
+
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+
+      expect(fs.existsSync(tmpPath)).toBe(false);
+    });
+
+    it("preserves a fresh `.tmp` (within the 5-min TTL)", () => {
+      const freshTs = Date.now() - 60 * 1000; // 1 min ago
+      const tmpPath = path.join(tmpDir, `crash-loop-state.json.${freshTs}-abc123.tmp`);
+      fs.writeFileSync(tmpPath, "in-flight write", "utf8");
+
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+
+      expect(fs.existsSync(tmpPath)).toBe(true);
+    });
+
+    it("only sweeps tmp files that match the crash-loop naming pattern", () => {
+      const otherTmp = path.join(tmpDir, "settings.json.123-abc.tmp");
+      fs.writeFileSync(otherTmp, "not ours", "utf8");
+
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+
+      expect(fs.existsSync(otherTmp)).toBe(true);
+    });
+  });
+
+  describe("corrupted sibling prune", () => {
+    it("retains the 3 most-recent `.corrupted.*` siblings and prunes older ones", () => {
+      // Drop 5 corrupted siblings with ascending timestamps so the prune sort
+      // is well-defined.
+      const timestamps = [1000, 2000, 3000, 4000, 5000];
+      for (const ts of timestamps) {
+        fs.writeFileSync(path.join(tmpDir, `crash-loop-state.json.corrupted.${ts}`), "x", "utf8");
+      }
+
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+
+      const survivors = fs
+        .readdirSync(tmpDir)
+        .filter((e) => e.startsWith("crash-loop-state.json.corrupted."))
+        .sort();
+      // The three newest (3000, 4000, 5000) survive — 1000 and 2000 are gone.
+      expect(survivors).toEqual([
+        "crash-loop-state.json.corrupted.3000",
+        "crash-loop-state.json.corrupted.4000",
+        "crash-loop-state.json.corrupted.5000",
+      ]);
+    });
+
+    it("does not prune when there are 3 or fewer siblings", () => {
+      for (const ts of [1000, 2000, 3000]) {
+        fs.writeFileSync(path.join(tmpDir, `crash-loop-state.json.corrupted.${ts}`), "x", "utf8");
+      }
+
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+
+      const survivors = fs
+        .readdirSync(tmpDir)
+        .filter((e) => e.startsWith("crash-loop-state.json.corrupted."));
+      expect(survivors).toHaveLength(3);
+    });
+
+    it("does not prune the just-quarantined sibling from the current boot", () => {
+      // Two older siblings already on disk.
+      for (const ts of [1000, 2000]) {
+        fs.writeFileSync(path.join(tmpDir, `crash-loop-state.json.corrupted.${ts}`), "x", "utf8");
+      }
+      // And a corrupt state file the current boot will quarantine.
+      fs.writeFileSync(statePath, "garbage", "utf8");
+
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+
+      const quarantinedPath = guard.getQuarantinedStatePath();
+      expect(quarantinedPath).not.toBeNull();
+      expect(fs.existsSync(quarantinedPath!)).toBe(true);
+    });
   });
 
   it("only counts crashes within the rapid crash window", () => {

@@ -150,6 +150,60 @@ describe("CrashLoopGuardService adversarial", () => {
     expect(Array.isArray(parsed.launches)).toBe(true);
   });
 
+  it("quarantine survives a chmod failure (rename is authoritative)", () => {
+    writeStateFile(statePath, { not: "valid", structure: true });
+    const chmodSpy = vi.spyOn(fs, "chmodSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("EPERM: not permitted"), { code: "EPERM" });
+    });
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toMatch(/\.corrupted\.\d+$/);
+    expect(fs.existsSync(guard.getQuarantinedStatePath()!)).toBe(true);
+    chmodSpy.mockRestore();
+  });
+
+  it("rename failure in quarantine leaves quarantinedStatePath null without throwing", () => {
+    writeStateFile(statePath, { not: "valid" });
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("EBUSY"), { code: "EBUSY" });
+    });
+
+    const guard = new CrashLoopGuardService();
+    expect(() => guard.initialize()).not.toThrow();
+    expect(guard.getQuarantinedStatePath()).toBeNull();
+    renameSpy.mockRestore();
+  });
+
+  it("sweep failure (readdirSync throws) does not prevent boot", () => {
+    const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+    });
+
+    const guard = new CrashLoopGuardService();
+    expect(() => guard.initialize()).not.toThrow();
+    expect(guard.isSafeMode()).toBe(false);
+    readdirSpy.mockRestore();
+  });
+
+  it("prune tolerates `.corrupted.*` siblings with malformed timestamps", () => {
+    // A malformed entry that would parse to NaN if naively coerced.
+    fs.writeFileSync(
+      path.join(tmpDir, "crash-loop-state.json.corrupted.not-a-number"),
+      "x",
+      "utf8"
+    );
+    // The regex requires \d+, so this entry is ignored entirely.
+    const guard = new CrashLoopGuardService();
+    expect(() => guard.initialize()).not.toThrow();
+
+    // Non-matching entry is preserved (we only act on regex matches).
+    expect(fs.existsSync(path.join(tmpDir, "crash-loop-state.json.corrupted.not-a-number"))).toBe(
+      true
+    );
+  });
+
   it("does not keep relaunch disabled after old launches roll out of the hard-stop window", () => {
     const now = Date.now();
     writeStateFile(statePath, {

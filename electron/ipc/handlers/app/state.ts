@@ -67,6 +67,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           crashCount: cacheGuard.getCrashCount(),
           lastCrashAt: cacheGuard.getLastCrashTimestamp(),
           settingsRecovery: consumePendingSettingsRecovery(),
+          // Crash-loop quarantine notifications are gated on safe mode; the
+          // fast path runs only when safe mode is inactive, so clear the field.
+          crashLoopStateRecovery: null,
         };
       }
     }
@@ -305,6 +308,12 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       projectStateRecovery: projectStateQuarantinedPath
         ? { quarantinedPath: projectStateQuarantinedPath }
         : null,
+      // Surface the crash-loop quarantine only when safe mode is also active —
+      // a silent reset on the happy path would be more noise than signal.
+      crashLoopStateRecovery:
+        inSafeMode && guard.getQuarantinedStatePath()
+          ? { quarantinedPath: guard.getQuarantinedStatePath()! }
+          : null,
     };
   };
   handlers.push(typedHandle(CHANNELS.APP_HYDRATE, handleAppHydrate));
