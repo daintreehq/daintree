@@ -131,6 +131,9 @@ export class TerminalWebGLManager {
   // To preserve case 1 while neutralising case 2, recordContextLoss is fed
   // through scheduleContextLossFlush: per-frame burst coalescing means one
   // GPU event = one breaker tick regardless of how many pool entries fired.
+  // Timestamps are taken at flush time (next rAF), not at event-dispatch time;
+  // this matters only if rAF is suppressed for longer than LOSS_WINDOW_MS (e.g.
+  // a fully backgrounded renderer), which is not a path we render WebGL on.
   private static readonly LOSS_THRESHOLD = 3;
   private static readonly LOSS_WINDOW_MS = 60_000;
 

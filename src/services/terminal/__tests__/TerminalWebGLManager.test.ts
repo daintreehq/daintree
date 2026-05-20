@@ -903,6 +903,7 @@ describe("TerminalWebGLManager", () => {
     });
 
     it("dispose cancels a pending loss flush before it records a tick", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const handlers = captureContextLossHandlers();
 
       const m1 = makeManagedTerminal();
@@ -918,15 +919,13 @@ describe("TerminalWebGLManager", () => {
       handlers[2]!();
 
       manager.dispose();
-      // The queued rAF callback must be a no-op — pendingLossCount cleared and
-      // the rAF id cancelled, so flushing the queue records no breaker ticks.
-      flushRafFrame();
+      // dispose must cancel the queued flush — not just zero pendingLossCount.
+      // If the rAF survived, flushRafFrame would still find an entry. The
+      // distinction matters: a future change that drops cancelAnimationFrame
+      // but keeps the count reset would silently leak rAF callbacks, and only
+      // this empty-queue assertion catches it.
+      expect(flushRafFrame()).toBe(false);
 
-      // Fresh manager should still acquire — the disposed manager's state is
-      // local to that instance, but a stray flush on the queue must not have
-      // tripped any console.warn breaker log either.
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      flushRafFrame();
       const breakerWarnings = warnSpy.mock.calls.filter(
         (args) => typeof args[0] === "string" && args[0].includes("circuit breaker")
       );
@@ -1786,6 +1785,9 @@ describe("TerminalWebGLManager", () => {
       manager.ensureContext("t2", m2);
       manager.ensureContext("t3", m3);
 
+      // Sync rAF here — three distinct events each flush inline as one tick
+      // apiece, matching production where each DOM event arrives in its own
+      // frame on a persistent-fault display (issue #6163 path).
       (m1.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
       (m2.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
       (m3.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
@@ -1795,6 +1797,37 @@ describe("TerminalWebGLManager", () => {
       manager.ensureContext("t4", m4);
       expect(WebglAddonMock.mock.calls.length).toBe(before);
       expect(manager.isActive("t4")).toBe(false);
+    });
+
+    it("coalesces a same-frame DOM-event burst across pool entries (#8541)", () => {
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      const m3 = makeManagedTerminal();
+      const m4 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+      manager.ensureContext("t3", m3);
+      manager.ensureContext("t4", m4);
+
+      // Queued rAF — mirrors the production path where Chromium dispatches
+      // webglcontextlost synchronously to every pool entry within one frame
+      // on a bulk GPU eviction. Must coalesce to one tick, well below the
+      // 3-loss threshold, so a new ensure still attaches.
+      rafMode = "queued";
+      (m1.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
+      (m2.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
+      (m3.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
+      (m4.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
+
+      expect(flushRafFrame()).toBe(true);
+      expect(flushRafFrame()).toBe(false);
+
+      rafMode = "sync";
+      const before = WebglAddonMock.mock.calls.length;
+      const m5 = makeManagedTerminal();
+      manager.ensureContext("t5", m5);
+      expect(WebglAddonMock.mock.calls.length).toBe(before + 1);
+      expect(manager.isActive("t5")).toBe(true);
     });
 
     it("does not re-fire after release (handler is removed)", () => {
