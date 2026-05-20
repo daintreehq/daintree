@@ -58,14 +58,17 @@ export async function wakeActiveWorktreeTerminals(): Promise<void> {
   // panel doesn't block the other visible panels.
   let focusedIndex = -1;
   for (let i = 0; i < targets.length; i++) {
-    if (terminalInstanceService.isFocused(targets[i])) {
+    const id = targets[i];
+    if (id && terminalInstanceService.isFocused(id)) {
       focusedIndex = i;
       break;
     }
   }
   if (focusedIndex > 0) {
     const [focused] = targets.splice(focusedIndex, 1);
-    targets.unshift(focused);
+    if (focused) {
+      targets.unshift(focused);
+    }
   }
 
   const wakeOne = async (id: string): Promise<void> => {
@@ -82,7 +85,10 @@ export async function wakeActiveWorktreeTerminals(): Promise<void> {
   const worker = async (): Promise<void> => {
     while (cursor < targets.length) {
       const next = cursor++;
-      await wakeOne(targets[next]);
+      const id = targets[next];
+      if (id) {
+        await wakeOne(id);
+      }
     }
   };
   const workerCount = Math.min(WAKE_CONCURRENCY, targets.length);

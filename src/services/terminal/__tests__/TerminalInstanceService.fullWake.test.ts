@@ -199,7 +199,8 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(lockResize).toHaveBeenNthCalledWith(1, id, false);
     expect(lockResize).toHaveBeenNthCalledWith(2, id, true, expect.any(Number));
     // Second call's TTL is the remaining suppression window — positive and ≤ 1500ms
-    const relockTtl = lockResize.mock.calls[1][2] as number;
+    const relockTtl = lockResize.mock.calls[1]?.[2] as number | undefined;
+    expect(relockTtl).toBeDefined();
     expect(relockTtl).toBeGreaterThan(0);
     expect(relockTtl).toBeLessThanOrEqual(1500);
   });
