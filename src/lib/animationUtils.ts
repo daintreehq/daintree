@@ -47,7 +47,8 @@ export const UI_PALETTE_EXIT_DURATION = DURATION_100;
 /** UX anti-flicker gate: sub-400ms work should show nothing (Doherty threshold).
  *  Used by palette loading bar and stale-result dimming to prevent flashes on
  *  fast renders. Not an animation token — a perceptual floor.
- *  Keep in sync with .palette-results-stale transition-delay in src/index.css. */
+ *  CSS counterpart: `--anti-flicker-delay` in src/index.css `:root`. The
+ *  drift-contract test in animationUtils.test.ts enforces parity. */
 export const UI_DOHERTY_THRESHOLD = 400;
 
 /** UX anti-flicker gate for skeleton components using the `immediate` prop.

@@ -661,6 +661,11 @@ code.hljs {
   --terminal-animation-duration: 50ms;
   --focus-transition-duration: 150ms;
   --focus-transition-easing: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Anti-flicker (Doherty) gate — single source of truth for the 400ms
+   * perceptual floor below which loading affordances should stay hidden.
+   * Mirror of UI_DOHERTY_THRESHOLD in src/lib/animationUtils.ts; the contract
+   * test in src/lib/__tests__/animationUtils.test.ts enforces parity. */
+  --anti-flicker-delay: 400ms;
   --background: var(--theme-surface-canvas);
   --foreground: var(--theme-text-primary);
   --card: var(--theme-surface-panel);
@@ -1124,7 +1129,7 @@ body,
 .animate-pulse-delayed {
   opacity: 0;
   animation: pulse-delayed 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  animation-delay: 400ms;
+  animation-delay: var(--anti-flicker-delay);
   will-change: opacity;
 }
 
@@ -1143,11 +1148,13 @@ body,
  * (typical for ~258 actions on fast hardware), the dim never starts. On a
  * genuinely overloaded render the surface fades to half opacity as a "still
  * working" cue.
- * Keep in sync with UI_DOHERTY_THRESHOLD in src/lib/animationUtils.ts. */
+ * The 400ms gate lives in the --anti-flicker-delay token in :root above; the
+ * UI_DOHERTY_THRESHOLD constant in src/lib/animationUtils.ts mirrors it for
+ * JS consumers. */
 .palette-results-stale,
 .surface-stale {
   opacity: 0.5;
-  transition: opacity 150ms ease-out 400ms;
+  transition: opacity 150ms ease-out var(--anti-flicker-delay);
 }
 
 /* Opt-in shimmer sweep for skeleton bones. Layered on top of the opacity pulse;
