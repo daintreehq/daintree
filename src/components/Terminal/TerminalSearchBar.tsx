@@ -25,8 +25,10 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
   const [searchTerm, setSearchTerm] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [regexEnabled, setRegexEnabled] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
   const [searchStatus, setSearchStatus] = useState<SearchStatus>("idle");
   const [matchResults, setMatchResults] = useState<MatchResults | null>(null);
+  const [regexError, setRegexError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -51,14 +53,16 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     (
       term: string,
       direction: "next" | "prev",
-      overrides?: { caseSensitive?: boolean; regexEnabled?: boolean }
+      overrides?: { caseSensitive?: boolean; regexEnabled?: boolean; wholeWord?: boolean }
     ) => {
       const effectiveCaseSensitive = overrides?.caseSensitive ?? caseSensitive;
       const effectiveRegexEnabled = overrides?.regexEnabled ?? regexEnabled;
+      const effectiveWholeWord = overrides?.wholeWord ?? wholeWord;
 
       if (!term) {
         setSearchStatus("idle");
         setMatchResults(null);
+        setRegexError(null);
         return;
       }
 
@@ -67,16 +71,23 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         if (!validation.isValid) {
           setSearchStatus("invalidRegex");
           setMatchResults(null);
+          setRegexError(validation.error ?? "Invalid regex pattern");
           const managed = terminalInstanceService.get(terminalId);
           managed?.searchAddon.clearDecorations();
           return;
         }
       }
 
+      setRegexError(null);
+
       const managed = terminalInstanceService.get(terminalId);
       if (!managed) return;
 
-      const options = buildSearchOptions(effectiveCaseSensitive, effectiveRegexEnabled);
+      const options = buildSearchOptions(
+        effectiveCaseSensitive,
+        effectiveRegexEnabled,
+        effectiveWholeWord
+      );
 
       try {
         const found =
@@ -89,13 +100,16 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           setMatchResults(null);
         }
         setSearchStatus(found ? "found" : "none");
-      } catch {
+      } catch (e) {
         setSearchStatus(effectiveRegexEnabled ? "invalidRegex" : "none");
         setMatchResults(null);
+        if (effectiveRegexEnabled && e instanceof Error) {
+          setRegexError(e.message);
+        }
         managed.searchAddon.clearDecorations();
       }
     },
-    [terminalId, caseSensitive, regexEnabled]
+    [terminalId, caseSensitive, regexEnabled, wholeWord]
   );
 
   const clearSearch = useCallback(() => {
@@ -103,6 +117,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     managed?.searchAddon.clearDecorations();
     setSearchStatus("idle");
     setMatchResults(null);
+    setRegexError(null);
   }, [terminalId]);
 
   const handleInputChange = useCallback(
@@ -161,10 +176,23 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
   const handleRegexToggle = useCallback(() => {
     setRegexEnabled((prev) => {
       const nextRegexEnabled = !prev;
+      if (!nextRegexEnabled) {
+        setRegexError(null);
+      }
       if (searchTerm) {
         performSearch(searchTerm, "next", { regexEnabled: nextRegexEnabled });
       }
       return nextRegexEnabled;
+    });
+  }, [searchTerm, performSearch]);
+
+  const handleWholeWordToggle = useCallback(() => {
+    setWholeWord((prev) => {
+      const nextWholeWord = !prev;
+      if (searchTerm) {
+        performSearch(searchTerm, "next", { wholeWord: nextWholeWord });
+      }
+      return nextWholeWord;
     });
   }, [searchTerm, performSearch]);
 
@@ -189,6 +217,11 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     return "Found";
   })();
 
+  const atHighlightLimit =
+    searchStatus === "found" &&
+    matchResults !== null &&
+    matchResults.resultCount >= SEARCH_HIGHLIGHT_LIMIT;
+
   return (
     <div
       className={cn(
@@ -200,21 +233,32 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       onClick={(e) => e.stopPropagation()}
       onKeyDown={handleKeyDown}
     >
-      <input
-        ref={inputRef}
-        type="text"
-        value={searchTerm}
-        onChange={handleInputChange}
-        placeholder="Find in terminal"
-        aria-label="Find in terminal"
-        data-terminal-search-input
-        className={cn(
-          "w-44 px-2 py-1 text-sm",
-          "bg-daintree-bg border border-daintree-border rounded",
-          "focus:outline-hidden focus:ring-1 focus:ring-status-info",
-          "text-daintree-text placeholder:text-text-muted"
-        )}
-      />
+      <Tooltip open={searchStatus === "invalidRegex" && !!regexError}>
+        <TooltipTrigger asChild>
+          <input
+            ref={inputRef}
+            type="text"
+            value={searchTerm}
+            onChange={handleInputChange}
+            placeholder="Find in terminal"
+            aria-label="Find in terminal"
+            aria-invalid={searchStatus === "invalidRegex" || undefined}
+            data-terminal-search-input
+            className={cn(
+              "w-44 px-2 py-1 text-sm rounded transition-colors",
+              "bg-daintree-bg border",
+              "focus:outline-hidden focus:ring-1",
+              "text-daintree-text placeholder:text-text-muted",
+              searchStatus === "invalidRegex"
+                ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
+                : "border-daintree-border focus:ring-status-info"
+            )}
+          />
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="start">
+          {regexError}
+        </TooltipContent>
+      </Tooltip>
 
       <Tooltip>
         <TooltipTrigger asChild>
@@ -254,17 +298,54 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         <TooltipContent side="bottom">Regex</TooltipContent>
       </Tooltip>
 
-      {statusText && (
-        <span
-          data-terminal-search-status
-          className={cn(
-            "text-xs px-1.5",
-            searchStatus === "found" ? "text-daintree-text/60" : "text-status-error"
-          )}
-        >
-          {statusText}
-        </span>
-      )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={handleWholeWordToggle}
+            className={cn(
+              "px-1.5 py-1 text-xs rounded transition-colors",
+              wholeWord
+                ? "bg-status-info text-daintree-bg"
+                : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
+            )}
+            aria-label="Toggle whole word"
+            aria-pressed={wholeWord}
+          >
+            <span className="underline underline-offset-2 decoration-1">ab</span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Whole word</TooltipContent>
+      </Tooltip>
+
+      {statusText &&
+        (atHighlightLimit ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                data-terminal-search-status
+                className={cn(
+                  "text-xs px-1.5 cursor-help underline decoration-dotted underline-offset-2",
+                  searchStatus === "found" ? "text-daintree-text/60" : "text-status-error"
+                )}
+              >
+                {statusText}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              Highlighting and navigation limited to first {SEARCH_HIGHLIGHT_LIMIT} matches
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          <span
+            data-terminal-search-status
+            className={cn(
+              "text-xs px-1.5",
+              searchStatus === "found" ? "text-daintree-text/60" : "text-status-error"
+            )}
+          >
+            {statusText}
+          </span>
+        ))}
 
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {statusText}

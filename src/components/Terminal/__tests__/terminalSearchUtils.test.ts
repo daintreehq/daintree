@@ -99,6 +99,23 @@ describe("buildSearchOptions", () => {
     expect(options.decorations?.matchOverviewRuler).toMatch(/^#[0-9a-fA-F]{6}$/);
     expect(options.decorations?.activeMatchColorOverviewRuler).toMatch(/^#[0-9a-fA-F]{6}$/);
   });
+
+  it("includes wholeWord when enabled", () => {
+    const options = buildSearchOptions(false, false, true);
+    expect(options.wholeWord).toBe(true);
+  });
+
+  it("omits wholeWord when disabled or not provided", () => {
+    expect(buildSearchOptions(false, false).wholeWord).toBeUndefined();
+    expect(buildSearchOptions(false, false, false).wholeWord).toBeUndefined();
+  });
+
+  it("supports regex and wholeWord together", () => {
+    const options = buildSearchOptions(true, true, true);
+    expect(options.caseSensitive).toBe(true);
+    expect(options.regex).toBe(true);
+    expect(options.wholeWord).toBe(true);
+  });
 });
 
 describe("getSearchDecorationColors", () => {

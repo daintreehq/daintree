@@ -67,13 +67,20 @@ export function getSearchDecorationColors(): SearchDecorationOptions {
   };
 }
 
-export function buildSearchOptions(caseSensitive: boolean, regexEnabled: boolean): ISearchOptions {
+export function buildSearchOptions(
+  caseSensitive: boolean,
+  regexEnabled: boolean,
+  wholeWord = false
+): ISearchOptions {
   const options: ISearchOptions = {
     caseSensitive,
     decorations: getSearchDecorationColors(),
   };
   if (regexEnabled) {
     options.regex = true;
+  }
+  if (wholeWord) {
+    options.wholeWord = true;
   }
   return options;
 }
