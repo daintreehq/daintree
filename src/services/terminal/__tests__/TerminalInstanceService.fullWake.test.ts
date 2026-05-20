@@ -46,6 +46,20 @@ vi.mock("../TerminalAddonManager", () => ({
   createWebLinksAddon: vi.fn(() => ({ dispose: vi.fn() })),
 }));
 
+const { forceXtermReflowMock } = vi.hoisted(() => ({
+  forceXtermReflowMock: vi.fn(),
+}));
+
+vi.mock("../TerminalReflowController", async () => {
+  const actual = await vi.importActual<typeof import("../TerminalReflowController")>(
+    "../TerminalReflowController"
+  );
+  return {
+    ...actual,
+    forceXtermReflow: forceXtermReflowMock,
+  };
+});
+
 type FullWakeTestService = {
   instances: Map<string, any>;
   wakeManager: { wakeAndRestore: (id: string) => Promise<boolean> };
@@ -86,6 +100,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    forceXtermReflowMock.mockReset();
     ({ terminalInstanceService: service } =
       (await import("../TerminalInstanceService")) as unknown as {
         terminalInstanceService: FullWakeTestService;
@@ -97,7 +112,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     if (service) service.instances.clear();
   });
 
-  it("runs applyDeferredResize → wakeAndRestore → refresh → handlePostWake → resumeFlush in order on success", async () => {
+  it("runs applyDeferredResize → forceXtermReflow → wakeAndRestore → refresh → handlePostWake → resumeFlush in order on success", async () => {
     const id = "fw-1";
     const instance = makeInstance();
     service.instances.set(id, instance);
@@ -108,6 +123,9 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
       .mockImplementation(() => {
         calls.push("applyDeferredResize");
       });
+    forceXtermReflowMock.mockImplementation(() => {
+      calls.push("forceXtermReflow");
+    });
     const wakeAndRestore = vi
       .spyOn(service.wakeManager, "wakeAndRestore")
       .mockImplementation(async () => {
@@ -128,6 +146,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
 
     expect(calls).toEqual([
       "applyDeferredResize",
+      "forceXtermReflow",
       "wakeAndRestore",
       "refresh",
       "handlePostWake",
@@ -135,6 +154,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     ]);
 
     expect(applyDeferredResize).toHaveBeenCalledWith(id);
+    expect(forceXtermReflowMock).toHaveBeenCalledWith(instance.terminal.element);
     expect(wakeAndRestore).toHaveBeenCalledWith(id);
     expect(handlePostWake).toHaveBeenCalledWith(id);
     expect(resumeFlush).toHaveBeenCalledWith(id);

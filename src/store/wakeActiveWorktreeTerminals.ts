@@ -25,10 +25,14 @@ const WAKE_CONCURRENCY = 2;
  * would no-op on tier equality (the backgrounded view's terminals stay at
  * VISIBLE), so the full-wake method bypasses the policy.
  *
- * The focused panel runs first (interactive responsiveness); the rest fan
- * out at concurrency = {@link WAKE_CONCURRENCY} to avoid a CPU spike across
- * large grids, where N concurrent `refresh()` calls on N xterm instances
- * can produce a long-task on the main thread.
+ * The focused panel is moved to slot 0 of the work queue so it gets the
+ * first execution slot (interactive responsiveness). The whole queue is
+ * drained at concurrency = {@link WAKE_CONCURRENCY} to avoid a CPU spike
+ * across large grids, where N concurrent `refresh()` calls on N xterm
+ * instances can produce a long-task on the main thread. Putting the focused
+ * panel inside the pool — rather than awaiting it standalone first — means
+ * a hung wake (IPC stall, oversized incremental restore) on the focused
+ * panel doesn't block the other visible panels from refreshing.
  *
  * Dock and trash terminals are excluded — they manage their own visibility.
  */
@@ -49,7 +53,9 @@ export async function wakeActiveWorktreeTerminals(): Promise<void> {
 
   if (targets.length === 0) return;
 
-  // Focused panel first — the user is most likely to be looking at it.
+  // Move the focused panel to slot 0 so it gets the first execution slot.
+  // It still runs inside the same worker pool, so a hang on the focused
+  // panel doesn't block the other visible panels.
   let focusedIndex = -1;
   for (let i = 0; i < targets.length; i++) {
     if (terminalInstanceService.isFocused(targets[i])) {
@@ -72,24 +78,15 @@ export async function wakeActiveWorktreeTerminals(): Promise<void> {
     }
   };
 
-  // Run the focused panel first, then fan out the rest at WAKE_CONCURRENCY.
-  if (targets.length === 1) {
-    await wakeOne(targets[0]);
-    return;
-  }
-
-  await wakeOne(targets[0]);
-
-  const remaining = targets.slice(1);
   let cursor = 0;
   const worker = async (): Promise<void> => {
-    while (cursor < remaining.length) {
+    while (cursor < targets.length) {
       const next = cursor++;
-      await wakeOne(remaining[next]);
+      await wakeOne(targets[next]);
     }
   };
+  const workerCount = Math.min(WAKE_CONCURRENCY, targets.length);
   const workers: Promise<void>[] = [];
-  const workerCount = Math.min(WAKE_CONCURRENCY, remaining.length);
   for (let i = 0; i < workerCount; i++) {
     workers.push(worker());
   }

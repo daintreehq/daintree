@@ -213,7 +213,7 @@ describe("wakeActiveWorktreeTerminals", () => {
     expect(callOrder).toHaveLength(3);
   });
 
-  it("caps concurrent wakes at 2 for the non-focused remainder", async () => {
+  it("caps concurrent wakes at 2 and actually runs them in parallel", async () => {
     mockActiveWorktreeId = "wt-1";
     const ids = ["a", "b", "c", "d", "e", "f"];
     mockPanelIds = ids;
@@ -238,20 +238,19 @@ describe("wakeActiveWorktreeTerminals", () => {
 
     const done = wakeActiveWorktreeTerminals();
 
-    // Drain: each microtask flush, resolve every pending deferred. Since the
-    // leader awaits first, then the remainder fans out at cap=2, the queue
-    // should never hold more than 2 deferreds for the remainder phase.
-    const sawInFlight: number[] = [];
+    // After the workers have spawned, the pool should have exactly 2 wakes
+    // in-flight (proving fan-out, not just serial execution).
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(inFlight).toBe(2);
+
     let safety = 50;
     while (safety-- > 0) {
       await Promise.resolve();
       await Promise.resolve();
-      sawInFlight.push(inFlight);
       if (deferreds.size === 0 && inFlight === 0) {
         break;
       }
-      // Resolve all currently pending deferreds (they were queued by the
-      // workers and the leader). Each resolution lets the next wakeOne start.
       const toResolve = [...deferreds.values()];
       deferreds.clear();
       for (const r of toResolve) r();
@@ -260,6 +259,46 @@ describe("wakeActiveWorktreeTerminals", () => {
     await done;
 
     expect(fullWakeMock).toHaveBeenCalledTimes(6);
-    expect(maxInFlight).toBeLessThanOrEqual(2);
+    expect(maxInFlight).toBe(2);
+  });
+
+  it("a hung focused-panel wake does not block the other panels", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const b = panel("b", { worktreeId: "wt-1" });
+    const c = panel("c", { worktreeId: "wt-1" });
+    mockPanelIds = ["a", "b", "c"];
+    mockPanelsById = { a, b, c };
+
+    // Focused panel "a" never resolves
+    isFocusedMock.mockImplementation((id: string) => id === "a");
+
+    let resolveB!: () => void;
+    let resolveC!: () => void;
+    fullWakeMock.mockImplementation((id: string) => {
+      if (id === "a") return new Promise<void>(() => {}); // hangs forever
+      if (id === "b") return new Promise<void>((r) => (resolveB = () => r()));
+      if (id === "c") return new Promise<void>((r) => (resolveC = () => r()));
+      return Promise.resolve();
+    });
+
+    const done = wakeActiveWorktreeTerminals();
+
+    // After microtask flushes, the pool has started a + b (cap=2); c waits.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fullWakeMock).toHaveBeenCalledWith("a");
+    expect(fullWakeMock).toHaveBeenCalledWith("b");
+
+    // Resolve b → c starts. a is still hung.
+    resolveB();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fullWakeMock).toHaveBeenCalledWith("c");
+
+    resolveC();
+    // done never resolves because a hangs — but b and c made progress.
+    // Drop reference; vitest cleanup will handle the pending promise.
+    void done;
   });
 });
