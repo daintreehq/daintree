@@ -198,6 +198,7 @@ const serviceRefsMock = vi.hoisted(() => {
     setWorktreePortBrokerRef: vi.fn((v: typeof worktreePortBroker) => {
       worktreePortBroker = v;
     }),
+    setWorkspaceClientRef: vi.fn(),
     getMainProcessWatchdogClientRef: vi.fn(() => watchdog),
     setMainProcessWatchdogClientRef: vi.fn((v: typeof watchdog) => {
       watchdog = v;
@@ -793,6 +794,85 @@ describe("registerShutdownHandler", () => {
       );
       // Ref still cleared after the failed stop.
       expect(serviceRefsMock.setCcrConfigService).toHaveBeenCalledWith(null);
+
+      warnSpy.mockRestore();
+    });
+
+    it("stops CCR watcher and clears PluginService before WorkspaceClient disposal", async () => {
+      const order: string[] = [];
+      serviceRefsMock.setInitialState({ ccr: ccrConfigMock });
+
+      ccrConfigMock.stopWatching.mockImplementationOnce(async () => {
+        order.push("ccr:stop");
+      });
+      pluginServiceMock.setWorkspaceClient.mockImplementationOnce(() => {
+        order.push("plugin:setWorkspaceClient(null)");
+      });
+      const workspaceDispose = vi.fn(async () => {
+        order.push("workspace:dispose");
+      });
+
+      const { beforeQuitCb } = await setup({
+        getWorkspaceClient: () => ({ dispose: workspaceDispose }) as never,
+      });
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      // CCR + plugin unwiring must complete before workspaceClient.dispose()
+      // runs; otherwise a file-change callback could fire into a disposing client.
+      const ccrIdx = order.indexOf("ccr:stop");
+      const pluginIdx = order.indexOf("plugin:setWorkspaceClient(null)");
+      const workspaceIdx = order.indexOf("workspace:dispose");
+      expect(ccrIdx).toBeGreaterThanOrEqual(0);
+      expect(pluginIdx).toBeGreaterThanOrEqual(0);
+      expect(workspaceIdx).toBeGreaterThanOrEqual(0);
+      expect(ccrIdx).toBeLessThan(workspaceIdx);
+      expect(pluginIdx).toBeLessThan(workspaceIdx);
+    });
+
+    it("nulls workspaceClientRef after disposeWorkspaceClient runs", async () => {
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(serviceRefsMock.setWorkspaceClientRef).toHaveBeenCalledWith(null);
+    });
+
+    it("still tears down PTY/workspace/watchdog when an earlier optional-ref dispose throws", async () => {
+      serviceRefsMock.setInitialState({
+        autoUpdater: autoUpdaterMock,
+        worktreePortBroker: worktreePortBrokerMock,
+        watchdog: mainProcessWatchdogMock,
+      });
+      autoUpdaterMock.dispose.mockImplementationOnce(() => {
+        throw new Error("auto-updater boom");
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      // The throwing optional-ref dispose must not strand the rest of the
+      // sync block — the WorktreePortBroker, watchdog, and ref-nullers all
+      // sit after it in source order.
+      expect(worktreePortBrokerMock.dispose).toHaveBeenCalled();
+      expect(mainProcessWatchdogMock.dispose).toHaveBeenCalled();
+      expect(serviceRefsMock.setAutoUpdaterServiceRef).toHaveBeenCalledWith(null);
+      expect(serviceRefsMock.setWorkspaceClientRef).toHaveBeenCalledWith(null);
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[MAIN] AutoUpdaterService.dispose failed:",
+        expect.any(Error)
+      );
 
       warnSpy.mockRestore();
     });

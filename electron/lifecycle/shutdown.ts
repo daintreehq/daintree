@@ -31,6 +31,7 @@ import {
   setResourceProfileService,
   getWorktreePortBrokerRef,
   setWorktreePortBrokerRef,
+  setWorkspaceClientRef,
   getMainProcessWatchdogClientRef,
   setMainProcessWatchdogClientRef,
   getAgentNotificationServiceRef,
@@ -155,7 +156,31 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     let exitCalled = false;
     let hardTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const cleanupPromise = gracefulShutdownPromise
+    // Stop the CCR config watcher and unwire PluginService's WorkspaceClient
+    // reference before the Promise.all that disposes the WorkspaceClient.
+    // Running these sequentially guarantees no file-change callback can fire
+    // into a half-disposed WorkspaceClient during the await. Both wrap their
+    // own failures so a single throw can't strand the rest of shutdown.
+    const preDisposePromise = gracefulShutdownPromise.then(async () => {
+      const ccr = getCcrConfigService();
+      if (ccr) {
+        try {
+          await ccr.stopWatching();
+        } catch (err) {
+          console.warn("[MAIN] CcrConfigService.stopWatching failed:", err);
+        }
+        setCcrConfigService(null);
+      }
+      try {
+        const { pluginService } = await import("../services/PluginService.js");
+        pluginService.setWorkspaceClient(null);
+      } catch {
+        // Module load errors during teardown are non-fatal (PluginService may
+        // never have been loaded if shutdown fired before first-interactive).
+      }
+    });
+
+    const cleanupPromise = preDisposePromise
       .then(() =>
         Promise.all([
           workspaceClient ? workspaceClient.dispose() : Promise.resolve(),
@@ -170,32 +195,21 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           import("../services/HelpSessionService.js")
             .then(({ helpSessionService }) => helpSessionService.revokeAll())
             .catch(() => {}),
-          // CCR config watcher is async — stop before nulling the PluginService
-          // WorkspaceClient ref to keep file-change callbacks from racing teardown.
-          (async () => {
-            const ccr = getCcrConfigService();
-            if (!ccr) return;
-            try {
-              await ccr.stopWatching();
-            } catch (err) {
-              console.warn("[MAIN] CcrConfigService.stopWatching failed:", err);
-            }
-            setCcrConfigService(null);
-          })(),
-          // Drop PluginService's WorkspaceClient reference so plugin event
-          // handlers can't fire into the disposed instance during late
-          // teardown. Dynamically imported to match the lazy load pattern used
-          // when the WorkspaceClient was wired in (see windowServices.ts).
-          import("../services/PluginService.js")
-            .then(({ pluginService }) => pluginService.setWorkspaceClient(null))
-            .catch(() => {}),
           new Promise<void>((resolve) => {
             // Global singletons that previously tore down on last-window-close
             // (electron/window/windowServices.ts) live here now so they cover
             // the macOS dock-reactivate path without racing a new window's
-            // re-init. Order: stop monitors and timers, then dispose clients,
-            // then null refs so any late callbacks no-op.
-            getResourceProfileService()?.stop();
+            // re-init. Every dispose() wraps in try/catch so one failure can't
+            // strand later cleanup (PTY/workspace/watchdog/DB) — matching the
+            // pattern already used for closeSharedDb downstream.
+            // Order: stop monitors and timers, then connectivity, then
+            // notifiers, then port broker (before WorkspaceClient is killed),
+            // then PTY/workspace/watchdog.
+            try {
+              getResourceProfileService()?.stop();
+            } catch (err) {
+              console.warn("[MAIN] ResourceProfileService.stop failed:", err);
+            }
             setResourceProfileService(null);
 
             try {
@@ -235,34 +249,77 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
             } catch (err) {
               console.warn("[MAIN] notificationService.dispose failed:", err);
             }
-            getAgentNotificationServiceRef()?.dispose();
+            try {
+              getAgentNotificationServiceRef()?.dispose();
+            } catch (err) {
+              console.warn("[MAIN] AgentNotificationService.dispose failed:", err);
+            }
             setAgentNotificationServiceRef(null);
             try {
               preAgentSnapshotService.dispose();
             } catch (err) {
               console.warn("[MAIN] preAgentSnapshotService.dispose failed:", err);
             }
-            getAutoUpdaterServiceRef()?.dispose();
+            try {
+              getAutoUpdaterServiceRef()?.dispose();
+            } catch (err) {
+              console.warn("[MAIN] AutoUpdaterService.dispose failed:", err);
+            }
             setAutoUpdaterServiceRef(null);
-            getWindowsStoreNotifierServiceRef()?.dispose();
+            try {
+              getWindowsStoreNotifierServiceRef()?.dispose();
+            } catch (err) {
+              console.warn("[MAIN] WindowsStoreNotifierService.dispose failed:", err);
+            }
             setWindowsStoreNotifierServiceRef(null);
 
-            // Port broker holds a WorkspaceClient reference — dispose before
-            // the WorkspaceClient module-level singleton is killed below.
-            getWorktreePortBrokerRef()?.dispose();
+            try {
+              getWorktreePortBrokerRef()?.dispose();
+            } catch (err) {
+              console.warn("[MAIN] WorktreePortBroker.dispose failed:", err);
+            }
             setWorktreePortBrokerRef(null);
 
-            disposePowerSaveBlockerService();
-            disposeAgentAvailabilityStore();
+            try {
+              disposePowerSaveBlockerService();
+            } catch (err) {
+              console.warn("[MAIN] disposePowerSaveBlockerService failed:", err);
+            }
+            try {
+              disposeAgentAvailabilityStore();
+            } catch (err) {
+              console.warn("[MAIN] disposeAgentAvailabilityStore failed:", err);
+            }
             if (ptyClient) {
-              ptyClient.dispose();
+              try {
+                ptyClient.dispose();
+              } catch (err) {
+                console.warn("[MAIN] PtyClient.dispose failed:", err);
+              }
               deps.setPtyClient(null);
             }
-            disposePtyClient();
-            disposeWorkspaceClient();
-            getMainProcessWatchdogClientRef()?.dispose();
+            try {
+              disposePtyClient();
+            } catch (err) {
+              console.warn("[MAIN] disposePtyClient failed:", err);
+            }
+            try {
+              disposeWorkspaceClient();
+            } catch (err) {
+              console.warn("[MAIN] disposeWorkspaceClient failed:", err);
+            }
+            setWorkspaceClientRef(null);
+            try {
+              getMainProcessWatchdogClientRef()?.dispose();
+            } catch (err) {
+              console.warn("[MAIN] MainProcessWatchdogClient.dispose failed:", err);
+            }
             setMainProcessWatchdogClientRef(null);
-            disposeMainProcessWatchdog();
+            try {
+              disposeMainProcessWatchdog();
+            } catch (err) {
+              console.warn("[MAIN] disposeMainProcessWatchdog failed:", err);
+            }
             resolve();
           }),
         ])
