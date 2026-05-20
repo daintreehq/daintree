@@ -12,6 +12,7 @@ describe("isClientBrokerError", () => {
       const err = new Error(`[BrokerError|${code}] underlying message`);
       expect(isClientBrokerError(err)).toBe(true);
       expect(err.name).toBe("BrokerError");
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- code property added by isClientBrokerError
       expect((err as Error & { code: string }).code).toBe(code);
       expect(err.message).toBe("underlying message");
     }
@@ -45,6 +46,7 @@ describe("isClientBrokerError", () => {
   it("decodes multi-line messages (regex /s flag)", () => {
     const err = new Error("[BrokerError|TIMEOUT] line one\nline two");
     expect(isClientBrokerError(err)).toBe(true);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- code property added by isClientBrokerError
     expect((err as Error & { code: string }).code).toBe("TIMEOUT");
     expect(err.message).toBe("line one\nline two");
   });
@@ -65,6 +67,7 @@ describe("isClientBrokerError", () => {
     (code) => {
       const encoded = encodeBrokerError(new BrokerError(code, "carrier message"));
       expect(isClientBrokerError(encoded)).toBe(true);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- code property added by isClientBrokerError
       expect((encoded as Error & { code: string }).code).toBe(code);
       expect(encoded.message).toBe("carrier message");
     }

@@ -65,6 +65,7 @@ export function isClientBrokerError(e: unknown): e is Error & { code: BrokerErro
   }
 
   // Same-realm fallback (no contextBridge crossing).
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- type narrowed by guard checks below
   const candidate = e as { code?: unknown };
   return (
     e.name === "BrokerError" &&
