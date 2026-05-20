@@ -233,7 +233,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     gracefulKill(id: string): Promise<string | null>;
     trash(id: string): Promise<void>;
     restore(id: string): Promise<boolean>;
-    setActivityTier(id: string, tier: PtyHostActivityTier): void;
+    setActivityTier(id: string, tier: PtyHostActivityTier, pollingIntervalMs?: number): void;
     wake(id: string): Promise<{ state: string | null; warnings?: string[] }>;
     acknowledgeData(id: string, length: number): void;
     getForProject(projectId: string): Promise<BackendTerminalInfo[]>;

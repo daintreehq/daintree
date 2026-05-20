@@ -123,16 +123,25 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
 
   const handleTerminalSetActivityTier = (
     _event: Electron.IpcMainEvent,
-    payload: { id: string; tier: PtyHostActivityTier }
+    payload: { id: string; tier: PtyHostActivityTier; pollingIntervalMs?: number }
   ) => {
     try {
       if (!payload || typeof payload !== "object") {
         return;
       }
-      const { id, tier } = payload;
+      const { id, tier, pollingIntervalMs } = payload;
       if (typeof id !== "string" || !id) return;
       const effectiveTier: PtyHostActivityTier = tier === "background" ? "background" : "active";
-      ptyClient.setActivityTier(id, effectiveTier);
+      // The renderer may send a cadence hint (issue #8596 — 200ms for VISIBLE-
+      // unfocused). Guard against malformed values; the PTY host falls back to
+      // the tier default when the field is missing or invalid.
+      const effectivePollingMs =
+        typeof pollingIntervalMs === "number" &&
+        Number.isFinite(pollingIntervalMs) &&
+        pollingIntervalMs > 0
+          ? pollingIntervalMs
+          : undefined;
+      ptyClient.setActivityTier(id, effectiveTier, effectivePollingMs);
     } catch (error) {
       console.error("[IPC] Failed to set activity tier:", error);
     }

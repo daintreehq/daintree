@@ -413,6 +413,7 @@ function TerminalPaneComponent({
   // Panel kind is always "terminal" for PTY panels; live identity is runtime chrome.
   const kind = "terminal" as const;
   const queueCount = usePanelStore((state) => state.commandQueueCountById[id] ?? 0);
+  const workingPanelCount = usePanelStore((state) => state.workingPanelCount);
 
   // Live preset color — re-derives from settings whenever the user edits a preset's color
   const presetCustomPresets = useAgentSettingsStore((s) =>
@@ -658,8 +659,16 @@ function TerminalPaneComponent({
 
   const getRefreshTierCallback = useCallback(() => {
     const terminal = getTerminal(id);
-    return getTerminalRefreshTier(terminal, isFocused, { isFleetArmed: isArmed });
-  }, [getTerminal, id, isArmed, isFocused]);
+    return getTerminalRefreshTier(terminal, isFocused, {
+      isFleetArmed: isArmed,
+      workingCount: workingPanelCount,
+    });
+  }, [getTerminal, id, isArmed, isFocused, workingPanelCount]);
+
+  // True when this pane is a working agent currently demoted from FOCUSED to
+  // VISIBLE because another working agent is competing for the budget
+  // (issue #8596). Drives the policy's longer fleet-driven hysteresis.
+  const isFleetDemoted = agentState === "working" && !isFocused && workingPanelCount > 1;
 
   const handleClick = (e?: React.MouseEvent) => {
     const target = e?.target as HTMLElement | null;
@@ -1203,6 +1212,7 @@ function TerminalPaneComponent({
                     onInput={handleInput}
                     className="absolute inset-0"
                     getRefreshTier={getRefreshTierCallback}
+                    isFleetDemoted={isFleetDemoted}
                     cwd={cwd}
                     hasBottomBar={showHybridInputBar}
                   />

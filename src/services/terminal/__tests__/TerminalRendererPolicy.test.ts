@@ -130,11 +130,12 @@ describe("TerminalRendererPolicy", () => {
       policy.initializeBackendTier("test-id", "background");
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
       policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
-      expect(terminalClient.setActivityTier).toHaveBeenCalledWith("test-id", "active");
+      expect(terminalClient.setActivityTier).toHaveBeenCalledWith("test-id", "active", 50);
 
       vi.clearAllMocks();
       policy.applyRendererPolicy("test-id", TerminalRefreshTier.BURST);
 
+      // FOCUSED → BURST keeps tier=active and polling=50ms — both unchanged.
       expect(terminalClient.setActivityTier).not.toHaveBeenCalled();
     });
   });

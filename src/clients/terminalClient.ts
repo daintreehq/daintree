@@ -317,8 +317,12 @@ export const terminalClient = {
     return window.electron.terminal.onRestored(callback);
   },
 
-  setActivityTier: (id: string, tier: "active" | "background"): void => {
-    window.electron.terminal.setActivityTier(id, tier);
+  setActivityTier: (
+    id: string,
+    tier: "active" | "background",
+    pollingIntervalMs?: number
+  ): void => {
+    window.electron.terminal.setActivityTier(id, tier, pollingIntervalMs);
   },
 
   wake: (id: string): Promise<{ state: string | null; warnings?: string[] }> => {

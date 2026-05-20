@@ -26,6 +26,14 @@ export interface XtermAdapterProps {
   onInput?: (data: string) => void;
   className?: string;
   getRefreshTier?: () => TerminalRefreshTier;
+  /**
+   * Set when the current refresh tier was demoted because a sibling working
+   * agent is now competing for the FOCUSED budget (issue #8596). Lets the
+   * renderer policy use a longer hysteresis window for fleet-driven downgrades
+   * so fast working/idle flip chains in the sibling don't oscillate this
+   * pane's cadence.
+   */
+  isFleetDemoted?: boolean;
   cwd?: string;
   restoreOnAttach?: boolean;
   hasBottomBar?: boolean;
@@ -43,6 +51,7 @@ export function XtermAdapter({
   onInput,
   className,
   getRefreshTier,
+  isFleetDemoted = false,
   cwd,
   restoreOnAttach = false,
   hasBottomBar = false,
@@ -481,8 +490,10 @@ export function XtermAdapter({
   useLayoutEffect(() => {
     // Use the stable proxy to avoid stale closures in the service
     terminalInstanceService.updateRefreshTierProvider(terminalId, stableRefreshTierProvider);
-    terminalInstanceService.applyRendererPolicy(terminalId, currentTier);
-  }, [terminalId, stableRefreshTierProvider, currentTier]);
+    terminalInstanceService.applyRendererPolicy(terminalId, currentTier, {
+      fleetDriven: isFleetDemoted,
+    });
+  }, [terminalId, stableRefreshTierProvider, currentTier, isFleetDemoted]);
 
   // Refit terminal when window becomes visible again after being hidden.
   // useLayoutEffect ensures the listener is registered synchronously before

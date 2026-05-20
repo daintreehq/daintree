@@ -7,6 +7,20 @@ import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { ABSOLUTE_MAX_GRID_TERMINALS } from "@/lib/terminalLayout";
 import { deriveTerminalChrome, type TerminalChromeInput } from "@/utils/terminalChrome";
 import { logError } from "@/utils/logger";
+import type { TerminalInstance } from "./types";
+
+/**
+ * Count panels whose agent is currently in `"working"` state. O(N), called
+ * from any slice action that mutates `agentState`, `panelsById`, or `panelIds`.
+ * Driven by issue #8596 — the result feeds fleet-aware refresh-tier demotion.
+ */
+export function computeWorkingPanelCount(panelsById: Record<string, TerminalInstance>): number {
+  let count = 0;
+  for (const id in panelsById) {
+    if (panelsById[id]?.agentState === "working") count++;
+  }
+  return count;
+}
 
 // Re-export for backward compatibility
 export const MAX_GRID_TERMINALS = ABSOLUTE_MAX_GRID_TERMINALS;

@@ -58,14 +58,19 @@ function isVisibleLivePtyTerminal(terminal: TerminalInstance): boolean {
 export function getTerminalRefreshTier(
   terminal: TerminalInstance | undefined,
   isFocused: boolean,
-  options: { isFleetArmed?: boolean } = {}
+  options: { isFleetArmed?: boolean; workingCount?: number } = {}
 ): TerminalRefreshTier {
   if (!terminal) {
     return TerminalRefreshTierEnum.VISIBLE;
   }
 
-  // Always use maximum refresh rate when agent is working to prevent render jitter
   if (terminal.agentState === "working") {
+    // When multiple agents are simultaneously working, only the focused pane
+    // keeps FOCUSED. Sibling working agents drop to VISIBLE so the renderer
+    // budget isn't split N ways at the top tier.
+    if (!isFocused && (options.workingCount ?? 0) > 1) {
+      return TerminalRefreshTierEnum.VISIBLE;
+    }
     return TerminalRefreshTierEnum.FOCUSED;
   }
 
@@ -607,6 +612,7 @@ export const usePanelStore = create<PanelGridState>()(
           panelsById: {},
           panelIds: [],
           panelIdsByWorktreeId: {},
+          workingPanelCount: 0,
           trashedTerminals: new Map(),
           backgroundedTerminals: new Map(),
           tabGroups: new Map(),
@@ -652,6 +658,7 @@ export const usePanelStore = create<PanelGridState>()(
           panelsById: {},
           panelIds: [],
           panelIdsByWorktreeId: {},
+          workingPanelCount: 0,
           trashedTerminals: new Map(),
           backgroundedTerminals: new Map(),
           tabGroups: new Map(),
@@ -699,6 +706,7 @@ export const usePanelStore = create<PanelGridState>()(
           panelsById: {},
           panelIds: [],
           panelIdsByWorktreeId: {},
+          workingPanelCount: 0,
           trashedTerminals: new Map(),
           backgroundedTerminals: new Map(),
           tabGroups: new Map(),

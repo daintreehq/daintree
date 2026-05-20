@@ -811,8 +811,8 @@ const api: ElectronAPI = {
     onRestored: (callback: (data: { id: string }) => void) =>
       _typedOn(CHANNELS.TERMINAL_RESTORED, callback),
 
-    setActivityTier: (id: string, tier: "active" | "background") =>
-      ipcRenderer.send(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, { id, tier }),
+    setActivityTier: (id: string, tier: "active" | "background", pollingIntervalMs?: number) =>
+      ipcRenderer.send(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, { id, tier, pollingIntervalMs }),
 
     wake: (id: string): Promise<{ state: string | null; warnings?: string[] }> =>
       _unwrappingInvoke(CHANNELS.TERMINAL_WAKE, id),
