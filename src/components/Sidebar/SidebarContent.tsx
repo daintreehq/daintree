@@ -22,10 +22,9 @@ import {
   useWorktreeActions,
   useAriaKeyshortcuts,
   useKeybindingDisplay,
-  useDeferredLoading,
+  useDohertyGate,
   useResizeObserverRaf,
 } from "@/hooks";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { WorktreeSidebarSearchBar, QuickStateFilterBar } from "@/components/Worktree";
 import { getBuiltinView } from "@/registry/builtinRendererRegistry";
@@ -369,11 +368,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     Date.now() - reconnectingAt >= RECONNECT_ESCALATE_MS;
   const deferredWorktrees = useDeferredValue(worktrees);
   const [isRefreshing, startRefreshTransition] = useTransition();
-  const showRefreshSpinner = useDeferredLoading(isRefreshing, UI_DOHERTY_THRESHOLD);
+  const showRefreshSpinner = useDohertyGate(isRefreshing);
   // Gate the "Reconnecting…" indicator behind the Doherty threshold so routine
   // sub-400ms port replacements don't flash the spinner. A real host crash
   // takes 2–4s to recover, well past the threshold.
-  const showReconnecting = useDeferredLoading(isReconnecting, UI_DOHERTY_THRESHOLD);
+  const showReconnecting = useDohertyGate(isReconnecting);
   const currentProject = useProjectStore((state) => state.currentProject);
   const worktreeLoadError = useProjectStore((state) => state.worktreeLoadError);
   useProjectSettings();

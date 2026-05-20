@@ -61,16 +61,15 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
   });
 
   describe("Doherty anti-flicker gate", () => {
-    it("imports useDeferredLoading and UI_DOHERTY_THRESHOLD", () => {
+    it("imports useDohertyGate from the deferred-loading hook module", () => {
+      expect(source).toContain("useDohertyGate");
       expect(source).toContain('from "@/hooks/useDeferredLoading"');
-      expect(source).toContain('from "@/lib/animationUtils"');
-      expect(source).toContain("UI_DOHERTY_THRESHOLD");
     });
 
     it("gates the connecting-state orbit reveal behind the 400ms Doherty threshold", () => {
       // Sub-400ms connections must never paint the orbit ring — the
       // placeholder stays visible throughout.
-      expect(source).toMatch(/useDeferredLoading\(isConnecting,\s*UI_DOHERTY_THRESHOLD\)/);
+      expect(source).toMatch(/useDohertyGate\(isConnecting\)/);
     });
   });
 

@@ -11,13 +11,11 @@ describe("SidebarContent reconnecting indicator — issue #8074", () => {
     source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
   });
 
-  it("gates the reconnecting indicator behind useDeferredLoading with UI_DOHERTY_THRESHOLD", () => {
+  it("gates the reconnecting indicator behind useDohertyGate", () => {
     // Doherty Threshold (400ms): routine sub-second port replacements must not
     // flash a spinner. The reconnecting state mirrors the existing
     // showRefreshSpinner pattern on the same component.
-    expect(source).toMatch(
-      /const showReconnecting = useDeferredLoading\(isReconnecting, UI_DOHERTY_THRESHOLD\)/
-    );
+    expect(source).toMatch(/const showReconnecting = useDohertyGate\(isReconnecting\)/);
   });
 
   it("renders the Reconnecting… span behind showReconnecting, not raw isReconnecting", () => {

@@ -50,8 +50,7 @@ import { actionService } from "@/services/ActionService";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
 import { useWebviewEviction } from "@/hooks/useWebviewEviction";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { WebviewDialog } from "../Browser/WebviewDialog";
 import { FindBar } from "../Browser/FindBar";
@@ -358,7 +357,7 @@ export function DevPreviewPane({
     previousIsEvictedRef.current = isEvicted;
   }, [isEvicted, hasBeenVisible]);
 
-  const showRecoverySpinner = useDeferredLoading(isRecoveringFromEviction, UI_DOHERTY_THRESHOLD);
+  const showRecoverySpinner = useDohertyGate(isRecoveringFromEviction);
 
   useEffect(() => {
     const webview = webviewElement;

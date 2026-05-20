@@ -53,7 +53,7 @@ export const UI_DOHERTY_THRESHOLD = 400;
 
 /** UX anti-flicker gate for skeleton components using the `immediate` prop.
  *  Sub-200ms work should show no pulse — warm-cache Suspense falls through this.
- *  Keep in sync with the `useDeferredLoading` default delay (200ms).
+ *  Consumed by `useSkeletonGate` in `src/hooks/useDeferredLoading.ts`.
  *  Not an animation token — a perceptual floor, same family as Doherty. */
 export const UI_SKELETON_GATE_MS = 200;
 

@@ -11,8 +11,7 @@ import {
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import { cn } from "@/lib/utils";
 import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
@@ -66,7 +65,7 @@ export function VoiceRecordingToolbarButton({
 
   // Doherty gate — under 400ms of "connecting" should never paint the orbit;
   // it would flash before the recording state arrives.
-  const showConnecting = useDeferredLoading(isConnecting, UI_DOHERTY_THRESHOLD);
+  const showConnecting = useDohertyGate(isConnecting);
   // Gate the orbit on isActive too — protects against a transient teardown
   // race where status briefly stays "recording"/"finishing" while
   // activeTarget has already been cleared, which would otherwise leave the

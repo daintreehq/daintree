@@ -35,7 +35,7 @@ vi.mock("@/hooks", async () => {
     "@/hooks/useDeferredLoading"
   );
   return {
-    useDeferredLoading: deferred.useDeferredLoading,
+    useDohertyGate: deferred.useDohertyGate,
     useProjectSwitcherPalette: () => ({
       isOpen: false,
       mode: "dropdown",
@@ -126,10 +126,10 @@ function setStore(patch: Partial<ProjectStoreState>) {
   Object.assign(projectStoreState, patch);
 }
 
-// The spinner is gated behind useDeferredLoading(isLoading, 400) so a
-// sub-threshold isLoading flip never flashes on warm-cache project state.
-// Advancing 400ms of fake timers inside act() simulates a load that
-// genuinely crosses the Doherty threshold.
+// The spinner is gated behind useDohertyGate(isLoading) so a sub-threshold
+// isLoading flip never flashes on warm-cache project state. Advancing 400ms
+// of fake timers inside act() simulates a load that genuinely crosses the
+// Doherty threshold.
 const DEFER_MS = 400;
 
 function advanceDeferGate() {
@@ -265,7 +265,7 @@ describe("ProjectSwitcher loading affordance", () => {
     expect(trigger.querySelector(".animate-spin")).not.toBeNull();
     expect(trigger.querySelector(".lucide-chevrons-up-down")).toBeNull();
 
-    // Clearing is instant — useDeferredLoading drops the loader the moment
+    // Clearing is instant — useDohertyGate drops the loader the moment
     // isPending goes false, with no timer to advance.
     setStore({ isLoading: false });
     rerender(<ProjectSwitcher />);

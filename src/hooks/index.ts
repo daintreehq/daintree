@@ -113,7 +113,7 @@ export type { UseUnsavedChangesOptions } from "./useUnsavedChanges";
 
 export { useDebounce } from "./useDebounce";
 
-export { useDeferredLoading } from "./useDeferredLoading";
+export { useDeferredLoading, useDohertyGate, useSkeletonGate } from "./useDeferredLoading";
 
 export { useTabLoad } from "./useTabLoad";
 export type { UseTabLoadOptions, UseTabLoadResult } from "./useTabLoad";

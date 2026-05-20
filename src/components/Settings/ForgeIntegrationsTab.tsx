@@ -10,8 +10,7 @@ import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect, type SettingsSelectOption } from "./SettingsSelect";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useProjectStore } from "@/store";
-import { useDeferredLoading } from "@/hooks";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { logError } from "@/utils/logger";
@@ -74,7 +73,7 @@ export function ForgeIntegrationsTab() {
   }, [remotes]);
   // Defer the "Loading remotes…" text past the Doherty threshold so fast IPC
   // resolutions don't flash a loading state for sub-400ms work.
-  const showRemotesLoading = useDeferredLoading(remotesLoading, UI_DOHERTY_THRESHOLD);
+  const showRemotesLoading = useDohertyGate(remotesLoading);
 
   useEffect(() => {
     let cancelled = false;
