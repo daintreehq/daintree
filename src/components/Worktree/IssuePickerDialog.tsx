@@ -83,30 +83,39 @@ export function IssuePickerDialog({
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("open");
   const [issues, setIssues] = useState<GitHubIssue[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [fetchedQuery, setFetchedQuery] = useState("");
+  const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fetchIdRef = useRef(0);
 
   const fetchIssues = useCallback(
     async (searchTerm: string, state: StateFilter) => {
-      setIsLoading(true);
-      setError(null);
+      const trimmed = searchTerm.trim();
+      const id = ++fetchIdRef.current;
+      setIsPending(true);
       try {
         const result = await githubClient.listIssues({
           cwd: worktree.path,
-          search: searchTerm.trim() || undefined,
+          search: trimmed || undefined,
           state,
         });
+        if (id !== fetchIdRef.current) return;
         setIssues(result.items);
+        setFetchedQuery(trimmed);
         setSelectedIndex(0);
+        setError(null);
+        setIsPending(false);
       } catch (e) {
+        if (id !== fetchIdRef.current) return;
         setError(formatErrorMessage(e, "Failed to load issues"));
         setIssues([]);
-      } finally {
-        setIsLoading(false);
+        setFetchedQuery(trimmed);
+        setSelectedIndex(0);
+        setIsPending(false);
       }
     },
     [worktree.path]
@@ -125,6 +134,9 @@ export function IssuePickerDialog({
     }, 300);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      // Invalidate any in-flight fetch the moment the user's input changes,
+      // so a slow response from the prior query can't land under the new one.
+      fetchIdRef.current++;
     };
   }, [search, stateFilter, isOpen, fetchIssues]);
 
@@ -132,6 +144,10 @@ export function IssuePickerDialog({
     if (isOpen) {
       setSearch("");
       setStateFilter("open");
+      setFetchedQuery("");
+      setIssues([]);
+      setError(null);
+      setIsPending(true);
       setSelectedIndex(0);
       setTimeout(() => inputRef.current?.focus(), 100);
     }
@@ -218,7 +234,7 @@ export function IssuePickerDialog({
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0 px-6 pb-4">
-        {isLoading && issues.length === 0 ? (
+        {isPending && issues.length === 0 ? (
           <Skeleton label="Loading issues" className="space-y-1">
             {Array.from({ length: 6 }).map((_, i) => (
               <div
@@ -236,11 +252,11 @@ export function IssuePickerDialog({
         ) : error ? (
           <div className="text-center py-8 text-sm text-status-error">{error}</div>
         ) : issues.length === 0 ? (
-          search.trim() ? (
+          fetchedQuery ? (
             <EmptyState
               variant="filtered-empty"
               scale="popover"
-              title={`No matches for "${search.trim()}"`}
+              title={`No matches for "${fetchedQuery}"`}
               action={
                 <button
                   type="button"
@@ -255,7 +271,13 @@ export function IssuePickerDialog({
             <EmptyState variant="zero-data" scale="popover" title="No issues found" />
           )
         ) : (
-          <div ref={listRef} className="space-y-1" role="listbox">
+          <div
+            ref={listRef}
+            className={cn("space-y-1", isPending && "surface-stale")}
+            role="listbox"
+            data-stale={isPending ? "true" : undefined}
+            aria-busy={isPending || undefined}
+          >
             {issues.map((issue, index) => (
               <IssueOptionRow
                 key={issue.number}
