@@ -17,7 +17,6 @@ import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
 import type {
-  HelpAssistantSettings,
   KeybindingImportResult,
   MicPermissionStatus,
   NotificationSettings,
@@ -105,7 +104,6 @@ import type {
   SnapshotRevertResult,
 } from "./git.js";
 import type { TerminalConfig } from "./config.js";
-import type { ShowContextMenuPayload } from "../menu.js";
 import type {
   FileSearchPayload,
   FileSearchResult,
@@ -132,7 +130,6 @@ import type {
 } from "../pty-host.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
-import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
 import type {
   DemoMoveToPayload,
@@ -472,11 +469,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: { success: boolean };
   };
-  "menu:show-context": {
-    args: [payload: ShowContextMenuPayload];
-    result: string | null;
-  };
-
   // Window channels
   "window:toggle-fullscreen": {
     args: [];
@@ -1162,28 +1154,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: { enabled: boolean };
   };
 
-  // Agent Capabilities channels
-  "agent-capabilities:get-registry": {
-    args: [];
-    result: AgentRegistry;
-  };
-  "agent-capabilities:get-agent-ids": {
-    args: [];
-    result: string[];
-  };
-  "agent-capabilities:get-agent-metadata": {
-    args: [agentId: string];
-    result: AgentMetadata | null;
-  };
-  "agent-capabilities:is-agent-enabled": {
-    args: [agentId: string];
-    result: boolean;
-  };
-  "agent-capabilities:get-ccr-presets": {
-    args: [];
-    result: AgentPreset[];
-  };
-
   // Daintree CLI install channels
   "cli:install": {
     args: [];
@@ -1360,15 +1330,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-  // Help assistant
-  "help-assistant:get-settings": {
-    args: [];
-    result: HelpAssistantSettings;
-  };
-  "help-assistant:set-settings": {
-    args: [patch: Partial<HelpAssistantSettings>];
-    result: void;
-  };
   "voice-input:start": {
     args: [];
     result: { ok: true } | { ok: false; error: string };

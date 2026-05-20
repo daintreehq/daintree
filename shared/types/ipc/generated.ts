@@ -8,6 +8,26 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "agent-capabilities:get-agent-ids": {
+    args: [];
+    result: string[];
+  };
+  "agent-capabilities:get-agent-metadata": {
+    args: [agentId: string];
+    result: import("./agentCapabilities.js").AgentMetadata | null;
+  };
+  "agent-capabilities:get-ccr-presets": {
+    args: [];
+    result: import("../../config/agentRegistry.js").AgentPreset[];
+  };
+  "agent-capabilities:get-registry": {
+    args: [];
+    result: import("./agentCapabilities.js").AgentRegistry;
+  };
+  "agent-capabilities:is-agent-enabled": {
+    args: [agentId: string];
+    result: boolean;
+  };
   "agent-session:clear": {
     args: [payload: { worktreeId?: string | undefined }];
     result: void;
@@ -208,6 +228,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { variables: Record<string, string> }];
     result: void;
   };
+  "help-assistant:get-settings": {
+    args: [];
+    result: import("./api.js").HelpAssistantSettings;
+  };
+  "help-assistant:set-settings": {
+    args: [patch: Partial<import("./api.js").HelpAssistantSettings>];
+    result: void;
+  };
   "help:get-folder-path": {
     args: [];
     result: string | null;
@@ -341,6 +369,10 @@ export interface GeneratedIpcInvokeMap {
   "mcp-server:set-session-tier": {
     args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
     result: { sessionId: string; tier: "action" | "workbench" | "system" };
+  };
+  "menu:show-context": {
+    args: [payload: import("../menu.js").ShowContextMenuPayload];
+    result: string | null;
   };
   "milestones:get": {
     args: [];

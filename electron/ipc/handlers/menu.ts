@@ -1,8 +1,8 @@
 import { Menu } from "electron";
-import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type { MenuItemOption, ShowContextMenuPayload } from "../../../shared/types/menu.js";
-import { typedHandleWithContext } from "../utils.js";
+import { defineIpcNamespace, op } from "../define.js";
+import { MENU_METHOD_CHANNELS } from "./menu.preload.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -88,53 +88,66 @@ function sanitizeShowContextMenuPayload(value: unknown): ShowContextMenuPayload 
   };
 }
 
-export function registerMenuHandlers(_deps: HandlerDependencies): () => void {
-  return typedHandleWithContext(CHANNELS.MENU_SHOW_CONTEXT, async (ctx, payload) => {
-    const sanitized = sanitizeShowContextMenuPayload(payload);
-    if (!sanitized || sanitized.template.length === 0) return null;
+export const menuNamespace = defineIpcNamespace({
+  name: "menu",
+  ops: {
+    showContext: op(
+      MENU_METHOD_CHANNELS.showContext,
+      async (ctx, payload: ShowContextMenuPayload): Promise<string | null> => {
+        const sanitized = sanitizeShowContextMenuPayload(payload);
+        if (!sanitized || sanitized.template.length === 0) return null;
 
-    const win = ctx.senderWindow;
-    if (!win || win.isDestroyed()) return null;
+        const win = ctx.senderWindow;
+        if (!win || win.isDestroyed()) return null;
 
-    return new Promise((resolve) => {
-      let resolved = false;
-      const resolveOnce = (value: string | null) => {
-        if (resolved) return;
-        resolved = true;
-        resolve(value);
-      };
-
-      const buildTemplate = (items: MenuItemOption[]): Electron.MenuItemConstructorOptions[] => {
-        return items.map((item) => {
-          if (item.type === "separator") {
-            return { type: "separator" };
-          }
-
-          const hasSubmenu = Array.isArray(item.submenu) && item.submenu.length > 0;
-          const base: Electron.MenuItemConstructorOptions = {
-            label: item.label,
-            enabled: item.enabled !== false,
-            type: item.type === "checkbox" ? "checkbox" : "normal",
-            ...(item.type === "checkbox" && item.checked !== undefined
-              ? { checked: item.checked }
-              : {}),
-            ...(item.sublabel ? { sublabel: item.sublabel } : {}),
-            ...(hasSubmenu ? { submenu: buildTemplate(item.submenu!) } : {}),
-            ...(hasSubmenu ? {} : { click: () => resolveOnce(item.id) }),
+        return new Promise((resolve) => {
+          let resolved = false;
+          const resolveOnce = (value: string | null) => {
+            if (resolved) return;
+            resolved = true;
+            resolve(value);
           };
 
-          return base;
+          const buildTemplate = (
+            items: MenuItemOption[]
+          ): Electron.MenuItemConstructorOptions[] => {
+            return items.map((item) => {
+              if (item.type === "separator") {
+                return { type: "separator" };
+              }
+
+              const hasSubmenu = Array.isArray(item.submenu) && item.submenu.length > 0;
+              const base: Electron.MenuItemConstructorOptions = {
+                label: item.label,
+                enabled: item.enabled !== false,
+                type: item.type === "checkbox" ? "checkbox" : "normal",
+                ...(item.type === "checkbox" && item.checked !== undefined
+                  ? { checked: item.checked }
+                  : {}),
+                ...(item.sublabel ? { sublabel: item.sublabel } : {}),
+                ...(hasSubmenu ? { submenu: buildTemplate(item.submenu!) } : {}),
+                ...(hasSubmenu ? {} : { click: () => resolveOnce(item.id) }),
+              };
+
+              return base;
+            });
+          };
+
+          const menu = Menu.buildFromTemplate(buildTemplate(sanitized.template));
+
+          menu.popup({
+            window: win,
+            ...(sanitized.x !== undefined ? { x: sanitized.x } : {}),
+            ...(sanitized.y !== undefined ? { y: sanitized.y } : {}),
+            callback: () => resolveOnce(null),
+          });
         });
-      };
+      },
+      { withContext: true }
+    ),
+  },
+});
 
-      const menu = Menu.buildFromTemplate(buildTemplate(sanitized.template));
-
-      menu.popup({
-        window: win,
-        ...(sanitized.x !== undefined ? { x: sanitized.x } : {}),
-        ...(sanitized.y !== undefined ? { y: sanitized.y } : {}),
-        callback: () => resolveOnce(null),
-      });
-    });
-  });
+export function registerMenuHandlers(_deps: HandlerDependencies): () => void {
+  return menuNamespace.register();
 }

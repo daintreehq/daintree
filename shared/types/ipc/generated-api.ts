@@ -13,6 +13,23 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["accessibility:get-enabled"]["args"]
     ): Promise<IpcInvokeMap["accessibility:get-enabled"]["result"]>;
   };
+  agentCapabilities: {
+    getAgentIds(
+      ...args: IpcInvokeMap["agent-capabilities:get-agent-ids"]["args"]
+    ): Promise<IpcInvokeMap["agent-capabilities:get-agent-ids"]["result"]>;
+    getAgentMetadata(
+      ...args: IpcInvokeMap["agent-capabilities:get-agent-metadata"]["args"]
+    ): Promise<IpcInvokeMap["agent-capabilities:get-agent-metadata"]["result"]>;
+    getCcrPresets(
+      ...args: IpcInvokeMap["agent-capabilities:get-ccr-presets"]["args"]
+    ): Promise<IpcInvokeMap["agent-capabilities:get-ccr-presets"]["result"]>;
+    getRegistry(
+      ...args: IpcInvokeMap["agent-capabilities:get-registry"]["args"]
+    ): Promise<IpcInvokeMap["agent-capabilities:get-registry"]["result"]>;
+    isAgentEnabled(
+      ...args: IpcInvokeMap["agent-capabilities:is-agent-enabled"]["args"]
+    ): Promise<IpcInvokeMap["agent-capabilities:is-agent-enabled"]["result"]>;
+  };
   clipboard: {
     readSelection(
       ...args: IpcInvokeMap["clipboard:read-selection"]["args"]
@@ -117,6 +134,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["help:unmark-terminal"]["args"]
     ): Promise<IpcInvokeMap["help:unmark-terminal"]["result"]>;
   };
+  helpAssistant: {
+    getSettings(
+      ...args: IpcInvokeMap["help-assistant:get-settings"]["args"]
+    ): Promise<IpcInvokeMap["help-assistant:get-settings"]["result"]>;
+    setSettings(
+      ...args: IpcInvokeMap["help-assistant:set-settings"]["args"]
+    ): Promise<IpcInvokeMap["help-assistant:set-settings"]["result"]>;
+  };
   hibernation: {
     getConfig(
       ...args: IpcInvokeMap["hibernation:get-config"]["args"]
@@ -180,6 +205,11 @@ export interface GeneratedElectronAPI {
     setSessionTier(
       ...args: IpcInvokeMap["mcp-server:set-session-tier"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:set-session-tier"]["result"]>;
+  };
+  menu: {
+    showContext(
+      ...args: IpcInvokeMap["menu:show-context"]["args"]
+    ): Promise<IpcInvokeMap["menu:show-context"]["result"]>;
   };
   milestones: {
     get(

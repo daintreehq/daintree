@@ -1,4 +1,3 @@
-import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { CcrConfigService } from "../../services/CcrConfigService.js";
 import {
@@ -8,9 +7,14 @@ import {
   getEffectiveAgentConfig,
   type AgentConfig,
 } from "../../../shared/config/agentRegistry.js";
-import type { AgentMetadata } from "../../../shared/types/ipc/agentCapabilities.js";
+import type {
+  AgentMetadata,
+  AgentRegistry,
+} from "../../../shared/types/ipc/agentCapabilities.js";
+import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
 import { isAgentPinned } from "../../../shared/utils/agentPinned.js";
-import { typedHandle } from "../utils.js";
+import { defineIpcNamespace, op } from "../define.js";
+import { AGENT_CAPABILITIES_METHOD_CHANNELS } from "./agentCapabilities.preload.js";
 
 function toAgentMetadata(config: AgentConfig, agentId: string): AgentMetadata {
   const isBuiltIn = agentId in AGENT_REGISTRY;
@@ -34,57 +38,61 @@ function toAgentMetadata(config: AgentConfig, agentId: string): AgentMetadata {
   };
 }
 
+export const agentCapabilitiesNamespace = defineIpcNamespace({
+  name: "agentCapabilities",
+  ops: {
+    getRegistry: op(
+      AGENT_CAPABILITIES_METHOD_CHANNELS.getRegistry,
+      async (): Promise<AgentRegistry> => {
+        return getEffectiveRegistry();
+      }
+    ),
+    getAgentIds: op(AGENT_CAPABILITIES_METHOD_CHANNELS.getAgentIds, async (): Promise<string[]> => {
+      return getEffectiveAgentIds();
+    }),
+    getAgentMetadata: op(
+      AGENT_CAPABILITIES_METHOD_CHANNELS.getAgentMetadata,
+      async (agentId: string): Promise<AgentMetadata | null> => {
+        if (!agentId || typeof agentId !== "string") {
+          throw new Error("Invalid agentId");
+        }
+        if (agentId === "__proto__" || agentId === "constructor" || agentId === "prototype") {
+          throw new Error("Invalid agentId: reserved keyword");
+        }
+        const config = getEffectiveAgentConfig(agentId);
+        if (!config) {
+          return null;
+        }
+        return toAgentMetadata(config, agentId);
+      }
+    ),
+    isAgentEnabled: op(
+      AGENT_CAPABILITIES_METHOD_CHANNELS.isAgentEnabled,
+      async (agentId: string): Promise<boolean> => {
+        if (!agentId || typeof agentId !== "string") {
+          throw new Error("Invalid agentId");
+        }
+        if (agentId === "__proto__" || agentId === "constructor" || agentId === "prototype") {
+          throw new Error("Invalid agentId: reserved keyword");
+        }
+        const config = getEffectiveAgentConfig(agentId);
+        if (!config) {
+          return false;
+        }
+        const agentSettings = store.get("agentSettings");
+        const agentEntry = agentSettings?.agents?.[agentId];
+        return isAgentPinned(agentEntry);
+      }
+    ),
+    getCcrPresets: op(
+      AGENT_CAPABILITIES_METHOD_CHANNELS.getCcrPresets,
+      async (): Promise<AgentPreset[]> => {
+        return CcrConfigService.getInstance().getPresets();
+      }
+    ),
+  },
+});
+
 export function registerAgentCapabilitiesHandlers(): () => void {
-  const handlers: Array<() => void> = [];
-
-  const handleGetRegistry = async () => {
-    return getEffectiveRegistry();
-  };
-  handlers.push(typedHandle(CHANNELS.AGENT_CAPABILITIES_GET_REGISTRY, handleGetRegistry));
-
-  const handleGetAgentIds = async () => {
-    return getEffectiveAgentIds();
-  };
-  handlers.push(typedHandle(CHANNELS.AGENT_CAPABILITIES_GET_AGENT_IDS, handleGetAgentIds));
-
-  const handleGetAgentMetadata = async (agentId: string): Promise<AgentMetadata | null> => {
-    if (!agentId || typeof agentId !== "string") {
-      throw new Error("Invalid agentId");
-    }
-    if (agentId === "__proto__" || agentId === "constructor" || agentId === "prototype") {
-      throw new Error("Invalid agentId: reserved keyword");
-    }
-    const config = getEffectiveAgentConfig(agentId);
-    if (!config) {
-      return null;
-    }
-    return toAgentMetadata(config, agentId);
-  };
-  handlers.push(
-    typedHandle(CHANNELS.AGENT_CAPABILITIES_GET_AGENT_METADATA, handleGetAgentMetadata)
-  );
-
-  const handleIsAgentEnabled = async (agentId: string): Promise<boolean> => {
-    if (!agentId || typeof agentId !== "string") {
-      throw new Error("Invalid agentId");
-    }
-    if (agentId === "__proto__" || agentId === "constructor" || agentId === "prototype") {
-      throw new Error("Invalid agentId: reserved keyword");
-    }
-    const config = getEffectiveAgentConfig(agentId);
-    if (!config) {
-      return false;
-    }
-    const agentSettings = store.get("agentSettings");
-    const agentEntry = agentSettings?.agents?.[agentId];
-    return isAgentPinned(agentEntry);
-  };
-  handlers.push(typedHandle(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED, handleIsAgentEnabled));
-
-  const handleGetCcrPresets = async () => {
-    return CcrConfigService.getInstance().getPresets();
-  };
-  handlers.push(typedHandle(CHANNELS.AGENT_CAPABILITIES_GET_CCR_PRESETS, handleGetCcrPresets));
-
-  return () => handlers.forEach((cleanup) => cleanup());
+  return agentCapabilitiesNamespace.register();
 }

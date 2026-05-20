@@ -144,7 +144,6 @@ import type {
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
 } from "../pty-host.js";
-import type { ShowContextMenuPayload } from "../menu.js";
 import type {
   FileSearchPayload,
   FileSearchResult,
@@ -154,7 +153,6 @@ import type {
 import type { DevPreviewStateChangedPayload } from "./devPreview.js";
 import type { AppAgentConfig } from "../appAgent.js";
 import type { ActionContext } from "../actions.js";
-import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 
@@ -394,9 +392,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;
   };
-  menu: {
-    showContext(payload: ShowContextMenuPayload): Promise<string | null>;
-  };
+  // menu is generated — see GeneratedElectronAPI.
   logs: {
     getAll(filters?: LogFilterOptions): Promise<LogEntry[]>;
     getSources(): Promise<string[]>;
@@ -1139,16 +1135,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Send confirmation response back to main process */
     sendConfirmationResponse(payload: { requestId: string; approved: boolean }): void;
   };
-  agentCapabilities: {
-    /** Get effective registry (built-in + user overrides) */
-    getRegistry(): Promise<AgentRegistry>;
-    /** Get list of effective agent IDs */
-    getAgentIds(): Promise<string[]>;
-    /** Get metadata for specific agent */
-    getAgentMetadata(agentId: string): Promise<AgentMetadata | null>;
-    /** Check if agent is enabled/available */
-    isAgentEnabled(agentId: string): Promise<boolean>;
-    /** Subscribe to CCR preset updates from main process */
+  // Invoke methods come from GeneratedElectronAPI; onPresetsUpdated is a renderer-only subscription.
+  agentCapabilities: GeneratedElectronAPI["agentCapabilities"] & {
     onPresetsUpdated(
       callback: (payload: {
         agentId: string;
@@ -1165,20 +1153,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         }>;
       }) => void
     ): () => void;
-    /** Fetch current CCR presets from main process */
-    getCcrPresets(): Promise<
-      Array<{
-        id: string;
-        name: string;
-        description?: string;
-        env?: Record<string, string>;
-        args?: string[];
-        color?: string;
-        dangerousEnabled?: boolean;
-        customFlags?: string;
-        inlineMode?: boolean;
-      }>
-    >;
   };
   agentSessionHistory: {
     list(worktreeId?: string): Promise<AgentSessionRecord[]>;
@@ -1389,10 +1363,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: import("./mcpServer.js").McpGrantLifecyclePayload) => void
     ): () => void;
   };
-  helpAssistant: {
-    getSettings(): Promise<HelpAssistantSettings>;
-    setSettings(settings: Partial<HelpAssistantSettings>): Promise<void>;
-  };
+  // helpAssistant is generated — see GeneratedElectronAPI.
   mcpBridge: {
     /** Listen for manifest requests from main process */
     onGetManifestRequest(callback: (requestId: string) => void): () => void;

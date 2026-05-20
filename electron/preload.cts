@@ -17,7 +17,6 @@ import type { AppErrorCode } from "../shared/types/appError.js";
 import type { McpRuntimeSnapshot } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
-import type { HelpAssistantTier } from "../shared/types/ipc/maps.js";
 import { CHANNELS } from "./ipc/channels.js";
 import {
   BrokerError,
@@ -47,6 +46,9 @@ import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.pr
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
+import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
+import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
+import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 
 import type {
   WorktreeState,
@@ -113,7 +115,6 @@ import type {
 
 type SpawnResultPayload = SpawnResult;
 import type { PortalNewTabMenuAction } from "../shared/types/portal.js";
-import type { ShowContextMenuPayload } from "../shared/types/menu.js";
 import type { ResourceProfilePayload } from "../shared/types/resourceProfile.js";
 import type { PluginActionDescriptor } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
@@ -1116,10 +1117,7 @@ const api: ElectronAPI = {
     onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
   },
 
-  menu: {
-    showContext: (payload: ShowContextMenuPayload) =>
-      _unwrappingInvoke(CHANNELS.MENU_SHOW_CONTEXT, payload),
-  },
+  menu: buildMenuPreloadBindings(_unwrappingInvoke),
 
   // Logs API
   logs: {
@@ -2173,15 +2171,7 @@ const api: ElectronAPI = {
 
   // Agent Capabilities API
   agentCapabilities: {
-    getRegistry: () => _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_GET_REGISTRY),
-
-    getAgentIds: () => _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_GET_AGENT_IDS),
-
-    getAgentMetadata: (agentId: string) =>
-      _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_GET_AGENT_METADATA, agentId),
-
-    isAgentEnabled: (agentId: string) =>
-      _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED, agentId),
+    ...buildAgentCapabilitiesPreloadBindings(_unwrappingInvoke),
 
     onPresetsUpdated: (
       callback: (payload: {
@@ -2195,8 +2185,6 @@ const api: ElectronAPI = {
         }>;
       }) => void
     ) => _typedOn(CHANNELS.AGENT_PRESETS_UPDATED, callback),
-
-    getCcrPresets: () => _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_GET_CCR_PRESETS),
   },
 
   // Agent Session History API
@@ -2424,18 +2412,7 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.MCP_GRANT_LIFECYCLE, callback),
   },
 
-  helpAssistant: {
-    getSettings: () => _unwrappingInvoke(CHANNELS.HELP_ASSISTANT_GET_SETTINGS),
-    setSettings: (
-      patch: Partial<{
-        docSearch: boolean;
-        daintreeControl: boolean;
-        tier: HelpAssistantTier;
-        bypassPermissions: boolean;
-        auditRetention: 7 | 30 | 0;
-      }>
-    ) => _unwrappingInvoke(CHANNELS.HELP_ASSISTANT_SET_SETTINGS, patch),
-  },
+  helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),
 
   mcpBridge: {
     onGetManifestRequest: (callback: (requestId: string) => void) => {
