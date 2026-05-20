@@ -23,10 +23,6 @@ const electronMock = vi.hoisted(() => ({
   },
 }));
 
-const fixPathMock = vi.hoisted(() => ({
-  default: vi.fn(),
-}));
-
 const osMock = vi.hoisted(() => ({
   totalmem: vi.fn<() => number>(),
 }));
@@ -55,8 +51,6 @@ vi.mock("fs", () => ({
 }));
 
 vi.mock("electron", () => electronMock);
-
-vi.mock("fix-path", () => fixPathMock);
 
 vi.mock("node:v8", () => ({
   default: { setFlagsFromString: vi.fn() },
@@ -863,35 +857,70 @@ describe("reset-data", () => {
   });
 });
 
-describe("fixPath packaging guard", () => {
+describe("kickOffEarlyPathRefresh", () => {
+  let shellEnvCallCount = 0;
+  let savedPath: string | undefined;
+
   beforeEach(() => {
     vi.resetModules();
     vi.resetAllMocks();
     Object.defineProperty(process, "platform", { value: "darwin", writable: true });
     process.argv = ["electron", "main.js"];
+    fsMock.existsSync.mockReturnValue(false);
+    shellEnvCallCount = 0;
+    savedPath = process.env.PATH;
+    process.env.PATH = "/old/path";
+    vi.doMock("shell-env", () => ({
+      shellEnv: vi.fn(async () => {
+        shellEnvCallCount += 1;
+        return { PATH: "/from/shell-env" };
+      }),
+    }));
   });
 
   afterEach(() => {
+    process.env.PATH = savedPath;
     electronMock.app.isPackaged = false;
     Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
     process.argv = originalArgv;
+    vi.doUnmock("shell-env");
   });
 
-  it("does not call fixPath in dev mode (isPackaged=false)", async () => {
-    electronMock.app.isPackaged = false;
-    fsMock.existsSync.mockReturnValue(false);
-
-    await import("../environment.js");
-
-    expect(fixPathMock.default).not.toHaveBeenCalled();
+  it("returns null from getEarlyPathRefreshPromise before kick-off", async () => {
+    const env = await import("../environment.js");
+    expect(env.getEarlyPathRefreshPromise()).toBeNull();
   });
 
-  it("calls fixPath in packaged mode (isPackaged=true)", async () => {
-    electronMock.app.isPackaged = true;
-    fsMock.existsSync.mockReturnValue(false);
+  it("kick-off runs refreshPath and updates PATH", async () => {
+    const env = await import("../environment.js");
+    await env.kickOffEarlyPathRefresh();
+    expect(shellEnvCallCount).toBe(1);
+    expect(process.env.PATH).toContain("/from/shell-env");
+  });
 
-    await import("../environment.js");
+  it("kick-off is idempotent — repeat calls share the same promise", async () => {
+    const env = await import("../environment.js");
+    const p1 = env.kickOffEarlyPathRefresh();
+    const p2 = env.kickOffEarlyPathRefresh();
+    expect(p1).toBe(p2);
+    await Promise.all([p1, p2]);
+    // shellEnv must only be invoked once even with two concurrent kick-offs.
+    expect(shellEnvCallCount).toBe(1);
+  });
 
-    expect(fixPathMock.default).toHaveBeenCalledOnce();
+  it("getEarlyPathRefreshPromise returns a settled promise after kick-off", async () => {
+    const env = await import("../environment.js");
+    await env.kickOffEarlyPathRefresh();
+    const after = env.getEarlyPathRefreshPromise();
+    expect(after).not.toBeNull();
+    // Awaiting a settled promise is a no-op — must not re-run shell-env.
+    await after;
+    expect(shellEnvCallCount).toBe(1);
+  });
+
+  it("concurrent refreshPath callers share one in-flight shell-env probe", async () => {
+    const env = await import("../environment.js");
+    await Promise.all([env.refreshPath(), env.refreshPath(), env.refreshPath()]);
+    expect(shellEnvCallCount).toBe(1);
   });
 });

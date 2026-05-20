@@ -16,7 +16,7 @@ import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { notificationService } from "../services/NotificationService.js";
 import { logInfo } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
-import { isDemoMode } from "../setup/environment.js";
+import { getEarlyPathRefreshPromise, isDemoMode } from "../setup/environment.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { registerDeferredTask, finalizeDeferredRegistration } from "./deferredInitQueue.js";
 import { toDisposable } from "../utils/lifecycle.js";
@@ -45,11 +45,11 @@ import {
  * with `worktreeService`, `worktreePortBroker`, and `projectViewManager` once
  * the workspace client and ProjectViewManager are wired in the orchestrator.
  */
-export function initPerWindowServices(
+export async function initPerWindowServices(
   win: BrowserWindow,
   ctx: WindowContext,
   windowRegistry: WindowRegistry | undefined
-): HandlerDependencies {
+): Promise<HandlerDependencies> {
   // Menu & Notifications (per-window: menu references this window)
   console.log("[MAIN] Creating application menu (initial, no agent availability yet)...");
   let cliAvailabilityService = getCliAvailabilityServiceRef();
@@ -95,6 +95,17 @@ export function initPerWindowServices(
   let ptyClient = getPtyClient();
   if (!ptyClient) {
     console.log("[MAIN] Starting critical services...");
+
+    // Wait for the early PATH refresh (kicked off in app.whenReady) before
+    // forking the PTY host so node-pty inherits the user's full PATH —
+    // version-manager shims (mise/asdf/Volta) and user-local bin dirs are
+    // otherwise invisible to packaged builds (#8625). Awaiting a settled
+    // promise is a no-op when the refresh already finished. If the kick-off
+    // never ran (test/headless contexts), skip the await rather than block.
+    const earlyPathRefresh = getEarlyPathRefreshPromise();
+    if (earlyPathRefresh) {
+      await earlyPathRefresh;
+    }
 
     // Start the external main-process watchdog before PtyClient so a deadlock
     // during PTY host fork (worst case: a synchronous spawn that hangs) is

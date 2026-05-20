@@ -66,7 +66,7 @@ import {
 import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
 import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotificationService.js";
 import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
-import { isSmokeTest } from "./setup/environment.js";
+import { isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
 import { store } from "./store.js";
 import {
   pruneOldLogs,
@@ -374,6 +374,15 @@ if (!gotTheLock) {
 
   app.whenReady().then(async () => {
     try {
+      // Fire-and-forget the user-PATH refresh. Runs concurrently with the
+      // rest of startup; the PtyClient creation site awaits it before
+      // spawning the PTY host (#8625). Kicked off inside whenReady() so the
+      // shell probe never spawns a child process pre-ready — that path leaks
+      // zombies on macOS Finder-launched packaged builds.
+      markPerformance(PERF_MARKS.EARLY_PATH_REFRESH_START);
+      kickOffEarlyPathRefresh().finally(() => {
+        markPerformance(PERF_MARKS.EARLY_PATH_REFRESH_COMPLETE);
+      });
       setupPermissionLockdown();
       registerAppProtocol(distPath);
       registerDaintreeFileProtocol();

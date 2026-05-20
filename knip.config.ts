@@ -96,8 +96,6 @@ const config: KnipConfig = {
   // explicit-declare fix should happen in a follow-up:
   //   - conf: imported in electron/__tests__/storeBackupRestore.test.ts;
   //     transitive via electron-store.
-  //   - shell-env: imported in electron/setup/environment.ts; transitive
-  //     via fix-path.
   //   - glob, @babel/core: imported in scripts/find-critical-compiler-errors.mjs;
   //     transitive via babel-plugin-react-compiler and related toolchain.
   //   - @types/trusted-types: provides the ambient `TrustedHTML` /
@@ -110,7 +108,6 @@ const config: KnipConfig = {
     "wait-on",
     "fast-check",
     "conf",
-    "shell-env",
     "glob",
     "@babel/core",
     "@types/trusted-types",
