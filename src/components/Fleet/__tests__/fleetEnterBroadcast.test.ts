@@ -140,9 +140,9 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
       // broadcast fires, then the batched path + cancel produce skippedCount>0.
       resolveFleetBroadcastConfirmation();
       for (let i = 0; i < 20; i += 1) await flush();
-      const msg = useAnnouncerStore.getState().polite?.msg ?? "";
-      expect(msg).toMatch(/Broadcast cancelled/);
-      expect(msg).toContain("7 terminals skipped");
+      expect(useAnnouncerStore.getState().polite?.msg).toBe(
+        "Broadcast cancelled — 5 sent, 7 terminals skipped"
+      );
     } finally {
       useFleetBroadcastProgressStore.setState({ advance: origAdvance });
     }
