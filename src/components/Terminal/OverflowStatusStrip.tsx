@@ -49,6 +49,13 @@ export function OverflowStatusStrip({ groups, className }: OverflowStatusStripPr
     return ids;
   }, [groups]);
 
+  // Drop groups whose panels have all been removed from the store mid-render —
+  // otherwise the count header advertises agents that aren't actually painted.
+  const renderableGroups = useMemo(() => {
+    const byId = panelStoreApi.getState().panelsById;
+    return groups.filter((g) => g.panelIds.some((id) => byId[id]));
+  }, [groups]);
+
   useEffect(() => {
     for (const id of overflowPanelIds) {
       try {
@@ -69,7 +76,7 @@ export function OverflowStatusStrip({ groups, className }: OverflowStatusStripPr
     };
   }, [overflowPanelIds]);
 
-  if (groups.length === 0) return null;
+  if (renderableGroups.length === 0) return null;
 
   return (
     <div
@@ -82,12 +89,18 @@ export function OverflowStatusStrip({ groups, className }: OverflowStatusStripPr
     >
       <div className="flex items-center justify-between mb-1 px-0.5">
         <span className="text-[11px] uppercase tracking-wide text-daintree-text/50">
-          {groups.length} more {groups.length === 1 ? "agent" : "agents"}
+          {renderableGroups.length} more {renderableGroups.length === 1 ? "agent" : "agents"}
         </span>
         <span className="text-[11px] text-daintree-text/40">Click to move to dock</span>
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {groups.map((group) => (
+      {/*
+       * Cap the strip at ~30% viewport height so an extreme overflow set
+       * (capacity = 1 with many panels on a narrow window) can't push the
+       * `flex-1 min-h-0` grid above into near-zero height. Cards inside
+       * scroll vertically instead.
+       */}
+      <div className="flex flex-wrap gap-1.5 max-h-[30vh] overflow-y-auto">
+        {renderableGroups.map((group) => (
           <OverflowCard key={group.id} group={group} />
         ))}
       </div>

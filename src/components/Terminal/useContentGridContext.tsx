@@ -24,8 +24,10 @@ import { TerminalRefreshTier } from "@shared/types/panel";
 import type { TabGroup, TabGroupLocation } from "@shared/types/panel";
 import {
   computeGridColumns,
+  getMaxGridCapacity,
   GRID_TRANSITION_DURATION_MS,
   GRID_FIT_DELAY_MS,
+  ABSOLUTE_MAX_GRID_TERMINALS,
 } from "@/lib/terminalLayout";
 import {
   isSidebarLayoutTransitionLocked,
@@ -336,9 +338,14 @@ export function useContentGridContext({
 
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
   const setGridDimensions = useLayoutConfigStore((state) => state.setGridDimensions);
-  const getMaxGridCapacity = useLayoutConfigStore((state) => state.getMaxGridCapacity);
-
-  const maxGridCapacity = getMaxGridCapacity();
+  // Subscribe reactively to the derived capacity so height-only resizes
+  // re-partition the grid. A `state.getMaxGridCapacity` function reference
+  // is stable across height changes and would leave the partition stale
+  // (verified against `useGridNavigation`'s inline-derived selector).
+  const maxGridCapacity = useLayoutConfigStore((state) => {
+    if (!state.gridDimensions) return ABSOLUTE_MAX_GRID_TERMINALS;
+    return getMaxGridCapacity(state.gridDimensions.width, state.gridDimensions.height);
+  });
   // Split the grid panels at the screen-fit capacity. Everything past the cap
   // renders in the overflow status strip (#8702) so we never paint terminals
   // narrower than MIN_TERMINAL_WIDTH_PX.
@@ -815,6 +822,21 @@ export function useContentGridContext({
       setFocused(maximizedGroupFocusTarget);
     }
   }, [focusedId, maximizedGroupFocusTarget, maximizedGroupPanels.length, setFocused]);
+
+  // Focus reconciliation when capacity shrinks (sidebar opens, window narrows):
+  // if `focusedId` has slipped into the overflow strip, arrow keys and Cmd+N
+  // can't reach it anymore. Drop focus onto the first visible panel instead so
+  // the user has a working keyboard model (#8702). Only fires when the focused
+  // panel is in the active worktree's grid set but no longer visible.
+  useEffect(() => {
+    if (!focusedId) return;
+    const focusedInVisible = visibleTabGroups.some((g) => g.panelIds.includes(focusedId));
+    if (focusedInVisible) return;
+    const focusedInOverflow = overflowTabGroups.some((g) => g.panelIds.includes(focusedId));
+    if (!focusedInOverflow) return;
+    const fallback = visibleTabGroups[0]?.panelIds[0] ?? null;
+    if (fallback) setFocused(fallback);
+  }, [focusedId, visibleTabGroups, overflowTabGroups, setFocused]);
 
   const gridContextMenuContent = (
     <ContextMenuContent>

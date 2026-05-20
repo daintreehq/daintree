@@ -198,4 +198,28 @@ describe("OverflowStatusStrip", () => {
       rerender(<OverflowStatusStrip groups={[makeGroup("g-1", ["p-1"])]} />)
     ).not.toThrow();
   });
+
+  it("drops groups whose panels are all absent from the store so the count matches what renders", () => {
+    panelState.panelsById = {
+      "p-real": makePanel("p-real"),
+    };
+
+    render(
+      <OverflowStatusStrip
+        groups={[makeGroup("g-real", ["p-real"]), makeGroup("g-ghost", ["p-missing"])]}
+      />
+    );
+
+    // Header counts renderable groups, not the raw input list.
+    expect(screen.getByText(/1 more agent$/)).toBeTruthy();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+  });
+
+  it("renders nothing when every group's panels are absent from the store", () => {
+    panelState.panelsById = {};
+    const { container } = render(
+      <OverflowStatusStrip groups={[makeGroup("g-1", ["p-missing"])]} />
+    );
+    expect(container.firstChild).toBeNull();
+  });
 });
