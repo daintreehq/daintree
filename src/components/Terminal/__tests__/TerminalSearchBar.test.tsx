@@ -273,7 +273,7 @@ describe("TerminalSearchBar", () => {
     });
 
     expect(mock.searchAddon.findNext).toHaveBeenCalled();
-    const lastCall = mock.searchAddon.findNext.mock.calls.at(-1)!;
+    const lastCall = mock.searchAddon.findNext.mock.calls.at(-1) as unknown[];
     expect(lastCall[1]).toMatchObject({ wholeWord: true });
   });
 
@@ -301,7 +301,7 @@ describe("TerminalSearchBar", () => {
     });
 
     expect(mock.searchAddon.findNext).toHaveBeenCalled();
-    const lastCall = mock.searchAddon.findNext.mock.calls.at(-1)!;
+    const lastCall = mock.searchAddon.findNext.mock.calls.at(-1) as unknown[];
     expect(lastCall[1]).toMatchObject({ regex: true, wholeWord: true });
   });
 
@@ -356,7 +356,7 @@ describe("TerminalSearchBar", () => {
     });
 
     expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(1);
-    const onlyCall = mock.searchAddon.findNext.mock.calls[0]!;
+    const onlyCall = mock.searchAddon.findNext.mock.calls[0] as unknown[];
     expect(onlyCall[1]).toMatchObject({ wholeWord: true });
   });
 
