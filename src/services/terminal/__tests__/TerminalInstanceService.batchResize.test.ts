@@ -52,11 +52,7 @@ type BatchTestService = {
   batchResize: (ids: string[]) => void;
   suppressResizesDuringLayoutTransition: (ids: string[], durationMs: number) => void;
   resizeController: {
-    resize: (
-      id: string,
-      width: number,
-      height: number
-    ) => { cols: number; rows: number } | null;
+    resize: (id: string, width: number, height: number) => { cols: number; rows: number } | null;
     fit: (id: string) => unknown;
     lockResize: (id: string, locked: boolean, customTtlMs?: number) => void;
     isResizeLocked: (id: string) => boolean;
@@ -150,9 +146,10 @@ describe("TerminalInstanceService batchResize", () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.useFakeTimers();
-    ({ terminalInstanceService: service } = (await import(
-      "../TerminalInstanceService"
-    )) as unknown as { terminalInstanceService: BatchTestService });
+    ({ terminalInstanceService: service } =
+      (await import("../TerminalInstanceService")) as unknown as {
+        terminalInstanceService: BatchTestService;
+      });
     service.instances.clear();
   });
 
@@ -293,9 +290,10 @@ describe("TerminalInstanceService suppressResizesDuringLayoutTransition", () => 
   beforeEach(async () => {
     vi.resetModules();
     vi.useFakeTimers();
-    ({ terminalInstanceService: service } = (await import(
-      "../TerminalInstanceService"
-    )) as unknown as { terminalInstanceService: BatchTestService });
+    ({ terminalInstanceService: service } =
+      (await import("../TerminalInstanceService")) as unknown as {
+        terminalInstanceService: BatchTestService;
+      });
     service.instances.clear();
   });
 
