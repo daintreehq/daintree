@@ -320,7 +320,9 @@ describe("app:boot handler", () => {
 
   it("surfaces crashLoopStateRecovery only when in safe mode AND quarantine path is set", async () => {
     crashGuard.isSafeMode.mockReturnValue(true);
-    crashGuard.getQuarantinedStatePath.mockReturnValue("/tmp/crash-loop-state.json.corrupted.42");
+    (crashGuard.getQuarantinedStatePath as any).mockReturnValue(
+      "/tmp/crash-loop-state.json.corrupted.42"
+    );
 
     const result = (await invokeBoot()) as { crashLoopStateRecovery: unknown };
     expect(result.crashLoopStateRecovery).toEqual({
@@ -330,7 +332,9 @@ describe("app:boot handler", () => {
 
   it("omits crashLoopStateRecovery when not in safe mode (silent corruption is log-only)", async () => {
     crashGuard.isSafeMode.mockReturnValue(false);
-    crashGuard.getQuarantinedStatePath.mockReturnValue("/tmp/crash-loop-state.json.corrupted.42");
+    (crashGuard.getQuarantinedStatePath as any).mockReturnValue(
+      "/tmp/crash-loop-state.json.corrupted.42"
+    );
 
     const result = (await invokeBoot()) as { crashLoopStateRecovery: unknown };
     expect(result.crashLoopStateRecovery).toBeNull();

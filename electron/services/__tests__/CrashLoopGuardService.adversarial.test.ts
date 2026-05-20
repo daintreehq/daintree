@@ -196,6 +196,7 @@ describe("CrashLoopGuardService adversarial", () => {
       statePath,
       JSON.stringify({
         version: 1,
+        // eslint-disable-next-line no-loss-of-precision
         crashes: 1e309, // → Infinity after JSON.parse
         launches: [],
         cleanExit: false,
@@ -218,6 +219,7 @@ describe("CrashLoopGuardService adversarial", () => {
         crashes: 0,
         launches: [],
         cleanExit: false,
+        // eslint-disable-next-line no-loss-of-precision
         lastReset: 1e309,
       }),
       "utf8"
