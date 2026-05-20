@@ -23,8 +23,9 @@ import { typedHandle, typedHandleValidated } from "../../utils.js";
 import { validateFolderName } from "../../../../shared/utils/folderName.js";
 import { ProjectSettingsSaveSchema } from "../../../services/projectSettingsCodec.js";
 import type { ProjectSettings } from "../../../types/index.js";
+import type { HandlerDependencies } from "../../types.js";
 
-export function registerProjectSettingsHandlers(): () => void {
+export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}): () => void {
   const handlers: Array<() => void> = [];
 
   const handleProjectGetSettings = async (projectId: string): Promise<ProjectSettings> => {
@@ -50,9 +51,26 @@ export function registerProjectSettingsHandlers(): () => void {
     if (project?.inRepoSettings) {
       await projectStore.writeInRepoSettings(project.path, settings as ProjectSettings);
     }
-    if (settings.githubRemote !== previousSettings.githubRemote) {
+    const previousRemote = previousSettings.forgeRemote ?? previousSettings.githubRemote;
+    const nextRemote = settings.forgeRemote ?? settings.githubRemote;
+    const remoteChanged = nextRemote !== previousRemote;
+    if (remoteChanged) {
       const { clearGitHubCaches } = await import("../../../services/GitHubService.js");
       clearGitHubCaches();
+    }
+    // Re-resolve the workspace host's PR provider when the provider override
+    // or selected remote changes — otherwise the running host keeps the
+    // provider it resolved at load-project and stored settings drift out of
+    // sync with the resolved provider (#8456). No-ops when no host is loaded.
+    const providerOverrideChanged =
+      (settings.forgeProviderOverride ?? null) !== (previousSettings.forgeProviderOverride ?? null);
+    if (remoteChanged || providerOverrideChanged) {
+      const projectPath = project?.path;
+      if (projectPath) {
+        void deps.worktreeService?.updateForgeSettings(projectPath).catch((error) => {
+          console.warn("[IPC] Failed to push forge settings to workspace host:", error);
+        });
+      }
     }
   };
   handlers.push(

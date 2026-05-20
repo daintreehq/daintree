@@ -22,17 +22,21 @@ const DEFAULT_CONFIG: Required<WorkspaceClientConfig> = {
 async function readForgeSettingsForProject(projectPath: string): Promise<{
   forgeProviderOverride: string | null;
   forgeDefaultProviderId: string | null;
+  forgeRemote: string | null;
 }> {
   let forgeProviderOverride: string | null = null;
+  let forgeRemote: string | null = null;
   try {
     const projectId = generateProjectId(projectPath);
     const settings = await projectStore.getProjectSettings(projectId).catch(() => null);
     forgeProviderOverride = settings?.forgeProviderOverride ?? null;
+    forgeRemote = settings?.forgeRemote ?? settings?.githubRemote ?? null;
   } catch {
     forgeProviderOverride = null;
+    forgeRemote = null;
   }
   const forgeDefaultProviderId = normalizeProviderId(store.get("forgeDefaultProviderId"));
-  return { forgeProviderOverride, forgeDefaultProviderId };
+  return { forgeProviderOverride, forgeDefaultProviderId, forgeRemote };
 }
 
 function readPersistedLogOverrides(): Record<string, string> {
@@ -197,6 +201,7 @@ export class WorkspaceHostPool {
         wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
         forgeProviderOverride: forgeSettings.forgeProviderOverride,
         forgeDefaultProviderId: forgeSettings.forgeDefaultProviderId,
+        forgeRemote: forgeSettings.forgeRemote,
       });
     })();
 
@@ -254,6 +259,7 @@ export class WorkspaceHostPool {
         wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
         forgeProviderOverride: forgeSettings.forgeProviderOverride,
         forgeDefaultProviderId: forgeSettings.forgeDefaultProviderId,
+        forgeRemote: forgeSettings.forgeRemote,
       });
     })();
 
@@ -316,6 +322,36 @@ export class WorkspaceHostPool {
 
   unregisterWindow(windowId: number): void {
     this.releaseWindow(windowId);
+  }
+
+  /**
+   * Push updated forge settings (provider override / default / selected
+   * remote) to a live workspace host so its `PullRequestService` re-resolves
+   * the provider without waiting for a project reload (#8456). No-ops when
+   * the project has no live or prewarmed host — the next `load-project`
+   * already carries fresh settings. Waits for any in-flight load to settle
+   * first so a slower `load-project` cannot clobber the newer values.
+   */
+  async updateForgeSettings(projectPath: string): Promise<void> {
+    const normalizedPath = this.normalizeProjectPath(projectPath);
+    const entry = this.entries.get(normalizedPath);
+    if (!entry) return;
+
+    try {
+      await entry.currentReadyPromise;
+    } catch {
+      // Host failed to load; the eventual restart re-reads settings via
+      // load-project, so there is nothing to push here.
+      return;
+    }
+
+    const forgeSettings = await readForgeSettingsForProject(normalizedPath);
+    entry.host.send({
+      type: "update-forge-settings",
+      forgeProviderOverride: forgeSettings.forgeProviderOverride,
+      forgeDefaultProviderId: forgeSettings.forgeDefaultProviderId,
+      forgeRemote: forgeSettings.forgeRemote,
+    });
   }
 
   // ── Eviction / dormant management ──
@@ -420,6 +456,7 @@ export class WorkspaceHostPool {
       wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
       forgeProviderOverride: forgeSettings.forgeProviderOverride,
       forgeDefaultProviderId: forgeSettings.forgeDefaultProviderId,
+      forgeRemote: forgeSettings.forgeRemote,
     });
 
     for (const [wcId, wc] of entry.directPortViews) {

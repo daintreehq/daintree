@@ -159,6 +159,7 @@ describe("writeInRepoSettings", () => {
     preferredImageViewer: { mode: "os" },
     branchPrefixMode: "custom",
     branchPrefixCustom: "feature/",
+    forgeRemote: "upstream",
     githubRemote: "upstream",
     forgeProviderOverride: "github-com",
     fleetSavedScopes: [

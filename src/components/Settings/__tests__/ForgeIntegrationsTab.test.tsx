@@ -82,7 +82,7 @@ function installForgeMocks(opts: ForgeMockOptions = {}) {
         return opts.resolveByRemote?.[remoteUrl] ?? noMatch;
       }),
     },
-    github: {
+    project: {
       listRemotes: vi.fn(async () => {
         if (opts.remotes instanceof Error) throw opts.remotes;
         return opts.remotes ?? [];
@@ -107,7 +107,7 @@ describe("ForgeIntegrationsTab", () => {
       expect(screen.getByText("Active project routing")).toBeTruthy();
     });
     expect(screen.getByText(/Open a project to view its forge routing/i)).toBeTruthy();
-    expect(window.electron.github.listRemotes).not.toHaveBeenCalled();
+    expect(window.electron.project.listRemotes).not.toHaveBeenCalled();
   });
 
   it("renders a routing row per remote with the resolved provider badge", async () => {
@@ -228,7 +228,7 @@ describe("ForgeIntegrationsTab", () => {
     await waitFor(() => {
       expect(screen.getByText("origin")).toBeTruthy();
     });
-    expect(window.electron.github.listRemotes).toHaveBeenCalledWith("/a");
+    expect(window.electron.project.listRemotes).toHaveBeenCalledWith("/a");
 
     installForgeMocks({
       providers: [github],
@@ -241,7 +241,7 @@ describe("ForgeIntegrationsTab", () => {
     rerender(<ForgeIntegrationsTab />);
 
     await waitFor(() => {
-      expect(window.electron.github.listRemotes).toHaveBeenCalledWith("/b");
+      expect(window.electron.project.listRemotes).toHaveBeenCalledWith("/b");
     });
   });
 

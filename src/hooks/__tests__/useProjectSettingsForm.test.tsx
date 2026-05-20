@@ -80,7 +80,7 @@ const baseSettings: ProjectSettings = {
   worktreePathPattern: "",
   terminalSettings: { shell: "/bin/zsh", shellArgs: ["-l"] },
   notificationOverrides: { soundEnabled: true },
-  githubRemote: "origin",
+  forgeRemote: "origin",
 };
 
 function resetMocks() {
@@ -145,7 +145,7 @@ describe("useProjectSettingsForm", () => {
     expect(result.current.branchPrefixCustom).toBe("gpriday");
     expect(result.current.terminalShell).toBe("/bin/zsh");
     expect(result.current.terminalShellArgs).toBe("-l");
-    expect(result.current.githubRemote).toBe("origin");
+    expect(result.current.forgeRemote).toBe("origin");
     expect(result.current.runCommands).toHaveLength(1);
     expect(result.current.environmentVariables).toHaveLength(1);
     expect(result.current.environmentVariables[0]!.key).toBe("NODE_ENV");

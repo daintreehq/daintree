@@ -410,7 +410,12 @@ export interface ProjectSettings {
   /** Custom branch prefix string when branchPrefixMode is "custom" (e.g., "feature/") */
   branchPrefixCustom?: string;
 
-  /** Git remote name to use for GitHub integration (defaults to "origin") */
+  /** Git remote name to use for forge integration (defaults to "origin") */
+  forgeRemote?: string;
+  /**
+   * @deprecated Use `forgeRemote` instead. Kept for one-cycle migration of existing project files.
+   * Normalized to `forgeRemote` on read by the project settings codec.
+   */
   githubRemote?: string;
   /**
    * Pinned forge provider for this project. When set, overrides hostname auto-detection
@@ -482,6 +487,7 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   preferredImageViewer: "local",
   branchPrefixMode: "local",
   branchPrefixCustom: "local",
+  forgeRemote: "local",
   githubRemote: "local",
   forgeProviderOverride: "local",
   worktreePathPattern: "shareable",

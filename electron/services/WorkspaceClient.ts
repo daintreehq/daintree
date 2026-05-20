@@ -109,6 +109,16 @@ export class WorkspaceClient extends EventEmitter {
     this.pool.prewarmProject(rootPath);
   }
 
+  /**
+   * Push updated forge settings to the live host for `projectPath` so its
+   * PR provider re-resolves after the user changes the provider override or
+   * selected remote (#8456). No-ops when no host is loaded for the project.
+   */
+  async updateForgeSettings(projectPath: string): Promise<void> {
+    if (this.isDisposed) return;
+    await this.pool.updateForgeSettings(projectPath);
+  }
+
   // ── Direct port management ──
 
   attachDirectPort(windowId: number, webContents: Electron.WebContents): void {

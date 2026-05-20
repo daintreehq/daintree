@@ -483,6 +483,12 @@ export interface ElectronAPI {
     saveSettings(projectId: string, settings: ProjectSettings): Promise<void>;
     detectRunners(projectId: string): Promise<RunCommand[]>;
     /**
+     * List all git remotes for a working directory, with an optional parsed
+     * owner/repo for remotes whose URL looks like a forge repo. Provider-
+     * agnostic replacement for the legacy `github.listRemotes` (#8456).
+     */
+    listRemotes(cwd: string): Promise<import("./github.js").RemoteInfo[]>;
+    /**
      * Close/background a project.
      * @param projectId - Project ID to close
      * @param options - Optional: { killTerminals: true } to kill running terminals (default: false, just backgrounds)
@@ -717,6 +723,7 @@ export interface ElectronAPI {
     ): Promise<import("../github.js").GitHubIssue | null>;
     getPRByNumber(cwd: string, prNumber: number): Promise<import("../github.js").GitHubPR | null>;
     getPRReviewThreads(cwd: string, prNumber: number): Promise<Record<string, number>>;
+    /** @deprecated Use `project.listRemotes` instead (#8456). */
     listRemotes(cwd: string): Promise<import("./github.js").RemoteInfo[]>;
     onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;

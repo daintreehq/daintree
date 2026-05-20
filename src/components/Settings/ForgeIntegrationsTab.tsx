@@ -116,7 +116,7 @@ export function ForgeIntegrationsTab() {
 
     (async () => {
       try {
-        const loadedRemotes = await window.electron.github.listRemotes(activeProjectPath);
+        const loadedRemotes = await window.electron.project.listRemotes(activeProjectPath);
         if (cancelled) return;
         if (loadedRemotes.length === 0) {
           setRemotes([]);

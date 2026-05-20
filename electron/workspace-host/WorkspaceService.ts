@@ -388,6 +388,7 @@ export class WorkspaceService {
     forgeSettings?: {
       forgeProviderOverride: string | null;
       forgeDefaultProviderId: string | null;
+      forgeRemote: string | null;
     }
   ): Promise<void> {
     try {
@@ -2273,6 +2274,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   updateForgeSettings(args: {
     forgeProviderOverride: string | null;
     forgeDefaultProviderId: string | null;
+    forgeRemote: string | null;
   }): void {
     pullRequestService.setForgeSettings(args);
     void pullRequestService.refresh();

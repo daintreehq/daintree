@@ -163,6 +163,9 @@ class PullRequestService {
   // function here.
   private forgeProviderOverride: string | null = null;
   private globalDefaultProviderId: string | null = null;
+  // Selected git remote name (`forgeRemote`, #8456). When set, the provider is
+  // resolved against this remote's URL instead of `origin`.
+  private forgeRemote: string | null = null;
   // In-flight dedup: keyed by branch name
   private inFlightBranchLookups = new Map<string, Promise<ForgePR | null>>();
 
@@ -331,9 +334,11 @@ class PullRequestService {
   public setForgeSettings(args: {
     forgeProviderOverride: string | null;
     forgeDefaultProviderId: string | null;
+    forgeRemote?: string | null;
   }): void {
     this.forgeProviderOverride = args.forgeProviderOverride;
     this.globalDefaultProviderId = args.forgeDefaultProviderId;
+    this.forgeRemote = args.forgeRemote ?? null;
     this.invalidateProvider();
   }
 
@@ -344,9 +349,19 @@ class PullRequestService {
       // simple-git's typed `getConfig` returns a `ConfigGetResult` envelope,
       // but daintree's wiring already resolves to the bare value string at
       // runtime (and tests mock it the same way). Treat as `string | null`.
-      const rawUrl = (await git.getConfig("remote.origin.url").catch(() => null)) as string | null;
+      const readRemoteUrl = async (remoteName: string): Promise<string | null> => {
+        const raw = (await git.getConfig(`remote.${remoteName}.url`).catch(() => null)) as
+          | string
+          | null;
+        return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+      };
+      // Resolve against the user-selected remote (`forgeRemote`, #8456) when
+      // set, falling back to `origin` so existing projects keep working.
+      const selectedRemote =
+        this.forgeRemote && this.forgeRemote.trim().length > 0 ? this.forgeRemote.trim() : null;
       const remoteUrl =
-        typeof rawUrl === "string" && rawUrl.trim().length > 0 ? rawUrl.trim() : null;
+        (selectedRemote ? await readRemoteUrl(selectedRemote) : null) ??
+        (await readRemoteUrl("origin"));
 
       const registered = resolveForgeProvider({
         remoteUrl,

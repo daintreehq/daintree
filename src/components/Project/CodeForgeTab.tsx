@@ -5,16 +5,16 @@ import type { RemoteInfo } from "@shared/types/ipc/github";
 import type { RegisteredForgeProvider } from "@shared/types/forge";
 
 interface CodeForgeTabProps {
-  githubRemote: string | undefined;
-  onGithubRemoteChange: (remote: string | undefined) => void;
+  forgeRemote: string | undefined;
+  onForgeRemoteChange: (remote: string | undefined) => void;
   forgeProviderOverride: string | null;
   onForgeProviderOverrideChange: (providerId: string | null) => void;
   projectPath: string | undefined;
 }
 
 export function CodeForgeTab({
-  githubRemote,
-  onGithubRemoteChange,
+  forgeRemote,
+  onForgeRemoteChange,
   forgeProviderOverride,
   onForgeProviderOverrideChange,
   projectPath,
@@ -34,7 +34,7 @@ export function CodeForgeTab({
     setLoading(true);
     setError(null);
 
-    window.electron.github
+    window.electron.project
       .listRemotes(projectPath)
       .then((result) => {
         if (!cancelled) {
@@ -90,9 +90,9 @@ export function CodeForgeTab({
   return (
     <div className="space-y-6">
       <div>
-        <label className="block text-sm font-medium text-daintree-text mb-1">Forge Remote</label>
+        <label className="block text-sm font-medium text-daintree-text mb-1">Forge remote</label>
         <p className="text-xs text-daintree-text/60 mb-2">
-          Select which git remote to use for forge integration (issues, PRs, and pulse data).
+          Select which git remote to use for forge integration (issues, PRs, and pulse data)
         </p>
         {loading ? (
           <div className="text-sm text-daintree-text/60">Loading remotes...</div>
@@ -100,8 +100,8 @@ export function CodeForgeTab({
           <div className="text-sm text-status-error">{error}</div>
         ) : (
           <select
-            value={githubRemote || ""}
-            onChange={(e) => onGithubRemoteChange(e.target.value || undefined)}
+            value={forgeRemote || ""}
+            onChange={(e) => onForgeRemoteChange(e.target.value || undefined)}
             className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
           >
             <option value="">Auto-detect (origin)</option>
@@ -118,7 +118,8 @@ export function CodeForgeTab({
       <div>
         <label className="block text-sm font-medium text-daintree-text mb-1">Forge provider</label>
         <p className="text-xs text-daintree-text/60 mb-2">
-          Pin this project to a specific forge provider. Defaults to GitHub when no override is set.
+          Pin this project to a specific forge provider. Auto-detects from the remote URL when no
+          override is set.
         </p>
         {providersLoading ? (
           <div className="text-sm text-daintree-text/60">Loading providers...</div>
@@ -132,7 +133,7 @@ export function CodeForgeTab({
             }
             className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
           >
-            <option value="">Default (GitHub)</option>
+            <option value="">Auto-detect</option>
             {providers.map((p) => {
               const providerId = makeForgeProviderId(p.pluginId, p.contribution.id);
               return (

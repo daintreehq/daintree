@@ -69,7 +69,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const [notificationOverrides, setNotificationOverrides] = useState<Partial<NotificationSettings>>(
     {}
   );
-  const [githubRemote, setGithubRemote] = useState<string | undefined>(undefined);
+  const [forgeRemote, setForgeRemote] = useState<string | undefined>(undefined);
   const [forgeProviderOverride, setForgeProviderOverride] = useState<string | null>(null);
   const [resourceEnvironments, setResourceEnvironments] = useState<
     Record<string, ResourceEnvironment> | undefined
@@ -139,7 +139,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       branchPrefixMode,
       branchPrefixCustom,
       devServerLoadTimeout,
-      githubRemote,
+      forgeRemote,
       worktreePathPattern,
       currentTerminalSettings,
       notificationOverrides,
@@ -157,7 +157,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     projectColor,
     devServerCommand,
     devServerLoadTimeout,
-    githubRemote,
+    forgeRemote,
     projectIconSvg,
     excludedPaths,
     environmentVariables,
@@ -212,7 +212,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       setTerminalDefaultCwd(undefined);
       setTerminalScrollback(undefined);
       setNotificationOverrides({});
-      setGithubRemote(undefined);
+      setForgeRemote(undefined);
       setForgeProviderOverride(null);
       setResourceEnvironments(undefined);
       setActiveResourceEnvironment(undefined);
@@ -245,7 +245,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     const initialWorktreePathPattern = projectSettings.worktreePathPattern ?? "";
     const initialTerminalSettings = projectSettings.terminalSettings;
     const initialNotificationOverrides = projectSettings.notificationOverrides ?? {};
-    const initialGithubRemote = projectSettings.githubRemote;
+    const initialForgeRemote = projectSettings.forgeRemote;
     const initialForgeProviderOverride = projectSettings.forgeProviderOverride ?? null;
     // resourceEnvironment → resourceEnvironments migration is owned by the
     // main-process codec (electron/services/projectSettingsCodec.ts), so by
@@ -292,7 +292,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         : undefined
     );
     setNotificationOverrides(initialNotificationOverrides);
-    setGithubRemote(initialGithubRemote);
+    setForgeRemote(initialForgeRemote);
     setForgeProviderOverride(initialForgeProviderOverride);
     setResourceEnvironments(initialResourceEnvironments);
     setActiveResourceEnvironment(initialActiveResourceEnvironment);
@@ -312,7 +312,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       initialBranchPrefixMode,
       initialBranchPrefixCustom,
       initialDevServerLoadTimeout,
-      initialGithubRemote,
+      initialForgeRemote,
       initialWorktreePathPattern,
       initialTerminalSettings,
       initialNotificationOverrides,
@@ -416,7 +416,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
         branchPrefixCustom:
           effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
-        githubRemote: githubRemote || undefined,
+        forgeRemote: forgeRemote || undefined,
         forgeProviderOverride: forgeProviderOverride ?? undefined,
         worktreePathPattern: sanitizedWorktreePathPattern,
         terminalSettings: currentTerminalSettings,
@@ -511,8 +511,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setTerminalScrollback,
     notificationOverrides,
     setNotificationOverrides,
-    githubRemote,
-    setGithubRemote,
+    forgeRemote,
+    setForgeRemote,
     forgeProviderOverride,
     setForgeProviderOverride,
     resourceEnvironments,

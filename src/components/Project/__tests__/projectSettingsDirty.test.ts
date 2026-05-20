@@ -722,7 +722,7 @@ describe("projectSettingsDirty", () => {
       expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
     });
 
-    it("should detect changed githubRemote", () => {
+    it("should detect changed forgeRemote", () => {
       const snapshotA = createProjectSettingsSnapshot(
         "Project",
         "🌲",

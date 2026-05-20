@@ -1269,6 +1269,8 @@ const api: ElectronAPI = {
     detectRunners: (projectId: string) =>
       _unwrappingInvoke(CHANNELS.PROJECT_DETECT_RUNNERS, projectId),
 
+    listRemotes: (cwd: string) => _unwrappingInvoke(CHANNELS.PROJECT_LIST_REMOTES, cwd),
+
     close: (projectId: string, options?: { killTerminals?: boolean }) =>
       _unwrappingInvoke(CHANNELS.PROJECT_CLOSE, projectId, options),
 
