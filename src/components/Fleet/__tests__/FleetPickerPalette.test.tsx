@@ -551,4 +551,137 @@ describe("FleetPickerPalette", () => {
       expect(status.textContent).toBe("Select terminals to arm");
     });
   });
+
+  describe("Replace / Append commit-mode toggle", () => {
+    it("renders the toggle defaulting to Replace", async () => {
+      seedTerminals([makeTerminal("t1", { worktreeId: "wt-1" })]);
+      renderPalette([makeWorktreeSnap("wt-1", "main")]);
+      await act(async () => {});
+
+      const replace = screen.getByTestId("fleet-picker-cold-start-commit-mode-replace");
+      const append = screen.getByTestId("fleet-picker-cold-start-commit-mode-append");
+      expect(replace.getAttribute("aria-checked")).toBe("true");
+      expect(append.getAttribute("aria-checked")).toBe("false");
+      const confirm = screen.getByTestId("fleet-picker-cold-start-confirm");
+      expect(confirm.textContent).toContain("Arm 1 selected");
+    });
+
+    it("switching to Append updates aria-checked and confirm label", async () => {
+      seedTerminals([
+        makeTerminal("t1", { worktreeId: "wt-1" }),
+        makeTerminal("t2", { worktreeId: "wt-1" }),
+      ]);
+      renderPalette([makeWorktreeSnap("wt-1", "main")]);
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-commit-mode-append"));
+      });
+
+      const replace = screen.getByTestId("fleet-picker-cold-start-commit-mode-replace");
+      const append = screen.getByTestId("fleet-picker-cold-start-commit-mode-append");
+      expect(replace.getAttribute("aria-checked")).toBe("false");
+      expect(append.getAttribute("aria-checked")).toBe("true");
+
+      const confirm = screen.getByTestId("fleet-picker-cold-start-confirm") as HTMLButtonElement;
+      expect(confirm.textContent).toContain("Add 2");
+      expect(confirm.textContent).not.toContain("Arm");
+    });
+
+    it("commit in append mode extends the armed set (does not replace)", async () => {
+      // Pre-arm a terminal that lives outside the active worktree — replace
+      // would drop it, append must keep it.
+      useFleetArmingStore.getState().armId("preexisting");
+      seedTerminals([
+        makeTerminal("preexisting", { worktreeId: "wt-2" }),
+        makeTerminal("t1", { worktreeId: "wt-1" }),
+        makeTerminal("t2", { worktreeId: "wt-1" }),
+      ]);
+      const onClose = vi.fn();
+      renderPalette([makeWorktreeSnap("wt-1", "main")], true, onClose);
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-commit-mode-append"));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-confirm"));
+      });
+
+      const s = useFleetArmingStore.getState();
+      expect(s.armOrder).toEqual(["preexisting", "t1", "t2"]);
+      expect(s.armedIds.has("preexisting")).toBe(true);
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it("commit in append mode dedupes against already-armed ids", async () => {
+      useFleetArmingStore.getState().armId("t1");
+      seedTerminals([
+        makeTerminal("t1", { worktreeId: "wt-1" }),
+        makeTerminal("t2", { worktreeId: "wt-1" }),
+      ]);
+      renderPalette([makeWorktreeSnap("wt-1", "main")]);
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-commit-mode-append"));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-confirm"));
+      });
+
+      // t1 was already armed and stays at its prior position; t2 is appended.
+      expect(useFleetArmingStore.getState().armOrder).toEqual(["t1", "t2"]);
+    });
+
+    it("toggling Replace ↔ Append preserves the current selection", async () => {
+      seedTerminals([
+        makeTerminal("t1", { worktreeId: "wt-1" }),
+        makeTerminal("t2", { worktreeId: "wt-1" }),
+      ]);
+      renderPalette([makeWorktreeSnap("wt-1", "main")]);
+      await act(async () => {});
+
+      // Preselection in cold-start mode gives us 2 selected.
+      const confirmInitial = screen.getByTestId(
+        "fleet-picker-cold-start-confirm"
+      ) as HTMLButtonElement;
+      expect(confirmInitial.textContent).toContain("Arm 2 selected");
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-commit-mode-append"));
+      });
+      expect(
+        (screen.getByTestId("fleet-picker-cold-start-confirm") as HTMLButtonElement).textContent
+      ).toContain("Add 2");
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-commit-mode-replace"));
+      });
+      expect(
+        (screen.getByTestId("fleet-picker-cold-start-confirm") as HTMLButtonElement).textContent
+      ).toContain("Arm 2 selected");
+    });
+
+    it("already-armed terminals stay visible after switching to Append", async () => {
+      // The hook's `mode` prop must remain "cold-start" regardless of the
+      // toggle, so already-armed terminals are NOT hidden in the visible list
+      // (that filtering only kicks in when the hook itself is in "add" mode).
+      useFleetArmingStore.getState().armId("t1");
+      seedTerminals([
+        makeTerminal("t1", { worktreeId: "wt-1" }),
+        makeTerminal("t2", { worktreeId: "wt-1" }),
+      ]);
+      renderPalette([makeWorktreeSnap("wt-1", "main")]);
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-commit-mode-append"));
+      });
+
+      // Both rows should still be rendered — t1 (already armed) and t2.
+      expect(screen.getByTestId("fleet-picker-cold-start-row-t1")).toBeTruthy();
+      expect(screen.getByTestId("fleet-picker-cold-start-row-t2")).toBeTruthy();
+    });
+  });
 });
