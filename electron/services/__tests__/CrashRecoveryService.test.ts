@@ -31,6 +31,7 @@ const appMock = vi.hoisted(() => {
 
 const utilsMock = vi.hoisted(() => ({
   resilientAtomicWriteFileSync: vi.fn(),
+  resilientRenameSync: vi.fn(),
 }));
 
 vi.mock("../../utils/fs.js", () => utilsMock);
@@ -93,6 +94,9 @@ describe("CrashRecoveryService", () => {
         fs.writeFileSync(fp, data, enc ?? "utf-8");
       }
     );
+    utilsMock.resilientRenameSync.mockImplementation((src: string, dest: string) => {
+      fs.renameSync(src, dest);
+    });
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -931,7 +935,7 @@ describe("CrashRecoveryService", () => {
       expect(storeMock.set.mock.calls[0][0]).toBe("appState");
     });
 
-    it("clears cached backup snapshot so restoreBackup has no stale reference", () => {
+    it("removes the renamed crashed-backup file so restoreBackup has no source", () => {
       const markerPath = path.join(userData, "running.lock");
       fs.writeFileSync(
         markerPath,
@@ -955,13 +959,18 @@ describe("CrashRecoveryService", () => {
       const svc = makeService();
       svc.initialize();
 
-      // Delete backup file so restoreBackup can only succeed via cache
-      fs.unlinkSync(path.join(backupDir, "session-state.json"));
-
+      // After initialize the live backup has been renamed to
+      // session-state.crashed-*.json. resetToFresh must unlink it so the
+      // user can't restore stale state by accident after explicitly
+      // choosing a fresh start.
       storeMock.set.mockClear();
       svc.resetToFresh();
 
       expect(svc.restoreBackup()).toBe(false);
+      const remaining = fs
+        .readdirSync(backupDir)
+        .filter((f) => f.startsWith("session-state.crashed-"));
+      expect(remaining).toEqual([]);
     });
   });
 
@@ -992,7 +1001,7 @@ describe("CrashRecoveryService", () => {
       expect(fs.existsSync(markerPath)).toBe(true);
     });
 
-    it("clears cached backup snapshot even when crashRecorded prevents backup/marker cleanup", () => {
+    it("unlinks crashed-backup file on cleanupOnExit even when crashRecorded skips marker cleanup", () => {
       const markerPath = path.join(userData, "running.lock");
       fs.writeFileSync(
         markerPath,
@@ -1016,14 +1025,12 @@ describe("CrashRecoveryService", () => {
       const svc = makeService();
       svc.initialize();
 
-      // Record crash so cleanupOnExit skips takeBackup/deleteMarker
       svc.recordCrash(new Error("test crash"));
-
-      // Delete backup file so restoreBackup can only succeed via cache
-      fs.unlinkSync(path.join(backupDir, "session-state.json"));
-
       svc.cleanupOnExit();
 
+      // The crashed-* file is unlinked regardless of crashRecorded so a
+      // re-run during the dying process doesn't restore stale state. The
+      // crashed-* file is owned by this service instance only.
       expect(svc.restoreBackup()).toBe(false);
     });
   });
@@ -1074,6 +1081,241 @@ describe("CrashRecoveryService", () => {
         expect.any(String),
         "utf-8"
       );
+    });
+
+    it("routes consumeMarker backup rename through resilientRenameSync", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals: [] } })
+      );
+      const markerSessionStart = Date.now() - 5000;
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs: markerSessionStart,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const expectedDest = path.join(backupDir, `session-state.crashed-${markerSessionStart}.json`);
+      expect(utilsMock.resilientRenameSync).toHaveBeenCalledWith(
+        path.join(backupDir, "session-state.json"),
+        expectedDest
+      );
+      expect(fs.existsSync(expectedDest)).toBe(true);
+      expect(fs.existsSync(path.join(backupDir, "session-state.json"))).toBe(false);
+    });
+  });
+
+  describe("crash cause classification", () => {
+    function osUptimeSpy(returnValue: number): ReturnType<typeof vi.spyOn> {
+      return vi.spyOn(os, "uptime").mockReturnValue(returnValue);
+    }
+
+    it("returns 'uncaught-exception' when marker has crashLogPath", () => {
+      const crashDir = path.join(userData, "crashes");
+      fs.mkdirSync(crashDir, { recursive: true });
+      const crashLogPath = path.join(crashDir, "crash-abc.json");
+      fs.writeFileSync(
+        crashLogPath,
+        JSON.stringify({
+          id: "abc",
+          timestamp: Date.now(),
+          appVersion: "1.0.0",
+          platform: "darwin",
+          osVersion: "22.0",
+          arch: "x64",
+        })
+      );
+
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5_000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          crashLogPath,
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()!.entry.crashCause).toBe("uncaught-exception");
+    });
+
+    it("returns 'suspended-then-lost' when marker has lastSuspendStart", () => {
+      const uptime = osUptimeSpy(10_000);
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 5_000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastSuspendStart: Date.now() - 4_000,
+            lastHeartbeatMs: Date.now() - 4_500,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        expect(svc.getPendingCrash()!.entry.crashCause).toBe("suspended-then-lost");
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("returns 'power-loss' when os.uptime is shorter than elapsed wall time", () => {
+      // sessionStart = 5min ago, but uptime is only 10 seconds — definitive reboot
+      const uptime = osUptimeSpy(10);
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 5 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 60_000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        expect(svc.getPendingCrash()!.entry.crashCause).toBe("power-loss");
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("returns 'external-kill' when heartbeat stale but system did not reboot", () => {
+      // uptime far exceeds elapsed wall time → no reboot. Heartbeat is 5min
+      // stale → external kill (SIGKILL, OOM killer, force-quit).
+      const uptime = osUptimeSpy(24 * 60 * 60);
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 10 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 5 * 60 * 1000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        expect(svc.getPendingCrash()!.entry.crashCause).toBe("external-kill");
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("returns 'unknown' when no attribution signal fires", () => {
+      const uptime = osUptimeSpy(24 * 60 * 60);
+      try {
+        const now = Date.now();
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: now - 10_000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            // Fresh heartbeat → not stale. No suspend stamp. uptime >> elapsed.
+            lastHeartbeatMs: now - 5_000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        expect(svc.getPendingCrash()!.entry.crashCause).toBe("unknown");
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("returns 'native-crash' when a Crashpad .dmp newer than sessionStart exists", () => {
+      const dumpsDir = path.join(userData, "crashpad-dumps");
+      const completedDir = path.join(dumpsDir, "completed");
+      fs.mkdirSync(completedDir, { recursive: true });
+      const dumpPath = path.join(completedDir, "abc-xyz.dmp");
+      fs.writeFileSync(dumpPath, "fake-minidump");
+      const sessionStartMs = Date.now() - 60_000;
+      // Backdate the dump's mtime so it's between sessionStart and now.
+      const dumpMtime = new Date(sessionStartMs + 5_000);
+      fs.utimesSync(dumpPath, dumpMtime, dumpMtime);
+
+      const getPathMock = appMock.getPath as ReturnType<typeof vi.fn>;
+      getPathMock.mockImplementation((key: string) => {
+        if (key === "crashDumps") return dumpsDir;
+        return userData;
+      });
+
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 30_000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        expect(svc.getPendingCrash()!.entry.crashCause).toBe("native-crash");
+      } finally {
+        getPathMock.mockReturnValue(userData);
+      }
+    });
+  });
+
+  describe("heartbeat and suspend stamping", () => {
+    it("writes lastHeartbeatMs on initialize", () => {
+      const before = Date.now();
+      const svc = makeService();
+      svc.initialize();
+      const after = Date.now();
+
+      const marker = JSON.parse(fs.readFileSync(path.join(userData, "running.lock"), "utf8"));
+      expect(typeof marker.lastHeartbeatMs).toBe("number");
+      expect(marker.lastHeartbeatMs).toBeGreaterThanOrEqual(before);
+      expect(marker.lastHeartbeatMs).toBeLessThanOrEqual(after);
+    });
+
+    it("refreshes lastHeartbeatMs on each backup-timer tick", () => {
+      vi.useFakeTimers();
+      try {
+        const svc = makeService();
+        svc.initialize();
+        svc.startBackupTimer();
+
+        const firstMarker = JSON.parse(
+          fs.readFileSync(path.join(userData, "running.lock"), "utf8")
+        );
+        const firstHeartbeat = firstMarker.lastHeartbeatMs;
+
+        vi.advanceTimersByTime(60_000);
+
+        const secondMarker = JSON.parse(
+          fs.readFileSync(path.join(userData, "running.lock"), "utf8")
+        );
+        expect(secondMarker.lastHeartbeatMs).toBeGreaterThan(firstHeartbeat);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

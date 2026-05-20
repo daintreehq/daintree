@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type {
+  CrashCause,
   CrashLogEntry,
   CrashRecoveryConfig,
   PanelSummary,
@@ -13,17 +14,22 @@ import { store, windowStatesStore } from "../store.js";
 import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { getActionBreadcrumbService } from "./ActionBreadcrumbService.js";
-import { resilientAtomicWriteFileSync } from "../utils/fs.js";
+import { resilientAtomicWriteFileSync, resilientRenameSync } from "../utils/fs.js";
 
 const MAX_CRASH_LOGS = 10;
 const MARKER_FILENAME = "running.lock";
 const CRASHES_DIR = "crashes";
 const BACKUP_DIR = "backups";
 const BACKUP_FILENAME = "session-state.json";
+const CRASHED_BACKUP_PREFIX = "session-state.crashed-";
 const BACKUP_INTERVAL_MS = 60_000;
 const DEBOUNCE_BACKUP_MS = 1_500;
 const BLUR_BACKUP_DEBOUNCE_MS = 100;
 const SUSPECT_WINDOW_MS = 30_000;
+// If the heartbeat field in the marker is older than this on next launch, the
+// previous session was almost certainly killed externally (SIGKILL, OOM killer,
+// force-quit) before its backup tick could refresh the stamp.
+const HEARTBEAT_STALE_THRESHOLD_MS = 120_000;
 
 export class CrashRecoveryService {
   private userData: string;
@@ -41,7 +47,11 @@ export class CrashRecoveryService {
   private removeFocusListener: (() => void) | null = null;
   private crashRecorded = false;
   private pendingPanelFilter: string[] | null = null;
-  private cachedBackupSnapshot: SessionSnapshot | null = null;
+  // Path of the renamed crashed-session backup file from the previous launch.
+  // Populated in consumeMarker() when the live backup is moved aside so the
+  // current session's backup tick cannot overwrite it. Null when there was
+  // no pre-crash backup or after the file has been consumed/cleaned up.
+  private crashedBackupPath: string | null = null;
 
   constructor() {
     this.userData = app.getPath("userData");
@@ -102,8 +112,10 @@ export class CrashRecoveryService {
   startBackupTimer(): void {
     if (this.backupTimer) return;
     this.takeBackup();
+    this.updateMarkerHeartbeat();
     this.backupTimer = setInterval(() => {
       this.takeBackup();
+      this.updateMarkerHeartbeat();
     }, BACKUP_INTERVAL_MS);
     this.registerSleepListeners();
     this.registerBlurListener();
@@ -126,6 +138,10 @@ export class CrashRecoveryService {
     this.unregisterSleepListeners();
     try {
       this.removeSuspendListener = getSystemSleepService().onSuspend(() => {
+        // Stamp the suspend start time so a power loss during sleep can be
+        // attributed to "suspended-then-lost" on the next launch instead of
+        // looking like a generic crash with a stale heartbeat.
+        this.stampSuspend(Date.now());
         if (this.backupTimer) {
           clearInterval(this.backupTimer);
           this.backupTimer = null;
@@ -136,6 +152,7 @@ export class CrashRecoveryService {
         }
       });
       this.removeWakeListener = getSystemSleepService().onWake(() => {
+        this.clearSuspend();
         this.startBackupTimer();
       });
     } catch {
@@ -226,29 +243,34 @@ export class CrashRecoveryService {
 
   restoreBackup(panelIds?: string[]): boolean {
     try {
-      // Use cached snapshot if available (backup file may have been overwritten
-      // by startBackupTimer between consumeMarker and user clicking restore)
-      let snapshot: SessionSnapshot;
-      if (this.cachedBackupSnapshot) {
-        snapshot = this.cachedBackupSnapshot;
-      } else {
-        if (!fs.existsSync(this.backupPath)) return false;
-        const raw = fs.readFileSync(this.backupPath, "utf8");
-        snapshot = JSON.parse(raw) as SessionSnapshot;
-      }
+      // After a crash, consumeMarker() renames the live backup file to a
+      // timestamped crashed-* path. Read from that path so the current
+      // session's backup tick can recreate session-state.json without
+      // clobbering the pre-crash snapshot. Fall back to the live path for
+      // explicit user-driven restores in a non-crash session.
+      const sourcePath = this.crashedBackupPath ?? this.backupPath;
+      if (!fs.existsSync(sourcePath)) return false;
+      const raw = fs.readFileSync(sourcePath, "utf8");
+      let snapshot = JSON.parse(raw) as SessionSnapshot;
 
       if (panelIds !== undefined && panelIds.length > 0 && snapshot.appState) {
-        // Filter onto a shallow copy so we don't mutate cachedBackupSnapshot.
+        // Filter onto a shallow copy so we don't mutate the parsed snapshot.
         // If applySessionSnapshot below throws and the user retries the
-        // restore (with or without a different filter), the cache must
-        // still hold the full pre-crash terminal list — mutating it in
-        // place permanently drops panels from any retry path.
+        // restore (with or without a different filter), re-reading from
+        // the crashed-* file gives the full pre-crash terminal list again.
         const appState = { ...(snapshot.appState as Record<string, unknown>) };
         if (Array.isArray(appState.terminals)) {
+          const originalTerminals = appState.terminals as Array<{ id: string }>;
           const idSet = new Set(panelIds);
-          appState.terminals = (appState.terminals as Array<{ id: string }>).filter((t) =>
-            idSet.has(t.id)
-          );
+          const filtered = originalTerminals.filter((t) => idSet.has(t.id));
+          // Stale or typo'd panel IDs would otherwise empty the filter and
+          // succeed-then-unlink the crashed-* file, dropping the recovery
+          // source the user might still want. Return false so they can
+          // retry with the correct IDs or no filter at all.
+          if (filtered.length === 0 && originalTerminals.length > 0) {
+            return false;
+          }
+          appState.terminals = filtered;
         }
         snapshot = { ...snapshot, appState };
       }
@@ -258,7 +280,7 @@ export class CrashRecoveryService {
       }
 
       this.applySessionSnapshot(snapshot);
-      this.cachedBackupSnapshot = null;
+      this.unlinkCrashedBackup();
       console.log(
         "[CrashRecovery] Session restored from backup" +
           (panelIds && panelIds.length > 0 ? ` (${panelIds.length} panels selected)` : "")
@@ -289,7 +311,7 @@ export class CrashRecoveryService {
         hasSeenWelcome: true,
         panelGridConfig: { strategy: "automatic" as const, value: 3 },
       });
-      this.cachedBackupSnapshot = null;
+      this.unlinkCrashedBackup();
       console.log("[CrashRecovery] Reset to fresh state");
     } catch (err) {
       console.error("[CrashRecovery] Failed to reset to fresh:", err);
@@ -301,9 +323,10 @@ export class CrashRecoveryService {
     if (!this.crashRecorded) {
       this.takeBackup();
       this.deleteMarker();
+      this.cleanupOrphanedCrashedBackups();
       console.log("[CrashRecovery] Clean exit — marker removed");
     }
-    this.cachedBackupSnapshot = null;
+    this.unlinkCrashedBackup();
   }
 
   private consumeMarker(): PendingCrash | null {
@@ -325,31 +348,36 @@ export class CrashRecoveryService {
         return null;
       }
 
+      // Move the live backup aside BEFORE deleting the marker. A kill
+      // between the two operations would otherwise wipe the marker (and
+      // skip crash detection on the next launch) while session-state.json
+      // is still present and recoverable. preserveBackupForRecovery is
+      // idempotent — if a crashed-{sessionStartMs}.json already exists
+      // from a partially-completed prior attempt it is reused.
+      this.crashedBackupPath = this.preserveBackupForRecovery(marker.sessionStartMs);
+
       this.deleteMarker();
 
-      const backupInfo = this.readBackupInfo();
-
-      // Cache the backup snapshot early so buildCrashEntryFromMarker can
-      // read panel data, and restoreBackup() can use it even if
-      // startBackupTimer() overwrites the backup file before the user resolves.
-      if (backupInfo.exists) {
+      let backupTimestamp: number | undefined;
+      if (this.crashedBackupPath !== null) {
         try {
-          const raw = fs.readFileSync(this.backupPath, "utf8");
-          this.cachedBackupSnapshot = JSON.parse(raw) as SessionSnapshot;
+          backupTimestamp = fs.statSync(this.crashedBackupPath).mtimeMs;
         } catch {
-          // If read fails, restoreBackup will fall back to reading from disk
+          // best-effort: backup timestamp is informational only
         }
       }
 
       const logPath = marker.crashLogPath ?? null;
       const entry = logPath ? this.readCrashLog(logPath) : this.buildCrashEntryFromMarker(marker);
-      const panels = backupInfo.exists ? this.extractPanelSummaries(entry.timestamp) : undefined;
+      entry.crashCause = this.classifyCrashCause(marker);
+      const panels =
+        this.crashedBackupPath !== null ? this.extractPanelSummaries(entry.timestamp) : undefined;
 
       return {
         logPath: logPath ?? path.join(this.crashesDir, `crash-${entry.id}.json`),
         entry,
-        hasBackup: backupInfo.exists,
-        backupTimestamp: backupInfo.timestamp,
+        hasBackup: this.crashedBackupPath !== null,
+        backupTimestamp,
         panels,
       };
     } catch (err) {
@@ -359,41 +387,131 @@ export class CrashRecoveryService {
     }
   }
 
+  /**
+   * Renames `session-state.json` to a timestamped `session-state.crashed-*.json`
+   * so the new session's backup tick cannot clobber it.
+   *
+   * On Windows the rename can transiently fail under antivirus or search-indexer
+   * locks (EPERM/EBUSY/EACCES). `resilientRenameSync` retries for up to 500ms;
+   * if it still fails we fall back to a copy-then-unlink path so the pre-crash
+   * snapshot is never silently lost.
+   *
+   * Returns the path of the renamed (or copied) file, or null if no live
+   * backup existed.
+   */
+  private preserveBackupForRecovery(markerSessionStartMs: number): string | null {
+    const crashedBackupPath = path.join(
+      this.userData,
+      BACKUP_DIR,
+      `${CRASHED_BACKUP_PREFIX}${markerSessionStartMs}.json`
+    );
+
+    // Idempotency: if a prior consumeMarker run completed the rename but
+    // was killed before deleteMarker, the destination is already on disk
+    // and the live backup is gone. Reuse the existing crashed-* file.
+    if (fs.existsSync(crashedBackupPath)) return crashedBackupPath;
+
+    if (!fs.existsSync(this.backupPath)) return null;
+
+    try {
+      resilientRenameSync(this.backupPath, crashedBackupPath);
+      return crashedBackupPath;
+    } catch (renameErr) {
+      try {
+        const content = fs.readFileSync(this.backupPath, "utf-8");
+        resilientAtomicWriteFileSync(crashedBackupPath, content, "utf-8");
+        try {
+          fs.unlinkSync(this.backupPath);
+        } catch {
+          // The duplicate at crashedBackupPath is the durable copy. If the
+          // original still can't be unlinked, the next backup tick will
+          // overwrite it — we won't keep reading stale content.
+        }
+        return crashedBackupPath;
+      } catch (copyErr) {
+        console.error(
+          "[CrashRecovery] Failed to preserve crash backup via rename or copy:",
+          renameErr,
+          copyErr
+        );
+        return null;
+      }
+    }
+  }
+
+  /**
+   * Best-effort unlink of any leftover `session-state.crashed-*.json` files in
+   * the backup directory. Called on clean exit so a force-quit during a future
+   * pending-crash dialog can't leak crashed-backup files indefinitely (the
+   * orphan-cleanup pattern from #3762).
+   */
+  private cleanupOrphanedCrashedBackups(): void {
+    try {
+      const backupDir = path.join(this.userData, BACKUP_DIR);
+      if (!fs.existsSync(backupDir)) return;
+      const files = fs
+        .readdirSync(backupDir)
+        .filter((f) => f.startsWith(CRASHED_BACKUP_PREFIX) && f.endsWith(".json"));
+      for (const file of files) {
+        try {
+          fs.unlinkSync(path.join(backupDir, file));
+        } catch {
+          // best-effort
+        }
+      }
+    } catch {
+      // best-effort
+    }
+  }
+
+  private unlinkCrashedBackup(): void {
+    if (!this.crashedBackupPath) return;
+    try {
+      fs.unlinkSync(this.crashedBackupPath);
+    } catch {
+      // File may already be gone (multiple cleanup paths can race); ignore.
+    }
+    this.crashedBackupPath = null;
+  }
+
   private extractPanelSummaries(crashTimestamp: number): PanelSummary[] {
     try {
-      // Prefer the snapshot cached by consumeMarker — startBackupTimer can
-      // overwrite this.backupPath on disk between marker consumption and
-      // here, which would silently swap pre-crash panels for an empty
-      // post-crash session. Fall back to disk only when the cache failed
-      // to populate (read or parse error in consumeMarker's try block).
-      let snapshot: SessionSnapshot;
-      if (this.cachedBackupSnapshot) {
-        snapshot = this.cachedBackupSnapshot;
-      } else {
-        if (!fs.existsSync(this.backupPath)) return [];
-        const raw = fs.readFileSync(this.backupPath, "utf8");
-        snapshot = JSON.parse(raw) as SessionSnapshot;
-      }
+      // Reads the renamed crashed-* file populated by consumeMarker. The
+      // current session's backup tick can recreate session-state.json freely
+      // — it can't overwrite the renamed file, so panel summaries here and
+      // restoreBackup later see the same pre-crash snapshot.
+      if (!this.crashedBackupPath || !fs.existsSync(this.crashedBackupPath)) return [];
+      const raw = fs.readFileSync(this.crashedBackupPath, "utf8");
+      const snapshot = JSON.parse(raw) as SessionSnapshot;
       if (!snapshot.appState) return [];
 
       const appState = snapshot.appState as Record<string, unknown>;
       const terminals = appState.terminals;
       if (!Array.isArray(terminals)) return [];
 
-      return terminals.map((t: Record<string, unknown>) => ({
-        id: String(t.id ?? ""),
-        kind: String(t.kind ?? "terminal"),
-        title: String(t.title ?? ""),
-        cwd: t.cwd ? String(t.cwd) : undefined,
-        worktreeId: t.worktreeId ? String(t.worktreeId) : undefined,
-        location: (t.location === "dock" ? "dock" : "grid") as "grid" | "dock",
-        isSuspect:
-          typeof t.createdAt === "number"
-            ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
-            : false,
-        agentState: coerceAgentState(t.agentState),
-        lastStateChange: typeof t.lastStateChange === "number" ? t.lastStateChange : undefined,
-      }));
+      // Per-item guard so one malformed entry (null, primitive, missing
+      // fields) cannot drop the entire panel list. Returning fewer
+      // summaries is acceptable; returning none when some were valid is not.
+      const summaries: PanelSummary[] = [];
+      for (const entry of terminals) {
+        if (typeof entry !== "object" || entry === null) continue;
+        const t = entry as Record<string, unknown>;
+        summaries.push({
+          id: String(t.id ?? ""),
+          kind: String(t.kind ?? "terminal"),
+          title: String(t.title ?? ""),
+          cwd: t.cwd ? String(t.cwd) : undefined,
+          worktreeId: t.worktreeId ? String(t.worktreeId) : undefined,
+          location: (t.location === "dock" ? "dock" : "grid") as "grid" | "dock",
+          isSuspect:
+            typeof t.createdAt === "number"
+              ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
+              : false,
+          agentState: coerceAgentState(t.agentState),
+          lastStateChange: typeof t.lastStateChange === "number" ? t.lastStateChange : undefined,
+        });
+      }
+      return summaries;
     } catch {
       return [];
     }
@@ -406,6 +524,10 @@ export class CrashRecoveryService {
         appVersion: app.getVersion(),
         platform: process.platform,
         isPackaged: app.isPackaged,
+        // Initialize the heartbeat to sessionStartMs so a launch that crashes
+        // before the first backup tick can still be classified as such — an
+        // undefined heartbeat would suppress external-kill detection entirely.
+        lastHeartbeatMs: this.sessionStartMs,
         crashLogPath: crashEntry
           ? path.join(this.crashesDir, `crash-${crashEntry.id}.json`)
           : undefined,
@@ -414,6 +536,43 @@ export class CrashRecoveryService {
     } catch (err) {
       console.error("[CrashRecovery] Failed to write marker:", err);
     }
+  }
+
+  /**
+   * Read-modify-write the marker so existing fields (crashLogPath,
+   * lastSuspendStart) are preserved. The in-memory approach used previously
+   * for the backup snapshot caused the very race this service is rewriting
+   * to eliminate — we keep the marker as a single source of truth on disk.
+   */
+  private mutateMarker(mutate: (marker: MarkerFile) => void): void {
+    try {
+      if (!fs.existsSync(this.markerPath)) return;
+      const raw = fs.readFileSync(this.markerPath, "utf8");
+      const marker = JSON.parse(raw) as MarkerFile;
+      if (!isValidMarker(marker)) return;
+      mutate(marker);
+      resilientAtomicWriteFileSync(this.markerPath, JSON.stringify(marker), "utf-8");
+    } catch (err) {
+      console.warn("[CrashRecovery] Failed to mutate marker:", err);
+    }
+  }
+
+  private updateMarkerHeartbeat(): void {
+    this.mutateMarker((marker) => {
+      marker.lastHeartbeatMs = Date.now();
+    });
+  }
+
+  private stampSuspend(suspendStartMs: number): void {
+    this.mutateMarker((marker) => {
+      marker.lastSuspendStart = suspendStartMs;
+    });
+  }
+
+  private clearSuspend(): void {
+    this.mutateMarker((marker) => {
+      delete marker.lastSuspendStart;
+    });
   }
 
   private deleteMarker(): void {
@@ -465,10 +624,104 @@ export class CrashRecoveryService {
     };
 
     this.enrichWithEnvironmentMetadata(entry);
-    const backupAppState = this.cachedBackupSnapshot?.appState;
-    this.enrichWithPanelData(entry, backupAppState);
+    this.enrichWithPanelData(entry, this.readCrashedBackupAppState());
 
     return entry;
+  }
+
+  private readCrashedBackupAppState(): unknown {
+    if (!this.crashedBackupPath) return undefined;
+    try {
+      if (!fs.existsSync(this.crashedBackupPath)) return undefined;
+      const raw = fs.readFileSync(this.crashedBackupPath, "utf-8");
+      const snapshot = JSON.parse(raw) as SessionSnapshot;
+      return snapshot.appState;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Best-effort classification of why the previous session ended.
+   *
+   * Priority order matters: stronger signals override weaker ones. A
+   * crashLogPath (set by recordCrash on uncaughtException) is the strongest
+   * signal because it was written by our own code; we trust it. Crashpad
+   * minidumps come from the OS-level handler and prove a native fault.
+   * Suspend/heartbeat/uptime are heuristics that distinguish power loss
+   * from external kills.
+   */
+  private classifyCrashCause(marker: MarkerFile): CrashCause {
+    if (marker.crashLogPath) return "uncaught-exception";
+    if (this.hasRecentCrashpadDump(marker.sessionStartMs)) return "native-crash";
+    if (typeof marker.lastSuspendStart === "number") return "suspended-then-lost";
+    if (this.didSystemReboot(marker.sessionStartMs)) return "power-loss";
+    if (this.isHeartbeatStale(marker.lastHeartbeatMs)) return "external-kill";
+    return "unknown";
+  }
+
+  /**
+   * Scans Electron's Crashpad directories for `.dmp` files written after the
+   * previous session started. Crashpad writes minidumps synchronously before
+   * the process terminates, so a newer dump file is definitive evidence the
+   * crash was a native fault (segfault, OOM, GPU process crash, etc.) rather
+   * than a JS exception or external kill.
+   */
+  private hasRecentCrashpadDump(sessionStartMs: number): boolean {
+    let dumpsDir: string;
+    try {
+      dumpsDir = app.getPath("crashDumps");
+    } catch {
+      return false;
+    }
+    // Crashpad shards dumps across these three subdirectories depending on
+    // their lifecycle. A dump can appear in any of them at next launch.
+    const subdirs = ["new", "pending", "completed"];
+    for (const subdir of subdirs) {
+      const fullPath = path.join(dumpsDir, subdir);
+      try {
+        if (!fs.existsSync(fullPath)) continue;
+        const files = fs.readdirSync(fullPath);
+        for (const file of files) {
+          if (!file.endsWith(".dmp")) continue;
+          try {
+            const stat = fs.statSync(path.join(fullPath, file));
+            if (stat.mtimeMs > sessionStartMs) return true;
+          } catch {
+            // best-effort
+          }
+        }
+      } catch {
+        // best-effort
+      }
+    }
+    return false;
+  }
+
+  /**
+   * True only when `os.uptime()` is shorter than the wall-clock time since
+   * the previous session started — a definitive reboot signal. Reliable
+   * positively only: sleep pauses uptime on macOS/Linux and Windows Fast
+   * Startup hibernation does not reset it, so the absence of this signal
+   * does NOT prove the system did not reboot.
+   */
+  private didSystemReboot(sessionStartMs: number, nowMs: number = Date.now()): boolean {
+    try {
+      const uptimeMs = os.uptime() * 1000;
+      const elapsedMs = nowMs - sessionStartMs;
+      if (elapsedMs <= 0) return false;
+      return uptimeMs < elapsedMs;
+    } catch {
+      return false;
+    }
+  }
+
+  private isHeartbeatStale(
+    lastHeartbeatMs: number | undefined,
+    nowMs: number = Date.now()
+  ): boolean {
+    if (typeof lastHeartbeatMs !== "number") return false;
+    return nowMs - lastHeartbeatMs > HEARTBEAT_STALE_THRESHOLD_MS;
   }
 
   private enrichWithRecentActions(entry: CrashLogEntry): void {
@@ -622,6 +875,19 @@ interface MarkerFile {
   platform: string;
   crashLogPath?: string;
   isPackaged?: boolean;
+  /**
+   * Wall-clock timestamp of the most recent backup-tick liveness write.
+   * Refreshed every BACKUP_INTERVAL_MS while the app is running. Compared
+   * at next launch against the staleness threshold to detect external
+   * kills (heartbeat older than threshold AND system did not reboot).
+   */
+  lastHeartbeatMs?: number;
+  /**
+   * Set on powerMonitor "suspend", cleared on "resume". A non-null value
+   * at next launch means the system slept and never made it through the
+   * resume callback — usually a power loss during sleep.
+   */
+  lastSuspendStart?: number;
 }
 
 interface SessionSnapshot {
