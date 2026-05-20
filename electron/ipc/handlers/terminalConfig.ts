@@ -163,13 +163,16 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
           store.set("terminalConfig.recentSchemeIds", sanitized);
         }
       ),
-      setScreenReaderMode: op(TERMINAL_CONFIG_METHOD_CHANNELS.setScreenReaderMode, async (mode) => {
-        if (mode !== "auto" && mode !== "on" && mode !== "off") {
-          console.warn("Invalid screen reader mode:", mode);
-          return;
+      setScreenReaderMode: op(
+        TERMINAL_CONFIG_METHOD_CHANNELS.setScreenReaderMode,
+        async (mode: "auto" | "on" | "off") => {
+          if (mode !== "auto" && mode !== "on" && mode !== "off") {
+            console.warn("Invalid screen reader mode:", mode);
+            return;
+          }
+          store.set("terminalConfig.screenReaderMode", mode);
         }
-        store.set("terminalConfig.screenReaderMode", mode);
-      }),
+      ),
       setResourceMonitoring: op(
         TERMINAL_CONFIG_METHOD_CHANNELS.setResourceMonitoring,
         async (enabled: boolean) => {
@@ -231,48 +234,59 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     },
   });
 
+  // Register the namespace first so a failure here leaves the standalone
+  // legacy handler uninstalled, mirroring the partial-unwind discipline in
+  // `define.ts`.
+  const namespaceCleanup = namespace.register();
+
   // `terminal-config:import-color-scheme` returns `{ok: true|false, ...}`,
   // which violates ForbidIpcEnvelopeKeys. Pending migration to throw AppError —
   // see #6020. Until then it stays as a standalone typedHandleWithContext call
   // alongside the namespace.
-  const importColorSchemeCleanup = typedHandleWithContext(
-    CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME,
-    // @ts-expect-error: handler returns {ok: true|false, ...} — pending migration to throw AppError. See #6020.
-    async (ctx) => {
-      const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
-      const dialogOptions = {
-        title: "Import Color Scheme",
-        filters: [
-          { name: "Color Schemes", extensions: ["itermcolors", "json"] },
-          { name: "All Files", extensions: ["*"] },
-        ],
-        properties: ["openFile" as const],
-      };
-      const result = win
-        ? await dialog.showOpenDialog(win, dialogOptions)
-        : await dialog.showOpenDialog(dialogOptions);
+  let importColorSchemeCleanup: () => void;
+  try {
+    importColorSchemeCleanup = typedHandleWithContext(
+      CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME,
+      // @ts-expect-error: handler returns {ok: true|false, ...} — pending migration to throw AppError. See #6020.
+      async (ctx) => {
+        const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
+        const dialogOptions = {
+          title: "Import Color Scheme",
+          filters: [
+            { name: "Color Schemes", extensions: ["itermcolors", "json"] },
+            { name: "All Files", extensions: ["*"] },
+          ],
+          properties: ["openFile" as const],
+        };
+        const result = win
+          ? await dialog.showOpenDialog(win, dialogOptions)
+          : await dialog.showOpenDialog(dialogOptions);
 
-      if (result.canceled || result.filePaths.length === 0) {
-        return { ok: false as const, errors: ["Import cancelled"] };
+        if (result.canceled || result.filePaths.length === 0) {
+          return { ok: false as const, errors: ["Import cancelled"] };
+        }
+
+        const parsed = await parseColorSchemeFile(result.filePaths[0]);
+        if (!parsed.ok) {
+          return parsed;
+        }
+        return {
+          ok: true as const,
+          scheme: {
+            id: parsed.scheme.id,
+            name: parsed.scheme.name,
+            type: parsed.scheme.type,
+            colors: { ...parsed.scheme.colors } as Record<string, string>,
+          },
+        };
       }
-
-      const parsed = await parseColorSchemeFile(result.filePaths[0]);
-      if (!parsed.ok) {
-        return parsed;
-      }
-      return {
-        ok: true as const,
-        scheme: {
-          id: parsed.scheme.id,
-          name: parsed.scheme.name,
-          type: parsed.scheme.type,
-          colors: { ...parsed.scheme.colors } as Record<string, string>,
-        },
-      };
-    }
-  );
-
-  const namespaceCleanup = namespace.register();
+    );
+  } catch (error) {
+    // Tear the namespace down so a failure here doesn't leave half the
+    // channels registered.
+    namespaceCleanup();
+    throw error;
+  }
 
   return () => {
     importColorSchemeCleanup();

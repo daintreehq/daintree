@@ -798,7 +798,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "terminal-config:set-screen-reader-mode": {
-    args: [mode: unknown];
+    args: [mode: "off" | "auto" | "on"];
     result: void;
   };
   "terminal-config:set-scrollback": {
