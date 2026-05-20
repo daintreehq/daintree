@@ -2,7 +2,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
-import { useFleetBroadcastConfirmStore } from "@/store/fleetBroadcastConfirmStore";
+import {
+  useFleetBroadcastConfirmStore,
+  resolveFleetBroadcastConfirmation,
+} from "@/store/fleetBroadcastConfirmStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -109,6 +112,40 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
     tryFleetBroadcastFromEditor("a", "hello", vi.fn());
     await flush();
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Broadcast sent to 2 — 1 failed");
+  });
+
+  it("announces skipped count in batched-cancel path when preempted batches never fire", async () => {
+    // FLEET_LARGE_PASTE_BATCH_SIZE is 5. 12 targets with a 120-KB payload
+    // triggers the batched path. Cancel after the first batch settles so
+    // the remaining 7 are skipped.
+    const ids = Array.from({ length: 12 }, (_, i) => `t${i}`);
+    const agents = ids.map((id) => makeAgent(id));
+    const panelsById: Record<string, TerminalInstance> = {};
+    for (const a of agents) panelsById[a.id] = a;
+    usePanelStore.setState({ panelsById, panelIds: ids });
+    useFleetArmingStore.getState().armIds(ids);
+
+    let batchCount = 0;
+    const origAdvance = useFleetBroadcastProgressStore.getState().advance;
+    useFleetBroadcastProgressStore.setState({
+      advance: (b, f) => {
+        batchCount += 1;
+        origAdvance(b, f);
+        if (batchCount === 1) cancelActiveBroadcast();
+      },
+    });
+    try {
+      tryFleetBroadcastFromEditor(ids[0]!, "x".repeat(120_000), vi.fn());
+      // Large payload triggers confirmation flow — resolve it so the
+      // broadcast fires, then the batched path + cancel produce skippedCount>0.
+      resolveFleetBroadcastConfirmation();
+      for (let i = 0; i < 20; i += 1) await flush();
+      expect(useAnnouncerStore.getState().polite?.msg).toBe(
+        "Broadcast cancelled — 5 sent, 7 terminals skipped"
+      );
+    } finally {
+      useFleetBroadcastProgressStore.setState({ advance: origAdvance });
+    }
   });
 
   it("announces partial cancel with both sent and failed counts", async () => {
