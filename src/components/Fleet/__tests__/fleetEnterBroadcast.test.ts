@@ -325,6 +325,29 @@ describe("tryFleetBroadcastFromEditor — confirmation gate", () => {
     await flush();
     expect(submitMock).toHaveBeenCalled();
   });
+
+  it("drops targets that became ineligible while the confirm dialog was open", async () => {
+    arm(["a", "b", "c"]);
+    tryFleetBroadcastFromEditor("a", "rm -rf /tmp", vi.fn());
+    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
+
+    // Pane B is trashed between confirm-request and confirm-submit.
+    usePanelStore.setState({
+      panelsById: {
+        a: makeAgent("a"),
+        b: { ...makeAgent("b"), location: "trash" } as TerminalInstance,
+        c: makeAgent("c"),
+      },
+      panelIds: ["a", "b", "c"],
+    });
+
+    resolveFleetBroadcastConfirmation();
+    await flush();
+    await flush();
+
+    const submittedIds = submitMock.mock.calls.map((call) => call[0]).sort();
+    expect(submittedIds).toEqual(["a", "c"]);
+  });
 });
 
 describe("cancelActiveBroadcast", () => {

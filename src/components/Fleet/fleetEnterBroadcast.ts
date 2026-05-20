@@ -18,6 +18,7 @@ import {
 import {
   buildFleetTargetPreviews,
   executeFleetBroadcast,
+  filterEligibleIds,
   type FleetExecutionResult,
   type FleetTargetPreview,
 } from "./fleetExecution";
@@ -174,7 +175,13 @@ export function tryFleetBroadcastFromEditor(
     livePreviews.length > 0 ? livePreviews : buildFleetTargetPreviews(text);
 
   const reasons = describeWarnings(text);
-  const destructiveMatch = getFleetBroadcastDestructiveMatch(text);
+  // Surface the destructive match from the source draft when possible
+  // (gives the user the offset inside their typed text). When the draft
+  // itself is safe but a resolved payload introduces a destructive
+  // pattern via variable expansion, fall back to the first non-excluded
+  // resolved match so the dialog can still explain the gate.
+  const destructiveMatch =
+    getFleetBroadcastDestructiveMatch(text) ?? findFirstResolvedDestructiveMatch(previews);
 
   // Resolved-payload gate: recipe-variable expansion can push a safe-
   // looking draft past the 512-byte threshold or surface a destructive
@@ -232,9 +239,16 @@ export function tryFleetBroadcastFromEditor(
     const controller = new AbortController();
     activeBroadcastController = controller;
     try {
+      // Re-check eligibility at dispatch time. Panes that disarmed,
+      // trashed, or lost their PTY between confirm-request and confirm-
+      // submit must not still receive bytes just because the snapshot
+      // marked them eligible. `effectiveTargets` already filtered against
+      // `resolveFleetBroadcastTargetIds()`; re-run the panel-eligibility
+      // filter so disposed PTYs are dropped too.
+      const eligibleTargets = filterEligibleIds(effectiveTargets);
       const result = await executeFleetBroadcast(
         text,
-        effectiveTargets,
+        eligibleTargets,
         overridesArg,
         controller.signal
       );
@@ -274,7 +288,7 @@ export function tryFleetBroadcastFromEditor(
         // A successful broadcast clears any stale failure dot on these
         // targets — the partial-failure state from a prior attempt is
         // now resolved.
-        for (const id of effectiveTargets) useFleetFailureStore.getState().dismissId(id);
+        for (const id of eligibleTargets) useFleetFailureStore.getState().dismissId(id);
       } else if (result.successCount > 0) {
         // Partial cancel — dispatched batches that succeeded should clear
         // their old failure dots; targets in skipped batches stay as-is.
@@ -320,4 +334,15 @@ export function tryFleetBroadcastFromEditor(
 
   void doSend();
   return true;
+}
+
+function findFirstResolvedDestructiveMatch(
+  previews: FleetTargetPreview[]
+): ReturnType<typeof getFleetBroadcastDestructiveMatch> {
+  for (const preview of previews) {
+    if (preview.excluded) continue;
+    const match = getFleetBroadcastDestructiveMatch(preview.resolvedPayload);
+    if (match !== null) return match;
+  }
+  return null;
 }

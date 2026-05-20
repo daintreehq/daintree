@@ -193,6 +193,24 @@ describe("fleetBroadcastConfirmStore", () => {
       expect(firstResolved).toBe(false);
       expect(secondResolved).toBe(true);
     });
+
+    it("a new request replaces the destructiveMatch without bleed", () => {
+      requestFleetBroadcastConfirmation({
+        text: "rm -rf /old",
+        warningReasons: ["destructive"],
+        destructiveMatch: { substring: "rm -rf ", index: 0 },
+      }).catch(() => {});
+
+      requestFleetBroadcastConfirmation({
+        text: "echo new",
+        warningReasons: ["multi-line"],
+        destructiveMatch: null,
+      }).catch(() => {});
+
+      const { pending } = useFleetBroadcastConfirmStore.getState();
+      expect(pending!.text).toBe("echo new");
+      expect(pending!.destructiveMatch).toBeNull();
+    });
   });
 
   describe("resolveFleetBroadcastConfirmation when nothing pending", () => {
