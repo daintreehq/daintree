@@ -201,7 +201,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "errors.recent",
     title: "Recent Errors",
     description:
-      "Active diagnostics-dock errors. Excludes pane-restart/spawn/reconnect failures unless normalized into the store.",
+      "List recent errors from the diagnostics-dock error store (IPC and normalized runtime failures), newest first. Args (all optional): `limit` (1-50, default 20); `includesDismissed` (default false — active only). Returns { errors } — each with id, type, message, details, source, timestamp, retryability, dismissed, worktreeId/terminalId, recoveryHint, occurrenceCount. Never errors. This is a different store from `notifications.recent` (the user inbox) — query both if you need the full picture.",
     category: "errors",
     kind: "query",
     danger: "safe",
@@ -256,7 +256,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "notifications.recent",
     title: "Recent Notifications",
     description:
-      "Recent notifications from the durable inbox (capped history, newest first). Filter by type or unread state.",
+      "List recent entries from the durable notification inbox (completion/waiting/info toasts the user saw), newest first. Args (all optional): `limit` (1-50, default 20); `type` ('success'|'error'|'info'|'warning'); `unreadOnly` (default false). Returns { notifications } — each with id, type, title, message, timestamp, seenAsToast. Never errors. This is a different store from `errors.recent` (the diagnostics-dock errors) — query both if you need the full picture.",
     category: "diagnostics",
     kind: "query",
     danger: "safe",

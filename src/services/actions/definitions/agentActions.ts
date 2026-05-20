@@ -343,7 +343,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.getState",
     title: "Get Agent State",
     description:
-      "Query agent state; returns state, waitingReason ('prompt'|'question', non-null when waiting), terminalId, found.",
+      "Look up the live state of an agent by its agent id. Args: `agentId` (required) — agent id such as 'claude' or 'codex', as seen in `terminal.list` entries' `agentId` field. Returns { agentId, state, waitingReason ('prompt'|'question', non-null only when state is 'waiting'), lastTransitionAt, terminalId, found }. Never errors — an unknown agent returns found:false with null fields. Do NOT use this to enumerate terminals — use `terminal.list` or `terminal.getStatus`.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -352,8 +352,16 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       agentId: z
         .string()
         .min(1)
-        .describe("Agent ID to look up (e.g., 'claude', 'codex'). From terminal.list[].agentId."),
+        .describe(
+          "Agent id to look up (e.g. 'claude', 'codex') — from `terminal.list` entries' `agentId` field."
+        ),
     }),
+    examples: [
+      {
+        args: { agentId: "claude" },
+        description: "Check whether the Claude agent is working, waiting, or idle",
+      },
+    ],
     resultSchema: z.object({
       agentId: z.string(),
       state: z.string().nullable(),

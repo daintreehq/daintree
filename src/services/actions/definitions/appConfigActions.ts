@@ -18,7 +18,8 @@ export function registerAppConfigActions(
   actions.set("agentSettings.get", () => ({
     id: "agentSettings.get",
     title: "Get Agent Settings",
-    description: "Get agent settings",
+    description:
+      "Read the per-agent settings map (model, flags, and other agent configuration). Takes no args. Returns { agents } — a record keyed by agent id of settings entries — plus an optional `settingsVersion`. Never errors; unconfigured agents are absent from the map. Use `agentSettings.set` to change a value.",
     category: "settings",
     kind: "query",
     danger: "safe",

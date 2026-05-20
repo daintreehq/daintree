@@ -9,7 +9,8 @@ export function registerKeybindingActions(
   actions.set("keybinding.getOverrides", () => ({
     id: "keybinding.getOverrides",
     title: "Get Keybinding Overrides",
-    description: "Get configured keybinding overrides",
+    description:
+      "Read the user's keybinding overrides (custom shortcuts that differ from defaults). Takes no args. Returns a record mapping action id to an array of key combos. Never errors; returns an empty map when no overrides are configured. Defaults are not included — only explicit overrides.",
     category: "settings",
     kind: "query",
     danger: "safe",

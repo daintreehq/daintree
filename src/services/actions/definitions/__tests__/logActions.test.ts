@@ -47,7 +47,9 @@ describe("errors.recent", () => {
     expect(def.danger).toBe("safe");
     expect(def.scope).toBe("renderer");
     expect(def.category).toBe("errors");
-    expect(def.description.length).toBeLessThanOrEqual(120);
+    // Four-line rubric (#8436) — assert the meaningful quality floor, not a
+    // tight ceiling (the registry-wide max lives in actionMetadata.test.ts).
+    expect(def.description.length).toBeGreaterThanOrEqual(80);
   });
 
   it("returns only active (non-dismissed) errors by default", async () => {
@@ -170,7 +172,9 @@ describe("notifications.recent", () => {
     expect(def.danger).toBe("safe");
     expect(def.scope).toBe("renderer");
     expect(def.category).toBe("diagnostics");
-    expect(def.description.length).toBeLessThanOrEqual(120);
+    // Four-line rubric (#8436) — assert the meaningful quality floor, not a
+    // tight ceiling (the registry-wide max lives in actionMetadata.test.ts).
+    expect(def.description.length).toBeGreaterThanOrEqual(80);
   });
 
   it("returns projected entries newest-first respecting the limit", async () => {

@@ -19,7 +19,7 @@ export function registerTerminalQueryActions(
     id: "terminal.list",
     title: "List Terminals",
     description:
-      "Get list of all terminals with metadata (id, kind, worktreeId, title, location, status)",
+      "List terminals/panels with lightweight metadata. Args (all optional): `worktreeId` filters to one worktree; `location` filters by 'grid'|'dock'|'trash'|'background' (default excludes trash and background). Returns { terminals } — each with id, kind, worktreeId, title, location, agentId, agentState, isInputLocked, isFocused. Ephemeral/internal panels are excluded. Never errors. Do NOT use this to poll agent state across a fleet or read output — use `terminal.getStatus`.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -79,13 +79,17 @@ export function registerTerminalQueryActions(
   actions.set("terminal.getOutput", () => ({
     id: "terminal.getOutput",
     title: "Get Terminal Output",
-    description: "Get terminal output with optional line limit and ANSI stripping.",
+    description:
+      "Read the trailing scrollback of a single terminal. Args: `terminalId` (required) — panel UUID from `terminal.list` (the `id` field); `maxLines` (1-1000, default 100); `stripAnsi` (default true). Returns { terminalId, content, lineCount, truncated }, or { ..., error } as data when the terminal is not found (not a thrown error). Do NOT use this to poll many terminals — `terminal.getStatus` with `includeOutput` fetches tails for N terminals in one call.",
     category: "terminal",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
-      terminalId: z.string().describe("Terminal instance ID from terminal.list"),
+      terminalId: z
+        .string()
+        .min(1)
+        .describe("Panel UUID returned by `terminal.list` (the `id` field)."),
       maxLines: z
         .number()
         .int()
@@ -167,7 +171,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getStatus",
     title: "Get Terminal Status",
     description:
-      "Batched fleet status — agentState, waitingReason, lastTransitionAt, plus optional recent-output tails.",
+      "Poll agent/terminal state across many terminals in one call. Args (all optional): `terminalIds` (1-256 explicit ids from `terminal.list`; when set, worktreeId/location are ignored and unknown ids return a per-entry `error`); `worktreeId`/`location` filters; `includeOutput:{ lines, stripAnsi }` to also return recent scrollback tails. Returns { terminals } — each with terminalId, agentId, agentState, waitingReason, lastTransitionAt, optional recentOutput, optional per-entry error. Never throws. Do NOT use `terminal.getOutput` for fleet polling, or `terminal.list` for agent state — this is the batched path.",
     category: "terminal",
     kind: "query",
     danger: "safe",

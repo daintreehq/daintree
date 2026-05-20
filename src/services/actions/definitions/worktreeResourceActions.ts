@@ -183,12 +183,22 @@ export function registerWorktreeResourceActions(
     defineAction({
       id: "worktree.resource.status",
       title: "Check Resource Status",
-      description: "Check the status of the resource associated with a worktree",
+      description:
+        "Run the configured status command for a worktree's remote resource and report the result. Args: `worktreeId` (optional) — a worktree id from `worktree.list` (the `id` field); defaults to the focused or active worktree. Returns { configured: false, status: null } when no status command is configured, otherwise { configured: true, status } where status is the resource state string or null. Errors when no worktree is selected or the worktree is not found; a failing status command surfaces an error toast rather than throwing.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      argsSchema: z
+        .object({
+          worktreeId: z
+            .string()
+            .optional()
+            .describe(
+              "Worktree id from `worktree.list` (the `id` field). Defaults to the focused or active worktree."
+            ),
+        })
+        .optional(),
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;

@@ -180,7 +180,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.getAll", () => ({
     id: "project.getAll",
     title: "List Projects",
-    description: "Get all projects",
+    description:
+      "List every project registered in Daintree, open or not. Takes no args. Returns { projects } — an array of project records with id, name, path, and metadata. Never errors; returns an empty array when no projects are registered. Do NOT use this just to find the active project — call `project.getCurrent`, which returns only the one currently open.",
     category: "project",
     kind: "query",
     danger: "safe",
@@ -195,7 +196,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.getCurrent", () => ({
     id: "project.getCurrent",
     title: "Get Current Project",
-    description: "Get the current active project",
+    description:
+      "Get the project currently open in the active window. Takes no args. Returns { project } — the active project record (id, name, path, metadata), or null when no project is open. Never errors. Do NOT use `project.getAll` for this — that lists every registered project; this returns only the active one.",
     category: "project",
     kind: "query",
     danger: "safe",
@@ -210,7 +212,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.getSettings", () => ({
     id: "project.getSettings",
     title: "Get Project Settings",
-    description: "Get a project's settings",
+    description:
+      "Read a project's persisted settings (notification overrides, runner config, worktree path pattern, etc.). Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project's id. Returns the settings object as an open-ended key/value map. Errors when no projectId is given and no project is active.",
     category: "project",
     kind: "query",
     danger: "safe",
@@ -431,7 +434,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.detectRunners", () => ({
     id: "project.detectRunners",
     title: "Detect Runners",
-    description: "Detect runnable commands for a project",
+    description:
+      "Detect runnable commands (test/lint/build/dev scripts) for a project by inspecting its manifest files. Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project. Returns { runners } — an array of { id, name, command }. Errors when no projectId is given and no project is active.",
     category: "project",
     kind: "query",
     danger: "safe",
@@ -450,7 +454,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.getStats", () => ({
     id: "project.getStats",
     title: "Get Project Stats",
-    description: "Get project statistics",
+    description:
+      "Get aggregate statistics for a project (commit/issue/PR counts and activity). Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project. Returns an open-ended stats object. Errors when no projectId is given and no project is active.",
     category: "project",
     kind: "query",
     danger: "safe",
