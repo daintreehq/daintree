@@ -791,7 +791,12 @@ describe("ResourceProfileService", () => {
       mix.push({ id: `live-${i}`, agentState: "working", detectedAgentId: "claude" });
     }
     for (let i = 0; i < 8; i += 1) {
-      mix.push({ id: `trash-${i}`, agentState: "working", detectedAgentId: "claude", isTrashed: true });
+      mix.push({
+        id: `trash-${i}`,
+        agentState: "working",
+        detectedAgentId: "claude",
+        isTrashed: true,
+      });
     }
     for (let i = 0; i < 5; i += 1) {
       mix.push({ id: `idle-${i}`, agentState: "idle", detectedAgentId: "claude" });
