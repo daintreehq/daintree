@@ -391,7 +391,9 @@ export function FleetArmingRibbon(): ReactElement | null {
   // Render confirmation before the armedCount<2 null guard so single-agent
   // keybindings (fleet.restart / fleet.kill always require confirmation)
   // stay reachable — and so draining 3→1 while a confirm is pending
-  // doesn't strand a live Enter listener with no visible UI.
+  // doesn't strand a live Enter listener with no visible UI. The failure
+  // banner is rendered alongside so a prior partial-failure surface stays
+  // visible while the user is in the confirm flow.
   if (armedCount > 0 && pending !== null) {
     const message = buildConfirmMessage(
       pending.kind,
@@ -399,34 +401,37 @@ export function FleetArmingRibbon(): ReactElement | null {
       pending.sessionLossCount
     );
     return (
-      <div
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        className={cn(
-          "relative flex items-center gap-3 border-b border-daintree-border px-3 py-2 text-[12px] text-daintree-text",
-          // Keep the Fleet surface continuous through confirm-pending so the
-          // mode chrome doesn't visually exit and re-enter during a confirm.
-          "bg-category-amber-subtle",
-          "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--color-category-amber-border)]"
-        )}
-        data-testid="fleet-arming-ribbon"
-        data-pending-action={pending.kind}
-      >
-        <span className="font-medium text-daintree-accent">{message}</span>
-        <div className="ml-auto flex items-center gap-2 text-[11px] text-daintree-text/70">
-          <span>
-            <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
-              Enter
-            </kbd>{" "}
-            to confirm
-          </span>
-          <span>
-            <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
-              Esc
-            </kbd>{" "}
-            to cancel
-          </span>
+      <div data-testid="fleet-arming-ribbon-group">
+        <FleetFailureBanner />
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className={cn(
+            "relative flex items-center gap-3 border-b border-daintree-border px-3 py-2 text-[12px] text-daintree-text",
+            // Keep the Fleet surface continuous through confirm-pending so the
+            // mode chrome doesn't visually exit and re-enter during a confirm.
+            "bg-category-amber-subtle",
+            "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--color-category-amber-border)]"
+          )}
+          data-testid="fleet-arming-ribbon"
+          data-pending-action={pending.kind}
+        >
+          <span className="font-medium text-daintree-accent">{message}</span>
+          <div className="ml-auto flex items-center gap-2 text-[11px] text-daintree-text/70">
+            <span>
+              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
+                Enter
+              </kbd>{" "}
+              to confirm
+            </span>
+            <span>
+              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
+                Esc
+              </kbd>{" "}
+              to cancel
+            </span>
+          </div>
         </div>
       </div>
     );

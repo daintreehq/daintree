@@ -485,4 +485,27 @@ describe("applyFleetBroadcastResult", () => {
     expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
     expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
   });
+
+  it("dismisses a prior failure when the next write to that target succeeds", () => {
+    // Mirrors fleetEnterBroadcast's dismiss-on-success — a stale red dot
+    // shouldn't linger after the user has visibly recovered the pane.
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+
+    applyFleetBroadcastResult({
+      results: [
+        { id: "t1", ok: true },
+        { id: "t2", ok: false, error: { code: "ENOSPC", message: "no space" } },
+      ],
+    });
+    expect(Array.from(useFleetFailureStore.getState().failedIds)).toEqual(["t2"]);
+
+    applyFleetBroadcastResult({
+      results: [
+        { id: "t1", ok: true },
+        { id: "t2", ok: true },
+      ],
+    });
+    expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
+  });
 });

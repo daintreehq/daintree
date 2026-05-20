@@ -605,4 +605,72 @@ describe("fleet.retryFailures", () => {
     expect(payload).toBe("ls\r");
     expect((targets as string[]).slice().sort()).toEqual(["t1", "t2"]);
   });
+
+  it("dismisses targets that succeeded on retry and preserves the ones that still fail", async () => {
+    (broadcastFleetLiteralPaste as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      failedIds: ["t2"],
+    });
+    useFleetFailureStore.setState({
+      failedIds: new Set(["t1", "t2", "t3"]),
+      payload: "ls\r",
+      recordedAt: Date.now(),
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    const s = useFleetFailureStore.getState();
+    expect(Array.from(s.failedIds)).toEqual(["t2"]);
+    expect(s.payload).toBe("ls\r");
+  });
+
+  it("clears the store entirely when every target succeeds on retry", async () => {
+    (broadcastFleetLiteralPaste as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      failedIds: [],
+    });
+    useFleetFailureStore.setState({
+      failedIds: new Set(["t1", "t2"]),
+      payload: "ls\r",
+      recordedAt: Date.now(),
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    const s = useFleetFailureStore.getState();
+    expect(s.failedIds.size).toBe(0);
+    expect(s.payload).toBeNull();
+    expect(s.recordedAt).toBeNull();
+  });
+
+  it("leaves the banner intact when invoked with a null payload (no silent clear)", async () => {
+    useFleetFailureStore.setState({
+      failedIds: new Set(["t1"]),
+      payload: null,
+      recordedAt: Date.now(),
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    const s = useFleetFailureStore.getState();
+    expect(s.failedIds.size).toBe(1);
+    expect(s.payload).toBeNull();
+  });
+
+  it("guards against double-dispatch (re-entrant retry while in flight)", async () => {
+    let resolveBroadcast: ((value: { failedIds: string[] }) => void) | null = null;
+    (broadcastFleetLiteralPaste as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () =>
+        new Promise<{ failedIds: string[] }>((resolve) => {
+          resolveBroadcast = resolve;
+        })
+    );
+    useFleetFailureStore.setState({
+      failedIds: new Set(["t1"]),
+      payload: "ls\r",
+      recordedAt: Date.now(),
+    });
+    const registry = await buildRegistry();
+    const first = run(registry, "fleet.retryFailures");
+    // Second call happens while the first is awaiting the broadcast.
+    await run(registry, "fleet.retryFailures");
+    expect(broadcastFleetLiteralPaste).toHaveBeenCalledTimes(1);
+    resolveBroadcast?.({ failedIds: [] });
+    await first;
+  });
 });

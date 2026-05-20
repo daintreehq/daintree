@@ -136,8 +136,12 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
 
   const nonPermanentFailedIds: string[] = [];
   const permanentlyFailedIds: string[] = [];
+  const succeededIds: string[] = [];
   for (const result of payload.results) {
-    if (result.ok) continue;
+    if (result.ok) {
+      succeededIds.push(result.id);
+      continue;
+    }
     const code = result.error?.code;
     // Missing errno → permanent. We can't tell if the target is recoverable,
     // so the safer default is to disarm rather than keep firing keystrokes.
@@ -145,6 +149,19 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
       permanentlyFailedIds.push(result.id);
     } else {
       nonPermanentFailedIds.push(result.id);
+    }
+  }
+
+  // A successful write to a previously-failed target clears the dot — same
+  // pattern as `fleetEnterBroadcast.ts`. Without this the banner persists
+  // after the user has visibly recovered (e.g. ENOSPC freed and the next
+  // keystroke landed).
+  if (succeededIds.length > 0) {
+    const failedSet = useFleetFailureStore.getState().failedIds;
+    if (failedSet.size > 0) {
+      for (const id of succeededIds) {
+        if (failedSet.has(id)) useFleetFailureStore.getState().dismissId(id);
+      }
     }
   }
 
