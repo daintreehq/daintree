@@ -212,7 +212,7 @@ describe("webContentsLifecycle", () => {
       expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
     });
 
-    it("swallows expected CDP errors silently", async () => {
+    it("swallows expected CDP errors silently (throttle)", async () => {
       const wc = createMockWc();
       wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Target closed"));
       await expect(
@@ -221,7 +221,16 @@ describe("webContentsLifecycle", () => {
       expect(warnSpy).not.toHaveBeenCalled();
     });
 
-    it("warns once for an unexpected CDP error", async () => {
+    it("swallows expected CDP errors silently (unthrottle)", async () => {
+      const wc = createMockWc();
+      wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Inspected target navigated"));
+      await expect(
+        unthrottleCpuWebContents(wc as unknown as Electron.WebContents)
+      ).resolves.toBeUndefined();
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it("warns once for an unexpected CDP error (throttle, rate 4)", async () => {
       const wc = createMockWc();
       wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Unknown protocol failure"));
       await expect(
@@ -231,9 +240,36 @@ describe("webContentsLifecycle", () => {
       expect(warnSpy.mock.calls[0][0]).toContain("setCPUThrottlingRate(4) failed");
     });
 
-    it("never throws when wc.debugger is missing entirely", async () => {
+    it("warns once for an unexpected CDP error (unthrottle, rate 1)", async () => {
+      const wc = createMockWc();
+      wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Unknown protocol failure"));
+      await expect(
+        unthrottleCpuWebContents(wc as unknown as Electron.WebContents)
+      ).resolves.toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain("setCPUThrottlingRate(1) failed");
+    });
+
+    it("swallows synchronous throw from debugger.attach", async () => {
+      const wc = createMockWc();
+      wc.debugger.attach.mockImplementation(() => {
+        throw new Error("Another debugger is already attached to this target");
+      });
+      await expect(
+        throttleCpuWebContents(wc as unknown as Electron.WebContents)
+      ).resolves.toBeUndefined();
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it("never throws when wc.debugger is missing entirely (throttle)", async () => {
       const wc = { isDestroyed: vi.fn(() => false) } as unknown as Electron.WebContents;
       await expect(throttleCpuWebContents(wc)).resolves.toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("never throws when wc.debugger is missing entirely (unthrottle)", async () => {
+      const wc = { isDestroyed: vi.fn(() => false) } as unknown as Electron.WebContents;
+      await expect(unthrottleCpuWebContents(wc)).resolves.toBeUndefined();
       expect(warnSpy).toHaveBeenCalledTimes(1);
     });
   });
