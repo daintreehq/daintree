@@ -809,6 +809,47 @@ describe("hydrateAppState", () => {
     expect(projectClientMock.getTabGroups).toHaveBeenCalledWith("project-1");
   });
 
+  it("dispatches getForProject concurrently with draft-input restore", async () => {
+    // Hold draft-input resolution so we can observe the IPC ordering. Without
+    // the parallelisation, getForProject would be blocked behind this await.
+    let releaseDrafts: () => void = () => {};
+    const draftsDeferred = new Promise<Record<string, string>>((resolve) => {
+      releaseDrafts = () => resolve({});
+    });
+    projectClientMock.getDraftInputs.mockReturnValue(draftsDeferred);
+
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+        activeWorktreeId: null,
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+    terminalClientMock.getForProject.mockResolvedValue([]);
+
+    const hydrationPromise = hydrateAppState({
+      addPanel: vi.fn(),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    // Flush microtasks so the prefetch fan-out runs. getForProject should have
+    // been dispatched even though getDraftInputs is still pending.
+    for (let i = 0; i < 10; i++) {
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+    }
+
+    expect(terminalClientMock.getForProject).toHaveBeenCalledWith("project-1");
+    expect(projectClientMock.getDraftInputs).toHaveBeenCalledWith("project-1");
+
+    releaseDrafts();
+    await hydrationPromise;
+  });
+
   it("defers non-critical snapshot restoration to lazy scroll during project-switch", async () => {
     // Track managed terminals per ID so we can simulate scroll events
     const managedTerminals = new Map<string, ReturnType<typeof makeMockManagedTerminal>>();

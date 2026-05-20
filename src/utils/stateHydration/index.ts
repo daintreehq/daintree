@@ -9,6 +9,7 @@ import type {
   TerminalReconnectError,
   TabGroup,
 } from "@/types";
+import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import type { ActionFrecencyEntry } from "@shared/types/actions";
 import { panelPersistence } from "@/store/persistence/panelPersistence";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -264,6 +265,23 @@ export async function hydrateAppState(
         })
       : null;
 
+    // Start the backend-terminal lookup alongside the other prefetch promises so
+    // its IPC round-trip overlaps with draft-input restore and the rest of the
+    // synchronous hydration work. The result is consumed inside the panel-restore
+    // block below; any rejection is captured and re-thrown there so the existing
+    // outer try/catch still logs and skips terminal restore.
+    let terminalFetchError: unknown = null;
+    const getForProjectPromise: Promise<BackendTerminalInfo[]> = currentProjectId
+      ? withRendererSpan(
+          PERF_MARKS.HYDRATE_GET_TERMINALS,
+          () => terminalClient.getForProject(currentProjectId),
+          { switchId: _switchId ?? null }
+        ).catch((error: unknown) => {
+          terminalFetchError = error;
+          return [];
+        })
+      : Promise.resolve([]);
+
     // Restore hybrid input bar draft inputs BEFORE terminal panels are created,
     // so HybridInputBar components pick up drafts from the store at mount time.
     if (currentProjectId) {
@@ -280,11 +298,8 @@ export async function hydrateAppState(
 
     if (currentProjectId) {
       try {
-        const backendTerminals = await withRendererSpan(
-          PERF_MARKS.HYDRATE_GET_TERMINALS,
-          () => terminalClient.getForProject(currentProjectId),
-          { switchId: _switchId ?? null }
-        );
+        const backendTerminals = await getForProjectPromise;
+        if (terminalFetchError) throw terminalFetchError;
         if (!checkCurrent()) return;
 
         logHydrationInfo(
