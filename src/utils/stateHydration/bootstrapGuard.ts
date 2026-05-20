@@ -5,13 +5,15 @@ let hydrationBootstrapPromise: Promise<void> | null = null;
 
 export async function ensureHydrationBootstrap(): Promise<void> {
   if (!hydrationBootstrapPromise) {
-    hydrationBootstrapPromise = (async () => {
-      await keybindingService.loadOverrides();
-      await useUserAgentRegistryStore.getState().initialize();
-    })().catch((error) => {
-      hydrationBootstrapPromise = null;
-      throw error;
-    });
+    hydrationBootstrapPromise = Promise.all([
+      keybindingService.loadOverrides(),
+      useUserAgentRegistryStore.getState().initialize(),
+    ])
+      .then(() => undefined)
+      .catch((error) => {
+        hydrationBootstrapPromise = null;
+        throw error;
+      });
   }
 
   await hydrationBootstrapPromise;

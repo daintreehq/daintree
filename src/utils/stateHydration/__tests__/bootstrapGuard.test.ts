@@ -54,7 +54,9 @@ describe("ensureHydrationBootstrap", () => {
     await ensureHydrationBootstrap();
 
     expect(loadOverridesMock).toHaveBeenCalledTimes(2);
-    expect(initializeMock).toHaveBeenCalledTimes(1);
+    // initialize() runs concurrently with loadOverrides() via Promise.all,
+    // so it fires on the failing first attempt too: 1 (failed call) + 1 (retry).
+    expect(initializeMock).toHaveBeenCalledTimes(2);
   });
 
   it("propagates initialize() rejections and clears the singleton", async () => {

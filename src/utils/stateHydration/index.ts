@@ -9,6 +9,7 @@ import type {
   TerminalReconnectError,
   TabGroup,
 } from "@/types";
+import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import type { ActionFrecencyEntry } from "@shared/types/actions";
 import { panelPersistence } from "@/store/persistence/panelPersistence";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -17,6 +18,7 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import {
   markRendererPerformance,
   withRendererSpan,
+  startRendererSpan,
   isRendererPerfCaptureEnabled,
   RENDERER_T0,
 } from "@/utils/performance";
@@ -264,6 +266,31 @@ export async function hydrateAppState(
         })
       : null;
 
+    // Start the backend-terminal lookup alongside the other prefetch promises so
+    // its IPC round-trip overlaps with draft-input restore and the rest of the
+    // synchronous hydration work. The result is consumed inside the panel-restore
+    // block below; any rejection is captured and re-thrown there so the existing
+    // outer try/catch still logs and skips terminal restore.
+    //
+    // Perf span is split into startRendererSpan + manual finishGetForProject so
+    // the `:end` mark only fires once `checkCurrent()` has confirmed the run is
+    // still current. Wrapping the in-flight promise in `withRendererSpan` would
+    // emit `:end` after `hydrateAppState`'s `finally` flushes the buffer when a
+    // mid-flight supersede happens, polluting the next run's marks with the
+    // wrong `switchId`.
+    let terminalFetchError: unknown = null;
+    const finishGetForProjectSpan = currentProjectId
+      ? startRendererSpan(PERF_MARKS.HYDRATE_GET_TERMINALS, {
+          switchId: _switchId ?? null,
+        })
+      : null;
+    const getForProjectPromise: Promise<BackendTerminalInfo[]> = currentProjectId
+      ? terminalClient.getForProject(currentProjectId).catch((error: unknown) => {
+          terminalFetchError = error;
+          return [];
+        })
+      : Promise.resolve([]);
+
     // Restore hybrid input bar draft inputs BEFORE terminal panels are created,
     // so HybridInputBar components pick up drafts from the store at mount time.
     if (currentProjectId) {
@@ -280,12 +307,10 @@ export async function hydrateAppState(
 
     if (currentProjectId) {
       try {
-        const backendTerminals = await withRendererSpan(
-          PERF_MARKS.HYDRATE_GET_TERMINALS,
-          () => terminalClient.getForProject(currentProjectId),
-          { switchId: _switchId ?? null }
-        );
+        const backendTerminals = await getForProjectPromise;
         if (!checkCurrent()) return;
+        finishGetForProjectSpan?.();
+        if (terminalFetchError) throw terminalFetchError;
 
         logHydrationInfo(
           `Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
