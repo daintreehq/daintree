@@ -20,6 +20,19 @@ import {
   type ResourceProfile,
   type ResourceProfilePayload,
 } from "../../shared/types/resourceProfile.js";
+import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
+
+/**
+ * Subset of PtyClient's TerminalInfoResponse used by the active-agent filter.
+ * Declared structurally so we don't depend on a non-exported interface.
+ */
+type ActiveAgentTerminalLike = {
+  agentState?: AgentState;
+  isTrashed?: boolean;
+  detectedAgentId?: string;
+  launchAgentId?: string;
+  everDetectedAgent?: boolean;
+};
 
 const EVAL_INTERVAL_MS = 30_000;
 const DOWNGRADE_HOLD_MS = 30_000;
@@ -69,7 +82,23 @@ const LAG_PRESSURE_MAX_MS = 120_000; // 2-minute hard cap on stuck latch
 // stops false "efficiency" drops when the app has plenty of headroom.
 const HIGH_FRACTION = 0.15;
 const LOW_FRACTION = 0.08;
-const WORKTREE_COUNT_HIGH = 8;
+
+// Fleet-size signal (live agent terminals in working/waiting/directing states).
+// Each running agent's resident memory is ~200–500 MB, so a graduated curve
+// reflects that fleet size scales pressure roughly linearly. A flat +1 was
+// indistinguishable across 8, 16, and 24 agents — those have wildly different
+// memory footprints and the service must react accordingly.
+const FLEET_COUNT_HIGH = 8;
+const FLEET_COUNT_VERY_HIGH = 16;
+const FLEET_COUNT_CRITICAL = 24;
+
+// System-available memory thresholds expressed as fractions of total RAM so
+// devices with very different physical memory behave consistently. On macOS
+// "available" = free + purgeable; elsewhere it's free alone. The score scales
+// alongside the app-private signal to catch the case where the OS as a whole
+// is starved by other processes even when this app's footprint is modest.
+const SYS_AVAILABLE_HIGH_FRACTION = 0.2;
+const SYS_AVAILABLE_LOW_FRACTION = 0.1;
 
 export interface ResourceProfileDeps {
   getPtyClient: () => PtyClient | null;
@@ -87,12 +116,14 @@ export class ResourceProfileService {
   private evalCleanup: (() => void) | null = null;
   private tickCount = 0;
   private disposed = false;
-  private cachedWorktreeCount = 0;
+  private cachedActiveAgentCount = 0;
   private thermalState: "unknown" | "nominal" | "fair" | "serious" | "critical" = "unknown";
   private speedLimit = 100;
   private isOnBattery = false;
   private readonly memoryThresholdHighMb: number;
   private readonly memoryThresholdLowMb: number;
+  private readonly sysMemThresholdHighMb: number;
+  private readonly sysMemThresholdLowMb: number;
   private lagInterval: NodeJS.Timeout | null = null;
   private lagHistogram: IntervalHistogram | null = null;
   private lagPreviousElu: EventLoopUtilization | null = null;
@@ -106,6 +137,8 @@ export class ResourceProfileService {
     const totalRamMb = os.totalmem() / 1024 / 1024;
     this.memoryThresholdHighMb = totalRamMb * HIGH_FRACTION;
     this.memoryThresholdLowMb = totalRamMb * LOW_FRACTION;
+    this.sysMemThresholdHighMb = totalRamMb * SYS_AVAILABLE_HIGH_FRACTION;
+    this.sysMemThresholdLowMb = totalRamMb * SYS_AVAILABLE_LOW_FRACTION;
   }
 
   private onThermalStateChange = (details: { state: string }): void => {
@@ -154,10 +187,6 @@ export class ResourceProfileService {
     this.isOnBattery = false;
   };
 
-  setWorktreeCount(count: number): void {
-    this.cachedWorktreeCount = count;
-  }
-
   getProfile(): ResourceProfile {
     return this.currentProfile;
   }
@@ -171,7 +200,7 @@ export class ResourceProfileService {
 
     logInfo("resource-profile-service-started", { profile: this.currentProfile });
 
-    this.refreshWorktreeCount();
+    this.refreshFleetState();
 
     powerMonitor.on("thermal-state-change", this.onThermalStateChange);
     powerMonitor.on("speed-limit-change", this.onSpeedLimitChange);
@@ -186,7 +215,7 @@ export class ResourceProfileService {
     powerMonitor.on("on-ac", this.onAcPower);
 
     this.evalCleanup = setAlignedInterval(() => {
-      this.refreshWorktreeCount();
+      this.refreshFleetState();
       this.evaluate();
     }, EVAL_INTERVAL_MS);
 
@@ -386,22 +415,68 @@ export class ResourceProfileService {
     }
   }
 
-  private refreshWorktreeCount(): void {
+  private refreshFleetState(): void {
     if (this.disposed) return;
     // Under sustained event-loop saturation, skip the only optional async work
-    // in this service. Cached count is used until pressure clears.
+    // in this service. Cached counts are used until pressure clears.
     if (this.lagEscalatedActive) return;
-    const workspaceClient = this.deps.getWorkspaceClient();
-    if (!workspaceClient) return;
-    workspaceClient
-      .getAllStatesAsync()
-      .then((states) => {
+
+    const ptyClient = this.deps.getPtyClient();
+    if (!ptyClient) return;
+
+    ptyClient
+      .getAllTerminalsAsync()
+      .then((terminals) => {
         if (this.disposed) return;
-        this.cachedWorktreeCount = states.length;
+        this.cachedActiveAgentCount = this.countActiveAgentTerminals(terminals);
       })
       .catch(() => {
         // non-critical — use last known count
       });
+  }
+
+  private countActiveAgentTerminals(terminals: ActiveAgentTerminalLike[]): number {
+    let count = 0;
+    for (const t of terminals) {
+      if (t.isTrashed) continue;
+      if (!t.agentState || !ACTIVE_AGENT_STATES.has(t.agentState)) continue;
+      // Only count terminals with an agent identity. `detectedAgentId` is the
+      // strongest signal (runtime-detected). A non-empty `launchAgentId` is
+      // accepted only before runtime detection has ever fired — once
+      // `everDetectedAgent` is true, missing `detectedAgentId` means the agent
+      // exited and we should not double-count the residual shell.
+      const hasIdentity =
+        Boolean(t.detectedAgentId) || (Boolean(t.launchAgentId) && t.everDetectedAgent !== true);
+      if (!hasIdentity) continue;
+      count += 1;
+    }
+    return count;
+  }
+
+  /**
+   * Read system-wide available memory in MB. Mirrors
+   * ProjectViewManager.getAvailableMemoryMb(): on macOS "available" =
+   * free + purgeable, because Darwin holds reclaimable pages as purgeable
+   * rather than free. On Windows/Linux, `free` alone is accurate. Returns
+   * null when the Chromium API is unavailable (e.g., under test mocks).
+   */
+  private getAvailableSystemMemoryMb(): number | null {
+    try {
+      const getInfo = (
+        process as {
+          getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+        }
+      ).getSystemMemoryInfo;
+      if (typeof getInfo !== "function") return null;
+      const info = getInfo.call(process);
+      const freeKb = typeof info.free === "number" ? info.free : 0;
+      const purgeableKb = typeof info.purgeable === "number" ? info.purgeable : 0;
+      const availableKb = freeKb + purgeableKb;
+      if (availableKb <= 0) return null;
+      return availableKb / 1024;
+    } catch {
+      return null;
+    }
   }
 
   stop(): void {
@@ -500,10 +575,33 @@ export class ResourceProfileService {
     if (this.speedLimit < 50) pressureScore += 2;
     else if (this.speedLimit < 100) pressureScore += 1;
 
-    // Worktree count signal
-    const worktreeCount = this.cachedWorktreeCount;
-    if (worktreeCount >= WORKTREE_COUNT_HIGH) {
+    // Fleet-size signal (graduated). Counts live agent terminals filtered
+    // through ACTIVE_AGENT_STATES rather than worktrees: an idle worktree
+    // costs negligible incremental memory, but each running agent runtime
+    // (Claude, Gemini, Codex) is hundreds of MB. With a flat +1 at 8, a 24-
+    // agent fleet scored identically to an 8-worktree project and could
+    // never reach `efficiency` from fleet size alone.
+    const agentCount = this.cachedActiveAgentCount;
+    if (agentCount >= FLEET_COUNT_CRITICAL) {
+      pressureScore += 3;
+    } else if (agentCount >= FLEET_COUNT_VERY_HIGH) {
+      pressureScore += 2;
+    } else if (agentCount >= FLEET_COUNT_HIGH) {
       pressureScore += 1;
+    }
+
+    // System-available memory signal. The app-private signal above only sees
+    // this process's footprint; if another app on the box is hoarding RAM
+    // and the OS is paging, we want to back off even when our own memory
+    // looks fine. Mirrors the (free + purgeable) pattern ProjectViewManager
+    // already uses for cached-view eviction.
+    const sysAvailMb = this.getAvailableSystemMemoryMb();
+    if (sysAvailMb !== null) {
+      if (sysAvailMb < this.sysMemThresholdLowMb) {
+        pressureScore += 2;
+      } else if (sysAvailMb < this.sysMemThresholdHighMb) {
+        pressureScore += 1;
+      }
     }
 
     if (pressureScore >= 3) return "efficiency";

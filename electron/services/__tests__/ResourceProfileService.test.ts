@@ -76,10 +76,34 @@ function makeMetric(type: string, privateMb: number): Electron.ProcessMetric {
 
 interface MockPtyClient {
   setResourceProfile: Mock;
+  getAllTerminalsAsync: Mock;
 }
 interface MockWorkspaceClient {
   updateMonitorConfig: Mock;
   getAllStatesAsync: Mock;
+}
+
+function makeActiveAgentTerminals(count: number): Array<Record<string, unknown>> {
+  const terminals: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < count; i += 1) {
+    terminals.push({
+      id: `t-${i}`,
+      agentState: "working",
+      detectedAgentId: "claude",
+      isTrashed: false,
+    });
+  }
+  return terminals;
+}
+
+async function flushAsync(): Promise<void> {
+  // The fleet refresh fires fire-and-forget promises inside the eval timer.
+  // After advancing fake timers we need to drain the microtask queue so the
+  // `.then(...)` writers commit `cachedActiveAgentCount` before computeTargetProfile
+  // runs on the next tick.
+  for (let i = 0; i < 5; i += 1) {
+    await Promise.resolve();
+  }
 }
 interface MockHibernationService {
   setMemoryPressureThresholdMs: Mock;
@@ -96,6 +120,7 @@ interface MockProjectStatsService {
 function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDeps {
   const mockPtyClient: MockPtyClient = {
     setResourceProfile: vi.fn(),
+    getAllTerminalsAsync: vi.fn().mockResolvedValue([]),
   };
   const mockWorkspaceClient: MockWorkspaceClient = {
     updateMonitorConfig: vi.fn(),
@@ -663,18 +688,109 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
-  it("high worktree count contributes to pressure", () => {
+  it("high active-agent count contributes to pressure", async () => {
     const deps = createDeps();
+    const mockPty = deps.getPtyClient() as unknown as MockPtyClient;
+    mockPty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(10));
     const service = new ResourceProfileService(deps);
-    service.setWorktreeCount(10);
     mockIsOnBatteryPower.mockReturnValue(true);
     service.start();
+    await flushAsync();
 
-    // Low memory (0) + battery (+1) + worktrees (+1) = 2 => balanced
+    // Low memory (0) + battery (+1) + 10 agents (+1 at FLEET_COUNT_HIGH=8) = 2 => balanced
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
 
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("balanced");
+
+    service.stop();
+  });
+
+  it("16 active agents alone reach balanced from performance", async () => {
+    const deps = createDeps();
+    const mockPty = deps.getPtyClient() as unknown as MockPtyClient;
+    mockPty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(16));
+    const service = new ResourceProfileService(deps);
+    service.start();
+    await flushAsync();
+
+    // Low memory (0) + no battery (0) + 16 agents (+2 at FLEET_COUNT_VERY_HIGH=16) = 2 => balanced
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("balanced");
+
+    service.stop();
+  });
+
+  it("24 active agents alone drive to efficiency", async () => {
+    const deps = createDeps();
+    const mockPty = deps.getPtyClient() as unknown as MockPtyClient;
+    mockPty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(24));
+    const service = new ResourceProfileService(deps);
+    service.start();
+    await flushAsync();
+
+    // Low memory (0) + no battery (0) + 24 agents (+3 at FLEET_COUNT_CRITICAL=24) = 3 => efficiency.
+    // This is the core fix: fleet size alone could never reach efficiency under the
+    // old flat +1 worktree-count signal.
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    service.stop();
+  });
+
+  it("7 active agents (below FLEET_COUNT_HIGH) contribute zero pressure", async () => {
+    const deps = createDeps();
+    const mockPty = deps.getPtyClient() as unknown as MockPtyClient;
+    mockPty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(7));
+    const service = new ResourceProfileService(deps);
+    service.start();
+    await flushAsync();
+
+    // Low memory (0) + no battery (0) + 7 agents (0) = 0 => performance (after upgrade hold)
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("performance");
+
+    service.stop();
+  });
+
+  it("trashed and idle terminals are excluded from the active-agent count", async () => {
+    const deps = createDeps();
+    const mockPty = deps.getPtyClient() as unknown as MockPtyClient;
+    // 24 entries total but only 7 qualify as live agents: the rest are either
+    // trashed, idle/completed, or lack an agent identity.
+    const mix: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 7; i += 1) {
+      mix.push({ id: `live-${i}`, agentState: "working", detectedAgentId: "claude" });
+    }
+    for (let i = 0; i < 8; i += 1) {
+      mix.push({ id: `trash-${i}`, agentState: "working", detectedAgentId: "claude", isTrashed: true });
+    }
+    for (let i = 0; i < 5; i += 1) {
+      mix.push({ id: `idle-${i}`, agentState: "idle", detectedAgentId: "claude" });
+    }
+    for (let i = 0; i < 4; i += 1) {
+      mix.push({ id: `noid-${i}`, agentState: "working" }); // no agent identity
+    }
+    mockPty.getAllTerminalsAsync.mockResolvedValue(mix);
+    const service = new ResourceProfileService(deps);
+    service.start();
+    await flushAsync();
+
+    // Only 7 live agents (below FLEET_COUNT_HIGH=8) — fleet score 0.
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("performance");
 
     service.stop();
   });
@@ -919,18 +1035,20 @@ describe("ResourceProfileService", () => {
     expect(mockPowerMonitorRemoveListener).toHaveBeenCalledWith("on-ac", expect.any(Function));
   });
 
-  it("scales thresholds down on low-RAM devices so 500 MB usage is detected", () => {
+  it("scales thresholds down on low-RAM devices so 500 MB usage is detected", async () => {
     // 4 GB machine: HIGH = 614 MB, LOW = 328 MB.
     // 500 MB of privateBytes must score LOW (+1), not HIGH (+2). To discriminate,
-    // pair with 10 worktrees (+1). LOW + worktrees = 2 → balanced;
-    // HIGH + worktrees = 3 → efficiency. The "balanced" assertion only passes
+    // pair with 10 active agents (+1). LOW + agents = 2 → balanced;
+    // HIGH + agents = 3 → efficiency. The "balanced" assertion only passes
     // if the 500 MB reading was scored as LOW.
     vi.spyOn(os, "totalmem").mockReturnValue(4 * 1024 * 1024 * 1024);
 
     const deps = createDeps();
+    const mockPty = deps.getPtyClient() as unknown as MockPtyClient;
+    mockPty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(10));
     const service = new ResourceProfileService(deps);
-    service.setWorktreeCount(10);
     service.start();
+    await flushAsync();
 
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 500)]);
     mockIsOnBatteryPower.mockReturnValue(false);
@@ -1041,5 +1159,189 @@ describe("ResourceProfileService", () => {
     expect(mockIsOnBatteryPower).toHaveBeenCalledTimes(1);
 
     service.stop();
+  });
+
+  describe("system available memory signal", () => {
+    // The Electron-augmented `process.getSystemMemoryInfo` lives on the real
+    // process global, so we attach a stub directly and restore it after each
+    // test. `vi.stubGlobal('process', ...)` would obliterate Node internals.
+    let originalGetSystemMemoryInfo: unknown;
+
+    beforeEach(() => {
+      originalGetSystemMemoryInfo = (process as { getSystemMemoryInfo?: unknown })
+        .getSystemMemoryInfo;
+    });
+
+    afterEach(() => {
+      if (originalGetSystemMemoryInfo === undefined) {
+        delete (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo;
+      } else {
+        (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo =
+          originalGetSystemMemoryInfo;
+      }
+    });
+
+    function stubSystemMemory(freeKb: number, purgeableKb: number, totalKb: number): void {
+      (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo = vi.fn(() => ({
+        free: freeKb,
+        purgeable: purgeableKb,
+        total: totalKb,
+      }));
+    }
+
+    it("system available memory below 10% of total adds +2 to pressure", () => {
+      // 8 GB total. 10% = 819 MB. Stub free+purgeable = 500 MB (well below LOW threshold).
+      // Free 300 MB + purgeable 200 MB = 500 MB available.
+      stubSystemMemory(300 * 1024, 200 * 1024, EIGHT_GB / 1024);
+
+      const deps = createDeps();
+      const service = new ResourceProfileService(deps);
+      mockIsOnBatteryPower.mockReturnValue(true);
+      service.start();
+
+      // Low app memory (0) + battery (+1) + sys mem <10% (+2) = 3 => efficiency
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      service.stop();
+    });
+
+    it("system available memory between 10–20% of total adds +1 to pressure", () => {
+      // 8 GB total. HIGH threshold (20%) = 1638 MB; LOW (10%) = 819 MB.
+      // Stub free 1000 MB + purgeable 0 = 1000 MB (between LOW and HIGH).
+      stubSystemMemory(1000 * 1024, 0, EIGHT_GB / 1024);
+
+      const deps = createDeps();
+      const service = new ResourceProfileService(deps);
+      mockIsOnBatteryPower.mockReturnValue(true);
+      service.start();
+
+      // Low app memory (0) + battery (+1) + sys mem 12% (+1) = 2 => balanced
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("balanced");
+
+      service.stop();
+    });
+
+    it("system available memory above 20% does not contribute", () => {
+      // Free 3 GB on 8 GB total = 37% available.
+      stubSystemMemory(3 * 1024 * 1024, 0, EIGHT_GB / 1024);
+
+      const deps = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // Low memory (0) + no battery (0) + sys mem fine (0) = 0 => performance
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("performance");
+
+      service.stop();
+    });
+
+    it("includes purgeable memory in the 'available' calculation", () => {
+      // 8 GB total. Free alone = 200 MB (well below 10% / 819 MB).
+      // With purgeable = 4 GB folded in, available = 4.2 GB (above 20% / 1638 MB).
+      // Asserting "performance" only passes if purgeable was added — without it
+      // the score would jump to +2 (sys mem critical).
+      stubSystemMemory(200 * 1024, 4 * 1024 * 1024, EIGHT_GB / 1024);
+
+      const deps = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("performance");
+
+      service.stop();
+    });
+
+    it("treats missing purgeable field as 0", () => {
+      // Non-macOS shape: only free is reported. Free = 500 MB on 8 GB = 6% available.
+      (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo = vi.fn(() => ({
+        free: 500 * 1024,
+        total: EIGHT_GB / 1024,
+      }));
+
+      const deps = createDeps();
+      const service = new ResourceProfileService(deps);
+      mockIsOnBatteryPower.mockReturnValue(true);
+      service.start();
+
+      // sys mem <10% (+2) + battery (+1) = 3 => efficiency
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      service.stop();
+    });
+
+    it("contributes nothing when process.getSystemMemoryInfo is absent", () => {
+      // Default state: no stub. Removed defensively in case the test runner
+      // happens to expose it.
+      delete (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo;
+
+      const deps = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("performance");
+
+      service.stop();
+    });
+
+    it("swallows errors from getSystemMemoryInfo", () => {
+      (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo = vi.fn(() => {
+        throw new Error("simulated native failure");
+      });
+
+      const deps = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // Should not throw; sys mem signal contributes 0.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      expect(() =>
+        vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000)
+      ).not.toThrow();
+      expect(service.getProfile()).toBe("performance");
+
+      service.stop();
+    });
+
+    it("treats non-positive available memory as no signal", () => {
+      // Edge case: API returns zero/negative free which would otherwise create
+      // a false positive. The helper should return null and the signal should
+      // not contribute, mirroring ProjectViewManager.
+      stubSystemMemory(0, 0, EIGHT_GB / 1024);
+
+      const deps = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("performance");
+
+      service.stop();
+    });
   });
 });
