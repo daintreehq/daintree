@@ -14,8 +14,8 @@ export function ContentGridMaximizedSingle({
 }) {
   "use memo";
 
-  const terminal = ctx.gridTerminals.find((t) => t.id === ctx.maximizedId);
-  if (!terminal) return null;
+  const maximizedId = ctx.maximizedId;
+  if (!maximizedId) return null;
 
   return (
     <div
@@ -34,7 +34,7 @@ export function ContentGridMaximizedSingle({
       <GridNotificationBar className="mx-1 mt-1 shrink-0" />
       <div className="relative min-h-0 flex-1">
         <GridPanel
-          terminal={terminal}
+          terminalId={maximizedId}
           isFocused={true}
           isMaximized={true}
           gridPanelCount={ctx.gridItemCount}

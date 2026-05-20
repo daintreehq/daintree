@@ -343,7 +343,7 @@ export function TwoPaneSplitLayout({
               disabled={isInTrash(terminals[0].id)}
             >
               <GridPanel
-                terminal={terminals[0]}
+                terminalId={terminals[0].id}
                 isFocused={terminals[0].id === focusedId}
                 gridPanelCount={2}
                 gridCols={2}
@@ -371,7 +371,7 @@ export function TwoPaneSplitLayout({
               disabled={isInTrash(terminals[1].id)}
             >
               <GridPanel
-                terminal={terminals[1]}
+                terminalId={terminals[1].id}
                 isFocused={terminals[1].id === focusedId}
                 gridPanelCount={2}
                 gridCols={2}

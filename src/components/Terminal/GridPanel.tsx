@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useSyncExternalStore } from "react";
-import { usePanelStore, type TerminalInstance } from "@/store";
+import { useShallow } from "zustand/react/shallow";
+import { usePanelStore } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   getPanelKindDefinition,
@@ -12,10 +13,9 @@ import type { TabInfo } from "@/components/Panel/TabButton";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
 import type { AgentState } from "@/types";
-import { terminalChromeDescriptorsEqual } from "@/utils/terminalChrome";
 
 export interface GridPanelProps {
-  terminal: TerminalInstance;
+  terminalId: string;
   isFocused: boolean;
   isMaximized?: boolean;
   gridPanelCount?: number;
@@ -39,105 +39,8 @@ export interface GridPanelProps {
   onTabReorder?: (newOrder: string[]) => void;
 }
 
-/**
- * Custom comparator for GridPanel's React.memo wrapper.
- *
- * Skips callback props (onTabClick, onTabClose, onTabRename, onAddTab,
- * onTabReorder) because ContentGrid passes inline closures that change every
- * render. Compares terminal fields used by buildPanelProps and ErrorBoundary
- * resetKeys. The drift-coverage test in gridPanelPropsAreEqual.test.ts
- * Proxies buildPanelProps and asserts each accessed terminal.* field is
- * caught here, so this list fails CI if it falls behind panelProps.ts.
- */
-export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProps): boolean {
-  // Scalar props
-  if (
-    prev.isFocused !== next.isFocused ||
-    prev.isMaximized !== next.isMaximized ||
-    prev.gridPanelCount !== next.gridPanelCount ||
-    prev.gridCols !== next.gridCols ||
-    prev.ambientAgentState !== next.ambientAgentState ||
-    prev.isFleetScope !== next.isFleetScope ||
-    prev.titleOverride !== next.titleOverride ||
-    prev.groupId !== next.groupId
-  ) {
-    return false;
-  }
-
-  // Terminal: fast-path reference check, then field-level comparison
-  if (prev.terminal !== next.terminal) {
-    const a = prev.terminal;
-    const b = next.terminal;
-    if (
-      a.id !== b.id ||
-      a.title !== b.title ||
-      a.worktreeId !== b.worktreeId ||
-      a.kind !== b.kind ||
-      a.launchAgentId !== b.launchAgentId ||
-      a.detectedAgentId !== b.detectedAgentId ||
-      a.everDetectedAgent !== b.everDetectedAgent ||
-      a.runtimeIdentity !== b.runtimeIdentity ||
-      a.cwd !== b.cwd ||
-      a.agentState !== b.agentState ||
-      a.activityHeadline !== b.activityHeadline ||
-      a.activityStatus !== b.activityStatus ||
-      a.activityType !== b.activityType ||
-      a.lastCommand !== b.lastCommand ||
-      a.flowStatus !== b.flowStatus ||
-      a.restartKey !== b.restartKey ||
-      a.restartError !== b.restartError ||
-      a.reconnectError !== b.reconnectError ||
-      a.spawnError !== b.spawnError ||
-      a.scrollbackRestoreError !== b.scrollbackRestoreError ||
-      a.detectedProcessId !== b.detectedProcessId ||
-      a.browserUrl !== b.browserUrl ||
-      a.isRestarting !== b.isRestarting ||
-      a.runtimeStatus !== b.runtimeStatus ||
-      a.isInputLocked !== b.isInputLocked ||
-      a.extensionState !== b.extensionState ||
-      a.pluginId !== b.pluginId ||
-      a.exitCode !== b.exitCode ||
-      a.agentPresetColor !== b.agentPresetColor ||
-      a.agentPresetId !== b.agentPresetId ||
-      a.agentLaunchFlags !== b.agentLaunchFlags ||
-      a.browserHistory !== b.browserHistory ||
-      a.browserZoom !== b.browserZoom
-    ) {
-      return false;
-    }
-  }
-
-  // Tabs: compare by length and element fields
-  const prevTabs = prev.tabs;
-  const nextTabs = next.tabs;
-  if (prevTabs !== nextTabs) {
-    if (prevTabs == null || nextTabs == null) return false;
-    if (prevTabs.length !== nextTabs.length) return false;
-    for (let i = 0; i < prevTabs.length; i++) {
-      const pt = prevTabs[i]!;
-      const nt = nextTabs[i]!;
-      if (
-        pt.id !== nt.id ||
-        pt.title !== nt.title ||
-        !terminalChromeDescriptorsEqual(pt.chrome, nt.chrome) ||
-        pt.kind !== nt.kind ||
-        pt.agentState !== nt.agentState ||
-        pt.isActive !== nt.isActive ||
-        pt.presetColor !== nt.presetColor ||
-        pt.isUsingFallback !== nt.isUsingFallback ||
-        pt.fallbackTooltip !== nt.fallbackTooltip ||
-        pt.hasDangerousFlags !== nt.hasDangerousFlags
-      ) {
-        return false;
-      }
-    }
-  }
-
-  return true;
-}
-
 export const GridPanel = React.memo(function GridPanel({
-  terminal,
+  terminalId,
   isFocused,
   isMaximized = false,
   gridPanelCount,
@@ -153,20 +56,25 @@ export const GridPanel = React.memo(function GridPanel({
   onAddTab,
   onTabReorder,
 }: GridPanelProps) {
+  // Subscribe to the terminal slice keyed by id. `useShallow` does per-field
+  // identity comparison, so re-renders fire only when fields of THIS terminal
+  // change — sibling panel mutations no longer cascade through the grid.
+  const terminal = usePanelStore(useShallow((state) => state.panelsById[terminalId]));
+
   const toggleMaximize = usePanelStore((state) => state.toggleMaximize);
   const getPanelGroup = usePanelStore((state) => state.getPanelGroup);
   const moveTerminalToDock = usePanelStore((state) => state.moveTerminalToDock);
 
   const { handleFocus, handleClose, handleTitleChange } = usePanelHandlers({
-    terminalId: terminal.id,
+    terminalId,
   });
 
   const handleToggleMaximize = useCallback(() => {
-    toggleMaximize(terminal.id, gridCols, gridPanelCount, getPanelGroup);
-  }, [toggleMaximize, terminal.id, gridCols, gridPanelCount, getPanelGroup]);
+    toggleMaximize(terminalId, gridCols, gridPanelCount, getPanelGroup);
+  }, [toggleMaximize, terminalId, gridCols, gridPanelCount, getPanelGroup]);
 
   const handleMinimize = useCallback(() => {
-    const panelElement = document.querySelector(`[data-panel-id="${terminal.id}"]`);
+    const panelElement = document.querySelector(`[data-panel-id="${terminalId}"]`);
     if (panelElement) {
       const sourceRect = panelElement.getBoundingClientRect();
       const dockElement = document.querySelector("[data-dock-density]");
@@ -179,7 +87,7 @@ export const GridPanel = React.memo(function GridPanel({
           height: 32,
         };
         triggerPanelTransition(
-          terminal.id,
+          terminalId,
           "minimize",
           {
             x: sourceRect.x,
@@ -192,67 +100,74 @@ export const GridPanel = React.memo(function GridPanel({
       }
     }
 
-    moveTerminalToDock(terminal.id);
-  }, [moveTerminalToDock, terminal.id]);
+    moveTerminalToDock(terminalId);
+  }, [moveTerminalToDock, terminalId]);
 
-  const kind = terminal.kind ?? "terminal";
   // Subscribe to definition registry mutations so a plugin re-registering its
   // panel kind hot-swaps the PluginMissingPanel placeholder without a reload.
   useSyncExternalStore(subscribeToPanelKindDefinitions, getPanelKindDefinitionsSnapshot);
+
+  const kind = terminal?.kind ?? "terminal";
   const definition = getPanelKindDefinition(kind);
 
-  const panelProps: PanelComponentProps = useMemo(
-    () =>
-      buildPanelProps({
-        terminal,
-        isFocused,
-        overrides: {
-          location: "grid" as const,
-          isMaximized,
-          gridPanelCount,
-          ambientAgentState,
-          onFocus: handleFocus,
-          onClose: handleClose,
-          // Fleet scope disables per-panel maximize — the armed grid is a single
-          // read-only composite view; promoting one cell would drop the rest.
-          onToggleMaximize: isFleetScope ? undefined : handleToggleMaximize,
-          onTitleChange: handleTitleChange,
-          onMinimize: isFleetScope ? undefined : handleMinimize,
-          tabs,
-          groupId,
-          onTabClick,
-          onTabClose,
-          onTabRename,
-          // Adding a new tab in scope would create a cross-worktree tab group,
-          // which violates the tab-group invariant in shared/types/panel.ts.
-          onAddTab: isFleetScope ? undefined : onAddTab,
-          onTabReorder,
-          ...(isFleetScope ? { isInputLocked: true } : undefined),
-          ...(titleOverride !== undefined ? { title: titleOverride } : undefined),
-        },
-      }),
-    [
+  const panelProps: PanelComponentProps | null = useMemo(() => {
+    if (!terminal) return null;
+    return buildPanelProps({
       terminal,
       isFocused,
-      isMaximized,
-      gridPanelCount,
-      ambientAgentState,
-      handleFocus,
-      handleClose,
-      handleToggleMaximize,
-      handleTitleChange,
-      handleMinimize,
-      tabs,
-      groupId,
-      onTabClick,
-      onTabClose,
-      onTabRename,
-      onAddTab,
-      onTabReorder,
-      isFleetScope,
-      titleOverride,
-    ]
-  );
+      overrides: {
+        location: "grid" as const,
+        isMaximized,
+        gridPanelCount,
+        ambientAgentState,
+        onFocus: handleFocus,
+        onClose: handleClose,
+        // Fleet scope disables per-panel maximize — the armed grid is a single
+        // read-only composite view; promoting one cell would drop the rest.
+        onToggleMaximize: isFleetScope ? undefined : handleToggleMaximize,
+        onTitleChange: handleTitleChange,
+        onMinimize: isFleetScope ? undefined : handleMinimize,
+        tabs,
+        groupId,
+        onTabClick,
+        onTabClose,
+        onTabRename,
+        // Adding a new tab in scope would create a cross-worktree tab group,
+        // which violates the tab-group invariant in shared/types/panel.ts.
+        onAddTab: isFleetScope ? undefined : onAddTab,
+        onTabReorder,
+        ...(isFleetScope ? { isInputLocked: true } : undefined),
+        ...(titleOverride !== undefined ? { title: titleOverride } : undefined),
+      },
+    });
+  }, [
+    terminal,
+    isFocused,
+    isMaximized,
+    gridPanelCount,
+    ambientAgentState,
+    handleFocus,
+    handleClose,
+    handleToggleMaximize,
+    handleTitleChange,
+    handleMinimize,
+    tabs,
+    groupId,
+    onTabClick,
+    onTabClose,
+    onTabRename,
+    onAddTab,
+    onTabReorder,
+    isFleetScope,
+    titleOverride,
+  ]);
+
+  // Transient unmount race: the panel was removed from the store while this
+  // cell is still in React's commit queue. Rendering null is correct — the
+  // parent removes the grid cell on the same tick.
+  if (!terminal || !panelProps) {
+    return null;
+  }
 
   if (!definition) {
     const isPluginOwned = Boolean(terminal.pluginId) || kind.includes(".");
@@ -317,4 +232,4 @@ export const GridPanel = React.memo(function GridPanel({
       <PanelComponent {...panelProps} />
     </ErrorBoundary>
   );
-}, gridPanelPropsAreEqual);
+});

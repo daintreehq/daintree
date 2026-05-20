@@ -117,7 +117,7 @@ export function ContentGridDefault({
                           layoutTransition={ctx.layoutTransition}
                         >
                           <GridPanel
-                            terminal={terminal}
+                            terminalId={terminal.id}
                             isFocused={terminal.id === ctx.focusedId}
                             gridPanelCount={ctx.gridItemCount}
                             gridCols={ctx.gridCols}
@@ -140,7 +140,6 @@ export function ContentGridDefault({
                         >
                           <GridTabGroup
                             group={group}
-                            panels={groupPanels}
                             focusedId={ctx.focusedId}
                             gridPanelCount={ctx.gridItemCount}
                             gridCols={ctx.gridCols}
