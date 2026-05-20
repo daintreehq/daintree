@@ -20,6 +20,7 @@ import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
 import { usePreferencesStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -205,11 +206,12 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // Inverse of isFleetPreviewed: when a preset hover is *active* and this
   // pane is NOT in the would-be-armed set, dim it so the matched panes
   // stand out without competing visual chrome on the rest of the grid.
-  // Gated on kind === "terminal" so browser, dev-preview, and other
-  // non-fleet panels (which are never in previewArmedIds) stay at full
-  // opacity — dimming them would imply they could have been armed.
+  // Gated on PTY-backed kinds so browser, dev-preview, and other non-fleet
+  // panels (which are never in previewArmedIds) stay at full opacity —
+  // dimming them would imply they could have been armed.
+  const isPtyKind = panelKindHasPty(kind);
   const isFleetDimmed = useFleetArmingStore(
-    (s) => kind === "terminal" && s.previewArmedIds.size > 0 && !s.previewArmedIds.has(id)
+    (s) => isPtyKind && s.previewArmedIds.size > 0 && !s.previewArmedIds.has(id)
   );
 
   // One-shot ring pulse when this pane becomes the new primary on fleet
