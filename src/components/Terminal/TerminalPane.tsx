@@ -402,6 +402,7 @@ function TerminalPaneComponent({
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
+  const isHostConnected = backendStatus === "connected";
 
   const isHibernated = useIsHibernated(id);
 
@@ -1039,14 +1040,17 @@ function TerminalPaneComponent({
     exitBehavior,
     reconnectError,
     spawnError,
+    backendStatus,
   });
-  const showRestartError = Boolean(restartError);
-  const showSpawnError = Boolean(spawnError) && !showRestartError;
-  const showReconnectError = Boolean(reconnectError) && !showRestartError && !showSpawnError;
+  const showRestartError = isHostConnected && Boolean(restartError);
+  const showSpawnError = isHostConnected && Boolean(spawnError) && !restartError;
+  const showReconnectError =
+    isHostConnected && Boolean(reconnectError) && !restartError && !spawnError;
   // Scrollback restore is independent of PTY launch state (spawn/reconnect),
   // so it can co-exist with those banners. Only restartError, which already
   // implies a destroyed-and-respawning PTY, suppresses it.
-  const showScrollbackRestoreError = Boolean(scrollbackRestoreError) && !showRestartError;
+  const showScrollbackRestoreError =
+    isHostConnected && Boolean(scrollbackRestoreError) && !restartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
 
   return (
