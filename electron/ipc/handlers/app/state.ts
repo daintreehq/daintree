@@ -8,6 +8,7 @@ import {
   filterValidTerminalEntries,
 } from "../../../schemas/ipc.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
+import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerService.js";
 
 export const CRASH_CRITICAL_FIELDS = new Set([
   "terminals",
@@ -58,9 +59,31 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     if (projectId && panelFilter === null && !cacheInSafeMode) {
       const cached = consumePrefetchedHydrateResult(projectId);
       if (cached) {
+        // The prefetch was built before the quarantine filter — apply it
+        // here so a project switch can't smuggle a repeat-suspect panel
+        // back into restoration that the boot hydrate would have dropped.
+        const ledger = getPanelSuspectLedger();
+        const quarantined = ledger.getQuarantinedPanels();
+        let filteredCached = cached;
+        let cachedSkipped = 0;
+        if (quarantined.length > 0 && Array.isArray(cached.appState?.terminals)) {
+          const quarantinedIdSet = new Set(quarantined.map((p) => p.id));
+          const beforeCount = cached.appState.terminals.length;
+          const filteredTerminals = cached.appState.terminals.filter(
+            (t) => !quarantinedIdSet.has(t.id)
+          );
+          cachedSkipped = beforeCount - filteredTerminals.length;
+          if (cachedSkipped > 0) {
+            filteredCached = {
+              ...cached,
+              appState: { ...cached.appState, terminals: filteredTerminals },
+            };
+          }
+        }
         return {
-          ...cached,
-          skippedPanelCount: 0,
+          ...filteredCached,
+          skippedPanelCount: cachedSkipped,
+          quarantinedPanels: quarantined,
           crashCount: cacheGuard.getCrashCount(),
           lastCrashAt: cacheGuard.getLastCrashTimestamp(),
           settingsRecovery: consumePendingSettingsRecovery(),
@@ -234,18 +257,38 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       terminalsSource = "global-fallback";
     }
 
-    // In safe mode, skip terminal restoration to break crash loops.
-    // Capture the count of panels we're about to drop so the renderer
-    // banner can tell users how much was deferred.
+    // Quarantine repeat-suspect panels from restoration. The ledger is
+    // updated upstream during crash recovery boot — read its result here
+    // and filter terminalsToUse after every branch has converged so the
+    // filter applies uniformly across per-project, migration, and
+    // global-fallback paths (#4911 phantom-restore pattern).
     const guard = getCrashLoopGuard();
     const inSafeMode = guard.isSafeMode();
+    const quarantinedPanels = getPanelSuspectLedger().getQuarantinedPanels();
+    const quarantinedIds = new Set(quarantinedPanels.map((p) => p.id));
     let skippedPanelCount = 0;
-    if (inSafeMode) {
-      skippedPanelCount = terminalsToUse.length;
+    if (quarantinedIds.size > 0) {
+      const before = terminalsToUse.length;
+      terminalsToUse = terminalsToUse.filter((t) => !quarantinedIds.has(t.id));
+      skippedPanelCount = before - terminalsToUse.length;
+      if (skippedPanelCount > 0) {
+        terminalsSource = "quarantine";
+        console.log(
+          `[AppHydrate] Quarantined ${skippedPanelCount} repeat-suspect panel(s) from restoration`
+        );
+      }
+    }
+    if (inSafeMode && terminalsToUse.length > 0) {
+      // Tier-3 escalation: whole-session safe mode wins when the crash loop
+      // guard has tripped, even if the per-panel ledger let some panels
+      // through. Per-panel quarantine narrows the failure first; safe mode
+      // is the fallback when crashes keep happening.
+      const remaining = terminalsToUse.length;
+      skippedPanelCount += remaining;
       terminalsToUse = [];
       terminalsSource = "safe-mode";
       console.log(
-        `[AppHydrate] Safe mode active — skipping ${skippedPanelCount} terminal(s) restoration`
+        `[AppHydrate] Safe mode active — dropping remaining ${remaining} terminal(s)`
       );
     }
 
@@ -295,6 +338,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       isWindowsStore:
         (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
       skippedPanelCount,
+      quarantinedPanels,
       crashCount: guard.getCrashCount(),
       lastCrashAt: guard.getLastCrashTimestamp(),
       settingsRecovery: consumePendingSettingsRecovery(),

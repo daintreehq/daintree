@@ -2487,6 +2487,8 @@ const api: ElectronAPI = {
     getConfig: () => _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_GET_CONFIG),
     setConfig: (config: { autoRestoreOnCrash?: boolean }) =>
       _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_SET_CONFIG, config),
+    restorePanel: (panelId: string) =>
+      _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_RESTORE_PANEL, panelId),
   },
 
   // Help workspace API

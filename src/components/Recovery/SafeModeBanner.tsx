@@ -23,10 +23,15 @@ export function SafeModeBanner() {
   const crashCount = useSafeModeStore((s) => s.crashCount);
   const skippedPanelCount = useSafeModeStore((s) => s.skippedPanelCount);
   const lastCrashAt = useSafeModeStore((s) => s.lastCrashAt);
+  const quarantinedPanels = useSafeModeStore((s) => s.quarantinedPanels);
+  const removeQuarantinedPanel = useSafeModeStore((s) => s.removeQuarantinedPanel);
   const dismiss = useSafeModeStore((s) => s.dismiss);
   const [isRestarting, setIsRestarting] = useState(false);
+  const [pendingRestoreIds, setPendingRestoreIds] = useState<Set<string>>(new Set());
 
-  if (!safeMode || dismissed) return null;
+  const hasQuarantine = (quarantinedPanels?.length ?? 0) > 0;
+
+  if ((!safeMode && !hasQuarantine) || dismissed) return null;
 
   const handleRestart = async () => {
     if (isRestarting) return;
@@ -36,6 +41,26 @@ export function SafeModeBanner() {
     } catch (error) {
       logError("Failed to restart from safe mode", error);
       setIsRestarting(false);
+    }
+  };
+
+  const handleRestorePanel = async (panelId: string) => {
+    if (pendingRestoreIds.has(panelId)) return;
+    setPendingRestoreIds((prev) => {
+      const next = new Set(prev);
+      next.add(panelId);
+      return next;
+    });
+    try {
+      await window.electron.crashRecovery.restorePanel(panelId);
+      removeQuarantinedPanel(panelId);
+    } catch (error) {
+      logError("Failed to restore quarantined panel", error);
+      setPendingRestoreIds((prev) => {
+        const next = new Set(prev);
+        next.delete(panelId);
+        return next;
+      });
     }
   };
 
@@ -51,7 +76,7 @@ export function SafeModeBanner() {
       : 0;
   const crashTimestamp =
     typeof lastCrashAt === "number" && Number.isFinite(lastCrashAt) ? lastCrashAt : null;
-  const hasDetails = skipped > 0 || crashes > 0 || crashTimestamp !== null;
+  const hasDetails = skipped > 0 || crashes > 0 || crashTimestamp !== null || hasQuarantine;
 
   let crashMetaText: string | null = null;
   if (crashes > 0 && crashTimestamp !== null) {
@@ -73,35 +98,88 @@ export function SafeModeBanner() {
       <PopoverContent
         align="end"
         sideOffset={8}
-        className="p-3 text-xs max-w-xs space-y-2 text-daintree-text"
+        className="p-3 text-xs max-w-sm space-y-2 text-daintree-text"
       >
         {crashMetaText && <p className="font-medium">{crashMetaText}</p>}
-        {skipped > 0 && (
+        {skipped > 0 && !hasQuarantine && (
           <p className="text-daintree-text/70">
             {skipped} {skipped === 1 ? "panel was" : "panels were"} skipped so you can recover the
             app. Restart normally to reload them.
           </p>
         )}
+        {hasQuarantine && quarantinedPanels && (
+          <div className="space-y-2">
+            <p className="text-daintree-text/70">
+              {quarantinedPanels.length}{" "}
+              {quarantinedPanels.length === 1
+                ? "panel was held back because it"
+                : "panels were held back because they"}{" "}
+              crashed shortly after launching. Restore individually to try again.
+            </p>
+            <ul className="space-y-1.5">
+              {quarantinedPanels.map((panel) => {
+                const isPending = pendingRestoreIds.has(panel.id);
+                return (
+                  <li
+                    key={panel.id}
+                    className="flex items-start justify-between gap-2 rounded border border-daintree-border/40 p-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-daintree-text truncate">
+                        {panel.title || panel.kind || panel.id}
+                      </p>
+                      {panel.cwd && (
+                        <p className="text-daintree-text/60 truncate font-mono text-[10px]">
+                          {panel.cwd}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleRestorePanel(panel.id);
+                      }}
+                      disabled={isPending}
+                      className="text-xs px-2 py-1 rounded border border-daintree-border hover:bg-overlay-subtle transition-colors shrink-0 disabled:opacity-50"
+                    >
+                      {isPending ? "Restoring…" : "Restore panel"}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   ) : undefined;
 
-  return (
-    <InlineStatusBanner
-      icon={AlertTriangle}
-      title="Safe mode — panels weren't restored"
-      severity="warning"
-      role="status"
-      trailingSlot={detailsPopover}
-      actions={[
+  const title = safeMode
+    ? "Safe mode — panels weren't restored"
+    : hasQuarantine
+      ? "Some panels were quarantined"
+      : "Safe mode — panels weren't restored";
+
+  const actions = safeMode
+    ? [
         {
           id: "restart",
           label: isRestarting ? "Restarting…" : "Restart normally",
-          variant: "primary",
+          variant: "primary" as const,
           onClick: handleRestart,
           disabled: isRestarting,
         },
-      ]}
+      ]
+    : [];
+
+  return (
+    <InlineStatusBanner
+      icon={AlertTriangle}
+      title={title}
+      severity="warning"
+      role="status"
+      trailingSlot={detailsPopover}
+      actions={actions}
       onClose={dismiss}
       closeAriaLabel="Dismiss safe mode banner"
     />

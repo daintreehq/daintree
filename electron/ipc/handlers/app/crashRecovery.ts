@@ -1,6 +1,7 @@
 import { CHANNELS } from "../../channels.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
+import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerService.js";
 import type {
   CrashRecoveryAction,
   CrashRecoveryConfig,
@@ -46,6 +47,16 @@ export function registerCrashRecoveryHandlers(): () => void {
   handlers.push(
     typedHandle(CHANNELS.CRASH_RECOVERY_SET_CONFIG, (config: Partial<CrashRecoveryConfig>) => {
       return getCrashRecoveryService().setConfig(config);
+    })
+  );
+
+  handlers.push(
+    typedHandle(CHANNELS.CRASH_RECOVERY_RESTORE_PANEL, (panelId: string) => {
+      if (typeof panelId !== "string" || panelId.length === 0) {
+        console.warn("[CrashRecovery] restore-panel called with invalid panelId");
+        return;
+      }
+      getPanelSuspectLedger().restorePanel(panelId);
     })
   );
 

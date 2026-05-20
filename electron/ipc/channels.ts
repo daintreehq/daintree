@@ -668,6 +668,7 @@ export const CHANNELS = {
   CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
   CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
   CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
+  CRASH_RECOVERY_RESTORE_PANEL: "crash-recovery:restore-panel",
 
   // Renderer Recovery channels (in-session crash recovery)
   RECOVERY_RELOAD_APP: "recovery:reload-app",

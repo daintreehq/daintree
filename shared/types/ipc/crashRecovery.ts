@@ -57,6 +57,22 @@ export interface PanelSummary {
   lastStateChange?: number;
 }
 
+/**
+ * Panel held out of restoration because its persistent suspect count
+ * has crossed the quarantine threshold. Surfaced in the safe-mode banner
+ * so the user can opt back in per panel without flipping the whole session
+ * out of safe mode.
+ */
+export interface QuarantinedPanelInfo {
+  id: string;
+  kind: string;
+  title: string;
+  cwd?: string;
+  worktreeId?: string;
+  /** Number of consecutive isSuspect-on-crash strikes recorded for this panel. */
+  suspectCount: number;
+}
+
 export interface PendingCrash {
   logPath: string;
   entry: CrashLogEntry;

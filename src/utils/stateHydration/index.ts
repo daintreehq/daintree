@@ -190,11 +190,19 @@ export async function hydrateAppState(
         crashCount: hydrateResult.crashCount,
         skippedPanelCount: hydrateResult.skippedPanelCount,
         lastCrashAt: hydrateResult.lastCrashAt,
+        quarantinedPanels: hydrateResult.quarantinedPanels,
       });
     } else {
       // Clear stale state when the main process has exited safe mode
-      // (e.g. stability timer fired or user restarted normally).
+      // (e.g. stability timer fired or user restarted normally), but keep
+      // any quarantined panels surfaced — per-panel quarantine fires
+      // independently of whole-session safe mode so the banner can still
+      // offer the "Restore panel" affordance.
       useSafeModeStore.getState().setSafeMode(false);
+      const quarantined = hydrateResult.quarantinedPanels;
+      if (quarantined && quarantined.length > 0) {
+        useSafeModeStore.getState().setQuarantinedPanels(quarantined);
+      }
     }
 
     dispatchRecoveryNotifications(hydrateResult);

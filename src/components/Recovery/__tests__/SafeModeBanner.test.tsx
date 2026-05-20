@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 import { SafeModeBanner } from "../SafeModeBanner";
 import { useSafeModeStore } from "@/store/safeModeStore";
 
 const resetAndRelaunch = vi.fn();
+const restorePanel = vi.fn();
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -25,9 +26,14 @@ beforeAll(() => {
 beforeEach(() => {
   resetAndRelaunch.mockReset();
   resetAndRelaunch.mockResolvedValue(undefined);
-  // Minimal stub of window.electron.app for the restart action
+  restorePanel.mockReset();
+  restorePanel.mockResolvedValue(undefined);
+  // Minimal stub of window.electron for the restart and restore-panel actions
   Object.defineProperty(window, "electron", {
-    value: { app: { resetAndRelaunch } },
+    value: {
+      app: { resetAndRelaunch },
+      crashRecovery: { restorePanel },
+    },
     writable: true,
     configurable: true,
   });
@@ -37,6 +43,7 @@ beforeEach(() => {
     crashCount: undefined,
     skippedPanelCount: undefined,
     lastCrashAt: undefined,
+    quarantinedPanels: undefined,
   });
   cleanup();
 });
@@ -175,5 +182,107 @@ describe("SafeModeBanner", () => {
     });
     expect(container.firstChild).toBeNull();
     expect(useSafeModeStore.getState().dismissed).toBe(true);
+  });
+
+  it("renders the quarantine-only headline when quarantine fired without safe mode", () => {
+    useSafeModeStore.setState({
+      safeMode: false,
+      quarantinedPanels: [
+        {
+          id: "panel-a",
+          kind: "terminal",
+          title: "Bash",
+          cwd: "/repo/a",
+          suspectCount: 2,
+        },
+      ],
+    });
+    render(<SafeModeBanner />);
+    expect(screen.getByText("Some panels were quarantined")).toBeTruthy();
+    // No restart action when not in safe mode
+    expect(screen.queryByRole("button", { name: /Restart normally/i })).toBeNull();
+  });
+
+  it("lists each quarantined panel with a Restore panel button in the popover", () => {
+    useSafeModeStore.setState({
+      safeMode: true,
+      quarantinedPanels: [
+        {
+          id: "panel-a",
+          kind: "terminal",
+          title: "Bash",
+          cwd: "/repo/a",
+          suspectCount: 2,
+        },
+        {
+          id: "panel-b",
+          kind: "terminal",
+          title: "Claude",
+          cwd: "/repo/b",
+          suspectCount: 3,
+        },
+      ],
+    });
+    render(<SafeModeBanner />);
+    fireEvent.click(screen.getByRole("button", { name: /Show details/i }));
+    expect(screen.getByText("Bash")).toBeTruthy();
+    expect(screen.getByText("/repo/a")).toBeTruthy();
+    expect(screen.getByText("Claude")).toBeTruthy();
+    expect(screen.getByText("/repo/b")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /Restore panel/i })).toHaveLength(2);
+  });
+
+  it("calls crashRecovery.restorePanel and removes the entry on click", async () => {
+    useSafeModeStore.setState({
+      safeMode: true,
+      quarantinedPanels: [
+        {
+          id: "panel-a",
+          kind: "terminal",
+          title: "Bash",
+          cwd: "/repo/a",
+          suspectCount: 2,
+        },
+      ],
+    });
+    render(<SafeModeBanner />);
+    fireEvent.click(screen.getByRole("button", { name: /Show details/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Restore panel/i }));
+    expect(restorePanel).toHaveBeenCalledTimes(1);
+    expect(restorePanel).toHaveBeenCalledWith("panel-a");
+    await waitFor(() => {
+      expect(useSafeModeStore.getState().quarantinedPanels).toBeUndefined();
+    });
+  });
+
+  it("keeps the entry visible if restorePanel rejects", async () => {
+    restorePanel.mockRejectedValueOnce(new Error("EROFS"));
+    useSafeModeStore.setState({
+      safeMode: true,
+      quarantinedPanels: [
+        {
+          id: "panel-a",
+          kind: "terminal",
+          title: "Bash",
+          cwd: "/repo/a",
+          suspectCount: 2,
+        },
+      ],
+    });
+    render(<SafeModeBanner />);
+    fireEvent.click(screen.getByRole("button", { name: /Show details/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Restore panel/i }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useSafeModeStore.getState().quarantinedPanels?.length).toBe(1);
+    // Button label reverts after the rejection
+    expect(screen.getByRole("button", { name: /Restore panel/i })).toBeTruthy();
+  });
+
+  it("hides the banner entirely when no safe mode and no quarantined panels", () => {
+    useSafeModeStore.setState({ safeMode: false, quarantinedPanels: undefined });
+    const { container } = render(<SafeModeBanner />);
+    expect(container.firstChild).toBeNull();
   });
 });

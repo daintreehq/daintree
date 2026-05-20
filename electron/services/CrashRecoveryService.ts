@@ -13,6 +13,7 @@ import { store, windowStatesStore } from "../store.js";
 import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { getActionBreadcrumbService } from "./ActionBreadcrumbService.js";
+import { getPanelSuspectLedger } from "./PanelSuspectLedgerService.js";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
 
 const MAX_CRASH_LOGS = 10;
@@ -54,6 +55,19 @@ export class CrashRecoveryService {
   initialize(): void {
     this.pendingCrash = this.consumeMarker();
     this.writeMarker();
+    // Update the persistent per-panel suspect ledger before hydrate runs.
+    // On a crash boot, increment strikes for panels that were suspect at
+    // crash time; on a clean boot, decay every active strike by one credit.
+    try {
+      const ledger = getPanelSuspectLedger();
+      if (this.pendingCrash) {
+        ledger.initialize(this.pendingCrash.panels ?? []);
+      } else {
+        ledger.recordCleanLaunch();
+      }
+    } catch (err) {
+      console.error("[CrashRecovery] Failed to update panel suspect ledger:", err);
+    }
     console.log("[CrashRecovery] Initialized, pending crash:", this.pendingCrash !== null);
   }
 

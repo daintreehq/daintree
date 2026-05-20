@@ -1373,6 +1373,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [config: Partial<import("./crashRecovery.js").CrashRecoveryConfig>];
     result: import("./crashRecovery.js").CrashRecoveryConfig;
   };
+  "crash-recovery:restore-panel": {
+    args: [panelId: string];
+    result: void;
+  };
 
   // Webview console capture
   "webview:start-console-capture": {

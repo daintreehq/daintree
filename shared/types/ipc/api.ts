@@ -1431,6 +1431,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setConfig(
       config: Partial<import("./crashRecovery.js").CrashRecoveryConfig>
     ): Promise<import("./crashRecovery.js").CrashRecoveryConfig>;
+    restorePanel(panelId: string): Promise<void>;
   };
   // help is generated — see GeneratedElectronAPI.
   perf: {
