@@ -5302,4 +5302,176 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
   });
+
+  describe("OSC 9;4 progress signal (Issue #8701)", () => {
+    it("transitions to busy from idle on a working signal even with no visible-line activity", () => {
+      vi.setSystemTime(1000);
+      const onStateChange = vi.fn();
+      // simulate a starved viewport: getVisibleLines returns nothing useful.
+      const monitor = new ActivityMonitor("osc-1", 100, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => [],
+        getCursorLine: () => null,
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      monitor.onOscProgressWorking(1000);
+
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).toHaveBeenCalledWith("osc-1", 100, "busy", { trigger: "output" });
+
+      monitor.dispose();
+    });
+
+    it("keeps an already-busy monitor busy across the 8s IDLE_DEBOUNCE_MS even when the visible snapshot never changes", () => {
+      // Reproduces #8701: a small grid tile starves the snapshot detector.
+      // Without OSC heartbeat, simpleOutputState polling would fire idle at 8s.
+      vi.setSystemTime(2000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("osc-heartbeat", 100, onStateChange, {
+        agentId: "claude",
+        // Two-line viewport, never changes: matches the starvation condition.
+        getVisibleLines: () => ["$", "waiting"],
+        getCursorLine: () => "waiting",
+        initialState: "busy",
+        skipInitialStateEmit: true,
+        pollingIntervalMs: 50,
+        idleDebounceMs: 8000,
+      });
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      // OSC heartbeat every 1s for 12s — longer than IDLE_DEBOUNCE_MS.
+      for (let t = 2000; t <= 14000; t += 1000) {
+        vi.setSystemTime(t);
+        monitor.onOscProgressWorking(t);
+        vi.advanceTimersByTime(1000);
+      }
+
+      expect(monitor.getState()).toBe("busy");
+      // Confirm no idle transition was emitted during the 12s window.
+      expect(onStateChange).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        "idle",
+        expect.anything()
+      );
+
+      monitor.dispose();
+    });
+
+    it("debounces idle: a working signal within 200ms cancels the pending idle timer", () => {
+      vi.setSystemTime(3000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("osc-debounce", 100, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => [],
+        getCursorLine: () => null,
+        initialState: "busy",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.onOscProgressWorking(3000);
+      monitor.onOscProgressIdle(3050);
+      // Working arrives well inside the 200ms debounce window.
+      vi.setSystemTime(3100);
+      monitor.onOscProgressWorking(3100);
+      // Advance past the original 200ms window — no idle should fire.
+      vi.advanceTimersByTime(300);
+
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("OSC idle does not immediately force the monitor to idle", () => {
+      vi.setSystemTime(4000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("osc-idle-no-force", 100, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => [],
+        getCursorLine: () => null,
+        initialState: "busy",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.onOscProgressWorking(4000);
+      onStateChange.mockClear();
+      monitor.onOscProgressIdle(4010);
+      vi.advanceTimersByTime(199);
+
+      // Under the 200ms debounce, no transition fires (and nothing else has).
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).not.toHaveBeenCalled();
+
+      // After the debounce fires, state is still busy — OSC idle is advisory.
+      vi.advanceTimersByTime(2);
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("respects MAX_WORKING_SILENCE_MS — OSC working does not bypass the safety timeout (#4974 regression)", () => {
+      // Bug #4974: a working signal that never decays leaves the agent stuck.
+      // The OSC heartbeat must refresh `lastDataTimestamp` like real output, so
+      // the moment OSC stops, the silence timeout still fires after MAX_WORKING_SILENCE_MS.
+      vi.setSystemTime(5000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("osc-silence", 100, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => ["foo"],
+        getCursorLine: () => "foo",
+        initialState: "busy",
+        skipInitialStateEmit: true,
+        pollingIntervalMs: 50,
+        idleDebounceMs: 8000,
+        // Tight silence cap so the test is short.
+        maxWorkingSilenceMs: 5000,
+      });
+      monitor.startPolling();
+
+      // One OSC working signal at t=5000, then OSC goes silent.
+      monitor.onOscProgressWorking(5000);
+      // Force boot exit so isWorkingSilenceTimeout can fire (it gates on it).
+      monitor.onData("ready");
+      onStateChange.mockClear();
+
+      // Advance past the silence cap; the polling cycle's idle path fires
+      // because lastActivityTimestamp/lastDataTimestamp are stale.
+      vi.advanceTimersByTime(10000);
+
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("dispose() while an OSC idle timer is pending does not throw", () => {
+      vi.setSystemTime(6000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("osc-dispose", 100, onStateChange, {
+        agentId: "claude",
+      });
+
+      monitor.onOscProgressIdle(6000);
+      // Don't advance — leave the timer pending.
+      expect(() => monitor.dispose()).not.toThrow();
+      // Advancing afterwards must not throw either (timer cleared).
+      expect(() => vi.advanceTimersByTime(500)).not.toThrow();
+    });
+
+    it("does not throw after dispose() when more OSC signals arrive", () => {
+      vi.setSystemTime(7000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("osc-post-dispose", 100, onStateChange, {
+        agentId: "claude",
+      });
+
+      monitor.dispose();
+      expect(() => monitor.onOscProgressWorking(7000)).not.toThrow();
+      expect(() => monitor.onOscProgressIdle(7000)).not.toThrow();
+    });
+  });
 });

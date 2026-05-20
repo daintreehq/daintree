@@ -29,6 +29,7 @@ import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import type { PooledPtyDataHandoff, PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
 import { handleOscColorQueries } from "./OscResponder.js";
+import { Osc94Parser } from "./Osc94Parser.js";
 import { SynchronizedFrameDetector } from "./SynchronizedFrameDetector.js";
 
 // Extracted modules
@@ -116,6 +117,17 @@ export interface TerminalProcessDependencies {
 
 export class TerminalProcess {
   private activityMonitor: ActivityMonitor | null = null;
+  // Streaming OSC 9;4 parser (#8701). Created once per TerminalProcess and
+  // fed every PTY chunk upstream of `activityMonitor.onData()`. Callbacks
+  // route to the current `activityMonitor` if one exists — the parser stays
+  // inert before an activity monitor is attached (plain terminals pre-promotion)
+  // and resumes seamlessly after promotion. Because the OSC 9;4 stripping in
+  // `IdleSequenceFilter` still runs downstream, byte-volume detectors remain
+  // unaffected; this is a read-only tap.
+  private readonly osc94Parser: Osc94Parser = new Osc94Parser({
+    onWorking: (now) => this.activityMonitor?.onOscProgressWorking(now),
+    onIdle: (now) => this.activityMonitor?.onOscProgressIdle(now),
+  });
   private processDetector: ProcessDetector | null = null;
   private headlineGenerator = new ActivityHeadlineGenerator();
   private lastDetectedProcessIconId: string | undefined;
@@ -1325,6 +1337,9 @@ export class TerminalProcess {
       this.activityMonitor.dispose();
       this.activityMonitor = null;
     }
+    // Clear any in-flight OSC 9;4 fragment so a sequence split across the
+    // teardown boundary can't trigger a callback against a stale monitor.
+    this.osc94Parser.reset();
   }
 
   setActivityMonitorTier(pollingIntervalMs: number): void {
@@ -1523,6 +1538,13 @@ export class TerminalProcess {
     const beforeContentSnapshot = this.isAgentLive
       ? this.getAgentOutputContentSnapshot()
       : undefined;
+
+    // Tap OSC 9;4 progress sequences upstream of the rest of the pipeline so
+    // the agent-state signal is viewport-independent (#8701). The parser is
+    // a read-only side channel; `IdleSequenceFilter.stripIdleTerminalSequences`
+    // still removes the sequence from the byte-volume / renderer paths
+    // downstream, so other detectors stay clean.
+    this.osc94Parser.feed(data, now);
 
     if (this.activityMonitor) {
       this.activityMonitor.onData(data);
