@@ -145,6 +145,11 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             epoch: string;
             seq: number;
             watcherDegraded: boolean;
+            // Set of mutation IDs the host has already acknowledged this epoch
+            // (#8405). Empty on a fresh host run — the renderer's outbox
+            // entries from a prior epoch will have their targets reconciled
+            // against the snapshot rather than matched against ack ids.
+            lastAcknowledgedMutationIds?: string[];
           }) => {
             if (thisGen !== generation) return;
 
@@ -215,6 +220,19 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             startTransition(() => {
               store.getState().applySnapshot(states, snapshotVersion, associations);
             });
+
+            // Mutation-outbox reconcile + replay (#8405). Order matters: prune
+            // FIRST so an ack the renderer missed (host crashed between
+            // `git worktree remove` and the result ack) doesn't get replayed.
+            // Then replay the survivors only on a wake reconnect — a cold start
+            // can't have outbox entries from this session, and firing the
+            // replay loop on every initial load would be wasted work. Both
+            // calls run outside the startTransition above so they aren't
+            // batched into the non-urgent render priority.
+            store.getState().pruneAcknowledgedMutations(response.lastAcknowledgedMutationIds ?? []);
+            if (isWake) {
+              store.getState().replayOutboxAfterReconnect();
+            }
 
             // Mirror the per-event resolve below: a snapshot delivered after a
             // host crash / port reconnect may carry the freshly created worktree

@@ -99,6 +99,7 @@ async function handleWorktreePortRequest(
           epoch,
           seq,
           watcherDegraded: workspaceService.isWatcherDegraded(),
+          lastAcknowledgedMutationIds: workspaceService.getAcknowledgedMutationIds(),
         };
         break;
       }
@@ -130,7 +131,8 @@ async function handleWorktreePortRequest(
           requestId,
           msg.payload.worktreeId,
           msg.payload.force,
-          msg.payload.deleteBranch
+          msg.payload.deleteBranch,
+          msg.payload.mutationId
         );
         result = { ok: true };
         break;

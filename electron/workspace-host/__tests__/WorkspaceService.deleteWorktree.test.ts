@@ -721,4 +721,138 @@ describe("WorkspaceService.deleteWorktree", () => {
       })
     );
   });
+
+  // Mutation-outbox dedup (#8405). The renderer mints a `mutationId` per
+  // user-intent delete and re-fires it on reconnect if the ack never landed;
+  // the host must short-circuit acked replays to `success` without re-running
+  // `git worktree remove` (which would throw "not a working tree").
+  describe("mutation-id dedup (#8405)", () => {
+    it("records the mutationId in the ack map after a successful delete", async () => {
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+        if (n(p as string) === "/test/worktree") return undefined;
+        throw new Error("ENOENT");
+      });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-ack-1", "/test/worktree", false, false, "mut-1");
+
+      expect(service.getAcknowledgedMutationIds()).toEqual(["mut-1"]);
+    });
+
+    it("does NOT record the mutationId when the delete fails", async () => {
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+        if (n(p as string) === "/test/worktree") return undefined;
+        throw new Error("ENOENT");
+      });
+      mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+        if (args[0] === "worktree" && args[1] === "remove") {
+          throw new Error("simulated worktree remove failure");
+        }
+      });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-fail-1", "/test/worktree", false, false, "mut-fail");
+
+      expect(service.getAcknowledgedMutationIds()).toEqual([]);
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "delete-worktree-result", success: false })
+      );
+    });
+
+    it("a replay with the same mutationId acks success without re-running git", async () => {
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+        if (n(p as string) === "/test/worktree") return undefined;
+        throw new Error("ENOENT");
+      });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-original", "/test/worktree", false, false, "mut-replay");
+
+      // Monitor is gone; ack map remembers `mut-replay`.
+      expect(service["monitors"].has("/test/worktree")).toBe(false);
+      mockSimpleGit.raw.mockClear();
+      mockSendEvent.mockClear();
+
+      await service.deleteWorktree("req-replay", "/test/worktree", false, false, "mut-replay");
+
+      // Did NOT run any git commands — the early-out fired before the monitor
+      // lookup (which would have thrown "not found").
+      expect(mockSimpleGit.raw).not.toHaveBeenCalled();
+      expect(mockSendEvent).toHaveBeenCalledWith({
+        type: "delete-worktree-result",
+        requestId: "req-replay",
+        success: true,
+      });
+    });
+
+    it("a request with a NEW mutationId for an already-removed worktree still throws not-found", async () => {
+      // Sanity check: only the matching mutationId short-circuits — a fresh
+      // mutationId on a phantom id is a genuine error.
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+        if (n(p as string) === "/test/worktree") return undefined;
+        throw new Error("ENOENT");
+      });
+      createAndRegisterMonitor();
+      await service.deleteWorktree("req-first", "/test/worktree", false, false, "mut-a");
+
+      mockSendEvent.mockClear();
+      await service.deleteWorktree("req-new", "/test/worktree", false, false, "mut-b");
+
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "delete-worktree-result",
+          requestId: "req-new",
+          success: false,
+          error: expect.stringContaining("not found"),
+        })
+      );
+    });
+
+    it("getAllStates includes the ack list in the all-states event", async () => {
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+        if (n(p as string) === "/test/worktree") return undefined;
+        throw new Error("ENOENT");
+      });
+      createAndRegisterMonitor();
+      await service.deleteWorktree("req-record", "/test/worktree", false, false, "mut-list");
+
+      mockSendEvent.mockClear();
+      service.getAllStates("states-1");
+
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "all-states",
+          requestId: "states-1",
+          lastAcknowledgedMutationIds: ["mut-list"],
+        })
+      );
+    });
+
+    it("deleteWorktree without a mutationId still works (backward compatible)", async () => {
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+        if (n(p as string) === "/test/worktree") return undefined;
+        throw new Error("ENOENT");
+      });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-no-mut", "/test/worktree");
+
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "delete-worktree-result",
+          requestId: "req-no-mut",
+          success: true,
+        })
+      );
+      // Nothing recorded in the ack map without an id — legacy callers don't
+      // pollute the snapshot list.
+      expect(service.getAcknowledgedMutationIds()).toEqual([]);
+    });
+  });
 });
