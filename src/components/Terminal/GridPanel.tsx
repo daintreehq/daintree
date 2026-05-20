@@ -122,7 +122,11 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
         !terminalChromeDescriptorsEqual(pt.chrome, nt.chrome) ||
         pt.kind !== nt.kind ||
         pt.agentState !== nt.agentState ||
-        pt.isActive !== nt.isActive
+        pt.isActive !== nt.isActive ||
+        pt.presetColor !== nt.presetColor ||
+        pt.isUsingFallback !== nt.isUsingFallback ||
+        pt.fallbackTooltip !== nt.fallbackTooltip ||
+        pt.hasDangerousFlags !== nt.hasDangerousFlags
       ) {
         return false;
       }

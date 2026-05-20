@@ -105,7 +105,9 @@ export function gridTabGroupPropsAreEqual(
           a.extensionState !== b.extensionState ||
           a.pluginId !== b.pluginId ||
           a.browserHistory !== b.browserHistory ||
-          a.browserZoom !== b.browserZoom
+          a.browserZoom !== b.browserZoom ||
+          a.isUsingFallback !== b.isUsingFallback ||
+          a.originalPresetId !== b.originalPresetId
         ) {
           return false;
         }

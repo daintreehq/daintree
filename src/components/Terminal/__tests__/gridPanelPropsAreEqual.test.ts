@@ -294,6 +294,52 @@ describe("gridPanelPropsAreEqual", () => {
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
   });
 
+  it("returns false when tab presetColor changes", () => {
+    const prev = baseProps({ tabs: [{ ...baseTab, presetColor: "#ff00ff" }] });
+    const next = baseProps({ tabs: [{ ...baseTab, presetColor: "#00ffff" }] });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when tab isUsingFallback changes", () => {
+    const prev = baseProps({ tabs: [{ ...baseTab, isUsingFallback: false }] });
+    const next = baseProps({ tabs: [{ ...baseTab, isUsingFallback: true }] });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when tab fallbackTooltip changes", () => {
+    const prev = baseProps({ tabs: [{ ...baseTab, fallbackTooltip: undefined }] });
+    const next = baseProps({
+      tabs: [{ ...baseTab, fallbackTooltip: 'Using fallback "x" — "y" unavailable' }],
+    });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when tab hasDangerousFlags changes", () => {
+    const prev = baseProps({ tabs: [{ ...baseTab, hasDangerousFlags: false }] });
+    const next = baseProps({ tabs: [{ ...baseTab, hasDangerousFlags: true }] });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when tab chrome.hasExited changes (post-exit spinner suppression)", () => {
+    // Race: exitCode/runtimeStatus fires before agentState:"exited" arrives.
+    // Without hasExited in the descriptor equality, the stale working spinner
+    // survives the re-render gate.
+    const liveChrome = deriveTerminalChrome({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentState: "working",
+    });
+    const exitedChrome = deriveTerminalChrome({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentState: "working",
+      exitCode: 0,
+    });
+    const prev = baseProps({ tabs: [{ ...baseTab, chrome: liveChrome }] });
+    const next = baseProps({ tabs: [{ ...baseTab, chrome: exitedChrome }] });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
   describe("drift coverage", () => {
     // Wraps a terminal in a Proxy that records every property read, then drives
     // buildPanelProps so the Proxy captures the full terminal.* surface

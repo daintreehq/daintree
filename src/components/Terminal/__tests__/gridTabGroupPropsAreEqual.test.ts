@@ -246,6 +246,35 @@ describe("gridTabGroupPropsAreEqual", () => {
     expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
   });
 
+  it("returns false when panel isUsingFallback changes", () => {
+    const prev = baseProps({
+      panels: [{ ...basePanel, isUsingFallback: false } as TerminalInstance, basePanel2],
+    });
+    const next = baseProps({
+      panels: [
+        { ...basePanel, isUsingFallback: true, originalPresetId: "preset-a" } as TerminalInstance,
+        basePanel2,
+      ],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when panel originalPresetId changes", () => {
+    const prev = baseProps({
+      panels: [
+        { ...basePanel, isUsingFallback: true, originalPresetId: "preset-a" } as TerminalInstance,
+        basePanel2,
+      ],
+    });
+    const next = baseProps({
+      panels: [
+        { ...basePanel, isUsingFallback: true, originalPresetId: "preset-b" } as TerminalInstance,
+        basePanel2,
+      ],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
   describe("drift coverage", () => {
     // Wraps a panel in a Proxy that records every property read, then drives
     // buildPanelProps so the Proxy captures the full terminal.* surface
