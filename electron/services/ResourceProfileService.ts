@@ -29,25 +29,38 @@ const WARMUP_TICKS = 2;
 // Active event-loop-lag mitigation. The diagnostics handler reads a separate
 // lifetime histogram for IPC; this service owns its own histogram and resets
 // it after each tumbling window so percentile() reflects only the recent slice.
-// p99 is biased low by monitorEventLoopDelay (a long block records as a single
-// large sample, not many) — thresholds are conservative to compensate.
+// p99 is biased low by monitorEventLoopDelay (a single long block records as
+// ONE large sample, not many) — thresholds are conservative to compensate.
 // AND-gating with eventLoopUtilization rejects three classes of false positive:
-// (1) isolated GC stalls — high p99 from a single long pause, but ELU averages
-// down across the window; (2) bursty IPC reply storms — p99 climbs from
-// queueing but the loop reaches idle between bursts; (3) synchronous native UI
-// work (file dialogs, window-drag, plugin loads that block libuv) — ELU pegs
-// near 1.0 while V8 sits idle waiting on the OS run loop, so p99 stays low.
-// A genuine sustained-saturation event has both high tail latency AND high
-// loop occupancy. ELU alone doesn't catch periodic long sync work; p99 alone
-// trips on the cases above.
+// (1) isolated GC stalls — GC runs on the JS thread, so GC time counts as
+// ACTIVE in ELU, not idle. A single long GC pause produces ONE histogram
+// sample which cannot move p99 meaningfully across a 5-second window; the
+// p99 threshold rejects these before ELU is even consulted.
+// (2) bursty IPC reply storms — p99 climbs from queueing but the loop
+// reaches idle between bursts so ELU stays moderate; (3) synchronous native
+// UI work (file dialogs, window-drag, plugin loads that block libuv) — ELU
+// pegs near 1.0 while V8 sits idle waiting on the OS run loop, so p99 stays
+// low. A genuine sustained-saturation event has both high tail latency AND
+// high loop occupancy. ELU alone doesn't catch periodic long sync work; p99
+// alone trips on the cases above.
+// Exit uses a sliding K-of-N window so occasional jitter (e.g. efficiency
+// mode's own batched work) doesn't permanently restart recovery. A hard time
+// cap bounds the latch so a pathological feedback loop can't pin the app to
+// efficiency forever — after the cap the latch force-clears and the normal
+// entry path will re-arm if saturation is genuinely ongoing. The cap is a
+// stuck-latch escape, not a saturation override: under truly sustained lag
+// (p99 + ELU both still elevated) the moderate entry path will re-latch
+// within 10s, which is correct.
 const LAG_SAMPLE_INTERVAL_MS = 5_000;
 const LAG_HISTOGRAM_RESOLUTION_MS = 10;
 const LAG_ENTRY_P99_MS = 250;
 const LAG_ENTRY_ELU = 0.7;
 const LAG_ESCALATE_P99_MS = 500;
 const LAG_EXIT_P99_MS = 150;
-const LAG_ENTER_TICKS_REQUIRED = 2; // 10s sustained
-const LAG_EXIT_TICKS_REQUIRED = 9; // 45s clean
+const LAG_ENTER_TICKS_REQUIRED = 2; // 10s sustained for moderate entry
+const LAG_EXIT_WINDOW_SAMPLES = 9; // 45s sliding window
+const LAG_EXIT_CLEAN_REQUIRED = 7; // 7-of-9 clean tolerates 2 noisy samples
+const LAG_PRESSURE_MAX_MS = 120_000; // 2-minute hard cap on stuck latch
 
 // Memory-pressure thresholds scale with device RAM so machines with very
 // different physical memory behave sensibly. On an 8 GB machine these
@@ -86,7 +99,8 @@ export class ResourceProfileService {
   private lagPressureActive = false;
   private lagEscalatedActive = false;
   private lagEnterTicks = 0;
-  private lagExitTicks = 0;
+  private lagExitWindow: boolean[] = [];
+  private lagPressureStartedAt: number | null = null;
 
   constructor(private deps: ResourceProfileDeps) {
     const totalRamMb = os.totalmem() / 1024 / 1024;
@@ -226,6 +240,14 @@ export class ResourceProfileService {
     this.lagInterval.unref();
   }
 
+  private clearLagPressure(): void {
+    this.lagPressureActive = false;
+    this.lagEscalatedActive = false;
+    this.lagEnterTicks = 0;
+    this.lagExitWindow = [];
+    this.lagPressureStartedAt = null;
+  }
+
   private sampleLag(): void {
     if (this.disposed || !this.lagHistogram) return;
 
@@ -259,25 +281,49 @@ export class ResourceProfileService {
       utilization = 0;
     }
 
-    // Exit path runs first: a window that drops below 150ms while degraded
-    // counts toward recovery even if it would also satisfy the entry condition
-    // on a separate cycle.
+    // Exit path runs first while the latch is held. A sliding K-of-N window
+    // tolerates jitter (e.g. efficiency mode's own batched work spiking p99
+    // a few times in a 9-sample window), and a hard time cap force-clears the
+    // latch if it has been held too long — preventing pathological feedback
+    // loops from pinning the app to efficiency indefinitely.
     if (this.lagPressureActive) {
-      if (p99Ms < LAG_EXIT_P99_MS) {
-        this.lagExitTicks += 1;
-        if (this.lagExitTicks >= LAG_EXIT_TICKS_REQUIRED) {
-          this.lagPressureActive = false;
-          this.lagEscalatedActive = false;
-          this.lagEnterTicks = 0;
-          this.lagExitTicks = 0;
+      const now = Date.now();
+      // Defensive: if lagPressureStartedAt is null while the latch is held the
+      // cap can never measure elapsed time, so honor it as "definitely past
+      // the cap" and force-clear. The two entry paths always set both fields
+      // together, so this branch is unreachable in production — but the cap is
+      // the last-resort escape and shouldn't be silently disarmed by an
+      // unexpected state.
+      if (
+        this.lagPressureStartedAt === null ||
+        now - this.lagPressureStartedAt >= LAG_PRESSURE_MAX_MS
+      ) {
+        const durationMs = this.lagPressureStartedAt === null ? 0 : now - this.lagPressureStartedAt;
+        logInfo("event-loop-lag-force-cleared", {
+          p99Ms: Math.round(p99Ms),
+          maxMs: Math.round(maxMs),
+          durationMs,
+        });
+        this.clearLagPressure();
+        return;
+      }
+
+      const isClean = p99Ms < LAG_EXIT_P99_MS;
+      this.lagExitWindow.push(isClean);
+      if (this.lagExitWindow.length > LAG_EXIT_WINDOW_SAMPLES) {
+        this.lagExitWindow.shift();
+      }
+      if (this.lagExitWindow.length >= LAG_EXIT_WINDOW_SAMPLES) {
+        const cleanCount = this.lagExitWindow.reduce((sum, clean) => (clean ? sum + 1 : sum), 0);
+        if (cleanCount >= LAG_EXIT_CLEAN_REQUIRED) {
           logInfo("event-loop-lag-cleared", {
             p99Ms: Math.round(p99Ms),
             maxMs: Math.round(maxMs),
           });
+          this.clearLagPressure();
+          return;
         }
-        return;
       }
-      this.lagExitTicks = 0;
 
       if (p99Ms > LAG_ESCALATE_P99_MS && !this.lagEscalatedActive) {
         this.lagEscalatedActive = true;
@@ -290,11 +336,42 @@ export class ResourceProfileService {
       return;
     }
 
+    // Severe-spike fast path: a single sample above the escalation threshold
+    // with sustained high ELU enters the latch immediately, halving the
+    // worst-case reaction time for genuine saturation bursts. ELU is still
+    // AND-gated to preserve the GC/native-UI false-positive filter.
+    if (p99Ms > LAG_ESCALATE_P99_MS && utilization > LAG_ENTRY_ELU) {
+      this.lagPressureActive = true;
+      this.lagEscalatedActive = true;
+      this.lagEnterTicks = 0;
+      this.lagExitWindow = [];
+      this.lagPressureStartedAt = Date.now();
+      // Emit both events on the same tick: log consumers expect the standard
+      // entry signal first, then the escalation signal. The dual-emit keeps
+      // the event stream consistent for code that subscribes only to one.
+      logInfo("event-loop-lag-detected", {
+        p99Ms: Math.round(p99Ms),
+        maxMs: Math.round(maxMs),
+        utilization: Math.round(utilization * 100) / 100,
+      });
+      logInfo("event-loop-lag-escalated", {
+        p99Ms: Math.round(p99Ms),
+        maxMs: Math.round(maxMs),
+        utilization: Math.round(utilization * 100) / 100,
+      });
+      if (this.currentProfile !== "efficiency") {
+        this.applyProfile("efficiency");
+      }
+      return;
+    }
+
     if (p99Ms > LAG_ENTRY_P99_MS && utilization > LAG_ENTRY_ELU) {
       this.lagEnterTicks += 1;
       if (this.lagEnterTicks >= LAG_ENTER_TICKS_REQUIRED) {
         this.lagPressureActive = true;
         this.lagEnterTicks = 0;
+        this.lagExitWindow = [];
+        this.lagPressureStartedAt = Date.now();
         logInfo("event-loop-lag-detected", {
           p99Ms: Math.round(p99Ms),
           maxMs: Math.round(maxMs),
@@ -350,10 +427,7 @@ export class ResourceProfileService {
       this.lagHistogram = null;
     }
     this.lagPreviousElu = null;
-    this.lagPressureActive = false;
-    this.lagEscalatedActive = false;
-    this.lagEnterTicks = 0;
-    this.lagExitTicks = 0;
+    this.clearLagPressure();
     this.thermalState = "unknown";
     this.isOnBattery = false;
     this.speedLimit = 100;

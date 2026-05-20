@@ -469,7 +469,7 @@ describe("ResourceProfileService adversarial", () => {
       service.stop();
     });
 
-    it("a single non-clean tick resets the recovery counter", () => {
+    it("exits via sliding window when 7 of 9 samples are clean", () => {
       const { deps } = createDeps();
       const service = new ResourceProfileService(deps);
       service.start();
@@ -480,27 +480,173 @@ describe("ResourceProfileService adversarial", () => {
       vi.advanceTimersByTime(5_000);
       expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(true);
 
-      // Eight clean ticks (one short of the 9-tick threshold).
-      setLag(50, 0.1);
-      for (let i = 0; i < 8; i++) {
+      // Push samples through the 9-sample window: 2 noisy + 7 clean,
+      // ending with the 7th clean sample making the window 7-of-9 clean.
+      const samples: Array<{ p99: number; util: number }> = [
+        { p99: 200, util: 0.5 }, // noisy (above exit threshold)
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 200, util: 0.5 }, // noisy
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean — window now contains 7 clean / 2 noisy
+      ];
+      for (const s of samples) {
+        setLag(s.p99, s.util);
         vi.advanceTimersByTime(5_000);
       }
-      expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(true);
 
-      // One non-clean tick (above exit threshold) resets the counter.
-      setLag(200, 0.5);
-      vi.advanceTimersByTime(5_000);
-
-      // Now eight more clean ticks should still NOT recover (counter restarted).
-      setLag(50, 0.1);
-      for (let i = 0; i < 8; i++) {
-        vi.advanceTimersByTime(5_000);
-      }
-      expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(true);
-
-      // Ninth clean tick clears it.
-      vi.advanceTimersByTime(5_000);
       expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(false);
+
+      service.stop();
+    });
+
+    it("does not exit when only 6 of 9 samples are clean", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // Enter degraded.
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(true);
+
+      // 3 noisy + 6 clean = below the 7-of-9 threshold.
+      const samples: Array<{ p99: number; util: number }> = [
+        { p99: 200, util: 0.5 }, // noisy
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 200, util: 0.5 }, // noisy
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 200, util: 0.5 }, // noisy
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean — window: 6 clean / 3 noisy
+      ];
+      for (const s of samples) {
+        setLag(s.p99, s.util);
+        vi.advanceTimersByTime(5_000);
+      }
+
+      expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(true);
+
+      service.stop();
+    });
+
+    it("does not force-clear before the hard cap elapses", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // Enter degraded.
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+
+      // Sustain moderate lag below the cap. After 115_000ms post-entry the
+      // cap has NOT elapsed; the latch must still be active.
+      setLag(400, 0.9);
+      vi.advanceTimersByTime(115_000);
+
+      const internals = service as unknown as { lagPressureActive: boolean };
+      expect(internals.lagPressureActive).toBe(true);
+      expect(logInfo).not.toHaveBeenCalledWith("event-loop-lag-force-cleared", expect.any(Object));
+
+      service.stop();
+    });
+
+    it("force-clears the latch after the hard cap even with sustained lag", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // Enter degraded.
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(true);
+
+      // Keep lag in the moderate band (above exit, below escalation) so the
+      // sliding window can never naturally clear it. The cap fires on the
+      // first lag-sample tick where (now - lagPressureStartedAt) >= 120_000.
+      // 120s lands exactly on the 5s-aligned cap-fire tick; one extra 5s tick
+      // confirms the post-cap state has no immediate re-entry yet (the
+      // moderate entry path needs 2 consecutive bad samples).
+      setLag(400, 0.9);
+      vi.advanceTimersByTime(125_000);
+
+      const internals = service as unknown as {
+        lagPressureActive: boolean;
+        lagEscalatedActive: boolean;
+        lagPressureStartedAt: number | null;
+        lagEnterTicks: number;
+      };
+      expect(internals.lagPressureActive).toBe(false);
+      expect(internals.lagEscalatedActive).toBe(false);
+      expect(internals.lagPressureStartedAt).toBeNull();
+      // One bad tick after cap-fire increments lagEnterTicks; not yet 2.
+      expect(internals.lagEnterTicks).toBe(1);
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "event-loop-lag-force-cleared",
+        expect.objectContaining({
+          p99Ms: 400,
+          maxMs: 400,
+          durationMs: expect.any(Number),
+        })
+      );
+
+      service.stop();
+    });
+
+    it("enters the latch on a single severe spike above 500ms", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // A single 5s window with p99 > LAG_ESCALATE_P99_MS (500) and high ELU
+      // bypasses the 2-tick moderate entry path.
+      setLag(600, 0.9);
+      vi.advanceTimersByTime(5_000);
+
+      const internals = service as unknown as {
+        lagPressureActive: boolean;
+        lagEscalatedActive: boolean;
+      };
+      expect(internals.lagPressureActive).toBe(true);
+      expect(internals.lagEscalatedActive).toBe(true);
+      expect(service.getProfile()).toBe("efficiency");
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "event-loop-lag-detected",
+        expect.objectContaining({ p99Ms: 600 })
+      );
+      expect(logInfo).toHaveBeenCalledWith(
+        "event-loop-lag-escalated",
+        expect.objectContaining({ p99Ms: 600 })
+      );
+
+      service.stop();
+    });
+
+    it("rejects a single severe spike when ELU is low (GC stall pattern)", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // p99 above escalation threshold but ELU low — suspected GC pause,
+      // not genuine saturation. Must not trip the immediate-entry path.
+      setLag(700, 0.3);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+
+      const internals = service as unknown as { lagPressureActive: boolean };
+      expect(internals.lagPressureActive).toBe(false);
+      expect(service.getProfile()).toBe("balanced");
 
       service.stop();
     });
