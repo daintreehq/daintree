@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const loadOverridesMock = vi.hoisted(() => vi.fn());
 const initializeMock = vi.hoisted(() => vi.fn());
@@ -69,5 +70,68 @@ describe("ensureHydrationBootstrap", () => {
 
     expect(loadOverridesMock).toHaveBeenCalledTimes(2);
     expect(initializeMock).toHaveBeenCalledTimes(2);
+  });
+
+  describe("perf instrumentation", () => {
+    beforeEach(() => {
+      window.__DAINTREE_PERF_MARKS__ = [];
+    });
+
+    afterEach(() => {
+      delete window.__DAINTREE_PERF_MARKS__;
+    });
+
+    function bootstrapMarks(): string[] {
+      return (window.__DAINTREE_PERF_MARKS__ ?? [])
+        .map((entry) => entry.mark)
+        .filter(
+          (mark) =>
+            typeof mark === "string" &&
+            (mark.startsWith("hydrate_bootstrap_load_overrides") ||
+              mark.startsWith("hydrate_bootstrap_init_user_agents"))
+        );
+    }
+
+    it("emits start/end spans for both steps on cold start", async () => {
+      await ensureHydrationBootstrap();
+
+      const marks = bootstrapMarks();
+      // Both steps run concurrently via Promise.all, so start marks fire before
+      // either end mark. Assert membership + per-step ordering instead of a
+      // single fixed sequence.
+      expect(marks).toContain("hydrate_bootstrap_load_overrides:start");
+      expect(marks).toContain("hydrate_bootstrap_load_overrides:end");
+      expect(marks).toContain("hydrate_bootstrap_init_user_agents:start");
+      expect(marks).toContain("hydrate_bootstrap_init_user_agents:end");
+      expect(marks.indexOf("hydrate_bootstrap_load_overrides:start")).toBeLessThan(
+        marks.indexOf("hydrate_bootstrap_load_overrides:end")
+      );
+      expect(marks.indexOf("hydrate_bootstrap_init_user_agents:start")).toBeLessThan(
+        marks.indexOf("hydrate_bootstrap_init_user_agents:end")
+      );
+    });
+
+    it("does not re-emit step marks on a cached call", async () => {
+      await ensureHydrationBootstrap();
+      window.__DAINTREE_PERF_MARKS__ = [];
+
+      await ensureHydrationBootstrap();
+
+      expect(bootstrapMarks()).toEqual([]);
+    });
+
+    it("emits start + end for both spans when loadOverrides fails (steps run in parallel)", async () => {
+      loadOverridesMock.mockRejectedValueOnce(new Error("boom"));
+
+      await expect(ensureHydrationBootstrap()).rejects.toThrow("boom");
+
+      // init_user_agents() runs concurrently with loadOverrides() via Promise.all,
+      // so its span still fires even when loadOverrides rejects.
+      const marks = bootstrapMarks();
+      expect(marks).toContain("hydrate_bootstrap_load_overrides:start");
+      expect(marks).toContain("hydrate_bootstrap_load_overrides:end");
+      expect(marks).toContain("hydrate_bootstrap_init_user_agents:start");
+      expect(marks).toContain("hydrate_bootstrap_init_user_agents:end");
+    });
   });
 });

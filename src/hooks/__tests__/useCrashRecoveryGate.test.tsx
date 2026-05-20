@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { renderHook, act } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { useCrashRecoveryGate } from "../app/useCrashRecoveryGate";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import type { PendingCrash, CrashRecoveryConfig, CrashRecoveryAction } from "@shared/types/ipc";
@@ -411,5 +411,195 @@ describe("useCrashRecoveryGate", () => {
     expect(resolve).toHaveBeenCalled();
     const storeState = useRestoreConfirmationStore.getState();
     expect(storeState.visible).toBe(false);
+  });
+
+  describe("perf instrumentation", () => {
+    beforeEach(() => {
+      window.__DAINTREE_PERF_MARKS__ = [];
+    });
+
+    afterEach(() => {
+      delete window.__DAINTREE_PERF_MARKS__;
+    });
+
+    function gateMarks(): string[] {
+      return (window.__DAINTREE_PERF_MARKS__ ?? [])
+        .map((entry) => entry.mark)
+        .filter((mark) => typeof mark === "string" && mark.startsWith("crash_recovery_gate"));
+    }
+
+    it("emits crash_recovery_gate start/end on no-crash path", async () => {
+      renderHook(() =>
+        useCrashRecoveryGate(
+          makeBoot({ settled: true, result: makeBootResult({ crashPending: null }) })
+        )
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(gateMarks()).toEqual(["crash_recovery_gate:start", "crash_recovery_gate:end"]);
+    });
+
+    it("emits crash_recovery_gate start/end on auto-restore path", async () => {
+      const resolve = vi.fn(async () => {});
+      installElectronStub({ resolve });
+
+      renderHook(() =>
+        useCrashRecoveryGate(
+          makeBoot({
+            settled: true,
+            result: makeBootResult({
+              crashPending: { ...mockCrash, crashCount: 1 },
+              crashConfig: { autoRestoreOnCrash: true },
+            }),
+          })
+        )
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(gateMarks()).toEqual(["crash_recovery_gate:start", "crash_recovery_gate:end"]);
+    });
+
+    it("emits crash_recovery_gate start/end on manual dialog path", async () => {
+      renderHook(() =>
+        useCrashRecoveryGate(
+          makeBoot({ settled: true, result: makeBootResult({ crashPending: mockCrash }) })
+        )
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(gateMarks()).toEqual(["crash_recovery_gate:start", "crash_recovery_gate:end"]);
+    });
+
+    it("emits crash_recovery_gate start/end when auto-restore resolve rejects", async () => {
+      const resolve = vi.fn(async () => {
+        throw new Error("resolve failed");
+      });
+      installElectronStub({ resolve });
+
+      renderHook(() =>
+        useCrashRecoveryGate(
+          makeBoot({
+            settled: true,
+            result: makeBootResult({
+              crashPending: { ...mockCrash, crashCount: 1 },
+              crashConfig: { autoRestoreOnCrash: true },
+            }),
+          })
+        )
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(gateMarks()).toEqual(["crash_recovery_gate:start", "crash_recovery_gate:end"]);
+    });
+
+    it("emits crash_recovery_gate start/end when boot settles with an error result", async () => {
+      renderHook(() =>
+        useCrashRecoveryGate(makeBoot({ settled: true, error: new Error("Boot IPC failed") }))
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(gateMarks()).toEqual(["crash_recovery_gate:start", "crash_recovery_gate:end"]);
+    });
+
+    it("does not emit any crash_recovery_gate marks when electron is unavailable", async () => {
+      Object.defineProperty(window, "electron", {
+        configurable: true,
+        writable: true,
+        value: undefined,
+      });
+
+      renderHook(() =>
+        useCrashRecoveryGate(
+          makeBoot({ settled: true, result: makeBootResult({ crashPending: null }) })
+        )
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(gateMarks()).toEqual([]);
+    });
+
+    it("records a finite, non-negative durationMs on the end mark", async () => {
+      renderHook(() =>
+        useCrashRecoveryGate(
+          makeBoot({ settled: true, result: makeBootResult({ crashPending: null }) })
+        )
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const endMark = (window.__DAINTREE_PERF_MARKS__ ?? []).find(
+        (entry) => entry.mark === "crash_recovery_gate:end"
+      );
+      expect(endMark).toBeDefined();
+      const durationMs = (endMark?.meta as { durationMs?: number } | undefined)?.durationMs;
+      expect(typeof durationMs).toBe("number");
+      expect(Number.isFinite(durationMs)).toBe(true);
+      expect(durationMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it("emits crash_recovery_gate start/end when window.electron.crashRecovery.resolve throws synchronously", async () => {
+      // Simulate a malformed bridge whose resolve() throws synchronously on the
+      // auto-restore path — the span must still close and the gate must clear.
+      Object.defineProperty(window, "electron", {
+        configurable: true,
+        writable: true,
+        value: {
+          crashRecovery: {
+            resolve: vi.fn(() => {
+              throw new Error("bridge malformed");
+            }),
+            setConfig: vi.fn(async () => mockConfig),
+          },
+        },
+      });
+
+      renderHook(() =>
+        useCrashRecoveryGate(
+          makeBoot({
+            settled: true,
+            result: makeBootResult({
+              crashPending: { ...mockCrash, crashCount: 1 },
+              crashConfig: { autoRestoreOnCrash: true },
+            }),
+          })
+        )
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(gateMarks()).toEqual(["crash_recovery_gate:start", "crash_recovery_gate:end"]);
+    });
   });
 });
