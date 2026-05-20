@@ -17,6 +17,7 @@ import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
+import { logWarn } from "@/utils/logger";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
@@ -632,7 +633,12 @@ export function HelpPanel({
                     onSend={({ text }) => {
                       if (terminal?.isInputLocked === true) return;
                       terminalInstanceService.notifyUserInput(terminalId);
-                      void terminalClient.submit(terminalId, text);
+                      // submit can now reject for dead PTYs (#8706); swallow
+                      // to log so the unhandled rejection doesn't leak — the
+                      // help panel is a one-shot send with no recovery UI.
+                      terminalClient.submit(terminalId, text).catch((err) => {
+                        logWarn("[HelpPanel] submit failed", { terminalId, error: err });
+                      });
                     }}
                     onSendKey={(key) => {
                       if (terminal?.isInputLocked === true) return;

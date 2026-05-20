@@ -8,21 +8,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";
 import type { BroadcastWriteResultPayload } from "@shared/types";
-
-/**
- * Errno codes that mean the target PTY is permanently gone — the renderer
- * should auto-disarm so the user isn't typing into a dead pane. Other
- * failures still surface the failure chip but leave the arming alone.
- */
-const PERMANENT_FAILURE_CODES: ReadonlySet<string> = new Set([
-  "EPIPE",
-  "EIO",
-  "EBADF",
-  "ECONNRESET",
-  "ENOTCONN",
-  "ENXIO",
-  "EINVAL",
-]);
+import { PERMANENT_FAILURE_CODES } from "./fleetBroadcast";
 
 function resolveLiveFleetTargetIds(): string[] {
   const { armOrder, armedIds } = useFleetArmingStore.getState();

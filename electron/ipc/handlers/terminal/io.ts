@@ -94,8 +94,47 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       if (typeof id !== "string" || typeof text !== "string") {
         throw new Error("Invalid terminal submit parameters");
       }
+      // PtyClient.submit is fire-and-forget — the pty-host silently no-ops
+      // a write to a terminal that's gone or has already exited (see
+      // `PtyManager.submit` / `TerminalProcess.submit`). That left structured
+      // fleet broadcast (`fleetExecution.executeFleetBroadcast`) seeing all
+      // submits as fulfilled and never disarming dead PTYs (#8706). Probe
+      // liveness here so the renderer gets an actual rejection it can
+      // classify and act on. Errno tokens (`EBADF`, `EPIPE`) lead the
+      // message so the renderer can match them via
+      // `classifyFleetRejectionReason` — Electron's structured-clone error
+      // serialization strips `.code` from `NodeJS.ErrnoException`, so the
+      // code MUST live in the message text to survive the IPC boundary.
+      // `getTerminalAsync` returns null both when the terminal genuinely
+      // doesn't exist (the case we want to surface to fleet broadcast) and
+      // when the broker rejects from a host crash / timeout (see
+      // `PtyClient.getTerminalAsync`'s `.catch(() => null)`). During a host
+      // restart that means every concurrent fleet submit briefly classifies
+      // as permanent and disarms the whole fleet — annoying but recoverable
+      // by re-arming. Splitting the two cases would need a new PtyClient
+      // method that propagates broker errors; out of scope for #8706. The
+      // pre-fix behavior had the opposite failure mode (kept firing into
+      // dead pipes), so this trade is a net win for the common case.
+      const info = await ptyClient.getTerminalAsync(id);
+      if (!info) {
+        throw new AppError({
+          code: "NOT_FOUND",
+          message: `EBADF: terminal ${id} not found`,
+          context: { terminalId: id },
+        });
+      }
+      if (info.hasPty === false) {
+        throw new AppError({
+          code: "NOT_FOUND",
+          message: `EPIPE: terminal ${id} has no live PTY (exited)`,
+          context: { terminalId: id },
+        });
+      }
       ptyClient.submit(id, text);
     } catch (error) {
+      // Preserve AppError shape so the renderer sees the embedded errno
+      // token in the message — wrapping would lose the prefix.
+      if (error instanceof AppError) throw error;
       const errorMessage = formatErrorMessage(error, "Failed to submit to terminal");
       throw new Error(`Failed to submit to terminal: ${errorMessage}`);
     }
