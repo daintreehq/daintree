@@ -219,6 +219,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   watchdog: {
     restart: vi.fn().mockResolvedValue(undefined),
     onDisabled: vi.fn(() => vi.fn()),
+    onActive: vi.fn(() => vi.fn()),
   },
 };
 

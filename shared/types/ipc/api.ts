@@ -312,6 +312,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         timestamp: number;
       }) => void
     ): () => void;
+    onActive(callback: () => void): () => void;
   };
   // slashCommands is generated — see GeneratedElectronAPI.
   artifact: {

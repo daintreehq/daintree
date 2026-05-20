@@ -12,4 +12,8 @@ export const watchdogClient = {
   ): (() => void) => {
     return window.electron.watchdog.onDisabled(callback);
   },
+
+  onActive: (callback: () => void): (() => void) => {
+    return window.electron.watchdog.onActive(callback);
+  },
 } as const;

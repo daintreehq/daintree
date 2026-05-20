@@ -950,6 +950,9 @@ const api: ElectronAPI = {
         timestamp: number;
       }) => void
     ): (() => void) => _eventBusOn("watchdog:disabled", callback),
+
+    onActive: (callback: () => void): (() => void) =>
+      _eventBusOn("watchdog:active", () => callback()),
   },
 
   // Slash Commands API

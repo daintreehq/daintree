@@ -1666,6 +1666,11 @@ export interface IpcEventMap {
     lastExitCode: number | null;
     timestamp: number;
   };
+  // Cleared global state after a successful manual restart — every window
+  // dismisses its WatchdogDisabledBanner. Broadcast (not window-scoped) so
+  // dispatching the action from one window also clears stale banners in
+  // sibling windows of a multi-window session.
+  "watchdog:active": void;
 
   // Agent events
   "agent:state-changed": AgentStateChangePayload;
@@ -2079,6 +2084,7 @@ export type IpcEventBusMap = Pick<
   | "terminal:status"
   // Watchdog deadlock detector — emitted once on cap-hit; global broadcast.
   | "watchdog:disabled"
+  | "watchdog:active"
 >;
 
 /**

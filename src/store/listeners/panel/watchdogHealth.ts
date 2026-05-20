@@ -24,5 +24,16 @@ export function setupWatchdogHealthListeners(): DisposableStore {
     )
   );
 
+  // Clear the banner across every window when ANY window successfully
+  // dispatches `watchdog.restart`. Without this, sibling windows would keep
+  // showing a stale banner after the watchdog was already restarted.
+  d.add(
+    toDisposable(
+      watchdogClient.onActive(() => {
+        usePanelStore.getState().clearWatchdogDisabled();
+      })
+    )
+  );
+
   return d;
 }
