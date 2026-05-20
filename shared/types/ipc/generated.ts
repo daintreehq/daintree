@@ -64,6 +64,10 @@ export interface GeneratedIpcInvokeMap {
     args: [context?: import("../commands.js").CommandContext | undefined];
     result: import("../commands.js").CommandManifestEntry[];
   };
+  "connectivity:get-state": {
+    args: [];
+    result: import("./connectivity.js").ServiceConnectivitySnapshot;
+  };
   "demo:annotate": {
     args: [payload: import("./demo.js").DemoAnnotatePayload];
     result: import("./demo.js").DemoAnnotateResult;
@@ -234,6 +238,14 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: void;
   };
+  "milestones:get": {
+    args: [];
+    result: Record<string, boolean>;
+  };
+  "milestones:mark-shown": {
+    args: [milestoneId: string];
+    result: void;
+  };
   "plugin:actions-get": {
     args: [];
     result: import("../plugin.js").PluginActionDescriptor[];
@@ -314,6 +326,38 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../portal.js").PortalShowNewTabMenuPayload];
     result: void;
   };
+  "privacy:clear-cache": {
+    args: [];
+    result: void;
+  };
+  "privacy:get-data-folder-path": {
+    args: [];
+    result: string;
+  };
+  "privacy:get-settings": {
+    args: [];
+    result: {
+      telemetryLevel: "off" | "errors" | "full";
+      logRetentionDays: 0 | 7 | 30 | 90;
+      dataFolderPath: string;
+    };
+  };
+  "privacy:open-data-folder": {
+    args: [];
+    result: void;
+  };
+  "privacy:reset-all-data": {
+    args: [];
+    result: void;
+  };
+  "privacy:set-log-retention": {
+    args: [days: 0 | 7 | 30 | 90];
+    result: void;
+  };
+  "privacy:set-telemetry-level": {
+    args: [level: "off" | "errors" | "full"];
+    result: void;
+  };
   "project:clone-cancel": {
     args: [];
     result: void;
@@ -353,9 +397,33 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("../scratch.js").Scratch;
   };
+  "sentry:get-consent-state": {
+    args: [];
+    result: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
+  };
+  "shortcut-hints:get-counts": {
+    args: [];
+    result: Record<string, number>;
+  };
+  "shortcut-hints:increment-count": {
+    args: [actionId: string];
+    result: void;
+  };
   "slash-commands:list": {
     args: [payload: import("../slashCommands.js").SlashCommandListRequest];
     result: import("../slashCommands.js").SlashCommand[];
+  };
+  "system-sleep:get-awake-time": {
+    args: [startTimestamp: number];
+    result: number;
+  };
+  "system-sleep:get-metrics": {
+    args: [];
+    result: import("./systemSleep.js").SystemSleepMetrics;
+  };
+  "system-sleep:reset": {
+    args: [];
+    result: void;
   };
   "terminal:force-resume": {
     args: [id: string];

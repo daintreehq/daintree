@@ -1,6 +1,18 @@
 import { CHANNELS } from "../channels.js";
-import { broadcastToRenderer, typedHandle } from "../utils.js";
+import { defineIpcNamespace, op } from "../define.js";
+import { broadcastToRenderer } from "../utils.js";
 import { getServiceConnectivityRegistry } from "../../services/connectivity/index.js";
+
+async function handleGetState() {
+  return getServiceConnectivityRegistry().getSnapshot();
+}
+
+export const connectivityNamespace = defineIpcNamespace({
+  name: "connectivity",
+  ops: {
+    getState: op(CHANNELS.CONNECTIVITY_GET_STATE, handleGetState),
+  },
+});
 
 export function registerConnectivityHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -17,7 +29,7 @@ export function registerConnectivityHandlers(): () => void {
   // Mount-time state replay. Each `WebContentsView` has an isolated Zustand
   // store, so a window that mounts after the initial probes settled would
   // never see the current state through push events alone.
-  handlers.push(typedHandle(CHANNELS.CONNECTIVITY_GET_STATE, async () => registry.getSnapshot()));
+  handlers.push(connectivityNamespace.register());
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

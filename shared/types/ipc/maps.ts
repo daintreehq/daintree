@@ -105,7 +105,6 @@ import type {
   SnapshotRevertResult,
 } from "./git.js";
 import type { TerminalConfig } from "./config.js";
-import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { ShowContextMenuPayload } from "../menu.js";
 import type {
   FileSearchPayload,
@@ -114,7 +113,7 @@ import type {
   FileReadResult,
 } from "./files.js";
 import type { DevPreviewStateChangedPayload } from "./devPreview.js";
-import type { ServiceConnectivityPayload, ServiceConnectivitySnapshot } from "./connectivity.js";
+import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type {
@@ -1077,20 +1076,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
 
   // Portal channels
-  // System Sleep channels
-  "system-sleep:get-metrics": {
-    args: [];
-    result: SystemSleepMetrics;
-  };
-  "system-sleep:get-awake-time": {
-    args: [startTimestamp: number];
-    result: number;
-  };
-  "system-sleep:reset": {
-    args: [];
-    result: void;
-  };
-
   // Hibernation channels
   "hibernation:get-config": {
     args: [];
@@ -1346,46 +1331,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-  // Privacy & Data
-  "privacy:get-settings": {
-    args: [];
-    result: {
-      telemetryLevel: "off" | "errors" | "full";
-      logRetentionDays: 0 | 7 | 30 | 90;
-      dataFolderPath: string;
-    };
-  };
-  "privacy:set-telemetry-level": {
-    args: [level: "off" | "errors" | "full"];
-    result: void;
-  };
-  "privacy:set-log-retention": {
-    args: [days: 0 | 7 | 30 | 90];
-    result: void;
-  };
-  "privacy:open-data-folder": {
-    args: [];
-    result: void;
-  };
-  "privacy:clear-cache": {
-    args: [];
-    result: void;
-  };
-  "privacy:reset-all-data": {
-    args: [];
-    result: void;
-  };
-  "privacy:get-data-folder-path": {
-    args: [];
-    result: string;
-  };
-
-  // Sentry
-  "sentry:get-consent-state": {
-    args: [];
-    result: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
-  };
-
   // Onboarding
   "onboarding:get": {
     args: [];
@@ -1444,15 +1389,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-  // Milestones
-  "milestones:get": {
-    args: [];
-    result: Record<string, boolean>;
-  };
-  "milestones:mark-shown": {
-    args: [milestoneId: string];
-    result: void;
-  };
 
   // Forge integration
   "forge:get-settings": {
@@ -1536,15 +1472,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: { providerId: string; classification: PushErrorClassification | null } | null;
   };
 
-  // Shortcut Hints
-  "shortcut-hints:get-counts": {
-    args: [];
-    result: Record<string, number>;
-  };
-  "shortcut-hints:increment-count": {
-    args: [actionId: string];
-    result: void;
-  };
 
   // Voice input
   "voice-input:get-settings": {
@@ -1784,11 +1711,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: string | null;
   };
 
-  // Per-service connectivity channels
-  "connectivity:get-state": {
-    args: [];
-    result: ServiceConnectivitySnapshot;
-  };
+  // Per-service connectivity channels (push only — request/response is in generated.ts)
 
   // Scratch (throwaway one-off agent workspace) channels
   // Global env channels
