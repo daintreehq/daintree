@@ -473,7 +473,7 @@ function PanelRow({
   crashTimestamp: number;
 }) {
   const reason =
-    panel.isSuspect && panel.createdAt
+    panel.isSuspect && typeof panel.createdAt === "number"
       ? formatSuspectReason(panel.createdAt, crashTimestamp)
       : undefined;
 

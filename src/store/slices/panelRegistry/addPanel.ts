@@ -161,6 +161,7 @@ export const createAddPanelActions = (
         extensionState: options.extensionState,
         pluginId,
         ephemeral: options.ephemeral,
+        createdAt: Date.now(),
         ...kindFields,
       };
 
@@ -377,6 +378,7 @@ export const createAddPanelActions = (
       spawnedBy: options.spawnedBy,
       ephemeral: options.ephemeral,
       startedAt: Date.now(),
+      createdAt: Date.now(),
       spawnStatus,
     };
 
