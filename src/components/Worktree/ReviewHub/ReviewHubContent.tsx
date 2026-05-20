@@ -55,6 +55,7 @@ import {
 import { EmptyState } from "@/components/ui/EmptyState";
 import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useFileDecorations } from "@/hooks/useFileDecorations";
 import { useShallow } from "zustand/react/shallow";
 // eslint-disable-next-line no-restricted-imports
 import { githubClient } from "@/clients/githubClient";
@@ -249,8 +250,6 @@ export function ReviewHubContent({
   const [selectedBaseBranchFile, setSelectedBaseBranchFile] = useState<CrossWorktreeFile | null>(
     null
   );
-  const [reviewThreadCounts, setReviewThreadCounts] = useState<Record<string, number> | null>(null);
-  const reviewThreadsRequestRef = useRef(0);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [selectionSection, setSelectionSection] = useState<FileStageRowSection | null>(null);
   const refreshIdRef = useRef(0);
@@ -389,6 +388,21 @@ export function ReviewHubContent({
       return null;
     })
   );
+
+  // Per-file review-thread badges now come from the generic plugin
+  // file-decoration system (the built-in GitHub plugin contributes the
+  // `worktree-diff:*` provider) rather than a direct `getPRReviewThreads`
+  // call here. The scope is empty (→ no-op, no IPC) unless the base-branch
+  // diff is showing for a worktree with a linked PR.
+  const decorationScope =
+    isOpen && diffMode === "base-branch" && worktreePR?.prNumber && worktreePath
+      ? `worktree-diff:${worktreePath}`
+      : "";
+  const decorationPaths = useMemo(
+    () => sortedBaseBranchFiles?.map((f) => f.path) ?? [],
+    [sortedBaseBranchFiles]
+  );
+  const reviewDecorations = useFileDecorations(decorationScope, decorationPaths);
 
   const behindCount = useWorktreeStore((state) => {
     for (const wt of state.worktrees.values()) {
@@ -530,7 +544,6 @@ export function ReviewHubContent({
       refreshIdRef.current++;
       bgRefreshIdRef.current++;
       baseBranchRequestRef.current++;
-      reviewThreadsRequestRef.current++;
       setStatus(null);
       setLoadError(null);
       setActionError(null);
@@ -542,7 +555,6 @@ export function ReviewHubContent({
       setBaseBranchFiles(null);
       setBaseBranchError(null);
       setSelectedBaseBranchFile(null);
-      setReviewThreadCounts(null);
       setForcePushDialogOpen(false);
       setPullRebasing(false);
       isPullRebasingRef.current = false;
@@ -598,38 +610,12 @@ export function ReviewHubContent({
   useEffect(() => {
     if (diffMode === "base-branch" && status?.currentBranch === mainBranch) {
       baseBranchRequestRef.current++;
-      reviewThreadsRequestRef.current++;
       setDiffMode("working-tree");
       setBaseBranchFiles(null);
       setBaseBranchError(null);
       setSelectedBaseBranchFile(null);
-      setReviewThreadCounts(null);
     }
   }, [status?.currentBranch, mainBranch, diffMode]);
-
-  useEffect(() => {
-    if (!isOpen || diffMode !== "base-branch" || !worktreePR?.prNumber || !worktreePath) {
-      if (diffMode !== "base-branch") {
-        setReviewThreadCounts(null);
-      }
-      return;
-    }
-
-    const requestId = ++reviewThreadsRequestRef.current;
-
-    void (async () => {
-      try {
-        const counts = await githubClient.getPRReviewThreads(worktreePath, worktreePR.prNumber!);
-        if (reviewThreadsRequestRef.current === requestId) {
-          setReviewThreadCounts(counts);
-        }
-      } catch {
-        if (reviewThreadsRequestRef.current === requestId) {
-          setReviewThreadCounts(null);
-        }
-      }
-    })();
-  }, [isOpen, diffMode, worktreePR?.prNumber, worktreePath]);
 
   useEffect(() => {
     if (!status || !selectionSection) return;
@@ -1510,7 +1496,12 @@ export function ReviewHubContent({
                       key={`${file.status}:${file.path}`}
                       file={file}
                       onClick={() => setSelectedBaseBranchFile(file)}
-                      unresolvedCount={reviewThreadCounts?.[file.path]}
+                      unresolvedCount={(() => {
+                        const badge = reviewDecorations[file.path]?.badge;
+                        if (badge === undefined) return undefined;
+                        const n = Number.parseInt(badge, 10);
+                        return Number.isNaN(n) ? undefined : n;
+                      })()}
                       onBadgeClick={
                         worktreePR?.prUrl
                           ? () =>

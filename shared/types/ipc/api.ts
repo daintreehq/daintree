@@ -1547,6 +1547,23 @@ export interface ElectronAPI {
     getPanelKinds(): Promise<import("../../config/panelKindRegistry.js").PanelKindConfig[]>;
     /** Pull the current set of registered forge providers (pluginId + manifest contribution). */
     getForgeProviders(): Promise<import("../forge.js").RegisteredForgeProvider[]>;
+    /**
+     * Pull merged per-file decorations for `scope` over `paths` from every
+     * matching plugin provider. Returns a map of path → decoration; paths
+     * with no decoration are omitted.
+     */
+    getDecorations(
+      scope: string,
+      paths: string[]
+    ): Promise<Record<string, import("../forge.js").FileDecoration>>;
+    /**
+     * Subscribe to file-decoration invalidations. The callback fires with the
+     * changed scope (and optionally the narrowed paths) — it carries no
+     * decoration data; re-pull via {@link getDecorations}. Returns a cleanup.
+     */
+    onDecorationsChanged(
+      callback: (payload: { scope: string; paths?: string[] }) => void
+    ): () => void;
     /** Subscribe to plugin panel kind registry changes. Returns a cleanup. */
     onPanelKindsChanged(
       callback: (payload: {

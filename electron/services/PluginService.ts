@@ -38,6 +38,14 @@ import {
   unregisterForgeProviderImpls,
   unregisterForgeProviders,
 } from "./forgeProviderRegistry.js";
+import {
+  registerFileDecorationProviderImpl,
+  registerFileDecorationProviders,
+  scopeMatchesPattern,
+  unregisterFileDecorationProviderImpl,
+  unregisterFileDecorationProviderImpls,
+  unregisterFileDecorationProviders,
+} from "./fileDecorationRegistry.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
@@ -437,6 +445,10 @@ export class PluginService {
       registerForgeProviders(manifest.name, manifest.contributes.forgeProviders);
     }
 
+    if (manifest.contributes.fileDecorationProviders.length > 0) {
+      registerFileDecorationProviders(manifest.name, manifest.contributes.fileDecorationProviders);
+    }
+
     // Insert the plugin into the registry BEFORE importing its main module so
     // synchronous host-API calls made during module evaluation (e.g., a plugin
     // that calls host.registerAction/registerHandler at import time) see the
@@ -622,6 +634,100 @@ export class PluginService {
         list.push(dispose);
         return dispose;
       },
+      registerFileDecorationProvider: (descriptor, impl) => {
+        if (revoked) {
+          throw new Error(
+            `Plugin "${pluginId}" host revoked: registerFileDecorationProvider called after activate() returned or timed out`
+          );
+        }
+        if (!descriptor || typeof descriptor !== "object") {
+          throw new Error(
+            `Plugin "${pluginId}" registerFileDecorationProvider: descriptor must be an object`
+          );
+        }
+        if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+          throw new Error(
+            `Plugin "${pluginId}" registerFileDecorationProvider: descriptor.id must be a non-empty string`
+          );
+        }
+        if (!impl || typeof impl !== "object" || typeof impl.provideDecorations !== "function") {
+          throw new Error(
+            `Plugin "${pluginId}" registerFileDecorationProvider: impl must expose provideDecorations()`
+          );
+        }
+        // Reject ids not declared in `contributes.fileDecorationProviders` for
+        // the same reason as forge providers: an undeclared id is unreachable
+        // through the eager scope-routing table, so the binding would be a
+        // silent orphan. Fail loud at registration instead.
+        const contributionId = descriptor.id;
+        const plugin = this.plugins.get(pluginId);
+        const declared = plugin?.manifest.contributes.fileDecorationProviders.some(
+          (c) => c.id === contributionId
+        );
+        if (!declared) {
+          throw new Error(
+            `Plugin "${pluginId}" registerFileDecorationProvider: descriptor.id "${contributionId}" is not declared in contributes.fileDecorationProviders`
+          );
+        }
+
+        registerFileDecorationProviderImpl(pluginId, contributionId, impl);
+
+        let disposed = false;
+        const dispose = (): void => {
+          if (disposed) return;
+          disposed = true;
+          unregisterFileDecorationProviderImpl(pluginId, contributionId, impl);
+          const list = this.pluginEventCleanups.get(pluginId);
+          if (!list) return;
+          const idx = list.indexOf(dispose);
+          if (idx >= 0) list.splice(idx, 1);
+          if (list.length === 0) this.pluginEventCleanups.delete(pluginId);
+        };
+
+        let list = this.pluginEventCleanups.get(pluginId);
+        if (!list) {
+          list = [];
+          this.pluginEventCleanups.set(pluginId, list);
+        }
+        list.push(dispose);
+        return dispose;
+      },
+      // NOT revoke-guarded: called from the plugin's own post-activation
+      // subscription callbacks (worktree changes, polling timers). The
+      // liveness guard is plugin membership, not the activation window — once
+      // the plugin unloads this becomes a silent no-op.
+      invalidateFileDecorations: (scope, paths) => {
+        if (!this.plugins.has(pluginId)) return;
+        if (typeof scope !== "string" || scope.length === 0) {
+          throw new Error(
+            `Plugin "${pluginId}" invalidateFileDecorations: scope must be a non-empty string`
+          );
+        }
+        // A plugin may only invalidate scopes it actually declared in
+        // `contributes.fileDecorationProviders`. Without this a plugin could
+        // force unrelated renderer views to re-pull. Mirrors the
+        // registration-time declared-id guard so the manifest stays the
+        // single source of truth for what a plugin owns.
+        const declaredScopes = this.plugins
+          .get(pluginId)
+          ?.manifest.contributes.fileDecorationProviders.flatMap((c) => c.scopes);
+        if (
+          !declaredScopes ||
+          !declaredScopes.some((pattern) => scopeMatchesPattern(scope, pattern))
+        ) {
+          throw new Error(
+            `Plugin "${pluginId}" invalidateFileDecorations: scope "${scope}" is not covered by any declared contributes.fileDecorationProviders[].scopes`
+          );
+        }
+        const narrowed =
+          Array.isArray(paths) && paths.length > 0
+            ? paths.filter((p): p is string => typeof p === "string" && p.length > 0)
+            : undefined;
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:decorations-changed",
+          payload: { scope, ...(narrowed && narrowed.length > 0 ? { paths: narrowed } : {}) },
+        });
+      },
     };
     return {
       host,
@@ -804,7 +910,25 @@ export class PluginService {
     // re-bind that didn't refresh the disposer slot). The bulk call is
     // idempotent — already-cleared keys are silent no-ops.
     unregisterForgeProviderImpls(pluginId);
+    // Capture the unloaded plugin's declared decoration scopes before clearing
+    // the registry so we can tell any renderer that was showing them to
+    // re-pull (it will now resolve no impl and clear). Without this, stale
+    // decorations from a runtime-unloaded plugin would linger until the next
+    // scope/path change or remount.
+    const decorationScopes = this.plugins
+      .get(pluginId)
+      ?.manifest.contributes.fileDecorationProviders.flatMap((c) => c.scopes);
+    unregisterFileDecorationProviders(pluginId);
+    unregisterFileDecorationProviderImpls(pluginId);
     this.plugins.delete(pluginId);
+    if (decorationScopes && decorationScopes.length > 0) {
+      for (const scope of new Set(decorationScopes)) {
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:decorations-changed",
+          payload: { scope },
+        });
+      }
+    }
   }
 
   private flushPluginEventCleanups(pluginId: string): void {

@@ -1,4 +1,7 @@
 import type {
+  FileDecorationContribution,
+  FileDecorationProviderDescriptor,
+  FileDecorationProviderImpl,
   ForgeProviderContribution,
   ForgeProviderDescriptor,
   ForgeProviderImpl,
@@ -100,6 +103,7 @@ export interface PluginManifest {
     views: ViewContribution[];
     mcpServers: McpServerContribution[];
     forgeProviders: ForgeProviderContribution[];
+    fileDecorationProviders: FileDecorationContribution[];
   };
 }
 
@@ -227,6 +231,32 @@ export interface PluginHostApi {
    * later invoked.
    */
   registerForgeProvider(descriptor: ForgeProviderDescriptor, impl: ForgeProviderImpl): () => void;
+  /**
+   * Bind a runtime {@link FileDecorationProviderImpl} to a descriptor declared
+   * in `contributes.fileDecorationProviders`. The descriptor's `id` is
+   * namespaced at runtime as `{pluginId}.{descriptor.id}` and must match an
+   * entry in the manifest — an undeclared id is rejected so the impl cannot
+   * drift away from the manifest-driven scope-routing table. Returns a
+   * disposer that unbinds the single implementation; all bindings are
+   * automatically removed when the plugin is unloaded. Must be called during
+   * `activate()` — the host is revoked once activation resolves or times out.
+   * Calling this twice with the same `descriptor.id` overwrites the prior
+   * binding; the older disposer becomes inert.
+   */
+  registerFileDecorationProvider(
+    descriptor: FileDecorationProviderDescriptor,
+    impl: FileDecorationProviderImpl
+  ): () => void;
+  /**
+   * Signal that decorations for `scope` (optionally narrowed to `paths`) have
+   * changed and any renderer showing them should re-pull. Unlike the
+   * `register*` methods this is NOT revoke-guarded: it is called from the
+   * plugin's own subscription callbacks (worktree changes, polling timers)
+   * which fire long after `activate()` resolves, and must remain callable for
+   * the plugin's whole lifetime. It becomes a silent no-op once the plugin is
+   * unloaded.
+   */
+  invalidateFileDecorations(scope: string, paths?: string[]): void;
 }
 
 export type PluginActivate = (

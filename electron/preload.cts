@@ -2573,6 +2573,8 @@ const api: ElectronAPI = {
     onToolbarButtonsChanged: (
       callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
     ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),
+    onDecorationsChanged: (callback: (payload: { scope: string; paths?: string[] }) => void) =>
+      _eventBusOn("plugin:decorations-changed", callback),
   },
 
   crashRecovery: {

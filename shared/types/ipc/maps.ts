@@ -2437,6 +2437,14 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
+  // Plugin file-decoration invalidation (main → renderer). Carries only the
+  // changed scope (optionally narrowed to `paths`) — never decoration data.
+  // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
+  "plugin:decorations-changed": {
+    scope: string;
+    paths?: string[];
+  };
+
   // Resource profile change (main → renderer)
   "resource:profile-changed": import("../resourceProfile.js").ResourceProfilePayload;
 
@@ -2511,6 +2519,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-kinds-changed"
   // Plugin toolbar button registry (global broadcast)
   | "plugin:toolbar-buttons-changed"
+  // Plugin file-decoration invalidation (global broadcast)
+  | "plugin:decorations-changed"
   // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready
   | "terminal:exit"
   | "terminal:backend-crashed"
