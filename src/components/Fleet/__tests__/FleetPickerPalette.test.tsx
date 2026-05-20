@@ -550,6 +550,22 @@ describe("FleetPickerPalette", () => {
       expect(status.getAttribute("role")).toBe("status");
       expect(status.textContent).toBe("Select terminals to arm");
     });
+
+    it("footer status shows 'Matches N of M' when a query narrows the list", async () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      seedTerminals([makeTerminal("alpha"), makeTerminal("beta"), makeTerminal("gamma")]);
+      renderPalette([makeWorktreeSnap("wt-1", "main")]);
+      await act(async () => {});
+
+      const search = screen.getByTestId("fleet-picker-cold-start-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "alpha" } });
+      });
+      await act(async () => {});
+
+      const status = screen.getByTestId("fleet-picker-cold-start-status");
+      expect(status.textContent).toContain("Matches 1 of 3");
+    });
   });
 
   describe("Replace / Append commit-mode toggle", () => {

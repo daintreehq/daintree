@@ -38,13 +38,18 @@ function seedTerminals(terminals: TerminalInstance[]): void {
   usePanelStore.setState({ panelsById, panelIds });
 }
 
-function makeWorktreeSnap(id: string, name: string): WorktreeSnapshot {
+function makeWorktreeSnap(
+  id: string,
+  name: string,
+  overrides: Partial<WorktreeSnapshot> = {}
+): WorktreeSnapshot {
   return {
     id,
     worktreeId: id,
     path: `/repo/${id}`,
     name,
     isCurrent: false,
+    ...overrides,
   } as WorktreeSnapshot;
 }
 
@@ -356,8 +361,8 @@ describe("FleetPickerContent + useFleetPicker", () => {
     });
   });
 
-  describe("search and regex toggle", () => {
-    it("filters visible terminals by title substring", async () => {
+  describe("fuzzy search", () => {
+    it("filters visible terminals by title", async () => {
       seedTerminals([
         makeTerminal("alpha-runner", { title: "Alpha runner" }),
         makeTerminal("beta-runner", { title: "Beta runner" }),
@@ -376,14 +381,73 @@ describe("FleetPickerContent + useFleetPicker", () => {
       await act(async () => {
         fireEvent.change(search, { target: { value: "alpha" } });
       });
-      // useDeferredValue may need a tick; force flush via timers/act.
       await act(async () => {});
       const ids = captured.picker?.visibleTerminals.map((t) => t.id) ?? [];
       expect(ids).toEqual(["alpha-runner"]);
     });
 
-    it("flags invalid regex with regexError state", async () => {
-      seedTerminals([makeTerminal("t1")]);
+    it("filters by worktree branch", async () => {
+      seedTerminals([
+        makeTerminal("t1", { worktreeId: "wt-1", title: "shell" }),
+        makeTerminal("t2", { worktreeId: "wt-2", title: "shell" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      const captured: { picker?: ReturnType<typeof useFleetPicker> } = {};
+      renderHarness(
+        [
+          makeWorktreeSnap("wt-1", "main", { branch: "feature/login" }),
+          makeWorktreeSnap("wt-2", "other", { branch: "fix/header" }),
+        ],
+        {
+          mode: "cold-start",
+          onCommit: () => {},
+          capturePicker: (p) => {
+            captured.picker = p;
+          },
+        }
+      );
+      await act(async () => {});
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "feature/login" } });
+      });
+      await act(async () => {});
+      const ids = captured.picker?.visibleTerminals.map((t) => t.id) ?? [];
+      expect(ids).toEqual(["t1"]);
+    });
+
+    it("filters by worktree path", async () => {
+      seedTerminals([
+        makeTerminal("t1", { worktreeId: "wt-1", title: "shell" }),
+        makeTerminal("t2", { worktreeId: "wt-2", title: "shell" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      const captured: { picker?: ReturnType<typeof useFleetPicker> } = {};
+      renderHarness(
+        [
+          makeWorktreeSnap("wt-1", "alpha", { path: "/repos/dashboards" }),
+          makeWorktreeSnap("wt-2", "beta", { path: "/repos/auth-service" }),
+        ],
+        {
+          mode: "cold-start",
+          onCommit: () => {},
+          capturePicker: (p) => {
+            captured.picker = p;
+          },
+        }
+      );
+      await act(async () => {});
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "dashboards" } });
+      });
+      await act(async () => {});
+      const ids = captured.picker?.visibleTerminals.map((t) => t.id) ?? [];
+      expect(ids).toEqual(["t1"]);
+    });
+
+    it("picks up live title changes (OSC update) without remounting the picker", async () => {
+      seedTerminals([makeTerminal("t1", { title: "Server" })]);
       useWorktreeSelectionStore.setState({ activeWorktreeId: null });
       const captured: { picker?: ReturnType<typeof useFleetPicker> } = {};
       renderHarness([makeWorktreeSnap("wt-1", "main")], {
@@ -394,17 +458,61 @@ describe("FleetPickerContent + useFleetPicker", () => {
         },
       });
       await act(async () => {});
-      const toggle = screen.getByTestId("fp-regex-toggle");
-      await act(async () => {
-        fireEvent.click(toggle);
-      });
+      // Simulate an OSC title update: same panel id, new title.
+      seedTerminals([makeTerminal("t1", { title: "Auth API" })]);
+      await act(async () => {});
       const search = screen.getByTestId("fp-search") as HTMLInputElement;
       await act(async () => {
-        fireEvent.change(search, { target: { value: "(" } });
+        fireEvent.change(search, { target: { value: "auth" } });
       });
-      // Wait for deferred value to settle.
       await act(async () => {});
-      expect(captured.picker?.regexError).not.toBeNull();
+      const ids = captured.picker?.visibleTerminals.map((t) => t.id) ?? [];
+      expect(ids).toEqual(["t1"]);
+    });
+
+    it("matches FALLBACK_GROUP terminals (no worktreeId) on title", async () => {
+      seedTerminals([
+        makeTerminal("loose", { title: "loose runner", worktreeId: undefined as never }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      const captured: { picker?: ReturnType<typeof useFleetPicker> } = {};
+      renderHarness([], {
+        mode: "cold-start",
+        onCommit: () => {},
+        capturePicker: (p) => {
+          captured.picker = p;
+        },
+      });
+      await act(async () => {});
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "loose" } });
+      });
+      await act(async () => {});
+      const ids = captured.picker?.visibleTerminals.map((t) => t.id) ?? [];
+      expect(ids).toEqual(["loose"]);
+    });
+
+    it("does not crash on regex-special characters", async () => {
+      seedTerminals([makeTerminal("alpha", { title: "Alpha runner" })]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      const captured: { picker?: ReturnType<typeof useFleetPicker> } = {};
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+        capturePicker: (p) => {
+          captured.picker = p;
+        },
+      });
+      await act(async () => {});
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "feat.*\\(login" } });
+      });
+      await act(async () => {});
+      // No exception; the picker simply returns no fuzzy matches for the
+      // unrelated regex-shaped query.
+      expect(captured.picker?.visibleTerminals.length).toBe(0);
     });
   });
 

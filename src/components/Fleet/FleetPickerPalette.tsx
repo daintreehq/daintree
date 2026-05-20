@@ -147,7 +147,9 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                   className="text-[11px] tabular-nums text-daintree-text/55"
                   data-testid="fleet-picker-cold-start-status"
                 >
-                  Select terminals to arm
+                  {hasQuery
+                    ? `Matches ${picker.visibleTerminals.length} of ${picker.eligibleTerminals.length}`
+                    : "Select terminals to arm"}
                   {picker.driftCount > 0 ? ` · ${picker.driftCount} ineligible` : ""}
                 </span>
                 <button
