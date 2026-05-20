@@ -19,7 +19,11 @@ import type { ActionContext } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import type { HelpAssistantTier } from "../shared/types/ipc/maps.js";
 import { CHANNELS } from "./ipc/channels.js";
-import { BrokerError, RequestResponseBroker } from "./services/rpc/RequestResponseBroker.js";
+import {
+  BrokerError,
+  RequestResponseBroker,
+  encodeBrokerError,
+} from "./services/rpc/RequestResponseBroker.js";
 import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
 import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
 import { buildGlobalEnvPreloadBindings } from "./ipc/handlers/globalEnv.preload.js";
@@ -225,27 +229,6 @@ ipcRenderer.on("terminal-port", (event, payload: { token: string }) => {
 
 type WorktreePortEventCallback = (data: unknown) => void;
 
-/**
- * Encode a {@link BrokerError} into a plain `Error` whose message carries the
- * `code` discriminant in a structured prefix. Electron's contextBridge strips
- * ALL custom Error properties (including `name` and `code`) when an error
- * crosses preload→renderer, so the prefix is the only reliable carrier.
- * The renderer-side `isClientBrokerError` guard
- * (`src/utils/clientBrokerError.ts`) decodes the prefix back into a `code`
- * field on the caught error.
- *
- * Format: `[BrokerError|<code>] <original message>`
- */
-function encodeBrokerError(err: BrokerError): Error {
-  const encoded = `[BrokerError|${err.code}] ${err.message}`;
-  const out = new Error(encoded);
-  // Same-realm properties (don't survive contextBridge but useful for tests
-  // and any in-preload consumer before crossing the boundary).
-  out.name = "BrokerError";
-  (out as Error & { code: BrokerError["code"] }).code = err.code;
-  return out;
-}
-
 class WorktreePortClient {
   private port: MessagePort | null = null;
   private broker = new RequestResponseBroker({
@@ -334,7 +317,10 @@ class WorktreePortClient {
 
     // Clear pending BEFORE nulling state — preserves the invariant that no
     // request can be registered after clearance but before the null check.
-    this.broker.clear(encodeBrokerError(new BrokerError("APP_SHUTDOWN", "Worktree port replaced")));
+    // Port replacement is a transient/recoverable condition (host restart,
+    // project switch within window), not app shutdown — surface HOST_EXITED
+    // so callers can retry rather than treating it as terminal.
+    this.broker.clear(encodeBrokerError(new BrokerError("HOST_EXITED", "Worktree port replaced")));
 
     this.port = null;
     this._isReady = false;
@@ -381,7 +367,9 @@ class WorktreePortClient {
     timeoutMs?: number
   ): Promise<WorktreePortResult<K>> {
     if (!this.port) {
-      return Promise.reject(new Error("Worktree port not ready"));
+      return Promise.reject(
+        encodeBrokerError(new BrokerError("HOST_EXITED", "Worktree port not ready"))
+      );
     }
 
     const id = this.broker.generateId();

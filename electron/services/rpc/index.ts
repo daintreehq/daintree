@@ -1,4 +1,4 @@
-export { RequestResponseBroker, BrokerError } from "./RequestResponseBroker.js";
+export { RequestResponseBroker, BrokerError, encodeBrokerError } from "./RequestResponseBroker.js";
 export type {
   PendingRequest,
   BrokerOptions,

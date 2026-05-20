@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  BrokerError,
+  encodeBrokerError,
+} from "../../../electron/services/rpc/RequestResponseBroker";
 import { ClientBrokerError, isClientBrokerError } from "../clientBrokerError";
 
 describe("isClientBrokerError", () => {
@@ -51,4 +55,18 @@ describe("isClientBrokerError", () => {
     expect(err.code).toBe("HOST_EXITED");
     expect(err.message).toBe("fell over");
   });
+
+  // Guards against format drift between encoder and decoder. The encoder lives
+  // in preload (electron/services/rpc), the decoder in src/utils — they're
+  // tested separately and would silently lose each other on a prefix change
+  // unless we roundtrip here.
+  it.each(["HOST_EXITED", "APP_SHUTDOWN", "TIMEOUT"] as const)(
+    "roundtrips encodeBrokerError -> isClientBrokerError for %s",
+    (code) => {
+      const encoded = encodeBrokerError(new BrokerError(code, "carrier message"));
+      expect(isClientBrokerError(encoded)).toBe(true);
+      expect((encoded as Error & { code: string }).code).toBe(code);
+      expect(encoded.message).toBe("carrier message");
+    }
+  );
 });

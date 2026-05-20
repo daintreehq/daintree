@@ -216,3 +216,25 @@ function normalizeRegisterArg(arg?: number | RegisterOptions): {
   if (typeof arg === "number") return { timeoutMs: arg };
   return { method: arg.method, timeoutMs: arg.timeoutMs };
 }
+
+/**
+ * Encode a {@link BrokerError} into a plain `Error` whose message carries the
+ * `code` discriminant in a structured prefix. Electron's contextBridge strips
+ * ALL custom Error properties (including `name` and `code`) when an error
+ * crosses preload→renderer, so the prefix is the only reliable carrier.
+ * The renderer-side `isClientBrokerError` guard
+ * (`src/utils/clientBrokerError.ts`) decodes the prefix back into a `code`
+ * field on the caught error. Mirrors the pattern used by `_reconstructAppError`
+ * in `electron/preload.cts` for the parallel `AppError` boundary problem.
+ *
+ * Format: `[BrokerError|<code>] <original message>`
+ */
+export function encodeBrokerError(err: BrokerError): Error {
+  const encoded = `[BrokerError|${err.code}] ${err.message}`;
+  const out = new Error(encoded);
+  // Same-realm properties (don't survive contextBridge but useful for tests
+  // and any in-preload consumer before crossing the boundary).
+  out.name = "BrokerError";
+  (out as Error & { code: BrokerError["code"] }).code = err.code;
+  return out;
+}
