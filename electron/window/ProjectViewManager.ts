@@ -32,7 +32,12 @@ import {
   attachRendererConsoleCapture,
   detachRendererConsoleCapture,
 } from "./rendererConsoleCapture.js";
-import { freezeWebContents, unfreezeWebContents } from "../utils/webContentsLifecycle.js";
+import {
+  freezeWebContents,
+  unfreezeWebContents,
+  throttleCpuWebContents,
+  unthrottleCpuWebContents,
+} from "../utils/webContentsLifecycle.js";
 import { ACTIVE_AGENT_STATES } from "../../shared/types/agent.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import {
@@ -101,7 +106,7 @@ export interface ProjectViewManagerOptions {
    * Called when a view transitions from active to cached with its webContents.id.
    * Mirrors onViewEvicted: live producer ports (worktree, workspace direct) must
    * be closed so messages don't accumulate in a renderer that Chromium may freeze
-   * after backgroundThrottling is enabled. Reactivation re-brokers a fresh port.
+   * after CPU throttling lands. Reactivation re-brokers a fresh port.
    */
   onViewCached?: (webContentsId: number) => void;
   /** Called on every did-finish-load for any managed view (initial load and reloads) */
@@ -672,17 +677,23 @@ export class ProjectViewManager {
     // Throttle background view to reduce CPU and allow Chromium to reclaim memory
     if (!current.view.webContents.isDestroyed()) {
       const cachedWcId = current.view.webContents.id;
-      // Close live producer ports BEFORE enabling background throttling. Once
-      // throttled, Chromium can freeze the renderer after ~5 min hidden or
-      // under memory pressure; any messages still posted by main/utility
-      // processes accumulate in the frozen renderer's task queue (no native
+      // Close live producer ports BEFORE applying CPU throttle. Once throttled,
+      // Chromium can freeze the renderer after ~5 min hidden or under memory
+      // pressure; any messages still posted by main/utility processes
+      // accumulate in the frozen renderer's task queue (no native
       // backpressure). Reactivation re-brokers a fresh port via activateView.
       try {
         this.onViewCached?.(cachedWcId);
       } catch (error) {
         console.error("[ProjectViewManager] onViewCached threw during deactivate:", error);
       }
-      current.view.webContents.setBackgroundThrottling(true);
+      // Use CDP Emulation.setCPUThrottlingRate (per-renderer) instead of
+      // WebContents.setBackgroundThrottling — the latter is window-wide in
+      // Electron 28+, so the active view's setBackgroundThrottling(false)
+      // silently un-throttled every cached sibling (#8599). CPU throttling
+      // keeps the event loop and MessagePort dispatch alive while slowing
+      // V8/Blink CPU time for this single renderer.
+      void throttleCpuWebContents(current.view.webContents);
 
       // Flush pending DOMStorage writes (synchronous — view stays alive in
       // cache, so data loss is not a concern)
@@ -730,10 +741,10 @@ export class ProjectViewManager {
   private activateView(entry: ViewEntry): void {
     registerAppView(this.win, entry.view);
 
-    // Defensive unfreeze BEFORE setBackgroundThrottling(false): efficiency
-    // transitions and view activations are async, so an activating view may
-    // still be frozen even if we've left efficiency in the meantime. Chromium
-    // does not auto-resume on focus or re-attach — explicit "active" required.
+    // Defensive unfreeze BEFORE restoring CPU rate: efficiency transitions and
+    // view activations are async, so an activating view may still be frozen
+    // even if we've left efficiency in the meantime. Chromium does not
+    // auto-resume on focus or re-attach — explicit "active" required.
     // Fire-and-forget: there is a sub-millisecond window between addChildView
     // making the view visible and Chromium processing the "active" CDP command.
     // Awaiting would force activateView to be async and ripple through all
@@ -743,9 +754,11 @@ export class ProjectViewManager {
       void unfreezeWebContents(entry.view.webContents);
     }
 
-    // Restore full priority before making visible
+    // Restore full CPU rate before making visible. Uses
+    // Emulation.setCPUThrottlingRate (per-renderer) — see deactivateEntry for
+    // why setBackgroundThrottling is unsuitable (window-wide in Electron 28+).
     if (!entry.view.webContents.isDestroyed()) {
-      entry.view.webContents.setBackgroundThrottling(false);
+      void unthrottleCpuWebContents(entry.view.webContents);
     }
 
     this.win.contentView.addChildView(entry.view);

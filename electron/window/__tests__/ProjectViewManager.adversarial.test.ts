@@ -7,7 +7,6 @@ type Handler = (...args: unknown[]) => void;
 interface MockWebContents {
   id: number;
   isDestroyed: ReturnType<typeof vi.fn>;
-  setBackgroundThrottling: ReturnType<typeof vi.fn>;
   executeJavaScript: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
@@ -34,7 +33,6 @@ function createMockWebContents(options?: { autoFinishLoad?: boolean }): MockWebC
   const webContents: MockWebContents = {
     id,
     isDestroyed: vi.fn(() => false),
-    setBackgroundThrottling: vi.fn(),
     executeJavaScript: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
@@ -134,6 +132,8 @@ vi.mock("../skeletonCss.js", () => ({
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
+  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
+  unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { ProjectViewManager } from "../ProjectViewManager.js";

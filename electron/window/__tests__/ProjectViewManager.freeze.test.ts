@@ -7,7 +7,6 @@ function createMockWebContents() {
   return {
     id,
     isDestroyed: vi.fn(() => false),
-    setBackgroundThrottling: vi.fn(),
     executeJavaScript: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
@@ -88,6 +87,8 @@ vi.mock("../skeletonCss.js", () => ({
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
+  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
+  unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
