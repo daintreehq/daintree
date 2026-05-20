@@ -360,10 +360,11 @@ describe("PtyClient adversarial", () => {
 
   it("GRACEFUL_KILL_SKIPS_KILL_WHEN_TIMEOUT_FIRES_AFTER_HOST_GONE", async () => {
     // When the host exits and the restart timer hasn't yet refilled `child`,
-    // a subsequent gracefulKill will time out with a plain Error('Request
-    // timeout: …') — not a BrokerError. Without the null-child guard, the
-    // catch would fall through to this.kill() and mutate local state on a
-    // dead client.
+    // a subsequent gracefulKill will time out with a BrokerError("TIMEOUT").
+    // gracefulKill excludes TIMEOUT from its host-gone short-circuit (a live
+    // host that timed out still needs a forced kill), so without the
+    // null-child guard the catch would fall through to this.kill() and
+    // mutate local state on a dead client.
     const client = createReadyClient();
     const privateAccess = client as unknown as PtyClientPrivateAccess;
     // Neutralize the auto-restart so `child` stays null for the duration of
@@ -396,8 +397,10 @@ describe("PtyClient adversarial", () => {
 
     await expect(promise).resolves.toBeNull();
 
-    // On timeout (non-BrokerError rejection) with a live host, gracefulKill
-    // must still send a kill message and remove the trashed PID.
+    // On timeout (BrokerError TIMEOUT) with a live host, gracefulKill must
+    // still send a kill message and remove the trashed PID — TIMEOUT is
+    // distinct from the host-gone broker clear reasons (HOST_EXITED /
+    // APP_SHUTDOWN).
     expect(shared.tracker.removeTrashed).toHaveBeenCalledWith("t1");
     const killCall = mockChild.postMessage.mock.calls.find(
       (call: unknown[]) => (call[0] as { type?: string })?.type === "kill"

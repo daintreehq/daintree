@@ -19,6 +19,11 @@ import type { ActionContext } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import type { HelpAssistantTier } from "../shared/types/ipc/maps.js";
 import { CHANNELS } from "./ipc/channels.js";
+import {
+  BrokerError,
+  RequestResponseBroker,
+  encodeBrokerError,
+} from "./services/rpc/RequestResponseBroker.js";
 import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
 import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
 import { buildGlobalEnvPreloadBindings } from "./ipc/handlers/globalEnv.preload.js";
@@ -226,14 +231,10 @@ type WorktreePortEventCallback = (data: unknown) => void;
 
 class WorktreePortClient {
   private port: MessagePort | null = null;
-  private pending = new Map<
-    string,
-    {
-      resolve: (value: unknown) => void;
-      reject: (error: Error) => void;
-      timeout: ReturnType<typeof setTimeout>;
-    }
-  >();
+  private broker = new RequestResponseBroker({
+    idPrefix: "worktree",
+    defaultTimeoutMs: 10000,
+  });
   private eventListeners = new Map<string, Set<WorktreePortEventCallback>>();
   private readyCallbacks: Array<() => void> = [];
   private disconnectedCallbacks: Array<() => void> = [];
@@ -269,15 +270,11 @@ class WorktreePortClient {
       if (!data) return;
 
       // Response to a request
-      if (data.id && this.pending.has(data.id)) {
-        const entry = this.pending.get(data.id)!;
-        clearTimeout(entry.timeout);
-        this.pending.delete(data.id);
-
+      if (data.id && this.broker.has(data.id)) {
         if (data.error != null) {
-          entry.reject(new Error(String(data.error)));
+          this.broker.reject(data.id, new Error(String(data.error)));
         } else {
-          entry.resolve(data.result);
+          this.broker.resolve(data.id, data.result);
         }
         return;
       }
@@ -318,12 +315,12 @@ class WorktreePortClient {
       // ignore
     }
 
-    // Reject all pending requests
-    for (const [, entry] of this.pending) {
-      clearTimeout(entry.timeout);
-      entry.reject(new Error("Worktree port replaced"));
-    }
-    this.pending.clear();
+    // Clear pending BEFORE nulling state — preserves the invariant that no
+    // request can be registered after clearance but before the null check.
+    // Port replacement is a transient/recoverable condition (host restart,
+    // project switch within window), not app shutdown — surface HOST_EXITED
+    // so callers can retry rather than treating it as terminal.
+    this.broker.clear(encodeBrokerError(new BrokerError("HOST_EXITED", "Worktree port replaced")));
 
     this.port = null;
     this._isReady = false;
@@ -348,11 +345,9 @@ class WorktreePortClient {
       // ignore
     }
 
-    for (const [, entry] of this.pending) {
-      clearTimeout(entry.timeout);
-      entry.reject(new Error("Worktree port disconnected"));
-    }
-    this.pending.clear();
+    this.broker.clear(
+      encodeBrokerError(new BrokerError("HOST_EXITED", "Worktree port disconnected"))
+    );
 
     this.port = null;
     this._isReady = false;
@@ -371,32 +366,38 @@ class WorktreePortClient {
     payload?: WorktreePortPayload<K>,
     timeoutMs?: number
   ): Promise<WorktreePortResult<K>> {
-    return new Promise<WorktreePortResult<K>>((resolve, reject) => {
-      if (!this.port) {
-        reject(new Error("Worktree port not ready"));
-        return;
+    if (!this.port) {
+      return Promise.reject(
+        encodeBrokerError(new BrokerError("HOST_EXITED", "Worktree port not ready"))
+      );
+    }
+
+    const id = this.broker.generateId();
+    // Resolve the per-action timeout (#8551): create/delete-worktree,
+    // resource-action, and run-lifecycle-setup legitimately run longer than
+    // the 10s default. The broker's own getEffectiveTimeout only validates a
+    // single defaultTimeoutMs, so the per-action table must be applied here.
+    const effectiveTimeout = resolveWorktreePortTimeout(action, timeoutMs);
+    const promise = this.broker.register<WorktreePortResult<K>>(id, {
+      method: String(action),
+      timeoutMs: effectiveTimeout,
+    });
+
+    try {
+      this.port.postMessage({ id, action, payload: payload ?? {} });
+    } catch (error) {
+      this.broker.reject(id, error instanceof Error ? error : new Error(String(error)));
+    }
+
+    // Encode BrokerError rejections (TIMEOUT, HOST_EXITED, APP_SHUTDOWN) so
+    // the renderer can decode the discriminant via `isClientBrokerError`.
+    // contextBridge strips own Error properties, so the prefix is the only
+    // reliable carrier across the realm boundary.
+    return promise.catch((err: unknown) => {
+      if (err instanceof BrokerError) {
+        throw encodeBrokerError(err);
       }
-
-      const id = crypto.randomUUID();
-      const effectiveTimeout = resolveWorktreePortTimeout(action, timeoutMs);
-      const timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Worktree port request timed out: ${String(action)}`));
-      }, effectiveTimeout);
-
-      this.pending.set(id, {
-        resolve: resolve as (value: unknown) => void,
-        reject,
-        timeout,
-      });
-
-      try {
-        this.port.postMessage({ id, action, payload: payload ?? {} });
-      } catch (error) {
-        clearTimeout(timeout);
-        this.pending.delete(id);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
+      throw err;
     });
   }
 
