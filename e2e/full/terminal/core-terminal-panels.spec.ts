@@ -80,7 +80,7 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const maximizeBtn = panel.locator('[aria-label*="Maximize"]').first();
       await maximizeBtn.click();
 
-      const restoreBtn = window.locator('[aria-label*="Restore grid view"]').first();
+      const restoreBtn = window.locator(SEL.panel.restore).first();
       await expect(restoreBtn).toBeVisible({ timeout: T_SHORT });
 
       await restoreBtn.click();
