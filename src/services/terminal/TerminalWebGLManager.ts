@@ -118,8 +118,19 @@ export class TerminalWebGLManager {
 
   // Circuit breaker: if N genuine context-loss events occur within W ms,
   // disable WebGL for the rest of the session to avoid strobing reacquisition
-  // on systems with persistent GPU faults (e.g. M-series Macs on external
-  // displays at fractional scaling).
+  // on systems with persistent GPU faults. Two recurrence paths to keep in
+  // mind when tuning these constants:
+  //   1. M-series Macs on external displays at fractional scaling — repeated
+  //      per-context faults spaced over seconds; each loss is a distinct GPU
+  //      event and must each count toward the threshold (issue #6163).
+  //   2. Chromium 146 D3D11on12 memory pressure (and equivalent bulk
+  //      GL_OUT_OF_MEMORY paths) — the GPU process drops every active context
+  //      via a single IPC, dispatching webglcontextlost synchronously to N
+  //      pool entries in the same animation frame. Counting each of those as
+  //      a separate breaker event would trip the threshold from one GPU event.
+  // To preserve case 1 while neutralising case 2, recordContextLoss is fed
+  // through scheduleContextLossFlush: per-frame burst coalescing means one
+  // GPU event = one breaker tick regardless of how many pool entries fired.
   private static readonly LOSS_THRESHOLD = 3;
   private static readonly LOSS_WINDOW_MS = 60_000;
 
@@ -141,6 +152,12 @@ export class TerminalWebGLManager {
   private hasLoggedSoftwareSkip = false;
   private lossTimestamps: number[] = [];
   private hasLoggedBreakerTrip = false;
+  // Burst coalescer for context-loss events: a bulk GPU-process eviction can
+  // synchronously fire webglcontextlost on every pool entry within one frame.
+  // pendingLossCount accumulates raw notifications; flushContextLoss records
+  // exactly one breaker tick per frame regardless of how many fired.
+  private pendingLossCount = 0;
+  private lossCoalesceRafId: number | null = null;
   // Pool-pressure diagnostics (Tier 0 — silent log). Eviction at a full pool is
   // expected behaviour in 20–30 terminal tiled fleets and falls back seamlessly
   // to the DOM renderer, so this is observable-only, not user-facing. Rate
@@ -286,6 +303,15 @@ export class TerminalWebGLManager {
     }
     this.atlasResyncRafId = null;
     this.atlasResyncPending.clear();
+    if (this.lossCoalesceRafId !== null) {
+      try {
+        cancelAnimationFrame(this.lossCoalesceRafId);
+      } catch {
+        // ignore
+      }
+    }
+    this.lossCoalesceRafId = null;
+    this.pendingLossCount = 0;
     for (const id of [...this.pool.keys()]) {
       this.doRelease(id);
     }
@@ -372,6 +398,26 @@ export class TerminalWebGLManager {
     }
   };
 
+  // Coalesce a burst of webglcontextlost events (one per active pool entry on
+  // a bulk GPU eviction — see LOSS_THRESHOLD comment) into one breaker tick.
+  private scheduleContextLossFlush(): void {
+    this.pendingLossCount += 1;
+    if (this.lossCoalesceRafId !== null) return;
+    const rafId = requestAnimationFrame(this.flushContextLoss);
+    // If flushContextLoss ran synchronously (test shim), pendingLossCount is
+    // already 0 and there is no rAF handle to retain.
+    if (this.pendingLossCount > 0) {
+      this.lossCoalesceRafId = rafId;
+    }
+  }
+
+  private flushContextLoss = (): void => {
+    this.lossCoalesceRafId = null;
+    if (this.pendingLossCount === 0) return;
+    this.pendingLossCount = 0;
+    this.recordContextLoss();
+  };
+
   private reacquireContext(id: string, entry: WebGLEntry): void {
     if (this.pool.get(id) !== entry) return;
     const managed = entry.managed;
@@ -410,7 +456,7 @@ export class TerminalWebGLManager {
       clDisposable = addon.onContextLoss(() => {
         if (this.pool.get(id)?.addon === ownAddon) {
           // record before release; pool entry still valid here
-          this.recordContextLoss();
+          this.scheduleContextLossFlush();
           this.releaseContext(id);
         }
       });
@@ -442,7 +488,7 @@ export class TerminalWebGLManager {
       if (element) {
         const captureHandler = (): void => {
           if (this.pool.get(id)?.addon !== ownAddon) return;
-          this.recordContextLoss();
+          this.scheduleContextLossFlush();
           this.releaseContext(id);
           try {
             if (managed.isOpened && managed.terminal.rows > 0) {

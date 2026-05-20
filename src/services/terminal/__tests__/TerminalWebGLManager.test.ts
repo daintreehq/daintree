@@ -839,6 +839,101 @@ describe("TerminalWebGLManager", () => {
       warnSpy.mockRestore();
     });
 
+    it("coalesces a same-frame loss burst across pool entries into one breaker tick", () => {
+      const handlers = captureContextLossHandlers();
+
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      const m3 = makeManagedTerminal();
+      const m4 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+      manager.ensureContext("t3", m3);
+      manager.ensureContext("t4", m4);
+
+      // Bulk GPU eviction (e.g. Chromium 146 D3D11on12 memory pressure) fires
+      // webglcontextlost on every pool entry within one animation frame. Queue
+      // the rAF so the burst collapses into a single breaker tick.
+      rafMode = "queued";
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
+      handlers[3]!();
+
+      expect(flushRafFrame()).toBe(true);
+      // The burst collapsed to one frame — nothing else queued.
+      expect(flushRafFrame()).toBe(false);
+
+      // One coalesced tick — far below LOSS_THRESHOLD, so the breaker must NOT
+      // have tripped and a new ensure must still attach. Flip rAF back to sync
+      // so the drain runs inline (matching how this suite's other tests work).
+      rafMode = "sync";
+      const before = WebglAddonMock.mock.calls.length;
+      const m5 = makeManagedTerminal();
+      manager.ensureContext("t5", m5);
+      expect(WebglAddonMock.mock.calls.length).toBe(before + 1);
+      expect(manager.isActive("t5")).toBe(true);
+    });
+
+    it("still trips on LOSS_THRESHOLD bursts across distinct frames", () => {
+      const handlers = captureContextLossHandlers();
+
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      const m3 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+      manager.ensureContext("t3", m3);
+
+      // Three genuinely distinct GPU events — one per frame — must each tick
+      // the breaker so the issue #6163 persistent-fault path still trips.
+      rafMode = "queued";
+      handlers[0]!();
+      flushRafFrame();
+      handlers[1]!();
+      flushRafFrame();
+      handlers[2]!();
+      flushRafFrame();
+
+      const before = WebglAddonMock.mock.calls.length;
+      const m4 = makeManagedTerminal();
+      manager.ensureContext("t4", m4);
+      expect(WebglAddonMock.mock.calls.length).toBe(before);
+      expect(manager.isActive("t4")).toBe(false);
+    });
+
+    it("dispose cancels a pending loss flush before it records a tick", () => {
+      const handlers = captureContextLossHandlers();
+
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      const m3 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+      manager.ensureContext("t3", m3);
+
+      rafMode = "queued";
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
+
+      manager.dispose();
+      // The queued rAF callback must be a no-op — pendingLossCount cleared and
+      // the rAF id cancelled, so flushing the queue records no breaker ticks.
+      flushRafFrame();
+
+      // Fresh manager should still acquire — the disposed manager's state is
+      // local to that instance, but a stray flush on the queue must not have
+      // tripped any console.warn breaker log either.
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      flushRafFrame();
+      const breakerWarnings = warnSpy.mock.calls.filter(
+        (args) => typeof args[0] === "string" && args[0].includes("circuit breaker")
+      );
+      expect(breakerWarnings).toHaveLength(0);
+      warnSpy.mockRestore();
+    });
+
     it("logs the breaker-trip warning only once", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const handlers = captureContextLossHandlers();
