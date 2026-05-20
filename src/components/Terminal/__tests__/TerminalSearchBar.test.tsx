@@ -240,6 +240,154 @@ describe("TerminalSearchBar", () => {
     expect(liveRegion.textContent).toBe("");
   });
 
+  it("renders the whole-word toggle initially unpressed", () => {
+    const mock = createMockManaged(true);
+    vi.mocked(terminalInstanceService.get).mockReturnValue(
+      mock as unknown as ReturnType<typeof terminalInstanceService.get>
+    );
+
+    renderSearchBar();
+    const button = screen.getByLabelText("Toggle whole word");
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("passes wholeWord: true to findNext when the toggle is on", async () => {
+    const mock = createMockManaged(true);
+    vi.mocked(terminalInstanceService.get).mockReturnValue(
+      mock as unknown as ReturnType<typeof terminalInstanceService.get>
+    );
+
+    renderSearchBar();
+    const input = screen.getByPlaceholderText("Find in terminal");
+
+    const wholeWordButton = screen.getByLabelText("Toggle whole word");
+    await act(() => {
+      fireEvent.click(wholeWordButton);
+    });
+
+    await act(() => {
+      fireEvent.change(input, { target: { value: "hello" } });
+    });
+    await act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(mock.searchAddon.findNext).toHaveBeenCalled();
+    const lastCall = mock.searchAddon.findNext.mock.calls.at(-1) as unknown[];
+    expect(lastCall[1]).toMatchObject({ wholeWord: true });
+  });
+
+  it("combines regex and wholeWord in findNext options", async () => {
+    const mock = createMockManaged(true);
+    vi.mocked(terminalInstanceService.get).mockReturnValue(
+      mock as unknown as ReturnType<typeof terminalInstanceService.get>
+    );
+
+    renderSearchBar();
+    const input = screen.getByPlaceholderText("Find in terminal");
+
+    await act(() => {
+      fireEvent.click(screen.getByLabelText("Toggle regex mode"));
+    });
+    await act(() => {
+      fireEvent.click(screen.getByLabelText("Toggle whole word"));
+    });
+
+    await act(() => {
+      fireEvent.change(input, { target: { value: "foo" } });
+    });
+    await act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(mock.searchAddon.findNext).toHaveBeenCalled();
+    const lastCall = mock.searchAddon.findNext.mock.calls.at(-1) as unknown[];
+    expect(lastCall[1]).toMatchObject({ regex: true, wholeWord: true });
+  });
+
+  it("marks the input invalid and surfaces the verbatim regex engine error", async () => {
+    const mock = createMockManaged(true);
+    vi.mocked(terminalInstanceService.get).mockReturnValue(
+      mock as unknown as ReturnType<typeof terminalInstanceService.get>
+    );
+
+    renderSearchBar();
+    const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+
+    await act(() => {
+      fireEvent.click(screen.getByLabelText("Toggle regex mode"));
+    });
+    await act(() => {
+      fireEvent.change(input, { target: { value: "[invalid" } });
+    });
+    await act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    // Tooltip mock renders content inline; require the engine-native message
+    // so a regression that swallows validation.error and shows only the
+    // generic fallback fails the test.
+    const renderedHtml = document.body.textContent ?? "";
+    expect(renderedHtml).toMatch(/Invalid regular expression/);
+  });
+
+  it("does not let a pending debounce overwrite an immediate toggle search", async () => {
+    const mock = createMockManaged(true);
+    vi.mocked(terminalInstanceService.get).mockReturnValue(
+      mock as unknown as ReturnType<typeof terminalInstanceService.get>
+    );
+
+    renderSearchBar();
+    const input = screen.getByPlaceholderText("Find in terminal");
+
+    // User types — schedules the 150ms debounce
+    await act(() => {
+      fireEvent.change(input, { target: { value: "foo" } });
+    });
+    // Before the debounce fires, click whole-word — should cancel the
+    // pending literal search and run an immediate {wholeWord: true} search.
+    await act(() => {
+      fireEvent.click(screen.getByLabelText("Toggle whole word"));
+    });
+    // Advance past the (now-cancelled) debounce horizon.
+    await act(() => {
+      vi.advanceTimersByTime(200);
+    });
+
+    expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(1);
+    const onlyCall = mock.searchAddon.findNext.mock.calls[0] as unknown[];
+    expect(onlyCall[1]).toMatchObject({ wholeWord: true });
+  });
+
+  it("clears the regex error state when the regex toggle is turned off", async () => {
+    const mock = createMockManaged(true);
+    vi.mocked(terminalInstanceService.get).mockReturnValue(
+      mock as unknown as ReturnType<typeof terminalInstanceService.get>
+    );
+
+    renderSearchBar();
+    const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
+
+    await act(() => {
+      fireEvent.click(screen.getByLabelText("Toggle regex mode"));
+    });
+    await act(() => {
+      fireEvent.change(input, { target: { value: "[invalid" } });
+    });
+    await act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+
+    await act(() => {
+      fireEvent.click(screen.getByLabelText("Toggle regex mode"));
+    });
+
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+  });
+
   it("disposes the onDidChangeResults subscription on unmount", () => {
     const mock = createMockManaged(true);
     vi.mocked(terminalInstanceService.get).mockReturnValue(

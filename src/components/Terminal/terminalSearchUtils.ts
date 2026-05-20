@@ -16,8 +16,7 @@ export function validateRegexTerm(
   error?: string;
 } {
   try {
-    const normalizedTerm = caseSensitive ? term : term.toLowerCase();
-    new RegExp(normalizedTerm, "g");
+    new RegExp(term, caseSensitive ? "g" : "gi");
     return { isValid: true };
   } catch (e) {
     return {
@@ -67,13 +66,20 @@ export function getSearchDecorationColors(): SearchDecorationOptions {
   };
 }
 
-export function buildSearchOptions(caseSensitive: boolean, regexEnabled: boolean): ISearchOptions {
+export function buildSearchOptions(
+  caseSensitive: boolean,
+  regexEnabled: boolean,
+  wholeWord = false
+): ISearchOptions {
   const options: ISearchOptions = {
     caseSensitive,
     decorations: getSearchDecorationColors(),
   };
   if (regexEnabled) {
     options.regex = true;
+  }
+  if (wholeWord) {
+    options.wholeWord = true;
   }
   return options;
 }
