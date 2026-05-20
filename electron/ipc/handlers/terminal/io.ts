@@ -3,6 +3,7 @@
  */
 
 import { ipcMain } from "electron";
+import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { TerminalResizePayload } from "../../../types/index.js";
@@ -104,7 +105,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     try {
       const parseResult = TerminalResizePayloadSchema.safeParse(payload);
       if (!parseResult.success) {
-        console.error("[IPC] Invalid terminal resize payload:", parseResult.error.format());
+        console.error("[IPC] Invalid terminal resize payload:", z.prettifyError(parseResult.error));
         return;
       }
 

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { z } from "zod";
 import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminalType } from "@xterm/headless";
 import headless from "@xterm/headless";
@@ -483,7 +484,7 @@ export class TerminalProcess {
       } else {
         console.error(
           "[TerminalProcess] Invalid agent:spawned payload:",
-          validatedSpawned.error.format()
+          z.prettifyError(validatedSpawned.error)
         );
       }
     }
