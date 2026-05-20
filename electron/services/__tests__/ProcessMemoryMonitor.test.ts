@@ -693,6 +693,66 @@ describe("ProcessMemoryMonitor", () => {
 
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
     });
+
+    it("escalates to tier 2 when the post-settle re-sample throws", async () => {
+      // Regression: the post-settle catch block must produce deltaMb=0,
+      // not deltaMb=beforeMb, so the AND gate falls through to escalation.
+      // Without `afterMb = beforeMb` inside the catch, the large derived
+      // delta would suppress tier 2 even with pressureRemains=true.
+      let cleared = false;
+      mockGetAppMetrics.mockImplementation(() => {
+        if (cleared) {
+          throw new Error("getAppMetrics unavailable");
+        }
+        return [makeMetric("Browser", 350 * 1024, 100)];
+      });
+      mockActions.clearCaches = vi.fn().mockImplementation(async () => {
+        cleared = true;
+      });
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({
+          pressureRemains: true,
+          resampleFailed: true,
+          deltaMb: 0,
+        })
+      );
+    });
+
+    it("consumes tier-2 cooldown even when hibernateIdleProjects throws", async () => {
+      // Regression: lastTier2At must be stamped before the tier-2 awaits.
+      // Otherwise a partial failure (destroyHiddenWebviews(2) succeeds,
+      // hibernateIdleProjects throws) leaves the cooldown unconsumed and the
+      // next pressure poll re-fires destroyHiddenWebviews(2).
+      arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 345 });
+      mockActions.hibernateIdleProjects = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("hibernate failed"))
+        .mockResolvedValue(undefined);
+
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+      // First cycle: tier-2 attempted, destroyHiddenWebviews(2) called,
+      // hibernate throws. Cooldown should still be consumed.
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+      const destroyCallsAfterFirst = vi
+        .mocked(mockActions.destroyHiddenWebviews)
+        .mock.calls.filter((c) => c[0] === 2).length;
+      expect(destroyCallsAfterFirst).toBe(1);
+
+      // Second cycle within cooldown: no new tier-2 fire.
+      await advancePolls(3);
+      const destroyCallsAfterSecond = vi
+        .mocked(mockActions.destroyHiddenWebviews)
+        .mock.calls.filter((c) => c[0] === 2).length;
+      expect(destroyCallsAfterSecond).toBe(1);
+    });
   });
 
   describe("blink memory sampling (issue #6272)", () => {
