@@ -66,7 +66,6 @@ export interface ContentGridContext {
   defaultCwd?: string;
   agentAvailability?: CliAvailability;
   emptyContent?: React.ReactNode;
-  panelsById: Record<string, TerminalInstance>;
   gridTerminals: TerminalInstance[];
   tabGroups: TabGroup[];
   focusedId: string | null;
@@ -137,9 +136,17 @@ export function useContentGridContext({
   emptyContent,
 }: ContentGridProps): ContentGridResult {
   "use memo";
+  // Subscribe only to structural fields. `panelsById` itself is intentionally
+  // excluded — `updateAgentState`/`updateActivity` spread it on every agent
+  // tick, which would invalidate `useShallow` and re-run the whole hook. The
+  // structural deps below (`panelIds`, `tabGroups`, `panelIdsByWorktreeId`,
+  // `trashedTerminals`) only change on add/remove/move/trash/restore. The
+  // memos that actually need per-panel fields read `panelsById` non-reactively
+  // via `usePanelStore.getState()` at evaluation time. See issue #8593.
   const {
-    panelsById,
     storeTerminalIds,
+    storeTabGroups,
+    panelIdsByWorktreeId,
     trashedTerminals,
     focusedId,
     maximizedId,
@@ -152,8 +159,9 @@ export function useContentGridContext({
     setFocused,
   } = usePanelStore(
     useShallow((state) => ({
-      panelsById: state.panelsById,
       storeTerminalIds: state.panelIds,
+      storeTabGroups: state.tabGroups,
+      panelIdsByWorktreeId: state.panelIdsByWorktreeId,
       trashedTerminals: state.trashedTerminals,
       focusedId: state.focusedId,
       maximizedId: state.maximizedId,
@@ -205,18 +213,22 @@ export function useContentGridContext({
 
   const gridTerminals = useMemo(() => {
     const result: TerminalInstance[] = [];
-    for (const id of storeTerminalIds) {
-      const t = panelsById[id];
-      if (
-        t &&
-        (t.location === "grid" || t.location === undefined) &&
-        (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      ) {
+    // Scope to a single worktree's bucket so per-terminal ticks in unrelated
+    // worktrees do not re-evaluate this memo. `panelIdsByWorktreeId` is
+    // maintained at write-time and preserves bucket reference stability
+    // (see #7451). Read `panelsById` non-reactively — structural changes are
+    // already captured by `panelIdsByWorktreeId`.
+    const ids = panelIdsByWorktreeId[activeWorktreeId ?? "__none__"];
+    if (!ids || ids.length === 0) return result;
+    const byId = usePanelStore.getState().panelsById;
+    for (const id of ids) {
+      const t = byId[id];
+      if (t && (t.location === "grid" || t.location === undefined)) {
         result.push(t);
       }
     }
     return result;
-  }, [panelsById, storeTerminalIds, activeWorktreeId]);
+  }, [panelIdsByWorktreeId, activeWorktreeId]);
 
   const getTabGroups = usePanelStore((state) => state.getTabGroups);
   const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
@@ -228,11 +240,16 @@ export function useContentGridContext({
   const setActiveTab = usePanelStore((state) => state.setActiveTab);
 
   const tabGroups = useMemo(() => {
+    // Structural-change triggers. `storeTabGroups` covers tab-group mutations.
+    // `trashedTerminals` covers the trash-without-tab-group edge case in
+    // `trashActions.ts` where `tabGroups` reference doesn't change but the
+    // trashed terminal must disappear from the grid (see contentGridTrashDep
+    // regression test).
     void storeTerminalIds;
-    void panelsById;
+    void storeTabGroups;
     void trashedTerminals;
     return getTabGroups("grid", activeWorktreeId ?? undefined);
-  }, [getTabGroups, activeWorktreeId, storeTerminalIds, panelsById, trashedTerminals]);
+  }, [getTabGroups, activeWorktreeId, storeTerminalIds, storeTabGroups, trashedTerminals]);
 
   const handleAddTabForPanel = useCallback(
     async (panel: TerminalInstance) => {
@@ -526,8 +543,12 @@ export function useContentGridContext({
 
   const fleetPanels = useMemo(() => {
     if (!isFleetScopeEnabled) return [];
-    return buildFleetPanels(armOrder, armedIds, panelsById);
-  }, [isFleetScopeEnabled, armOrder, armedIds, panelsById]);
+    // Read `panelsById` non-reactively. Structural invalidation comes from
+    // `armOrder`/`armedIds` (fleet membership) and `storeTerminalIds` (panel
+    // add/remove/location change — a panel moving to `trash`/`background`
+    // would otherwise leave a stale entry here).
+    return buildFleetPanels(armOrder, armedIds, usePanelStore.getState().panelsById);
+  }, [isFleetScopeEnabled, armOrder, armedIds, storeTerminalIds]);
 
   const isFleetScopeRender = isFleetScopeEnabled && fleetPanels.length > 0;
 
@@ -826,7 +847,6 @@ export function useContentGridContext({
     defaultCwd,
     agentAvailability,
     emptyContent,
-    panelsById,
     gridTerminals,
     tabGroups,
     focusedId,
