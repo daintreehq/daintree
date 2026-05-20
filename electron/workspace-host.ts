@@ -37,6 +37,14 @@ import { ensureSerializable } from "../shared/utils/serialization.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../shared/utils/forgeProviderIds.js";
 import { fanoutEventToWorktreePorts } from "./workspace-host/worktreePortFanout.js";
+import { PERF_MARKS } from "../shared/perf/marks.js";
+import { markHostPerformance } from "./utils/hostPerformance.js";
+
+// First user-code statement after all imports settle. ESM hoists native
+// module dlopen (better-sqlite3 via WorkspaceService, @parcel/watcher) ahead
+// of any statement here, so this is the earliest feasible proxy for "native
+// modules loaded". The exact dlopen instant is not reachable from ESM.
+markHostPerformance(PERF_MARKS.WORKSPACE_HOST_NATIVE_MODULE_READY);
 
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
@@ -712,4 +720,5 @@ process.on("SIGTERM", () => {
 
 // Signal ready
 console.log("[WorkspaceHost] Initialized and ready");
+markHostPerformance(PERF_MARKS.WORKSPACE_HOST_READY_POSTED);
 sendEvent({ type: "ready" });

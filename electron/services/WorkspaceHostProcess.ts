@@ -3,15 +3,18 @@ import { EventEmitter } from "events";
 import { createHash } from "crypto";
 import path from "path";
 import os from "os";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "url";
 import type {
   WorkspaceHostRequest,
   WorkspaceHostEvent,
   WorkspaceClientConfig,
 } from "../../shared/types/workspace-host.js";
+import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { GitHubAuth } from "./github/GitHubAuth.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { createLogger } from "../utils/logger.js";
+import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../shared/utils/forgeProviderIds.js";
 
@@ -495,6 +498,14 @@ export class WorkspaceHostProcess extends EventEmitter {
     const electronDir = path.basename(__dirname) === "chunks" ? path.dirname(__dirname) : __dirname;
     const hostPath = path.join(electronDir, "workspace-host-bootstrap.js");
 
+    // Anchor cross-process timing for the host's per-phase marks. The child
+    // has its own `performance.timeOrigin`, so we ship a wall-clock-aligned
+    // float (sub-ms precision) and let the child subtract.
+    const forkAbsMs = performance.timeOrigin + performance.now();
+    markPerformance(PERF_MARKS.WORKSPACE_HOST_FORK_DISPATCHED, {
+      serviceName: this.serviceName,
+    });
+
     try {
       this.child = utilityProcess.fork(hostPath, [], {
         serviceName: this.serviceName,
@@ -507,6 +518,11 @@ export class WorkspaceHostProcess extends EventEmitter {
           ...(process.env as Record<string, string>),
           DAINTREE_USER_DATA: app.getPath("userData"),
           DAINTREE_UTILITY_PROCESS_KIND: "workspace-host",
+          DAINTREE_PERF_FORK_ABS_MS: String(forkAbsMs),
+          DAINTREE_PERF_MAIN_BOOT_ABS_MS: String(mainBootAbsMs),
+          // Per-instance label so concurrent workspace-host marks (two projects
+          // open) remain distinguishable in the shared NDJSON.
+          DAINTREE_WORKSPACE_SERVICE_NAME: this.serviceName,
         },
       });
     } catch (error) {

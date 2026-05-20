@@ -33,12 +33,15 @@
 import { app, utilityProcess, type UtilityProcess } from "electron";
 import os from "os";
 import path from "path";
+import { performance } from "node:perf_hooks";
+import { PERF_MARKS } from "../../../shared/perf/marks.js";
 import type {
   CrashType,
   HostCrashPayload,
   PtyHostEvent,
   PtyHostRequest,
 } from "../../../shared/types/pty-host.js";
+import { mainBootAbsMs, markPerformance } from "../../utils/performance.js";
 
 /**
  * Map an authoritative `child-process-gone` reason (Electron 37+) to our CrashType.
@@ -298,6 +301,12 @@ export class PtyHostLifecycle {
 
     const hostPath = path.join(this.config.electronDir, "pty-host-bootstrap.js");
 
+    // Anchor cross-process timing for the host's per-phase marks. The child
+    // has its own `performance.timeOrigin`, so we ship a wall-clock-aligned
+    // float (sub-ms precision) and let the child subtract.
+    const forkAbsMs = performance.timeOrigin + performance.now();
+    markPerformance(PERF_MARKS.PTY_HOST_FORK_DISPATCHED);
+
     try {
       this.child = utilityProcess.fork(hostPath, [], {
         serviceName: "daintree-pty-host",
@@ -319,6 +328,8 @@ export class PtyHostLifecycle {
           // can gate themselves on `!== "0"` without touching `app.isPackaged`.
           DAINTREE_IS_PACKAGED: app.isPackaged ? "1" : "0",
           DAINTREE_UTILITY_PROCESS_KIND: "pty-host",
+          DAINTREE_PERF_FORK_ABS_MS: String(forkAbsMs),
+          DAINTREE_PERF_MAIN_BOOT_ABS_MS: String(mainBootAbsMs),
           // node-pty 1.x hangs intermittently on Linux kernels with io_uring
           // enabled (microsoft/node-pty#630, closed as not planned). The fix
           // is permanent and must be set inside the explicit env object — a

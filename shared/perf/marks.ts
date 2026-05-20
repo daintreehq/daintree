@@ -16,6 +16,16 @@ export const PERF_MARKS = {
   DEFERRED_SERVICES_START: "deferred_services_start",
   DEFERRED_SERVICES_COMPLETE: "deferred_services_complete",
 
+  PTY_HOST_FORK_DISPATCHED: "pty_host_fork_dispatched",
+  PTY_HOST_MODULE_EVAL_COMPLETE: "pty_host_module_eval_complete",
+  PTY_HOST_NATIVE_MODULE_READY: "pty_host_native_module_ready",
+  PTY_HOST_READY_POSTED: "pty_host_ready_posted",
+
+  WORKSPACE_HOST_FORK_DISPATCHED: "workspace_host_fork_dispatched",
+  WORKSPACE_HOST_MODULE_EVAL_COMPLETE: "workspace_host_module_eval_complete",
+  WORKSPACE_HOST_NATIVE_MODULE_READY: "workspace_host_native_module_ready",
+  WORKSPACE_HOST_READY_POSTED: "workspace_host_ready_posted",
+
   HYDRATE_START: "hydrate_start",
   HYDRATE_RESTORE_PANELS_START: "hydrate_restore_panels_start",
   HYDRATE_RESTORE_PANELS_END: "hydrate_restore_panels_end",
