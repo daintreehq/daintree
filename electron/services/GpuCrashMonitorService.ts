@@ -40,6 +40,23 @@ export function isGpuAngleFallbackByFlag(userDataPath: string): boolean {
   return fs.existsSync(path.join(userDataPath, GPU_ANGLE_FALLBACK_FLAG));
 }
 
+/**
+ * True only when the app is *actually* running with ANGLE/Vulkan fallback.
+ * The crash listener writes `gpu-angle-fallback.flag` on any platform after
+ * the first GPU crash, but `electron/setup/environment.ts` only appends the
+ * ANGLE switches on Linux Wayland (and only when hardware acceleration is
+ * still on). Use this for UI surfaces so macOS / Linux X11 / Windows don't
+ * show a misleading "running in ANGLE mode" warning when ANGLE was never
+ * engaged. Keep `isGpuAngleFallbackByFlag` for raw-flag inspection
+ * (diagnostics, environment-module bootstrap).
+ */
+export function isGpuAngleFallbackApplied(userDataPath: string): boolean {
+  if (process.platform !== "linux") return false;
+  if (process.env.XDG_SESSION_TYPE !== "wayland") return false;
+  if (isGpuDisabledByFlag(userDataPath)) return false;
+  return isGpuAngleFallbackByFlag(userDataPath);
+}
+
 export function writeGpuAngleFallbackFlag(userDataPath: string): void {
   fs.writeFileSync(path.join(userDataPath, GPU_ANGLE_FALLBACK_FLAG), String(Date.now()), "utf8");
 }

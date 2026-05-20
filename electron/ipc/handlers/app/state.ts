@@ -25,7 +25,7 @@ export const CRASH_CRITICAL_FIELDS = new Set([
 import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
 import {
   isGpuDisabledByFlag,
-  isGpuAngleFallbackByFlag,
+  isGpuAngleFallbackApplied,
 } from "../../../services/GpuCrashMonitorService.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
 import { closeTelemetry } from "../../../services/TelemetryService.js";
@@ -294,7 +294,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       agentSettings: store.get("agentSettings"),
       gpuWebGLHardware,
       gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
-      gpuAngleFallbackActive: isGpuAngleFallbackByFlag(app.getPath("userData")),
+      gpuAngleFallbackActive: isGpuAngleFallbackApplied(app.getPath("userData")),
       safeMode: inSafeMode,
       isWindowsStore:
         (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,

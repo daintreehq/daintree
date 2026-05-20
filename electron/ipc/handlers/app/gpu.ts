@@ -3,7 +3,7 @@ import { CHANNELS } from "../../channels.js";
 import { store } from "../../../store.js";
 import {
   isGpuDisabledByFlag,
-  isGpuAngleFallbackByFlag,
+  isGpuAngleFallbackApplied,
   writeGpuDisabledFlag,
   clearGpuDisabledFlag,
   clearGpuAngleFallbackFlag,
@@ -18,7 +18,7 @@ export function registerGpuHandlers(): () => void {
     const userDataPath = app.getPath("userData");
     return {
       hardwareAccelerationDisabled: isGpuDisabledByFlag(userDataPath),
-      angleFallbackActive: isGpuAngleFallbackByFlag(userDataPath),
+      angleFallbackActive: isGpuAngleFallbackApplied(userDataPath),
     };
   };
   handlers.push(typedHandle(CHANNELS.GPU_GET_STATUS, handleGetStatus));

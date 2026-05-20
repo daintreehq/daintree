@@ -34,6 +34,7 @@ vi.mock("../../../store.js", () => ({ store: storeMock }));
 const gpuMonitorMock = vi.hoisted(() => ({
   isGpuDisabledByFlag: vi.fn(() => false),
   isGpuAngleFallbackByFlag: vi.fn(() => false),
+  isGpuAngleFallbackApplied: vi.fn(() => false),
   writeGpuDisabledFlag: vi.fn(),
   clearGpuDisabledFlag: vi.fn(),
   clearGpuAngleFallbackFlag: vi.fn(),
@@ -118,7 +119,7 @@ describe("GPU_GET_STATUS handler", () => {
 
   it("returns both flag states as false by default", async () => {
     gpuMonitorMock.isGpuDisabledByFlag.mockReturnValue(false);
-    gpuMonitorMock.isGpuAngleFallbackByFlag.mockReturnValue(false);
+    gpuMonitorMock.isGpuAngleFallbackApplied.mockReturnValue(false);
 
     registerGpuHandlers();
     const handler = ipcMainMock._handlers.get("gpu:get-status")!;
@@ -131,9 +132,9 @@ describe("GPU_GET_STATUS handler", () => {
     });
   });
 
-  it("reports angleFallbackActive=true when the ANGLE flag exists", async () => {
+  it("reports angleFallbackActive=true when ANGLE is actually applied", async () => {
     gpuMonitorMock.isGpuDisabledByFlag.mockReturnValue(false);
-    gpuMonitorMock.isGpuAngleFallbackByFlag.mockReturnValue(true);
+    gpuMonitorMock.isGpuAngleFallbackApplied.mockReturnValue(true);
 
     registerGpuHandlers();
     const handler = ipcMainMock._handlers.get("gpu:get-status")!;
@@ -145,12 +146,33 @@ describe("GPU_GET_STATUS handler", () => {
 
     expect(result.angleFallbackActive).toBe(true);
     expect(result.hardwareAccelerationDisabled).toBe(false);
-    expect(gpuMonitorMock.isGpuAngleFallbackByFlag).toHaveBeenCalledWith("/tmp/user-data");
+    expect(gpuMonitorMock.isGpuAngleFallbackApplied).toHaveBeenCalledWith("/tmp/user-data");
+  });
+
+  it("reports angleFallbackActive=false when the flag exists but ANGLE is not applied", async () => {
+    // Mirrors the macOS / Linux X11 / Windows case: GpuCrashMonitorService
+    // writes the flag on any platform after the first GPU crash, but
+    // environment.ts only appends the ANGLE switches on Linux Wayland.
+    // isGpuAngleFallbackApplied gates on platform so non-Wayland users
+    // don't see a misleading "running in ANGLE mode" warning.
+    gpuMonitorMock.isGpuDisabledByFlag.mockReturnValue(false);
+    gpuMonitorMock.isGpuAngleFallbackByFlag.mockReturnValue(true);
+    gpuMonitorMock.isGpuAngleFallbackApplied.mockReturnValue(false);
+
+    registerGpuHandlers();
+    const handler = ipcMainMock._handlers.get("gpu:get-status")!;
+
+    const result = (await handler({} as Electron.IpcMainInvokeEvent)) as {
+      hardwareAccelerationDisabled: boolean;
+      angleFallbackActive: boolean;
+    };
+
+    expect(result.angleFallbackActive).toBe(false);
   });
 
   it("reports hardwareAccelerationDisabled=true when the disable flag exists", async () => {
     gpuMonitorMock.isGpuDisabledByFlag.mockReturnValue(true);
-    gpuMonitorMock.isGpuAngleFallbackByFlag.mockReturnValue(false);
+    gpuMonitorMock.isGpuAngleFallbackApplied.mockReturnValue(false);
 
     registerGpuHandlers();
     const handler = ipcMainMock._handlers.get("gpu:get-status")!;
