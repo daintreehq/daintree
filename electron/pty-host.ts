@@ -58,6 +58,7 @@ import {
   type RendererConnection,
 } from "./pty-host/handlers/index.js";
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
+import { SCROLLBACK_MIN } from "../shared/config/scrollback.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 
 // Validate we're running in UtilityProcess context
@@ -259,6 +260,7 @@ const resourceGovernor = new ResourceGovernor({
       lastInputTime: t.lastInputTime,
       agentState: t.agentState,
     })),
+  trimBuffers: () => ptyManager.trimScrollback(SCROLLBACK_MIN),
   getPendingBytesSnapshot: () => {
     // Merge SAB-path, IPC-path, and per-window MessagePort-path queue depths so
     // the reliability gauge captures every in-flight byte the pty-host is holding.
