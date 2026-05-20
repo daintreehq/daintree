@@ -250,6 +250,27 @@ describe("createWatchdog", () => {
       expect(killMain).toHaveBeenCalledTimes(1);
     });
 
+    it("grace boundary is strict `<` — tick at exactly HEARTBEAT_INTERVAL_MS counts", () => {
+      // Off-by-one guard: if the comparison were `<=`, the very first tick
+      // after the grace window expires would still be suppressed, delaying
+      // detection by one extra interval. Verify the boundary is `<`.
+      const killMain = vi.fn();
+      let now = 1000;
+      const wd = createWatchdog({ killMain, logError: () => {}, now: () => now });
+      wd.handleMessage({ type: "ping" });
+      wd.handleMessage({ type: "wake" });
+
+      // At `lastWakeTimestamp + HEARTBEAT_INTERVAL_MS - 1` the grace still applies.
+      now += HEARTBEAT_INTERVAL_MS - 1;
+      for (let i = 0; i < MAX_MISSED; i++) wd.tick();
+      expect(killMain).not.toHaveBeenCalled();
+
+      // At `lastWakeTimestamp + HEARTBEAT_INTERVAL_MS` the grace lifts.
+      now = 1000 + HEARTBEAT_INTERVAL_MS;
+      for (let i = 0; i < MAX_MISSED; i++) wd.tick();
+      expect(killMain).toHaveBeenCalledTimes(1);
+    });
+
     it("`wake` message records the current monotonic timestamp", () => {
       let now = 5000;
       const wd = createWatchdog({ killMain: vi.fn(), logError: () => {}, now: () => now });

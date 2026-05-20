@@ -372,6 +372,73 @@ describe("MainProcessWatchdogClient", () => {
     expect(shared.forkMock.mock.calls.length).toBe(4);
   });
 
+  it("sliding window trims crashes older than RAPID_CRASH_WINDOW_MS without relying on the stability timer", () => {
+    // Isolates the per-crash filter trim from the stability timer's bulk
+    // clear. After a single crash, advance past the window but stop short
+    // of `STABILITY_TIMEOUT_MS` to keep the stability timer pending — the
+    // next crash must observe an empty window via the filter, not the
+    // timer. Both knobs happen to be 300s in this codebase, so we use a
+    // first crash that's well inside the window, then a brief restart, so
+    // the stability timer is restarted by the new fork and never fires.
+    new WatchdogClient({ mainPid: 4242 });
+
+    let currentChild = mockChild;
+    // First crash — schedules a restart and a fresh stability timer.
+    let next = createMockChild();
+    shared.forkMock.mockReturnValueOnce(next);
+    currentChild.emit("exit", 1);
+    vi.advanceTimersByTime(6_000);
+    currentChild = next;
+    expect(shared.forkMock).toHaveBeenCalledTimes(2);
+
+    // Crash again at t≈12s — second crash in window.
+    next = createMockChild();
+    shared.forkMock.mockReturnValueOnce(next);
+    currentChild.emit("exit", 1);
+    vi.advanceTimersByTime(6_000);
+    currentChild = next;
+    expect(shared.forkMock).toHaveBeenCalledTimes(3);
+
+    // Advance past RAPID_CRASH_WINDOW_MS (300s) so the prior two crash
+    // timestamps decay out of the filter. The stability timer restarts on
+    // every fork, so it last started at t≈18s and would fire at t≈318s.
+    // Stop just before that.
+    vi.advanceTimersByTime(295_000);
+
+    // Now crash 3 more times. If trimming works, each crash starts a fresh
+    // window, so we get 2 more restarts before the 3rd hits the cap.
+    for (let i = 0; i < 3; i++) {
+      next = createMockChild();
+      shared.forkMock.mockReturnValueOnce(next);
+      currentChild.emit("exit", 1);
+      vi.advanceTimersByTime(6_000);
+      currentChild = next;
+    }
+    // Initial(1) + 2 + 2 = 5. If trimming were broken, the first post-decay
+    // crash would land as the 3rd entry in the window and trip the cap
+    // immediately — count would stay at 3.
+    expect(shared.forkMock.mock.calls.length).toBe(5);
+  });
+
+  it("dispose() while a restart timer is pending suppresses the restart fork", () => {
+    // Pre-fix regression: if `dispose()` only cleared the timer but the
+    // timer callback didn't recheck `isDisposed`, a near-instant
+    // dispose-after-crash race could still spawn a watchdog after we
+    // committed to shutting down.
+    const client = new WatchdogClient({ mainPid: 4242 });
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+
+    // Crash → restart timer scheduled.
+    mockChild.emit("exit", 1);
+
+    // Dispose before the restart cap elapses.
+    client.dispose();
+
+    // Advance past the cap — the restart fork must NOT happen.
+    vi.advanceTimersByTime(10_000);
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+  });
+
   it("uses watchdog-specific jitter constants distinct from PtyHostLifecycle", () => {
     // The watchdog must not share jitter ranges with PtyHostLifecycle —
     // correlated restart delays trigger simultaneous fork storms when both
