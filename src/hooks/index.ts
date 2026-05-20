@@ -115,6 +115,9 @@ export { useDebounce } from "./useDebounce";
 
 export { useDeferredLoading } from "./useDeferredLoading";
 
+export { useTabLoad } from "./useTabLoad";
+export type { UseTabLoadOptions, UseTabLoadResult } from "./useTabLoad";
+
 export { useSlowCall } from "./useSlowCall";
 export type { UseSlowCallOptions, UseSlowCallReturn } from "./useSlowCall";
 

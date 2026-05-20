@@ -5,7 +5,9 @@ import { Key, Check, AlertCircle, FlaskConical, ExternalLink, Github } from "luc
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
 import type { GitHubTokenConfig, GitHubTokenValidation } from "@/types";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
+import { useTabLoad } from "@/hooks";
 import { logError } from "@/utils/logger";
 
 interface ForgeSettingBlockProps {
@@ -45,9 +47,9 @@ type ValidationResult = "success" | "error" | "test-success" | "test-error" | nu
 export function GitHubSettingsTab() {
   const {
     config: githubConfig,
-    isLoading,
-    error: loadError,
+    error: storeError,
     initialize,
+    refresh,
     updateConfig,
   } = useGitHubConfigStore();
   const [githubToken, setGithubToken] = useState("");
@@ -56,13 +58,17 @@ export function GitHubSettingsTab() {
   const [validationResult, setValidationResult] = useState<ValidationResult>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const [loadTimedOut, setLoadTimedOut] = useState(false);
-
-  useEffect(() => {
-    initialize();
-    const timer = setTimeout(() => setLoadTimedOut(true), 10_000);
-    return () => clearTimeout(timer);
-  }, [initialize]);
+  // initialize() is singleflight via the store's `initPromise` — calling it
+  // again on retry returns the hung promise. refresh() always issues a fresh
+  // IPC, so retry routes through it (see useTabLoad jsdoc). The store catches
+  // load failures internally and surfaces them via its `error` field; the hook
+  // only needs to watch for the timeout case.
+  const { loadError: timeoutError, retryAction } = useTabLoad({
+    initialize,
+    retry: refresh,
+    timeoutMessage: "GitHub settings took too long to load.",
+  });
+  const loadError = timeoutError ?? storeError;
 
   useEffect(() => {
     if (!validationResult) return;
@@ -184,47 +190,12 @@ export function GitHubSettingsTab() {
     );
   };
 
-  useSettingsTabValidation("code-forge", Boolean(loadError) || loadTimedOut);
-
-  if (isLoading) {
-    if (loadTimedOut) {
-      return (
-        <div className="flex flex-col items-center justify-center h-32 gap-3">
-          <div className="text-status-error text-sm">Settings load timed out</div>
-          <button
-            onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
-            className="text-xs px-3 py-1.5 border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
-          >
-            Reload Application
-          </button>
-        </div>
-      );
-    }
-    return (
-      <div className="flex items-center justify-center h-32">
-        <div className="text-daintree-text/60 text-sm">Loading GitHub settings...</div>
-      </div>
-    );
-  }
-
-  if (loadError || !githubConfig) {
-    return (
-      <div className="flex flex-col items-center justify-center h-32 gap-3">
-        <div className="text-status-error text-sm">
-          {loadError || "Failed to load GitHub settings"}
-        </div>
-        <button
-          onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
-          className="text-xs px-3 py-1.5 border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
-        >
-          Reload Application
-        </button>
-      </div>
-    );
-  }
+  useSettingsTabValidation("code-forge", Boolean(loadError));
 
   return (
     <div className="space-y-4">
+      {loadError && <SettingsLoadErrorBanner message={loadError} onRetry={retryAction} />}
+
       <ForgeSettingBlock
         id="github-token"
         icon={Key}

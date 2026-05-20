@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, useMemo, type ComponentType, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { GitBranch, Github, Key, Check, AlertCircle } from "lucide-react";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
@@ -9,7 +17,9 @@ import {
 } from "./ForgeProviderSelectorDropdown";
 import { GitHubSettingsTab } from "./GitHubSettingsTab";
 import { ForgeIntegrationsTab } from "./ForgeIntegrationsTab";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
+import { useTabLoad } from "@/hooks";
 import { logError } from "@/utils/logger";
 
 type ForgeIcon = ComponentType<{ className?: string; size?: number; "aria-hidden"?: boolean }>;
@@ -20,7 +30,6 @@ function getForgeIcon(id: string): ForgeIcon {
 
 const GENERAL_ID = "general";
 const GITHUB_ID = "github";
-const PROVIDER_LOAD_TIMEOUT_MS = 10_000;
 const CREDENTIAL_RESULT_DISPLAY_MS = 5000;
 
 interface CodeForgeSettingsTabProps {
@@ -30,38 +39,22 @@ interface CodeForgeSettingsTabProps {
 
 export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForgeSettingsTabProps) {
   const [providers, setProviders] = useState<ForgeProviderEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [loadTimedOut, setLoadTimedOut] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoadTimedOut(false);
-    const timer = setTimeout(() => {
-      if (!cancelled) setLoadTimedOut(true);
-    }, PROVIDER_LOAD_TIMEOUT_MS);
-
-    window.electron.forge
-      .getProviders()
-      .then((loaded) => {
-        if (cancelled) return;
-        setProviders(loaded);
-        setLoadTimedOut(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setLoadError("Couldn't load forge providers");
-        logError("Failed to load forge providers for CodeForgeSettingsTab", err);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
+  const loadProviders = useCallback(async () => {
+    try {
+      const loaded = await window.electron.forge.getProviders();
+      setProviders(loaded);
+    } catch (err) {
+      logError("Failed to load forge providers for CodeForgeSettingsTab", err);
+      throw err;
+    }
   }, []);
+
+  const { loadError, retryAction } = useTabLoad({
+    initialize: loadProviders,
+    errorMessage: "Couldn't load forge providers",
+    timeoutMessage: "Forge providers took too long to load.",
+  });
 
   const providerOptions = useMemo<ForgeProviderOption[]>(
     () =>
@@ -79,42 +72,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       ? activeSubtab
       : GITHUB_ID;
 
-  useSettingsTabValidation("code-forge", Boolean(loadError) || loadTimedOut);
-
-  if (loading) {
-    if (loadTimedOut) {
-      return (
-        <div className="flex flex-col items-center justify-center h-32 gap-3">
-          <div className="text-status-error text-sm">Settings load timed out</div>
-          <button
-            onClick={() => window.location.reload()}
-            className="text-xs px-3 py-1.5 border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
-          >
-            Reload Application
-          </button>
-        </div>
-      );
-    }
-    return (
-      <div className="flex items-center justify-center h-32">
-        <div className="text-daintree-text/60 text-sm">Loading forge settings...</div>
-      </div>
-    );
-  }
-
-  if (loadError) {
-    return (
-      <div className="flex flex-col items-center justify-center h-32 gap-3">
-        <div className="text-status-error text-sm">{loadError}</div>
-        <button
-          onClick={() => window.location.reload()}
-          className="text-xs px-3 py-1.5 border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
-        >
-          Reload Application
-        </button>
-      </div>
-    );
-  }
+  useSettingsTabValidation("code-forge", Boolean(loadError));
 
   const isGeneral = effectiveSubtab === GENERAL_ID;
   const isGitHub = effectiveSubtab === GITHUB_ID;
@@ -124,6 +82,8 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
 
   return (
     <div className="space-y-6">
+      {loadError && <SettingsLoadErrorBanner message={loadError} onRetry={retryAction} />}
+
       <div className="space-y-4">
         <div>
           <h4 className="text-sm font-medium mb-1">Code Forge</h4>
