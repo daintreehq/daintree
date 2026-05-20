@@ -73,7 +73,7 @@ describe("ContentGrid richer project identity (issue #7472)", () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("detached at ");
     expect(content).toContain("activeWorktreeHead.slice(0, 7)");
-    expect(content).toContain('import { GitBranch, Settings } from "lucide-react"');
+    expect(content).toMatch(/import \{ .*GitBranch, Settings \} from "lucide-react"/);
     expect(content).toContain("<GitBranch ");
   });
 });
