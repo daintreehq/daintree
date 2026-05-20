@@ -56,13 +56,19 @@ const CRASH_LOOP_THRESHOLD = 3;
 // after we've decided to leave efficiency is the worst-of-both-worlds.
 const EFFICIENCY_FREEZE_DEBOUNCE_MS = 500;
 /**
- * Maximum time to wait for the incoming view's renderer to signal
- * `APP_VIEW_PAINTED` before unconditionally tearing down the outgoing
- * view. Three seconds keeps a slow renderer from leaving the outgoing
- * view attached indefinitely on a stuck or crashed cold start, while
- * comfortably covering the realistic worst case (~1s on cold disk).
+ * Soft paint-gate timeout (ms). At this point the gate logs that the
+ * incoming view is taking longer than the typical cold start, but the
+ * outgoing view stays attached so the user never sees an unfinished
+ * frame. Crossing this bound is observable but never user-visible.
  */
-const PAINT_GATE_TIMEOUT_MS = 3_000;
+const DEFAULT_PAINT_GATE_TIMEOUT_MS = 3_000;
+/**
+ * Hard paint-gate timeout (ms). Last-resort ceiling — assumes the
+ * incoming renderer is stuck or crashed and forcibly detaches the
+ * outgoing view. Generous enough that legitimately slow cold starts
+ * (low memory, thermal throttling) finish via the signal path instead.
+ */
+const DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS = 8_000;
 /**
  * Period between renderer-memory samples for cached (non-active) views. 30 s
  * matches `ProcessMemoryMonitor` and keeps the synchronous `app.getAppMetrics()`
@@ -73,6 +79,8 @@ const CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS = 30_000;
 
 type ViewState = "loading" | "active" | "cached";
 
+type PaintGateOutcome = "signal" | "hard-timeout" | "cancelled";
+
 interface PaintGate {
   webContentsId: number;
   /**
@@ -80,8 +88,21 @@ interface PaintGate {
    * wait. Resize events must reach it too so visible bounds stay in sync.
    */
   outgoingEntry: ViewEntry | null;
-  timeout: ReturnType<typeof setTimeout>;
-  resolve: (reason: "signal" | "timeout" | "cancelled") => void;
+  /**
+   * Soft timer — fires `onSoftTimeout` but does NOT resolve the gate. The
+   * outgoing view stays attached so the soft tail is invisible to the user.
+   */
+  softTimeout: ReturnType<typeof setTimeout>;
+  /**
+   * Hard timer — resolves the gate as `"hard-timeout"`, signalling the
+   * caller to detach the outgoing view as a last resort.
+   */
+  hardTimeout: ReturnType<typeof setTimeout>;
+  /**
+   * Settle the gate. Clears both timers, clears `pendingPaintGate`, and
+   * resolves the outer promise. Idempotent — repeat calls no-op.
+   */
+  resolve: (reason: PaintGateOutcome) => void;
 }
 
 type EvictionReason = "lru" | "pressure" | "limit-change";
@@ -116,11 +137,19 @@ export interface ProjectViewManagerOptions {
   /** Number of project views to keep cached in memory (1–5, default: 1) */
   cachedProjectViews?: number;
   /**
-   * Override the paint-gate fallback timeout (default 3000 ms). Lower values
-   * are useful in tests so the cold-start swap proceeds without waiting on
-   * a real renderer paint signal.
+   * Override the soft paint-gate timeout (default 3000 ms). Crossing this
+   * bound only logs `projectview.paintgate.softtimeout` — the outgoing view
+   * stays attached. Lower values are useful in tests to exercise the
+   * soft-timeout warning path without forcing a real cold start.
    */
   paintGateTimeoutMs?: number;
+  /**
+   * Override the hard paint-gate timeout (default 8000 ms). At this bound
+   * the outgoing view is forcibly detached as a last resort. Lower values
+   * are useful in tests to drive both the hard-timeout warning and the
+   * fall-through deactivation deterministically.
+   */
+  paintGateHardTimeoutMs?: number;
 }
 
 export class ProjectViewManager {
@@ -143,7 +172,8 @@ export class ProjectViewManager {
   private efficiencyFreezeEnabled = false;
   private efficiencyFreezeTimer: NodeJS.Timeout | null = null;
   private pendingPaintGate: PaintGate | null = null;
-  private paintGateTimeoutMs = PAINT_GATE_TIMEOUT_MS;
+  private paintGateTimeoutMs = DEFAULT_PAINT_GATE_TIMEOUT_MS;
+  private paintGateHardTimeoutMs = DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS;
   // One-shot focus intent consumed by the next switchTo for this projectId.
   // Lives on the instance (not module) so multi-window does not cross-leak.
   // Cleared after delivery or discard so a later unrelated switch can't
@@ -169,6 +199,9 @@ export class ProjectViewManager {
     }
     if (opts.paintGateTimeoutMs != null) {
       this.paintGateTimeoutMs = Math.max(0, opts.paintGateTimeoutMs);
+    }
+    if (opts.paintGateHardTimeoutMs != null) {
+      this.paintGateHardTimeoutMs = Math.max(0, opts.paintGateHardTimeoutMs);
     }
 
     // Single resize handler that always updates the active view's bounds.
@@ -362,7 +395,15 @@ export class ProjectViewManager {
     // `did-finish-load`) is captured instead of dropped. The renderer fires
     // `APP_VIEW_PAINTED` once per V8 context and never retries — without
     // pre-arming, every fast cold switch would fall through to the timeout.
-    const paintGatePromise = this.waitForPaint(view.webContents.id, previousEntry);
+    const softMs = this.paintGateTimeoutMs;
+    const paintGatePromise = this.waitForPaint(view.webContents.id, previousEntry, () => {
+      // Soft timeout: outgoing stays attached, gate keeps waiting. Logging
+      // only — the user never sees an unfinished frame on the soft path.
+      logWarn("projectview.paintgate.softtimeout", {
+        projectId,
+        waitedMs: softMs,
+      });
+    });
 
     let visibleAt: number;
     try {
@@ -371,18 +412,22 @@ export class ProjectViewManager {
 
       // Wait for the renderer to confirm React has committed its first
       // structural paint (sent via `APP_VIEW_PAINTED` after a double-rAF in
-      // `notifyViewPainted`). Bounded by `PAINT_GATE_TIMEOUT_MS` so a stuck
-      // renderer cannot leave the outgoing view attached forever.
+      // `notifyViewPainted`). Two-phase: the soft timeout above is observable
+      // but never user-visible; only the hard timeout below detaches the
+      // outgoing view as a last resort when the renderer is stuck or crashed.
       const gateResult = await paintGatePromise;
       visibleAt = performance.now();
-      if (gateResult === "timeout") {
-        logWarn("projectview.paintgate.timeout", {
+      if (gateResult === "hard-timeout") {
+        logWarn("projectview.paintgate.hardtimeout", {
           projectId,
-          waitedMs: this.paintGateTimeoutMs,
+          waitedMs: this.paintGateHardTimeoutMs,
         });
       }
 
-      // Paint signal received (or timed out) — safe to detach the outgoing view.
+      // Paint signal received (or hard timeout reached) — detach the
+      // outgoing view. On hard timeout the incoming frame may be blank,
+      // but the renderer has had its full grace period and holding the
+      // outgoing view longer can't recover a stuck renderer.
       if (previousEntry && this.activeProjectId === projectId) {
         this.deactivateEntry(previousEntry);
       }
@@ -395,12 +440,13 @@ export class ProjectViewManager {
       });
 
       // Deliver pending focus intent only when the renderer has confirmed
-      // first paint. On timeout the renderer may be stuck or unresponsive —
-      // dropping the intent is safer than firing into a partially-mounted
-      // view (the subscriber is registered before `notifyViewPainted`, but
-      // a paint-gate timeout means we have no positive evidence of that).
-      // The intent is always consumed (cleared) regardless of outcome to
-      // prevent a later unrelated switch from picking up a stale focus.
+      // first paint. On hard timeout the renderer may be stuck or
+      // unresponsive — dropping the intent is safer than firing into a
+      // partially-mounted view (the subscriber is registered before
+      // `notifyViewPainted`, but a hard timeout means we have no positive
+      // evidence of that). The intent is always consumed (cleared)
+      // regardless of outcome to prevent a later unrelated switch from
+      // picking up a stale focus.
       const coldIntent = this.consumePendingFocusIntent(projectId);
       if (coldIntent && gateResult === "signal") {
         this.deliverFocusIntent(view, coldIntent);
@@ -411,7 +457,7 @@ export class ProjectViewManager {
       // previous app-view registration (`registerAppView` was overwritten to
       // point at the failed view), and let the still-attached outgoing view
       // resume as the active view.
-      this.clearPaintGate("cancelled");
+      this.clearPaintGate();
       // Discard any pending focus intent for the failed projectId so a later
       // unrelated switch can't pick it up.
       this.consumePendingFocusIntent(projectId);
@@ -445,31 +491,59 @@ export class ProjectViewManager {
 
   /**
    * Resolve when the renderer with `webContentsId` posts `APP_VIEW_PAINTED`
-   * via {@link signalViewPainted}, or when `PAINT_GATE_TIMEOUT_MS` elapses,
-   * or when a superseding switch cancels the gate. Only one paint gate is
-   * tracked at a time — opening a new gate cancels any prior pending one.
+   * via {@link signalViewPainted}, when the hard timeout elapses, or when a
+   * superseding switch cancels the gate. Only one paint gate is tracked at
+   * a time — opening a new gate cancels any prior pending one.
+   *
+   * Two-phase timing:
+   *   - Soft (`paintGateTimeoutMs`): fires `onSoftTimeout` for observability.
+   *     The gate stays open and the outgoing view stays attached.
+   *   - Hard (`paintGateHardTimeoutMs`): resolves the gate as
+   *     `"hard-timeout"`, prompting the caller to detach the outgoing view.
+   *
+   * Both timer values are captured at gate creation. A later
+   * `setPaintGateTimeoutMs` / `setPaintGateHardTimeoutMs` call updates the
+   * fields but does NOT retime an in-flight gate.
    */
   private waitForPaint(
     webContentsId: number,
-    outgoingEntry: ViewEntry | null
-  ): Promise<"signal" | "timeout" | "cancelled"> {
+    outgoingEntry: ViewEntry | null,
+    onSoftTimeout?: () => void
+  ): Promise<PaintGateOutcome> {
     // Cancel any prior gate from a previous switch attempt. Should not
     // normally occur (switchChain serializes), but guards against re-entry
     // from rollback paths.
-    this.clearPaintGate("cancelled");
+    this.clearPaintGate();
 
-    return new Promise((resolveOuter) => {
+    const softMs = this.paintGateTimeoutMs;
+    // Guarantee hard >= soft at gate-creation time so the soft callback
+    // always fires before the hard fall-through, regardless of how the two
+    // setters are ordered by the resource-profile push.
+    const hardMs = Math.max(this.paintGateHardTimeoutMs, softMs);
+
+    return new Promise<PaintGateOutcome>((resolveOuter) => {
+      let settled = false;
       const gate: PaintGate = {
         webContentsId,
         outgoingEntry,
-        timeout: setTimeout(() => {
-          if (this.pendingPaintGate === gate) {
-            this.pendingPaintGate = null;
-            resolveOuter("timeout");
+        softTimeout: setTimeout(() => {
+          // Soft tail: log only. Keep waiting for either the paint signal
+          // or the hard timeout — DO NOT resolve.
+          if (this.pendingPaintGate !== gate) return;
+          try {
+            onSoftTimeout?.();
+          } catch (err) {
+            console.error("[ProjectViewManager] paint-gate soft callback threw:", err);
           }
-        }, this.paintGateTimeoutMs),
+        }, softMs),
+        hardTimeout: setTimeout(() => {
+          gate.resolve("hard-timeout");
+        }, hardMs),
         resolve: (reason) => {
-          clearTimeout(gate.timeout);
+          if (settled) return;
+          settled = true;
+          clearTimeout(gate.softTimeout);
+          clearTimeout(gate.hardTimeout);
           if (this.pendingPaintGate === gate) {
             this.pendingPaintGate = null;
           }
@@ -480,12 +554,10 @@ export class ProjectViewManager {
     });
   }
 
-  private clearPaintGate(reason: "signal" | "timeout" | "cancelled"): void {
+  private clearPaintGate(): void {
     const gate = this.pendingPaintGate;
     if (!gate) return;
-    this.pendingPaintGate = null;
-    clearTimeout(gate.timeout);
-    gate.resolve(reason);
+    gate.resolve("cancelled");
   }
 
   /**
@@ -551,6 +623,26 @@ export class ProjectViewManager {
     const safe = Number.isFinite(n) ? n : 1;
     this.maxCachedViews = Math.max(1, Math.min(5, safe));
     this.evictStaleViews("limit-change");
+  }
+
+  /**
+   * Set the soft paint-gate timeout (ms). Does NOT retime an in-flight
+   * gate — the value is captured at gate creation. Called by
+   * `ResourceProfileService` to push per-profile timing.
+   */
+  setPaintGateTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.paintGateTimeoutMs = ms;
+  }
+
+  /**
+   * Set the hard paint-gate timeout (ms). Does NOT retime an in-flight
+   * gate — the value is captured at gate creation. Called by
+   * `ResourceProfileService` to push per-profile timing.
+   */
+  setPaintGateHardTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.paintGateHardTimeoutMs = ms;
   }
 
   /**
@@ -644,7 +736,7 @@ export class ProjectViewManager {
     }
     this.efficiencyFreezeEnabled = false;
 
-    this.clearPaintGate("cancelled");
+    this.clearPaintGate();
     for (const projectId of Array.from(this.views.keys())) {
       this.cleanupEntry(projectId);
     }

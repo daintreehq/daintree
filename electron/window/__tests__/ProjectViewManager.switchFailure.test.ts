@@ -189,6 +189,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
       dirname: "/test",
       cachedProjectViews: 3,
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
     });
 
     initialWc = createMockWebContents();
@@ -287,6 +288,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
     const freshManager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
     });
 
     const failWc = createMockWebContents({ autoFinishLoad: false });

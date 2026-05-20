@@ -202,11 +202,14 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     vi.mocked(logWarn).mockClear();
 
     win = createMockWindow();
-    // Use a small, non-zero timeout so tests can observe both the signal
-    // path (resolves before timeout) and the timeout path (advances past it).
+    // Use small, non-zero timeouts so tests can observe each phase:
+    //  - soft (50 ms) fires the warning but keeps the outgoing view attached
+    //  - hard (150 ms) is the last-resort fall-through that detaches
+    // Both must be set explicitly because the PVM defaults are 3 s / 8 s.
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 50,
+      paintGateHardTimeoutMs: 150,
       cachedProjectViews: 3,
     });
 
@@ -247,7 +250,46 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     expect(manager.getActiveProjectId()).toBe("proj-b");
   });
 
-  it("falls through paint gate after timeout when signal never arrives", async () => {
+  it("soft timeout warns but does NOT detach the outgoing view", async () => {
+    vi.useFakeTimers();
+    try {
+      const slowWc = createMockWebContents();
+      wcQueue.push(slowWc);
+
+      const switchPromise = manager.switchTo("proj-b", "/path/b");
+
+      // Flush microtasks so did-finish-load fires and waitForPaint is armed.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+      // Cross the soft bound (50 ms) — warning logged, gate still open.
+      await vi.advanceTimersByTimeAsync(60);
+      expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+      expect(
+        vi
+          .mocked(logWarn)
+          .mock.calls.filter(([event]) => event === "projectview.paintgate.softtimeout")
+      ).toHaveLength(1);
+
+      // Signal eventually arrives between soft and hard — outgoing released
+      // cleanly. No hard-timeout warning. (Hard bound is 150 ms; soft fired
+      // at 50 ms; we are at ~60 ms.)
+      manager.signalViewPainted(slowWc.id);
+      await switchPromise;
+
+      expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+      expect(manager.getActiveProjectId()).toBe("proj-b");
+      expect(
+        vi
+          .mocked(logWarn)
+          .mock.calls.filter(([event]) => event === "projectview.paintgate.hardtimeout")
+      ).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls through paint gate at hard timeout when signal never arrives", async () => {
     vi.useFakeTimers();
     try {
       const slowWc = createMockWebContents();
@@ -258,18 +300,78 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       // Flush microtasks so did-finish-load fires and waitForPaint is armed.
       await vi.advanceTimersByTimeAsync(0);
 
-      // Outgoing still attached, gate pending.
+      // Cross the soft bound (50 ms) — outgoing still attached.
+      await vi.advanceTimersByTimeAsync(60);
       expect(win.contentView.removeChildView).not.toHaveBeenCalled();
 
-      // Advance past the paint gate timeout (50ms).
-      await vi.advanceTimersByTimeAsync(60);
+      // Cross the hard bound (150 ms total) — outgoing now detached.
+      await vi.advanceTimersByTimeAsync(100);
       await switchPromise;
 
       expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
       expect(manager.getActiveProjectId()).toBe("proj-b");
       expect(
-        vi.mocked(logWarn).mock.calls.filter(([event]) => event === "projectview.paintgate.timeout")
+        vi
+          .mocked(logWarn)
+          .mock.calls.filter(([event]) => event === "projectview.paintgate.softtimeout")
       ).toHaveLength(1);
+      expect(
+        vi
+          .mocked(logWarn)
+          .mock.calls.filter(([event]) => event === "projectview.paintgate.hardtimeout")
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hard timeout drops the pending focus intent", async () => {
+    vi.useFakeTimers();
+    try {
+      const slowWc = createMockWebContents();
+      wcQueue.push(slowWc);
+
+      manager.setPendingFocusIntent("proj-b", "focus-next-waiting");
+
+      const switchPromise = manager.switchTo("proj-b", "/path/b");
+      await vi.advanceTimersByTimeAsync(0);
+      // Past hard bound — fall-through, intent dropped.
+      await vi.advanceTimersByTimeAsync(200);
+      await switchPromise;
+
+      expect(slowWc.send).not.toHaveBeenCalledWith("project:focus-on-activate", expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("paint-gate timeout setters do not retime an in-flight gate", async () => {
+    vi.useFakeTimers();
+    try {
+      const slowWc = createMockWebContents();
+      wcQueue.push(slowWc);
+
+      const switchPromise = manager.switchTo("proj-b", "/path/b");
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Bump both bounds way up mid-flight — must NOT delay the active gate
+      // (captured at gate creation). The 50 ms / 150 ms bounds from beforeEach
+      // still apply.
+      manager.setPaintGateTimeoutMs(10_000);
+      manager.setPaintGateHardTimeoutMs(20_000);
+
+      // Cross the original soft bound — warning fires using captured value.
+      await vi.advanceTimersByTimeAsync(60);
+      expect(
+        vi
+          .mocked(logWarn)
+          .mock.calls.filter(([event]) => event === "projectview.paintgate.softtimeout")
+      ).toHaveLength(1);
+
+      // Cross the original hard bound — fall-through fires using captured value.
+      await vi.advanceTimersByTimeAsync(100);
+      await switchPromise;
+      expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

@@ -132,6 +132,8 @@ interface MockProjectViewManager {
   setCachedViewLimit: Mock;
   setLowMemoryFreeThresholdMb: Mock;
   setEfficiencyFreeze: Mock;
+  setPaintGateTimeoutMs: Mock;
+  setPaintGateHardTimeoutMs: Mock;
 }
 interface MockProjectStatsService {
   updatePollInterval: Mock;
@@ -153,6 +155,8 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDe
     setCachedViewLimit: vi.fn(),
     setLowMemoryFreeThresholdMb: vi.fn(),
     setEfficiencyFreeze: vi.fn(),
+    setPaintGateTimeoutMs: vi.fn(),
+    setPaintGateHardTimeoutMs: vi.fn(),
   };
   const mockProjectStatsService: MockProjectStatsService = {
     updatePollInterval: vi.fn(),
@@ -687,6 +691,80 @@ describe("ResourceProfileService", () => {
       RESOURCE_PROFILE_CONFIGS.balanced.lowMemoryFreeThresholdMb
     );
     expect(pvm.setLowMemoryFreeThresholdMb).toHaveBeenCalledTimes(1);
+
+    service.stop();
+  });
+
+  it("pushes the balanced profile's paint-gate timeouts on start()", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+
+    service.start();
+
+    expect(pvm.setPaintGateTimeoutMs).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.paintGateTimeoutMs
+    );
+    expect(pvm.setPaintGateHardTimeoutMs).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.paintGateHardTimeoutMs
+    );
+
+    service.stop();
+  });
+
+  it("pushes efficiency paint-gate timeouts on transition into efficiency", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    service.start();
+
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    expect(pvm.setPaintGateTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.paintGateTimeoutMs
+    );
+    expect(pvm.setPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.paintGateHardTimeoutMs
+    );
+
+    service.stop();
+  });
+
+  it("restores balanced paint-gate timeouts on upgrade from efficiency", () => {
+    const deps = createDeps({ getUserCachedViewLimit: () => 3 });
+    const service = new ResourceProfileService(deps);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    service.start();
+
+    const onAcHandler = mockPowerMonitorOn.mock.calls.find(
+      (call: string[]) => call[0] === "on-ac"
+    )?.[1] as (() => void) | undefined;
+
+    // Drive into efficiency
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    expect(pvm.setPaintGateTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.paintGateTimeoutMs
+    );
+
+    // Relieve to balanced
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
+    onAcHandler!();
+    vi.advanceTimersByTime(30_000 * 4);
+
+    expect(service.getProfile()).toBe("balanced");
+    expect(pvm.setPaintGateTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.paintGateTimeoutMs
+    );
+    expect(pvm.setPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.paintGateHardTimeoutMs
+    );
 
     service.stop();
   });

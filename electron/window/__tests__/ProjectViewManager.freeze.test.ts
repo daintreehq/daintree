@@ -123,6 +123,7 @@ describe("ProjectViewManager — efficiency freeze", () => {
       dirname: "/test",
       cachedProjectViews: 3,
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
     });
     // Stub the paint gate to resolve immediately — this suite uses fake timers
     // so the gate's setTimeout cannot fire on its own.

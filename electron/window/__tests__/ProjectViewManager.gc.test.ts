@@ -120,6 +120,7 @@ describe("ProjectViewManager — GC on deactivate", () => {
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
