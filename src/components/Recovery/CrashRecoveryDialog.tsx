@@ -438,7 +438,10 @@ export function CrashRecoveryDialog({
               </p>
             )
           ) : (
-            <div className="flex items-center justify-between gap-3" data-testid="auto-restore-label">
+            <div
+              className="flex items-center justify-between gap-3"
+              data-testid="auto-restore-label"
+            >
               <div className="text-left">
                 <div id="auto-restore-title" className="text-sm font-medium text-daintree-text">
                   Restore automatically next time

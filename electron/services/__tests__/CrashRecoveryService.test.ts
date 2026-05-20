@@ -918,9 +918,12 @@ describe("CrashRecoveryService", () => {
       expect(pending!.panels![0]).toMatchObject({ id: "p1", kind: "terminal" });
 
       // Cached snapshot ensures restoreBackup applies the previous-generation
-      // appState even if the backup files are deleted under it.
-      fs.unlinkSync(path.join(backupDir, "session-state.json"));
-      fs.unlinkSync(path.join(backupDir, "session-state.previous.json"));
+      // appState even if the backup files are deleted under it. consumeMarker
+      // renames the current backup to a crashed-* path during initialize, so
+      // we sweep all .json files instead of unlinking specific paths.
+      for (const file of fs.readdirSync(backupDir)) {
+        if (file.endsWith(".json")) fs.unlinkSync(path.join(backupDir, file));
+      }
       const restored = svc.restoreBackup();
       expect(restored).toBe(true);
       expect(storeMock.set).toHaveBeenCalledWith("appState", previousSnapshot.appState);

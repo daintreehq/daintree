@@ -41,7 +41,9 @@ vi.mock("@/store/persistence/panelPersistence", () => ({
 }));
 
 vi.mock("@/components/Fleet/fleetExecution", () => ({
-  broadcastFleetLiteralPaste: vi.fn().mockResolvedValue({ failedIds: [] }),
+  broadcastFleetLiteralPaste: vi
+    .fn()
+    .mockResolvedValue({ failedIds: [], permanentlyFailedIds: [], transientlyFailedIds: [] }),
 }));
 
 const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
@@ -610,6 +612,8 @@ describe("fleet.retryFailures", () => {
   it("dismisses targets that succeeded on retry and preserves the ones that still fail", async () => {
     (broadcastFleetLiteralPaste as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       failedIds: ["t2"],
+      transientlyFailedIds: ["t2"],
+      permanentlyFailedIds: [],
     });
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2", "t3"]),
@@ -626,6 +630,8 @@ describe("fleet.retryFailures", () => {
   it("clears the store entirely when every target succeeds on retry", async () => {
     (broadcastFleetLiteralPaste as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       failedIds: [],
+      transientlyFailedIds: [],
+      permanentlyFailedIds: [],
     });
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
@@ -654,10 +660,15 @@ describe("fleet.retryFailures", () => {
   });
 
   it("guards against double-dispatch (re-entrant retry while in flight)", async () => {
-    let resolveBroadcast: ((value: { failedIds: string[] }) => void) | null = null;
+    type BroadcastResult = {
+      failedIds: string[];
+      transientlyFailedIds: string[];
+      permanentlyFailedIds: string[];
+    };
+    let resolveBroadcast: ((value: BroadcastResult) => void) | null = null;
     (broadcastFleetLiteralPaste as ReturnType<typeof vi.fn>).mockImplementationOnce(
       () =>
-        new Promise<{ failedIds: string[] }>((resolve) => {
+        new Promise<BroadcastResult>((resolve) => {
           resolveBroadcast = resolve;
         })
     );
@@ -671,7 +682,11 @@ describe("fleet.retryFailures", () => {
     // Second call happens while the first is awaiting the broadcast.
     await run(registry, "fleet.retryFailures");
     expect(broadcastFleetLiteralPaste).toHaveBeenCalledTimes(1);
-    (resolveBroadcast as ((value: { failedIds: string[] }) => void) | null)?.({ failedIds: [] });
+    (resolveBroadcast as ((value: BroadcastResult) => void) | null)?.({
+      failedIds: [],
+      transientlyFailedIds: [],
+      permanentlyFailedIds: [],
+    });
     await first;
   });
 });
