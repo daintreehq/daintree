@@ -367,7 +367,7 @@ function PanelHeaderComponent({
     if (location === "dock") {
       onRestore?.();
     } else {
-      void actionService.dispatch("nav.toggleFocusMode");
+      onToggleMaximize?.();
     }
   };
 

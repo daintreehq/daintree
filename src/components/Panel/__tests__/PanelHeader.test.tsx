@@ -620,29 +620,41 @@ describe("PanelHeader", () => {
   });
 
   describe("header double-click behavior", () => {
-    it("dispatches nav.toggleFocusMode when double-clicking header in grid mode", () => {
+    it("calls onToggleMaximize when double-clicking header in grid mode", () => {
+      const onToggleMaximize = vi.fn();
       const { container } = render(
-        <PanelHeader {...makeProps({ location: "grid", onToggleMaximize: vi.fn() })} />
+        <PanelHeader {...makeProps({ location: "grid", onToggleMaximize })} />
       );
       const header = container.firstElementChild as HTMLElement;
       fireEvent.dblClick(header);
-      expect(mockDispatch).toHaveBeenCalledWith("nav.toggleFocusMode");
+      expect(onToggleMaximize).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).not.toHaveBeenCalledWith("nav.toggleFocusMode");
     });
 
     it("calls onRestore when double-clicking header in dock mode", () => {
       const onRestore = vi.fn();
-      const { container } = render(<PanelHeader {...makeProps({ location: "dock", onRestore })} />);
+      const onToggleMaximize = vi.fn();
+      const { container } = render(
+        <PanelHeader {...makeProps({ location: "dock", onRestore, onToggleMaximize })} />
+      );
       const header = container.firstElementChild as HTMLElement;
       fireEvent.dblClick(header);
       expect(onRestore).toHaveBeenCalledTimes(1);
-      expect(mockDispatch).not.toHaveBeenCalledWith("nav.toggleFocusMode");
+      expect(onToggleMaximize).not.toHaveBeenCalled();
     });
 
-    it("does not dispatch when double-clicking a button within the header", () => {
-      render(<PanelHeader {...makeProps({ location: "grid", onToggleMaximize: vi.fn() })} />);
+    it("does not call onToggleMaximize when double-clicking a button within the header", () => {
+      const onToggleMaximize = vi.fn();
+      render(<PanelHeader {...makeProps({ location: "grid", onToggleMaximize })} />);
       const closeButton = screen.getByTestId("panel-close");
       fireEvent.dblClick(closeButton);
-      expect(mockDispatch).not.toHaveBeenCalledWith("nav.toggleFocusMode");
+      expect(onToggleMaximize).not.toHaveBeenCalled();
+    });
+
+    it("does not throw when onToggleMaximize is undefined", () => {
+      const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
+      const header = container.firstElementChild as HTMLElement;
+      expect(() => fireEvent.dblClick(header)).not.toThrow();
     });
   });
 

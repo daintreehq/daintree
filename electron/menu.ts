@@ -282,6 +282,11 @@ export function createApplicationMenu(
           click: (_item, browserWindow) =>
             sendAction("nav.toggleSidebar", getTargetBrowserWindow(browserWindow)),
         },
+        {
+          label: "Toggle Focus Mode",
+          click: (_item, browserWindow) =>
+            sendAction("nav.toggleFocusMode", getTargetBrowserWindow(browserWindow)),
+        },
         { type: "separator" },
         {
           label: "Reload",
