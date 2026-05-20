@@ -3,9 +3,9 @@ import type { CliAvailabilityService } from "../services/CliAvailabilityService.
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { handleDirectoryOpen } from "../menu.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
-import { setSignalShutdown } from "./signalShutdownState.js";
+import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
 import { isWindowRecreating } from "./windowRecreationState.js";
-import { CLEANUP_TIMEOUT_MS } from "./shutdownConfig.js";
+import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
 
 let pendingCliPath: string | null = null;
 
@@ -51,10 +51,16 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
   // for the same reason: closing the dev terminal sends SIGHUP and would
   // otherwise terminate the process without the markCleanExit call.
   //
-  // The safety-belt timer must outlast `CLEANUP_TIMEOUT_MS` so it doesn't fire
-  // mid-cleanup; the 3000ms buffer covers `closeTelemetry()` which can take up
-  // to ~2500ms in the worst case (Sentry init-wait cap 500ms + close timeout
-  // 2000ms — see TelemetryService.ts) and runs after the cleanup race resolves.
+  // The safety-belt timer must outlast the full graceful-shutdown chain so it
+  // doesn't fire mid-cleanup. `SAFETY_BELT_TIMEOUT_MS` budgets the 10s cleanup
+  // race plus a 3000ms historical buffer plus 2500ms for closeTelemetry()
+  // (Sentry init-wait cap 500ms + close timeout 2000ms — see TelemetryService.ts).
+  // The handle is captured and stored in signalShutdownState.ts so shutdown.ts
+  // can `clearSafetyBeltTimer()` it before its own `app.exit()` calls; without
+  // that, a slow closeTelemetry() could let the belt fire after a normal exit
+  // and report the wrong exit code to systemd/nodemon. The belt fires
+  // `app.exit(1)` (dirty exit) — never `process.exit(0)` — so process
+  // supervisors get the correct signal and Electron's native teardown still runs.
   // A second signal within 2000ms force-exits with status 1 — escape hatch
   // when shutdown stalls. After that window, repeat signals are ignored
   // (cleanup is already in progress).
@@ -74,7 +80,12 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     }
     firstSignalTime = Date.now();
     setSignalShutdown();
-    setTimeout(() => process.exit(0), CLEANUP_TIMEOUT_MS + 3000).unref();
+    const handle = setTimeout(() => {
+      setSafetyBeltTimer(null);
+      app.exit(1);
+    }, SAFETY_BELT_TIMEOUT_MS);
+    handle.unref();
+    setSafetyBeltTimer(handle);
     app.quit();
   };
   process.on("SIGTERM", signalHandler);

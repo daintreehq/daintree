@@ -44,7 +44,7 @@ import {
 import { closeSharedDb } from "../services/persistence/db.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
-import { isSignalShutdown } from "./signalShutdownState.js";
+import { isSignalShutdown, clearSafetyBeltTimer } from "./signalShutdownState.js";
 import { CLEANUP_TIMEOUT_MS } from "./shutdownConfig.js";
 
 export { CLEANUP_TIMEOUT_MS };
@@ -112,6 +112,18 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     }
 
     isQuitting = true;
+
+    // Eager snapshot at quit-intent so the next launch has a post-quit-intent
+    // backup regardless of which branch of the cleanup race wins. Without this,
+    // a hard-timeout dirty exit skips cleanupOnExit() entirely and leaves the
+    // user with whatever the 60s backup timer last captured. takeBackup() is
+    // synchronous and best-effort (swallows its own errors), so it cannot
+    // block or fail the shutdown chain.
+    try {
+      getCrashRecoveryService().takeBackup();
+    } catch (err) {
+      console.warn("[MAIN] Eager takeBackup at quit-intent failed:", err);
+    }
 
     console.log("[MAIN] Starting graceful shutdown...");
     const { drainRateLimitQueues } = await import("../ipc/utils.js");
@@ -399,6 +411,12 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         } catch (err) {
           console.warn("[MAIN] CrashLoopGuard.markCleanExit failed:", err);
         }
+        // Defuse the signal-handler safety-belt the moment we've committed to a
+        // clean exit. closeTelemetry below has a 2500ms internal cap, but
+        // clearing first eliminates the dependency on that cap holding — if a
+        // future refactor extends the telemetry budget, the belt won't be able
+        // to fire after app.exit(0) and clobber the exit code with exit(1).
+        clearSafetyBeltTimer();
         try {
           await closeTelemetry();
         } catch (err) {
@@ -413,6 +431,9 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         console.error("[MAIN] Error during cleanup:", error);
         // Intentionally do NOT clean up the marker on the error/timeout path —
         // leaving running.lock on disk is the dirty-exit signal for next launch.
+        // Defuse the belt before telemetry flush for the same reason as the
+        // clean branch above.
+        clearSafetyBeltTimer();
         try {
           await closeTelemetry();
         } catch (err) {
