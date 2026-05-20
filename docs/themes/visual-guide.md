@@ -777,10 +777,10 @@ These are used in badges, toast notifications, diff viewer gutters, and terminal
 ## 16. GitHub Integration Colors
 
 ```
-[Open]    → github-open (green)
-[Merged]  → github-merged (purple)
-[Closed]  → github-closed (red)
-[Draft]   → github-draft (gray)
+[Open]    → pr-open (green)
+[Merged]  → pr-merged (purple)
+[Closed]  → pr-closed (red)
+[Draft]   → pr-draft (gray)
 ```
 
 Dark themes use GitHub's dark-mode palette; light themes use GitHub's light-mode palette. Each theme can override these individually.

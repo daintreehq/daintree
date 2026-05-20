@@ -188,12 +188,12 @@ Derived from `ThemeStrategy` in the palette:
 
 ## GitHub Tokens
 
-| Token           | Purpose                   |
-| --------------- | ------------------------- |
-| `github-open`   | Open issue/PR indicator   |
-| `github-merged` | Merged PR indicator       |
-| `github-closed` | Closed issue/PR indicator |
-| `github-draft`  | Draft PR indicator        |
+| Token        | Purpose                   |
+| ------------ | ------------------------- |
+| `pr-open`    | Open issue/PR indicator   |
+| `pr-merged`  | Merged PR indicator       |
+| `pr-closed`  | Closed issue/PR indicator |
+| `pr-draft`   | Draft PR indicator        |
 
 Dark themes use GitHub's dark-mode palette; light themes use GitHub's light-mode palette.
 
