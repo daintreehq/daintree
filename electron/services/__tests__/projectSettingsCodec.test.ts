@@ -394,4 +394,134 @@ describe("decodeFleetSavedScopes (internal)", () => {
   it("drops invalid entries and returns undefined when all are dropped", () => {
     expect(__internal.decodeFleetSavedScopes([{ garbage: true }])).toBeUndefined();
   });
+
+  it("preserves valid recency fields on a snapshot scope", () => {
+    const result = __internal.decodeFleetSavedScopes([
+      {
+        kind: "snapshot",
+        id: "s1",
+        name: "Recency",
+        terminalIds: ["a"],
+        createdAt: 1700000000000,
+        lastUsedAt: 1710000000000,
+        usageHistory: [1709000000000, 1710000000000],
+      },
+    ]);
+    const scope = result?.[0];
+    expect(scope?.kind).toBe("snapshot");
+    expect((scope as { lastUsedAt?: number } | undefined)?.lastUsedAt).toBe(1710000000000);
+    expect((scope as { usageHistory?: number[] } | undefined)?.usageHistory).toEqual([
+      1709000000000, 1710000000000,
+    ]);
+  });
+
+  it("preserves valid recency fields on a predicate scope", () => {
+    const result = __internal.decodeFleetSavedScopes([
+      {
+        kind: "predicate",
+        id: "p1",
+        name: "Recency",
+        scope: "all",
+        stateFilter: "working",
+        createdAt: 1700000000000,
+        lastUsedAt: 1710000000000,
+        usageHistory: [1709000000000, 1710000000000],
+      },
+    ]);
+    const scope = result?.[0];
+    expect(scope?.kind).toBe("predicate");
+    expect((scope as { lastUsedAt?: number } | undefined)?.lastUsedAt).toBe(1710000000000);
+    expect((scope as { usageHistory?: number[] } | undefined)?.usageHistory).toEqual([
+      1709000000000, 1710000000000,
+    ]);
+  });
+
+  it("decodes a scope without recency fields (backwards compat)", () => {
+    const result = __internal.decodeFleetSavedScopes([
+      {
+        kind: "snapshot",
+        id: "s1",
+        name: "No Recency",
+        terminalIds: ["a"],
+        createdAt: 1700000000000,
+      },
+    ]);
+    const scope = result?.[0];
+    expect(scope).toBeDefined();
+    expect((scope as { lastUsedAt?: unknown } | undefined)?.lastUsedAt).toBeUndefined();
+    expect((scope as { usageHistory?: unknown } | undefined)?.usageHistory).toBeUndefined();
+  });
+
+  it("silently drops malformed lastUsedAt (non-number)", () => {
+    const result = __internal.decodeFleetSavedScopes([
+      {
+        kind: "snapshot",
+        id: "s1",
+        name: "Bad",
+        terminalIds: ["a"],
+        createdAt: 1700000000000,
+        lastUsedAt: "not-a-number",
+      },
+    ]);
+    expect(result?.[0]).toBeDefined();
+    expect((result?.[0] as { lastUsedAt?: unknown } | undefined)?.lastUsedAt).toBeUndefined();
+  });
+
+  it("silently drops malformed lastUsedAt (NaN)", () => {
+    const result = __internal.decodeFleetSavedScopes([
+      {
+        kind: "snapshot",
+        id: "s1",
+        name: "Bad",
+        terminalIds: ["a"],
+        createdAt: 1700000000000,
+        lastUsedAt: NaN,
+      },
+    ]);
+    expect(result?.[0]).toBeDefined();
+    expect((result?.[0] as { lastUsedAt?: unknown } | undefined)?.lastUsedAt).toBeUndefined();
+  });
+
+  it("filters non-finite entries from usageHistory", () => {
+    const result = __internal.decodeFleetSavedScopes([
+      {
+        kind: "snapshot",
+        id: "s1",
+        name: "Bad",
+        terminalIds: ["a"],
+        createdAt: 1700000000000,
+        usageHistory: [1709000000000, "bad", NaN, Infinity, 1710000000000],
+      },
+    ]);
+    const history = (result?.[0] as { usageHistory?: number[] } | undefined)?.usageHistory;
+    expect(history).toEqual([1709000000000, 1710000000000]);
+  });
+
+  it("drops usageHistory when it is not an array", () => {
+    const result = __internal.decodeFleetSavedScopes([
+      {
+        kind: "snapshot",
+        id: "s1",
+        name: "Bad",
+        terminalIds: ["a"],
+        createdAt: 1700000000000,
+        usageHistory: "not-an-array",
+      },
+    ]);
+    expect((result?.[0] as { usageHistory?: unknown } | undefined)?.usageHistory).toBeUndefined();
+  });
+
+  it("drops usageHistory when filtered result is empty", () => {
+    const result = __internal.decodeFleetSavedScopes([
+      {
+        kind: "snapshot",
+        id: "s1",
+        name: "Bad",
+        terminalIds: ["a"],
+        createdAt: 1700000000000,
+        usageHistory: ["all", "bad", "entries"],
+      },
+    ]);
+    expect((result?.[0] as { usageHistory?: unknown } | undefined)?.usageHistory).toBeUndefined();
+  });
 });

@@ -305,6 +305,10 @@ export interface SnapshotFleetSavedScope {
   name: string;
   terminalIds: string[];
   createdAt: number;
+  /** Timestamp of last run (milliseconds since epoch) */
+  lastUsedAt?: number;
+  /** Timestamps of recent runs for frecency scoring (capped at 20 entries) */
+  usageHistory?: number[];
 }
 
 /** Predicate fleet scope: stores a filter rule that is re-evaluated against the current panel set on recall. */
@@ -316,6 +320,10 @@ export interface PredicateFleetSavedScope {
   /** "all" maps to armAll(scope); "working"/"waiting"/"finished" map to armByState(preset, scope, false). */
   stateFilter: "all" | "working" | "waiting" | "finished";
   createdAt: number;
+  /** Timestamp of last run (milliseconds since epoch) */
+  lastUsedAt?: number;
+  /** Timestamps of recent runs for frecency scoring (capped at 20 entries) */
+  usageHistory?: number[];
 }
 
 /** A saved fleet scope — a named selection persisted per-project for quick recall. */
