@@ -280,6 +280,9 @@ function preloadSafeModeBanner() {
 const LazySafeModeBanner = lazy(() =>
   preloadSafeModeBanner().then((m) => ({ default: m.SafeModeBanner }))
 );
+// Fetch eagerly: `safeMode` is set synchronously during hydration, so the
+// first post-hydration render can suspend before the idle preload fires.
+void preloadSafeModeBanner();
 
 function preloadRestoreConfirmationBanner() {
   return import("./components/Recovery/RestoreConfirmationBanner");
