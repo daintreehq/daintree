@@ -314,6 +314,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../portal.js").PortalShowNewTabMenuPayload];
     result: void;
   };
+  "project:clone-cancel": {
+    args: [];
+    result: void;
+  };
+  "project:clone-repo": {
+    args: [options: import("./gitClone.js").CloneRepoOptions];
+    result: import("./gitClone.js").CloneRepoResult;
+  };
   "scratch:create": {
     args: [name?: string | undefined];
     result: import("../scratch.js").Scratch;
