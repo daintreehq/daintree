@@ -310,6 +310,7 @@ export interface ElectronAPI {
     onRestoreScrollback(callback: (data: { terminalIds: string[] }) => void): () => void;
     restartService(): Promise<void>;
     onReclaimMemory(callback: () => void): () => void;
+    onAccelerateHibernation(callback: (data: { level: 1 | 2 }) => void): () => void;
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;

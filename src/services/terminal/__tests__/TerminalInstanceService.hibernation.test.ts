@@ -81,6 +81,7 @@ type HibernationTestService = {
   resetRenderer: (id: string) => void;
   setVisible: (id: string, visible: boolean) => void;
   setInputLocked: (id: string, locked: boolean) => void;
+  accelerateHibernation: (level: 1 | 2) => void;
 };
 
 function makeMockManaged(overrides: Record<string, unknown> = {}) {
@@ -247,11 +248,16 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(service.isHibernated("t1")).toBe(true);
     });
 
-    it("should never hibernate active agent terminals", () => {
+    it("should never hibernate recently-active working agent terminals", () => {
+      // The eligibility check now uses lastWriteAt as the load-bearing
+      // signal; the plain "working" state alone is no longer permanent
+      // immunity. A recent write proves the agent is still live.
       const managed = makeMockManaged({
         kind: "terminal",
         launchAgentId: "claude",
         canonicalAgentState: "working",
+        lastWriteAt: Date.now() - 1000,
+        pendingWrites: 0,
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
@@ -261,11 +267,13 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(managed.terminal.dispose).not.toHaveBeenCalled();
     });
 
-    it("should never hibernate waiting agent terminals", () => {
+    it("should never hibernate recently-active waiting agent terminals", () => {
       const managed = makeMockManaged({
         kind: "terminal",
         launchAgentId: "claude",
         canonicalAgentState: "waiting",
+        lastWriteAt: Date.now() - 1000,
+        pendingWrites: 0,
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
@@ -425,13 +433,19 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(managed.isHibernated).toBe(true);
     });
 
-    it("should NOT start hibernation timer for active agent terminals", () => {
+    it("should NOT start hibernation timer for recently-active agent terminals", () => {
+      // With idle-aware eligibility, an active-state agent is only excluded
+      // while its silence window is unmet. Setting a recent lastWriteAt
+      // pins this terminal inside that window so the regular timer must
+      // not fire — though the eligibility re-check timer is allowed.
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
         isVisible: false,
         kind: "terminal",
         launchAgentId: "claude",
         canonicalAgentState: "working",
+        lastWriteAt: Date.now() - 1000,
+        pendingWrites: 0,
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
@@ -814,6 +828,126 @@ describe("TerminalInstanceService - Hibernation", () => {
       service.hibernate("t1");
       service.unhibernate("t1");
       expect(managed.listeners.length).toBe(afterFirstCycle);
+    });
+  });
+
+  describe("accelerateHibernation() under memory pressure", () => {
+    it("compresses a BACKGROUND offscreen terminal's hibernation timer at tier 1", () => {
+      const managed = makeMockManaged({
+        isVisible: false,
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.accelerateHibernation(1);
+
+      expect(managed.hibernationTimer).toBeDefined();
+
+      // Standard 30s window must NOT apply — tier 1 is 5s.
+      vi.advanceTimersByTime(4_999);
+      expect(managed.isHibernated).toBe(false);
+
+      vi.advanceTimersByTime(2);
+      expect(managed.isHibernated).toBe(true);
+    });
+
+    it("hibernates a BACKGROUND offscreen terminal immediately at tier 2", () => {
+      const managed = makeMockManaged({
+        isVisible: false,
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.accelerateHibernation(2);
+
+      // Tier 2 schedules with delay 0 — flush the macrotask queue.
+      vi.advanceTimersByTime(0);
+      expect(managed.isHibernated).toBe(true);
+    });
+
+    it("ignores terminals that are not in BACKGROUND tier", () => {
+      const managed = makeMockManaged({
+        isVisible: false,
+        lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.accelerateHibernation(2);
+      vi.advanceTimersByTime(10_000);
+
+      expect(managed.hibernationTimer).toBeUndefined();
+      expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("ignores visible terminals even in BACKGROUND tier", () => {
+      // A non-focused split-view terminal can be BACKGROUND-tier and still
+      // on screen. Tearing it down under memory pressure would visibly
+      // collapse the user's view — never do this.
+      const managed = makeMockManaged({
+        isVisible: true,
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.accelerateHibernation(2);
+      vi.advanceTimersByTime(10_000);
+
+      expect(managed.hibernationTimer).toBeUndefined();
+      expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("skips terminals that are already hibernated", () => {
+      const managed = makeMockManaged({
+        isVisible: false,
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        isHibernated: true,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.accelerateHibernation(2);
+      vi.advanceTimersByTime(10_000);
+
+      // Already-hibernated terminals stay hibernated; no new timer.
+      expect(managed.hibernationTimer).toBeUndefined();
+    });
+
+    it("does not tear down a recently-active agent terminal at tier 2", () => {
+      // Tier 2 fires immediately, but the hibernate() safety guard still
+      // protects an agent that has recent output — the silence window must
+      // pass first. The pending re-check timer takes over.
+      const managed = makeMockManaged({
+        isVisible: false,
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        launchAgentId: "claude",
+        canonicalAgentState: "working",
+        lastWriteAt: Date.now() - 1000, // very recent write
+        pendingWrites: 0,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.accelerateHibernation(2);
+      vi.advanceTimersByTime(0);
+
+      // Must NOT have hibernated — silence window unmet.
+      expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("does not hibernate a non-BACKGROUND terminal even with idle agent state", () => {
+      const managed = makeMockManaged({
+        isVisible: false,
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        launchAgentId: "claude",
+        canonicalAgentState: "idle",
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.accelerateHibernation(2);
+      vi.advanceTimersByTime(10_000);
+
+      // The renderer policy owns when to hibernate based on tier; the
+      // accelerator only compresses the timer for already-BACKGROUND
+      // terminals. A FOCUSED idle agent is still on the user's screen.
+      expect(managed.isHibernated).toBeFalsy();
     });
   });
 });

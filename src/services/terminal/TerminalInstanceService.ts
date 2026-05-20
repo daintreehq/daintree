@@ -10,6 +10,8 @@ import {
   PostCompleteHook,
   isWebGLEligibleTier,
   WRITE_BURST_DECAY_MS,
+  HIBERNATION_DELAY_PRESSURE_TIER1_MS,
+  HIBERNATION_DELAY_PRESSURE_TIER2_MS,
 } from "./types";
 import {
   setupTerminalAddons,
@@ -1882,12 +1884,46 @@ class TerminalInstanceService {
     return this.hibernationManager.isHibernationEligible(tier, managed);
   }
 
-  private scheduleHibernation(id: string, managed: ManagedTerminal): void {
-    this.hibernationManager.scheduleHibernation(id, managed);
+  private scheduleHibernation(id: string, managed: ManagedTerminal, delayMs?: number): void {
+    this.hibernationManager.scheduleHibernation(id, managed, delayMs);
   }
 
   private cancelHibernation(managed: ManagedTerminal): void {
     this.hibernationManager.cancelHibernation(managed);
+  }
+
+  /**
+   * Memory-pressure accelerator. Sweep every BACKGROUND-tier instance and
+   * re-arm its hibernation timer with a shorter delay so idle terminals
+   * release memory immediately under OS pressure instead of waiting for the
+   * fixed 30s window.
+   *
+   * - Level 1 (mild pressure): HIBERNATION_DELAY_PRESSURE_TIER1_MS (5s).
+   *   Enough headroom for a write burst to drain and to absorb tab-flip
+   *   oscillation, but ~6x faster than the normal window.
+   * - Level 2 (sustained pressure): HIBERNATION_DELAY_PRESSURE_TIER2_MS (0).
+   *   Fire immediately; the `hibernate()` safety guard still blocks
+   *   actively-writing or recently-active agent terminals.
+   *
+   * Skips visible terminals (the user is looking at them) and terminals that
+   * are not currently in BACKGROUND tier (those are protected by the
+   * renderer policy). Already-hibernated terminals are skipped.
+   */
+  accelerateHibernation(level: 1 | 2): void {
+    const delayMs =
+      level === 1 ? HIBERNATION_DELAY_PRESSURE_TIER1_MS : HIBERNATION_DELAY_PRESSURE_TIER2_MS;
+    for (const [id, managed] of this.instances.entries()) {
+      if (managed.isHibernated) continue;
+      if (managed.isVisible) continue;
+      if (managed.lastAppliedTier !== TerminalRefreshTier.BACKGROUND) continue;
+      // Cancel the existing 30s timer so we don't race two pending
+      // hibernations against each other. The new schedule re-runs the
+      // eligibility check, so active-agent terminals with recent writes
+      // still wait out their silence window (their eligibility re-check
+      // timer takes over from here).
+      this.cancelHibernation(managed);
+      this.scheduleHibernation(id, managed, delayMs);
+    }
   }
 
   destroy(id: string): void {
