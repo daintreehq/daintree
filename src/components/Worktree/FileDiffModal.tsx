@@ -23,7 +23,7 @@ function FileViewerModalFallback({ isOpen }: { isOpen: boolean }) {
   return (
     <Skeleton
       label="Loading file viewer"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-backdrop"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim-medium"
     >
       <SkeletonBone className="w-[min(80vw,720px)] h-[min(70vh,480px)]" />
     </Skeleton>
