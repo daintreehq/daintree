@@ -414,6 +414,13 @@ describe("GitHubService adversarial", () => {
       .mockResolvedValueOnce({
         repository: {},
       })
+      // getProjectHealth runs the slow-cadence merged-PR velocity query before
+      // the health query (issue #8757) — both responses must be queued.
+      .mockResolvedValueOnce({
+        mergedPRs60: { issueCount: 0 },
+        mergedPRs120: { issueCount: 0 },
+        mergedPRs180: { issueCount: 0 },
+      })
       .mockResolvedValueOnce({
         repository: {
           defaultBranchRef: null,
