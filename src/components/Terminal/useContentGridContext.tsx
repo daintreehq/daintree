@@ -24,8 +24,10 @@ import { TerminalRefreshTier } from "@shared/types/panel";
 import type { TabGroup, TabGroupLocation } from "@shared/types/panel";
 import {
   computeGridColumns,
+  getMaxGridCapacity,
   GRID_TRANSITION_DURATION_MS,
   GRID_FIT_DELAY_MS,
+  ABSOLUTE_MAX_GRID_TERMINALS,
 } from "@/lib/terminalLayout";
 import {
   isSidebarLayoutTransitionLocked,
@@ -56,6 +58,7 @@ import { actionService } from "@/services/ActionService";
 // mutated.
 const EMPTY_PANEL_IDS: string[] = [];
 const EMPTY_TERMINALS: TerminalInstance[] = [];
+const EMPTY_TAB_GROUPS: TabGroup[] = [];
 
 export function pixelSnapTransform({ x, y }: TransformProperties): string {
   const tx = typeof x === "number" ? x : parseFloat(x ?? "0") || 0;
@@ -76,6 +79,19 @@ export interface ContentGridContext {
   emptyContent?: React.ReactNode;
   gridTerminals: TerminalInstance[];
   tabGroups: TabGroup[];
+  /**
+   * Tab groups that fit in the grid at the readable minimum size, sliced from
+   * `tabGroups` by `maxGridCapacity`. Renderers iterate this list (not the raw
+   * `tabGroups`) so any panels above capacity are excluded from the grid and
+   * routed to the overflow status strip instead. See #8702.
+   */
+  visibleTabGroups: TabGroup[];
+  /**
+   * Tab groups that exceed the grid's screen-fit capacity and render as
+   * compact status cards below the grid. Empty when `tabGroups.length <=
+   * maxGridCapacity`. See #8702.
+   */
+  overflowTabGroups: TabGroup[];
   focusedId: string | null;
   maximizedId: string | null;
   maximizeTarget: ReturnType<typeof usePanelStore.getState>["maximizeTarget"];
@@ -322,10 +338,27 @@ export function useContentGridContext({
 
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
   const setGridDimensions = useLayoutConfigStore((state) => state.setGridDimensions);
-  const getMaxGridCapacity = useLayoutConfigStore((state) => state.getMaxGridCapacity);
-
-  const maxGridCapacity = getMaxGridCapacity();
-  const isGridFull = tabGroups.length >= maxGridCapacity;
+  // Subscribe reactively to the derived capacity so height-only resizes
+  // re-partition the grid. A `state.getMaxGridCapacity` function reference
+  // is stable across height changes and would leave the partition stale
+  // (verified against `useGridNavigation`'s inline-derived selector).
+  const maxGridCapacity = useLayoutConfigStore((state) => {
+    if (!state.gridDimensions) return ABSOLUTE_MAX_GRID_TERMINALS;
+    return getMaxGridCapacity(state.gridDimensions.width, state.gridDimensions.height);
+  });
+  // Split the grid panels at the screen-fit capacity. Everything past the cap
+  // renders in the overflow status strip (#8702) so we never paint terminals
+  // narrower than MIN_TERMINAL_WIDTH_PX.
+  const visibleTabGroups = useMemo(
+    () => (tabGroups.length <= maxGridCapacity ? tabGroups : tabGroups.slice(0, maxGridCapacity)),
+    [tabGroups, maxGridCapacity]
+  );
+  const overflowTabGroups = useMemo(
+    () =>
+      tabGroups.length <= maxGridCapacity ? EMPTY_TAB_GROUPS : tabGroups.slice(maxGridCapacity),
+    [tabGroups, maxGridCapacity]
+  );
+  const isGridFull = visibleTabGroups.length >= maxGridCapacity;
 
   const { setNodeRef, isOver } = useDroppable({
     id: "grid-container",
@@ -347,10 +380,12 @@ export function useContentGridContext({
   }, [isDragging]);
 
   const placeholderInGrid =
-    placeholderIndex !== null && placeholderIndex >= 0 && placeholderIndex <= tabGroups.length;
+    placeholderIndex !== null &&
+    placeholderIndex >= 0 &&
+    placeholderIndex <= visibleTabGroups.length;
 
   const showPlaceholder = placeholderInGrid && sourceContainer === "dock" && !isGridFull;
-  const gridItemCount = tabGroups.length + (showPlaceholder ? 1 : 0);
+  const gridItemCount = visibleTabGroups.length + (showPlaceholder ? 1 : 0);
 
   const bindGridRegion = useCallback((node: HTMLDivElement | null) => {
     useMacroFocusStore.getState().setRegionRef("grid", node);
@@ -567,13 +602,15 @@ export function useContentGridContext({
   );
 
   const panelIds = useMemo(() => {
-    const ids = tabGroups.map((g) => g.panelIds[0] ?? g.id);
+    // Only visible groups participate in SortableContext / dnd — overflow
+    // status cards are non-draggable and live outside the grid container.
+    const ids = visibleTabGroups.map((g) => g.panelIds[0] ?? g.id);
     if (showPlaceholder && placeholderInGrid) {
       const insertIndex = Math.min(Math.max(0, placeholderIndex), ids.length);
       ids.splice(insertIndex, 0, GRID_PLACEHOLDER_ID);
     }
     return ids;
-  }, [tabGroups, showPlaceholder, placeholderIndex, placeholderInGrid]);
+  }, [visibleTabGroups, showPlaceholder, placeholderIndex, placeholderInGrid]);
 
   // Structurally-filtered fleet panel IDs. Delegates membership to
   // `buildFleetPanels` (single source of truth — see #5989) and projects to
@@ -786,6 +823,21 @@ export function useContentGridContext({
     }
   }, [focusedId, maximizedGroupFocusTarget, maximizedGroupPanels.length, setFocused]);
 
+  // Focus reconciliation when capacity shrinks (sidebar opens, window narrows):
+  // if `focusedId` has slipped into the overflow strip, arrow keys and Cmd+N
+  // can't reach it anymore. Drop focus onto the first visible panel instead so
+  // the user has a working keyboard model (#8702). Only fires when the focused
+  // panel is in the active worktree's grid set but no longer visible.
+  useEffect(() => {
+    if (!focusedId) return;
+    const focusedInVisible = visibleTabGroups.some((g) => g.panelIds.includes(focusedId));
+    if (focusedInVisible) return;
+    const focusedInOverflow = overflowTabGroups.some((g) => g.panelIds.includes(focusedId));
+    if (!focusedInOverflow) return;
+    const fallback = visibleTabGroups[0]?.panelIds[0] ?? null;
+    if (fallback) setFocused(fallback);
+  }, [focusedId, visibleTabGroups, overflowTabGroups, setFocused]);
+
   const gridContextMenuContent = (
     <ContextMenuContent>
       <ContextMenuActionItem
@@ -874,6 +926,8 @@ export function useContentGridContext({
     emptyContent,
     gridTerminals,
     tabGroups,
+    visibleTabGroups,
+    overflowTabGroups,
     focusedId,
     maximizedId,
     maximizeTarget,

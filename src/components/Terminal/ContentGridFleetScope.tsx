@@ -1,6 +1,6 @@
 import { AnimatePresence, LayoutGroup, m } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { MIN_TERMINAL_HEIGHT_PX } from "@/lib/terminalLayout";
+import { MIN_TERMINAL_HEIGHT_PX, MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
 import { GridNotificationBar } from "./GridNotificationBar";
 import { GridPanel } from "./GridPanel";
 import { GridShell } from "./GridShell";
@@ -43,7 +43,7 @@ export function ContentGridFleetScope({
           className="h-full bg-noise p-1"
           style={{
             display: "grid",
-            gridTemplateColumns: `repeat(${ctx.fleetGridCols}, minmax(0, 1fr))`,
+            gridTemplateColumns: `repeat(${ctx.fleetGridCols}, minmax(min(100%, ${MIN_TERMINAL_WIDTH_PX}px), 1fr))`,
             gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
             gap: "4px",
             backgroundColor: "var(--color-grid-bg)",
