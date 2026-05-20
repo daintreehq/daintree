@@ -326,30 +326,36 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     return s;
   }, [eligibleTerminals]);
 
-  // Stable identity for the Fuse memo — keying on the joined `id\x00title`
-  // pairs (NUL is illegal in panel ids/titles, so it can't collide) avoids
-  // rebuilds when `panelsById` updates a search-irrelevant field
-  // (e.g. agentState), while still invalidating when a terminal title
-  // changes via OSC. See past lesson on useProjectSwitcherPalette (#4747).
-  const fuseIdKey = useMemo(
-    () => eligibleTerminals.map((t) => `${t.id}\x00${t.title}`).join(","),
+  // Stable identity-and-source key for the Fuse memo. Each eligible terminal
+  // contributes its search-relevant projection — id, title, worktreeId — as
+  // three NUL-separated fields (NUL is illegal in panel/worktree ids and in
+  // OSC-derived titles, so it can't collide). The string is value-equal
+  // whenever only a search-irrelevant field changed (e.g. agentState), so the
+  // Fuse memo keyed on it skips rebuilding the index, while a title change via
+  // OSC or a change to the eligible set still invalidates it. The Fuse memo
+  // reconstructs its items from this key, so it never reads the unstable
+  // `eligibleTerminals` reference directly and its dependency array stays
+  // exhaustive. See past lesson on useProjectSwitcherPalette (#4747).
+  const fuseSourceKey = useMemo(
+    () => eligibleTerminals.flatMap((t) => [t.id, t.title, t.worktreeId]).join("\x00"),
     [eligibleTerminals]
   );
 
   const fuse = useMemo(() => {
-    const items: FuseItem[] = eligibleTerminals.map((t) => {
+    const fields = fuseSourceKey === "" ? [] : fuseSourceKey.split("\x00");
+    const items: FuseItem[] = [];
+    for (let i = 0; i + 2 < fields.length; i += 3) {
+      const worktreeId = fields[i + 2]!;
       const groupName =
-        t.worktreeId === FALLBACK_GROUP_ID
-          ? FALLBACK_GROUP_NAME
-          : (worktreeNames[t.worktreeId] ?? "");
-      return {
-        id: t.id,
-        title: t.title,
+        worktreeId === FALLBACK_GROUP_ID ? FALLBACK_GROUP_NAME : (worktreeNames[worktreeId] ?? "");
+      items.push({
+        id: fields[i]!,
+        title: fields[i + 1]!,
         groupName,
-        branch: worktreeBranches[t.worktreeId] ?? "",
-        path: worktreePaths[t.worktreeId] ?? "",
-      };
-    });
+        branch: worktreeBranches[worktreeId] ?? "",
+        path: worktreePaths[worktreeId] ?? "",
+      });
+    }
     return new Fuse(items, {
       keys: [
         { name: "title", weight: 1.0 },
@@ -361,10 +367,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       ignoreLocation: true,
       minMatchCharLength: 2,
     });
-    // `fuseIdKey` is the stable identity proxy for `eligibleTerminals`; only
-    // rebuild when the eligible id set or worktree metadata actually changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fuseIdKey, worktreeNames, worktreeBranches, worktreePaths]);
+  }, [fuseSourceKey, worktreeNames, worktreeBranches, worktreePaths]);
 
   const visibleTerminals = useMemo<PickerTerminal[]>(() => {
     const trimmed = deferredQuery.trim();
