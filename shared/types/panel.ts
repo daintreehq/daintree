@@ -480,6 +480,8 @@ export interface TerminalInstance {
   stateChangeTrigger?: AgentStateChangeTrigger;
   stateChangeConfidence?: number;
   waitingReason?: WaitingReason;
+  /** Error code or message from agent state transitions (e.g., "ECONNRESET", "EPIPE") */
+  error?: string;
   /** Extracted session cost in dollars from the last completed agent run */
   sessionCost?: number;
   /** Extracted session token count from the last completed agent run */
