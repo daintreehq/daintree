@@ -1,6 +1,7 @@
 import { AlertTriangle } from "lucide-react";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { getRestoreConfirmationTitle } from "./recoveryCopy";
 
 const AUTO_DISMISS_MS = 10_000;
 
@@ -14,11 +15,7 @@ export function RestoreConfirmationBanner() {
   return (
     <InlineStatusBanner
       icon={AlertTriangle}
-      title={
-        suspectCount > 0
-          ? `Session recovered after unexpected exit — ${suspectCount} ${suspectCount === 1 ? "panel" : "panels"} created near the crash may be affected.`
-          : "Session recovered after unexpected exit."
-      }
+      title={getRestoreConfirmationTitle(suspectCount)}
       severity="warning"
       role="status"
       actions={[]}

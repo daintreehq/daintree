@@ -6,6 +6,7 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
+import { SAFE_MODE_BANNER_COPY } from "./recoveryCopy";
 
 function formatRelativeTime(timestamp: number): string {
   const diff = Date.now() - timestamp;
@@ -93,7 +94,7 @@ export function SafeModeBanner() {
     <>
       <InlineStatusBanner
         icon={AlertTriangle}
-        title="Safe mode — panels weren't restored"
+        title={SAFE_MODE_BANNER_COPY.title}
         severity="warning"
         role="status"
         trailingSlot={detailsPopover}
