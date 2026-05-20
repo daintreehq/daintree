@@ -123,8 +123,10 @@ export function broadcastFleetRawInput(originId: string, data: string): boolean 
  * - Non-permanent failures (e.g., `EAGAIN`) leave arming alone and record a
  *   transient failure entry so the user sees the chip. The chip's "Retry
  *   failed" path is a no-op for the raw-input transport (single keystrokes
- *   are not meaningful to replay), and `recordFailure` is called with an
- *   empty payload to make that explicit.
+ *   are not meaningful to replay), so `recordFailure` is called with a
+ *   `null` payload. `fleet.retryFailures` guards on `payload == null` and
+ *   will skip the IPC write — using `""` here would slip through that guard
+ *   and fire real empty-byte writes against live PTYs (#8705).
  *
  * Exported for testing — production wires this into the IPC subscription
  * registered at module load.
@@ -134,8 +136,12 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
 
   const nonPermanentFailedIds: string[] = [];
   const permanentlyFailedIds: string[] = [];
+  const succeededIds: string[] = [];
   for (const result of payload.results) {
-    if (result.ok) continue;
+    if (result.ok) {
+      succeededIds.push(result.id);
+      continue;
+    }
     const code = result.error?.code;
     // Missing errno → permanent. We can't tell if the target is recoverable,
     // so the safer default is to disarm rather than keep firing keystrokes.
@@ -143,6 +149,19 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
       permanentlyFailedIds.push(result.id);
     } else {
       nonPermanentFailedIds.push(result.id);
+    }
+  }
+
+  // A successful write to a previously-failed target clears the dot — same
+  // pattern as `fleetEnterBroadcast.ts`. Without this the banner persists
+  // after the user has visibly recovered (e.g. ENOSPC freed and the next
+  // keystroke landed).
+  if (succeededIds.length > 0) {
+    const failedSet = useFleetFailureStore.getState().failedIds;
+    if (failedSet.size > 0) {
+      for (const id of succeededIds) {
+        if (failedSet.has(id)) useFleetFailureStore.getState().dismissId(id);
+      }
     }
   }
 
@@ -154,10 +173,10 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
   });
 
   if (nonPermanentFailedIds.length > 0) {
-    // Empty payload — raw input has no meaningful retry, and the
-    // `Retry failed` action checks for a non-null payload before firing.
+    // Null payload — raw input has no meaningful retry, and the
+    // `Retry failed` action checks for `payload == null` before firing.
     // The chip still surfaces so the user notices something rejected.
-    useFleetFailureStore.getState().recordFailure("", nonPermanentFailedIds);
+    useFleetFailureStore.getState().recordFailure(null, nonPermanentFailedIds);
   }
 
   if (permanentlyFailedIds.length > 0) {

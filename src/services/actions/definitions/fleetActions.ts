@@ -81,6 +81,14 @@ function requestConfirmation(kind: FleetPendingActionKind, targets: TerminalInst
   });
 }
 
+/**
+ * Module-level re-entrancy flag for `fleet.retryFailures`. A fast double-
+ * click on the banner's "Retry failed" button would otherwise dispatch
+ * two concurrent broadcasts against the same target set; for payloads
+ * ending in `\r` that double-executes the command in every pane.
+ */
+let retryInFlight = false;
+
 function clearPendingIf(kind: FleetPendingActionKind): void {
   const pending = useFleetPendingActionStore.getState().pending;
   if (pending && pending.kind === kind) {
@@ -319,14 +327,25 @@ export function registerFleetActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     run: async () => {
+      // Re-entrancy guard: a fast double-click on "Retry failed" would
+      // otherwise dispatch two concurrent broadcasts against the same
+      // target set before either's dismissId loop runs — for command-
+      // terminating payloads (`"make deploy\r"`) that double-executes
+      // the command.
+      if (retryInFlight) return;
       const { failedIds, payload } = useFleetFailureStore.getState();
       if (payload == null || failedIds.size === 0) return;
       // Snapshot once — `failedIds` mutates as dismissId fires inside the loop.
       const targets = Array.from(failedIds);
-      const result = await broadcastFleetLiteralPaste(payload, targets);
-      const stillFailed = new Set(result.failedIds);
-      for (const id of targets) {
-        if (!stillFailed.has(id)) useFleetFailureStore.getState().dismissId(id);
+      retryInFlight = true;
+      try {
+        const result = await broadcastFleetLiteralPaste(payload, targets);
+        const stillFailed = new Set(result.failedIds);
+        for (const id of targets) {
+          if (!stillFailed.has(id)) useFleetFailureStore.getState().dismissId(id);
+        }
+      } finally {
+        retryInFlight = false;
       }
     },
   }));

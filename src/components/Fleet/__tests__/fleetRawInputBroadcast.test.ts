@@ -396,10 +396,11 @@ describe("applyFleetBroadcastResult", () => {
 
     const failure = useFleetFailureStore.getState();
     expect(Array.from(failure.failedIds)).toEqual(["t2"]);
-    // Payload is intentionally empty for raw-input failures — single
-    // keystrokes aren't meaningful to retry, and the `Retry failed` action
-    // checks for a non-null payload before firing.
-    expect(failure.payload).toBe("");
+    // Payload is intentionally null for raw-input failures — single
+    // keystrokes aren't meaningful to retry, and `fleet.retryFailures`
+    // guards on `payload == null` to skip the IPC write. An empty string
+    // would slip past the loose-equality guard (#8705).
+    expect(failure.payload).toBeNull();
 
     const arming = useFleetArmingStore.getState();
     expect(arming.armedIds.has("t2")).toBe(true);
@@ -483,5 +484,28 @@ describe("applyFleetBroadcastResult", () => {
 
     expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
     expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
+  });
+
+  it("dismisses a prior failure when the next write to that target succeeds", () => {
+    // Mirrors fleetEnterBroadcast's dismiss-on-success — a stale red dot
+    // shouldn't linger after the user has visibly recovered the pane.
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+
+    applyFleetBroadcastResult({
+      results: [
+        { id: "t1", ok: true },
+        { id: "t2", ok: false, error: { code: "ENOSPC", message: "no space" } },
+      ],
+    });
+    expect(Array.from(useFleetFailureStore.getState().failedIds)).toEqual(["t2"]);
+
+    applyFleetBroadcastResult({
+      results: [
+        { id: "t1", ok: true },
+        { id: "t2", ok: true },
+      ],
+    });
+    expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
   });
 });
