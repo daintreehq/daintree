@@ -272,6 +272,8 @@ export function FleetArmingRibbon(): ReactElement | null {
   );
 
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId) ?? null;
+  usePanelStore((s) => s.panelIds);
+  usePanelStore((s) => s.panelsById);
 
   const presetCounts = {
     waitingCurrent: computeArmByStateIds("waiting", "current", activeWorktreeId).length,
