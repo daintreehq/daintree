@@ -536,6 +536,28 @@ describe("ResourceProfileService adversarial", () => {
       service.stop();
     });
 
+    it("does not force-clear before the hard cap elapses", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // Enter degraded.
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+
+      // Sustain moderate lag below the cap. After 115_000ms post-entry the
+      // cap has NOT elapsed; the latch must still be active.
+      setLag(400, 0.9);
+      vi.advanceTimersByTime(115_000);
+
+      const internals = service as unknown as { lagPressureActive: boolean };
+      expect(internals.lagPressureActive).toBe(true);
+      expect(logInfo).not.toHaveBeenCalledWith("event-loop-lag-force-cleared", expect.any(Object));
+
+      service.stop();
+    });
+
     it("force-clears the latch after the hard cap even with sustained lag", () => {
       const { deps } = createDeps();
       const service = new ResourceProfileService(deps);

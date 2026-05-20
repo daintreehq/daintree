@@ -47,7 +47,10 @@ const WARMUP_TICKS = 2;
 // mode's own batched work) doesn't permanently restart recovery. A hard time
 // cap bounds the latch so a pathological feedback loop can't pin the app to
 // efficiency forever — after the cap the latch force-clears and the normal
-// entry path will re-arm if saturation is genuinely ongoing.
+// entry path will re-arm if saturation is genuinely ongoing. The cap is a
+// stuck-latch escape, not a saturation override: under truly sustained lag
+// (p99 + ELU both still elevated) the moderate entry path will re-latch
+// within 10s, which is correct.
 const LAG_SAMPLE_INTERVAL_MS = 5_000;
 const LAG_HISTOGRAM_RESOLUTION_MS = 10;
 const LAG_ENTRY_P99_MS = 250;
@@ -285,11 +288,17 @@ export class ResourceProfileService {
     // loops from pinning the app to efficiency indefinitely.
     if (this.lagPressureActive) {
       const now = Date.now();
+      // Defensive: if lagPressureStartedAt is null while the latch is held the
+      // cap can never measure elapsed time, so honor it as "definitely past
+      // the cap" and force-clear. The two entry paths always set both fields
+      // together, so this branch is unreachable in production — but the cap is
+      // the last-resort escape and shouldn't be silently disarmed by an
+      // unexpected state.
       if (
-        this.lagPressureStartedAt !== null &&
+        this.lagPressureStartedAt === null ||
         now - this.lagPressureStartedAt >= LAG_PRESSURE_MAX_MS
       ) {
-        const durationMs = now - this.lagPressureStartedAt;
+        const durationMs = this.lagPressureStartedAt === null ? 0 : now - this.lagPressureStartedAt;
         logInfo("event-loop-lag-force-cleared", {
           p99Ms: Math.round(p99Ms),
           maxMs: Math.round(maxMs),
@@ -337,6 +346,9 @@ export class ResourceProfileService {
       this.lagEnterTicks = 0;
       this.lagExitWindow = [];
       this.lagPressureStartedAt = Date.now();
+      // Emit both events on the same tick: log consumers expect the standard
+      // entry signal first, then the escalation signal. The dual-emit keeps
+      // the event stream consistent for code that subscribes only to one.
       logInfo("event-loop-lag-detected", {
         p99Ms: Math.round(p99Ms),
         maxMs: Math.round(maxMs),
