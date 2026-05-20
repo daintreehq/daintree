@@ -2,15 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 
 import { fanoutEventToPorts, type FanoutPort } from "../worktreePortFanout.js";
 
-function makePort(throwOnPost = false): FanoutPort & {
-  postMessage: ReturnType<typeof vi.fn>;
-  close: ReturnType<typeof vi.fn>;
-} {
+function makePort(throwOnPost = false) {
+  const postMessage = vi.fn(() => {
+    if (throwOnPost) throw new Error("DataCloneError: not serializable");
+  });
+  const close = vi.fn(() => {});
   return {
-    postMessage: vi.fn(() => {
-      if (throwOnPost) throw new Error("DataCloneError: not serializable");
-    }),
-    close: vi.fn(),
+    postMessage,
+    close,
+  } as FanoutPort & {
+    postMessage: ReturnType<typeof vi.fn>;
+    close: ReturnType<typeof vi.fn>;
   };
 }
 
