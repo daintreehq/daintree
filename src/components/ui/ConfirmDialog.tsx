@@ -39,6 +39,13 @@ type ConfirmDialogBaseProps = {
   cancelLabel?: string;
   onConfirm: () => void | Promise<void>;
   isConfirmLoading?: boolean;
+  /**
+   * Disable the primary action while the dialog stays open — for gates
+   * that depend on the body's own state (e.g. all options excluded).
+   * Stacks with the typed-name gate; the button stays disabled if
+   * either gate fails.
+   */
+  confirmDisabled?: boolean;
   zIndex?: DialogZIndex;
   initialFocus?: DialogInitialFocus;
 };
@@ -64,6 +71,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     cancelLabel = "Cancel",
     onConfirm,
     isConfirmLoading = false,
+    confirmDisabled = false,
     variant,
     zIndex,
     initialFocus,
@@ -120,6 +128,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
 
   const handleConfirm = () => {
     if (hasTypedNameGate && !isTypedMatched) return;
+    if (confirmDisabled) return;
     return onConfirm();
   };
 
@@ -162,7 +171,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
           label: confirmLabel,
           onClick: handleConfirm,
           loading: isConfirmLoading,
-          disabled: hasTypedNameGate && !isTypedMatched,
+          disabled: (hasTypedNameGate && !isTypedMatched) || confirmDisabled,
           intent: variant === "destructive" ? "destructive" : "default",
         }}
       />

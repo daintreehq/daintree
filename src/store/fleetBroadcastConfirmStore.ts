@@ -1,4 +1,7 @@
 import { create } from "zustand";
+import type { FleetBroadcastDestructiveMatch } from "@/components/Fleet/fleetBroadcast";
+
+export type { FleetBroadcastDestructiveMatch };
 
 /**
  * Frozen per-target snapshot rendered in the divergence confirm dialog.
@@ -38,6 +41,16 @@ export interface PendingFleetBroadcastTarget {
  * Lives outside ribbon-local state so any caller (paste handler, input bar,
  * future scriptable broadcasts) can request a confirm without a callback
  * prop chain.
+ *
+ * `divergence.targets` is a request-time snapshot of resolved per-target
+ * payloads + per-target overrides/skips. The confirm UI reads only this
+ * snapshot — never the live `fleetResolutionPreviewStore`, which rebuilds
+ * on every keystroke and would otherwise show stale data after the dialog
+ * opens.
+ *
+ * `destructiveMatch` points at the first destructive substring + its
+ * character offset so the confirm UI can show the user the actual command
+ * rather than an abstract category label.
  */
 export interface PendingFleetBroadcast {
   requestId: string;
@@ -52,6 +65,12 @@ export interface PendingFleetBroadcast {
   divergence?: {
     targets: PendingFleetBroadcastTarget[];
   };
+  /**
+   * First destructive substring + position in the source draft, or null
+   * when no destructive pattern matched. Lets the confirm UI point at the
+   * actual command rather than only a category label.
+   */
+  destructiveMatch?: FleetBroadcastDestructiveMatch | null;
 }
 
 interface FleetBroadcastConfirmState {

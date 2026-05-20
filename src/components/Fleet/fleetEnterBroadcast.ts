@@ -9,10 +9,16 @@ import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewSt
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logWarn } from "@/utils/logger";
-import { getFleetBroadcastWarnings, resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
+import {
+  getFleetBroadcastDestructiveMatch,
+  getFleetBroadcastWarnings,
+  needsFleetBroadcastConfirmation,
+  resolveFleetBroadcastTargetIds,
+} from "./fleetBroadcast";
 import {
   buildFleetTargetPreviews,
   executeFleetBroadcast,
+  filterEligibleIds,
   type FleetExecutionResult,
   type FleetTargetPreview,
 } from "./fleetExecution";
@@ -118,6 +124,12 @@ function buildDivergenceTargets(
  * variables) route through a confirm dialog before dispatch so the user
  * sees the actual per-target content — the silent-fallback comment that
  * used to live here is gone because we no longer silently fall back.
+ *
+ * Recipe-variable expansion can also push a safe-looking draft past the
+ * 512-byte threshold or surface a destructive substring not in the source
+ * draft. `needsFleetBroadcastConfirmation` re-checks the resolved per-
+ * target payloads so the confirm gate sees what each pane will actually
+ * receive, not just the source text.
  */
 export function tryFleetBroadcastFromEditor(
   terminalId: string,
@@ -163,6 +175,20 @@ export function tryFleetBroadcastFromEditor(
     livePreviews.length > 0 ? livePreviews : buildFleetTargetPreviews(text);
 
   const reasons = describeWarnings(text);
+  // Surface the destructive match from the source draft when possible
+  // (gives the user the offset inside their typed text). When the draft
+  // itself is safe but a resolved payload introduces a destructive
+  // pattern via variable expansion, fall back to the first non-excluded
+  // resolved match so the dialog can still explain the gate.
+  const destructiveMatch =
+    getFleetBroadcastDestructiveMatch(text) ?? findFirstResolvedDestructiveMatch(previews);
+
+  // Resolved-payload gate: recipe-variable expansion can push a safe-
+  // looking draft past the 512-byte threshold or surface a destructive
+  // substring per-target. Re-check against the resolved fan-out so the
+  // confirm reflects what each pane will actually receive.
+  const resolvedPayloads = previews.filter((p) => !p.excluded).map((p) => p.resolvedPayload);
+  const requiresWarningConfirm = needsFleetBroadcastConfirmation(text, resolvedPayloads);
 
   // Divergence is scoped to live armed targets: a stale override for a
   // terminal that has since disarmed must not force a spurious confirm
@@ -213,9 +239,16 @@ export function tryFleetBroadcastFromEditor(
     const controller = new AbortController();
     activeBroadcastController = controller;
     try {
+      // Re-check eligibility at dispatch time. Panes that disarmed,
+      // trashed, or lost their PTY between confirm-request and confirm-
+      // submit must not still receive bytes just because the snapshot
+      // marked them eligible. `effectiveTargets` already filtered against
+      // `resolveFleetBroadcastTargetIds()`; re-run the panel-eligibility
+      // filter so disposed PTYs are dropped too.
+      const eligibleTargets = filterEligibleIds(effectiveTargets);
       const result = await executeFleetBroadcast(
         text,
-        effectiveTargets,
+        eligibleTargets,
         overridesArg,
         controller.signal
       );
@@ -255,7 +288,7 @@ export function tryFleetBroadcastFromEditor(
         // A successful broadcast clears any stale failure dot on these
         // targets — the partial-failure state from a prior attempt is
         // now resolved.
-        for (const id of effectiveTargets) useFleetFailureStore.getState().dismissId(id);
+        for (const id of eligibleTargets) useFleetFailureStore.getState().dismissId(id);
       } else if (result.successCount > 0) {
         // Partial cancel — dispatched batches that succeeded should clear
         // their old failure dots; targets in skipped batches stay as-is.
@@ -285,7 +318,7 @@ export function tryFleetBroadcastFromEditor(
     }
   };
 
-  if (reasons.length > 0 || divergent) {
+  if (requiresWarningConfirm || divergent) {
     void requestFleetBroadcastConfirmation({
       text,
       warningReasons: reasons,
@@ -294,10 +327,22 @@ export function tryFleetBroadcastFromEditor(
             targets: buildDivergenceTargets(previews, initialOverrides, initialSkipped),
           }
         : undefined,
+      destructiveMatch,
     }).then(doSend);
     return true;
   }
 
   void doSend();
   return true;
+}
+
+function findFirstResolvedDestructiveMatch(
+  previews: FleetTargetPreview[]
+): ReturnType<typeof getFleetBroadcastDestructiveMatch> {
+  for (const preview of previews) {
+    if (preview.excluded) continue;
+    const match = getFleetBroadcastDestructiveMatch(preview.resolvedPayload);
+    if (match !== null) return match;
+  }
+  return null;
 }

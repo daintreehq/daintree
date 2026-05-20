@@ -292,6 +292,64 @@ describe("tryFleetBroadcastFromEditor — permanent failure auto-disarm (#8706)"
   });
 });
 
+describe("tryFleetBroadcastFromEditor — confirmation gate", () => {
+  it("opens the confirm gate with destructiveMatch snapshot for destructive drafts", () => {
+    arm(["a", "b"]);
+    const consumed = tryFleetBroadcastFromEditor("a", "rm -rf /tmp", vi.fn());
+    expect(consumed).toBe(true);
+    const pending = useFleetBroadcastConfirmStore.getState().pending;
+    expect(pending).not.toBeNull();
+    expect(pending!.destructiveMatch).not.toBeNull();
+    expect(pending!.destructiveMatch!.substring.toLowerCase()).toContain("rm");
+    // Nothing has dispatched yet — submit only fires after confirmation.
+    expect(submitMock).not.toHaveBeenCalled();
+  });
+
+  it("confirming dispatches to every armed target", async () => {
+    arm(["a", "b", "c"]);
+    tryFleetBroadcastFromEditor("a", "rm -rf /tmp", vi.fn());
+    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
+
+    resolveFleetBroadcastConfirmation();
+    await flush();
+    await flush();
+
+    const submittedIds = submitMock.mock.calls.map((call) => call[0]).sort();
+    expect(submittedIds).toEqual(["a", "b", "c"]);
+  });
+
+  it("skips the confirm gate for short, single-line, safe text", async () => {
+    arm(["a", "b"]);
+    tryFleetBroadcastFromEditor("a", "npm test", vi.fn());
+    expect(useFleetBroadcastConfirmStore.getState().pending).toBeNull();
+    await flush();
+    expect(submitMock).toHaveBeenCalled();
+  });
+
+  it("drops targets that became ineligible while the confirm dialog was open", async () => {
+    arm(["a", "b", "c"]);
+    tryFleetBroadcastFromEditor("a", "rm -rf /tmp", vi.fn());
+    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
+
+    // Pane B is trashed between confirm-request and confirm-submit.
+    usePanelStore.setState({
+      panelsById: {
+        a: makeAgent("a"),
+        b: { ...makeAgent("b"), location: "trash" } as TerminalInstance,
+        c: makeAgent("c"),
+      },
+      panelIds: ["a", "b", "c"],
+    });
+
+    resolveFleetBroadcastConfirmation();
+    await flush();
+    await flush();
+
+    const submittedIds = submitMock.mock.calls.map((call) => call[0]).sort();
+    expect(submittedIds).toEqual(["a", "c"]);
+  });
+});
+
 describe("cancelActiveBroadcast", () => {
   it("aborts the in-flight controller so the run finalizes as cancelled", async () => {
     arm(["a", "b", "c"]);

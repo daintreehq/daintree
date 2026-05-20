@@ -9,6 +9,7 @@ import {
   FLEET_LARGE_PASTE_BYTE_THRESHOLD,
   buildFleetBroadcastRecipeContext,
   getFleetBroadcastByteLength,
+  getFleetBroadcastDestructiveMatch,
   getFleetBroadcastWarnings,
   needsFleetBroadcastConfirmation,
   resolveFleetBroadcastTargetIds,
@@ -213,6 +214,65 @@ describe("needsFleetBroadcastConfirmation", () => {
   });
   it("returns false for short, single-line, safe text", () => {
     expect(needsFleetBroadcastConfirmation("run the test")).toBe(false);
+  });
+
+  describe("resolved-payload variant", () => {
+    it("confirms when any resolved payload exceeds the byte threshold even if the source draft is safe", () => {
+      const safeDraft = "cd {{worktree_path}}";
+      const longResolved = `cd ${"/very/long/path/".repeat(40)}`;
+      expect(getFleetBroadcastByteLength(longResolved)).toBeGreaterThan(
+        FLEET_CONFIRM_BYTE_THRESHOLD
+      );
+      expect(needsFleetBroadcastConfirmation(safeDraft, [longResolved])).toBe(true);
+      expect(needsFleetBroadcastConfirmation(safeDraft, ["safe"])).toBe(false);
+    });
+
+    it("confirms when any resolved payload contains a destructive pattern surfaced by substitution", () => {
+      const safeDraft = "cleanup {{worktree_path}}";
+      // Variable expansion could introduce `rm -rf` not present in the draft.
+      expect(needsFleetBroadcastConfirmation(safeDraft, ["cleanup", "rm -rf /tmp/scratch"])).toBe(
+        true
+      );
+    });
+
+    it("returns false when source draft is safe and all resolved payloads are safe", () => {
+      expect(
+        needsFleetBroadcastConfirmation("status {{branch_name}}", ["status main", "status develop"])
+      ).toBe(false);
+    });
+
+    it("source-level warnings still take precedence over an empty resolved list", () => {
+      expect(needsFleetBroadcastConfirmation("rm -rf .", [])).toBe(true);
+    });
+  });
+});
+
+describe("getFleetBroadcastDestructiveMatch", () => {
+  it("returns substring and index for a destructive draft", () => {
+    const match = getFleetBroadcastDestructiveMatch("rm -rf node_modules");
+    expect(match).not.toBeNull();
+    expect(match!.index).toBe(0);
+    expect(match!.substring.toLowerCase()).toContain("rm -rf");
+  });
+
+  it("returns the offset for a destructive command embedded in the draft", () => {
+    const draft = "echo 'cleanup' && rm -rf /tmp/scratch";
+    const match = getFleetBroadcastDestructiveMatch(draft);
+    expect(match).not.toBeNull();
+    expect(match!.index).toBe(draft.indexOf("rm -rf"));
+    expect(match!.substring.toLowerCase()).toContain("rm");
+  });
+
+  it("returns null for safe text", () => {
+    expect(getFleetBroadcastDestructiveMatch("echo hello")).toBeNull();
+    expect(getFleetBroadcastDestructiveMatch("npm test")).toBeNull();
+  });
+
+  it("does not depend on regex lastIndex — repeated calls are stable", () => {
+    const draft = "rm -rf node_modules";
+    const first = getFleetBroadcastDestructiveMatch(draft);
+    const second = getFleetBroadcastDestructiveMatch(draft);
+    expect(first).toEqual(second);
   });
 });
 

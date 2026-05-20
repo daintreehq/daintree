@@ -106,7 +106,13 @@ function detectUnresolved(text: string, ctx: RecipeContext): string[] {
   return unresolved;
 }
 
-function filterEligibleIds(ids: string[]): string[] {
+/**
+ * Drop ids whose backing panel is no longer fleet-eligible (trashed,
+ * backgrounded, no PTY, etc.). Exported so the Enter-broadcast confirm
+ * path can re-check eligibility at dispatch time — a pane that went
+ * away while the confirm dialog was open must not still receive bytes.
+ */
+export function filterEligibleIds(ids: string[]): string[] {
   const { panelsById } = usePanelStore.getState();
   return ids.filter((id) => isTerminalFleetEligible(panelsById[id]));
 }
