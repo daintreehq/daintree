@@ -2,6 +2,7 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { store } from "../store.js";
+import { resilientAtomicWriteFileSync } from "../utils/fs.js";
 import { createLogger } from "../utils/logger.js";
 import { closeTelemetry } from "./TelemetryService.js";
 import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
@@ -26,7 +27,11 @@ export function isGpuDisabledByFlag(userDataPath: string): boolean {
 }
 
 export function writeGpuDisabledFlag(userDataPath: string): void {
-  fs.writeFileSync(path.join(userDataPath, GPU_DISABLED_FLAG), String(Date.now()), "utf8");
+  resilientAtomicWriteFileSync(
+    path.join(userDataPath, GPU_DISABLED_FLAG),
+    String(Date.now()),
+    "utf8"
+  );
 }
 
 export function clearGpuDisabledFlag(userDataPath: string): void {
@@ -58,7 +63,11 @@ export function isGpuAngleFallbackApplied(userDataPath: string): boolean {
 }
 
 export function writeGpuAngleFallbackFlag(userDataPath: string): void {
-  fs.writeFileSync(path.join(userDataPath, GPU_ANGLE_FALLBACK_FLAG), String(Date.now()), "utf8");
+  resilientAtomicWriteFileSync(
+    path.join(userDataPath, GPU_ANGLE_FALLBACK_FLAG),
+    String(Date.now()),
+    "utf8"
+  );
 }
 
 export function clearGpuAngleFallbackFlag(userDataPath: string): void {
@@ -120,6 +129,17 @@ class GpuCrashMonitorService {
       // hardware where Vulkan itself crashes — in that case the strikes
       // accumulate normally toward the nuclear path below.
       if (effectiveCount === 1 && !alreadyHasAngleFallback) {
+        // The ANGLE/Vulkan switches are only applied on Linux+Wayland (see
+        // `electron/setup/environment.ts`). On macOS/Windows the relaunch
+        // would be a no-op — let the strike accumulate toward the nuclear
+        // path instead of burning a session restart for no behavior change.
+        if (process.platform !== "linux") {
+          logger.info("gpu-crash-soft-fallback-skip-nonlinux", {
+            platform: process.platform,
+            crashCount: effectiveCount,
+          });
+          return;
+        }
         try {
           writeGpuAngleFallbackFlag(userDataPath);
         } catch (err) {

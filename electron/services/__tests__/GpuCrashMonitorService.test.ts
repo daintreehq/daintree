@@ -68,6 +68,7 @@ import {
 
 describe("GpuCrashMonitorService", () => {
   let tmpDir: string;
+  let originalPlatform: NodeJS.Platform;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -75,12 +76,18 @@ describe("GpuCrashMonitorService", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gpu-crash-test-"));
     appMock.getPath.mockReturnValue(tmpDir);
     crashLoopGuardMock.shouldRelaunch.mockReturnValue(true);
+    // Default to linux so existing first-strike tests exercise the soft
+    // fallback path. The "non-Linux first-strike no-op" describe overrides
+    // this per-test.
+    originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
     fs.rmSync(tmpDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
@@ -381,8 +388,15 @@ describe("GpuCrashMonitorService", () => {
     });
 
     it("does NOT relaunch when ANGLE flag write fails (prevents per-session loop)", async () => {
-      const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
-        throw new Error("EROFS: read-only filesystem");
+      vi.doMock("../../utils/fs.js", async () => {
+        const actual =
+          await vi.importActual<typeof import("../../utils/fs.js")>("../../utils/fs.js");
+        return {
+          ...actual,
+          resilientAtomicWriteFileSync: vi.fn(() => {
+            throw new Error("EROFS: read-only filesystem");
+          }),
+        };
       });
       try {
         await loadAndInit();
@@ -397,14 +411,21 @@ describe("GpuCrashMonitorService", () => {
           expect.objectContaining({ path: "angle-fallback" })
         );
       } finally {
-        writeSpy.mockRestore();
+        vi.doUnmock("../../utils/fs.js");
       }
     });
 
     it("does NOT relaunch when nuclear disable flag write fails", async () => {
       writeGpuAngleFallbackFlag(tmpDir);
-      const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
-        throw new Error("EROFS: read-only filesystem");
+      vi.doMock("../../utils/fs.js", async () => {
+        const actual =
+          await vi.importActual<typeof import("../../utils/fs.js")>("../../utils/fs.js");
+        return {
+          ...actual,
+          resilientAtomicWriteFileSync: vi.fn(() => {
+            throw new Error("EROFS: read-only filesystem");
+          }),
+        };
       });
       try {
         await loadAndInit();
@@ -421,7 +442,7 @@ describe("GpuCrashMonitorService", () => {
           expect.objectContaining({ path: "disable" })
         );
       } finally {
-        writeSpy.mockRestore();
+        vi.doUnmock("../../utils/fs.js");
       }
     });
 
@@ -455,6 +476,107 @@ describe("GpuCrashMonitorService", () => {
       mod.initializeGpuCrashMonitor();
       const listenerCount = (appListeners["child-process-gone"] ?? []).length;
       expect(listenerCount).toBe(1);
+    });
+
+    describe("non-Linux first-strike no-op", () => {
+      function withPlatform(platform: NodeJS.Platform, fn: () => Promise<void>): Promise<void> {
+        const original = process.platform;
+        Object.defineProperty(process, "platform", { value: platform, configurable: true });
+        return fn().finally(() => {
+          Object.defineProperty(process, "platform", { value: original, configurable: true });
+        });
+      }
+
+      async function trackAtomicWriter(): Promise<ReturnType<typeof vi.fn>> {
+        const writeSpy = vi.fn();
+        vi.doMock("../../utils/fs.js", async () => {
+          const actual =
+            await vi.importActual<typeof import("../../utils/fs.js")>("../../utils/fs.js");
+          return {
+            ...actual,
+            resilientAtomicWriteFileSync: (
+              ...args: Parameters<typeof actual.resilientAtomicWriteFileSync>
+            ) => {
+              writeSpy(...args);
+              return actual.resilientAtomicWriteFileSync(...args);
+            },
+          };
+        });
+        return writeSpy;
+      }
+
+      it("darwin: first crash does not write ANGLE flag, does not relaunch", async () => {
+        await withPlatform("darwin", async () => {
+          const writeSpy = await trackAtomicWriter();
+          try {
+            await loadAndInit();
+            emitGpuCrash();
+            await new Promise((r) => setImmediate(r));
+            expect(appMock.relaunch).not.toHaveBeenCalled();
+            expect(appMock.exit).not.toHaveBeenCalled();
+            expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
+            expect(writeSpy).not.toHaveBeenCalled();
+            expect(loggerMethods.info).toHaveBeenCalledWith(
+              "gpu-crash-soft-fallback-skip-nonlinux",
+              expect.objectContaining({ platform: "darwin", crashCount: 1 })
+            );
+          } finally {
+            vi.doUnmock("../../utils/fs.js");
+          }
+        });
+      });
+
+      it("win32: first crash does not write ANGLE flag, does not relaunch", async () => {
+        await withPlatform("win32", async () => {
+          const writeSpy = await trackAtomicWriter();
+          try {
+            await loadAndInit();
+            emitGpuCrash();
+            await new Promise((r) => setImmediate(r));
+            expect(appMock.relaunch).not.toHaveBeenCalled();
+            expect(appMock.exit).not.toHaveBeenCalled();
+            expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
+            expect(writeSpy).not.toHaveBeenCalled();
+            expect(loggerMethods.info).toHaveBeenCalledWith(
+              "gpu-crash-soft-fallback-skip-nonlinux",
+              expect.objectContaining({ platform: "win32", crashCount: 1 })
+            );
+          } finally {
+            vi.doUnmock("../../utils/fs.js");
+          }
+        });
+      });
+
+      it("darwin: strikes still accumulate to nuclear disable across crashes", async () => {
+        await withPlatform("darwin", async () => {
+          await loadAndInit();
+          emitGpuCrash();
+          emitGpuCrash();
+          emitGpuCrash();
+          await vi.waitFor(() => {
+            expect(appMock.exit).toHaveBeenCalledWith(0);
+          });
+          expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+          expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
+          expect(storeMock.set).toHaveBeenCalledWith("gpu", {
+            hardwareAccelerationDisabled: true,
+          });
+        });
+      });
+
+      it("win32: strikes still accumulate to nuclear disable across crashes", async () => {
+        await withPlatform("win32", async () => {
+          await loadAndInit();
+          emitGpuCrash();
+          emitGpuCrash();
+          emitGpuCrash();
+          await vi.waitFor(() => {
+            expect(appMock.exit).toHaveBeenCalledWith(0);
+          });
+          expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+          expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
+        });
+      });
     });
 
     describe("crash-loop guard integration", () => {
