@@ -39,6 +39,14 @@ import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
+import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
+import { buildSentryPreloadBindings } from "./ipc/handlers/sentry.preload.js";
+import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
+import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
+import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
+import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
+import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
+import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
 
 import type {
   WorktreeState,
@@ -69,7 +77,6 @@ import type {
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
   ServiceConnectivityPayload,
-  ServiceConnectivitySnapshot,
   GitStatus,
   KeyAction,
   TerminalRecipe,
@@ -1603,8 +1610,7 @@ const api: ElectronAPI = {
 
   // Per-service connectivity API
   connectivity: {
-    getState: (): Promise<ServiceConnectivitySnapshot> =>
-      _unwrappingInvoke(CHANNELS.CONNECTIVITY_GET_STATE) as Promise<ServiceConnectivitySnapshot>,
+    ...buildConnectivityPreloadBindings(_unwrappingInvoke),
 
     onServiceChanged: (callback: (payload: ServiceConnectivityPayload) => void) =>
       _typedOn(CHANNELS.CONNECTIVITY_SERVICE_CHANGED, callback),
@@ -1878,13 +1884,7 @@ const api: ElectronAPI = {
 
   // Hibernation API
   hibernation: {
-    getConfig: (): Promise<{ enabled: boolean; inactiveThresholdHours: number }> =>
-      _unwrappingInvoke(CHANNELS.HIBERNATION_GET_CONFIG),
-
-    updateConfig: (
-      config: Partial<{ enabled: boolean; inactiveThresholdHours: number }>
-    ): Promise<{ enabled: boolean; inactiveThresholdHours: number }> =>
-      _unwrappingInvoke(CHANNELS.HIBERNATION_UPDATE_CONFIG, config),
+    ...buildHibernationPreloadBindings(_unwrappingInvoke),
 
     onProjectHibernated: (
       callback: (payload: {
@@ -1899,19 +1899,7 @@ const api: ElectronAPI = {
 
   // Idle Terminal Notification API
   idleTerminals: {
-    getConfig: (): Promise<{ enabled: boolean; thresholdMinutes: number }> =>
-      _unwrappingInvoke(CHANNELS.IDLE_TERMINAL_GET_CONFIG),
-
-    updateConfig: (
-      config: Partial<{ enabled: boolean; thresholdMinutes: number }>
-    ): Promise<{ enabled: boolean; thresholdMinutes: number }> =>
-      _unwrappingInvoke(CHANNELS.IDLE_TERMINAL_UPDATE_CONFIG, config),
-
-    closeProject: (projectId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.IDLE_TERMINAL_CLOSE_PROJECT, projectId),
-
-    dismissProject: (projectId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.IDLE_TERMINAL_DISMISS_PROJECT, projectId),
+    ...buildIdleTerminalPreloadBindings(_unwrappingInvoke),
 
     onNotify: (
       callback: (payload: {
@@ -1928,12 +1916,7 @@ const api: ElectronAPI = {
 
   // System Sleep API
   systemSleep: {
-    getMetrics: () => _unwrappingInvoke(CHANNELS.SYSTEM_SLEEP_GET_METRICS),
-
-    getAwakeTimeSince: (startTimestamp: number) =>
-      _unwrappingInvoke(CHANNELS.SYSTEM_SLEEP_GET_AWAKE_TIME, startTimestamp),
-
-    reset: () => _unwrappingInvoke(CHANNELS.SYSTEM_SLEEP_RESET),
+    ...buildSystemSleepPreloadBindings(_unwrappingInvoke),
 
     onSuspend: (callback: () => void) => _typedOn(CHANNELS.SYSTEM_SLEEP_ON_SUSPEND, callback),
 
@@ -2269,29 +2252,31 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.APP_THEME_SYSTEM_APPEARANCE_CHANGED, callback),
   },
 
-  telemetry: {
-    get: () => _unwrappingInvoke(CHANNELS.TELEMETRY_GET),
-    setEnabled: (enabled: boolean) => _unwrappingInvoke(CHANNELS.TELEMETRY_SET_ENABLED, enabled),
-    markPromptShown: () => _unwrappingInvoke(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN),
-    track: (event: string, properties: Record<string, unknown>) =>
-      _unwrappingInvoke(CHANNELS.TELEMETRY_TRACK, event, properties),
-    preview: {
-      getState: () => _unwrappingInvoke(CHANNELS.TELEMETRY_PREVIEW_GET_STATE),
-      toggle: (active: boolean) => _unwrappingInvoke(CHANNELS.TELEMETRY_PREVIEW_TOGGLE, active),
-      subscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_SUBSCRIBE),
-      unsubscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_UNSUBSCRIBE),
-      onEventBatch: (
-        callback: (
-          events: import("../shared/types/ipc/telemetryPreview.js").SanitizedTelemetryEvent[]
-        ) => void
-      ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_EVENT_BATCH, callback),
-      onStateChanged: (
-        callback: (
-          state: import("../shared/types/ipc/telemetryPreview.js").TelemetryPreviewState
-        ) => void
-      ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_STATE_CHANGED, callback),
-    },
-  },
+  telemetry: (() => {
+    const flat = buildTelemetryPreloadBindings(_unwrappingInvoke);
+    return {
+      get: flat.get,
+      setEnabled: flat.setEnabled,
+      markPromptShown: flat.markPromptShown,
+      track: flat.track,
+      preview: {
+        getState: flat.previewGetState,
+        toggle: flat.previewToggle,
+        subscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_SUBSCRIBE),
+        unsubscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_UNSUBSCRIBE),
+        onEventBatch: (
+          callback: (
+            events: import("../shared/types/ipc/telemetryPreview.js").SanitizedTelemetryEvent[]
+          ) => void
+        ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_EVENT_BATCH, callback),
+        onStateChanged: (
+          callback: (
+            state: import("../shared/types/ipc/telemetryPreview.js").TelemetryPreviewState
+          ) => void
+        ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_STATE_CHANGED, callback),
+      },
+    };
+  })(),
 
   gpu: {
     getStatus: () => _unwrappingInvoke(CHANNELS.GPU_GET_STATUS),
@@ -2300,23 +2285,14 @@ const api: ElectronAPI = {
   },
 
   privacy: {
-    getSettings: () => _unwrappingInvoke(CHANNELS.PRIVACY_GET_SETTINGS),
-    setTelemetryLevel: (level: "off" | "errors" | "full") =>
-      _unwrappingInvoke(CHANNELS.PRIVACY_SET_TELEMETRY_LEVEL, level),
-    setLogRetention: (days: 7 | 30 | 90 | 0) =>
-      _unwrappingInvoke(CHANNELS.PRIVACY_SET_LOG_RETENTION, days),
-    openDataFolder: () => _unwrappingInvoke(CHANNELS.PRIVACY_OPEN_DATA_FOLDER),
-    clearCache: () => _unwrappingInvoke(CHANNELS.PRIVACY_CLEAR_CACHE),
-    resetAllData: () => _unwrappingInvoke(CHANNELS.PRIVACY_RESET_ALL_DATA),
-    getDataFolderPath: () => _unwrappingInvoke(CHANNELS.PRIVACY_GET_DATA_FOLDER_PATH),
+    ...buildPrivacyPreloadBindings(_unwrappingInvoke),
+
     onTelemetryConsentChanged: (
       callback: (payload: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean }) => void
     ) => _typedOn(CHANNELS.PRIVACY_TELEMETRY_CONSENT_CHANGED, callback),
   },
 
-  sentry: {
-    getConsentState: () => _unwrappingInvoke(CHANNELS.SENTRY_GET_CONSENT_STATE),
-  },
+  sentry: buildSentryPreloadBindings(_unwrappingInvoke),
 
   onboarding: {
     ...buildOnboardingPreloadBindings(_unwrappingInvoke),
@@ -2328,11 +2304,7 @@ const api: ElectronAPI = {
 
   milestones: buildMilestonesPreloadBindings(_unwrappingInvoke),
 
-  shortcutHints: {
-    getCounts: () => _unwrappingInvoke(CHANNELS.SHORTCUT_HINTS_GET_COUNTS),
-    incrementCount: (actionId: string) =>
-      _unwrappingInvoke(CHANNELS.SHORTCUT_HINTS_INCREMENT_COUNT, actionId),
-  },
+  shortcutHints: buildShortcutHintsPreloadBindings(_unwrappingInvoke),
 
   forge: {
     getSettings: () => _unwrappingInvoke(CHANNELS.FORGE_GET_SETTINGS),

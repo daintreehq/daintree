@@ -64,6 +64,10 @@ export interface GeneratedIpcInvokeMap {
     args: [context?: import("../commands.js").CommandContext | undefined];
     result: import("../commands.js").CommandManifestEntry[];
   };
+  "connectivity:get-state": {
+    args: [];
+    result: import("./connectivity.js").ServiceConnectivitySnapshot;
+  };
   "demo:annotate": {
     args: [payload: import("./demo.js").DemoAnnotatePayload];
     result: import("./demo.js").DemoAnnotateResult;
@@ -241,6 +245,30 @@ export interface GeneratedIpcInvokeMap {
   "help:unmark-terminal": {
     args: [terminalId: string];
     result: void;
+  };
+  "hibernation:get-config": {
+    args: [];
+    result: import("./hibernation.js").HibernationConfig;
+  };
+  "hibernation:update-config": {
+    args: [config: Partial<import("./hibernation.js").HibernationConfig>];
+    result: import("./hibernation.js").HibernationConfig;
+  };
+  "idle-terminal:close-project": {
+    args: [projectId: string];
+    result: void;
+  };
+  "idle-terminal:dismiss-project": {
+    args: [projectId: string];
+    result: void;
+  };
+  "idle-terminal:get-config": {
+    args: [];
+    result: import("./idleTerminals.js").IdleTerminalNotifyConfig;
+  };
+  "idle-terminal:update-config": {
+    args: [config: Partial<import("./idleTerminals.js").IdleTerminalNotifyConfig>];
+    result: import("./idleTerminals.js").IdleTerminalNotifyConfig;
   };
   "mcp-server:clear-audit-log": {
     args: [];
@@ -458,6 +486,38 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../portal.js").PortalShowNewTabMenuPayload];
     result: void;
   };
+  "privacy:clear-cache": {
+    args: [];
+    result: void;
+  };
+  "privacy:get-data-folder-path": {
+    args: [];
+    result: string;
+  };
+  "privacy:get-settings": {
+    args: [];
+    result: {
+      telemetryLevel: "off" | "errors" | "full";
+      logRetentionDays: 0 | 7 | 30 | 90;
+      dataFolderPath: string;
+    };
+  };
+  "privacy:open-data-folder": {
+    args: [];
+    result: void;
+  };
+  "privacy:reset-all-data": {
+    args: [];
+    result: void;
+  };
+  "privacy:set-log-retention": {
+    args: [days: 0 | 7 | 30 | 90];
+    result: void;
+  };
+  "privacy:set-telemetry-level": {
+    args: [level: "off" | "errors" | "full"];
+    result: void;
+  };
   "project:clone-cancel": {
     args: [];
     result: void;
@@ -497,9 +557,57 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("../scratch.js").Scratch;
   };
+  "sentry:get-consent-state": {
+    args: [];
+    result: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
+  };
+  "shortcut-hints:get-counts": {
+    args: [];
+    result: Record<string, number>;
+  };
+  "shortcut-hints:increment-count": {
+    args: [actionId: string];
+    result: void;
+  };
   "slash-commands:list": {
     args: [payload: import("../slashCommands.js").SlashCommandListRequest];
     result: import("../slashCommands.js").SlashCommand[];
+  };
+  "system-sleep:get-awake-time": {
+    args: [startTimestamp: number];
+    result: number;
+  };
+  "system-sleep:get-metrics": {
+    args: [];
+    result: import("./systemSleep.js").SystemSleepMetrics;
+  };
+  "system-sleep:reset": {
+    args: [];
+    result: void;
+  };
+  "telemetry:get": {
+    args: [];
+    result: { enabled: boolean; hasSeenPrompt: boolean };
+  };
+  "telemetry:mark-prompt-shown": {
+    args: [];
+    result: void;
+  };
+  "telemetry:preview-get-state": {
+    args: [];
+    result: import("./telemetryPreview.js").TelemetryPreviewState;
+  };
+  "telemetry:preview-toggle": {
+    args: [active: boolean];
+    result: import("./telemetryPreview.js").TelemetryPreviewState;
+  };
+  "telemetry:set-enabled": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "telemetry:track": {
+    args: [eventName: string, properties: Record<string, unknown>];
+    result: void;
   };
   "terminal:force-resume": {
     args: [id: string];

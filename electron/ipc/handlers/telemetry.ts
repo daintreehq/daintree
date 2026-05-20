@@ -18,7 +18,9 @@ import type {
   SanitizedTelemetryEvent,
   TelemetryPreviewState,
 } from "../../../shared/types/ipc/telemetryPreview.js";
-import { typedBroadcast, typedHandle } from "../utils.js";
+import { typedBroadcast } from "../utils.js";
+import { defineIpcNamespace, op } from "../define.js";
+import { TELEMETRY_METHOD_CHANNELS } from "./telemetry.preload.js";
 
 const ALLOWED_EVENTS = new Set<string>(ANALYTICS_EVENTS);
 
@@ -73,6 +75,68 @@ function broadcastPreviewState(): void {
   typedBroadcast("telemetry:preview-state-changed", state);
 }
 
+export const telemetryNamespace = defineIpcNamespace({
+  name: "telemetry",
+  ops: {
+    get: op(
+      TELEMETRY_METHOD_CHANNELS.get,
+      (): { enabled: boolean; hasSeenPrompt: boolean } => ({
+        enabled: isTelemetryEnabled(),
+        hasSeenPrompt: hasTelemetryPromptBeenShown(),
+      })
+    ),
+    setEnabled: op(
+      TELEMETRY_METHOD_CHANNELS.setEnabled,
+      async (enabled: boolean): Promise<void> => {
+        if (typeof enabled !== "boolean") return;
+        await setTelemetryEnabled(enabled);
+        typedBroadcast("privacy:telemetry-consent-changed", {
+          level: getTelemetryLevel(),
+          hasSeenPrompt: hasTelemetryPromptBeenShown(),
+        });
+      }
+    ),
+    markPromptShown: op(TELEMETRY_METHOD_CHANNELS.markPromptShown, (): void => {
+      markTelemetryPromptShown();
+      typedBroadcast("privacy:telemetry-consent-changed", {
+        level: getTelemetryLevel(),
+        hasSeenPrompt: true,
+      });
+    }),
+    track: op(
+      TELEMETRY_METHOD_CHANNELS.track,
+      (eventName: string, properties: Record<string, unknown>): void => {
+        if (typeof eventName !== "string" || !ALLOWED_EVENTS.has(eventName)) return;
+        if (typeof properties !== "object" || properties === null || Array.isArray(properties))
+          return;
+        trackEvent(eventName, properties);
+      }
+    ),
+    previewGetState: op(
+      TELEMETRY_METHOD_CHANNELS.previewGetState,
+      (): TelemetryPreviewState => ({ active: isTelemetryPreviewActive() })
+    ),
+    previewToggle: op(
+      TELEMETRY_METHOD_CHANNELS.previewToggle,
+      (active: boolean): TelemetryPreviewState => {
+        // Match the strict-boolean guard used by TELEMETRY_SET_ENABLED so a
+        // buggy caller sending `"false"` doesn't coerce to truthy and flip
+        // preview on.
+        if (typeof active !== "boolean") {
+          return { active: isTelemetryPreviewActive() };
+        }
+        const prev = isTelemetryPreviewActive();
+        setTelemetryPreviewActive(active);
+        // Turning preview off flushes whatever is pending so the final batch
+        // arrives in order; subsequent events are ignored by queuePreviewEvent.
+        if (!active) flushPreviewBatch();
+        if (prev !== active) broadcastPreviewState();
+        return { active };
+      }
+    ),
+  },
+});
+
 export function registerTelemetryHandlers(): () => void {
   const cleanups: Array<() => void> = [];
 
@@ -81,66 +145,7 @@ export function registerTelemetryHandlers(): () => void {
   // IPC layer without needing to import IPC modules itself.
   setTelemetryPreviewEnqueue(queuePreviewEvent);
 
-  cleanups.push(
-    typedHandle(CHANNELS.TELEMETRY_GET, () => ({
-      enabled: isTelemetryEnabled(),
-      hasSeenPrompt: hasTelemetryPromptBeenShown(),
-    }))
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.TELEMETRY_SET_ENABLED, async (enabled: unknown) => {
-      if (typeof enabled !== "boolean") return;
-      await setTelemetryEnabled(enabled);
-      typedBroadcast("privacy:telemetry-consent-changed", {
-        level: getTelemetryLevel(),
-        hasSeenPrompt: hasTelemetryPromptBeenShown(),
-      });
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN, () => {
-      markTelemetryPromptShown();
-      typedBroadcast("privacy:telemetry-consent-changed", {
-        level: getTelemetryLevel(),
-        hasSeenPrompt: true,
-      });
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.TELEMETRY_TRACK, (eventName: unknown, properties: unknown) => {
-      if (typeof eventName !== "string" || !ALLOWED_EVENTS.has(eventName)) return;
-      if (typeof properties !== "object" || properties === null || Array.isArray(properties))
-        return;
-      trackEvent(eventName, properties as Record<string, unknown>);
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.TELEMETRY_PREVIEW_GET_STATE, () => ({
-      active: isTelemetryPreviewActive(),
-    }))
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.TELEMETRY_PREVIEW_TOGGLE, (active: unknown) => {
-      // Match the strict-boolean guard used by TELEMETRY_SET_ENABLED so a
-      // buggy caller sending `"false"` doesn't coerce to truthy and flip
-      // preview on.
-      if (typeof active !== "boolean") {
-        return { active: isTelemetryPreviewActive() };
-      }
-      const prev = isTelemetryPreviewActive();
-      setTelemetryPreviewActive(active);
-      // Turning preview off flushes whatever is pending so the final batch
-      // arrives in order; subsequent events are ignored by queuePreviewEvent.
-      if (!active) flushPreviewBatch();
-      if (prev !== active) broadcastPreviewState();
-      return { active };
-    })
-  );
+  cleanups.push(telemetryNamespace.register());
 
   const handleSubscribe = (event: Electron.IpcMainEvent) => {
     const sender = event.sender;

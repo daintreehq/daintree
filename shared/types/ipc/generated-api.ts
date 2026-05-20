@@ -47,6 +47,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["commands:list"]["args"]
     ): Promise<IpcInvokeMap["commands:list"]["result"]>;
   };
+  connectivity: {
+    getState(
+      ...args: IpcInvokeMap["connectivity:get-state"]["args"]
+    ): Promise<IpcInvokeMap["connectivity:get-state"]["result"]>;
+  };
   devPreview: {
     ensure(
       ...args: IpcInvokeMap["dev-preview:ensure"]["args"]
@@ -111,6 +116,14 @@ export interface GeneratedElectronAPI {
     unmarkTerminal(
       ...args: IpcInvokeMap["help:unmark-terminal"]["args"]
     ): Promise<IpcInvokeMap["help:unmark-terminal"]["result"]>;
+  };
+  hibernation: {
+    getConfig(
+      ...args: IpcInvokeMap["hibernation:get-config"]["args"]
+    ): Promise<IpcInvokeMap["hibernation:get-config"]["result"]>;
+    updateConfig(
+      ...args: IpcInvokeMap["hibernation:update-config"]["args"]
+    ): Promise<IpcInvokeMap["hibernation:update-config"]["result"]>;
   };
   mcpServer: {
     clearAuditLog(
@@ -284,9 +297,56 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["portal:show-new-tab-menu"]["args"]
     ): Promise<IpcInvokeMap["portal:show-new-tab-menu"]["result"]>;
   };
+  privacy: {
+    clearCache(
+      ...args: IpcInvokeMap["privacy:clear-cache"]["args"]
+    ): Promise<IpcInvokeMap["privacy:clear-cache"]["result"]>;
+    getDataFolderPath(
+      ...args: IpcInvokeMap["privacy:get-data-folder-path"]["args"]
+    ): Promise<IpcInvokeMap["privacy:get-data-folder-path"]["result"]>;
+    getSettings(
+      ...args: IpcInvokeMap["privacy:get-settings"]["args"]
+    ): Promise<IpcInvokeMap["privacy:get-settings"]["result"]>;
+    openDataFolder(
+      ...args: IpcInvokeMap["privacy:open-data-folder"]["args"]
+    ): Promise<IpcInvokeMap["privacy:open-data-folder"]["result"]>;
+    resetAllData(
+      ...args: IpcInvokeMap["privacy:reset-all-data"]["args"]
+    ): Promise<IpcInvokeMap["privacy:reset-all-data"]["result"]>;
+    setLogRetention(
+      ...args: IpcInvokeMap["privacy:set-log-retention"]["args"]
+    ): Promise<IpcInvokeMap["privacy:set-log-retention"]["result"]>;
+    setTelemetryLevel(
+      ...args: IpcInvokeMap["privacy:set-telemetry-level"]["args"]
+    ): Promise<IpcInvokeMap["privacy:set-telemetry-level"]["result"]>;
+  };
+  sentry: {
+    getConsentState(
+      ...args: IpcInvokeMap["sentry:get-consent-state"]["args"]
+    ): Promise<IpcInvokeMap["sentry:get-consent-state"]["result"]>;
+  };
+  shortcutHints: {
+    getCounts(
+      ...args: IpcInvokeMap["shortcut-hints:get-counts"]["args"]
+    ): Promise<IpcInvokeMap["shortcut-hints:get-counts"]["result"]>;
+    incrementCount(
+      ...args: IpcInvokeMap["shortcut-hints:increment-count"]["args"]
+    ): Promise<IpcInvokeMap["shortcut-hints:increment-count"]["result"]>;
+  };
   slashCommands: {
     list(
       ...args: IpcInvokeMap["slash-commands:list"]["args"]
     ): Promise<IpcInvokeMap["slash-commands:list"]["result"]>;
+  };
+  systemSleep: {
+    getAwakeTime(
+      ...args: IpcInvokeMap["system-sleep:get-awake-time"]["args"]
+    ): Promise<IpcInvokeMap["system-sleep:get-awake-time"]["result"]>;
+    getMetrics(
+      ...args: IpcInvokeMap["system-sleep:get-metrics"]["args"]
+    ): Promise<IpcInvokeMap["system-sleep:get-metrics"]["result"]>;
+    reset(
+      ...args: IpcInvokeMap["system-sleep:reset"]["args"]
+    ): Promise<IpcInvokeMap["system-sleep:reset"]["result"]>;
   };
 }

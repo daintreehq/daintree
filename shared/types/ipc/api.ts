@@ -11,7 +11,12 @@ import type {
   TerminalRecipe,
   TerminalSnapshot,
 } from "../project.js";
-import type { ChecklistState, HelpAssistantTier, IpcEventBusMap } from "./maps.js";
+import type {
+  ChecklistState,
+  HelpAssistantTier,
+  IpcEventBusMap,
+  IpcInvokeMap,
+} from "./maps.js";
 import type { GeneratedElectronAPI } from "./generated-api.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
@@ -120,9 +125,8 @@ import type {
   IssueNotFoundPayload,
 } from "./github.js";
 import type { TerminalConfig } from "./config.js";
-import type { HibernationConfig, HibernationProjectHibernatedPayload } from "./hibernation.js";
-import type { IdleTerminalNotifyConfig, IdleTerminalNotifyPayload } from "./idleTerminals.js";
-import type { SystemSleepMetrics } from "./systemSleep.js";
+import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
+import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { KeyAction } from "../keymap.js";
 
 export interface KeybindingImportResult {
@@ -727,8 +731,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRepoStatsAndPageUpdated(callback: (data: RepoStatsAndPagePayload) => void): () => void;
     getTokenHealth(): Promise<GitHubTokenHealthPayload>;
   };
-  connectivity: {
-    getState(): Promise<import("./connectivity.js").ServiceConnectivitySnapshot>;
+  // getState comes from GeneratedElectronAPI; onServiceChanged is a renderer-only subscription.
+  connectivity: GeneratedElectronAPI["connectivity"] & {
     onServiceChanged(
       callback: (payload: import("./connectivity.js").ServiceConnectivityPayload) => void
     ): () => void;
@@ -920,27 +924,30 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Read the current scroll position from Blink layout — works on frozen pages */
     getScrollPosition(webContentsId: number): Promise<number>;
   };
-  hibernation: {
-    getConfig(): Promise<HibernationConfig>;
-    updateConfig(config: Partial<HibernationConfig>): Promise<HibernationConfig>;
+  // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
+  hibernation: GeneratedElectronAPI["hibernation"] & {
     onProjectHibernated(
       callback: (payload: HibernationProjectHibernatedPayload) => void
     ): () => void;
   };
+  // Channel is `idle-terminal:*` (singular) but the renderer surface uses
+  // `idleTerminals` (plural). The preload opts out of the API codegen via
+  // RENDERER_API_SKIP — methods are hand-typed here against IpcInvokeMap.
   idleTerminals: {
-    getConfig(): Promise<IdleTerminalNotifyConfig>;
-    updateConfig(config: Partial<IdleTerminalNotifyConfig>): Promise<IdleTerminalNotifyConfig>;
-    closeProject(projectId: string): Promise<void>;
-    dismissProject(projectId: string): Promise<void>;
+    getConfig(): Promise<IpcInvokeMap["idle-terminal:get-config"]["result"]>;
+    updateConfig(
+      ...args: IpcInvokeMap["idle-terminal:update-config"]["args"]
+    ): Promise<IpcInvokeMap["idle-terminal:update-config"]["result"]>;
+    closeProject(
+      ...args: IpcInvokeMap["idle-terminal:close-project"]["args"]
+    ): Promise<IpcInvokeMap["idle-terminal:close-project"]["result"]>;
+    dismissProject(
+      ...args: IpcInvokeMap["idle-terminal:dismiss-project"]["args"]
+    ): Promise<IpcInvokeMap["idle-terminal:dismiss-project"]["result"]>;
     onNotify(callback: (payload: IdleTerminalNotifyPayload) => void): () => void;
   };
-  systemSleep: {
-    /** Get metrics about system sleep tracking */
-    getMetrics(): Promise<SystemSleepMetrics>;
-    /** Get elapsed awake time since timestamp, excluding sleep periods */
-    getAwakeTimeSince(startTimestamp: number): Promise<number>;
-    /** Reset accumulated sleep tracking */
-    reset(): Promise<void>;
+  // Invoke methods come from GeneratedElectronAPI; suspend/wake are renderer-only subscriptions.
+  systemSleep: GeneratedElectronAPI["systemSleep"] & {
     /** Subscribe to suspend events */
     onSuspend(callback: () => void): () => void;
     /** Subscribe to wake events with sleep duration */
@@ -1215,37 +1222,19 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getStatus(): Promise<{ hardwareAccelerationDisabled: boolean }>;
     setHardwareAcceleration(enabled: boolean): Promise<void>;
   };
-  privacy: {
-    getSettings(): Promise<{
-      telemetryLevel: "off" | "errors" | "full";
-      logRetentionDays: 7 | 30 | 90 | 0;
-      dataFolderPath: string;
-    }>;
-    setTelemetryLevel(level: "off" | "errors" | "full"): Promise<void>;
-    setLogRetention(days: 7 | 30 | 90 | 0): Promise<void>;
-    openDataFolder(): Promise<void>;
-    clearCache(): Promise<void>;
-    resetAllData(): Promise<void>;
-    getDataFolderPath(): Promise<string>;
+  // Invoke methods come from GeneratedElectronAPI; onTelemetryConsentChanged is a renderer-only subscription.
+  privacy: GeneratedElectronAPI["privacy"] & {
     onTelemetryConsentChanged(
       callback: (payload: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean }) => void
     ): () => void;
   };
-  sentry: {
-    getConsentState(): Promise<{
-      level: "off" | "errors" | "full";
-      hasSeenPrompt: boolean;
-    }>;
-  };
+  // sentry is generated — see GeneratedElectronAPI.
   // Invoke methods come from GeneratedElectronAPI; onChecklistPush is a renderer-only subscription.
   onboarding: GeneratedElectronAPI["onboarding"] & {
     onChecklistPush(callback: (state: ChecklistState) => void): () => void;
   };
   // milestones is generated — see GeneratedElectronAPI.
-  shortcutHints: {
-    getCounts(): Promise<Record<string, number>>;
-    incrementCount(actionId: string): Promise<void>;
-  };
+  // shortcutHints is generated — see GeneratedElectronAPI.
   forge: {
     /** Read the persisted forge settings (global default provider id). */
     getSettings(): Promise<{ defaultProviderId: string | null }>;

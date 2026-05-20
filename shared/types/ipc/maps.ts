@@ -105,7 +105,6 @@ import type {
   SnapshotRevertResult,
 } from "./git.js";
 import type { TerminalConfig } from "./config.js";
-import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { ShowContextMenuPayload } from "../menu.js";
 import type {
   FileSearchPayload,
@@ -114,7 +113,7 @@ import type {
   FileReadResult,
 } from "./files.js";
 import type { DevPreviewStateChangedPayload } from "./devPreview.js";
-import type { ServiceConnectivityPayload, ServiceConnectivitySnapshot } from "./connectivity.js";
+import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type {
@@ -131,8 +130,8 @@ import type {
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
 } from "../pty-host.js";
-import type { HibernationConfig, HibernationProjectHibernatedPayload } from "./hibernation.js";
-import type { IdleTerminalNotifyConfig, IdleTerminalNotifyPayload } from "./idleTerminals.js";
+import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
+import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
 import type {
@@ -1077,48 +1076,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
 
   // Portal channels
-  // System Sleep channels
-  "system-sleep:get-metrics": {
-    args: [];
-    result: SystemSleepMetrics;
-  };
-  "system-sleep:get-awake-time": {
-    args: [startTimestamp: number];
-    result: number;
-  };
-  "system-sleep:reset": {
-    args: [];
-    result: void;
-  };
-
-  // Hibernation channels
-  "hibernation:get-config": {
-    args: [];
-    result: HibernationConfig;
-  };
-  "hibernation:update-config": {
-    args: [config: Partial<HibernationConfig>];
-    result: HibernationConfig;
-  };
-
-  // Idle terminal notification channels
-  "idle-terminal:get-config": {
-    args: [];
-    result: IdleTerminalNotifyConfig;
-  };
-  "idle-terminal:update-config": {
-    args: [config: Partial<IdleTerminalNotifyConfig>];
-    result: IdleTerminalNotifyConfig;
-  };
-  "idle-terminal:close-project": {
-    args: [projectId: string];
-    result: void;
-  };
-  "idle-terminal:dismiss-project": {
-    args: [projectId: string];
-    result: void;
-  };
-
   // Keybinding channels
   "keybinding:get-overrides": {
     args: [];
@@ -1301,31 +1258,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [schemeId: string];
     result: void;
   };
-  "telemetry:get": {
-    args: [];
-    result: { enabled: boolean; hasSeenPrompt: boolean };
-  };
-  "telemetry:set-enabled": {
-    args: [enabled: boolean];
-    result: void;
-  };
-  "telemetry:mark-prompt-shown": {
-    args: [];
-    result: void;
-  };
-  "telemetry:track": {
-    args: [event: string, properties: Record<string, unknown>];
-    result: void;
-  };
-  "telemetry:preview-get-state": {
-    args: [];
-    result: TelemetryPreviewState;
-  };
-  "telemetry:preview-toggle": {
-    args: [active: boolean];
-    result: TelemetryPreviewState;
-  };
-
   // GPU
   "gpu:get-status": {
     args: [];
@@ -1334,46 +1266,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "gpu:set-hardware-acceleration": {
     args: [enabled: boolean];
     result: void;
-  };
-
-  // Privacy & Data
-  "privacy:get-settings": {
-    args: [];
-    result: {
-      telemetryLevel: "off" | "errors" | "full";
-      logRetentionDays: 0 | 7 | 30 | 90;
-      dataFolderPath: string;
-    };
-  };
-  "privacy:set-telemetry-level": {
-    args: [level: "off" | "errors" | "full"];
-    result: void;
-  };
-  "privacy:set-log-retention": {
-    args: [days: 0 | 7 | 30 | 90];
-    result: void;
-  };
-  "privacy:open-data-folder": {
-    args: [];
-    result: void;
-  };
-  "privacy:clear-cache": {
-    args: [];
-    result: void;
-  };
-  "privacy:reset-all-data": {
-    args: [];
-    result: void;
-  };
-  "privacy:get-data-folder-path": {
-    args: [];
-    result: string;
-  };
-
-  // Sentry
-  "sentry:get-consent-state": {
-    args: [];
-    result: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
   };
 
   // Forge integration
@@ -1456,16 +1348,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "forge:classify-push-error": {
     args: [payload: { cwd: string; stderr: string }];
     result: { providerId: string; classification: PushErrorClassification | null } | null;
-  };
-
-  // Shortcut Hints
-  "shortcut-hints:get-counts": {
-    args: [];
-    result: Record<string, number>;
-  };
-  "shortcut-hints:increment-count": {
-    args: [actionId: string];
-    result: void;
   };
 
   // Voice input
@@ -1630,12 +1512,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "github:resolve-author-avatar": {
     args: [email: string];
     result: string | null;
-  };
-
-  // Per-service connectivity channels
-  "connectivity:get-state": {
-    args: [];
-    result: ServiceConnectivitySnapshot;
   };
 
   // Scratch (throwaway one-off agent workspace) channels
