@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import { CrashRecoveryDialog } from "../CrashRecoveryDialog";
@@ -37,6 +37,37 @@ vi.mock("@/components/ui/AppDialog", () => {
   AppDialog.CloseButton = () => <button type="button">close</button>;
   AppDialog.Body = ({ children, className }: SectionProps) => (
     <div className={className}>{children}</div>
+  );
+  AppDialog.Description = ({ children }: SectionProps) => <p>{children}</p>;
+  AppDialog.Footer = ({
+    secondaryAction,
+    primaryAction,
+  }: {
+    secondaryAction?: { label: string; onClick: () => void; disabled?: boolean };
+    primaryAction?: { label: string; onClick: () => void; loading?: boolean; disabled?: boolean };
+  }) => (
+    <div>
+      {secondaryAction && (
+        <button
+          type="button"
+          data-confirm-role="cancel"
+          onClick={secondaryAction.onClick}
+          disabled={secondaryAction.disabled}
+        >
+          {secondaryAction.label}
+        </button>
+      )}
+      {primaryAction && (
+        <button
+          type="button"
+          data-confirm-role="confirm"
+          onClick={primaryAction.onClick}
+          disabled={primaryAction.disabled}
+        >
+          {primaryAction.label}
+        </button>
+      )}
+    </div>
   );
 
   return { AppDialog };
@@ -217,10 +248,43 @@ describe("CrashRecoveryDialog", () => {
       expect(call.panelIds).not.toContain("t2");
     });
 
-    it("calls onResolve with fresh when 'Continue without restoring' is clicked", async () => {
+    it("opens destructive confirm dialog when 'Continue without restoring' is clicked, does not call onResolve immediately", async () => {
       const { onResolve } = setup();
       fireEvent.click(screen.getByTestId("fresh-button"));
+      expect(onResolve).not.toHaveBeenCalled();
+      expect(screen.getByText("Reset to clean layout?")).toBeTruthy();
+    });
+
+    it("calls onResolve with fresh when confirm button is clicked in destructive dialog", async () => {
+      const { onResolve } = setup();
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      fireEvent.click(screen.getByText("Reset to clean layout"));
       await waitFor(() => expect(onResolve).toHaveBeenCalledWith({ kind: "fresh" }));
+    });
+
+    it("does not call onResolve when cancel is clicked in destructive confirm dialog", async () => {
+      const { onResolve } = setup();
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      fireEvent.click(screen.getByText("Cancel"));
+      expect(onResolve).not.toHaveBeenCalled();
+      // Fresh button should be re-enabled
+      const btn = screen.getByTestId("fresh-button") as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+    });
+
+    it("shows panel preview in destructive confirm dialog", () => {
+      setup();
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      const confirm = screen.getByTestId("app-dialog");
+      expect(within(confirm).getByText("Shell")).toBeTruthy();
+      expect(within(confirm).getByText("Claude")).toBeTruthy();
+      expect(within(confirm).getByText("Docs")).toBeTruthy();
+    });
+
+    it("destructive confirm dialog does not show panel preview when panels is empty", () => {
+      setup({ crash: { panels: [] } });
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      expect(screen.getByText("Your session will start with a clean layout.")).toBeTruthy();
     });
 
     it("toggle all deselects when all are selected", () => {
@@ -256,6 +320,19 @@ describe("CrashRecoveryDialog", () => {
       setup();
       expect(screen.getByTestId("toggle-all-button").className).toContain("cursor-pointer");
     });
+
+    it("restore-selected path is unaffected by destructive confirm gate", async () => {
+      const { onResolve } = setup();
+      fireEvent.click(screen.getByTestId("restore-selected-button"));
+      await waitFor(() =>
+        expect(onResolve).toHaveBeenCalledWith({
+          kind: "restore",
+          panelIds: expect.arrayContaining(["t1", "t2", "t3"]),
+        })
+      );
+      // Should not show confirm dialog
+      expect(screen.queryByText("Reset to clean layout?")).toBeNull();
+    });
   });
 
   describe("without panels (legacy fallback)", () => {
@@ -286,6 +363,15 @@ describe("CrashRecoveryDialog", () => {
           panelIds: [],
         })
       );
+    });
+
+    it("opens destructive confirm dialog on fresh in legacy mode and resolves on confirm", async () => {
+      const { onResolve } = setup({ crash: { panels: [] } });
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      expect(onResolve).not.toHaveBeenCalled();
+      expect(screen.getByText("Reset to clean layout?")).toBeTruthy();
+      fireEvent.click(screen.getByText("Reset to clean layout"));
+      await waitFor(() => expect(onResolve).toHaveBeenCalledWith({ kind: "fresh" }));
     });
   });
 
