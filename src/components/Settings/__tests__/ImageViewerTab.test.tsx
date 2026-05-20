@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { ImageViewerTab } from "../ImageViewerTab";
 import { useProjectStore } from "@/store/projectStore";
 import type { Project } from "@shared/types/project";
@@ -110,5 +110,61 @@ describe("ImageViewerTab", () => {
       screen.getByText(/Open a project to configure its image viewer preference/i)
     ).toBeTruthy();
     expect(window.electron.project.getSettings).not.toHaveBeenCalled();
+  });
+
+  it("blocks Save when the settings load rejects", async () => {
+    installElectron(async () => {
+      throw new Error("ipc blew up");
+    });
+    setProject({ id: "proj-1", path: "/repo", name: "Repo" } as Project);
+
+    render(<ImageViewerTab />);
+
+    const saveButton = (await waitFor(() => {
+      const btn = screen.getByRole("button", { name: /save/i }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+      return btn;
+    })) as HTMLButtonElement;
+
+    // Section chrome stays visible; an error message surfaces.
+    expect(screen.getByText("Image viewer")).toBeTruthy();
+    expect(screen.getByText(/ipc blew up|Couldn't load image viewer settings/i)).toBeTruthy();
+
+    // Radios remain disabled — load failed, the persisted value is unknown.
+    const osRadio = screen.getByRole("radio", { name: /Use OS default/i }) as HTMLInputElement;
+    const customRadio = screen.getByRole("radio", {
+      name: /Custom command/i,
+    }) as HTMLInputElement;
+    expect(osRadio.disabled).toBe(true);
+    expect(customRadio.disabled).toBe(true);
+    expect(saveButton.disabled).toBe(true);
+  });
+
+  it("blocks Save when the settings load times out", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      const deferred = deferredSettings();
+      installElectron(() => deferred.promise as Promise<unknown>);
+      setProject({ id: "proj-1", path: "/repo", name: "Repo" } as Project);
+
+      render(<ImageViewerTab />);
+
+      // Before the timeout fires, controls are merely loading.
+      const osRadio = screen.getByRole("radio", { name: /Use OS default/i }) as HTMLInputElement;
+      expect(osRadio.disabled).toBe(true);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(screen.getByText(/took too long to load/i)).toBeTruthy();
+
+      const saveButton = screen.getByRole("button", { name: /save/i }) as HTMLButtonElement;
+      expect(saveButton.disabled).toBe(true);
+      // Radios remain disabled so user can't overwrite unknown data.
+      expect(osRadio.disabled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

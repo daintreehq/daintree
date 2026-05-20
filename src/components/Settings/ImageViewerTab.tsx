@@ -13,6 +13,7 @@ export function ImageViewerTab() {
   const [customCommand, setCustomCommand] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const isMountedRef = useRef(true);
@@ -33,12 +34,16 @@ export function ImageViewerTab() {
     setCustomCommand("");
     setSaved(false);
     setSaveError(null);
+    setLoadError(null);
     setIsLoading(true);
     let cancelled = false;
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      if (!cancelled && isMountedRef.current) setIsLoading(false);
+      if (!cancelled && isMountedRef.current) {
+        setLoadError("Settings took too long to load. Reopen the tab to retry.");
+        setIsLoading(false);
+      }
     }, 10_000);
     window.electron.project
       .getSettings(activeProjectId)
@@ -53,6 +58,7 @@ export function ImageViewerTab() {
       .catch((err) => {
         if (cancelled || !isMountedRef.current) return;
         logError("[ImageViewerTab] Failed to load settings", err);
+        setLoadError(formatErrorMessage(err, "Couldn't load image viewer settings"));
       })
       .finally(() => {
         clearTimeout(timer);
@@ -75,7 +81,7 @@ export function ImageViewerTab() {
   };
 
   const handleSave = async () => {
-    if (!activeProjectId || isSaving || isLoading) return;
+    if (!activeProjectId || isSaving || isLoading || loadError) return;
     if (mode === "custom" && !customCommand.trim()) {
       setSaveError("Custom command cannot be empty");
       return;
@@ -129,7 +135,7 @@ export function ImageViewerTab() {
                 value="os"
                 checked={mode === "os"}
                 onChange={() => handleModeChange("os")}
-                disabled={isLoading}
+                disabled={isLoading || Boolean(loadError)}
                 className="accent-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed"
               />
               <span className="text-sm text-daintree-text">Use OS default</span>
@@ -145,7 +151,7 @@ export function ImageViewerTab() {
                 value="custom"
                 checked={mode === "custom"}
                 onChange={() => handleModeChange("custom")}
-                disabled={isLoading}
+                disabled={isLoading || Boolean(loadError)}
                 className="accent-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed"
               />
               <span className="text-sm text-daintree-text">Custom command</span>
@@ -159,7 +165,7 @@ export function ImageViewerTab() {
                 type="text"
                 value={customCommand}
                 onChange={(e) => handleCommandChange(e.target.value)}
-                disabled={isLoading}
+                disabled={isLoading || Boolean(loadError)}
                 placeholder="e.g. open -a Photoshop, gimp"
                 className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent transition-colors font-mono disabled:opacity-50 disabled:cursor-not-allowed"
               />
@@ -172,7 +178,7 @@ export function ImageViewerTab() {
           <div className="flex items-center gap-2">
             <button
               onClick={handleSave}
-              disabled={isSaving || isLoading}
+              disabled={isSaving || isLoading || Boolean(loadError)}
               className="px-4 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-daintree-bg text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
             >
               {isSaving ? "Saving…" : "Save"}
@@ -180,6 +186,7 @@ export function ImageViewerTab() {
             {saved && <span className="text-xs text-status-success">Saved</span>}
           </div>
 
+          {loadError && <p className="text-xs text-status-error">{loadError}</p>}
           {saveError && <p className="text-xs text-status-error">{saveError}</p>}
         </div>
       </SettingsSection>
