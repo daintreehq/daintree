@@ -1790,6 +1790,115 @@ describe("ActionService", () => {
     });
   });
 
+  describe("lazy schema compilation (issue #8614)", () => {
+    /**
+     * The schemaCache is private; we read it via the same-file `unknown` cast
+     * because ESM module-namespace freezing prevents `vi.spyOn(z, "toJSONSchema")`.
+     * Cache state is the most direct observable signal that compilation has or
+     * has not run.
+     */
+    function getSchemaCache(s: ActionService): Map<string, unknown> {
+      return (s as unknown as { schemaCache: Map<string, unknown> }).schemaCache;
+    }
+
+    function getRequiresArgsCache(s: ActionService): Map<string, boolean> {
+      return (s as unknown as { requiresArgsCache: Map<string, boolean> }).requiresArgsCache;
+    }
+
+    function registerSchemaAction(id = "actions.list" as ActionId): void {
+      service.register({
+        id,
+        title: "Test",
+        description:
+          "Test action for validating ActionService lazy JSON schema compilation behavior under issue #8614.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({ name: z.string() }),
+        run: vi.fn().mockResolvedValue(undefined),
+      });
+    }
+
+    it("does not populate schemaCache during register()", () => {
+      registerSchemaAction();
+      expect(getSchemaCache(service).size).toBe(0);
+    });
+
+    it("populates requiresArgsCache eagerly during register()", () => {
+      registerSchemaAction();
+      expect(getRequiresArgsCache(service).get("actions.list" as ActionId)).toBe(true);
+    });
+
+    it("listIds() returns registered ids without populating schemaCache", () => {
+      registerSchemaAction("actions.list" as ActionId);
+      service.register({
+        id: "actions.get" as ActionId,
+        title: "T",
+        description:
+          "Test action for validating ActionService lazy JSON schema compilation behavior under issue #8614.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const ids = Array.from(service.listIds());
+      expect(ids).toEqual(["actions.list", "actions.get"]);
+      expect(getSchemaCache(service).size).toBe(0);
+    });
+
+    it("populates schemaCache on first list() call", () => {
+      registerSchemaAction();
+      expect(getSchemaCache(service).size).toBe(0);
+      service.list();
+      expect(getSchemaCache(service).size).toBe(1);
+    });
+
+    it("populates schemaCache on first get() call", () => {
+      registerSchemaAction();
+      expect(getSchemaCache(service).size).toBe(0);
+      service.get("actions.list" as ActionId);
+      expect(getSchemaCache(service).size).toBe(1);
+    });
+
+    it("caches no-argsSchema actions on first read so repeated calls do not recompute", () => {
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "T",
+        description:
+          "Test action for validating ActionService lazy JSON schema compilation behavior under issue #8614.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      });
+
+      service.list();
+      const cache = getSchemaCache(service);
+      // Without argsSchema, inputSchema is undefined — but the entry must exist
+      // in the cache so .has() short-circuits subsequent recomputation.
+      expect(cache.has("actions.list" as ActionId)).toBe(true);
+      const cachedAfterFirst = cache.get("actions.list" as ActionId);
+      service.list();
+      service.get("actions.list" as ActionId);
+      expect(cache.get("actions.list" as ActionId)).toBe(cachedAfterFirst);
+    });
+
+    it("unregister() clears both requiresArgsCache and schemaCache", () => {
+      registerSchemaAction();
+      service.list();
+      expect(getSchemaCache(service).size).toBe(1);
+      expect(getRequiresArgsCache(service).size).toBe(1);
+
+      service.unregister("actions.list" as ActionId);
+      expect(getSchemaCache(service).size).toBe(0);
+      expect(getRequiresArgsCache(service).size).toBe(0);
+    });
+  });
+
   describe("dispatch error boundaries (issue #7284)", () => {
     let warnSpy: ReturnType<typeof vi.spyOn>;
 

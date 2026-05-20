@@ -163,17 +163,24 @@ export interface LastDispatchedAction {
 }
 
 /**
- * Cached fields from {@link ActionService.toManifestEntry} that depend solely
- * on the action definition (not on the runtime context). Computed once at
- * `register()` time and reused on every `list()` / `get()` call.
+ * Cached JSON Schemas derived from an action definition. Computed lazily on the
+ * first {@link ActionService.toManifestEntry} call that needs them, because
+ * `z.toJSONSchema()` is sync-CPU and ~308 built-in actions otherwise compile
+ * during cold start before any consumer needs the manifest (issue #8614).
  */
-type CachedManifestPartials = {
+type CachedSchemas = {
   inputSchema: Record<string, unknown> | undefined;
   outputSchema: Record<string, unknown> | undefined;
-  requiresArgs: boolean;
 };
 
-function computeManifestPartials(definition: AnyActionDefinition): CachedManifestPartials {
+function computeRequiresArgs(definition: AnyActionDefinition): boolean {
+  return definition.argsSchema
+    ? !definition.argsSchema.safeParse(undefined).success &&
+        !definition.argsSchema.safeParse({}).success
+    : rawSchemaRequiresArgs(definition.rawInputSchema);
+}
+
+function computeSchemas(definition: AnyActionDefinition): CachedSchemas {
   return {
     inputSchema: definition.argsSchema
       ? zodSchemaToJsonSchema(definition.argsSchema)
@@ -184,16 +191,19 @@ function computeManifestPartials(definition: AnyActionDefinition): CachedManifes
         : definition.mcpOutputSchema
           ? definition.rawOutputSchema
           : undefined,
-    requiresArgs: definition.argsSchema
-      ? !definition.argsSchema.safeParse(undefined).success &&
-        !definition.argsSchema.safeParse({}).success
-      : rawSchemaRequiresArgs(definition.rawInputSchema),
   };
 }
 
 export class ActionService {
   private registry = new Map<ActionId, AnyActionDefinition>();
-  private manifestPartialCache = new Map<ActionId, CachedManifestPartials>();
+  private requiresArgsCache = new Map<ActionId, boolean>();
+  /**
+   * Lazily-filled JSON schema cache. Populated on first `toManifestEntry()` for
+   * a given id; `.has(id)` distinguishes "not computed yet" from "computed but
+   * the schema is intentionally undefined" (the input/output fields can both
+   * be undefined for actions without schemas).
+   */
+  private schemaCache = new Map<ActionId, CachedSchemas>();
   private contextProvider: (() => ActionContext) | null = null;
   /**
    * Last eligible {actionId, args} captured after a successful dispatch from a
@@ -213,12 +223,15 @@ export class ActionService {
     // a warning before the throw would be spurious noise.
     validateActionDefinition(definition);
     const typed = definition as AnyActionDefinition;
-    // Compute partials before mutating the registry: if a custom validator
-    // inside computeManifestPartials throws, we don't want has() to start
-    // returning true for a half-registered action.
-    const partials = computeManifestPartials(typed);
+    // Compute requiresArgs before mutating the registry: if argsSchema.safeParse
+    // throws, we don't want has() to start returning true for a half-registered
+    // action. JSON-schema compilation is intentionally deferred to first
+    // toManifestEntry() call (issue #8614) — bulk-compiling 308 schemas at
+    // startup would block ~150-300ms of frame budget for data no consumer
+    // needs until the action palette or MCP manifest is first opened.
+    const requiresArgs = computeRequiresArgs(typed);
     this.registry.set(definition.id, typed);
-    this.manifestPartialCache.set(definition.id, partials);
+    this.requiresArgsCache.set(definition.id, requiresArgs);
   }
 
   /** Whether an action id is present in the registry. */
@@ -229,7 +242,17 @@ export class ActionService {
   /** Remove an action from the registry. Silent no-op if unknown — safe for unload cleanup. */
   unregister(id: ActionId): void {
     this.registry.delete(id);
-    this.manifestPartialCache.delete(id);
+    this.requiresArgsCache.delete(id);
+    this.schemaCache.delete(id);
+  }
+
+  /**
+   * Iterate registered action ids without materializing manifest entries. Avoids
+   * the JSON-schema compilation that `list()` triggers — use this when only
+   * ids are needed (e.g. plugin id validation at startup).
+   */
+  listIds(): IterableIterator<ActionId> {
+    return this.registry.keys();
   }
 
   setContextProvider(provider: (() => ActionContext) | null): void {
@@ -428,14 +451,22 @@ export class ActionService {
       }
     }
 
-    // Defensive: register() populates the cache, so a miss should only happen
-    // if a test bypasses register() and writes to the registry directly.
-    // Compute on the fly rather than throwing, matching getActionContext()'s
-    // graceful-degradation pattern.
-    let cached = this.manifestPartialCache.get(definition.id);
-    if (!cached) {
-      cached = computeManifestPartials(definition);
-      this.manifestPartialCache.set(definition.id, cached);
+    // requiresArgs is populated by register(); the defensive fallback covers
+    // tests that bypass register() and write to the registry directly,
+    // matching getActionContext()'s graceful-degradation pattern.
+    let requiresArgs = this.requiresArgsCache.get(definition.id);
+    if (requiresArgs === undefined) {
+      requiresArgs = computeRequiresArgs(definition);
+      this.requiresArgsCache.set(definition.id, requiresArgs);
+    }
+
+    // JSON schemas are deferred from register-time to first-use (issue #8614).
+    // Use .has() rather than truthy-check so an action whose schemas are both
+    // intentionally undefined isn't recomputed on every call.
+    let schemas = this.schemaCache.get(definition.id);
+    if (!this.schemaCache.has(definition.id)) {
+      schemas = computeSchemas(definition);
+      this.schemaCache.set(definition.id, schemas);
     }
 
     // Shallow-copy the cached schemas so that if a downstream consumer
@@ -455,11 +486,11 @@ export class ActionService {
         danger: definition.danger,
         category: definition.category,
       }),
-      inputSchema: cached.inputSchema ? { ...cached.inputSchema } : undefined,
-      outputSchema: cached.outputSchema ? { ...cached.outputSchema } : undefined,
+      inputSchema: schemas?.inputSchema ? { ...schemas.inputSchema } : undefined,
+      outputSchema: schemas?.outputSchema ? { ...schemas.outputSchema } : undefined,
       enabled,
       disabledReason,
-      requiresArgs: cached.requiresArgs,
+      requiresArgs,
       keywords: definition.keywords?.slice(),
       ...(definition.mcpAnnotations ? { mcpAnnotations: { ...definition.mcpAnnotations } } : {}),
       ...(definition.mcpVisibility ? { mcpVisibility: definition.mcpVisibility } : {}),
