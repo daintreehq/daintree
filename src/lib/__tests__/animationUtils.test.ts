@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   DURATION_75,
@@ -18,6 +20,7 @@ import {
   PANEL_RESTORE_DURATION,
   TERMINAL_ANIMATION_DURATION,
   UI_ANIMATION_DURATION,
+  UI_DOHERTY_THRESHOLD,
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
   UI_ENTER_EASING,
@@ -137,5 +140,48 @@ describe("spring easing constants", () => {
   it("uses asymmetric durations with exit faster than enter", () => {
     expect(UI_EXIT_DURATION).toBeLessThan(UI_ENTER_DURATION);
     expect(UI_EXIT_DURATION / UI_ENTER_DURATION).toBe(0.6);
+  });
+});
+
+describe("--anti-flicker-delay CSS contract", () => {
+  // Read the source CSS once. Asserting authored intent in src/index.css —
+  // the build pipeline (Tailwind, autoprefixer) doesn't affect these regexes.
+  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+
+  it("declares --anti-flicker-delay inside the :root block", () => {
+    // Scope matters: a stray declaration in a narrower selector would let
+    // var() fall through to its initial value for consumers outside that
+    // scope. Anchor the property to the :root block so the test fails if it
+    // ever migrates out.
+    expect(css).toMatch(/:root\s*\{[^}]*--anti-flicker-delay\s*:\s*\d+ms/);
+  });
+
+  it("declares --anti-flicker-delay exactly once", () => {
+    // A second declaration in a media query or duplicate :root would let the
+    // cascade resolve to a different value while the first-match parity test
+    // below still passes — guard against that.
+    const declarations = css.match(/--anti-flicker-delay\s*:/g) ?? [];
+    expect(declarations.length).toBe(1);
+  });
+
+  it("token value matches UI_DOHERTY_THRESHOLD", () => {
+    const match = css.match(/--anti-flicker-delay\s*:\s*(\d+)ms/);
+    expect(match).not.toBeNull();
+    if (!match?.[1]) return;
+    const ms = Number.parseInt(match[1], 10);
+    expect(ms).toBe(UI_DOHERTY_THRESHOLD);
+  });
+
+  it(".animate-pulse-delayed references the token (not a bare literal)", () => {
+    expect(css).toMatch(
+      /\.animate-pulse-delayed\s*\{[\s\S]*?animation-delay:\s*var\(--anti-flicker-delay\)/
+    );
+    expect(css).not.toMatch(/\.animate-pulse-delayed\s*\{[\s\S]*?animation-delay:\s*\d+ms/);
+  });
+
+  it(".palette-results-stale / .surface-stale transition references the token", () => {
+    expect(css).toMatch(
+      /\.palette-results-stale,\s*\.surface-stale\s*\{[\s\S]*?transition:\s*opacity\s+150ms\s+ease-out\s+var\(--anti-flicker-delay\)/
+    );
   });
 });
