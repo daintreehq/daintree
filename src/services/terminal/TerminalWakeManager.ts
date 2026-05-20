@@ -16,6 +16,7 @@ export interface WakeManagerDeps {
 export class TerminalWakeManager {
   private lastWakeTime = new Map<string, number>();
   private pendingWakes = new Map<string, { retries: number; timeoutId: NodeJS.Timeout }>();
+  private pendingRateLimitedWakes = new Map<string, NodeJS.Timeout>();
   private inFlightWakes = new Map<string, Promise<boolean>>();
   private deps: WakeManagerDeps;
 
@@ -111,6 +112,22 @@ export class TerminalWakeManager {
     const lastWake = this.lastWakeTime.get(id) ?? 0;
 
     if (now - lastWake < WAKE_RATE_LIMIT_MS) {
+      // Coalesce: a fast switch-away-then-back must not be silently dropped
+      // (#8562). Schedule one trailing-edge call at the end of the rate-limit
+      // window. Subsequent calls inside the window clear and reschedule, so
+      // any burst collapses to a single deferred wake.
+      const existing = this.pendingRateLimitedWakes.get(id);
+      if (existing) {
+        clearTimeout(existing);
+      }
+      const delay = Math.max(0, WAKE_RATE_LIMIT_MS - (now - lastWake));
+      const timeoutId = setTimeout(() => {
+        this.pendingRateLimitedWakes.delete(id);
+        if (this.deps.hasInstance(id)) {
+          this.triggerWake(id);
+        }
+      }, delay);
+      this.pendingRateLimitedWakes.set(id, timeoutId);
       return;
     }
 
@@ -152,6 +169,12 @@ export class TerminalWakeManager {
       clearTimeout(pending.timeoutId);
       this.pendingWakes.delete(id);
     }
+
+    const rateLimited = this.pendingRateLimitedWakes.get(id);
+    if (rateLimited) {
+      clearTimeout(rateLimited);
+      this.pendingRateLimitedWakes.delete(id);
+    }
   }
 
   dispose(): void {
@@ -163,5 +186,10 @@ export class TerminalWakeManager {
       clearTimeout(pending.timeoutId);
     }
     this.pendingWakes.clear();
+
+    for (const [, timeoutId] of this.pendingRateLimitedWakes) {
+      clearTimeout(timeoutId);
+    }
+    this.pendingRateLimitedWakes.clear();
   }
 }

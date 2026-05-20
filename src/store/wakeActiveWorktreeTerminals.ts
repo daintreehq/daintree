@@ -3,8 +3,10 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";
 
+const WAKE_CONCURRENCY = 2;
+
 /**
- * Wake every grid terminal in the active worktree (#7999).
+ * Wake every grid terminal in the active worktree (#7999, #8562).
  *
  * Called on cached `WebContentsView` reactivation (project view activation
  * via Electron 41 `addChildView`). The pty-host headless mirror keeps
@@ -14,20 +16,27 @@ import { logWarn } from "@/utils/logger";
  * needs to be pulled from the headless mirror via the `wake-terminal` IPC
  * and applied via `restoreFromSerialized`.
  *
- * Uses `terminalInstanceService.wake(id)` directly rather than
- * `applyRendererPolicy(VISIBLE)` because the renderer-policy path returns
- * early when tier equality holds (`TerminalRendererPolicy.applyRendererPolicy`),
- * and a backgrounded view's terminals stay at VISIBLE the whole time —
- * so the policy guard would prevent the wake from ever firing. `wake()`
- * also unhibernates and uses its own rate-limit guard against rapid
- * view-toggle floods.
+ * Uses `terminalInstanceService.fullWakeForVisibilityRestore(id)` rather
+ * than `wake(id)` because `wake()` only triggers buffer restore +
+ * xterm.refresh — visible panes were left with stale geometry and missing
+ * recent output until the user clicked each pane (#8562). The full sequence
+ * also runs `applyDeferredResize`, `forceXtermReflow`, `handlePostWake`, and
+ * `dataBuffer.resumeFlush`. Going through `applyRendererPolicy(VISIBLE)`
+ * would no-op on tier equality (the backgrounded view's terminals stay at
+ * VISIBLE), so the full-wake method bypasses the policy.
+ *
+ * The focused panel runs first (interactive responsiveness); the rest fan
+ * out at concurrency = {@link WAKE_CONCURRENCY} to avoid a CPU spike across
+ * large grids, where N concurrent `refresh()` calls on N xterm instances
+ * can produce a long-task on the main thread.
  *
  * Dock and trash terminals are excluded — they manage their own visibility.
  */
-export function wakeActiveWorktreeTerminals(): void {
+export async function wakeActiveWorktreeTerminals(): Promise<void> {
   const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
   const { panelIds, panelsById } = usePanelStore.getState();
 
+  const targets: string[] = [];
   for (const id of panelIds) {
     const panel = panelsById[id];
     if (!panel) continue;
@@ -35,13 +44,54 @@ export function wakeActiveWorktreeTerminals(): void {
     if ((panel.worktreeId ?? null) !== activeWorktreeId) continue;
     const location = panel.location ?? "grid";
     if (location === "dock" || location === "trash") continue;
+    targets.push(id);
+  }
 
+  if (targets.length === 0) return;
+
+  // Focused panel first — the user is most likely to be looking at it.
+  let focusedIndex = -1;
+  for (let i = 0; i < targets.length; i++) {
+    if (terminalInstanceService.isFocused(targets[i])) {
+      focusedIndex = i;
+      break;
+    }
+  }
+  if (focusedIndex > 0) {
+    const [focused] = targets.splice(focusedIndex, 1);
+    targets.unshift(focused);
+  }
+
+  const wakeOne = async (id: string): Promise<void> => {
     try {
-      terminalInstanceService.wake(id);
+      await terminalInstanceService.fullWakeForVisibilityRestore(id);
     } catch (error) {
       // One broken terminal must not abort the fan-out — the next visible
       // terminal still needs its missed range pulled from the headless mirror.
       logWarn("[wakeActiveWorktreeTerminals] wake failed", { id, error });
     }
+  };
+
+  // Run the focused panel first, then fan out the rest at WAKE_CONCURRENCY.
+  if (targets.length === 1) {
+    await wakeOne(targets[0]);
+    return;
   }
+
+  await wakeOne(targets[0]);
+
+  const remaining = targets.slice(1);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < remaining.length) {
+      const next = cursor++;
+      await wakeOne(remaining[next]);
+    }
+  };
+  const workers: Promise<void>[] = [];
+  const workerCount = Math.min(WAKE_CONCURRENCY, remaining.length);
+  for (let i = 0; i < workerCount; i++) {
+    workers.push(worker());
+  }
+  await Promise.all(workers);
 }

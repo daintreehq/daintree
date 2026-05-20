@@ -762,6 +762,78 @@ class TerminalInstanceService {
   }
 
   /**
+   * Run the full click-equivalent wake sequence on a visible terminal whose
+   * project view just regained visibility (#8562). `wake(id)` only triggers
+   * buffer restore + xterm.refresh; the click/focus path additionally runs
+   * `applyDeferredResize`, `forceXtermReflow`, `handlePostWake`, and
+   * `dataBuffer.resumeFlush`. Without those steps, visible terminals show
+   * stale geometry and missing recent output until the user clicks each pane.
+   *
+   * Bypasses {@link TerminalRendererPolicy.applyRendererPolicy} — that path
+   * early-returns on tier equality and a backgrounded view's terminals stay
+   * at VISIBLE the whole time. Bypasses the resize lock the same way the
+   * attach path does (record remaining suppression TTL, unlock, resize,
+   * relock with remaining TTL) so geometry resync doesn't silently no-op
+   * while project-switch suppression is active.
+   */
+  async fullWakeForVisibilityRestore(id: string): Promise<void> {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    if (managed.isHibernated) {
+      this.unhibernate(id);
+    }
+
+    // Re-fetch after unhibernate so we operate on the current instance.
+    const current = this.instances.get(id);
+    if (!current) return;
+    if (!current.isOpened) return;
+
+    // Attach is in progress — its post-rAF reconciliation (around L1166) will
+    // apply the renderer policy and run the wake. A second path here would
+    // race.
+    if (current.isAttaching) return;
+
+    const needsLockBypass = current.isResizeSuppressed === true;
+    let remainingMs = 0;
+    if (needsLockBypass && current.resizeSuppressionEndTime) {
+      remainingMs = Math.max(0, current.resizeSuppressionEndTime - Date.now());
+      this.resizeController.lockResize(id, false);
+    }
+    try {
+      this.resizeController.applyDeferredResize(id);
+    } finally {
+      if (needsLockBypass) {
+        this.resizeController.lockResize(id, true, remainingMs);
+      }
+    }
+
+    const termEl = current.terminal.element;
+    if (termEl) {
+      try {
+        forceXtermReflow(termEl);
+      } catch (error) {
+        logWarn(`forceXtermReflow failed for ${id}`, { error });
+      }
+    }
+
+    const ok = await this.wakeManager.wakeAndRestore(id);
+
+    // Re-check after async: terminal may have been destroyed, hibernated, or
+    // replaced while wakeAndRestore was in flight.
+    const after = this.instances.get(id);
+    if (!after || after !== current) return;
+    if (after.isHibernated) return;
+
+    after.terminal.refresh(0, after.terminal.rows - 1);
+
+    if (ok) {
+      this.handlePostWake(id);
+    }
+    this.dataBuffer.resumeFlush(id);
+  }
+
+  /**
    * Signal a PTY data-loss discontinuity at the point where the pty-host
    * discarded bytes from the IPC fallback queue. Instead of writing a styled
    * ANSI line directly (which embeds presentation in the wire format and can't
@@ -1645,6 +1717,10 @@ class TerminalInstanceService {
 
     managed.isFocused = isFocused;
     managed.lastActiveTime = Date.now();
+  }
+
+  isFocused(id: string): boolean {
+    return this.instances.get(id)?.isFocused === true;
   }
 
   focus(id: string): void {

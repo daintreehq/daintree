@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { TerminalInstance } from "@shared/types";
 
-const wakeMock = vi.fn();
+const fullWakeMock = vi.fn();
+const isFocusedMock = vi.fn();
 const logWarnMock = vi.fn();
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
-    wake: wakeMock,
+    fullWakeForVisibilityRestore: fullWakeMock,
+    isFocused: isFocusedMock,
   },
 }));
 
@@ -42,7 +44,10 @@ function panel(id: string, overrides: Partial<TerminalInstance> = {}): TerminalI
 }
 
 beforeEach(() => {
-  wakeMock.mockReset();
+  fullWakeMock.mockReset();
+  fullWakeMock.mockResolvedValue(undefined);
+  isFocusedMock.mockReset();
+  isFocusedMock.mockReturnValue(false);
   logWarnMock.mockReset();
   mockActiveWorktreeId = null;
   mockPanelIds = [];
@@ -50,60 +55,60 @@ beforeEach(() => {
 });
 
 describe("wakeActiveWorktreeTerminals", () => {
-  it("wakes grid terminals in the active worktree", () => {
+  it("wakes grid terminals in the active worktree", async () => {
     mockActiveWorktreeId = "wt-1";
     const a = panel("a", { worktreeId: "wt-1" });
     const b = panel("b", { worktreeId: "wt-1" });
     mockPanelIds = ["a", "b"];
     mockPanelsById = { a, b };
 
-    wakeActiveWorktreeTerminals();
+    await wakeActiveWorktreeTerminals();
 
-    expect(wakeMock).toHaveBeenCalledTimes(2);
-    expect(wakeMock).toHaveBeenCalledWith("a");
-    expect(wakeMock).toHaveBeenCalledWith("b");
+    expect(fullWakeMock).toHaveBeenCalledTimes(2);
+    expect(fullWakeMock).toHaveBeenCalledWith("a");
+    expect(fullWakeMock).toHaveBeenCalledWith("b");
   });
 
-  it("excludes terminals from other worktrees", () => {
+  it("excludes terminals from other worktrees", async () => {
     mockActiveWorktreeId = "wt-1";
     const a = panel("a", { worktreeId: "wt-1" });
     const b = panel("b", { worktreeId: "wt-2" });
     mockPanelIds = ["a", "b"];
     mockPanelsById = { a, b };
 
-    wakeActiveWorktreeTerminals();
+    await wakeActiveWorktreeTerminals();
 
-    expect(wakeMock).toHaveBeenCalledTimes(1);
-    expect(wakeMock).toHaveBeenCalledWith("a");
+    expect(fullWakeMock).toHaveBeenCalledTimes(1);
+    expect(fullWakeMock).toHaveBeenCalledWith("a");
   });
 
-  it("excludes dock-located terminals", () => {
+  it("excludes dock-located terminals", async () => {
     mockActiveWorktreeId = "wt-1";
     const a = panel("a", { worktreeId: "wt-1", location: "grid" });
     const dock = panel("dock", { worktreeId: "wt-1", location: "dock" });
     mockPanelIds = ["a", "dock"];
     mockPanelsById = { a, dock };
 
-    wakeActiveWorktreeTerminals();
+    await wakeActiveWorktreeTerminals();
 
-    expect(wakeMock).toHaveBeenCalledTimes(1);
-    expect(wakeMock).toHaveBeenCalledWith("a");
+    expect(fullWakeMock).toHaveBeenCalledTimes(1);
+    expect(fullWakeMock).toHaveBeenCalledWith("a");
   });
 
-  it("excludes trash-located terminals", () => {
+  it("excludes trash-located terminals", async () => {
     mockActiveWorktreeId = "wt-1";
     const a = panel("a", { worktreeId: "wt-1" });
     const trash = panel("trash", { worktreeId: "wt-1", location: "trash" });
     mockPanelIds = ["a", "trash"];
     mockPanelsById = { a, trash };
 
-    wakeActiveWorktreeTerminals();
+    await wakeActiveWorktreeTerminals();
 
-    expect(wakeMock).toHaveBeenCalledTimes(1);
-    expect(wakeMock).toHaveBeenCalledWith("a");
+    expect(fullWakeMock).toHaveBeenCalledTimes(1);
+    expect(fullWakeMock).toHaveBeenCalledWith("a");
   });
 
-  it("excludes non-terminal panel kinds", () => {
+  it("excludes non-terminal panel kinds", async () => {
     mockActiveWorktreeId = "wt-1";
     const term = panel("term", { worktreeId: "wt-1", kind: "terminal" });
     const browser = panel("browser", { worktreeId: "wt-1", kind: "browser" });
@@ -111,57 +116,57 @@ describe("wakeActiveWorktreeTerminals", () => {
     mockPanelIds = ["term", "browser", "dev"];
     mockPanelsById = { term, browser, dev: devPreview };
 
-    wakeActiveWorktreeTerminals();
+    await wakeActiveWorktreeTerminals();
 
-    expect(wakeMock).toHaveBeenCalledTimes(1);
-    expect(wakeMock).toHaveBeenCalledWith("term");
+    expect(fullWakeMock).toHaveBeenCalledTimes(1);
+    expect(fullWakeMock).toHaveBeenCalledWith("term");
   });
 
-  it("treats undefined kind as terminal", () => {
+  it("treats undefined kind as terminal", async () => {
     mockActiveWorktreeId = "wt-1";
     const a = panel("a", { worktreeId: "wt-1", kind: undefined });
     mockPanelIds = ["a"];
     mockPanelsById = { a };
 
-    wakeActiveWorktreeTerminals();
+    await wakeActiveWorktreeTerminals();
 
-    expect(wakeMock).toHaveBeenCalledTimes(1);
-    expect(wakeMock).toHaveBeenCalledWith("a");
+    expect(fullWakeMock).toHaveBeenCalledTimes(1);
+    expect(fullWakeMock).toHaveBeenCalledWith("a");
   });
 
-  it("when no active worktree, only wakes terminals with no worktree affiliation", () => {
+  it("when no active worktree, only wakes terminals with no worktree affiliation", async () => {
     mockActiveWorktreeId = null;
     const a = panel("a", { worktreeId: undefined });
     const b = panel("b", { worktreeId: "wt-1" });
     mockPanelIds = ["a", "b"];
     mockPanelsById = { a, b };
 
-    wakeActiveWorktreeTerminals();
+    await wakeActiveWorktreeTerminals();
 
-    expect(wakeMock).toHaveBeenCalledTimes(1);
-    expect(wakeMock).toHaveBeenCalledWith("a");
+    expect(fullWakeMock).toHaveBeenCalledTimes(1);
+    expect(fullWakeMock).toHaveBeenCalledWith("a");
   });
 
-  it("no-ops when there are no panels", () => {
+  it("no-ops when there are no panels", async () => {
     mockActiveWorktreeId = "wt-1";
     mockPanelIds = [];
     mockPanelsById = {};
 
-    wakeActiveWorktreeTerminals();
+    await wakeActiveWorktreeTerminals();
 
-    expect(wakeMock).not.toHaveBeenCalled();
+    expect(fullWakeMock).not.toHaveBeenCalled();
   });
 
-  it("skips panels missing from panelsById", () => {
+  it("skips panels missing from panelsById", async () => {
     mockActiveWorktreeId = "wt-1";
     mockPanelIds = ["ghost"];
     mockPanelsById = {};
 
-    expect(() => wakeActiveWorktreeTerminals()).not.toThrow();
-    expect(wakeMock).not.toHaveBeenCalled();
+    await expect(wakeActiveWorktreeTerminals()).resolves.toBeUndefined();
+    expect(fullWakeMock).not.toHaveBeenCalled();
   });
 
-  it("isolates per-terminal failures so the fan-out continues", () => {
+  it("isolates per-terminal failures so the fan-out continues", async () => {
     mockActiveWorktreeId = "wt-1";
     const a = panel("a", { worktreeId: "wt-1" });
     const b = panel("b", { worktreeId: "wt-1" });
@@ -169,20 +174,92 @@ describe("wakeActiveWorktreeTerminals", () => {
     mockPanelIds = ["a", "b", "c"];
     mockPanelsById = { a, b, c };
 
-    wakeMock.mockImplementation((id: string) => {
+    fullWakeMock.mockImplementation(async (id: string) => {
       if (id === "b") throw new Error("broken xterm");
     });
 
-    expect(() => wakeActiveWorktreeTerminals()).not.toThrow();
+    await expect(wakeActiveWorktreeTerminals()).resolves.toBeUndefined();
 
-    expect(wakeMock).toHaveBeenCalledTimes(3);
-    expect(wakeMock).toHaveBeenCalledWith("a");
-    expect(wakeMock).toHaveBeenCalledWith("b");
-    expect(wakeMock).toHaveBeenCalledWith("c");
+    expect(fullWakeMock).toHaveBeenCalledTimes(3);
+    expect(fullWakeMock).toHaveBeenCalledWith("a");
+    expect(fullWakeMock).toHaveBeenCalledWith("b");
+    expect(fullWakeMock).toHaveBeenCalledWith("c");
     expect(logWarnMock).toHaveBeenCalledTimes(1);
     expect(logWarnMock).toHaveBeenCalledWith(
       "[wakeActiveWorktreeTerminals] wake failed",
       expect.objectContaining({ id: "b" })
     );
+  });
+
+  it("runs the focused panel before the rest", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const b = panel("b", { worktreeId: "wt-1" });
+    const c = panel("c", { worktreeId: "wt-1" });
+    mockPanelIds = ["a", "b", "c"];
+    mockPanelsById = { a, b, c };
+
+    // "c" is focused — must be invoked first
+    isFocusedMock.mockImplementation((id: string) => id === "c");
+
+    const callOrder: string[] = [];
+    fullWakeMock.mockImplementation(async (id: string) => {
+      callOrder.push(id);
+    });
+
+    await wakeActiveWorktreeTerminals();
+
+    expect(callOrder[0]).toBe("c");
+    expect(callOrder).toHaveLength(3);
+  });
+
+  it("caps concurrent wakes at 2 for the non-focused remainder", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const ids = ["a", "b", "c", "d", "e", "f"];
+    mockPanelIds = ids;
+    mockPanelsById = Object.fromEntries(
+      ids.map((id) => [id, panel(id, { worktreeId: "wt-1" })])
+    ) as Record<string, TerminalInstance>;
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const deferreds = new Map<string, () => void>();
+
+    fullWakeMock.mockImplementation((id: string) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      return new Promise<void>((resolve) => {
+        deferreds.set(id, () => {
+          inFlight--;
+          resolve();
+        });
+      });
+    });
+
+    const done = wakeActiveWorktreeTerminals();
+
+    // Drain: each microtask flush, resolve every pending deferred. Since the
+    // leader awaits first, then the remainder fans out at cap=2, the queue
+    // should never hold more than 2 deferreds for the remainder phase.
+    const sawInFlight: number[] = [];
+    let safety = 50;
+    while (safety-- > 0) {
+      await Promise.resolve();
+      await Promise.resolve();
+      sawInFlight.push(inFlight);
+      if (deferreds.size === 0 && inFlight === 0) {
+        break;
+      }
+      // Resolve all currently pending deferreds (they were queued by the
+      // workers and the leader). Each resolution lets the next wakeOne start.
+      const toResolve = [...deferreds.values()];
+      deferreds.clear();
+      for (const r of toResolve) r();
+    }
+
+    await done;
+
+    expect(fullWakeMock).toHaveBeenCalledTimes(6);
+    expect(maxInFlight).toBeLessThanOrEqual(2);
   });
 });

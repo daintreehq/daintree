@@ -191,4 +191,132 @@ describe("TerminalWakeManager", () => {
     resolveWake({ state: "serialized-state" });
     await wakePromise;
   });
+
+  describe("rate-limit coalescing (#8562)", () => {
+    function makeDeps(managed: any): WakeManagerDeps {
+      return {
+        getInstance: vi.fn(() => managed),
+        hasInstance: vi.fn(() => true),
+        restoreFromSerialized: vi.fn(() => true),
+        restoreFromSerializedIncremental: vi.fn(async () => true),
+      };
+    }
+
+    it("schedules a trailing-edge wake when called inside the rate-limit window", async () => {
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        const managed = {
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed));
+
+        // First wake fires immediately
+        manager.wake("term-rl-1");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        // Allow first wake to resolve and record lastWakeTime
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Second wake within rate-limit window MUST NOT be dropped silently —
+        // it schedules a trailing-edge timer for the end of the window.
+        vi.setSystemTime(Date.now() + 200);
+        manager.wake("term-rl-1");
+        // Trailing-edge timer hasn't fired yet
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        // Advance past the window and the trailing wake fires
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(wakeMock).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("collapses repeated calls inside the window to a single trailing wake", async () => {
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        const managed = {
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed));
+
+        manager.wake("term-rl-2");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        // Three more calls during the window — should collapse to one trailing
+        vi.setSystemTime(Date.now() + 100);
+        manager.wake("term-rl-2");
+        vi.setSystemTime(Date.now() + 100);
+        manager.wake("term-rl-2");
+        vi.setSystemTime(Date.now() + 100);
+        manager.wake("term-rl-2");
+
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1500);
+        expect(wakeMock).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("cancels pending rate-limited wake when clearWakeState is called", async () => {
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        const managed = {
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed));
+
+        manager.wake("term-rl-3");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        vi.setSystemTime(Date.now() + 200);
+        manager.wake("term-rl-3");
+
+        // Clear state cancels the pending trailing wake
+        manager.clearWakeState("term-rl-3");
+
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("dispose cancels all pending rate-limited wakes", async () => {
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        const managed = {
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed));
+
+        manager.wake("term-rl-4");
+        await vi.advanceTimersByTimeAsync(0);
+        manager.wake("term-rl-5");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(wakeMock).toHaveBeenCalledTimes(2);
+
+        vi.setSystemTime(Date.now() + 100);
+        manager.wake("term-rl-4");
+        manager.wake("term-rl-5");
+
+        manager.dispose();
+
+        await vi.advanceTimersByTimeAsync(2000);
+        // No additional wakes fired after dispose
+        expect(wakeMock).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
