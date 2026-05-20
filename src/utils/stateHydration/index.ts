@@ -18,6 +18,7 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import {
   markRendererPerformance,
   withRendererSpan,
+  startRendererSpan,
   isRendererPerfCaptureEnabled,
   RENDERER_T0,
 } from "@/utils/performance";
@@ -270,13 +271,21 @@ export async function hydrateAppState(
     // synchronous hydration work. The result is consumed inside the panel-restore
     // block below; any rejection is captured and re-thrown there so the existing
     // outer try/catch still logs and skips terminal restore.
+    //
+    // Perf span is split into startRendererSpan + manual finishGetForProject so
+    // the `:end` mark only fires once `checkCurrent()` has confirmed the run is
+    // still current. Wrapping the in-flight promise in `withRendererSpan` would
+    // emit `:end` after `hydrateAppState`'s `finally` flushes the buffer when a
+    // mid-flight supersede happens, polluting the next run's marks with the
+    // wrong `switchId`.
     let terminalFetchError: unknown = null;
+    const finishGetForProjectSpan = currentProjectId
+      ? startRendererSpan(PERF_MARKS.HYDRATE_GET_TERMINALS, {
+          switchId: _switchId ?? null,
+        })
+      : null;
     const getForProjectPromise: Promise<BackendTerminalInfo[]> = currentProjectId
-      ? withRendererSpan(
-          PERF_MARKS.HYDRATE_GET_TERMINALS,
-          () => terminalClient.getForProject(currentProjectId),
-          { switchId: _switchId ?? null }
-        ).catch((error: unknown) => {
+      ? terminalClient.getForProject(currentProjectId).catch((error: unknown) => {
           terminalFetchError = error;
           return [];
         })
@@ -299,8 +308,9 @@ export async function hydrateAppState(
     if (currentProjectId) {
       try {
         const backendTerminals = await getForProjectPromise;
-        if (terminalFetchError) throw terminalFetchError;
         if (!checkCurrent()) return;
+        finishGetForProjectSpan?.();
+        if (terminalFetchError) throw terminalFetchError;
 
         logHydrationInfo(
           `Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
