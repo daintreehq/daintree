@@ -470,6 +470,41 @@ describe("app:boot handler", () => {
     expect(result.quarantinedPanels).toEqual([]);
   });
 
+  it("preserves panels in safe mode when the quarantine set doesn't match this project", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    // Ledger has IDs from a different project — none of the current project's
+    // saved panels are quarantined.
+    panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["other-project-bad"]));
+    panelSuspectLedger.getQuarantinedPanels.mockReturnValue([
+      { id: "other-project-bad", kind: "terminal", title: "Other" },
+    ]);
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+      if (key === "appState") {
+        return {
+          terminals: [
+            { id: "current-a", kind: "terminal", title: "A", location: "grid", cwd: "/tmp" },
+            { id: "current-b", kind: "terminal", title: "B", location: "grid", cwd: "/tmp" },
+          ],
+          sidebarWidth: 350,
+        };
+      }
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    });
+
+    const result = (await invokeBoot()) as {
+      appState: { terminals: Array<{ id: string }> };
+      skippedPanelCount: number;
+      quarantinedPanels: Array<{ id: string }>;
+    };
+    expect(result.appState.terminals.map((t) => t.id).sort()).toEqual(["current-a", "current-b"]);
+    expect(result.skippedPanelCount).toBe(0);
+    // The other project's quarantine is still surfaced for the banner.
+    expect(result.quarantinedPanels.map((p) => p.id)).toEqual(["other-project-bad"]);
+  });
+
   it("does not consult the ledger filter outside of safe mode", async () => {
     crashGuard.isSafeMode.mockReturnValue(false);
     panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["a"]));

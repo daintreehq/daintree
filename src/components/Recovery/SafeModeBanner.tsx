@@ -30,7 +30,9 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
   const [state, setState] = useState<"idle" | "clearing" | "cleared" | "failed">("idle");
 
   const handleRestore = async () => {
-    if (state !== "idle") return;
+    // Block only the in-flight case — a failed clear must remain retryable
+    // (the row's Retry button calls this same handler).
+    if (state === "clearing" || state === "cleared") return;
     setState("clearing");
     try {
       const result = await clearQuarantinedPanel(panel.id);

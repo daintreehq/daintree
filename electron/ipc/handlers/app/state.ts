@@ -279,11 +279,34 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       [];
     if (inSafeMode) {
       const quarantinedIds = ledger.getQuarantinedPanelIds();
+      const ledgerEmpty = quarantinedIds.size === 0;
       const original = terminalsToUse;
       const survivors = original.filter((t) => !quarantinedIds.has(t.id));
       const skippedToQuarantine = original.length - survivors.length;
-      if (skippedToQuarantine > 0 && survivors.length > 0) {
-        // Partial quarantine — keep the stable panels, drop only the suspects.
+      if (ledgerEmpty) {
+        // Legacy fallback: the ledger has no per-panel quarantine data for
+        // this crash-loop run, so the system can't isolate which panel(s)
+        // caused it. Fall back to the original all-or-nothing wipe so safe
+        // mode still breaks the loop. Hits on first crash loop after upgrade
+        // (or after the ledger was cleared by user action).
+        skippedPanelCount = original.length;
+        terminalsToUse = [];
+        terminalsSource = "safe-mode";
+        console.log(
+          `[AppHydrate] Safe mode active — skipping ${skippedPanelCount} terminal(s) restoration (ledger empty)`
+        );
+      } else if (original.length > 0 && survivors.length === 0) {
+        // Every saved panel for the current project is in the quarantine set
+        // — whole-session safe mode escalation. This is the per-project
+        // analogue of the legacy wipe.
+        skippedPanelCount = original.length;
+        terminalsToUse = [];
+        terminalsSource = "safe-mode";
+        console.log(
+          `[AppHydrate] Safe mode active — skipping ${skippedPanelCount} terminal(s) restoration (all quarantined)`
+        );
+      } else if (skippedToQuarantine > 0) {
+        // Partial quarantine — restore the stable panels, drop the suspects.
         terminalsToUse = survivors;
         skippedPanelCount = skippedToQuarantine;
         terminalsSource = "safe-mode-quarantine";
@@ -291,14 +314,15 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           `[AppHydrate] Safe mode active — quarantining ${skippedToQuarantine} suspect panel(s), restoring ${survivors.length} stable panel(s)`
         );
       } else {
-        // Either nothing was quarantined (legacy path: ledger empty, e.g.
-        // first crash loop after upgrade) or every saved panel is suspect.
-        // Both collapse to the original all-or-nothing wipe.
-        skippedPanelCount = original.length;
-        terminalsToUse = [];
-        terminalsSource = "safe-mode";
+        // Safe mode is active but none of THIS project's saved panels appear
+        // in the quarantine set (e.g., the user crashed on a different
+        // project and switched here). Restore normally — the per-panel
+        // ledger isolates the failure to its real cause. Quarantined panels
+        // from other projects are still surfaced via `quarantinedPanels` so
+        // the banner popover can list them.
+        skippedPanelCount = 0;
         console.log(
-          `[AppHydrate] Safe mode active — skipping ${skippedPanelCount} terminal(s) restoration`
+          `[AppHydrate] Safe mode active — no panels quarantined for this project, restoring ${original.length} panel(s)`
         );
       }
       quarantinedPanels = ledger.getQuarantinedPanels();

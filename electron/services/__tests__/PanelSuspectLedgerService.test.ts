@@ -209,6 +209,23 @@ describe("PanelSuspectLedgerService", () => {
     expect(readLedgerFile().panels.p2).toBeDefined();
   });
 
+  it("clearQuarantinedPanel restores the in-memory record and returns false on write failure", () => {
+    const ledger1 = new PanelSuspectLedgerService();
+    ledger1.initialize(pendingCrash([suspectPanel("p1")]));
+    __resetPanelSuspectLedgerForTesting();
+    const ledger2 = new PanelSuspectLedgerService();
+    ledger2.initialize(pendingCrash([suspectPanel("p1")]));
+    expect(ledger2.getQuarantinedPanelIds().has("p1")).toBe(true);
+
+    utilsMock.resilientAtomicWriteFileSync.mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+    expect(ledger2.clearQuarantinedPanel("p1")).toBe(false);
+    // Record should still be in the in-memory ledger so the next clean
+    // launch (or retry) writes a consistent view.
+    expect(ledger2.getQuarantinedPanelIds().has("p1")).toBe(true);
+  });
+
   it("clearQuarantinedPanel returns false for unknown panel ids", () => {
     const ledger = new PanelSuspectLedgerService();
     ledger.initialize(null);

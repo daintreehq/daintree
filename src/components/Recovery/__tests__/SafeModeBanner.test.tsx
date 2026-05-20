@@ -280,6 +280,30 @@ describe("SafeModeBanner", () => {
     });
   });
 
+  it("Retry button calls clearQuarantinedPanel again after a failure", async () => {
+    clearQuarantinedPanel.mockReset();
+    clearQuarantinedPanel.mockResolvedValueOnce({ cleared: false });
+    clearQuarantinedPanel.mockResolvedValueOnce({ cleared: true });
+    useSafeModeStore.setState({
+      safeMode: true,
+      skippedPanelCount: 1,
+      quarantinedPanels: [{ id: "p1", kind: "terminal", title: "Tricky" }],
+    });
+    render(<SafeModeBanner />);
+    fireEvent.click(screen.getByRole("button", { name: /Show details/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Restore panel/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Retry/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Retry/ }));
+    await waitFor(() => {
+      expect(clearQuarantinedPanel).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/Restoring on next launch/)).toBeTruthy();
+    });
+  });
+
   it("uses the singular phrasing for one quarantined panel", () => {
     useSafeModeStore.setState({
       safeMode: true,

@@ -194,11 +194,18 @@ export class PanelSuspectLedgerService {
     if (!Object.prototype.hasOwnProperty.call(this.ledger.panels, panelId)) {
       return false;
     }
+    // Stash the record so an atomic-write failure can restore the in-memory
+    // state — otherwise the renderer would see "Restoring on next launch"
+    // while the disk ledger still has the entry and re-quarantines the panel
+    // on the next boot.
+    const previous = this.ledger.panels[panelId];
     delete this.ledger.panels[panelId];
     try {
       this.writeLedger();
     } catch (err) {
       console.error("[PanelSuspectLedger] Failed to persist after clearQuarantinedPanel:", err);
+      this.ledger.panels[panelId] = previous;
+      return false;
     }
     return true;
   }
