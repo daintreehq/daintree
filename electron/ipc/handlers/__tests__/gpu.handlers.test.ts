@@ -33,6 +33,7 @@ vi.mock("../../../store.js", () => ({ store: storeMock }));
 
 const gpuMonitorMock = vi.hoisted(() => ({
   isGpuDisabledByFlag: vi.fn(() => false),
+  isGpuAngleFallbackByFlag: vi.fn(() => false),
   writeGpuDisabledFlag: vi.fn(),
   clearGpuDisabledFlag: vi.fn(),
   clearGpuAngleFallbackFlag: vi.fn(),
@@ -106,5 +107,60 @@ describe("GPU_SET_HARDWARE_ACCELERATION handler", () => {
     await handlerPromise;
 
     expect(appMock.exit).toHaveBeenCalledWith(0);
+  });
+});
+
+describe("GPU_GET_STATUS handler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ipcMainMock._handlers.clear();
+  });
+
+  it("returns both flag states as false by default", async () => {
+    gpuMonitorMock.isGpuDisabledByFlag.mockReturnValue(false);
+    gpuMonitorMock.isGpuAngleFallbackByFlag.mockReturnValue(false);
+
+    registerGpuHandlers();
+    const handler = ipcMainMock._handlers.get("gpu:get-status")!;
+
+    const result = await handler({} as Electron.IpcMainInvokeEvent);
+
+    expect(result).toEqual({
+      hardwareAccelerationDisabled: false,
+      angleFallbackActive: false,
+    });
+  });
+
+  it("reports angleFallbackActive=true when the ANGLE flag exists", async () => {
+    gpuMonitorMock.isGpuDisabledByFlag.mockReturnValue(false);
+    gpuMonitorMock.isGpuAngleFallbackByFlag.mockReturnValue(true);
+
+    registerGpuHandlers();
+    const handler = ipcMainMock._handlers.get("gpu:get-status")!;
+
+    const result = (await handler({} as Electron.IpcMainInvokeEvent)) as {
+      hardwareAccelerationDisabled: boolean;
+      angleFallbackActive: boolean;
+    };
+
+    expect(result.angleFallbackActive).toBe(true);
+    expect(result.hardwareAccelerationDisabled).toBe(false);
+    expect(gpuMonitorMock.isGpuAngleFallbackByFlag).toHaveBeenCalledWith("/tmp/user-data");
+  });
+
+  it("reports hardwareAccelerationDisabled=true when the disable flag exists", async () => {
+    gpuMonitorMock.isGpuDisabledByFlag.mockReturnValue(true);
+    gpuMonitorMock.isGpuAngleFallbackByFlag.mockReturnValue(false);
+
+    registerGpuHandlers();
+    const handler = ipcMainMock._handlers.get("gpu:get-status")!;
+
+    const result = (await handler({} as Electron.IpcMainInvokeEvent)) as {
+      hardwareAccelerationDisabled: boolean;
+      angleFallbackActive: boolean;
+    };
+
+    expect(result.hardwareAccelerationDisabled).toBe(true);
+    expect(result.angleFallbackActive).toBe(false);
   });
 });

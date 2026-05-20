@@ -64,6 +64,7 @@ vi.mock("../../utils/gpuDetection.js", () => ({
 
 vi.mock("../../services/GpuCrashMonitorService.js", () => ({
   isGpuDisabledByFlag: vi.fn(() => false),
+  isGpuAngleFallbackByFlag: vi.fn(() => false),
 }));
 
 const crashGuard = {

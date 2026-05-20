@@ -227,10 +227,13 @@ async function collectGpu() {
   const result: Record<string, unknown> = {};
 
   try {
-    const { isGpuDisabledByFlag } = await import("./GpuCrashMonitorService.js");
+    const { isGpuDisabledByFlag, isGpuAngleFallbackByFlag } =
+      await import("./GpuCrashMonitorService.js");
     result.hardwareAccelerationDisabled = isGpuDisabledByFlag(app.getPath("userData"));
+    result.angleFallbackActive = isGpuAngleFallbackByFlag(app.getPath("userData"));
   } catch {
     result.hardwareAccelerationDisabled = "unknown";
+    result.angleFallbackActive = "unknown";
   }
 
   try {

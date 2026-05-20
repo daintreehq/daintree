@@ -3,7 +3,7 @@ import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../utils/gpuDetection.js";
-import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
+import { isGpuDisabledByFlag, isGpuAngleFallbackByFlag } from "./GpuCrashMonitorService.js";
 import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
 import type { HydrateResult } from "../../shared/types/ipc/app.js";
 import { inferKind } from "../../shared/utils/inferPanelKind.js";
@@ -84,6 +84,7 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     agentSettings: store.get("agentSettings"),
     gpuWebGLHardware,
     gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
+    gpuAngleFallbackActive: isGpuAngleFallbackByFlag(app.getPath("userData")),
     safeMode: inSafeMode,
     isWindowsStore: (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
     settingsRecovery: null,

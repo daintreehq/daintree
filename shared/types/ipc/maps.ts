@@ -1224,7 +1224,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   // GPU
   "gpu:get-status": {
     args: [];
-    result: { hardwareAccelerationDisabled: boolean };
+    result: { hardwareAccelerationDisabled: boolean; angleFallbackActive: boolean };
   };
   "gpu:set-hardware-acceleration": {
     args: [enabled: boolean];
