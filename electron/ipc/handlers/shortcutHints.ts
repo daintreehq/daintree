@@ -8,15 +8,12 @@ export const shortcutHintsNamespace = defineIpcNamespace({
     getCounts: op(SHORTCUT_HINTS_METHOD_CHANNELS.getCounts, (): Record<string, number> => {
       return store.get("shortcutHintCounts") ?? {};
     }),
-    incrementCount: op(
-      SHORTCUT_HINTS_METHOD_CHANNELS.incrementCount,
-      (actionId: string): void => {
-        if (typeof actionId !== "string") return;
-        const counts = store.get("shortcutHintCounts") ?? {};
-        counts[actionId] = (counts[actionId] ?? 0) + 1;
-        store.set("shortcutHintCounts", counts);
-      }
-    ),
+    incrementCount: op(SHORTCUT_HINTS_METHOD_CHANNELS.incrementCount, (actionId: string): void => {
+      if (typeof actionId !== "string") return;
+      const counts = store.get("shortcutHintCounts") ?? {};
+      counts[actionId] = (counts[actionId] ?? 0) + 1;
+      store.set("shortcutHintCounts", counts);
+    }),
   },
 });
 

@@ -10,12 +10,9 @@ export function registerHibernationHandlers(_deps: HandlerDependencies): () => v
   const namespace = defineIpcNamespace({
     name: "hibernation",
     ops: {
-      getConfig: op(
-        HIBERNATION_METHOD_CHANNELS.getConfig,
-        async (): Promise<HibernationConfig> => {
-          return hibernationService.getConfig();
-        }
-      ),
+      getConfig: op(HIBERNATION_METHOD_CHANNELS.getConfig, async (): Promise<HibernationConfig> => {
+        return hibernationService.getConfig();
+      }),
       updateConfig: op(
         HIBERNATION_METHOD_CHANNELS.updateConfig,
         async (config: Partial<HibernationConfig>): Promise<HibernationConfig> => {

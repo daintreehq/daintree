@@ -3,7 +3,11 @@ import type { StoreSchema } from "../../store.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { ONBOARDING_METHOD_CHANNELS } from "./onboarding.preload.js";
 import { setOnboardingCompleteTag } from "../../services/TelemetryService.js";
-import type { ChecklistItemId, ChecklistState, OnboardingState } from "../../../shared/types/ipc/maps.js";
+import type {
+  ChecklistItemId,
+  ChecklistState,
+  OnboardingState,
+} from "../../../shared/types/ipc/maps.js";
 
 type StoredOnboardingState = StoreSchema["onboarding"];
 
@@ -188,22 +192,17 @@ export const onboardingNamespace = defineIpcNamespace({
         return { ...state, availabilityFirstSeen: next };
       }
     ),
-    dismissWelcomeCard: op(
-      ONBOARDING_METHOD_CHANNELS.dismissWelcomeCard,
-      (): OnboardingState => {
-        store.set("onboarding.welcomeCardDismissed", true);
-        return { ...getOnboardingState(), welcomeCardDismissed: true };
-      }
-    ),
-    dismissSetupBanner: op(
-      ONBOARDING_METHOD_CHANNELS.dismissSetupBanner,
-      (): OnboardingState => {
-        store.set("onboarding.setupBannerDismissed", true);
-        return { ...getOnboardingState(), setupBannerDismissed: true };
-      }
-    ),
-    getChecklist: op(ONBOARDING_METHOD_CHANNELS.getChecklist, (): ChecklistState =>
-      getChecklistState()
+    dismissWelcomeCard: op(ONBOARDING_METHOD_CHANNELS.dismissWelcomeCard, (): OnboardingState => {
+      store.set("onboarding.welcomeCardDismissed", true);
+      return { ...getOnboardingState(), welcomeCardDismissed: true };
+    }),
+    dismissSetupBanner: op(ONBOARDING_METHOD_CHANNELS.dismissSetupBanner, (): OnboardingState => {
+      store.set("onboarding.setupBannerDismissed", true);
+      return { ...getOnboardingState(), setupBannerDismissed: true };
+    }),
+    getChecklist: op(
+      ONBOARDING_METHOD_CHANNELS.getChecklist,
+      (): ChecklistState => getChecklistState()
     ),
     dismissChecklist: op(ONBOARDING_METHOD_CHANNELS.dismissChecklist, (): void => {
       store.set("onboarding.checklist.dismissed", true);

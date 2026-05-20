@@ -7,10 +7,7 @@ import {
   getEffectiveAgentConfig,
   type AgentConfig,
 } from "../../../shared/config/agentRegistry.js";
-import type {
-  AgentMetadata,
-  AgentRegistry,
-} from "../../../shared/types/ipc/agentCapabilities.js";
+import type { AgentMetadata, AgentRegistry } from "../../../shared/types/ipc/agentCapabilities.js";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
 import { isAgentPinned } from "../../../shared/utils/agentPinned.js";
 import { defineIpcNamespace, op } from "../define.js";

@@ -11,12 +11,7 @@ import type {
   TerminalRecipe,
   TerminalSnapshot,
 } from "../project.js";
-import type {
-  ChecklistState,
-  HelpAssistantTier,
-  IpcEventBusMap,
-  IpcInvokeMap,
-} from "./maps.js";
+import type { ChecklistState, HelpAssistantTier, IpcEventBusMap, IpcInvokeMap } from "./maps.js";
 import type { GeneratedElectronAPI } from "./generated-api.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";

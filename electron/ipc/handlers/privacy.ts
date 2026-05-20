@@ -41,13 +41,10 @@ export const privacyNamespace = defineIpcNamespace({
         });
       }
     ),
-    setLogRetention: op(
-      PRIVACY_METHOD_CHANNELS.setLogRetention,
-      (days: LogRetentionDays): void => {
-        if (typeof days !== "number" || !VALID_RETENTION.includes(days)) return;
-        store.set("privacy.logRetentionDays", days);
-      }
-    ),
+    setLogRetention: op(PRIVACY_METHOD_CHANNELS.setLogRetention, (days: LogRetentionDays): void => {
+      if (typeof days !== "number" || !VALID_RETENTION.includes(days)) return;
+      store.set("privacy.logRetentionDays", days);
+    }),
     openDataFolder: op(PRIVACY_METHOD_CHANNELS.openDataFolder, (): void => {
       shell.showItemInFolder(app.getPath("userData"));
     }),
