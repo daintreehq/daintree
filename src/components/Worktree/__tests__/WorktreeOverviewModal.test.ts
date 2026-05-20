@@ -271,4 +271,84 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       );
     });
   });
+
+  describe("bulk action bar (#8655)", () => {
+    let modalSource: string;
+
+    beforeEach(async () => {
+      modalSource = await fs.readFile(MODAL_PATH, "utf-8");
+    });
+
+    it("imports the bulk-remove hook so the modal owns the orchestrator state", () => {
+      expect(modalSource).toMatch(/import\s*\{\s*useWorktreeBulkRemove\s*\}/);
+    });
+
+    it("imports ConfirmDialog for the D1 close-sessions and D3 remove gates", () => {
+      expect(modalSource).toMatch(/from\s*"@\/components\/ui\/ConfirmDialog"/);
+    });
+
+    it("swaps the standard header for a contextual bar when hasSelection is true", () => {
+      expect(modalSource).toMatch(/\{hasSelection\s*\?\s*\(/);
+    });
+
+    it("renders 'N selected' inside the contextual bar with aria-live for SR feedback", () => {
+      expect(modalSource).toMatch(/aria-live="polite"[\s\S]{0,200}selectedIds\.size\s*}/);
+    });
+
+    it("exposes a Close sessions button wired to handleCloseSessionsClick", () => {
+      expect(modalSource).toMatch(
+        /data-testid="worktree-bulk-close-sessions"[\s\S]{0,400}|onClick=\{handleCloseSessionsClick\}/
+      );
+      expect(modalSource).toContain("Close sessions");
+    });
+
+    it("exposes a Remove worktrees button wired to the bulk-remove hook", () => {
+      expect(modalSource).toMatch(/data-testid="worktree-bulk-remove"/);
+      expect(modalSource).toMatch(/onClick=\{bulkRemove\.handleRemoveClick\}/);
+    });
+
+    it("uses variant='destructive' on the Remove button so the styling matches the D3 classification", () => {
+      const removeButtonSlice = modalSource.slice(
+        modalSource.indexOf("worktree-bulk-remove") - 200,
+        modalSource.indexOf("worktree-bulk-remove") + 200
+      );
+      expect(removeButtonSlice).toMatch(/variant="destructive"/);
+    });
+
+    it("renders a ConfirmDialog with typedNameTarget for the D3 bulk remove gate", () => {
+      expect(modalSource).toMatch(/typedNameTarget=\{bulkRemove\.typedNameTarget\}/);
+    });
+
+    it("renders a separate ConfirmDialog for the D1 close-sessions gate (variant='default')", () => {
+      expect(modalSource).toMatch(/isCloseSessionsConfirmOpen/);
+      expect(modalSource).toMatch(/handleCloseSessionsConfirm/);
+    });
+
+    it("snapshots the selection into a ref at click time so it survives reactive selectedIds drift (#4729)", () => {
+      // handleCloseSessionsClick must freeze the selected ids before the
+      // user has a chance to deselect/reselect mid-confirm. The handler
+      // for confirm then iterates the ref, not the live closure.
+      expect(modalSource).toMatch(/closeSessionsIdsRef\s*=\s*useRef/);
+      // Click handler must materialize the live selection into a snapshot
+      // (Array.from / new Set / .slice all work) before assigning to the ref.
+      const clickHandlerMatch = modalSource.match(
+        /handleCloseSessionsClick[\s\S]{0,400}?closeSessionsIdsRef\.current\s*=/
+      );
+      expect(clickHandlerMatch).not.toBeNull();
+      expect(modalSource).toMatch(/Array\.from\(selectedIds\)/);
+      // Confirm handler must iterate the snapshot, NOT the live selectedIds.
+      expect(modalSource).toMatch(/for\s*\(const\s+id\s+of\s+closeSessionsIdsRef\.current\)/);
+    });
+
+    it("builds worktreeMap by id so the hook can snapshot targets at confirm-click time", () => {
+      expect(modalSource).toMatch(/worktreeMap\s*=\s*useMemo/);
+      expect(modalSource).toMatch(/map\.set\(w\.id,\s*w\)/);
+    });
+
+    it("passes selectedIds, worktreeMap, and clearSelection to useWorktreeBulkRemove", () => {
+      expect(modalSource).toMatch(
+        /useWorktreeBulkRemove\(\{\s*selectedIds,\s*worktreeMap,\s*clearSelection,?\s*\}\)/
+      );
+    });
+  });
 });
