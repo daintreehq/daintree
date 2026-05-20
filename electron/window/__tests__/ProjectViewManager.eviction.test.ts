@@ -389,6 +389,34 @@ describe("ProjectViewManager — eviction safety", () => {
     expect(wcB.close).not.toHaveBeenCalled();
   });
 
+  it("switching back to a cached view refreshes its LRU stamp", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    // Re-visit proj-a from cache — its lastUsed must be refreshed so it is
+    // no longer the oldest candidate. Without this, the next overflow would
+    // wrongly target proj-a.
+    await managerWithLimit.switchTo("proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-d", "/path/d");
+
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).not.toContain("proj-b");
+    expect(remaining).toContain("proj-a");
+    expect(remaining).toContain("proj-c");
+    expect(remaining).toContain("proj-d");
+  });
+
   it("falls back to LRU when no candidate has measured memory", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -442,7 +470,7 @@ describe("ProjectViewManager — eviction safety", () => {
     expect(remaining).toContain("proj-c");
   });
 
-  it("active-agent views are still evicted last regardless of memory rank", async () => {
+  it("active-agent views are still evicted last regardless of LRU rank", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
@@ -566,6 +594,15 @@ describe("ProjectViewManager — eviction safety", () => {
     expect(remaining).toContain("proj-d");
     expect(remaining).not.toContain("proj-a");
     expect(remaining).not.toContain("proj-b");
+
+    // Lock in eviction sequence (not just membership): proj-a evicts before
+    // proj-b, matching LRU order. Without this, a reverse-order regression
+    // would still produce the same survivor set and silently pass.
+    const evictionCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.eviction")
+      .map(([, ctx]) => (ctx as { projectId: string }).projectId);
+    expect(evictionCalls).toEqual(["proj-a", "proj-b"]);
   });
 
   it("calls forgetBlinkSample with the evicted webContents id", async () => {
