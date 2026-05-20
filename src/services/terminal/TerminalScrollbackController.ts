@@ -3,6 +3,7 @@ import { useScrollbackStore } from "@/store/scrollbackStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
+import { logInfo } from "@/utils/logger";
 
 function getValidScrollbackBase(value: number | undefined): number | undefined {
   if (typeof value !== "number" || Number.isNaN(value) || !Number.isFinite(value)) {
@@ -45,9 +46,14 @@ export function reduceScrollback(
   managed.lastScrollbackReduceAt = Date.now();
 
   if (scrollbackUsed > targetLines) {
-    managed.terminal.write(
-      `\r\n\x1b[33m[Daintree] Scrollback reduced to ${targetLines} lines due to memory pressure. Older history is no longer available.\x1b[0m\r\n`
-    );
+    logInfo("Terminal scrollback reduced under memory pressure", {
+      targetLines,
+      scrollbackUsed,
+      previousScrollback: currentScrollback,
+      rows: managed.terminal.rows,
+      kind: managed.kind,
+      force: options.force === true,
+    });
   }
 }
 

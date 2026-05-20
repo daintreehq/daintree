@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reduceScrollback, restoreScrollback } from "../TerminalScrollbackController";
 import type { ManagedTerminal } from "../types";
+import { logInfo } from "@/utils/logger";
 
 const mockState = vi.hoisted(() => ({
   scrollbackStore: { scrollbackLines: 5000 },
@@ -20,6 +21,13 @@ vi.mock("@/store/performanceModeStore", () => ({
 
 vi.mock("@/store/projectSettingsStore", () => ({
   useProjectSettingsStore: { getState: () => mockState.projectSettingsStore },
+}));
+
+vi.mock("@/utils/logger", () => ({
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
 }));
 
 function createManagedTerminal(
@@ -52,6 +60,7 @@ describe("TerminalScrollbackController adversarial", () => {
     mockState.scrollbackStore.scrollbackLines = 5000;
     mockState.performanceModeStore.performanceMode = false;
     mockState.projectSettingsStore.settings = null;
+    vi.mocked(logInfo).mockClear();
   });
 
   it("INVALID_PROJECT_OVERRIDE_NAN", () => {
@@ -97,9 +106,10 @@ describe("TerminalScrollbackController adversarial", () => {
 
     expect(managed.terminal.options.scrollback).toBe(500);
     expect(managed.terminal.write).not.toHaveBeenCalled();
+    expect(logInfo).not.toHaveBeenCalled();
   });
 
-  it("HUGE_BUFFER_REDUCTION_ONE_NOTICE", () => {
+  it("HUGE_BUFFER_REDUCTION_LOGS_ONCE_NO_TERMINAL_WRITE", () => {
     const managed = createManagedTerminal({}, {
       options: { scrollback: 2_000_000 },
       buffer: { active: { length: 5_000_000 } },
@@ -108,9 +118,16 @@ describe("TerminalScrollbackController adversarial", () => {
     reduceScrollback(managed, 500);
 
     expect(managed.terminal.options.scrollback).toBe(500);
-    expect(managed.terminal.write).toHaveBeenCalledTimes(1);
-    expect(managed.terminal.write).toHaveBeenCalledWith(
-      expect.stringContaining("Scrollback reduced to 500 lines")
+    expect(managed.terminal.write).not.toHaveBeenCalled();
+    expect(logInfo).toHaveBeenCalledTimes(1);
+    expect(logInfo).toHaveBeenCalledWith(
+      "Terminal scrollback reduced under memory pressure",
+      expect.objectContaining({
+        targetLines: 500,
+        scrollbackUsed: 4_999_976,
+        previousScrollback: 2_000_000,
+        rows: 24,
+      })
     );
   });
 

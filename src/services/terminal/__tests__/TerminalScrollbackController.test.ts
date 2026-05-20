@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { reduceScrollback, restoreScrollback } from "../TerminalScrollbackController";
 import type { ManagedTerminal } from "../types";
+import { logInfo } from "@/utils/logger";
 
 const mockScrollbackStore = { scrollbackLines: 5000 };
 vi.mock("@/store/scrollbackStore", () => ({
@@ -15,6 +16,13 @@ vi.mock("@/store/performanceModeStore", () => ({
 const mockProjectSettingsStore: { settings: Record<string, unknown> | null } = { settings: null };
 vi.mock("@/store/projectSettingsStore", () => ({
   useProjectSettingsStore: { getState: () => mockProjectSettingsStore },
+}));
+
+vi.mock("@/utils/logger", () => ({
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
 }));
 
 function getWrittenData(managed: ManagedTerminal): string[] {
@@ -46,6 +54,7 @@ describe("TerminalScrollbackController", () => {
     mockScrollbackStore.scrollbackLines = 5000;
     mockPerformanceModeStore.performanceMode = false;
     mockProjectSettingsStore.settings = null;
+    vi.mocked(logInfo).mockClear();
   });
 
   describe("reduceScrollback", () => {
@@ -81,7 +90,7 @@ describe("TerminalScrollbackController", () => {
       expect(managed.terminal.options.scrollback).toBe(300);
     });
 
-    it("reduces scrollback and writes notice when scrollback content exceeds target", () => {
+    it("reduces scrollback and logs info without polluting the terminal when content exceeds target", () => {
       const managed = makeMockManaged();
       Object.defineProperty(managed.terminal.buffer.active, "length", {
         value: 3000,
@@ -90,11 +99,20 @@ describe("TerminalScrollbackController", () => {
       reduceScrollback(managed, 500);
 
       expect(managed.terminal.options.scrollback).toBe(500);
-      expect(getWrittenData(managed)).toHaveLength(1);
-      expect(getWrittenData(managed)[0]).toContain("Scrollback reduced to 500 lines");
+      expect(getWrittenData(managed)).toHaveLength(0);
+      expect(logInfo).toHaveBeenCalledTimes(1);
+      expect(logInfo).toHaveBeenCalledWith(
+        "Terminal scrollback reduced under memory pressure",
+        expect.objectContaining({
+          targetLines: 500,
+          scrollbackUsed: 2976,
+          previousScrollback: 5000,
+          rows: 24,
+        })
+      );
     });
 
-    it("reduces scrollback without notice when scrollback content is within target", () => {
+    it("reduces scrollback without logging when scrollback content is within target", () => {
       const managed = makeMockManaged();
       Object.defineProperty(managed.terminal.buffer.active, "length", {
         value: 100,
@@ -104,6 +122,7 @@ describe("TerminalScrollbackController", () => {
 
       expect(managed.terminal.options.scrollback).toBe(500);
       expect(getWrittenData(managed)).toHaveLength(0);
+      expect(logInfo).not.toHaveBeenCalled();
     });
 
     describe("cooldown gate", () => {

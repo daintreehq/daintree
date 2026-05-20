@@ -747,7 +747,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           icon={HardDrive}
           title="Scrollback history"
           id="terminal-scrollback"
-          description="Base scrollback applies to agent terminals. Shells and dev servers use reduced limits automatically."
+          description="Base scrollback applies to agent terminals. Shells and dev servers use reduced limits automatically. Background terminals may temporarily reduce scrollback under memory pressure."
           badge="New Terminals"
         >
           <div className="grid grid-cols-4 gap-3" role="radiogroup" aria-label="Scrollback presets">
