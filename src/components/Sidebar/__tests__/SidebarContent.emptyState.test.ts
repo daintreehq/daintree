@@ -86,11 +86,12 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       expect(quickStateIdx).toBeLessThan(genericIdx);
     });
 
-    it("uses the user-cleared variant when only quick-state filter is active (no facet filters)", () => {
+    it("splits the no-facet-filter quick-state branch by filter: waiting gets user-cleared, others get filtered-empty", () => {
       // When the quick-state filter is the only active filter (no facet
-      // filters), zero results means the user genuinely cleared their
-      // working/waiting queue — route to the completion-oriented
-      // user-cleared variant with a single "All caught up" title.
+      // filters), zero results for "waiting" means nothing needs attention —
+      // a genuine completion state using user-cleared. Zero results for
+      // "working" or "finished" is a filter mismatch — those use
+      // filtered-empty with recovery actions.
       const branchStart = source.indexOf(
         "showQuickStateEmptyState && !hasFacetFiltersActive && !hasQuery ?"
       );
@@ -101,8 +102,14 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       const branch = source.slice(branchStart, branchEnd);
       expect(branch).toContain("<EmptyState");
       expect(branch).toContain('variant="user-cleared"');
+      expect(branch).toContain('variant="filtered-empty"');
       expect(branch).toContain('title="All caught up"');
-      expect(branch).not.toContain("action=");
+      expect(branch).toContain('quickStateFilter === "waiting"');
+      expect(branch).toContain(
+        `No \${QUICK_STATE_LABELS[quickStateFilter].toLowerCase()} worktrees`
+      );
+      expect(branch).toContain("setQuickStateFilter");
+      expect(branch).not.toContain("clearAllFilters");
     });
 
     it("names both axes when a facet filter is active alongside the quick-state — issue #7971", () => {
@@ -140,10 +147,11 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
     });
 
     it("uses both user-cleared and filtered-empty variants in the quick-state branch", () => {
-      // When only the quick-state filter is active (no facet filters), the
-      // user-cleared variant celebrates completion. When facet filters are
-      // active alongside the quick-state, filtered-empty describes the
-      // absence.
+      // When only the quick-state filter is active (no facet filters),
+      // the "waiting" filter gets user-cleared (nothing waiting = caught up);
+      // "working" and "finished" get filtered-empty (filter mismatch).
+      // When facet filters are also active, filtered-empty describes the
+      // combined absence.
       const quickStateIdx = source.indexOf(
         "showQuickStateEmptyState && !hasFacetFiltersActive && !hasQuery ?"
       );
@@ -183,10 +191,45 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       // The user-cleared variant forbids description by design; the
       // filtered-empty sidebar variant omits description per CLAUDE.md
       // empty-state rules.
-      const branchStart = source.indexOf("showQuickStateEmptyState && !hasFacetFiltersActive ?");
+      const branchStart = source.indexOf(
+        "showQuickStateEmptyState && !hasFacetFiltersActive && !hasQuery ?"
+      );
       const branchEnd = source.indexOf(") : filteredWorktrees.length === 0 &&", branchStart);
       const branch = source.slice(branchStart, branchEnd);
       expect(branch).not.toMatch(/description=/);
+    });
+
+    it("uses setQuickStateFilter in the non-waiting filtered-empty branch, not clearAllFilters — issue #8650", () => {
+      // The non-waiting branch (working/finished) only fires when no facet
+      // filters are active, so clearing just the quick-state filter is the
+      // precise recovery action. clearAllFilters would be overkill.
+      const branchStart = source.indexOf(
+        "showQuickStateEmptyState && !hasFacetFiltersActive && !hasQuery ?"
+      );
+      const branchEnd = source.indexOf(
+        ") : showQuickStateEmptyState && hasFacetFiltersActive ?",
+        branchStart
+      );
+      const branch = source.slice(branchStart, branchEnd);
+      expect(branch).toMatch(/setQuickStateFilter\("all"\)/);
+      expect(branch).not.toContain("clearAllFilters");
+    });
+
+    it("renders Show all worktrees and Open overview buttons in the non-waiting filtered-empty branch — issue #8650", () => {
+      // The working/finished filtered-empty branch must include both recovery
+      // buttons, consistent with all other filtered-empty branches (#8383).
+      const branchStart = source.indexOf(
+        "showQuickStateEmptyState && !hasFacetFiltersActive && !hasQuery ?"
+      );
+      const branchEnd = source.indexOf(
+        ") : showQuickStateEmptyState && hasFacetFiltersActive ?",
+        branchStart
+      );
+      const branch = source.slice(branchStart, branchEnd);
+      expect(branch).toMatch(
+        /onClick=\{\(\) => setQuickStateFilter\("all"\)\}[\s\S]*?>\s*Show all worktrees\s*</
+      );
+      expect(branch).toMatch(/onClick=\{onOpenOverview\}[\s\S]*?>\s*Open overview\s*</);
     });
 
     it("renders the popover-filtered empty state via the EmptyState primitive with a noun-phrase title", () => {
@@ -457,11 +500,12 @@ describe("SidebarContent quick-state user-cleared variant — issue #8394", () =
     source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
   });
 
-  it("routes no-facet-filter, no-query zero to user-cleared with 'All caught up' title", () => {
-    // The user-cleared variant fires only when no facet filters AND no text
-    // query are active. A text query narrowing results to zero is a genuine
-    // filter constraint, not queue completion — it should use filtered-empty.
+  it("routes no-facet-filter, no-query zero for 'waiting' to user-cleared with 'All caught up' title", () => {
+    // Only the "waiting" quick-state filter routes to user-cleared — nothing
+    // waiting on the user is genuinely caught up. "working" and "finished"
+    // with zero results are filter mismatches and use filtered-empty instead.
     expect(source).toContain("showQuickStateEmptyState && !hasFacetFiltersActive && !hasQuery");
+    expect(source).toContain('quickStateFilter === "waiting"');
     expect(source).toContain('variant="user-cleared"');
     expect(source).toContain('title="All caught up"');
   });
