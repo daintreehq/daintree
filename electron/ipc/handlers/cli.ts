@@ -1,25 +1,19 @@
-import { CHANNELS } from "../channels.js";
 import * as CliInstallService from "../../services/CliInstallService.js";
-import { typedHandle } from "../utils.js";
+import { defineIpcNamespace, op } from "../define.js";
+import { CLI_METHOD_CHANNELS } from "./cli.preload.js";
+
+export const cliNamespace = defineIpcNamespace({
+  name: "cli",
+  ops: {
+    install: op(CLI_METHOD_CHANNELS.install, async () => {
+      return CliInstallService.install();
+    }),
+    getStatus: op(CLI_METHOD_CHANNELS.getStatus, async () => {
+      return CliInstallService.getStatus();
+    }),
+  },
+});
 
 export function registerCliHandlers(): () => void {
-  const handlers: Array<() => void> = [];
-
-  handlers.push(
-    typedHandle(CHANNELS.CLI_GET_STATUS, async () => {
-      return CliInstallService.getStatus();
-    })
-  );
-
-  handlers.push(
-    typedHandle(CHANNELS.CLI_INSTALL, async () => {
-      return CliInstallService.install();
-    })
-  );
-
-  return () => {
-    for (const cleanup of handlers) {
-      cleanup();
-    }
-  };
+  return cliNamespace.register();
 }

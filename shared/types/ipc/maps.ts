@@ -57,7 +57,6 @@ import type {
   AgentUpdateSettings,
   StartAgentUpdatePayload,
   StartAgentUpdateResult,
-  CliInstallStatus,
   SystemHealthCheckResult,
   AppMetricsSummary,
   HardwareInfo,
@@ -1158,16 +1157,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: { enabled: boolean };
   };
 
-  // Daintree CLI install channels
-  "cli:install": {
-    args: [];
-    result: CliInstallStatus;
-  };
-  "cli:get-status": {
-    args: [];
-    result: CliInstallStatus;
-  };
-
   // Clipboard channels — handlers throw `AppError` on failure (CLIPBOARD_EMPTY,
   // CLIPBOARD_INVALID, UNSUPPORTED, VALIDATION). Renderer consumers use
   // try/catch + isClientAppError(e) to branch on e.code.
@@ -1482,28 +1471,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   // Scratch (throwaway one-off agent workspace) channels
   // Global env channels
   // Global recipe channels
-  "global:get-recipes": {
-    args: [];
-    result: TerminalRecipe[];
-  };
-  "global:add-recipe": {
-    args: [payload: { recipe: TerminalRecipe }];
-    result: void;
-  };
-  "global:update-recipe": {
-    args: [
-      payload: {
-        recipeId: string;
-        updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>;
-      },
-    ];
-    result: void;
-  };
-  "global:delete-recipe": {
-    args: [payload: { recipeId: string }];
-    result: void;
-  };
-
   // Help channels
   // Project clone channels
   "project:clone-repo": {

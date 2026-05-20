@@ -44,6 +44,14 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "cli:get-status": {
+    args: [];
+    result: import("./system.js").CliInstallStatus;
+  };
+  "cli:install": {
+    args: [];
+    result: import("./system.js").CliInstallStatus;
+  };
   "clipboard:read-selection": {
     args: [];
     result: { text: string };
@@ -226,6 +234,32 @@ export interface GeneratedIpcInvokeMap {
   };
   "global-env:set": {
     args: [payload: { variables: Record<string, string> }];
+    result: void;
+  };
+  "global:add-recipe": {
+    args: [payload: { recipe: import("../project.js").TerminalRecipe }];
+    result: void;
+  };
+  "global:delete-recipe": {
+    args: [payload: { recipeId: string }];
+    result: void;
+  };
+  "global:get-recipes": {
+    args: [];
+    result: import("../project.js").TerminalRecipe[];
+  };
+  "global:update-recipe": {
+    args: [
+      payload: {
+        recipeId: string;
+        updates: Partial<
+          Omit<
+            import("../project.js").TerminalRecipe,
+            "id" | "projectId" | "worktreeId" | "createdAt"
+          >
+        >;
+      },
+    ];
     result: void;
   };
   "help-assistant:get-settings": {

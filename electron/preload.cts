@@ -49,6 +49,8 @@ import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.prel
 import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
 import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
+import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
+import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 
 import type {
   WorktreeState,
@@ -1455,20 +1457,7 @@ const api: ElectronAPI = {
   },
 
   // Global Recipes API
-  globalRecipes: {
-    getRecipes: (): Promise<TerminalRecipe[]> => _unwrappingInvoke(CHANNELS.GLOBAL_GET_RECIPES),
-
-    addRecipe: (recipe: TerminalRecipe): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.GLOBAL_ADD_RECIPE, { recipe }),
-
-    updateRecipe: (
-      recipeId: string,
-      updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
-    ): Promise<void> => _unwrappingInvoke(CHANNELS.GLOBAL_UPDATE_RECIPE, { recipeId, updates }),
-
-    deleteRecipe: (recipeId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.GLOBAL_DELETE_RECIPE, { recipeId }),
-  },
+  globalRecipes: buildGlobalRecipesPreloadBindings(_unwrappingInvoke),
 
   // Global Environment Variables API
   globalEnv: buildGlobalEnvPreloadBindings(_unwrappingInvoke),
@@ -2116,6 +2105,9 @@ const api: ElectronAPI = {
 
   // Gemini API
   gemini: buildGeminiPreloadBindings(_unwrappingInvoke),
+
+  // Daintree CLI install API
+  cli: buildCliPreloadBindings(_unwrappingInvoke),
 
   // Commands API
   commands: buildCommandsPreloadBindings(_unwrappingInvoke),
