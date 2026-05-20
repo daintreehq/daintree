@@ -11,7 +11,6 @@ import {
 } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { AlertTriangle, FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
-import { HollowCircle } from "@/components/icons";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -1358,30 +1357,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 motion-reduce:transition-none flex items-center gap-1">
             <button
               type="button"
-              onClick={() => {
-                setQuickStateFilter("working");
-                onOpenOverview();
-              }}
-              className="p-1 text-daintree-text/40 hover:text-[var(--color-state-working)] hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-              aria-label="View working worktrees"
-              title="View working worktrees"
-            >
-              <HollowCircle className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setQuickStateFilter("waiting");
-                onOpenOverview();
-              }}
-              className="p-1 text-daintree-text/40 hover:text-status-warning hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-              aria-label="View waiting worktrees"
-              title="View waiting worktrees"
-            >
-              <HollowCircle className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
               onClick={onOpenOverview}
               className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
               aria-label="Open worktrees overview"
@@ -1430,24 +1405,22 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       </div>
 
       {/* Filter scope and sort-disabled status */}
-      <div className="px-4 min-h-5 shrink-0">
-        {(showScope || dragDisabledReason) && (
-          <div
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-            className="text-xs text-daintree-text/50 leading-5"
-          >
-            {showScope && (
-              <span>
-                {filteredCount} of {totalCount} worktrees
-              </span>
-            )}
-            {showScope && dragDisabledReason && <span> · </span>}
-            {dragDisabledReason && <span>{dragDisabledReason}</span>}
-          </div>
-        )}
-      </div>
+      {(showScope || dragDisabledReason) && (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="px-4 shrink-0 text-xs text-daintree-text/50 leading-5"
+        >
+          {showScope && (
+            <span>
+              {filteredCount} of {totalCount} worktrees
+            </span>
+          )}
+          {showScope && dragDisabledReason && <span> · </span>}
+          {dragDisabledReason && <span>{dragDisabledReason}</span>}
+        </div>
+      )}
 
       {/* Inline search bar — only when there are non-main worktrees */}
       {hasNonMainWorktrees && (

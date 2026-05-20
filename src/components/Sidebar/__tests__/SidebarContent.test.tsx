@@ -21,10 +21,13 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     return src.slice(start, end);
   }
 
-  it("renders a stable-height container between header and search bar", () => {
+  it("renders the status line only when there is status text, reserving no empty height", () => {
     const region = statusLineRegion(source);
-    expect(region).toContain("min-h-5");
+    // No permanent min-height reservation — an empty status row left a stray
+    // gap under the header, so the whole row is gated on having content.
+    expect(region).not.toContain("min-h-5");
     expect(region).toContain("shrink-0");
+    expect(region).toMatch(/\{\(showScope \|\| dragDisabledReason\) &&/);
   });
 
   it("uses ARIA live region for screen reader announcements", () => {

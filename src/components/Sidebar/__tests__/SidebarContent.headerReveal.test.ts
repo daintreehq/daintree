@@ -51,10 +51,10 @@ describe("SidebarContent header reveal — issue #6964", () => {
     return src.slice(start, end);
   }
 
-  it("renders focus-visible outlines on all six header icon buttons — issue #7602", () => {
+  it("renders focus-visible outlines on all four header icon buttons — issue #7602", () => {
     const header = headerSlice(source);
     const focusVisibleCount = (header.match(/focus-visible:outline-daintree-accent/g) ?? []).length;
-    expect(focusVisibleCount).toBe(6);
+    expect(focusVisibleCount).toBe(4);
     expect(header).toContain("focus-visible:outline focus-visible:outline-2");
   });
 
@@ -62,7 +62,7 @@ describe("SidebarContent header reveal — issue #6964", () => {
     const header = headerSlice(source);
     expect(header).toContain("text-daintree-text/60");
     const fortyCount = (header.match(/text-daintree-text\/40/g) ?? []).length;
-    expect(fortyCount).toBe(6);
+    expect(fortyCount).toBe(4);
   });
 
   it("respects prefers-reduced-motion via motion-reduce:transition-none", () => {
