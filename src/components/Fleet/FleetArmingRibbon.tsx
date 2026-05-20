@@ -41,6 +41,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
@@ -237,6 +238,18 @@ export function FleetArmingRibbon(): ReactElement | null {
   const setPreviewArmedIds = useFleetArmingStore((s) => s.setPreviewArmedIds);
   const clearPreviewArmedIds = useFleetArmingStore((s) => s.clearPreviewArmedIds);
 
+  // Counts shown beside each preset menu item. Read at render time from
+  // the pure helpers — they snapshot the panel store internally. The
+  // ribbon re-renders on every fleet/broadcast/preview store mutation, so
+  // counts stay fresh enough for the brief lifetime of an open menu; on
+  // commit, armByState recomputes against live state regardless.
+  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId ?? null);
+  const waitingCurrentCount = computeArmByStateIds("waiting", "current", activeWorktreeId).length;
+  const waitingAllCount = computeArmByStateIds("waiting", "all", activeWorktreeId).length;
+  const workingCurrentCount = computeArmByStateIds("working", "current", activeWorktreeId).length;
+  const workingAllCount = computeArmByStateIds("working", "all", activeWorktreeId).length;
+  const allCurrentCount = collectEligibleIds("current", activeWorktreeId).length;
+
   // Compute which panel ids a state-preset menu item would arm — used to
   // light up the matching panes' title bars while the user hovers/focuses
   // the menu item, before they commit. Pure dry-run; no store mutation.
@@ -280,7 +293,15 @@ export function FleetArmingRibbon(): ReactElement | null {
         }}
         {...previewItemHandlers(() => computePreviewByState("waiting", "current"))}
       >
-        All waiting — this worktree
+        <span>All waiting — this worktree</span>
+        {waitingCurrentCount > 0 ? (
+          <DropdownMenuShortcut
+            data-testid="fleet-preset-count-waiting-current"
+            className="tabular-nums"
+          >
+            {waitingCurrentCount}
+          </DropdownMenuShortcut>
+        ) : null}
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
@@ -288,7 +309,15 @@ export function FleetArmingRibbon(): ReactElement | null {
         }}
         {...previewItemHandlers(() => computePreviewByState("waiting", "all"))}
       >
-        All waiting — all worktrees
+        <span>All waiting — all worktrees</span>
+        {waitingAllCount > 0 ? (
+          <DropdownMenuShortcut
+            data-testid="fleet-preset-count-waiting-all"
+            className="tabular-nums"
+          >
+            {waitingAllCount}
+          </DropdownMenuShortcut>
+        ) : null}
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
@@ -296,7 +325,15 @@ export function FleetArmingRibbon(): ReactElement | null {
         }}
         {...previewItemHandlers(() => computePreviewByState("working", "current"))}
       >
-        All working — this worktree
+        <span>All working — this worktree</span>
+        {workingCurrentCount > 0 ? (
+          <DropdownMenuShortcut
+            data-testid="fleet-preset-count-working-current"
+            className="tabular-nums"
+          >
+            {workingCurrentCount}
+          </DropdownMenuShortcut>
+        ) : null}
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
@@ -304,7 +341,15 @@ export function FleetArmingRibbon(): ReactElement | null {
         }}
         {...previewItemHandlers(() => computePreviewByState("working", "all"))}
       >
-        All working — all worktrees
+        <span>All working — all worktrees</span>
+        {workingAllCount > 0 ? (
+          <DropdownMenuShortcut
+            data-testid="fleet-preset-count-working-all"
+            className="tabular-nums"
+          >
+            {workingAllCount}
+          </DropdownMenuShortcut>
+        ) : null}
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem
@@ -313,7 +358,15 @@ export function FleetArmingRibbon(): ReactElement | null {
         }}
         {...previewItemHandlers(() => computePreviewAll("current"))}
       >
-        All in this worktree
+        <span>All in this worktree</span>
+        {allCurrentCount > 0 ? (
+          <DropdownMenuShortcut
+            data-testid="fleet-preset-count-all-current"
+            className="tabular-nums"
+          >
+            {allCurrentCount}
+          </DropdownMenuShortcut>
+        ) : null}
       </DropdownMenuItem>
       {armedCount > 0 ? (
         <>

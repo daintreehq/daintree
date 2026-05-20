@@ -201,6 +201,13 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // pane's title bar lifts to a neutral surface tint (not accent) so the
   // preview is unmistakable but doesn't squat on the focus anchor color.
   const isFleetPreviewed = useFleetArmingStore((s) => s.previewArmedIds.has(id));
+  // Dim panes that are NOT in the active preview set so matched panes
+  // stand out. Active = preview set is non-empty AND this pane is missing
+  // from it. Two .has() checks on the existing Set — primitive boolean
+  // selector, no derived collection, no extra store state.
+  const isFleetPreviewDimmed = useFleetArmingStore(
+    (s) => s.previewArmedIds.size > 0 && !s.previewArmedIds.has(id)
+  );
 
   // One-shot ring pulse when this pane becomes the new primary on fleet
   // exit. Listens for the CustomEvent dispatched from FleetArmingRibbon's
@@ -414,6 +421,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         data-runtime-icon-id={terminalChrome.iconId || undefined}
         data-selected={isSelected || undefined}
         data-hibernated={isHibernated || undefined}
+        data-fleet-dimmed={isFleetPreviewDimmed || undefined}
         style={{
           contain: "content",
           ...(worktreeAccentColor
@@ -440,6 +448,11 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
                     : "border-overlay hover:border-tint/[0.08]"),
           location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
           worktreeAccentColor && location === "grid" && !isMaximized && "panel-worktree-identity",
+          // Snap (no transition) — a synchronous opacity shift across many
+          // panels at once reads cleanly; a 150ms waterfall fade would feel
+          // jittery. Matched panes stay at full opacity, providing the
+          // contrast that makes the preview legible.
+          isFleetPreviewDimmed && "opacity-50",
           className
         )}
         onClick={handleClick}

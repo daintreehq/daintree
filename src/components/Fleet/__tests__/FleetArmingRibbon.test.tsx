@@ -69,6 +69,9 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   ),
   DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuShortcut: ({ children, ...rest }: React.HTMLAttributes<HTMLSpanElement>) => (
+    <span {...rest}>{children}</span>
+  ),
 }));
 
 import { FleetArmingRibbon } from "../FleetArmingRibbon";
@@ -785,6 +788,35 @@ describe("FleetArmingRibbon", () => {
       fireEvent.click(findMenuItem(/All working — this worktree/));
       const armed = useFleetArmingStore.getState().armedIds;
       expect([...armed].sort()).toEqual(["t1", "t2"]);
+    });
+
+    it("renders match counts next to each preset menu item", () => {
+      seed([
+        makeAgent("t1", "waiting"),
+        makeAgent("t2", "waiting"),
+        makeAgent("t3", "working"),
+        { ...makeAgent("t4", "waiting"), worktreeId: "wt-2" } as TerminalInstance,
+        { ...makeAgent("t5", "working"), worktreeId: "wt-2" } as TerminalInstance,
+      ]);
+      useFleetArmingStore.getState().armIds(["t1", "t3"]);
+      render(<FleetArmingRibbon />);
+      expect(screen.getByTestId("fleet-preset-count-waiting-current").textContent).toBe("2");
+      expect(screen.getByTestId("fleet-preset-count-waiting-all").textContent).toBe("3");
+      expect(screen.getByTestId("fleet-preset-count-working-current").textContent).toBe("1");
+      expect(screen.getByTestId("fleet-preset-count-working-all").textContent).toBe("2");
+      // "All in this worktree" counts every eligible pane in wt-1.
+      expect(screen.getByTestId("fleet-preset-count-all-current").textContent).toBe("3");
+    });
+
+    it("omits the count badge when a preset would match zero panes", () => {
+      seed([makeAgent("t1", "waiting"), makeAgent("t2", "waiting")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      // No working agents anywhere — badge is hidden for both working presets.
+      expect(screen.queryByTestId("fleet-preset-count-working-current")).toBeNull();
+      expect(screen.queryByTestId("fleet-preset-count-working-all")).toBeNull();
+      // Waiting matches exist — those badges are visible.
+      expect(screen.getByTestId("fleet-preset-count-waiting-current").textContent).toBe("2");
     });
   });
 
