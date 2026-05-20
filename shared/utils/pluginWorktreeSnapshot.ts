@@ -34,17 +34,19 @@ export function toPluginWorktreeSnapshot(snapshot: WorktreeSnapshot): PluginWork
 }
 
 /**
- * Synthesize the provider-agnostic `linked` projection from the internal
- * snapshot's flat GitHub-shaped fields. Returns `null` when neither an issue
- * nor a PR is linked. Provider id is hardcoded to `"github"` because the only
- * forge currently writing these fields is the built-in GitHub integration.
- *
- * TODO(forge-abstraction): when `PRIntegrationService` is rewritten against
- * the {@link ForgeProviderImpl} contract, the synthesized {@link ResourceRef}
- * will be replaced with one carrying populated `owner`/`repo` — they're empty
- * here because `WorktreeSnapshot` does not currently carry repo identity.
+ * Project the worktree's linked forge resources for plugins. `snapshot.linked`
+ * is the source of truth (#8452): when present it is passed through verbatim
+ * (deep-cloned then frozen so the host's live `_linked` reference is never
+ * mutated). Only legacy snapshots that never populated `linked` fall back to
+ * synthesizing it from the flat GitHub-shaped fields, where the provider id is
+ * hardcoded to `"github"` and `owner`/`repo` are empty because those snapshots
+ * predate canonical repo identity on the payload.
  */
 function buildLinkedProjection(snapshot: WorktreeSnapshot): PluginWorktreeLinked | null {
+  if (snapshot.linked != null) {
+    return freezeLinked(snapshot.linked);
+  }
+
   const hasPR = typeof snapshot.prNumber === "number";
   const hasIssue = typeof snapshot.issueNumber === "number";
   if (!hasPR && !hasIssue) return null;
@@ -91,4 +93,36 @@ function buildLinkedProjection(snapshot: WorktreeSnapshot): PluginWorktreeLinked
   }
 
   return Object.freeze(linked);
+}
+
+/**
+ * Deep-clone then freeze a host-provided `linked` projection. Cloning is
+ * mandatory: freezing the live `WorktreeMonitor._linked` reference directly
+ * would make the host's own internal state immutable and break subsequent
+ * `setLinked()` merges.
+ */
+function freezeLinked(linked: PluginWorktreeLinked): PluginWorktreeLinked {
+  const cloned: {
+    providerId: string;
+    issue?: PluginWorktreeLinkedIssue;
+    pr?: PluginWorktreeLinkedPR;
+  } = { providerId: linked.providerId };
+
+  if (linked.issue) {
+    cloned.issue = Object.freeze({
+      ref: Object.freeze({ ...linked.issue.ref }),
+      title: linked.issue.title,
+    });
+  }
+  if (linked.pr) {
+    cloned.pr = Object.freeze({
+      ref: Object.freeze({ ...linked.pr.ref }),
+      title: linked.pr.title,
+      url: linked.pr.url,
+      state: linked.pr.state,
+      ...(linked.pr.ciStatus ? { ciStatus: linked.pr.ciStatus } : {}),
+    });
+  }
+
+  return Object.freeze(cloned);
 }

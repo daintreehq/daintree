@@ -450,7 +450,11 @@ export type DaintreeEventMap = {
     /** Branch the lookup was initiated against; receivers drop the overlay if the worktree's branch has changed. */
     branchName?: string;
     /** Provider that resolved the PR (e.g. `"daintree.github.github"`). */
-    providerId?: string;
+    providerId: string;
+    /** Canonical repository owner the PR/issue belongs to. */
+    owner: string;
+    /** Canonical repository name the PR/issue belongs to. */
+    repo: string;
     /** Provider-agnostic CI status (forge format). */
     ciStatus?: import("../../shared/types/forge.js").CIStatus;
     timestamp: number;
@@ -476,7 +480,11 @@ export type DaintreeEventMap = {
     /** Branch the lookup was initiated against; receivers drop the overlay if the worktree's branch has changed. */
     branchName?: string;
     /** Provider that resolved the issue (e.g. `"daintree.github.github"`). */
-    providerId?: string;
+    providerId: string;
+    /** Canonical repository owner the issue belongs to. */
+    owner: string;
+    /** Canonical repository name the issue belongs to. */
+    repo: string;
     timestamp: number;
   };
 

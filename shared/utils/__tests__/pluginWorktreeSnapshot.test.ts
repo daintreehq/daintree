@@ -183,3 +183,127 @@ describe("toPluginWorktreeSnapshot — linked projection", () => {
     expect(out.lastActivityTimestamp).toBeNull();
   });
 });
+
+describe("toPluginWorktreeSnapshot — linked is the source of truth (#8452)", () => {
+  it("passes a non-GitHub linked projection through without collapsing to defaults", () => {
+    const out = toPluginWorktreeSnapshot(
+      makeSnapshot({
+        // Flat fields are the legacy GitHub-shaped derivation; they must NOT
+        // override the canonical linked payload.
+        prNumber: 42,
+        prUrl: "https://github.com/o/r/pull/42",
+        prState: "open",
+        issueNumber: 7,
+        linked: {
+          providerId: "acme.gitlab",
+          pr: {
+            ref: {
+              providerId: "acme.gitlab",
+              owner: "acme-corp",
+              repo: "my-project",
+              number: 1234,
+              rawData: null,
+            },
+            title: "Add widget",
+            url: "https://gitlab.acme.com/acme-corp/my-project/-/merge_requests/1234",
+            state: "open",
+          },
+          issue: {
+            ref: {
+              providerId: "acme.gitlab",
+              owner: "acme-corp",
+              repo: "my-project",
+              number: 88,
+              rawData: null,
+            },
+            title: "Widget request",
+          },
+        },
+      })
+    );
+
+    expect(out.linked?.providerId).toBe("acme.gitlab");
+    expect(out.linked?.pr?.ref).toEqual({
+      providerId: "acme.gitlab",
+      owner: "acme-corp",
+      repo: "my-project",
+      number: 1234,
+      rawData: null,
+    });
+    expect(out.linked?.pr?.url).toBe(
+      "https://gitlab.acme.com/acme-corp/my-project/-/merge_requests/1234"
+    );
+    expect(out.linked?.issue?.ref.owner).toBe("acme-corp");
+    expect(out.linked?.issue?.ref.repo).toBe("my-project");
+    expect(out.linked?.issue?.ref.number).toBe(88);
+  });
+
+  it("preserves a forge CI status when passing linked through", () => {
+    const out = toPluginWorktreeSnapshot(
+      makeSnapshot({
+        linked: {
+          providerId: "acme.gitlab",
+          pr: {
+            ref: {
+              providerId: "acme.gitlab",
+              owner: "acme-corp",
+              repo: "my-project",
+              number: 5,
+              rawData: null,
+            },
+            url: "u",
+            state: "open",
+            ciStatus: {
+              state: "failure",
+              total: 3,
+              passed: 1,
+              failed: 2,
+              pending: 0,
+              rawData: null,
+            },
+          },
+        },
+      })
+    );
+    expect(out.linked?.pr?.ciStatus).toEqual({
+      state: "failure",
+      total: 3,
+      passed: 1,
+      failed: 2,
+      pending: 0,
+      rawData: null,
+    });
+  });
+
+  it("deep-clones rather than freezing the host's live linked reference", () => {
+    const liveLinked = {
+      providerId: "acme.gitlab",
+      pr: {
+        ref: {
+          providerId: "acme.gitlab",
+          owner: "acme-corp",
+          repo: "my-project",
+          number: 9,
+          rawData: null,
+        },
+        url: "u",
+        state: "open" as const,
+      },
+    };
+    const out = toPluginWorktreeSnapshot(makeSnapshot({ linked: liveLinked }));
+
+    // Projection is frozen…
+    expect(Object.isFrozen(out.linked)).toBe(true);
+    expect(Object.isFrozen(out.linked?.pr)).toBe(true);
+    expect(Object.isFrozen(out.linked?.pr?.ref)).toBe(true);
+    // …but the host's original object is untouched and still mutable.
+    expect(Object.isFrozen(liveLinked)).toBe(false);
+    expect(Object.isFrozen(liveLinked.pr)).toBe(false);
+    expect(Object.isFrozen(liveLinked.pr.ref)).toBe(false);
+    expect(out.linked).not.toBe(liveLinked);
+  });
+
+  it("returns null only when linked is null AND no flat fields are present", () => {
+    expect(toPluginWorktreeSnapshot(makeSnapshot({ linked: null })).linked).toBeNull();
+  });
+});

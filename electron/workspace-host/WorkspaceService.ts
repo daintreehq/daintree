@@ -17,6 +17,12 @@ import type {
   CreateWorktreeOptions,
   BranchInfo,
 } from "../../shared/types/workspace-host.js";
+import type {
+  PluginWorktreeLinked,
+  PluginWorktreeLinkedIssue,
+  PluginWorktreeLinkedPR,
+} from "../../shared/types/plugin.js";
+import type { CIStatus } from "../../shared/types/forge.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
 import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
 import {
@@ -189,6 +195,31 @@ export class WorkspaceService {
           return;
         }
 
+        // `linked` is the source of truth — built from the canonical
+        // provider/owner/repo carried by the detection event. Flat fields are
+        // derived compatibility values written alongside it.
+        const existingIssue = monitor.getSnapshot().linked?.issue;
+        const linked = this.composeLinked({
+          providerId: data.providerId,
+          owner: data.owner,
+          repo: data.repo,
+          pr: {
+            number: data.prNumber,
+            title: data.prTitle,
+            url: data.prUrl,
+            state: data.prState,
+            ciStatus: data.ciStatus,
+          },
+          issue:
+            data.issueNumber && data.issueTitle
+              ? { number: data.issueNumber, title: data.issueTitle }
+              : undefined,
+        });
+        // Preserve an earlier issue linkage this PR event didn't carry.
+        const finalLinked: PluginWorktreeLinked =
+          !linked.issue && existingIssue ? { ...linked, issue: existingIssue } : linked;
+
+        monitor.setLinked(finalLinked);
         monitor.setPRInfo({
           prNumber: data.prNumber,
           prUrl: data.prUrl,
@@ -199,49 +230,6 @@ export class WorkspaceService {
           prLastUpdatedAt: data.prLastUpdatedAt,
           issueLastUpdatedAt: data.issueLastUpdatedAt,
         });
-
-        // Populate provider-agnostic linked projection alongside legacy fields.
-        // Preserve any existing linked.issue so that an earlier issue-detected
-        // event isn't wiped when the PR is resolved afterwards.
-        const existingLinked = monitor.getSnapshot().linked;
-        const existingIssue = existingLinked?.issue;
-        const issueData =
-          data.issueNumber && data.issueTitle
-            ? {
-                issue: {
-                  ref: {
-                    providerId: data.providerId!,
-                    owner: "",
-                    repo: "",
-                    number: data.issueNumber,
-                    rawData: null,
-                  },
-                  title: data.issueTitle,
-                },
-              }
-            : existingIssue
-              ? { issue: existingIssue }
-              : {};
-
-        if (data.providerId) {
-          monitor.setLinked({
-            providerId: data.providerId,
-            pr: {
-              ref: {
-                providerId: data.providerId,
-                owner: "",
-                repo: "",
-                number: data.prNumber,
-                rawData: null,
-              },
-              title: data.prTitle,
-              url: data.prUrl,
-              state: data.prState,
-              ...(data.ciStatus ? { ciStatus: data.ciStatus } : {}),
-            },
-            ...issueData,
-          });
-        }
 
         if (monitor.hasInitialStatus) {
           this.emitUpdate(monitor);
@@ -261,25 +249,7 @@ export class WorkspaceService {
           issueLastUpdatedAt: data.issueLastUpdatedAt,
           branchName: data.branchName,
           providerId: data.providerId,
-          linked: data.providerId
-            ? {
-                providerId: data.providerId,
-                pr: {
-                  ref: {
-                    providerId: data.providerId,
-                    owner: "",
-                    repo: "",
-                    number: data.prNumber,
-                    rawData: null,
-                  },
-                  title: data.prTitle,
-                  url: data.prUrl,
-                  state: data.prState,
-                  ...(data.ciStatus ? { ciStatus: data.ciStatus } : {}),
-                },
-                ...issueData,
-              }
-            : undefined,
+          linked: finalLinked,
         });
       },
       onPRCleared: (worktreeId, data) => {
@@ -326,31 +296,30 @@ export class WorkspaceService {
           return;
         }
 
+        // Keep the private flat issue number in lockstep so the
+        // onIssueNotFound guard (`monitor.issueNumber !== issueNumber`)
+        // matches forge-resolved issues, not just branch-parsed ones.
+        monitor.setIssueNumber(data.issueNumber);
         monitor.setIssueTitle(data.issueTitle);
         if (data.issueLastUpdatedAt !== undefined) {
           monitor.setIssueLastUpdatedAt(data.issueLastUpdatedAt);
         }
 
-        // Update linked.issue if we have provider info
-        if (data.providerId) {
-          const snapshot = monitor.getSnapshot();
-          const existingLinked = snapshot.linked ?? null;
-          monitor.setLinked({
-            providerId: data.providerId,
-            issue: {
-              ref: {
-                providerId: data.providerId,
-                owner: "",
-                repo: "",
-                number: data.issueNumber,
-                rawData: null,
-              },
-              title: data.issueTitle,
-            },
-            // Preserve existing PR linkage if present
-            ...(existingLinked?.pr ? { pr: existingLinked.pr } : {}),
-          });
-        }
+        // `linked` is the source of truth — built from the canonical
+        // provider/owner/repo carried by the detection event.
+        const existingPr = monitor.getSnapshot().linked?.pr;
+        const linked = this.composeLinked({
+          providerId: data.providerId,
+          owner: data.owner,
+          repo: data.repo,
+          issue: { number: data.issueNumber, title: data.issueTitle },
+        });
+        // Preserve existing PR linkage if present.
+        const finalLinked: PluginWorktreeLinked = existingPr
+          ? { ...linked, pr: existingPr }
+          : linked;
+
+        monitor.setLinked(finalLinked);
 
         if (monitor.hasInitialStatus) {
           this.emitUpdate(monitor);
@@ -364,6 +333,7 @@ export class WorkspaceService {
           issueLastUpdatedAt: data.issueLastUpdatedAt,
           branchName: data.branchName,
           providerId: data.providerId,
+          linked: finalLinked,
         });
       },
       onIssueNotFound: (worktreeId, issueNumber) => {
@@ -892,6 +862,50 @@ export class WorkspaceService {
       seq: this.nextSeq(),
     });
     events.emit("sys:worktree:update", snapshot);
+  }
+
+  /**
+   * Build the provider-agnostic `linked` projection from canonical
+   * provider/owner/repo carried by detection events. This is the single
+   * construction point — callers must never synthesize a {@link ResourceRef}
+   * with empty `owner`/`repo` (the #8452 anti-pattern).
+   */
+  private composeLinked(params: {
+    providerId: string;
+    owner: string;
+    repo: string;
+    pr?: {
+      number: number;
+      title?: string;
+      url: string;
+      state: "open" | "merged" | "closed";
+      ciStatus?: CIStatus;
+    };
+    issue?: { number: number; title?: string };
+  }): PluginWorktreeLinked {
+    const { providerId, owner, repo } = params;
+    const linked: {
+      providerId: string;
+      pr?: PluginWorktreeLinkedPR;
+      issue?: PluginWorktreeLinkedIssue;
+    } = { providerId };
+
+    if (params.pr) {
+      linked.pr = {
+        ref: { providerId, owner, repo, number: params.pr.number, rawData: null },
+        title: params.pr.title,
+        url: params.pr.url,
+        state: params.pr.state,
+        ...(params.pr.ciStatus ? { ciStatus: params.pr.ciStatus } : {}),
+      };
+    }
+    if (params.issue) {
+      linked.issue = {
+        ref: { providerId, owner, repo, number: params.issue.number, rawData: null },
+        title: params.issue.title,
+      };
+    }
+    return linked;
   }
 
   private emitUpdate(monitor: WorktreeMonitor): void {

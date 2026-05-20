@@ -64,6 +64,7 @@ interface IssueDetectedEvent {
   issueLastUpdatedAt?: number;
   branchName?: string;
   providerId?: string;
+  linked?: PluginWorktreeLinked | null;
 }
 
 interface IssueNotFoundEvent {
@@ -442,30 +443,17 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         const existing = worktrees.get(event.worktreeId);
         if (!existing) return;
         if (!branchesMatch(event.branchName, existing.branch)) return;
+        // `linked` is the source of truth — pass through the host-built
+        // projection (carrying canonical providerId/owner/repo) rather than
+        // re-synthesizing it with empty owner/repo (#8452). Full-replace, so
+        // the host's preserved PR linkage isn't lost.
         store.getState().applyUpdate(
           {
             ...existing,
             issueNumber: event.issueNumber,
             issueTitle: event.issueTitle,
             issueLastUpdatedAt: event.issueLastUpdatedAt ?? existing.issueLastUpdatedAt,
-            ...(event.providerId
-              ? {
-                  linked: {
-                    providerId: event.providerId,
-                    issue: {
-                      ref: {
-                        providerId: event.providerId,
-                        owner: "",
-                        repo: "",
-                        number: event.issueNumber,
-                        rawData: null,
-                      },
-                      title: event.issueTitle,
-                    },
-                    ...(existing.linked?.pr ? { pr: existing.linked.pr } : {}),
-                  },
-                }
-              : {}),
+            linked: event.linked ?? existing.linked,
           },
           overlayVersion(store.getState().version)
         );
@@ -479,12 +467,18 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         const existing = worktrees.get(event.worktreeId);
         if (!existing) return;
         if (existing.issueNumber !== event.issueNumber) return;
+        // `linked` is the source of truth (#8452): clearing the issue must
+        // drop linked.issue too, mirroring the host's onIssueNotFound and the
+        // pr-cleared handler above. Preserve any PR linkage that's present.
         store.getState().applyUpdate(
           {
             ...existing,
             issueNumber: undefined,
             issueTitle: undefined,
             issueLastUpdatedAt: undefined,
+            linked: existing.linked?.pr
+              ? { providerId: existing.linked.providerId, pr: existing.linked.pr }
+              : null,
           },
           overlayVersion(store.getState().version)
         );

@@ -369,4 +369,79 @@ describe("WorkspaceHostEventRouter", () => {
       expect(events.emit).toHaveBeenCalledWith("sys:worktree:update", event.worktree);
     });
   });
+
+  describe("linked is the source of truth on re-emit (#8452)", () => {
+    it("derives canonical providerId/owner/repo from linked on sys:pr:detected", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, {
+        type: "pr-detected",
+        worktreeId: "wt-1",
+        prNumber: 1234,
+        prUrl: "https://gitlab.acme.com/acme-corp/my-project/-/merge_requests/1234",
+        prState: "open",
+        prTitle: "Add widget",
+        providerId: "acme.gitlab",
+        linked: {
+          providerId: "acme.gitlab",
+          pr: {
+            ref: {
+              providerId: "acme.gitlab",
+              owner: "acme-corp",
+              repo: "my-project",
+              number: 1234,
+              rawData: null,
+            },
+            url: "https://gitlab.acme.com/acme-corp/my-project/-/merge_requests/1234",
+            state: "open",
+          },
+        },
+      });
+
+      expect(events.emit).toHaveBeenCalledWith(
+        "sys:pr:detected",
+        expect.objectContaining({
+          worktreeId: "wt-1",
+          prNumber: 1234,
+          providerId: "acme.gitlab",
+          owner: "acme-corp",
+          repo: "my-project",
+        })
+      );
+    });
+
+    it("derives canonical providerId/owner/repo from linked on sys:issue:detected", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, {
+        type: "issue-detected",
+        worktreeId: "wt-2",
+        issueNumber: 88,
+        issueTitle: "Widget request",
+        providerId: "acme.gitlab",
+        linked: {
+          providerId: "acme.gitlab",
+          issue: {
+            ref: {
+              providerId: "acme.gitlab",
+              owner: "acme-corp",
+              repo: "my-project",
+              number: 88,
+              rawData: null,
+            },
+            title: "Widget request",
+          },
+        },
+      });
+
+      expect(events.emit).toHaveBeenCalledWith(
+        "sys:issue:detected",
+        expect.objectContaining({
+          worktreeId: "wt-2",
+          issueNumber: 88,
+          providerId: "acme.gitlab",
+          owner: "acme-corp",
+          repo: "my-project",
+        })
+      );
+    });
+  });
 });

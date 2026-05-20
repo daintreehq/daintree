@@ -1000,6 +1000,26 @@ export class WorktreeMonitor {
       resourceStatus = { provider: this._resourceProvider };
     }
 
+    // `linked` is the source of truth (#8452). When present, the legacy flat
+    // fields are derived from it; the private flat fields only serve the
+    // legacy/branch-parse path where `_linked` was never populated.
+    const linkedPr = this._linked?.pr;
+    const linkedIssue = this._linked?.issue;
+    const linkedPrState: "open" | "merged" | "closed" | undefined = linkedPr
+      ? linkedPr.state === "declined"
+        ? "closed"
+        : linkedPr.state
+      : undefined;
+    const linkedPrCiStatus: GitHubPRCIStatus | undefined = linkedPr?.ciStatus
+      ? linkedPr.ciStatus.state === "success"
+        ? "SUCCESS"
+        : linkedPr.ciStatus.state === "failure"
+          ? "FAILURE"
+          : linkedPr.ciStatus.state === "pending"
+            ? "PENDING"
+            : undefined
+      : undefined;
+
     const snapshot: WorktreeSnapshot = {
       id: this.id,
       path: this.path,
@@ -1016,13 +1036,13 @@ export class WorktreeMonitor {
       createdAt: this._createdAt,
       aiNote: this.aiNote,
       aiNoteTimestamp: this.aiNoteTimestamp,
-      issueNumber: this._issueNumber,
-      prNumber: this.prNumber,
-      prUrl: this.prUrl,
-      prState: this.prState,
-      prCiStatus: this.prCiStatus,
-      prTitle: this.prTitle,
-      issueTitle: this.issueTitle,
+      issueNumber: linkedIssue?.ref.number ?? this._issueNumber,
+      prNumber: linkedPr?.ref.number ?? this.prNumber,
+      prUrl: linkedPr?.url ?? this.prUrl,
+      prState: linkedPr ? linkedPrState : this.prState,
+      prCiStatus: linkedPr ? linkedPrCiStatus : this.prCiStatus,
+      prTitle: linkedPr ? linkedPr.title : this.prTitle,
+      issueTitle: linkedIssue ? linkedIssue.title : this.issueTitle,
       prLastUpdatedAt: this.prLastUpdatedAt,
       issueLastUpdatedAt: this.issueLastUpdatedAt,
       worktreeChanges: this.worktreeChanges,

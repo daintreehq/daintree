@@ -38,7 +38,11 @@ export interface PRIntegrationCallbacks {
       /** Branch the lookup was initiated against — used by the renderer to drop stale overlays. */
       branchName?: string;
       /** Provider that resolved the PR (e.g. `"daintree.github.github"`). */
-      providerId?: string;
+      providerId: string;
+      /** Canonical repository owner the PR/issue belongs to. */
+      owner: string;
+      /** Canonical repository name the PR/issue belongs to. */
+      repo: string;
       /** Provider-agnostic CI status (forge format). */
       ciStatus?: import("../../shared/types/forge.js").CIStatus;
     }
@@ -53,7 +57,11 @@ export interface PRIntegrationCallbacks {
       /** Branch the lookup was initiated against — used by the renderer to drop stale overlays. */
       branchName?: string;
       /** Provider that resolved the issue (e.g. `"daintree.github.github"`). */
-      providerId?: string;
+      providerId: string;
+      /** Canonical repository owner the issue belongs to. */
+      owner: string;
+      /** Canonical repository name the issue belongs to. */
+      repo: string;
     }
   ): void;
   onIssueNotFound(worktreeId: string, issueNumber: number): void;
@@ -107,6 +115,8 @@ export class PRIntegrationService {
           issueLastUpdatedAt: data.issueTitle !== undefined ? Date.now() : undefined,
           branchName: data.branchName,
           providerId: data.providerId,
+          owner: data.owner,
+          repo: data.repo,
           ciStatus: data.ciStatus,
         });
       })
@@ -120,6 +130,8 @@ export class PRIntegrationService {
           issueLastUpdatedAt: Date.now(),
           branchName: data.branchName,
           providerId: data.providerId,
+          owner: data.owner,
+          repo: data.repo,
         });
       })
     );

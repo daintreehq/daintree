@@ -544,6 +544,8 @@ export type WorkspaceHostEvent =
       branchName?: string;
       /** Provider that resolved the issue (e.g. `"daintree.github.github"`). */
       providerId?: string;
+      /** Provider-agnostic linked projection (dual-shipped alongside legacy fields during migration). */
+      linked?: PluginWorktreeLinked | null;
     }
   | {
       type: "issue-not-found";

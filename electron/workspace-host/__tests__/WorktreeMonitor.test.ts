@@ -494,6 +494,113 @@ describe("WorktreeMonitor", () => {
     expect(monitor.getSnapshot().prCiStatus).toBeUndefined();
   });
 
+  describe("linked is the source of truth (#8452)", () => {
+    it("derives flat fields from a non-GitHub linked projection", () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      monitor.setLinked({
+        providerId: "acme.gitlab",
+        pr: {
+          ref: {
+            providerId: "acme.gitlab",
+            owner: "acme-corp",
+            repo: "my-project",
+            number: 1234,
+            rawData: null,
+          },
+          title: "Add widget",
+          url: "https://gitlab.acme.com/acme-corp/my-project/-/merge_requests/1234",
+          state: "open",
+          ciStatus: {
+            state: "failure",
+            total: 3,
+            passed: 1,
+            failed: 2,
+            pending: 0,
+            rawData: null,
+          },
+        },
+        issue: {
+          ref: {
+            providerId: "acme.gitlab",
+            owner: "acme-corp",
+            repo: "my-project",
+            number: 88,
+            rawData: null,
+          },
+          title: "Widget request",
+        },
+      });
+
+      const snapshot = monitor.getSnapshot();
+      // Flat fields are derived from linked, not collapsed to GitHub defaults.
+      expect(snapshot.prNumber).toBe(1234);
+      expect(snapshot.prUrl).toBe(
+        "https://gitlab.acme.com/acme-corp/my-project/-/merge_requests/1234"
+      );
+      expect(snapshot.prState).toBe("open");
+      expect(snapshot.prTitle).toBe("Add widget");
+      expect(snapshot.prCiStatus).toBe("FAILURE");
+      expect(snapshot.issueNumber).toBe(88);
+      expect(snapshot.issueTitle).toBe("Widget request");
+      // The canonical owner/repo survive on the linked projection itself.
+      expect(snapshot.linked?.pr?.ref.owner).toBe("acme-corp");
+      expect(snapshot.linked?.pr?.ref.repo).toBe("my-project");
+    });
+
+    it("maps the declined PR state down to closed for the flat field", () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      monitor.setLinked({
+        providerId: "acme.bitbucket",
+        pr: {
+          ref: {
+            providerId: "acme.bitbucket",
+            owner: "acme-corp",
+            repo: "my-project",
+            number: 5,
+            rawData: null,
+          },
+          url: "u",
+          state: "declined",
+        },
+      });
+      expect(monitor.getSnapshot().prState).toBe("closed");
+    });
+
+    it("falls back to legacy flat fields when linked is null", () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      monitor.setPRInfo({ prNumber: 42, prUrl: "url", prState: "open", prTitle: "Legacy" });
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.linked).toBeNull();
+      expect(snapshot.prNumber).toBe(42);
+      expect(snapshot.prTitle).toBe("Legacy");
+    });
+
+    it("clearLinked reverts flat-field derivation to the legacy fields", () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      monitor.setPRInfo({ prNumber: 7, prUrl: "legacy-url", prState: "merged" });
+      monitor.setLinked({
+        providerId: "acme.gitlab",
+        pr: {
+          ref: {
+            providerId: "acme.gitlab",
+            owner: "acme-corp",
+            repo: "my-project",
+            number: 999,
+            rawData: null,
+          },
+          url: "linked-url",
+          state: "open",
+        },
+      });
+      expect(monitor.getSnapshot().prNumber).toBe(999);
+
+      monitor.clearLinked();
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.prNumber).toBe(7);
+      expect(snapshot.prUrl).toBe("legacy-url");
+    });
+  });
+
   it("hasInitialStatus is false before start", () => {
     const callbacks = makeCallbacks();
     const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
