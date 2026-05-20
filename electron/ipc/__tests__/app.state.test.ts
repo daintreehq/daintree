@@ -52,6 +52,7 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
 vi.mock("../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: vi.fn(() => null),
+    getProjectById: vi.fn(() => null),
     getProjectStateWithRecovery: vi.fn(),
     saveProjectState: vi.fn(),
   },
@@ -113,6 +114,9 @@ vi.mock("../../ipc/utils.js", async (importOriginal) => {
 
 import { CRASH_CRITICAL_FIELDS, registerAppStateHandlers } from "../handlers/app/state.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
+import { projectStore } from "../../services/ProjectStore.js";
+import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
+import type { HandlerDependencies } from "../types.js";
 
 function shouldTriggerBackup(updates: Record<string, unknown>): boolean {
   return Object.keys(updates).some((k) => CRASH_CRITICAL_FIELDS.has(k));
@@ -246,12 +250,20 @@ describe("shouldTriggerBackup", () => {
   });
 });
 
-async function invokeBoot() {
+function makeInvokeEvent(senderId = 1) {
+  return {
+    sender: {
+      id: senderId,
+    },
+  } as unknown as Electron.IpcMainInvokeEvent;
+}
+
+async function invokeBoot(options: { deps?: HandlerDependencies; senderId?: number } = {}) {
   ipcHandlers.clear();
-  const cleanup = registerAppStateHandlers();
+  const cleanup = registerAppStateHandlers(options.deps);
   const handler = ipcHandlers.get("app:boot");
   if (!handler) throw new Error("app:boot handler not registered");
-  const result = (await handler({})) as Record<string, unknown>;
+  const result = (await handler(makeInvokeEvent(options.senderId))) as Record<string, unknown>;
   cleanup();
   return result;
 }
@@ -265,7 +277,15 @@ describe("app:boot handler", () => {
     crashService.getPendingCrash.mockReturnValue(null);
     crashService.consumePanelFilter.mockReturnValue(null);
     crashService.getConfig.mockReturnValue({ autoRestoreOnCrash: false });
+    crashGuard.getQuarantinedStatePath.mockReturnValue(null);
     vi.mocked(consumePrefetchedHydrateResult).mockReturnValue(undefined);
+    vi.mocked(getWindowForWebContents).mockReturnValue(null);
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue(null);
+    vi.mocked(projectStore.getProjectById).mockReturnValue(null);
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+      state: null,
+      quarantinedPath: undefined,
+    });
   });
 
   it("returns a BootResult with crashPending=null and the live crashConfig when no crash is pending", async () => {
@@ -379,5 +399,90 @@ describe("app:boot handler", () => {
     expect(result.terminalConfig).toEqual(cachedResult.terminalConfig);
     expect(result.crashPending).toBeNull();
     expect(result.crashConfig).toEqual({ autoRestoreOnCrash: false });
+  });
+
+  it("hydrates the project bound to the sending project view instead of the stale global current project", async () => {
+    const boundProject = {
+      id: "proj-bound",
+      name: "Bound Project",
+      path: "/projects/bound",
+    };
+    vi.mocked(getWindowForWebContents).mockReturnValue({
+      id: 7,
+      isDestroyed: () => false,
+    } as unknown as Electron.BrowserWindow);
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "proj-stale",
+      name: "Stale Project",
+      path: "/projects/stale",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+    vi.mocked(projectStore.getProjectById).mockImplementation((projectId) =>
+      projectId === boundProject.id
+        ? (boundProject as unknown as ReturnType<typeof projectStore.getProjectById>)
+        : null
+    );
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+      state: {
+        projectId: boundProject.id,
+        sidebarWidth: 350,
+        terminals: [],
+      },
+      quarantinedPath: undefined,
+    });
+
+    const pvm = {
+      getProjectIdForWebContents: vi.fn().mockReturnValue(boundProject.id),
+    };
+    const deps = {
+      windowRegistry: {
+        getByWindowId: vi.fn().mockReturnValue({
+          services: {
+            projectViewManager: pvm,
+          },
+        }),
+      },
+      projectViewManager: {
+        getProjectIdForWebContents: vi.fn().mockReturnValue("proj-other"),
+      },
+    } as unknown as HandlerDependencies;
+
+    const result = await invokeBoot({ deps, senderId: 42 });
+
+    expect(result.project).toEqual(boundProject);
+    expect(pvm.getProjectIdForWebContents).toHaveBeenCalledWith(42);
+    expect(projectStore.getProjectStateWithRecovery).toHaveBeenCalledWith(boundProject.id);
+    expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("does not inherit the global current project for an unbound project view", async () => {
+    vi.mocked(getWindowForWebContents).mockReturnValue({
+      id: 7,
+      isDestroyed: () => false,
+    } as unknown as Electron.BrowserWindow);
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "proj-stale",
+      name: "Stale Project",
+      path: "/projects/stale",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+
+    const pvm = {
+      getProjectIdForWebContents: vi.fn().mockReturnValue(null),
+    };
+    const deps = {
+      windowRegistry: {
+        getByWindowId: vi.fn().mockReturnValue({
+          services: {
+            projectViewManager: pvm,
+          },
+        }),
+      },
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    const result = await invokeBoot({ deps, senderId: 42 });
+
+    expect(result.project).toBeNull();
+    expect(projectStore.getProjectStateWithRecovery).not.toHaveBeenCalled();
+    expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
   });
 });

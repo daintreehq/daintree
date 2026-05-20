@@ -3,12 +3,26 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { removePathSync } from "../../helpers/fixtures";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_LONG } from "../../helpers/timeouts";
-import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
 async function expectMainUiReady(page: AppContext["window"], timeout = T_LONG): Promise<void> {
   await expect(page.getByRole("toolbar", { name: "Main toolbar" })).toBeVisible({ timeout });
+}
+
+function forceAutoRestoreOff(userDataDir: string): void {
+  const configPath = path.join(userDataDir, "config.json");
+  let config: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    try {
+      config = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+    } catch {
+      config = {};
+    }
+  }
+  config.crashRecovery = { autoRestoreOnCrash: false };
+  writeFileSync(configPath, JSON.stringify(config));
 }
 
 function seedCorruptedMarker(userDataDir: string): void {
@@ -62,6 +76,7 @@ function seedPanelWithBogusWorktree(userDataDir: string): void {
   const backupsDir = path.join(userDataDir, "backups");
   mkdirSync(crashesDir, { recursive: true });
   mkdirSync(backupsDir, { recursive: true });
+  forceAutoRestoreOff(userDataDir);
 
   const crashId = "e2e-bogus-worktree";
   const crashLog = {
@@ -164,6 +179,7 @@ test.describe.serial("Core: Crash Recovery — corrupted session backup", () => 
 
   test("start fresh dismisses dialog and shows main UI", async () => {
     await ctx.window.locator(SEL.crashRecovery.freshButton).click();
+    await ctx.window.getByRole("button", { name: "Reset to clean layout" }).click();
     await expect(ctx.window.locator(SEL.crashRecovery.dialog)).not.toBeVisible({
       timeout: T_LONG,
     });
@@ -243,6 +259,7 @@ test.describe.serial("Core: Crash Recovery — panel with non-existent worktreeI
 
   test("start fresh dismisses dialog and shows main UI", async () => {
     await ctx.window.locator(SEL.crashRecovery.freshButton).click();
+    await ctx.window.getByRole("button", { name: "Reset to clean layout" }).click();
     await expect(ctx.window.locator(SEL.crashRecovery.dialog)).not.toBeVisible({
       timeout: T_LONG,
     });

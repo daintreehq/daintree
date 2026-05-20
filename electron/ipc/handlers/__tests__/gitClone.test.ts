@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { EventEmitter } from "events";
+import path from "node:path";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -176,6 +177,7 @@ describe("gitClone — gh repo clone fast path", () => {
 
     const cleanup = registerGitCloneHandlers();
     const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
+    const targetPath = path.join("/abs/parent", "repo");
 
     const result = await handler(makeCtxEvent(), makeOptions());
 
@@ -186,7 +188,7 @@ describe("gitClone — gh repo clone fast path", () => {
     );
     expect(spawnedArgs?.slice(0, 4)).toEqual(["repo", "clone", "owner/repo", "repo"]);
     expect(createAuthenticatedGitMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ clonedPath: "/abs/parent/repo" });
+    expect(result).toEqual({ clonedPath: targetPath });
 
     cleanup();
   });
@@ -366,6 +368,7 @@ describe("gitClone — gh repo clone fast path", () => {
 
     const cleanup = registerGitCloneHandlers();
     const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
+    const targetPath = path.join("/abs/parent", "repo");
 
     await expect(handler(makeCtxEvent(), makeOptions())).rejects.toMatchObject({
       name: "GitOperationError",
@@ -373,7 +376,7 @@ describe("gitClone — gh repo clone fast path", () => {
     });
 
     expect(fsMock.promises.rm).toHaveBeenCalledWith(
-      "/abs/parent/repo",
+      targetPath,
       expect.objectContaining({ recursive: true, force: true })
     );
 

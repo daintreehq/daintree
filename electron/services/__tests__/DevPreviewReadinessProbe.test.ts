@@ -49,20 +49,20 @@ function mockResponseWithStatus(statusCode: number) {
 }
 
 function mockConnectionRefused() {
-  const req: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
+  const firstReq: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
   mockRequest.mockImplementation(
     (_url: string, _options: Record<string, unknown>, _callback: RequestCallback) => {
-      const r = { ...req };
+      const r: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
       setTimeout(() => {
-        const errorHandler = r.on.mock.calls.find((c: unknown[]) => c[0] === "error")?.[1] as
-          | ((err: Error) => void)
-          | undefined;
+        const errorHandler = r.on.mock.calls
+          .filter((c: unknown[]) => c[0] === "error")
+          .at(-1)?.[1] as ((err: Error) => void) | undefined;
         if (errorHandler) errorHandler(new Error("ECONNREFUSED"));
       }, 10);
       return r;
     }
   );
-  return req;
+  return firstReq;
 }
 
 describe("waitForServerReady", () => {
@@ -75,6 +75,34 @@ describe("waitForServerReady", () => {
     const signal = new AbortController().signal;
     const result = await waitForServerReady("http://localhost:3000", signal, 100);
     expect(result).toBe(true);
+  });
+
+  it("falls back to IPv4 loopback when localhost is refused", async () => {
+    mockRequest.mockImplementation(
+      (url: string, _options: Record<string, unknown>, callback: RequestCallback) => {
+        const req: MockRequest = { on: vi.fn(), end: vi.fn(), destroy: vi.fn() };
+        if (url === "http://127.0.0.1:3000/") {
+          callback({ statusCode: 200, resume: vi.fn() });
+          return req;
+        }
+
+        setTimeout(() => {
+          const errorHandler = req.on.mock.calls.find((c: unknown[]) => c[0] === "error")?.[1] as
+            | ((err: Error) => void)
+            | undefined;
+          errorHandler?.(new Error("ECONNREFUSED"));
+        }, 0);
+        return req;
+      }
+    );
+
+    const signal = new AbortController().signal;
+    const result = await waitForServerReady("http://localhost:3000", signal, 100);
+    expect(result).toBe(true);
+    expect(mockRequest.mock.calls.map((call) => call[0])).toEqual([
+      "http://localhost:3000/",
+      "http://127.0.0.1:3000/",
+    ]);
   });
 
   it("returns false on malformed URL", async () => {

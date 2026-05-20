@@ -859,6 +859,7 @@ describe("reset-data", () => {
 
 describe("kickOffEarlyPathRefresh", () => {
   let shellEnvCallCount = 0;
+  let shellEnvMode: "path" | "throw" | "empty" = "path";
   let savedPath: string | undefined;
 
   beforeEach(() => {
@@ -868,11 +869,18 @@ describe("kickOffEarlyPathRefresh", () => {
     process.argv = ["electron", "main.js"];
     fsMock.existsSync.mockReturnValue(false);
     shellEnvCallCount = 0;
+    shellEnvMode = "path";
     savedPath = process.env.PATH;
     process.env.PATH = "/old/path";
     vi.doMock("shell-env", () => ({
       shellEnv: vi.fn(async () => {
         shellEnvCallCount += 1;
+        if (shellEnvMode === "throw") {
+          throw new Error("broken .zshrc");
+        }
+        if (shellEnvMode === "empty") {
+          return {};
+        }
         return { PATH: "/from/shell-env" };
       }),
     }));
@@ -925,11 +933,7 @@ describe("kickOffEarlyPathRefresh", () => {
   });
 
   it("kick-off swallows shell-env rejection and leaves PATH unchanged", async () => {
-    vi.doMock("shell-env", () => ({
-      shellEnv: vi.fn(async () => {
-        throw new Error("broken .zshrc");
-      }),
-    }));
+    shellEnvMode = "throw";
     process.env.PATH = "/old/path";
     const env = await import("../environment.js");
     await expect(env.kickOffEarlyPathRefresh()).resolves.toBeUndefined();
@@ -942,9 +946,7 @@ describe("kickOffEarlyPathRefresh", () => {
   });
 
   it("kick-off preserves PATH when shell-env returns no PATH key", async () => {
-    vi.doMock("shell-env", () => ({
-      shellEnv: vi.fn(async () => ({})),
-    }));
+    shellEnvMode = "empty";
     process.env.PATH = "/old/path";
     const env = await import("../environment.js");
     await env.kickOffEarlyPathRefresh();

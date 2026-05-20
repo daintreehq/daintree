@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloneRepoProgressEvent } from "../../../../../shared/types/ipc/gitClone.js";
 
+const n = (value: string) => value.replace(/\\/g, "/");
+
 // --- Capture the registered handler ----------------------------------------
 type CloneHandler = (
   ctx: { event: { sender: object } },
@@ -280,7 +282,7 @@ describe("registerGitCloneHandlers", () => {
 
     const cleanup = sentEvents.find((e) => e.stage === "cleanup-failed");
     expect(cleanup).toBeDefined();
-    expect(cleanup!.message).toContain("/tmp/parent/repo");
+    expect(n(cleanup!.message)).toContain("/tmp/parent/repo");
   });
 
   it("does not emit cleanup-failed when partial cleanup succeeds", async () => {

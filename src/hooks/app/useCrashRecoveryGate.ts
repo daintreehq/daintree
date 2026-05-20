@@ -89,8 +89,10 @@ export function useCrashRecoveryGate(boot: AppBootState): {
 
     // Kick off the CrashRecoveryDialog chunk fetch before the next render
     // commits the Suspense boundary, so the dialog appears without a blank
-    // fallback. The promise is cached, so the lazy() consumer reuses it.
-    void import("@/components/Recovery/CrashRecoveryDialog");
+    // fallback. The promise is cached, so the lazy() consumer reuses it. This
+    // is a best-effort preload; the actual lazy() import owns user-visible
+    // loading/error behavior.
+    void import("@/components/Recovery/CrashRecoveryDialog").catch(() => {});
     done();
     setState({ status: "pending", crash: pending, config });
   }, [boot]);

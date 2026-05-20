@@ -407,18 +407,22 @@ export async function clickTerminalContextMenuItem(
     }
 
     try {
-      await item.click({ timeout: 3_000 });
+      await item.click({ timeout: 3_000, force: attempt > 0 });
       return;
     } catch (error) {
       lastError = error;
-      if (!(await isContextMenuVisible(page, 500))) return;
+      if (!(await isContextMenuVisible(page, 500))) {
+        continue;
+      }
 
       try {
         await item.click({ force: true, timeout: 3_000 });
         return;
       } catch (forceError) {
         lastError = forceError;
-        if (!(await isContextMenuVisible(page, 500))) return;
+        if (!(await isContextMenuVisible(page, 500))) {
+          continue;
+        }
 
         try {
           await item.focus({ timeout: 1_000 });

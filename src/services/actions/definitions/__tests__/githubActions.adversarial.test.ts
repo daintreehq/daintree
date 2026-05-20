@@ -445,7 +445,7 @@ describe("githubClient import boundary", () => {
     const violations: string[] = [];
 
     for (const filePath of allFiles) {
-      const relPath = path.relative(rootDir, filePath);
+      const relPath = path.relative(rootDir, filePath).replace(/\\/g, "/");
       if (allowlist.has(relPath)) continue;
 
       const content = fs.readFileSync(filePath, "utf-8");

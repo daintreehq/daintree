@@ -734,7 +734,7 @@ describe("WorktreeLifecycleService", () => {
 
       expect(result.success).toBe(true);
       expect(result.logPath).toBeDefined();
-      expect(result.logPath).toMatch(
+      expect(n(result.logPath ?? "")).toMatch(
         /\/home\/testuser\/\.daintree\/projects\/_path_root\/teardown-logs\/wt-1\/\d+\.log$/
       );
       expect(mockMkdir).toHaveBeenCalledWith(

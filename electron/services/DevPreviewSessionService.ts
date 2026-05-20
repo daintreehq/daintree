@@ -756,6 +756,19 @@ export class DevPreviewSessionService {
         projectId: session.projectId,
         terminalId,
       });
+
+      // The allocated PORT is authoritative for the common zero-config path.
+      // Keep output URL detection below as an override for servers that choose
+      // their own port, but do not depend on a single terminal line to start.
+      setTimeout(() => {
+        if (this.disposed) return;
+        if (session.generation !== nextGeneration || session.terminalId !== terminalId) return;
+        if (session.status !== "starting" || session.url || session.readinessAbort) return;
+
+        const abort = new AbortController();
+        session.readinessAbort = abort;
+        this.pollServerReadiness(session, assignedUrl, abort.signal, nextGeneration);
+      }, 0);
     } catch (error) {
       const message = formatErrorMessage(error, "Failed to start dev server");
       this.detachTerminal(session);

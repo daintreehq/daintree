@@ -64,6 +64,18 @@ describe("syncParentDirectory", () => {
     expect(mockedClose).toHaveBeenCalled();
   });
 
+  it("treats unsupported directory fsync as best-effort", async () => {
+    const error = Object.assign(new Error("EPERM: operation not permitted, fsync"), {
+      code: "EPERM",
+    });
+    mockedSync.mockRejectedValue(error);
+
+    const target = path.join(tmpDir, "test.json");
+    await resilientAtomicWriteFile(target, "data");
+
+    expect(mockedClose).toHaveBeenCalled();
+  });
+
   it("opens correct parent dir for nested paths", async () => {
     const nestedDir = path.join(tmpDir, "sub", "nested");
     const target = path.join(nestedDir, "file.json");

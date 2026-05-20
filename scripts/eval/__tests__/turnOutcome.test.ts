@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { describe, it, expect, vi } from "vitest";
 import {
   TURN_OUTCOME_CLASS_ORDER,
   computeClassDistribution,
@@ -36,6 +38,8 @@ function makeRecord(overrides: Partial<AssistantTurnRecord> = {}): AssistantTurn
 // ---------------------------------------------------------------------------
 
 describe("resolveStorePath", () => {
+  const normalize = (value: string) => value.replace(/\\/g, "/");
+
   it("returns explicit path unchanged when absolute", () => {
     const result = resolveStorePath("/tmp/my-config.json");
     expect(result).toBe("/tmp/my-config.json");
@@ -43,16 +47,15 @@ describe("resolveStorePath", () => {
 
   it("resolves relative path", () => {
     const result = resolveStorePath("relative/config.json");
-    expect(result.endsWith("relative/config.json")).toBe(true);
+    expect(normalize(result).endsWith("relative/config.json")).toBe(true);
   });
 
   it("uses Daintree capitalization on macOS", () => {
-    const originalPlatform = process.platform;
-    Object.defineProperty(process, "platform", { value: "darwin" });
+    const platformSpy = vi.spyOn(os, "platform").mockReturnValue("darwin");
     // Can't easily mock os.homedir() but check the path ends correctly
     const result = resolveStorePath();
-    expect(result).toContain("Library/Application Support/Daintree/config.json");
-    Object.defineProperty(process, "platform", { value: originalPlatform });
+    expect(normalize(result)).toContain("Library/Application Support/Daintree/config.json");
+    platformSpy.mockRestore();
   });
 
   it("respects DAINTREE_USER_DATA pointing to a json file", () => {
@@ -66,7 +69,7 @@ describe("resolveStorePath", () => {
   it("appends config.json to DAINTREE_USER_DATA directory", () => {
     const prev = process.env.DAINTREE_USER_DATA;
     process.env.DAINTREE_USER_DATA = "/custom/path";
-    expect(resolveStorePath()).toBe("/custom/path/config.json");
+    expect(resolveStorePath()).toBe(path.join("/custom/path", "config.json"));
     if (prev) process.env.DAINTREE_USER_DATA = prev;
     else delete process.env.DAINTREE_USER_DATA;
   });

@@ -244,6 +244,7 @@ test.describe.serial("Core: Crash Recovery", () => {
     const { window } = ctx;
 
     await window.locator(SEL.crashRecovery.freshButton).click();
+    await window.getByRole("button", { name: "Reset to clean layout" }).click();
 
     await expect(window.locator(SEL.crashRecovery.dialog)).not.toBeVisible({
       timeout: T_LONG,

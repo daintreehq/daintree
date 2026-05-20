@@ -663,6 +663,15 @@ export function WorktreeCard({
     });
   };
 
+  const ariaStatusParts: string[] = [spineState];
+  if (gitStateIndicator && !(gitStateIndicator.kind === "dirty" && hasChanges)) {
+    ariaStatusParts.push(gitStateIndicator.label);
+  }
+  if (hasChanges) {
+    ariaStatusParts.push("has uncommitted changes");
+  }
+  const ariaStatusLabel = ariaStatusParts.join(", ");
+
   const cardContent = (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -693,7 +702,7 @@ export function WorktreeCard({
           aria-busy={isBeingDeleted && !deleteError ? "true" : undefined}
           role={variant === "grid" ? "group" : undefined}
           aria-current={variant === "grid" && isActive ? "true" : undefined}
-          aria-label={`Worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (selected, current)" : ""}, Status: ${spineState}${gitStateIndicator ? `, ${gitStateIndicator.label}` : ""}${!gitStateIndicator && hasChanges ? ", has uncommitted changes" : ""}`}
+          aria-label={`Worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (selected, current)" : ""}, Status: ${ariaStatusLabel}`}
           onClick={handleCardClick}
           onDoubleClick={handleDoubleClick}
           onPointerEnter={handlePointerEnter}

@@ -398,6 +398,8 @@ describe("ProjectViewManager — eviction safety", () => {
   });
 
   it("switching back to a cached view refreshes its LRU stamp", async () => {
+    let now = 1_700_000_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => now++);
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
@@ -405,25 +407,29 @@ describe("ProjectViewManager — eviction safety", () => {
       cachedProjectViews: 3,
     });
 
-    const wcA = createMockWebContents();
-    const viewA = { webContents: wcA, setBounds: vi.fn() };
-    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+    try {
+      const wcA = createMockWebContents();
+      const viewA = { webContents: wcA, setBounds: vi.fn() };
+      managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
-    await managerWithLimit.switchTo("proj-b", "/path/b");
-    await managerWithLimit.switchTo("proj-c", "/path/c");
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await managerWithLimit.switchTo("proj-c", "/path/c");
 
-    // Re-visit proj-a from cache — its lastUsed must be refreshed so it is
-    // no longer the oldest candidate. Without this, the next overflow would
-    // wrongly target proj-a.
-    await managerWithLimit.switchTo("proj-a", "/path/a");
+      // Re-visit proj-a from cache — its lastUsed must be refreshed so it is
+      // no longer the oldest candidate. Without this, the next overflow would
+      // wrongly target proj-a.
+      await managerWithLimit.switchTo("proj-a", "/path/a");
 
-    await managerWithLimit.switchTo("proj-d", "/path/d");
+      await managerWithLimit.switchTo("proj-d", "/path/d");
 
-    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
-    expect(remaining).not.toContain("proj-b");
-    expect(remaining).toContain("proj-a");
-    expect(remaining).toContain("proj-c");
-    expect(remaining).toContain("proj-d");
+      const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+      expect(remaining).not.toContain("proj-b");
+      expect(remaining).toContain("proj-a");
+      expect(remaining).toContain("proj-c");
+      expect(remaining).toContain("proj-d");
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("falls back to LRU when no candidate has measured memory", async () => {

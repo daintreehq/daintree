@@ -36,13 +36,35 @@ import { markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { consumePrefetchedHydrateResult } from "../../../services/prefetchHydrateCache.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
-import type { HandlerDependencies } from "../../types.js";
+import type { HandlerDependencies, IpcContext } from "../../types.js";
 
 export function registerAppStateHandlers(deps?: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleAppHydrate = async () => {
-    const currentProject = projectStore.getCurrentProject();
+  const resolveProjectForHydration = (ctx?: IpcContext) => {
+    if (!ctx) {
+      return projectStore.getCurrentProject();
+    }
+
+    const pvm =
+      (ctx.senderWindow &&
+        deps?.windowRegistry?.getByWindowId(ctx.senderWindow.id)?.services?.projectViewManager) ??
+      deps?.projectViewManager;
+
+    if (pvm) {
+      const viewProjectId = pvm.getProjectIdForWebContents(ctx.webContentsId);
+      return viewProjectId ? projectStore.getProjectById(viewProjectId) : null;
+    }
+
+    if (ctx.projectId) {
+      return projectStore.getProjectById(ctx.projectId);
+    }
+
+    return projectStore.getCurrentProject();
+  };
+
+  const handleAppHydrate = async (ctx?: IpcContext) => {
+    const currentProject = resolveProjectForHydration(ctx);
     const globalAppState = store.get("appState");
     const projectId = currentProject?.id;
     const panelFilter = getCrashRecoveryService().consumePanelFilter();
@@ -316,7 +338,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           : null,
     };
   };
-  handlers.push(typedHandle(CHANNELS.APP_HYDRATE, handleAppHydrate));
+  handlers.push(typedHandleWithContext(CHANNELS.APP_HYDRATE, handleAppHydrate));
 
   // Batched cold-start boot payload. Collapses what was three separate renderer
   // round-trips (`crash-recovery:get-pending`, `crash-recovery:get-config`,
@@ -324,8 +346,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
   // (`consumePanelFilter`, `consumePendingSettingsRecovery`) and the prefetch
   // fast path remain inside `handleAppHydrate` — boot just appends the crash
   // gate fields onto the same result.
-  const handleAppBoot = async () => {
-    const hydrate = await handleAppHydrate();
+  const handleAppBoot = async (ctx: IpcContext) => {
+    const hydrate = await handleAppHydrate(ctx);
     const crashService = getCrashRecoveryService();
     const guard = getCrashLoopGuard();
     // Mirror crash-recovery:get-pending: suppress in safe mode and inject the
@@ -344,7 +366,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       crashConfig: crashService.getConfig(),
     };
   };
-  handlers.push(typedHandle(CHANNELS.APP_BOOT, handleAppBoot));
+  handlers.push(typedHandleWithContext(CHANNELS.APP_BOOT, handleAppBoot));
 
   const handleAppGetState = async () => {
     return store.get("appState") as import("../../../../shared/types/ipc/app.js").AppState;

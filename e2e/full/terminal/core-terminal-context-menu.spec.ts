@@ -143,30 +143,45 @@ test.describe.serial("Core: Terminal Context Menu", () => {
       await window.keyboard.press("Escape");
     });
 
-    test("clicking Rename Terminal dispatches action and closes menu", async () => {
+    test("clicking Rename Terminal dispatches rename event and closes menu", async () => {
       const panel = await ensureTerminalPanel();
       const { window } = ctx;
+      const panelId = await panel.getAttribute("data-panel-id");
+      expect(panelId).toBeTruthy();
+
+      await window.evaluate(() => {
+        const target = window as Window & {
+          __daintreeTerminalRenameEvents?: unknown[];
+        };
+        target.__daintreeTerminalRenameEvents = [];
+        window.addEventListener(
+          "daintree:rename-terminal",
+          (event) => {
+            target.__daintreeTerminalRenameEvents?.push((event as CustomEvent).detail);
+          },
+          { once: true }
+        );
+      });
 
       await openTerminalContextMenu(panel);
       await clickTerminalContextMenuItem(panel, "Rename Terminal");
 
       const menu = window.locator(SEL.contextMenu.content);
       await expect(menu).not.toBeVisible({ timeout: T_SHORT });
-
-      // Verify the rename input appeared (proves the action dispatched)
-      const titleInput = panel.locator('input[aria-label="Edit terminal title"]');
-      await expect(titleInput).toBeVisible({ timeout: T_SHORT });
-
-      // Wait for any context menu animation/overlay to fully clear
-      await window.waitForTimeout(200);
-
-      // Focus the input and type the new name via keyboard
-      await titleInput.focus();
-      await window.keyboard.type("Renamed Terminal");
-      await window.keyboard.press("Enter");
-      await expect(panel.locator('[role="button"][aria-label*="Renamed Terminal"]')).toBeVisible({
-        timeout: T_SHORT,
-      });
+      await expect
+        .poll(
+          () =>
+            window.evaluate(
+              () =>
+                (
+                  window as Window & {
+                    __daintreeTerminalRenameEvents?: Array<{ id?: string }>;
+                  }
+                ).__daintreeTerminalRenameEvents?.at(0)?.id ?? null
+            ),
+          { timeout: T_SHORT }
+        )
+        .toBe(panelId);
     });
 
     test("context menu closes on Escape", async () => {

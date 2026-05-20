@@ -8,8 +8,16 @@ import {
   useRef,
   useState,
   useTransition,
+  forwardRef,
 } from "react";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import {
+  Virtuoso,
+  type Components,
+  type ItemProps,
+  type ListProps,
+  type ScrollerProps,
+  type VirtuosoHandle,
+} from "react-virtuoso";
 import { AlertTriangle, FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -155,6 +163,48 @@ interface SidebarVirtuosoContext {
   dragStartOrder: string[];
   isSortDisabled: boolean;
 }
+
+const SidebarVirtuosoScroller = forwardRef<
+  HTMLDivElement,
+  ScrollerProps & { context?: SidebarVirtuosoContext }
+>(function SidebarVirtuosoScroller({ children, style, tabIndex: _tabIndex, ...props }, ref) {
+  return (
+    <div {...props} ref={ref} role="rowgroup" tabIndex={-1} style={style}>
+      {children}
+    </div>
+  );
+});
+
+const SidebarVirtuosoList = forwardRef<
+  HTMLDivElement,
+  ListProps & { context?: SidebarVirtuosoContext }
+>(function SidebarVirtuosoList({ children, style, ...props }, ref) {
+  return (
+    <div {...props} ref={ref} role="presentation" style={style}>
+      {children}
+    </div>
+  );
+});
+
+function SidebarVirtuosoItem({
+  children,
+  style,
+  item: _item,
+  context: _context,
+  ...props
+}: ItemProps<SidebarFlatItem> & { context?: SidebarVirtuosoContext }) {
+  return (
+    <div {...props} role="presentation" style={style}>
+      {children}
+    </div>
+  );
+}
+
+const SIDEBAR_VIRTUOSO_COMPONENTS: Components<SidebarFlatItem, SidebarVirtuosoContext> = {
+  Scroller: SidebarVirtuosoScroller,
+  List: SidebarVirtuosoList,
+  Item: SidebarVirtuosoItem,
+};
 
 // Module-level item key so Virtuoso's memoization isn't broken by a fresh
 // arrow identity each render (past lesson #5010). Returning the stable id
@@ -1487,6 +1537,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         {/* Main worktree — visible unless excluded by text search or facet filters */}
         {mainVisible && (
           <div
+            role="rowgroup"
             className="shrink-0"
             style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
           >
@@ -1510,6 +1561,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         {/* Integration branch (develop/trunk/next) — pinned below main, subject to text search and facet filters */}
         {integrationVisible && (
           <div
+            role="rowgroup"
             className="shrink-0"
             style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
           >
@@ -1529,22 +1581,32 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           </div>
         )}
 
-        {pendingCreationRows && <div className="shrink-0">{pendingCreationRows}</div>}
+        {pendingCreationRows && (
+          <div role="rowgroup" className="shrink-0">
+            {pendingCreationRows}
+          </div>
+        )}
 
         {/* Strong divider between pinned worktrees and scrollable list */}
-        {hasNonMainWorktrees && <div className="shrink-0 border-b border-border-default" />}
+        {hasNonMainWorktrees && (
+          <div role="presentation" className="shrink-0 border-b border-border-default" />
+        )}
 
         {hasNonMainWorktrees && (
-          <QuickStateFilterBar
-            value={quickStateFilter}
-            onChange={setQuickStateFilter}
-            counts={quickStateCounts}
-            trailing={armMatchingButton}
-          />
+          <div role="row">
+            <div role="gridcell">
+              <QuickStateFilterBar
+                value={quickStateFilter}
+                onChange={setQuickStateFilter}
+                counts={quickStateCounts}
+                trailing={armMatchingButton}
+              />
+            </div>
+          </div>
         )}
 
         {/* Virtualized non-main worktree list */}
-        <div className="relative flex-1 min-h-0">
+        <div role="presentation" className="relative flex-1 min-h-0">
           {showQuickStateEmptyState && !hasFacetFiltersActive && !hasQuery ? (
             quickStateFilter === "waiting" ? (
               <EmptyState variant="user-cleared" scale="sidebar" title="All caught up" />
@@ -1647,6 +1709,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               overscan={SIDEBAR_VIRTUOSO_OVERSCAN_PX}
               increaseViewportBy={SIDEBAR_VIRTUOSO_OVERSCAN_PX}
               skipAnimationFrameInResizeObserver
+              components={SIDEBAR_VIRTUOSO_COMPONENTS}
               computeItemKey={computeSidebarItemKey}
               itemContent={renderSidebarFlatItem}
               scrollerRef={setScrollerElement}
@@ -1662,6 +1725,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 overscan={SIDEBAR_VIRTUOSO_OVERSCAN_PX}
                 increaseViewportBy={SIDEBAR_VIRTUOSO_OVERSCAN_PX}
                 skipAnimationFrameInResizeObserver
+                components={SIDEBAR_VIRTUOSO_COMPONENTS}
                 computeItemKey={computeSidebarItemKey}
                 itemContent={renderSidebarFlatItem}
                 scrollerRef={setScrollerElement}

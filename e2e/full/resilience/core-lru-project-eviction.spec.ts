@@ -30,6 +30,8 @@ const CACHE_LIMIT = 2;
 let ctx: AppContext;
 let fixtureCleanups: Array<() => void> = [];
 let repoDirs: string[] = [];
+let projectIdA = "";
+let projectIdC = "";
 
 async function configurePvm(app: AppContext["app"], limit: number): Promise<void> {
   await app.evaluate((_electron, n) => {
@@ -86,6 +88,34 @@ async function fetchAllWorktreesJson(window: Page): Promise<string> {
   });
 }
 
+async function requireActiveProjectId(app: AppContext["app"], label: string): Promise<string> {
+  const state = await readPvmState(app);
+  if (!state.activeProjectId) {
+    throw new Error(`[lru-eviction] expected active project id after opening ${label}`);
+  }
+  return state.activeProjectId;
+}
+
+async function waitForProjectAToBeEvictedWithCActive(app: AppContext["app"]): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const state = await readPvmState(app);
+        return (
+          state.activeProjectId === projectIdC &&
+          !state.projectIds.includes(projectIdA) &&
+          state.viewCount >= 1 &&
+          state.viewCount <= CACHE_LIMIT
+        );
+      },
+      {
+        timeout: 15_000,
+        intervals: [200, 400, 800, 1600],
+      }
+    )
+    .toBe(true);
+}
+
 test.describe.serial("Core: LRU project-view eviction with active terminal/worktree state", () => {
   test.beforeAll(async () => {
     test.setTimeout(300_000);
@@ -96,6 +126,7 @@ test.describe.serial("Core: LRU project-view eviction with active terminal/workt
 
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, repoA, PROJECT_A);
+    projectIdA = await requireActiveProjectId(ctx.app, PROJECT_A);
 
     // Freeze the cache limit BEFORE adding B and C. The default of 5 would
     // keep all three views alive and prevent the deterministic single-view
@@ -104,6 +135,7 @@ test.describe.serial("Core: LRU project-view eviction with active terminal/workt
 
     ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, repoB, PROJECT_B);
     ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, repoC, PROJECT_C);
+    projectIdC = await requireActiveProjectId(ctx.app, PROJECT_C);
 
     // Return to A so the first test starts with A active and a fresh terminal.
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
@@ -135,16 +167,13 @@ test.describe.serial("Core: LRU project-view eviction with active terminal/workt
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_B);
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_C);
 
-    // webContents.close() is async — poll until the cache settles back to
-    // the limit before re-opening A, so the cold-start path actually runs.
+    // webContents.close() is async — poll until A is no longer represented in
+    // the PVM before re-opening it, so the cold-start path actually runs.
+    // ResourceProfileService may legitimately collapse the cache below the
+    // user limit under CI pressure, so assert boundedness instead of exact size.
     // The LRU mechanism itself (and the projectId-level eviction assertion)
     // is covered by `e2e/nightly/nightly-evicted-view-leak.spec.ts`.
-    await expect
-      .poll(async () => (await readPvmState(ctx.app)).viewCount, {
-        timeout: 15_000,
-        intervals: [200, 400, 800, 1600],
-      })
-      .toBe(CACHE_LIMIT);
+    await waitForProjectAToBeEvictedWithCActive(ctx.app);
 
     // Return to A — cold-start: new WebContentsView, fresh renderer, must
     // re-broker PTY and worktree MessagePorts.
@@ -177,12 +206,7 @@ test.describe.serial("Core: LRU project-view eviction with active terminal/workt
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_B);
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_C);
 
-    await expect
-      .poll(async () => (await readPvmState(ctx.app)).viewCount, {
-        timeout: 15_000,
-        intervals: [200, 400, 800, 1600],
-      })
-      .toBe(CACHE_LIMIT);
+    await waitForProjectAToBeEvictedWithCActive(ctx.app);
 
     // Commit a new file in A's repo while A's view is destroyed. After cold-
     // start the WorktreePortBroker re-brokering must pick this up; a stale
@@ -224,9 +248,10 @@ test.describe.serial("Core: LRU project-view eviction with active terminal/workt
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_C);
 
     const state = await readPvmState(ctx.app);
-    expect(state.viewCount).toBe(CACHE_LIMIT);
-    expect(state.activeProjectId).not.toBeNull();
-    // Ensure the active view is C and exactly one cached view remains.
-    expect(state.projectIds).toHaveLength(CACHE_LIMIT);
+    expect(state.viewCount).toBeGreaterThanOrEqual(1);
+    expect(state.viewCount).toBeLessThanOrEqual(CACHE_LIMIT);
+    expect(state.activeProjectId).toBe(projectIdC);
+    expect(state.projectIds).toContain(projectIdC);
+    expect(state.projectIds).not.toContain(projectIdA);
   });
 });

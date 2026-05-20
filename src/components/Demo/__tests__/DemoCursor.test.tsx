@@ -246,23 +246,27 @@ describe("DemoCursor", () => {
     const input = document.createElement("input");
     input.id = "native-input";
     document.body.appendChild(input);
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
 
-    render(<DemoCursor />);
-    emit("demo:exec-type", {
-      selector: "#native-input",
-      text: "hi",
-      cps: 1000,
-      requestId: "req-type-native",
-    });
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-type", {
+        selector: "#native-input",
+        text: "hi",
+        cps: 1000,
+        requestId: "req-type-native",
+      });
 
-    await vi.waitFor(
-      () => expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-type-native", undefined),
-      { timeout: 2000, interval: 20 }
-    );
+      await vi.waitFor(
+        () => expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-type-native", undefined),
+        { timeout: 2000, interval: 20 }
+      );
 
-    expect(input.value).toBe("hi");
-
-    document.body.removeChild(input);
+      expect(input.value).toBe("hi");
+    } finally {
+      randomSpy.mockRestore();
+      document.body.removeChild(input);
+    }
   });
 
   it("type() dispatches CodeMirror transactions when target is a CM editor", async () => {
@@ -277,24 +281,28 @@ describe("DemoCursor", () => {
       state: EditorState.create({ doc: "" }),
       parent: container,
     });
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
 
-    render(<DemoCursor />);
-    emit("demo:exec-type", {
-      selector: "#cm-container",
-      text: "ab",
-      cps: 1000,
-      requestId: "req-type-cm",
-    });
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-type", {
+        selector: "#cm-container",
+        text: "ab",
+        cps: 1000,
+        requestId: "req-type-cm",
+      });
 
-    await vi.waitFor(
-      () => expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-type-cm", undefined),
-      { timeout: 2000, interval: 20 }
-    );
+      await vi.waitFor(
+        () => expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-type-cm", undefined),
+        { timeout: 2000, interval: 20 }
+      );
 
-    expect(view.state.doc.toString()).toBe("ab");
-
-    view.destroy();
-    document.body.removeChild(container);
+      expect(view.state.doc.toString()).toBe("ab");
+    } finally {
+      randomSpy.mockRestore();
+      view.destroy();
+      document.body.removeChild(container);
+    }
   });
 
   it("sleep completes after the specified duration", async () => {

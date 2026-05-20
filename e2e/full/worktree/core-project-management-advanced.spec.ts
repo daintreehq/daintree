@@ -154,16 +154,11 @@ test.describe.serial("Core: Project Management Advanced", () => {
       const initialCount = await cards.count();
       expect(initialCount).toBeGreaterThanOrEqual(2);
 
-      // Open filter popover
-      await modal.locator(SEL.worktree.filterButton).click();
-      const popover = window.locator(SEL.worktree.filterPopover);
-      await expect(popover).toBeVisible({ timeout: T_SHORT });
-
-      const searchInput = popover.locator('[aria-label="Search worktrees"]');
+      const searchInput = modal.getByRole("textbox", { name: "Search worktrees" });
+      await expect(searchInput).toBeVisible({ timeout: T_MEDIUM });
 
       // Search for a non-existent branch — active worktree may still show due to alwaysShowActive
       await searchInput.fill("nonexistent-branch-xyz-999");
-      await window.waitForTimeout(T_SETTLE);
 
       // Card count should decrease (active worktree may remain visible)
       await expect
@@ -173,31 +168,12 @@ test.describe.serial("Core: Project Management Advanced", () => {
         })
         .toBeLessThan(initialCount);
 
-      // Clear search — the filter popover may have auto-closed after the
-      // search reduced results to 0, so use the modal's "Clear all filters"
-      // button which is always visible when filters are active.
-      const clearAllBtn = modal.getByRole("button", { name: "Clear all filters" });
-      if (await clearAllBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await clearAllBtn.click();
-      } else {
-        // Fallback: reopen popover and clear the search input
-        await modal.locator(SEL.worktree.filterButton).click();
-        await expect(popover).toBeVisible({ timeout: T_SHORT });
-        await popover.locator('[aria-label="Clear search"]').click();
-      }
-      await window.waitForTimeout(T_SETTLE);
+      await searchInput.fill("");
 
       // All cards should reappear
       await expect
         .poll(() => cards.count(), { timeout: T_MEDIUM })
         .toBeGreaterThanOrEqual(initialCount);
-
-      // Close popover if still open (the "Clear all filters" path closes it,
-      // but the fallback path leaves it open)
-      if (await popover.isVisible({ timeout: 500 }).catch(() => false)) {
-        await modal.locator(SEL.worktree.filterButton).click();
-      }
-      await expect(popover).not.toBeVisible({ timeout: T_SHORT });
     });
 
     test("sort options toggle correctly", async () => {
