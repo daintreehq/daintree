@@ -457,7 +457,7 @@ export function TerminalContextMenu({
           ) : (
             <Maximize2 className={ICON_CLASS} aria-hidden="true" />
           )}
-          {isMaximized ? "Restore Size" : "Maximize"}
+          {isMaximized ? "Restore" : "Maximize"}
           <ContextMenuShortcut>^⇧F</ContextMenuShortcut>
         </ContextMenuItem>
       )}

@@ -514,6 +514,14 @@ describe("PanelHeader", () => {
       expect(restoreTooltip).toBeDefined();
       expect(restoreTooltip!.textContent).not.toContain("double-click header");
     });
+
+    it("renders restore button with standardized labels (no 'Focus' wording)", () => {
+      render(<PanelHeader {...makeProps({ onToggleMaximize: vi.fn(), isMaximized: true })} />);
+      const restoreBtn = screen.getByRole("button", { name: "Restore grid view" });
+      expect(restoreBtn).toBeDefined();
+      expect(restoreBtn.textContent).toContain("Restore");
+      expect(screen.queryByText("Exit Focus")).toBeNull();
+    });
   });
 
   describe("Move to Dock button", () => {

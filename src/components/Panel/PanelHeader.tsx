@@ -1008,7 +1008,7 @@ function PanelHeaderComponent({
           </Tooltip>
         )}
 
-        {/* Middle control: Collapse-to-Dock + Open-in-grid (dock) / Maximize / Exit Focus.
+        {/* Middle control: Collapse-to-Dock + Open-in-grid (dock) / Maximize / Restore.
             Dock panels never receive onToggleMaximize, so this branch owns the
             slot whenever location is "dock" regardless of onMinimize. */}
         {location === "dock" ? (
@@ -1066,11 +1066,11 @@ function PanelHeaderComponent({
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="flex items-center gap-1.5 px-2 py-1 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                aria-label="Exit Focus mode and restore grid view"
+                aria-label="Restore grid view"
                 aria-keyshortcuts={maximizeAriaShortcut}
               >
                 <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
-                <span className="font-medium">Exit Focus</span>
+                <span className="font-medium">Restore</span>
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
