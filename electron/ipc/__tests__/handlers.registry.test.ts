@@ -75,6 +75,7 @@ const registerMocks = vi.hoisted(() => ({
   registerPerfHandlers: vi.fn(),
   registerConnectivityHandlers: vi.fn(),
   registerScratchHandlers: vi.fn(),
+  registerWatchdogHandlers: vi.fn(),
 }));
 
 vi.mock("../handlers/worktree/index.js", () => ({
@@ -244,6 +245,9 @@ vi.mock("../handlers/connectivity.js", () => ({
 }));
 vi.mock("../handlers/scratch/index.js", () => ({
   registerScratchHandlers: registerMocks.registerScratchHandlers,
+}));
+vi.mock("../handlers/watchdog.js", () => ({
+  registerWatchdogHandlers: registerMocks.registerWatchdogHandlers,
 }));
 vi.mock("../../services/events.js", () => ({
   events: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },

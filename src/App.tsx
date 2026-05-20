@@ -313,6 +313,13 @@ const LazyHostCrashBanner = lazy(() =>
   preloadHostCrashBanner().then((m) => ({ default: m.HostCrashBanner }))
 );
 
+function preloadWatchdogDisabledBanner() {
+  return import("./components/Recovery/WatchdogDisabledBanner");
+}
+const LazyWatchdogDisabledBanner = lazy(() =>
+  preloadWatchdogDisabledBanner().then((m) => ({ default: m.WatchdogDisabledBanner }))
+);
+
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
@@ -567,6 +574,7 @@ function App() {
       void preloadGitHubTokenBanner();
       void preloadCloudSyncBanner();
       void preloadHostCrashBanner();
+      void preloadWatchdogDisabledBanner();
       import("@github-renderer/index").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
@@ -776,6 +784,9 @@ function App() {
             </Suspense>
             <Suspense fallback={null}>
               <LazyHostCrashBanner />
+            </Suspense>
+            <Suspense fallback={null}>
+              <LazyWatchdogDisabledBanner />
             </Suspense>
             <DndProvider>
               <VoiceRecordingAnnouncer />

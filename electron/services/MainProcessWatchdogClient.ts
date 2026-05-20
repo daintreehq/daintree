@@ -16,6 +16,7 @@
 import { app, utilityProcess, type UtilityProcess } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { trackEvent } from "./TelemetryService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +30,17 @@ const SERVICE_NAME = "daintree-watchdog";
 // detection. Any duration well above the cap of cumulative backoff
 // (≤30s for 3 attempts) is safe — we pick 30s for the symmetry.
 const RESTART_COUNTER_RESET_MS = 30_000;
+
+export interface WatchdogDisabledPayload {
+  /** Number of restart attempts that completed before the cap kicked in. */
+  attemptCount: number;
+  /** Exit code from the final crash, when one was reported. */
+  lastExitCode: number | null;
+  /** Wall-clock ms when the cap was hit. */
+  timestamp: number;
+}
+
+export type WatchdogDisabledListener = (payload: WatchdogDisabledPayload) => void;
 
 export interface MainProcessWatchdogClientConfig {
   /** Maximum restart attempts before giving up. After this, deadlock
@@ -62,6 +74,9 @@ export class MainProcessWatchdogClient {
   private restartAttempts = 0;
   private isDisposed = false;
   private isPaused = false;
+  private lastExitCode: number | null = null;
+  private disabledListener: WatchdogDisabledListener | null = null;
+  private disabledNotified = false;
 
   constructor(config: MainProcessWatchdogClientConfig = {}) {
     this.config = {
@@ -138,6 +153,7 @@ export class MainProcessWatchdogClient {
 
       if (wasDisposed) return;
 
+      this.lastExitCode = code ?? null;
       console.warn(`[MainProcessWatchdogClient] Watchdog exited (code=${code})`);
       this.scheduleRestart();
     });
@@ -178,6 +194,7 @@ export class MainProcessWatchdogClient {
       console.error(
         `[MainProcessWatchdogClient] Max restart attempts (${this.config.maxRestartAttempts}) reached. Deadlock detection disabled until next launch.`
       );
+      this.notifyDisabled();
       return;
     }
 
@@ -264,6 +281,61 @@ export class MainProcessWatchdogClient {
     // If the child is null (crashed during sleep), scheduleRestart from the
     // exit handler will resurrect it; we'll re-arm via the immediate ping
     // in startHost().
+  }
+
+  /** Register a listener fired exactly once when the watchdog hits its
+   * restart cap and deadlock detection becomes inactive for the session.
+   * Replaces any previous listener; pass `null` to detach. The listener
+   * fires every cap-hit cycle but at most once per cycle — a successful
+   * `restart()` re-arms it for the next cycle.
+   */
+  onDisabled(listener: WatchdogDisabledListener | null): void {
+    this.disabledListener = listener;
+  }
+
+  private notifyDisabled(): void {
+    if (this.disabledNotified) return;
+    this.disabledNotified = true;
+    const payload: WatchdogDisabledPayload = {
+      attemptCount: this.restartAttempts,
+      lastExitCode: this.lastExitCode,
+      timestamp: Date.now(),
+    };
+    try {
+      trackEvent("watchdog_disabled", { ...payload });
+    } catch (err) {
+      console.warn("[MainProcessWatchdogClient] trackEvent failed:", err);
+    }
+    if (this.disabledListener) {
+      try {
+        this.disabledListener(payload);
+      } catch (err) {
+        console.warn("[MainProcessWatchdogClient] onDisabled listener threw:", err);
+      }
+    }
+  }
+
+  /** Reset attempt counters and fork a fresh watchdog. Called from the
+   * IPC restart handler after the renderer's recovery banner is dismissed.
+   * Idempotent if the watchdog is already running. */
+  restart(): void {
+    if (this.isDisposed) return;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    if (this.stabilityTimer) {
+      clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
+    this.restartAttempts = 0;
+    this.lastExitCode = null;
+    this.disabledNotified = false;
+    if (this.child) {
+      // Already running — counters are reset; nothing further to do.
+      return;
+    }
+    this.startHost();
   }
 
   /** Stop the watchdog cleanly. Idempotent. */

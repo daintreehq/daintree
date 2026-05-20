@@ -32,3 +32,4 @@ export { appThemeClient } from "./appThemeClient";
 export { globalRecipesClient } from "./globalRecipesClient";
 export { telemetryPreviewClient } from "./telemetryPreviewClient";
 export { connectivityClient } from "./connectivityClient";
+export { watchdogClient } from "./watchdogClient";

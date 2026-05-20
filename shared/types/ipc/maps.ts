@@ -1658,6 +1658,20 @@ export interface IpcEventMap {
   "terminal:reduce-scrollback": { terminalIds: string[]; targetLines: number };
   "terminal:restore-scrollback": { terminalIds: string[] };
 
+  // Watchdog deadlock detector — emitted once when the main-process watchdog
+  // hits its restart cap and deadlock detection becomes inactive for the
+  // session. Renderer surfaces a recovery banner so the user can restart it.
+  "watchdog:disabled": {
+    attemptCount: number;
+    lastExitCode: number | null;
+    timestamp: number;
+  };
+  // Cleared global state after a successful manual restart — every window
+  // dismisses its WatchdogDisabledBanner. Broadcast (not window-scoped) so
+  // dispatching the action from one window also clears stale banners in
+  // sibling windows of a multi-window session.
+  "watchdog:active": void;
+
   // Agent events
   "agent:state-changed": AgentStateChangePayload;
   "agent:all-clear": { timestamp: number };
@@ -2068,6 +2082,9 @@ export type IpcEventBusMap = Pick<
   // Terminal observability
   | "terminal:reliability-metric"
   | "terminal:status"
+  // Watchdog deadlock detector — emitted once on cap-hit; global broadcast.
+  | "watchdog:disabled"
+  | "watchdog:active"
 >;
 
 /**

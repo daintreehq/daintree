@@ -305,6 +305,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.toggleInputLock",
   "terminal.viewInfo",
   "terminal.restartService",
+  "watchdog.restart",
   "terminal.new",
   "terminal.hibernate",
   "terminal.hibernateAllIdle",
