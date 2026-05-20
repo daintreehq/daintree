@@ -560,6 +560,15 @@ function _reconstructGitError(serialized: {
   return error;
 }
 
+// Typed overload: when `channel` is a key of `IpcInvokeMap`, args and result are
+// statically enforced against the central IPC contract. Falls back to a loose
+// signature for the function-value pass-through used by `build*PreloadBindings`.
+function _unwrappingInvoke<K extends Extract<keyof IpcInvokeMap, string>>(
+  channel: K,
+  ...args: IpcInvokeMap[K]["args"]
+): Promise<IpcInvokeMap[K]["result"]>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- fallback for function-value pass-through to build*PreloadBindings
+function _unwrappingInvoke(channel: string, ...args: unknown[]): Promise<any>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches ipcRenderer.invoke return type
 async function _unwrappingInvoke(channel: string, ...args: unknown[]): Promise<any> {
   const response = await ipcRenderer.invoke(channel, ...args);
@@ -577,13 +586,6 @@ async function _unwrappingInvoke(channel: string, ...args: unknown[]): Promise<a
     return response.data;
   }
   return response;
-}
-
-function _typedInvoke<K extends Extract<keyof IpcInvokeMap, string>>(
-  channel: K,
-  ...args: IpcInvokeMap[K]["args"]
-): Promise<IpcInvokeMap[K]["result"]> {
-  return _unwrappingInvoke(channel, ...args) as Promise<IpcInvokeMap[K]["result"]>;
 }
 
 function _typedOn<K extends Extract<keyof IpcEventMap, string>>(
@@ -974,7 +976,7 @@ const api: ElectronAPI = {
       editor: { id: string; customCommand?: string; customTemplate?: string };
       projectId?: string;
     }) =>
-      _typedInvoke(
+      _unwrappingInvoke(
         CHANNELS.EDITOR_SET_CONFIG,
         payload as import("../shared/types/editor.js").EditorSetConfigPayload
       ),
