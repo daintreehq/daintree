@@ -17,6 +17,12 @@ import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { AnimatedLabel } from "../ui/AnimatedLabel";
 import { SettingsSwitch } from "../Settings/SettingsSwitch";
+import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
+import {
+  getSuspectPanelBannerTitle,
+  SUSPECT_PANEL_BANNER_DESCRIPTION_DESELECTED,
+  SUSPECT_PANEL_BANNER_DESCRIPTION_SELECTED,
+} from "./recoveryCopy";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -61,9 +67,10 @@ export function CrashRecoveryDialog({
   const panels = useMemo(() => crash.panels ?? [], [crash.panels]);
   const hasPanels = panels.length > 0;
   const isInCrashLoop = (crash.crashCount ?? 0) >= 2;
+  const shouldDeselectSuspects = (crash.crashCount ?? 0) >= 1;
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(
-    () => new Set(panels.map((p) => p.id))
+    () => new Set(panels.filter((p) => !(shouldDeselectSuspects && p.isSuspect)).map((p) => p.id))
   );
   const [resolving, setResolving] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -224,14 +231,21 @@ export function CrashRecoveryDialog({
               </div>
 
               {suspectCount > 0 && (
-                <p
-                  className="text-xs text-status-warning/90 bg-status-warning/10 rounded px-2 py-1.5"
-                  data-testid="suspect-warning"
-                >
-                  <span className="tabular-nums">{suspectCount}</span> panel
-                  {suspectCount > 1 ? "s were" : " was"} created shortly before the crash and may be
-                  related.
-                </p>
+                <div data-testid="suspect-warning" className="rounded-md overflow-hidden">
+                  <InlineStatusBanner
+                    severity="warning"
+                    icon={AlertTriangle}
+                    title={getSuspectPanelBannerTitle(suspectCount, shouldDeselectSuspects)}
+                    description={
+                      shouldDeselectSuspects
+                        ? SUSPECT_PANEL_BANNER_DESCRIPTION_DESELECTED
+                        : SUSPECT_PANEL_BANNER_DESCRIPTION_SELECTED
+                    }
+                    actions={[]}
+                    role="status"
+                    ariaLive="polite"
+                  />
+                </div>
               )}
 
               <div className="flex gap-2">
