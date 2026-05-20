@@ -18,6 +18,15 @@ export interface WatchdogDeps {
   killMain: () => void;
   /** Optional log sink. Defaults to console.error in the runtime entry. */
   logError?: (msg: string) => void;
+  /** Monotonic clock seam. Defaults to `performance.now`. Used to detect
+   * stale ticks that were queued before a "wake" message landed: when the
+   * OS schedules `setInterval` callbacks during sleep, they fire as a
+   * burst at wake — without a monotonic check, those queued ticks would
+   * each increment `missedBeats` and cross the kill threshold before the
+   * arming ping has a chance to reset the counter. `performance.now` is
+   * required (not `Date.now`) because it's immune to wall-clock jumps
+   * from NTP adjustments and user time changes. */
+  now?: () => number;
 }
 
 export interface WatchdogMessage {
@@ -28,6 +37,11 @@ export interface WatchdogState {
   isArmed: boolean;
   isPaused: boolean;
   missedBeats: number;
+  /** Monotonic timestamp of the most recent "wake" message, used by `tick`
+   * to suppress queued-during-sleep ticks that fire as a burst at wake.
+   * Zero means "no wake observed yet" — the grace window only applies
+   * after a real wake event, so it never masks a frozen-at-boot main. */
+  lastWakeTimestamp: number;
 }
 
 export interface Watchdog {
@@ -45,14 +59,26 @@ export interface Watchdog {
 
 export function createWatchdog(deps: WatchdogDeps): Watchdog {
   const log = deps.logError ?? ((msg) => console.error(msg));
+  const now = deps.now ?? (() => performance.now());
   const state: WatchdogState = {
     isArmed: false,
     isPaused: false,
     missedBeats: 0,
+    lastWakeTimestamp: 0,
   };
 
   function tick(): void {
     if (!state.isArmed || state.isPaused) return;
+
+    // Suppress ticks that were queued during sleep and burst-fire on wake.
+    // macOS and Windows both deliver suspended `setInterval` callbacks as a
+    // packed sequence at resume, which would each increment `missedBeats`
+    // before the post-wake arming ping has a chance to reset it. The grace
+    // is exactly one heartbeat interval — long enough to absorb the burst,
+    // short enough to never mask a real deadlock on the awake system.
+    if (state.lastWakeTimestamp > 0 && now() - state.lastWakeTimestamp < HEARTBEAT_INTERVAL_MS) {
+      return;
+    }
 
     state.missedBeats += 1;
 
@@ -87,6 +113,7 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
       case "wake":
         state.isPaused = false;
         state.missedBeats = 0;
+        state.lastWakeTimestamp = now();
         return true;
       case "dispose":
         state.isArmed = false;
