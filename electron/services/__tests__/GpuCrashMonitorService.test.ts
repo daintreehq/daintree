@@ -487,33 +487,63 @@ describe("GpuCrashMonitorService", () => {
         });
       }
 
+      async function trackAtomicWriter(): Promise<ReturnType<typeof vi.fn>> {
+        const writeSpy = vi.fn();
+        vi.doMock("../../utils/fs.js", async () => {
+          const actual =
+            await vi.importActual<typeof import("../../utils/fs.js")>("../../utils/fs.js");
+          return {
+            ...actual,
+            resilientAtomicWriteFileSync: (
+              ...args: Parameters<typeof actual.resilientAtomicWriteFileSync>
+            ) => {
+              writeSpy(...args);
+              return actual.resilientAtomicWriteFileSync(...args);
+            },
+          };
+        });
+        return writeSpy;
+      }
+
       it("darwin: first crash does not write ANGLE flag, does not relaunch", async () => {
         await withPlatform("darwin", async () => {
-          await loadAndInit();
-          emitGpuCrash();
-          await new Promise((r) => setImmediate(r));
-          expect(appMock.relaunch).not.toHaveBeenCalled();
-          expect(appMock.exit).not.toHaveBeenCalled();
-          expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
-          expect(loggerMethods.info).toHaveBeenCalledWith(
-            "gpu-crash-soft-fallback-skip-nonlinux",
-            expect.objectContaining({ platform: "darwin", crashCount: 1 })
-          );
+          const writeSpy = await trackAtomicWriter();
+          try {
+            await loadAndInit();
+            emitGpuCrash();
+            await new Promise((r) => setImmediate(r));
+            expect(appMock.relaunch).not.toHaveBeenCalled();
+            expect(appMock.exit).not.toHaveBeenCalled();
+            expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
+            expect(writeSpy).not.toHaveBeenCalled();
+            expect(loggerMethods.info).toHaveBeenCalledWith(
+              "gpu-crash-soft-fallback-skip-nonlinux",
+              expect.objectContaining({ platform: "darwin", crashCount: 1 })
+            );
+          } finally {
+            vi.doUnmock("../../utils/fs.js");
+          }
         });
       });
 
       it("win32: first crash does not write ANGLE flag, does not relaunch", async () => {
         await withPlatform("win32", async () => {
-          await loadAndInit();
-          emitGpuCrash();
-          await new Promise((r) => setImmediate(r));
-          expect(appMock.relaunch).not.toHaveBeenCalled();
-          expect(appMock.exit).not.toHaveBeenCalled();
-          expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
-          expect(loggerMethods.info).toHaveBeenCalledWith(
-            "gpu-crash-soft-fallback-skip-nonlinux",
-            expect.objectContaining({ platform: "win32", crashCount: 1 })
-          );
+          const writeSpy = await trackAtomicWriter();
+          try {
+            await loadAndInit();
+            emitGpuCrash();
+            await new Promise((r) => setImmediate(r));
+            expect(appMock.relaunch).not.toHaveBeenCalled();
+            expect(appMock.exit).not.toHaveBeenCalled();
+            expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
+            expect(writeSpy).not.toHaveBeenCalled();
+            expect(loggerMethods.info).toHaveBeenCalledWith(
+              "gpu-crash-soft-fallback-skip-nonlinux",
+              expect.objectContaining({ platform: "win32", crashCount: 1 })
+            );
+          } finally {
+            vi.doUnmock("../../utils/fs.js");
+          }
         });
       });
 
