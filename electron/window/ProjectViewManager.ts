@@ -395,7 +395,12 @@ export class ProjectViewManager {
     // `did-finish-load`) is captured instead of dropped. The renderer fires
     // `APP_VIEW_PAINTED` once per V8 context and never retries — without
     // pre-arming, every fast cold switch would fall through to the timeout.
+    //
+    // Capture both bounds at call time so the warning logs reflect the
+    // value actually used by the in-flight gate even if the setters fire
+    // a profile push between gate creation and log emission.
     const softMs = this.paintGateTimeoutMs;
+    const hardMs = Math.max(this.paintGateHardTimeoutMs, softMs);
     const paintGatePromise = this.waitForPaint(view.webContents.id, previousEntry, () => {
       // Soft timeout: outgoing stays attached, gate keeps waiting. Logging
       // only — the user never sees an unfinished frame on the soft path.
@@ -420,7 +425,7 @@ export class ProjectViewManager {
       if (gateResult === "hard-timeout") {
         logWarn("projectview.paintgate.hardtimeout", {
           projectId,
-          waitedMs: this.paintGateHardTimeoutMs,
+          waitedMs: hardMs,
         });
       }
 
@@ -1302,8 +1307,16 @@ export class ProjectViewManager {
       return memoryByPid.get(pid) ?? 0;
     };
 
+    // Outgoing view of an open paint gate is still on-screen and serving as
+    // the anti-flash bridge — treat it as non-evictable, same as the active
+    // view. Without this, a setCachedViewLimit(1) call landing mid-gate
+    // (e.g. an efficiency-profile transition firing during a slow cold
+    // start) would evict the outgoing view and expose the unpainted
+    // incoming frame, re-creating the exact flash this gate prevents.
+    const gateOutgoingProjectId = this.pendingPaintGate?.outgoingEntry?.projectId ?? null;
+
     const evictable = Array.from(this.views.entries())
-      .filter(([id]) => id !== this.activeProjectId)
+      .filter(([id]) => id !== this.activeProjectId && id !== gateOutgoingProjectId)
       // Oldest lastUsed first — pure LRU. Sequential switchTo calls stamp
       // distinct millisecond timestamps so equal-lastUsed ties don't arise
       // in practice; Array.sort stability handles them deterministically.

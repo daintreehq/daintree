@@ -345,6 +345,42 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     }
   });
 
+  it("setCachedViewLimit(1) during the paint gate does NOT evict the outgoing view", async () => {
+    // Regression: a profile transition to efficiency mid-cold-start can
+    // call setCachedViewLimit(1) while the paint gate is open. Without
+    // the gate-aware eviction guard the outgoing view would be evicted
+    // and expose the blank incoming frame — the exact flash this gate
+    // is meant to prevent.
+    const slowWc = createMockWebContents();
+    wcQueue.push(slowWc);
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Pre-flight: outgoing (proj-a) attached, gate pending.
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    // Squeeze the cache while the gate is open. This call is the normal
+    // efficiency-transition behaviour from ResourceProfileService.
+    manager.setCachedViewLimit(1);
+
+    // Outgoing must NOT be evicted by the limit-change pass — it's still
+    // the visible anti-flash bridge until the gate resolves.
+    expect(initialWc.close).not.toHaveBeenCalled();
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    // Release the gate. The outgoing view is now detached (gate release)
+    // and may be evicted (post-switch LRU pass with the new max=1). The
+    // critical guarantee is that the detach order — gate release first,
+    // eviction second — keeps the swap seamless even when both fire on
+    // the same trailing-edge.
+    manager.signalViewPainted(slowWc.id);
+    await switchPromise;
+
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+  });
+
   it("paint-gate timeout setters do not retime an in-flight gate", async () => {
     vi.useFakeTimers();
     try {
