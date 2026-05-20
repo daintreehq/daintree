@@ -345,7 +345,7 @@ export function registerGitCloneHandlers(): () => void {
       // No "starting" event here on purpose: emitting one would populate the
       // renderer's progress list immediately and defeat the Doherty gate that
       // suppresses the connecting placeholder for sub-400ms clones. The
-      // renderer owns that phase via `isCloning` + `useDeferredLoading`.
+      // renderer owns that phase via `isCloning` + `useDohertyGate`.
 
       if (useGhPath && ghTarget) {
         await cloneWithGh(
