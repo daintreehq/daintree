@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daintree — Recovery</title>
     <style>
+      :root {
+        interpolate-size: allow-keywords;
+      }
       * {
         margin: 0;
         padding: 0;
@@ -132,6 +135,50 @@
       .status.error {
         color: #f87171;
       }
+      .reset-confirm-section {
+        height: 0;
+        overflow: clip;
+        opacity: 0;
+        transition:
+          height 120ms ease-in,
+          opacity 120ms ease-in;
+      }
+      .reset-confirm-section.open {
+        height: auto;
+        opacity: 1;
+        transition:
+          height 200ms ease-out,
+          opacity 200ms ease-out;
+      }
+      .reset-confirm-body {
+        background: #1c1f2b;
+        border: 1px solid #3f3f46;
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin-top: 10px;
+        text-align: left;
+      }
+      .reset-confirm-description {
+        color: #e4e4e7;
+        font-size: 13px;
+        line-height: 1.6;
+      }
+      .reset-confirm-detail {
+        color: #a1a1aa;
+        font-size: 12px;
+        line-height: 1.6;
+        margin-top: 6px;
+      }
+      .reset-confirm-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-top: 12px;
+      }
+      .btn-destructive {
+        background: #b91c1c;
+        color: #fff;
+      }
     </style>
   </head>
   <body>
@@ -155,10 +202,29 @@
       <p class="backup-line" id="backup-line" style="display: none"></p>
       <div class="details" id="crash-details">Loading crash details…</div>
       <div class="actions">
-        <button class="btn-primary" id="btn-reload">Reload Window</button>
-        <button class="btn-secondary" id="btn-export-diagnostics">Export Diagnostics</button>
-        <button class="btn-secondary" id="btn-open-logs">Open Logs</button>
-        <button class="btn-secondary" id="btn-reset">Reset Workspace State</button>
+        <button class="btn-primary" id="btn-reload">Reload window</button>
+        <button class="btn-secondary" id="btn-export-diagnostics">Export diagnostics</button>
+        <button class="btn-secondary" id="btn-open-logs">Open logs</button>
+        <button
+          class="btn-secondary"
+          id="btn-reset"
+          aria-expanded="false"
+          aria-controls="reset-confirm-section"
+        >
+          Reset workspace state
+        </button>
+        <div id="reset-confirm-section" class="reset-confirm-section" inert>
+          <div class="reset-confirm-body">
+            <p class="reset-confirm-description" id="reset-confirm-description">
+              This will clear all open sessions and reset sidebar and panel layout.
+            </p>
+            <p class="reset-confirm-detail" id="reset-confirm-detail" style="display: none"></p>
+            <div class="reset-confirm-actions">
+              <button class="btn-destructive" id="btn-reset-confirm">Reset workspace</button>
+              <button class="btn-secondary" id="btn-reset-cancel">Cancel</button>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="status" id="status" role="status" aria-live="polite"></div>
     </div>
