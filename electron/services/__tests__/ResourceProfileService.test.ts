@@ -628,7 +628,8 @@ describe("ResourceProfileService", () => {
     expect(balanced.pollIntervalBackground).toBe(10000);
     expect(balanced.processTreePollInterval).toBe(2500);
     expect(balanced.projectStatsPollInterval).toBe(5000);
-    expect(balanced.maxWebGLContexts).toBe(12);
+    expect(balanced.maxWebGLContexts).toBe(16);
+    expect(balanced.passiveWebGLThreshold).toBe(12);
     expect(balanced.memoryPressureInactiveMs).toBe(30 * 60 * 1000);
     expect(balanced.lowMemoryFreeThresholdMb).toBe(768);
   });

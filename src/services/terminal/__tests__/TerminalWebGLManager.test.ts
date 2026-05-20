@@ -969,7 +969,7 @@ describe("TerminalWebGLManager", () => {
   });
 
   describe("LRU eviction", () => {
-    // These tests fill the pool to MAX_CONTEXTS (12), past the passive gate.
+    // These tests fill the pool to MAX_CONTEXTS, past the passive gate.
     // Pin the threshold above the pool cap so eviction — not passive-mode
     // suppression — is what's under test here.
     beforeEach(async () => {

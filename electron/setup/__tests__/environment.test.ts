@@ -473,6 +473,82 @@ describe("GPU memory flags", () => {
   });
 });
 
+describe("WebGL context cap", () => {
+  const GIB = 1024 ** 3;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "main.js"];
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+  });
+
+  it("sets max-active-webgl-contexts to 24 on a 4 GiB machine", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(4 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "24");
+  });
+
+  it("sets max-active-webgl-contexts to 24 at the 8 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(8 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "24");
+  });
+
+  it("sets max-active-webgl-contexts to 28 just above the 8 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(8 * GIB + 1);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "28");
+  });
+
+  it("sets max-active-webgl-contexts to 28 at the 16 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "28");
+  });
+
+  it("sets max-active-webgl-contexts to 32 just above the 16 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB + 1);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "32");
+  });
+
+  it("sets max-active-webgl-contexts to 32 on a 32 GiB machine", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(32 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "32");
+  });
+});
+
 describe("Chromium feature flags", () => {
   beforeEach(() => {
     vi.resetModules();
