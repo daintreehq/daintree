@@ -68,12 +68,7 @@ import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotif
 import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
 import { isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
 import { store } from "./store.js";
-import {
-  pruneOldLogs,
-  initializeLogger,
-  registerLoggerTransport,
-  setLogLevelOverrides,
-} from "./utils/logger.js";
+import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
 import { broadcastToRenderer } from "./ipc/utils.js";
 import { registerCommands } from "./services/commands/index.js";
 import {
@@ -146,14 +141,6 @@ if (!gotTheLock) {
   console.log("[MAIN] Another instance is already running. Quitting...");
   app.quit();
 } else {
-  // Prune old log files based on retention setting
-  {
-    const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
-    if (retentionDays > 0) {
-      pruneOldLogs(app.getPath("userData"), retentionDays);
-    }
-  }
-
   initializeLogger(app.getPath("userData"));
 
   // Seed per-module level overrides from persisted store so main-process

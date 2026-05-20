@@ -35,6 +35,7 @@ import {
 import { startAppMetricsMonitor } from "../services/ProcessMemoryMonitor.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
+import { pruneOldLogs } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -702,6 +703,16 @@ export async function initGlobalServices(
   registerDeferredTask({
     name: "session-eviction",
     run: () => evictStaleSessionFiles(),
+  });
+
+  registerDeferredTask({
+    name: "prune-old-logs",
+    run: () => {
+      const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
+      if (retentionDays > 0) {
+        pruneOldLogs(app.getPath("userData"), retentionDays);
+      }
+    },
   });
 
   return "ok";

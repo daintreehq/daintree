@@ -4,9 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // imported module captures our mock. Names recorded here drive the
 // task-ordering assertions below.
 const registeredTaskNames: string[] = [];
+const registeredTaskRuns = new Map<string, () => unknown>();
 const setMcpRegistry = vi.fn();
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
+let mockLogRetentionDays: number | undefined = 30;
+const { pruneOldLogs } = vi.hoisted(() => ({ pruneOldLogs: vi.fn() }));
 
 vi.mock("../../utils/performance.js", () => ({
   markPerformance: vi.fn(),
@@ -31,8 +34,21 @@ vi.mock("../../services/StoreMigrations.js", () => ({
 
 vi.mock("../../store.js", () => ({
   store: {
-    get: vi.fn(() => ({})),
+    get: vi.fn((key: string) => {
+      if (key === "privacy") {
+        return mockLogRetentionDays === undefined ? {} : { logRetentionDays: mockLogRetentionDays };
+      }
+      return {};
+    }),
   },
+}));
+
+vi.mock("../../utils/logger.js", () => ({
+  pruneOldLogs,
+  logError: vi.fn(),
+  logWarn: vi.fn(),
+  logInfo: vi.fn(),
+  logDebug: vi.fn(),
 }));
 
 vi.mock("../../services/TelemetryService.js", () => ({
@@ -162,13 +178,14 @@ vi.mock("../../services/HelpSessionService.js", () => ({
 vi.mock("../deferredInitQueue.js", () => ({
   registerDeferredTask: vi.fn((task: { name: string; run: () => unknown }) => {
     registeredTaskNames.push(task.name);
+    registeredTaskRuns.set(task.name, task.run);
   }),
   finalizeDeferredRegistration: vi.fn(),
   resetDeferredQueue: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
-  app: { exit: vi.fn() },
+  app: { exit: vi.fn(), getPath: vi.fn(() => "/tmp/userData") },
   dialog: { showErrorBox: vi.fn() },
   session: { defaultSession: { clearCache: vi.fn(), clearStorageData: vi.fn() } },
 }));
@@ -181,12 +198,15 @@ import { app } from "electron";
 describe("initGlobalServices task ordering", () => {
   beforeEach(() => {
     registeredTaskNames.length = 0;
+    registeredTaskRuns.clear();
     // mockReset (not mockClear) so mockImplementation set in one test doesn't
     // leak into the next — keeps tests independent as the suite grows.
     setMcpRegistry.mockReset();
+    pruneOldLogs.mockReset();
     (app.exit as ReturnType<typeof vi.fn>).mockReset();
     migrationCurrentVersion = 1;
     migrationShouldThrow = false;
+    mockLogRetentionDays = 30;
     setGlobalServicesInitialized(false);
   });
 
@@ -295,6 +315,49 @@ describe("initGlobalServices task ordering", () => {
 
     expect(registeredTaskNames).toContain("ccr-config");
     expect(registeredTaskNames).toContain("plugin-service");
+  });
+
+  it("registers prune-old-logs as a deferred task so it doesn't block cold start (#8622)", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    expect(registeredTaskNames).toContain("prune-old-logs");
+  });
+
+  it("prune-old-logs task invokes pruneOldLogs with retentionDays from privacy settings", async () => {
+    mockLogRetentionDays = 14;
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("prune-old-logs");
+    expect(run).toBeDefined();
+    run?.();
+
+    expect(pruneOldLogs).toHaveBeenCalledWith("/tmp/userData", 14);
+  });
+
+  it("prune-old-logs task skips pruning when retentionDays is 0", async () => {
+    mockLogRetentionDays = 0;
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("prune-old-logs");
+    expect(run).toBeDefined();
+    run?.();
+
+    expect(pruneOldLogs).not.toHaveBeenCalled();
+  });
+
+  it("prune-old-logs task defaults retentionDays to 30 when privacy setting is missing", async () => {
+    mockLogRetentionDays = undefined;
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("prune-old-logs");
+    expect(run).toBeDefined();
+    run?.();
+
+    expect(pruneOldLogs).toHaveBeenCalledWith("/tmp/userData", 30);
   });
 
   it("returns 'ok' on the happy path", async () => {
