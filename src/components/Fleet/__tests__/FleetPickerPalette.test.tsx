@@ -663,6 +663,58 @@ describe("FleetPickerPalette", () => {
       ).toContain("Arm 2 selected");
     });
 
+    it("resets to Replace when the palette is closed and reopened", async () => {
+      // FleetPickerPalette stays mounted across isOpen toggles (it lives
+      // inside SidebarContent), so commitMode survives a naive close-reopen
+      // unless we explicitly reset it. Guard against that regression.
+      seedTerminals([
+        makeTerminal("t1", { worktreeId: "wt-1" }),
+        makeTerminal("t2", { worktreeId: "wt-1" }),
+      ]);
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeWorktreeSnap("wt-1", "main")], { epoch: "test", seq: 1 });
+      const { rerender } = render(
+        <WorktreeStoreContext.Provider value={store}>
+          <FleetPickerPalette isOpen={true} onClose={() => {}} />
+        </WorktreeStoreContext.Provider>
+      );
+      await act(async () => {});
+
+      // Switch to Append.
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-commit-mode-append"));
+      });
+      expect(
+        screen
+          .getByTestId("fleet-picker-cold-start-commit-mode-append")
+          .getAttribute("aria-checked")
+      ).toBe("true");
+
+      // Close…
+      rerender(
+        <WorktreeStoreContext.Provider value={store}>
+          <FleetPickerPalette isOpen={false} onClose={() => {}} />
+        </WorktreeStoreContext.Provider>
+      );
+      await act(async () => {});
+
+      // …and reopen. Replace must be active again.
+      rerender(
+        <WorktreeStoreContext.Provider value={store}>
+          <FleetPickerPalette isOpen={true} onClose={() => {}} />
+        </WorktreeStoreContext.Provider>
+      );
+      await act(async () => {});
+
+      const replace = screen.getByTestId("fleet-picker-cold-start-commit-mode-replace");
+      const append = screen.getByTestId("fleet-picker-cold-start-commit-mode-append");
+      expect(replace.getAttribute("aria-checked")).toBe("true");
+      expect(append.getAttribute("aria-checked")).toBe("false");
+      expect(
+        (screen.getByTestId("fleet-picker-cold-start-confirm") as HTMLButtonElement).textContent
+      ).toContain("Arm 2 selected");
+    });
+
     it("already-armed terminals stay visible after switching to Append", async () => {
       // The hook's `mode` prop must remain "cold-start" regardless of the
       // toggle, so already-armed terminals are NOT hidden in the visible list

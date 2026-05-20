@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
@@ -22,15 +22,22 @@ export interface FleetPickerPaletteProps {
  * the canonical centered/scrimmed/aria-modal palette tier-fast animation
  * (~150ms enter / ~100ms exit). Cold-start mode: pre-selects active-worktree
  * eligibles. A footer segmented control lets the user choose between replace
- * (`armIds`, default) and append (`addToFleet`) semantics per session — state
- * is local, so each fresh open resets to replace. The hook's `mode` prop is
- * kept frozen at `"cold-start"` regardless of the toggle, because changing it
- * would re-fire the pre-selection effect and wipe the user's picks.
+ * (`armIds`, default) and append (`addToFleet`) semantics per session. The
+ * palette is mounted persistently by its parent (only `isOpen` toggles), so
+ * `commitMode` is explicitly reset to `"replace"` whenever the palette closes
+ * — relying on unmount-driven reset would silently retain Append across opens.
+ * The hook's `mode` prop is kept frozen at `"cold-start"` regardless of the
+ * toggle, because changing it would re-fire the pre-selection effect and wipe
+ * the user's picks.
  */
 export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps): ReactElement {
   const armIds = useFleetArmingStore((s) => s.armIds);
   const addToFleet = useFleetArmingStore((s) => s.addToFleet);
   const [commitMode, setCommitMode] = useState<CommitMode>("replace");
+
+  useEffect(() => {
+    if (!isOpen) setCommitMode("replace");
+  }, [isOpen]);
 
   const handleCommit = useCallback(
     (selected: string[]) => {
