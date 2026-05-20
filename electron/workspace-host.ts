@@ -36,6 +36,7 @@ import { gitHubRateLimitService } from "./services/github/index.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../shared/utils/forgeProviderIds.js";
+import { fanoutEventToWorktreePorts } from "./workspace-host/worktreePortFanout.js";
 
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
@@ -70,13 +71,7 @@ const DIRECT_RENDERER_EVENTS = new Set([
 ]);
 
 function sendToWorktreePorts(event: WorkspaceHostEvent): void {
-  for (let i = worktreePorts.length - 1; i >= 0; i--) {
-    try {
-      worktreePorts[i].postMessage({ type: "event", event });
-    } catch {
-      worktreePorts.splice(i, 1);
-    }
-  }
+  fanoutEventToWorktreePorts(worktreePorts, event);
 }
 
 async function handleWorktreePortRequest(
