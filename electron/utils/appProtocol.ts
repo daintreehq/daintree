@@ -9,7 +9,24 @@ export interface AppProtocolHeaders extends Record<string, string> {
   "Permissions-Policy": string;
   "X-Content-Type-Options": string;
   "Cross-Origin-Resource-Policy": string;
+  "Cache-Control": string;
 }
+
+export interface BuildHeadersOptions {
+  stats?: { mtime: Date };
+  filePath?: string;
+}
+
+const ONE_YEAR_SECONDS = 31_536_000;
+const IMMUTABLE_DIRECTIVE = `public, max-age=${ONE_YEAR_SECONDS}, immutable`;
+const REVALIDATE_DIRECTIVE = "no-cache, must-revalidate";
+
+// Vite content-hashed assets live under `assets/` as `<name>-<hash>.<ext>`. The
+// hash is 8+ URL-safe characters — covers Vite's default 8-char hex and
+// rolldown's 8-char xxHash base64url. Files outside `assets/` (e.g.
+// `index.html`) are not fingerprinted and must revalidate.
+const IMMUTABLE_ASSET_RE =
+  /(?:^|[/\\])assets[/\\][^/\\]+-[A-Za-z0-9_-]{8,}\.(?:js|mjs|css|map|woff2?|ttf|otf|eot|png|svg|webp|gif|jpe?g|ico|bmp|wasm|avif)$/i;
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html",
@@ -39,15 +56,53 @@ export function getMimeType(filePath: string): string {
   return MIME_TYPES[ext] || "application/octet-stream";
 }
 
-export function buildHeaders(mimeType: string): AppProtocolHeaders {
-  return {
+export function isImmutableAppAsset(filePath: string): boolean {
+  return IMMUTABLE_ASSET_RE.test(filePath);
+}
+
+export function toHttpDate(date: Date): string {
+  return date.toUTCString();
+}
+
+// Returns true when the client's If-Modified-Since timestamp is at or after the
+// file's mtime — the server should respond 304. HTTP dates have whole-second
+// precision; we floor both sides to seconds to avoid false 200s from sub-second
+// filesystem mtimes (e.g. 12:34:56.700 vs the 12:34:56 header).
+export function isNotModified(headerValue: string | null, mtime: Date): boolean {
+  if (!headerValue) return false;
+  const parsedMs = Date.parse(headerValue);
+  if (Number.isNaN(parsedMs)) return false;
+  const mtimeSec = Math.floor(mtime.getTime() / 1000);
+  const parsedSec = Math.floor(parsedMs / 1000);
+  return mtimeSec <= parsedSec;
+}
+
+export function buildHeaders(
+  mimeType: string,
+  options: BuildHeadersOptions = {}
+): AppProtocolHeaders {
+  const { stats, filePath } = options;
+  // V8 code cache persistence in Chromium requires both a non-`no-store`
+  // Cache-Control AND a validator header (Last-Modified or ETag). Without
+  // either, the renderer recompiles every cold launch. See issue #8624.
+  const cacheControl =
+    filePath && isImmutableAppAsset(filePath) ? IMMUTABLE_DIRECTIVE : REVALIDATE_DIRECTIVE;
+
+  const headers: AppProtocolHeaders = {
     "Content-Type": mimeType,
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Embedder-Policy": "credentialless",
     "Permissions-Policy": DAINTREE_APP_PERMISSIONS_POLICY,
     "X-Content-Type-Options": "nosniff",
     "Cross-Origin-Resource-Policy": "same-origin",
+    "Cache-Control": cacheControl,
   };
+
+  if (stats) {
+    headers["Last-Modified"] = toHttpDate(stats.mtime);
+  }
+
+  return headers;
 }
 
 export function resolveAppUrlToDistPath(

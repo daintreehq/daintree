@@ -3,7 +3,12 @@ import { getWindowForWebContents, getAppWebContents } from "../window/webContent
 import path from "path";
 import fs from "fs/promises";
 import { pathToFileURL } from "url";
-import { resolveAppUrlToDistPath, getMimeType, buildHeaders } from "../utils/appProtocol.js";
+import {
+  resolveAppUrlToDistPath,
+  getMimeType,
+  buildHeaders,
+  isNotModified,
+} from "../utils/appProtocol.js";
 import {
   classifyPartition,
   getDaintreeAppCSP,
@@ -45,6 +50,29 @@ function createAppProtocolHandler(distPath: string) {
       });
     }
 
+    // V8 code cache in Chromium 146 won't persist bytecode without both a
+    // non-`no-store` Cache-Control AND a validator header. We stat the file
+    // first so the validator and the 304 shortcut are both available — without
+    // the 304 path every reload returns a fresh 200 that invalidates the
+    // bytecode entry. See issue #8624.
+    let stats: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      stats = await fs.stat(filePath);
+    } catch {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildHeaders("text/plain"),
+      });
+    }
+
+    const ifModifiedSince = request.headers.get("If-Modified-Since");
+    if (isNotModified(ifModifiedSince, stats.mtime)) {
+      return new Response(null, {
+        status: 304,
+        headers: buildHeaders(getMimeType(filePath), { stats, filePath }),
+      });
+    }
+
     try {
       const fileUrl = pathToFileURL(filePath).toString();
       const response = await net.fetch(fileUrl);
@@ -57,7 +85,7 @@ function createAppProtocolHandler(distPath: string) {
       }
 
       const mimeType = getMimeType(filePath);
-      const headers = buildHeaders(mimeType);
+      const headers = buildHeaders(mimeType, { stats, filePath });
       const buffer = await response.arrayBuffer();
 
       return new Response(buffer, {
