@@ -139,6 +139,15 @@ function SettingsDialogInner({
     () => new Set<SettingsTab>([initialTab])
   );
 
+  // AppDialog uses useAnimatedPresence and keeps children mounted through
+  // the ~120ms exit animation, so a hover-intent timer scheduled near close
+  // can fire while the dialog is animating out. Read this ref inside the
+  // timer callback to skip the speculative mount when the dialog is closing.
+  const isOpenRef = useRef(isOpen);
+  useEffect(() => {
+    isOpenRef.current = isOpen;
+  }, [isOpen]);
+
   const hasProject = !!projectId;
 
   useEffect(() => {
@@ -633,7 +642,13 @@ function SettingsDialogInner({
                       hasError={tabsWithErrors.has(tabId)}
                       onSelect={handleNavSelect}
                       onPrefetchImport={isLazy ? entry.importer : undefined}
-                      onPrefetchMount={isLazy ? () => markTabVisited(tabId) : undefined}
+                      onPrefetchMount={
+                        isLazy
+                          ? () => {
+                              if (isOpenRef.current) markTabVisited(tabId);
+                            }
+                          : undefined
+                      }
                     />
                   );
                 })}

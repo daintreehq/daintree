@@ -202,4 +202,29 @@ describe("useHoverIntentPrefetch (issue #8760)", () => {
     });
     expect(onPrefetchMount).toHaveBeenCalledTimes(1);
   });
+
+  // Models the render-site gate added for the AppDialog exit-animation window:
+  // SettingsDialogInner wraps markTabVisited in an `isOpenRef.current` check
+  // so a timer scheduled within 150ms of close doesn't mount a hidden panel
+  // (which would fire its IPC reads against a closing dialog).
+  it("render-site isOpenRef gate suppresses the speculative mount during close", () => {
+    const markTabVisited = vi.fn();
+    const isOpenRef = { current: true };
+    const onPrefetchMount = () => {
+      if (isOpenRef.current) markTabVisited("agents");
+    };
+
+    const { result } = renderHook(() => useHoverIntentPrefetch({ onPrefetchMount }));
+
+    act(() => {
+      result.current.onEnter();
+    });
+    // User closes the dialog 100ms into the hover.
+    isOpenRef.current = false;
+    act(() => {
+      vi.advanceTimersByTime(SETTINGS_TAB_HOVER_INTENT_MS);
+    });
+
+    expect(markTabVisited).not.toHaveBeenCalled();
+  });
 });
