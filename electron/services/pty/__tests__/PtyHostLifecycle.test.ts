@@ -488,16 +488,14 @@ describe("PtyHostLifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(lifecycle.crashTimestamps).toHaveLength(1);
 
-    // Fire the restart timer and advance well past the 5-minute window.
-    // Use advanceTimersToNextTimerAsync to drain whatever restart delay was
-    // scheduled with jitter, then advance past the window for the next crash.
+    // Fire the restart timer, then advance well past the 30-minute window.
     const child2 = createMockChild();
     shared.forkMock.mockReturnValueOnce(child2);
     await vi.advanceTimersByTimeAsync(4_001);
     lifecycle.waitForReady().catch(() => undefined);
 
-    // Advance 6 minutes — the first crash timestamp is now outside the window
-    await vi.advanceTimersByTimeAsync(360_000);
+    // Advance 31 minutes — the first crash timestamp is now outside the window
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
 
     // Crash 2: filter drops the stale timestamp, length becomes 1 again
     child2.emit("exit", 1);
@@ -506,7 +504,7 @@ describe("PtyHostLifecycle", () => {
     expect(callbacks.log.onMaxRestartsCalls).toHaveLength(0);
   });
 
-  it("stability timer clears the crash window after a quiet interval", async () => {
+  it("crash window persists through long quiet intervals and decays lazily (regression #8683)", async () => {
     const { lifecycle, callbacks } = makeLifecycle();
     lifecycle.start();
     lifecycle.markReady();
@@ -516,27 +514,64 @@ describe("PtyHostLifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(lifecycle.crashTimestamps).toHaveLength(1);
 
-    // Restart fires, host comes up, markReady starts a fresh stability timer
+    // Restart fires, host comes up. The crash entry must survive ready and
+    // long quiet intervals — there is no proactive reset timer any more.
     const child2 = createMockChild();
     shared.forkMock.mockReturnValueOnce(child2);
     await vi.advanceTimersByTimeAsync(4_001);
     lifecycle.waitForReady().catch(() => undefined);
     lifecycle.markReady();
 
-    // Window still has the crash recorded immediately after ready (this is
-    // critical — clearing on ready would defeat the sliding window).
     expect(lifecycle.crashTimestamps).toHaveLength(1);
 
-    // After STABILITY_TIMEOUT_MS of clean running, the timer fires and clears
-    // the history.
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(lifecycle.crashTimestamps).toHaveLength(0);
+    // 10 minutes of clean running — the prior crash is still within the
+    // 30-min window and remains counted.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(lifecycle.crashTimestamps).toHaveLength(1);
 
-    // A subsequent crash gets a fresh budget and does not trip the cap.
+    // The next crash accumulates rather than getting a fresh budget.
     child2.emit("exit", 1);
     await vi.advanceTimersByTimeAsync(0);
-    expect(lifecycle.crashTimestamps).toHaveLength(1);
+    expect(lifecycle.crashTimestamps).toHaveLength(2);
     expect(callbacks.log.onMaxRestartsCalls).toHaveLength(0);
+  });
+
+  it("slow flap of 6-minute-cadence crashes trips the cap (regression #8683)", async () => {
+    const { lifecycle, callbacks } = makeLifecycle();
+    lifecycle.start();
+    lifecycle.markReady();
+
+    // Crash 1
+    mockChild.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lifecycle.crashTimestamps).toHaveLength(1);
+
+    // Wait 6 minutes (well past the prior 5-min rapid window), restart, then
+    // crash again. Under the old guard the prior timestamp had already
+    // expired and the count would not accumulate.
+    const child2 = createMockChild();
+    shared.forkMock.mockReturnValueOnce(child2);
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    lifecycle.waitForReady().catch(() => undefined);
+    lifecycle.markReady();
+
+    // Crash 2 — still inside the 30-min window
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lifecycle.crashTimestamps).toHaveLength(2);
+    expect(callbacks.log.onMaxRestartsCalls).toHaveLength(0);
+
+    // Another 6 minutes, then crash 3 — threshold reached.
+    const child3 = createMockChild();
+    shared.forkMock.mockReturnValueOnce(child3);
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    lifecycle.waitForReady().catch(() => undefined);
+    lifecycle.markReady();
+
+    child3.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lifecycle.crashTimestamps).toHaveLength(3);
+    expect(callbacks.log.onMaxRestartsCalls).toEqual([1]);
   });
 
   it("manualRestart no-ops when child is still alive", () => {
@@ -605,55 +640,6 @@ describe("PtyHostLifecycle", () => {
     expect(lifecycle.restartTimer).toBeNull();
     // The new host gets a fresh three-crash budget; the prior crashes don't
     // contribute to the next threshold check.
-    expect(callbacks.log.onMaxRestartsCalls).toHaveLength(0);
-  });
-
-  it("manualRestart cancels a pending stability timer", async () => {
-    const { lifecycle } = makeLifecycle();
-    lifecycle.start();
-    // markReady starts the stability timer.
-    lifecycle.markReady();
-
-    // Record one crash so the window is non-empty before the host exits again.
-    mockChild.emit("exit", 1);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(lifecycle.crashTimestamps).toHaveLength(1);
-
-    // manualRestart clears both the window and any pending stability timer.
-    const child2 = createMockChild();
-    shared.forkMock.mockReturnValueOnce(child2);
-    lifecycle.manualRestart();
-    lifecycle.waitForReady().catch(() => undefined);
-    expect(lifecycle.crashTimestamps).toHaveLength(0);
-
-    // Record a new crash AFTER the manual restart, then advance past the
-    // original stability deadline. If the old timer had survived, it would
-    // fire here and wipe the freshly recorded crash. Asserting the entry
-    // survives proves the old timer was cancelled.
-    child2.emit("exit", 1);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(lifecycle.crashTimestamps).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(300_001);
-    expect(lifecycle.crashTimestamps).toHaveLength(1);
-  });
-
-  it("stability timer from a prior ready is cancelled on crash", async () => {
-    const { lifecycle, callbacks } = makeLifecycle();
-    lifecycle.start();
-    lifecycle.markReady();
-
-    // Run almost to the stability deadline, then crash. The stability timer
-    // is now ~100ms from firing; if it weren't cancelled it would wipe the
-    // crash window after the crash, defeating the three-strike guard for any
-    // crash-near-ready pattern.
-    await vi.advanceTimersByTimeAsync(299_900);
-    mockChild.emit("exit", 1);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(lifecycle.crashTimestamps).toHaveLength(1);
-
-    // Advance past the stale deadline — the crash entry must survive.
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(lifecycle.crashTimestamps).toHaveLength(1);
     expect(callbacks.log.onMaxRestartsCalls).toHaveLength(0);
   });
 
@@ -775,16 +761,16 @@ describe("PtyHostLifecycle timer hygiene", () => {
     }
   });
 
-  it("stability timer is unref'd so it never pins the event loop", () => {
+  it("markReady does not schedule any background timer (regression #8683)", () => {
     const { lifecycle } = makeLifecycle();
     lifecycle.start();
 
     const { unrefSpies, restore } = instrumentSetTimeoutUnref();
     try {
-      // markReady() schedules the stability setTimeout.
+      // markReady() must NOT schedule a stability timer — its absence is the
+      // core of #8683. The crash window decays lazily at crash-record-time.
       lifecycle.markReady();
-      expect(unrefSpies).toHaveLength(1);
-      expect(unrefSpies[0]).toHaveBeenCalledTimes(1);
+      expect(unrefSpies).toHaveLength(0);
     } finally {
       restore();
     }

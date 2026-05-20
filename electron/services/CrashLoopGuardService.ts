@@ -6,8 +6,13 @@ import { resilientAtomicWriteFileSync } from "../utils/fs.js";
 const STATE_FILENAME = "crash-loop-state.json";
 const CRASH_THRESHOLD = 3;
 const HARD_STOP_THRESHOLD = 5;
-const STABILITY_TIMEOUT_MS = 5 * 60 * 1000;
-const RAPID_CRASH_WINDOW_MS = 300_000;
+// Sliding-window decay for the crash counter. Lazy-evaluated at boot and at
+// crash-record-time — no setTimeout, no proactive reset. A wider window
+// (compared to the prior 5-minute rapid-crash setting) closes the slow-flap
+// blind spot where a crash every 6+ minutes accumulated no strikes because
+// each entry expired before the next crash. Exported so the alignment test
+// (`crashGuardAlignment.test.ts`) can assert the three guards share one value.
+export const CRASH_WINDOW_MS = 30 * 60 * 1000;
 
 // Grace window before a leftover `.tmp` from `resilientAtomicWriteFileSync` is
 // swept. Matches the precedent in `terminalSessionPersistence.ts` — long enough
@@ -56,7 +61,6 @@ export class CrashLoopGuardService {
   private statePath: string;
   private safeMode = false;
   private relaunchAllowed = true;
-  private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
   private initialized = false;
   private crashCount = 0;
   private lastCrashAt: number | undefined;
@@ -82,7 +86,7 @@ export class CrashLoopGuardService {
     const now = Date.now();
 
     if (!state.cleanExit) {
-      const recentLaunches = state.launches.filter((ts) => now - ts < RAPID_CRASH_WINDOW_MS);
+      const recentLaunches = state.launches.filter((ts) => now - ts < CRASH_WINDOW_MS);
       state.crashes = recentLaunches.length;
     } else {
       state.crashes = 0;
@@ -151,9 +155,8 @@ export class CrashLoopGuardService {
   }
 
   /**
-   * User-initiated reset: cancel the stability timer first so it can't
-   * fire between our write and exit and clobber the fresh state, then
-   * atomically clear the state file and reset in-memory flags.
+   * User-initiated reset: atomically clear the state file and reset in-memory
+   * flags.
    *
    * Throws if the disk write fails. The caller (IPC handler) must propagate
    * the failure so the renderer can re-enable the restart button — silently
@@ -161,10 +164,6 @@ export class CrashLoopGuardService {
    * boot the user straight back into safe mode after relaunch.
    */
   resetForNormalBoot(): void {
-    if (this.stabilityTimer) {
-      clearTimeout(this.stabilityTimer);
-      this.stabilityTimer = null;
-    }
     this.writeState(freshState());
     this.safeMode = false;
     this.relaunchAllowed = true;
@@ -182,27 +181,9 @@ export class CrashLoopGuardService {
     }
   }
 
-  startStabilityTimer(): void {
-    if (this.stabilityTimer) return;
-    this.stabilityTimer = setTimeout(() => {
-      this.stabilityTimer = null;
-      try {
-        const state = freshState();
-        this.writeState(state);
-        this.safeMode = false;
-        this.relaunchAllowed = true;
-        console.log("[CrashLoopGuard] Stability timer fired — crash counter reset");
-      } catch (err) {
-        console.error("[CrashLoopGuard] Failed to reset crash counter:", err);
-      }
-    }, STABILITY_TIMEOUT_MS);
-  }
-
   dispose(): void {
-    if (this.stabilityTimer) {
-      clearTimeout(this.stabilityTimer);
-      this.stabilityTimer = null;
-    }
+    // No resources held — kept for API stability with callers that pair
+    // initialize()/dispose() out of habit.
   }
 
   private readState(): CrashLoopState {
@@ -360,7 +341,7 @@ export function isSafeModeActive(userDataPath?: string): boolean {
     ) {
       if (parsed.cleanExit) return false;
       const now = Date.now();
-      const recentLaunches = parsed.launches.filter((ts) => now - ts < RAPID_CRASH_WINDOW_MS);
+      const recentLaunches = parsed.launches.filter((ts) => now - ts < CRASH_WINDOW_MS);
       return recentLaunches.length >= CRASH_THRESHOLD;
     }
     return false;

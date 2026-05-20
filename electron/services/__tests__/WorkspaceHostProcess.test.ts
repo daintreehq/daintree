@@ -659,7 +659,7 @@ describe("WorkspaceHostProcess crash window", () => {
     host.dispose();
   });
 
-  it("stability timer clears the crash window after a quiet interval", async () => {
+  it("crash window persists through long quiet intervals (regression #8683)", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {
       maxRestartAttempts: 3,
@@ -673,43 +673,15 @@ describe("WorkspaceHostProcess crash window", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect((host as any).crashTimestamps).toHaveLength(1);
 
-    // Auto-restart fires and host comes up; ready arms a fresh stability timer
+    // Auto-restart fires and host comes up
     host.waitForReady().catch(() => {});
     await vi.advanceTimersByTimeAsync(2_001);
     const child2 = mockChildren[1] as MockUtilityChild;
     child2.emit("message", { type: "ready" });
 
-    // Crash entry must survive immediately after ready
-    expect((host as any).crashTimestamps).toHaveLength(1);
-
-    // After STABILITY_TIMEOUT_MS of clean running, the window is cleared
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect((host as any).crashTimestamps).toHaveLength(0);
-
-    host.dispose();
-  });
-
-  it("stability timer from a prior ready is cancelled on crash", async () => {
-    const { WorkspaceHostProcess } = await loadModule();
-    const host = new WorkspaceHostProcess("/tmp/project", {
-      maxRestartAttempts: 3,
-      healthCheckIntervalMs: 30000,
-    } as any);
-    host.waitForReady().catch(() => {});
-
-    const child = mockChildren[0] as MockUtilityChild;
-    child.emit("message", { type: "ready" });
-
-    // Run almost to the stability deadline, then crash. The stability timer
-    // is now ~100ms from firing; if it weren't cancelled it would wipe the
-    // crash window AFTER the crash, defeating the three-strike guard.
-    await vi.advanceTimersByTimeAsync(299_900);
-    child.emit("exit", 1);
-    await vi.advanceTimersByTimeAsync(0);
-    expect((host as any).crashTimestamps).toHaveLength(1);
-
-    // Advance past the stale deadline — the crash entry must survive
-    await vi.advanceTimersByTimeAsync(1_000);
+    // 10 minutes of clean running — the crash entry must persist (there
+    // is no proactive reset timer any more).
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect((host as any).crashTimestamps).toHaveLength(1);
 
     host.dispose();
@@ -730,21 +702,59 @@ describe("WorkspaceHostProcess crash window", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect((host as any).crashTimestamps).toHaveLength(1);
 
-    // Restart fires; advance well past the window (6 minutes)
+    // Restart fires; advance well past the 30-min window (31 minutes)
     host.waitForReady().catch(() => {});
     await vi.advanceTimersByTimeAsync(2_001);
     const child2 = mockChildren[1] as MockUtilityChild;
     child2.emit("message", { type: "ready" });
-    // Advance well past the 5-min window — the stability timer fires at
-    // exactly 5min, which clears the window. After this point, any new
-    // crash starts fresh.
-    await vi.advanceTimersByTimeAsync(360_000);
-    expect((host as any).crashTimestamps).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
 
-    // A subsequent crash gets a fresh budget
+    // A subsequent crash gets a fresh budget — the lazy filter at
+    // crash-record-time drops the stale entry.
     child2.emit("exit", 1);
     await vi.advanceTimersByTimeAsync(0);
     expect((host as any).crashTimestamps).toHaveLength(1);
+
+    host.dispose();
+  });
+
+  it("slow flap of 6-minute-cadence crashes trips host-crash (regression #8683)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const crashSpy = vi.fn();
+    host.on("host-crash", crashSpy);
+
+    // Crash 1
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).crashTimestamps).toHaveLength(1);
+
+    // Wait 6 minutes (just outside the prior 5-min rapid window), then crash
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).crashTimestamps).toHaveLength(2);
+    expect(crashSpy).not.toHaveBeenCalled();
+
+    // Another 6 minutes, then crash 3 — threshold reached
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    const child3 = mockChildren[2] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child3.emit("message", { type: "ready" });
+    child3.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).crashTimestamps).toHaveLength(3);
+    expect(crashSpy).toHaveBeenCalledWith(1);
 
     host.dispose();
   });

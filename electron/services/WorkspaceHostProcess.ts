@@ -32,13 +32,14 @@ const RESTART_CAP_BASE_MS = 1_000;
 const RESTART_CAP_MAX_MS = 10_000;
 
 // Time-windowed crash-loop guard. Mirrors the constants in PtyHostLifecycle
-// (and CrashLoopGuardService) so the workspace-host follows the same policy:
-// three crashes within five minutes trip the cap, and a five-minute stretch
-// of clean running decays the window back to empty. Duplicated rather than
-// imported because the guards operate at independent layers.
+// and CrashLoopGuardService so the three guards follow the same policy: three
+// crashes within the window trip the cap, and crashes spread further apart
+// decay out lazily at crash-record-time. Duplicated rather than imported
+// because the guards operate at independent layers. The alignment test
+// (`crashGuardAlignment.test.ts`) asserts the three values stay in lockstep
+// so the next person tuning one is forced to consider the others.
 const CRASH_THRESHOLD = 3;
-const RAPID_CRASH_WINDOW_MS = 300_000;
-const STABILITY_TIMEOUT_MS = 300_000;
+export const CRASH_WINDOW_MS = 30 * 60 * 1000;
 
 export class WorkspaceHostProcess extends EventEmitter {
   private child: UtilityProcess | null = null;
@@ -52,18 +53,11 @@ export class WorkspaceHostProcess extends EventEmitter {
   private restartTimer: NodeJS.Timeout | null = null;
   private disposeTimer: NodeJS.Timeout | null = null;
   /**
-   * Sliding window of recent crash timestamps. Trimmed to entries within
-   * `RAPID_CRASH_WINDOW_MS` on each crash; cleared when the stability timer
-   * fires after a successful `ready`. Three crashes within the window trip
-   * the cap and emit `host-crash`.
+   * Sliding window of recent crash timestamps. Lazy-pruned to entries within
+   * `CRASH_WINDOW_MS` on each crash — no proactive reset, no setTimeout.
+   * Three crashes within the window trip the cap and emit `host-crash`.
    */
   private crashTimestamps: number[] = [];
-  /**
-   * Stability timer started on every `ready`. When it fires after
-   * `STABILITY_TIMEOUT_MS` of clean running, the crash window is cleared.
-   * Cleared on crash, `manualRestart()`, and `dispose()`.
-   */
-  private stabilityTimer: NodeJS.Timeout | null = null;
   /**
    * Authoritative crash reason captured from `app.on("child-process-gone")`.
    * Consumed by the next `exit` handler via `setImmediate` deferral, since the
@@ -282,11 +276,10 @@ export class WorkspaceHostProcess extends EventEmitter {
 
   /**
    * Restart the host after its auto-restart budget has been exhausted.
-   * Clears the crash window and pending stability timer so future crashes
-   * get a fresh budget, respawns the child, and emits `"restarted"` so
-   * `WorkspaceClient` can re-broker ports and reload the project — the
-   * auto-restart path emits this from its `setTimeout` callback which
-   * `manualRestart()` bypasses.
+   * Clears the crash window so future crashes get a fresh budget, respawns
+   * the child, and emits `"restarted"` so `WorkspaceClient` can re-broker
+   * ports and reload the project — the auto-restart path emits this from its
+   * `setTimeout` callback which `manualRestart()` bypasses.
    */
   manualRestart(): void {
     if (this.isDisposed) {
@@ -307,10 +300,6 @@ export class WorkspaceHostProcess extends EventEmitter {
     }
 
     this.crashTimestamps = [];
-    if (this.stabilityTimer) {
-      clearTimeout(this.stabilityTimer);
-      this.stabilityTimer = null;
-    }
 
     console.log(`[WorkspaceHost:${this.serviceName}] Manual restart initiated`);
     this.startHost();
@@ -336,10 +325,6 @@ export class WorkspaceHostProcess extends EventEmitter {
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
-    }
-    if (this.stabilityTimer) {
-      clearTimeout(this.stabilityTimer);
-      this.stabilityTimer = null;
     }
     if (this.handshakeTimeout) {
       clearTimeout(this.handshakeTimeout);
@@ -570,15 +555,6 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.isInitialized = false;
       this.child = null;
 
-      // Cancel any stability timer the prior `ready` armed. If it stayed
-      // alive, it could fire moments after a crash and wipe `crashTimestamps`
-      // even though the host never ran cleanly for the full window —
-      // defeating the three-crash guard for crash-ready-crash-ready patterns.
-      if (this.stabilityTimer) {
-        clearTimeout(this.stabilityTimer);
-        this.stabilityTimer = null;
-      }
-
       this.broker.clear(
         new BrokerError("HOST_EXITED", "Workspace Host crashed", {
           projectScopeId: this.projectPath,
@@ -628,13 +604,11 @@ export class WorkspaceHostProcess extends EventEmitter {
         // would orphan that host.
         if (this.child !== null) return;
 
-        // Time-windowed sliding crash counter. Trim entries older than the
-        // window, then append the current crash. Three crashes within five
-        // minutes trip the cap; crashes spread further apart decay out.
+        // Time-windowed sliding crash counter. Lazy-prune entries older than
+        // the window, then append the current crash. Three crashes within the
+        // window trip the cap; crashes spread further apart decay out.
         const crashAt = Date.now();
-        this.crashTimestamps = this.crashTimestamps.filter(
-          (t) => crashAt - t < RAPID_CRASH_WINDOW_MS
-        );
+        this.crashTimestamps = this.crashTimestamps.filter((t) => crashAt - t < CRASH_WINDOW_MS);
         this.crashTimestamps.push(crashAt);
 
         if (this.crashTimestamps.length < CRASH_THRESHOLD) {
@@ -661,7 +635,7 @@ export class WorkspaceHostProcess extends EventEmitter {
           this.restartTimer.unref?.();
         } else {
           console.error(
-            `[WorkspaceHost:${this.serviceName}] Max restart attempts reached (${CRASH_THRESHOLD} crashes in ${RAPID_CRASH_WINDOW_MS}ms), giving up`
+            `[WorkspaceHost:${this.serviceName}] Max restart attempts reached (${CRASH_THRESHOLD} crashes in ${CRASH_WINDOW_MS}ms), giving up`
           );
           this.emit("host-crash", reportedCode);
         }
@@ -736,23 +710,6 @@ export class WorkspaceHostProcess extends EventEmitter {
     app.on("child-process-gone", handler);
   }
 
-  /**
-   * Start (or restart) the stability timer. When it fires after
-   * `STABILITY_TIMEOUT_MS` of clean running, the crash window is cleared so
-   * subsequent crashes start fresh. Unref'd so the timer never pins the
-   * Electron event loop alive after `app.quit`.
-   */
-  private startStabilityTimer(): void {
-    if (this.stabilityTimer) {
-      clearTimeout(this.stabilityTimer);
-    }
-    this.stabilityTimer = setTimeout(() => {
-      this.stabilityTimer = null;
-      this.crashTimestamps = [];
-    }, STABILITY_TIMEOUT_MS);
-    this.stabilityTimer.unref?.();
-  }
-
   private handleHostEvent(event: WorkspaceHostEvent): void {
     try {
       this.processHostEvent(event);
@@ -777,13 +734,12 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "ready": {
         if (!this.child) return;
         this.isInitialized = true;
-        // Start (or restart) the stability timer. We deliberately do NOT
-        // clear `crashTimestamps` here — clearing on ready would defeat the
-        // sliding window for a crash-ready-crash-ready loop, where each
-        // fresh ready would wipe the history right before the next crash.
-        // The window is only cleared when the timer fires after a full
-        // stable interval. This is the fix for #8553.
-        this.startStabilityTimer();
+        // Do NOT clear `crashTimestamps` here — clearing on ready would
+        // defeat the sliding window for a crash-ready-crash-ready loop,
+        // where each fresh ready would wipe the history right before the
+        // next crash. The window decays lazily at crash-record-time in the
+        // `exit` handler. This is the fix for #8553 (preserved) and #8683
+        // (no proactive reset timer).
 
         const token = GitHubAuth.getToken();
         if (token) {

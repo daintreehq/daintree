@@ -105,15 +105,16 @@ const RESTART_CAP_BASE_MS = 1_000;
 const RESTART_CAP_MAX_MS = 10_000;
 
 // Time-windowed crash-loop guard. Mirrors the constants in
-// `CrashLoopGuardService` so the pty-host follows the same policy as the main
-// process: three crashes within five minutes trip the cap, and a five-minute
-// stretch of clean running decays the window back to empty. Constants are
-// duplicated rather than imported because the two guards operate at different
-// layers (disk-persisted app-level vs. in-memory pty-host) and shouldn't be
-// coupled.
+// `CrashLoopGuardService` and `WorkspaceHostProcess` so the three guards
+// follow the same policy: three crashes within the window trip the cap, and
+// crashes spread further apart decay out lazily at crash-record-time.
+// Constants are duplicated rather than imported because the guards operate at
+// different layers (disk-persisted app-level vs. in-memory utility-process)
+// and shouldn't be coupled. The alignment test
+// (`crashGuardAlignment.test.ts`) asserts the three values stay in lockstep
+// so the next person tuning one is forced to consider the others.
 const CRASH_THRESHOLD = 3;
-const RAPID_CRASH_WINDOW_MS = 300_000;
-const STABILITY_TIMEOUT_MS = 300_000;
+export const CRASH_WINDOW_MS = 30 * 60 * 1000;
 
 export interface PtyHostLifecycleConfig {
   memoryLimitMb: number;
@@ -170,19 +171,13 @@ export class PtyHostLifecycle {
   /** Public for test access — read by `isReady()` on PtyClient and the watchdog tick. */
   isInitialized = false;
   /**
-   * Sliding window of recent crash timestamps. Trimmed to entries within
-   * `RAPID_CRASH_WINDOW_MS` on each crash; cleared when the stability timer
-   * fires after a successful `markReady()`. Public for test access.
+   * Sliding window of recent crash timestamps. Lazy-pruned to entries within
+   * `CRASH_WINDOW_MS` on each crash — no proactive reset, no setTimeout.
+   * Public for test access.
    */
   crashTimestamps: number[] = [];
   /** Active restart timer; cleared on dispose / start / manualRestart. */
   restartTimer: NodeJS.Timeout | null = null;
-  /**
-   * Stability timer started on every `markReady()`. When it fires after
-   * `STABILITY_TIMEOUT_MS` of clean running, the crash window is cleared.
-   * Cleared by `manualRestart()` and `dispose()`.
-   */
-  private stabilityTimer: NodeJS.Timeout | null = null;
   /** Force-kill backstop timer scheduled by dispose(); cleared if dispose runs again. */
   private disposeTimer: NodeJS.Timeout | null = null;
   /**
@@ -227,12 +222,10 @@ export class PtyHostLifecycle {
   markReady(): boolean {
     if (!this.child) return false;
     this.isInitialized = true;
-    // Start (or restart) the stability timer. Note we deliberately do NOT
-    // clear `crashTimestamps` here — clearing on ready would defeat the
-    // sliding window for a crash-ready-crash-ready loop, where each fresh
+    // Do NOT clear `crashTimestamps` here — clearing on ready would defeat
+    // the sliding window for a crash-ready-crash-ready loop, where each fresh
     // ready would wipe the history right before the next crash. The window
-    // is only cleared when the timer fires after a full stable interval.
-    this.startStabilityTimer();
+    // decays lazily at crash-record-time in `handleExit()`.
     if (this.readyResolve) {
       this.readyResolve();
       this.readyResolve = null;
@@ -248,8 +241,8 @@ export class PtyHostLifecycle {
 
   /**
    * User-initiated restart (e.g., from the renderer). Clears the crash window
-   * and cancels any pending stability timer so the new cycle starts with a
-   * fresh budget. No-ops if already disposed or already running.
+   * so the new cycle starts with a fresh budget. No-ops if already disposed
+   * or already running.
    */
   manualRestart(): void {
     if (this.callbacks.isDisposed()) {
@@ -268,10 +261,6 @@ export class PtyHostLifecycle {
     }
 
     this.crashTimestamps = [];
-    if (this.stabilityTimer) {
-      clearTimeout(this.stabilityTimer);
-      this.stabilityTimer = null;
-    }
     this.callbacks.onBeforeRestart();
     this.callbacks.logInfo("[PtyClient] Manual restart initiated");
     this.start();
@@ -389,11 +378,6 @@ export class PtyHostLifecycle {
       this.restartTimer = null;
     }
 
-    if (this.stabilityTimer) {
-      clearTimeout(this.stabilityTimer);
-      this.stabilityTimer = null;
-    }
-
     if (this.disposeTimer) {
       clearTimeout(this.disposeTimer);
       this.disposeTimer = null;
@@ -461,15 +445,6 @@ export class PtyHostLifecycle {
     this.isInitialized = false;
     this.child = null; // Prevent posting to dead process
 
-    // Cancel any stability timer the prior `markReady()` armed. If it stayed
-    // alive, it could fire moments after a crash and wipe `crashTimestamps`
-    // even though the host never ran cleanly for the full window — defeating
-    // the three-crash guard for crash-ready-crash-ready patterns.
-    if (this.stabilityTimer) {
-      clearTimeout(this.stabilityTimer);
-      this.stabilityTimer = null;
-    }
-
     if (this.callbacks.isDisposed()) {
       // Expected shutdown - drop any buffered reason so it can't leak.
       this.pendingChildProcessGoneReason = null;
@@ -534,13 +509,11 @@ export class PtyHostLifecycle {
       // window, don't schedule a second auto-restart — it would orphan that host.
       if (this.child !== null) return;
 
-      // Time-windowed sliding crash counter. Trim entries older than the
-      // window, then append the current crash. Three crashes within five
-      // minutes trip the cap; crashes spread further apart decay out.
+      // Time-windowed sliding crash counter. Lazy-prune entries older than
+      // the window, then append the current crash. Three crashes within the
+      // window trip the cap; crashes spread further apart decay out.
       const crashAt = Date.now();
-      this.crashTimestamps = this.crashTimestamps.filter(
-        (t) => crashAt - t < RAPID_CRASH_WINDOW_MS
-      );
+      this.crashTimestamps = this.crashTimestamps.filter((t) => crashAt - t < CRASH_WINDOW_MS);
       this.crashTimestamps.push(crashAt);
 
       if (this.crashTimestamps.length < CRASH_THRESHOLD) {
@@ -563,28 +536,11 @@ export class PtyHostLifecycle {
         this.restartTimer.unref?.();
       } else {
         console.error(
-          `[PtyClient] Max restart attempts reached (${CRASH_THRESHOLD} crashes in ${RAPID_CRASH_WINDOW_MS}ms), giving up`
+          `[PtyClient] Max restart attempts reached (${CRASH_THRESHOLD} crashes in ${CRASH_WINDOW_MS}ms), giving up`
         );
         this.callbacks.onMaxRestartsReached(reportedCode);
       }
     });
-  }
-
-  /**
-   * Start (or restart) the stability timer. When it fires after
-   * `STABILITY_TIMEOUT_MS` of clean running, the crash window is cleared so
-   * subsequent crashes start fresh. Unref'd so the timer never pins the
-   * Electron event loop alive after `app.quit`.
-   */
-  private startStabilityTimer(): void {
-    if (this.stabilityTimer) {
-      clearTimeout(this.stabilityTimer);
-    }
-    this.stabilityTimer = setTimeout(() => {
-      this.stabilityTimer = null;
-      this.crashTimestamps = [];
-    }, STABILITY_TIMEOUT_MS);
-    this.stabilityTimer.unref?.();
   }
 
   private installHostLogForwarding(): void {
