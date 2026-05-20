@@ -170,7 +170,7 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
       getPtyClient: () => pty as unknown as PtyClient,
       getWorkspaceClient: () => workspace as unknown as WorkspaceClient,
       getHibernationService: () => hibernation as unknown as HibernationService,
-      getProjectViewManager: () => null,
+      getAllProjectViewManagers: () => [],
       getProjectStatsService: () => stats as unknown as ProjectStatsService,
       getUserCachedViewLimit: () => 1,
       ...overrides,

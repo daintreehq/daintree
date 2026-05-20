@@ -142,10 +142,18 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDe
     getPtyClient: () => mockPtyClient as unknown as PtyClient,
     getWorkspaceClient: () => mockWorkspaceClient as unknown as WorkspaceClient,
     getHibernationService: () => mockHibernationService as unknown as HibernationService,
-    getProjectViewManager: () => mockProjectViewManager as unknown as ProjectViewManager,
+    getAllProjectViewManagers: () => [mockProjectViewManager as unknown as ProjectViewManager],
     getProjectStatsService: () => mockProjectStatsService as unknown as ProjectStatsService,
     getUserCachedViewLimit: () => 2,
     ...overrides,
+  };
+}
+
+function makeMockPvm(): MockProjectViewManager {
+  return {
+    setCachedViewLimit: vi.fn(),
+    setLowMemoryFreeThresholdMb: vi.fn(),
+    setEfficiencyFreeze: vi.fn(),
   };
 }
 
@@ -329,7 +337,7 @@ describe("ResourceProfileService", () => {
       getPtyClient: () => null,
       getWorkspaceClient: () => null,
       getHibernationService: () => null,
-      getProjectViewManager: () => null,
+      getAllProjectViewManagers: () => [],
       getProjectStatsService: () => null,
     });
     const service = new ResourceProfileService(deps);
@@ -356,7 +364,7 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setCachedViewLimit).toHaveBeenCalledWith(1);
     expect(pvm.setCachedViewLimit).toHaveBeenCalledTimes(1);
     expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
@@ -379,7 +387,7 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setEfficiencyFreeze).toHaveBeenLastCalledWith(true);
 
     // Relieve to balanced.
@@ -396,7 +404,7 @@ describe("ResourceProfileService", () => {
 
   it("still unfreezes when setCachedViewLimit throws on the exit path", () => {
     const deps = createDeps({ getUserCachedViewLimit: () => 2 });
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     const service = new ResourceProfileService(deps);
     mockIsOnBatteryPower.mockReturnValue(true);
     service.start();
@@ -437,7 +445,7 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("performance");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setEfficiencyFreeze).not.toHaveBeenCalled();
 
     service.stop();
@@ -458,7 +466,7 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(1);
 
     // Relieve to moderate pressure (score 1 = balanced)
@@ -504,7 +512,7 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(30_000);
 
     expect(service.getProfile()).toBe("performance");
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(2);
     expect(pvm.setCachedViewLimit).toHaveBeenCalledTimes(2);
 
@@ -524,14 +532,14 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("performance");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
 
     service.stop();
   });
 
   it("handles null project view manager on efficiency transition", () => {
-    const deps = createDeps({ getProjectViewManager: () => null });
+    const deps = createDeps({ getAllProjectViewManagers: () => [] });
     const service = new ResourceProfileService(deps);
     mockIsOnBatteryPower.mockReturnValue(true);
     service.start();
@@ -548,7 +556,7 @@ describe("ResourceProfileService", () => {
   it("pushes the balanced profile's threshold on start() even without a transition", () => {
     const deps = createDeps();
     const service = new ResourceProfileService(deps);
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
 
     service.start();
 
@@ -570,7 +578,7 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
     );
@@ -593,7 +601,7 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
     );
@@ -626,14 +634,14 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("performance");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(null);
 
     service.stop();
   });
 
   it("handles null pvm gracefully when pushing threshold", () => {
-    const deps = createDeps({ getProjectViewManager: () => null });
+    const deps = createDeps({ getAllProjectViewManagers: () => [] });
     const service = new ResourceProfileService(deps);
     mockIsOnBatteryPower.mockReturnValue(true);
     service.start();
@@ -1367,5 +1375,112 @@ describe("ResourceProfileService", () => {
 
       service.stop();
     });
+  });
+
+  it("start() pushes the low-memory threshold to every registered PVM", () => {
+    // Regression for #8605: in multi-window sessions, the initial threshold
+    // must arm every window's PVM, not just the most recently opened one.
+    const pvmA = makeMockPvm();
+    const pvmB = makeMockPvm();
+    const deps = createDeps({
+      getAllProjectViewManagers: () => [
+        pvmA as unknown as ProjectViewManager,
+        pvmB as unknown as ProjectViewManager,
+      ],
+    });
+    const service = new ResourceProfileService(deps);
+
+    service.start();
+
+    expect(pvmA.setLowMemoryFreeThresholdMb).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.lowMemoryFreeThresholdMb
+    );
+    expect(pvmB.setLowMemoryFreeThresholdMb).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.lowMemoryFreeThresholdMb
+    );
+
+    service.stop();
+  });
+
+  it("efficiency transition fans out setCachedViewLimit and setEfficiencyFreeze to every PVM", () => {
+    // Regression for #8605: profile transitions must reach every open window's
+    // PVM so the memory controls aren't silently scoped to one window.
+    const pvmA = makeMockPvm();
+    const pvmB = makeMockPvm();
+    const deps = createDeps({
+      getAllProjectViewManagers: () => [
+        pvmA as unknown as ProjectViewManager,
+        pvmB as unknown as ProjectViewManager,
+      ],
+    });
+    const service = new ResourceProfileService(deps);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    service.start();
+
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    expect(pvmA.setCachedViewLimit).toHaveBeenCalledWith(1);
+    expect(pvmA.setEfficiencyFreeze).toHaveBeenCalledWith(true);
+    expect(pvmA.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
+    );
+    expect(pvmB.setCachedViewLimit).toHaveBeenCalledWith(1);
+    expect(pvmB.setEfficiencyFreeze).toHaveBeenCalledWith(true);
+    expect(pvmB.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
+    );
+
+    service.stop();
+  });
+
+  it("one failing PVM does not block the remaining PVMs", () => {
+    // Per-operation try/catch isolation must extend across PVMs: a throw on
+    // one window's setCachedViewLimit must not skip the next window's calls.
+    const pvmA = makeMockPvm();
+    const pvmB = makeMockPvm();
+    pvmA.setCachedViewLimit.mockImplementation(() => {
+      throw new Error("simulated PVM A failure");
+    });
+    const deps = createDeps({
+      getAllProjectViewManagers: () => [
+        pvmA as unknown as ProjectViewManager,
+        pvmB as unknown as ProjectViewManager,
+      ],
+    });
+    const service = new ResourceProfileService(deps);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    service.start();
+
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    // PVM A's setEfficiencyFreeze must still run even though
+    // setCachedViewLimit threw — split try/catch per call.
+    expect(pvmA.setEfficiencyFreeze).toHaveBeenCalledWith(true);
+    // And PVM B must receive the full sequence, unblocked by A's failure.
+    expect(pvmB.setCachedViewLimit).toHaveBeenCalledWith(1);
+    expect(pvmB.setEfficiencyFreeze).toHaveBeenCalledWith(true);
+    expect(pvmB.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
+    );
+
+    service.stop();
+  });
+
+  it("zero PVMs is a no-throw no-op", () => {
+    const deps = createDeps({ getAllProjectViewManagers: () => [] });
+    const service = new ResourceProfileService(deps);
+    mockIsOnBatteryPower.mockReturnValue(true);
+
+    expect(() => service.start()).not.toThrow();
+
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    expect(() => vi.advanceTimersByTime(60_000 + 30_000 + 30_000)).not.toThrow();
+    expect(service.getProfile()).toBe("efficiency");
+
+    service.stop();
   });
 });
