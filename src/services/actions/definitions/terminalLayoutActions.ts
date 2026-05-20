@@ -56,6 +56,10 @@ export function registerTerminalLayoutActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
+        const terminal = state.panelsById[targetId];
+        if (!terminal) {
+          return;
+        }
         useLayoutUndoStore.getState().pushLayoutSnapshot();
         state.moveTerminalToGrid(targetId);
       }
