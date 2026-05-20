@@ -76,6 +76,29 @@ describe("Osc94Parser", () => {
     expect(onWorking).toHaveBeenCalledExactlyOnceWith(910);
   });
 
+  it("handles a sequence split right after the OSC introducer (chunk ends in '\\x1b]')", () => {
+    // Regression for the fast-guard gap: a chunk ending in the full 2-byte
+    // OSC introducer was silently dropped because it satisfied neither
+    // `includes("\\x1b]9")` nor `endsWith("\\x1b")`.
+    const { parser, onWorking } = makeParser();
+    parser.feed("\x1b]", 920);
+    parser.feed("9;4;1;50\x07", 930);
+    expect(onWorking).toHaveBeenCalledExactlyOnceWith(930);
+  });
+
+  it("recovers a valid OSC 9;4 from inside an unterminated foreign OSC's swallowed payload", () => {
+    // Regression for the swallow bug: an unterminated OSC 9 notification
+    // accumulates in carry; a later valid OSC 9;4 arrives with its own BEL,
+    // which gets misinterpreted as the foreign OSC's terminator and swallows
+    // the inner OSC 9;4 as part of the payload. The parser must re-seed carry
+    // from the nested `\x1b]` so the inner sequence still fires.
+    const { parser, onWorking } = makeParser();
+    parser.feed("\x1b]9;You have mail", 940);
+    expect(onWorking).not.toHaveBeenCalled();
+    parser.feed("\x1b]9;4;1;50\x07", 950);
+    expect(onWorking).toHaveBeenCalledExactlyOnceWith(950);
+  });
+
   it("handles a sequence split inside the ST terminator", () => {
     const { parser, onWorking } = makeParser();
     parser.feed("\x1b]9;4;1;75\x1b", 1000);

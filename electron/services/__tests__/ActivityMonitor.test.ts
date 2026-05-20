@@ -5326,6 +5326,30 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
+    it("negative control: the same starved viewport goes idle after 8s WITHOUT OSC heartbeats", () => {
+      // Pairs with the heartbeat test below — proves the positive test is
+      // load-bearing rather than vacuous. Same setup, no OSC calls.
+      vi.setSystemTime(1500);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("osc-no-heartbeat", 100, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => ["$", "waiting"],
+        getCursorLine: () => "waiting",
+        initialState: "busy",
+        skipInitialStateEmit: true,
+        pollingIntervalMs: 50,
+        idleDebounceMs: 8000,
+      });
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      vi.advanceTimersByTime(12000);
+
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
     it("keeps an already-busy monitor busy across the 8s IDLE_DEBOUNCE_MS even when the visible snapshot never changes", () => {
       // Reproduces #8701: a small grid tile starves the snapshot detector.
       // Without OSC heartbeat, simpleOutputState polling would fire idle at 8s.
@@ -5443,6 +5467,41 @@ describe("ActivityMonitor", () => {
       // because lastActivityTimestamp/lastDataTimestamp are stale.
       vi.advanceTimersByTime(10000);
 
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("OSC idle decays into natural idle: heartbeats stop, lastActivityTimestamp ages out, polling fires idle", () => {
+      // Strengthens coverage of the OSC idle path: after the OSC working
+      // heartbeat stops (state=0 received and not re-armed), no further
+      // refreshes happen — the existing 8s IDLE_DEBOUNCE_MS path should
+      // fire as `lastActivityTimestamp` becomes stale.
+      vi.setSystemTime(15000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("osc-natural-idle", 100, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => ["$", "waiting"],
+        getCursorLine: () => "waiting",
+        initialState: "busy",
+        skipInitialStateEmit: true,
+        pollingIntervalMs: 50,
+        idleDebounceMs: 8000,
+      });
+      monitor.startPolling();
+
+      // One working heartbeat, then OSC says idle (Claude between tool calls).
+      monitor.onOscProgressWorking(15000);
+      monitor.onOscProgressIdle(15050);
+      onStateChange.mockClear();
+
+      // Cross the 200ms OSC debounce — no transition yet (advisory only).
+      vi.advanceTimersByTime(201);
+      expect(monitor.getState()).toBe("busy");
+
+      // Now let 8s of natural decay run. No further OSC heartbeats arrive,
+      // so lastActivityTimestamp ages out and the polling cycle fires idle.
+      vi.advanceTimersByTime(9000);
       expect(monitor.getState()).toBe("idle");
 
       monitor.dispose();

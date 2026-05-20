@@ -54,10 +54,16 @@ export class Osc94Parser {
     // candidate and the carry is empty. `\x1b]9` is the minimal prefix for
     // both OSC 9;4 and the unrelated single-digit OSC 9 (notifications);
     // discriminating happens below after we have a complete payload. A chunk
-    // ending in ESC must still flow through so a sequence split across the
-    // chunk boundary (chunk1: "...\x1b", chunk2: "]9;4;1;50\x07") doesn't
-    // lose its introducer.
-    if (this.carry.length === 0 && !chunk.includes("\x1b]9") && !chunk.endsWith(ESC)) {
+    // ending in ESC OR in `ESC]` must still flow through so a sequence split
+    // across the chunk boundary (chunk1: "...\x1b", chunk2: "]9;4;1;50\x07")
+    // OR (chunk1: "...\x1b]", chunk2: "9;4;1;50\x07") doesn't lose its
+    // introducer.
+    if (
+      this.carry.length === 0 &&
+      !chunk.includes("\x1b]9") &&
+      !chunk.endsWith(ESC) &&
+      !chunk.endsWith("\x1b]")
+    ) {
       return;
     }
 
@@ -99,9 +105,29 @@ export class Osc94Parser {
       }
 
       const payload = this.carry.substring(oscIdx + 2, termIdx);
-      this.carry = this.carry.substring(termIdx + termLen);
 
-      this.handlePayload(payload, now);
+      if (this.handlePayload(payload, now)) {
+        // Recognized OSC 9;4 — consume past the terminator and continue.
+        this.carry = this.carry.substring(termIdx + termLen);
+        continue;
+      }
+
+      // Payload was an unrelated OSC (e.g. an unterminated OSC 9 notification
+      // that grew until a later OSC 9;4's BEL was treated as its terminator).
+      // The unrelated payload may contain a *nested* `\x1b]` that belongs to
+      // a real OSC sequence; if so, re-seed carry from that nested introducer
+      // so the next loop iteration can match it. Without this, a valid
+      // OSC 9;4 buried inside a malformed peer's payload would be silently
+      // lost.
+      const nestedOscIdx = payload.indexOf("\x1b]");
+      if (nestedOscIdx === -1) {
+        this.carry = this.carry.substring(termIdx + termLen);
+      } else {
+        // Reseed from the absolute position of the nested introducer (which
+        // is `oscIdx + 2 + nestedOscIdx` in the original carry) — preserves
+        // both the inner payload and the terminator that we just hijacked.
+        this.carry = this.carry.substring(oscIdx + 2 + nestedOscIdx);
+      }
     }
   }
 
@@ -127,19 +153,24 @@ export class Osc94Parser {
     return -1;
   }
 
-  private handlePayload(payload: string, now: number): void {
-    if (!payload.startsWith("9;4;")) return;
+  // Returns `true` when the payload was recognized as an OSC 9;4 sequence
+  // (whether it fired a callback or was an ignored state code 2/4), `false`
+  // for unrelated OSC payloads. The caller uses the return value to decide
+  // whether to scan the consumed payload for a nested `\x1b]` introducer.
+  private handlePayload(payload: string, now: number): boolean {
+    if (!payload.startsWith("9;4;")) return false;
 
     const parts = payload.split(";");
-    if (parts.length < 3) return;
+    if (parts.length < 3) return true;
 
     const rawState = parts[2];
     // Only single-digit states 0-4 are defined in the spec; reject anything
     // else (including empty, multi-char, non-numeric) so we don't fire on
-    // malformed input.
-    if (rawState.length !== 1) return;
+    // malformed input. Still return `true` — this was an OSC 9;4 payload,
+    // just with a malformed state; we consume it cleanly.
+    if (rawState.length !== 1) return true;
     const state = rawState.charCodeAt(0) - 48;
-    if (state < 0 || state > 4) return;
+    if (state < 0 || state > 4) return true;
 
     if (state === 1 || state === 3) {
       this.callbacks.onWorking(now);
@@ -147,5 +178,6 @@ export class Osc94Parser {
       this.callbacks.onIdle(now);
     }
     // State 2 (error) and 4 (paused) are ignored — no matching agent state.
+    return true;
   }
 }
