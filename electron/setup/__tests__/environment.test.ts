@@ -547,6 +547,30 @@ describe("WebGL context cap", () => {
     const { app } = await import("electron");
     expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "32");
   });
+
+  it("registers max-active-webgl-contexts exactly once", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    const calls = vi
+      .mocked(app.commandLine.appendSwitch)
+      .mock.calls.filter(([key]) => key === "max-active-webgl-contexts");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("registers max-active-webgl-contexts on Linux too", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "28");
+  });
 });
 
 describe("Chromium feature flags", () => {

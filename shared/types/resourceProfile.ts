@@ -55,6 +55,9 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     pollIntervalBackground: 5000,
     processTreePollInterval: 2000,
     projectStatsPollInterval: 5000,
+    // Performance mode disables the passive gate (threshold == max) so all
+    // slots fill before DOM fallback kicks in. Only reached under low-pressure
+    // conditions, so coexisting WebGL consumers have ample budget.
     maxWebGLContexts: 24,
     passiveWebGLThreshold: 24,
     memoryPressureInactiveMs: 60 * 60 * 1000, // 60 min
