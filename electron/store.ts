@@ -302,6 +302,18 @@ export interface StoreSchema {
    * migration entry required (mirrors `dismissedUpdateVersion` pattern).
    */
   forgeDefaultProviderId?: string | null;
+  /**
+   * Per-provider credential records, keyed by the canonical
+   * `{pluginId}.{contributionId}` forge provider id. Each value is a
+   * `JSON.stringify`-serialized `Record<string, string>` of the provider's
+   * declared credential fields. Stored as a single flat top-level object —
+   * never written via electron-store dot-notation paths, since provider ids
+   * themselves contain dots and would silently nest. Absent means "no
+   * provider credentials saved" (read with `?? {}`). Plain text, same
+   * security model as `forgeDefaultProviderId` / the GitHub token (~/.gitconfig
+   * equivalent) — deliberately not encrypted.
+   */
+  forgeCredentials?: Record<string, string>;
 }
 
 const storeOptions = {

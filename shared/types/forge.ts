@@ -350,6 +350,33 @@ export type ForgeCapabilityHint =
   | (string & {});
 
 /**
+ * Input type for a declared credential field. The open union keeps the two
+ * built-in types autocompleting while letting a provider name a custom
+ * renderer hint without failing TypeScript (precedent: PR #4489). The host
+ * only distinguishes `"password"` (masked input) from everything else (plain
+ * text); unknown values fall back to text.
+ */
+export type CredentialFieldType = "password" | "text" | (string & {});
+
+/**
+ * One credential input a forge provider declares in its manifest so the host
+ * can render a real settings form for it instead of a "no configuration"
+ * stub. The host never inspects the entered value beyond passing the primary
+ * field to {@link ForgeProviderImpl.validateToken}; storage stays opaque.
+ */
+export interface CredentialField {
+  /** Stable key the entered value is stored under in the credential record. */
+  id: string;
+  /** Field label shown in Preferences → Code Forge. */
+  label: string;
+  /** Renderer hint; `"password"` masks input, anything else renders text. */
+  type: CredentialFieldType;
+  placeholder?: string;
+  /** Optional one-line hint rendered under the input. */
+  helpText?: string;
+}
+
+/**
  * Registered forge provider — pairs a manifest contribution with its owning
  * pluginId. Returned by the host registry's listing functions and exposed to
  * the renderer via `window.electron.plugin.getForgeProviders()`.
@@ -373,6 +400,14 @@ export interface ForgeProviderContribution {
   matches: string[];
   /** Informational capability hints; the host does not interpret these. */
   capabilities?: ForgeCapabilityHint[];
+  /**
+   * Credential inputs the host renders a real settings form from. Absent or
+   * empty means the provider needs no host-side credential entry (the host
+   * shows "No configuration needed"). The first `"password"`-typed field —
+   * or the first field when none is `"password"` — is the primary credential
+   * passed to {@link ForgeProviderImpl.validateToken}.
+   */
+  credentialFields?: CredentialField[];
   /** ID prefix in this plugin's `settings` contributions, used to group provider settings. */
   settingsScopeRef?: string;
   /** IDs of `views` contributions shown under this provider's panel section. */

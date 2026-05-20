@@ -78,11 +78,20 @@ export const McpServerContributionSchema = z.object({
  * uninterpreted advisory list (informational only); the host gates behavior
  * on the runtime `ForgeProviderImpl` shape, not these strings.
  */
+const CredentialFieldSchema = z.object({
+  id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+  label: z.string().min(1),
+  type: z.string().min(1),
+  placeholder: z.string().optional(),
+  helpText: z.string().optional(),
+});
+
 export const ForgeProviderContributionSchema = z.object({
   id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
   name: z.string().min(1),
   matches: z.array(z.string().min(1)).min(1),
   capabilities: z.array(z.string().min(1)).optional(),
+  credentialFields: z.array(CredentialFieldSchema).optional(),
   settingsScopeRef: z.string().min(1).optional(),
   viewRefs: z.array(z.string().min(1)).optional(),
 });

@@ -1329,6 +1329,20 @@ export interface ElectronAPI {
     assignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
     /** Validate a token against the global default forge provider. */
     validateToken(token: string): Promise<AuthValidation>;
+    /**
+     * Validate and persist credentials for a specific forge provider, keyed
+     * by its canonical `{pluginId}.{contributionId}` id. `credentials` is a
+     * map of the provider's declared `credentialFields` ids to entered
+     * values. The primary field is validated via the provider impl; on
+     * success the full record is persisted and synced to the workspace host.
+     * Returns the validation result — credentials are persisted only when
+     * `valid` is `true`.
+     */
+    setCredential(providerId: string, credentials: Record<string, string>): Promise<AuthValidation>;
+    /** Report whether credentials are stored for the given forge provider id. */
+    getCredentialStatus(providerId: string): Promise<{ hasCredential: boolean }>;
+    /** Clear stored credentials for the given forge provider id. */
+    clearCredential(providerId: string): Promise<void>;
   };
   voiceInput: {
     getSettings(): Promise<VoiceInputSettings>;

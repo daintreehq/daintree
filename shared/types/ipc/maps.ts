@@ -1658,6 +1658,18 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [token: string];
     result: AuthValidation;
   };
+  "forge:set-credential": {
+    args: [providerId: string, credentials: Record<string, string>];
+    result: AuthValidation;
+  };
+  "forge:get-credential-status": {
+    args: [providerId: string];
+    result: { hasCredential: boolean };
+  };
+  "forge:clear-credential": {
+    args: [providerId: string];
+    result: void;
+  };
 
   // Shortcut Hints
   "shortcut-hints:get-counts": {
