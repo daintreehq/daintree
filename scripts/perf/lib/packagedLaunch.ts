@@ -122,21 +122,29 @@ async function waitForNdjsonMark(
 ): Promise<MarkRecord | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (!fs.existsSync(ndjsonPath)) {
+      await new Promise((r) => setTimeout(r, 100));
+      continue;
+    }
+    let lines: string[] = [];
     try {
-      if (!fs.existsSync(ndjsonPath)) {
-        await new Promise((r) => setTimeout(r, 100));
-        continue;
-      }
-      const lines = fs.readFileSync(ndjsonPath, "utf-8").trim().split("\n");
-      for (const line of lines) {
-        if (!line) continue;
+      lines = fs.readFileSync(ndjsonPath, "utf-8").trim().split("\n");
+    } catch {
+      // File read raced with a write — try again on the next poll.
+    }
+    // Per-line try/catch so a single malformed line (e.g. a truncated
+    // mid-write) doesn't cause us to skip the rest of the buffer for this
+    // poll tick.
+    for (const line of lines) {
+      if (!line) continue;
+      try {
         const record = JSON.parse(line) as MarkRecord;
         if (record.mark === targetMark) {
           return record;
         }
+      } catch {
+        // Skip malformed line
       }
-    } catch {
-      // File may be mid-write
     }
     await new Promise((r) => setTimeout(r, 100));
   }
@@ -159,7 +167,13 @@ export function parseBootDuration(ndjsonPath: string): {
     if (!line) continue;
     try {
       const record = JSON.parse(line) as MarkRecord;
-      marks.set(record.mark, record);
+      // First-wins matches the aggregate() policy in coldStartAggregate.ts.
+      // Marks are append-only in NDJSON; the first occurrence is the
+      // canonical one. Later duplicates (idempotency-guard breakage,
+      // re-emission during teardown) should not silently shift the value.
+      if (!marks.has(record.mark)) {
+        marks.set(record.mark, record);
+      }
     } catch {
       // Skip malformed lines
     }

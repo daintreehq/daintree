@@ -91,6 +91,22 @@ describe("parseBootDuration", () => {
     expect(result.durationMs).toBe(-1);
   });
 
+  it("uses the first occurrence of a duplicate mark (first-wins), matching aggregate semantics", () => {
+    // RENDERER_FIRST_INTERACTIVE has an idempotency guard in the renderer,
+    // but if it somehow appeared twice we must take the first value to stay
+    // consistent with aggregate()'s firstByMark policy.
+    const file = writeNdjson([
+      { mark: PERF_MARKS.APP_BOOT_START, timestamp: "t", elapsedMs: 0 },
+      { mark: PERF_MARKS.RENDERER_FIRST_INTERACTIVE, timestamp: "t", elapsedMs: 1200 },
+      { mark: PERF_MARKS.RENDERER_FIRST_INTERACTIVE, timestamp: "t", elapsedMs: 9000 },
+    ]);
+    tmpFiles.push(file);
+
+    const result = parseBootDuration(file);
+
+    expect(result.durationMs).toBe(1200);
+  });
+
   it("populates serviceInitMs and hydrateMs metrics when those phase marks exist", () => {
     const file = writeNdjson([
       { mark: PERF_MARKS.APP_BOOT_START, timestamp: "t", elapsedMs: 0 },

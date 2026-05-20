@@ -187,9 +187,13 @@ export function aggregate(runs: RunData[]): Aggregate {
         const sourceURL = normalizeLoafSourceURL(rawSourceURL);
         // `typeof NaN === "number"` is true, so a malformed mark could poison
         // mean/percentile stats. `Number.isFinite` excludes NaN and ±Infinity.
+        // Negatives are clamped to 0 — a real LoAF entry cannot block for a
+        // negative duration; a negative value means malformed meta.
         const rawBlocking = record.meta?.blockingDurationMs;
         const blockingMs =
-          typeof rawBlocking === "number" && Number.isFinite(rawBlocking) ? rawBlocking : 0;
+          typeof rawBlocking === "number" && Number.isFinite(rawBlocking) && rawBlocking >= 0
+            ? rawBlocking
+            : 0;
         const list = loafBySource.get(sourceURL) ?? [];
         list.push(blockingMs);
         loafBySource.set(sourceURL, list);
@@ -213,6 +217,16 @@ export function aggregate(runs: RunData[]): Aggregate {
       }
 
       if (!firstByMark.has(record.mark)) {
+        // Skip malformed records: elapsedMs must be a finite non-negative
+        // number to participate in p50/p95 stats. A null/NaN/string from a
+        // mid-write would otherwise poison the bucket.
+        if (
+          typeof record.elapsedMs !== "number" ||
+          !Number.isFinite(record.elapsedMs) ||
+          record.elapsedMs < 0
+        ) {
+          continue;
+        }
         firstByMark.set(record.mark, record);
         const list = markElapsed.get(record.mark) ?? [];
         list.push(record.elapsedMs);

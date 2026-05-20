@@ -416,6 +416,75 @@ describe("event_loop_lag aggregation", () => {
     expect(agg.eventLoopLag!.maxMs).toBe(150);
   });
 
+  it("rejects negative blockingDurationMs without poisoning totals", () => {
+    const agg = aggregate([
+      makeRun({
+        marks: [
+          {
+            mark: "renderer_long_animation_frame",
+            timestamp: "t",
+            elapsedMs: 100,
+            meta: {
+              blockingDurationMs: -100,
+              topScripts: [{ sourceURL: "app://./assets/x.js" }],
+            },
+          },
+          {
+            mark: "renderer_long_animation_frame",
+            timestamp: "t",
+            elapsedMs: 200,
+            meta: {
+              blockingDurationMs: 50,
+              topScripts: [{ sourceURL: "app://./assets/x.js" }],
+            },
+          },
+        ],
+      }),
+    ]);
+
+    expect(agg.loaf["app://./assets/x.js"].totalBlockingMs).toBe(50);
+    expect(agg.loaf["app://./assets/x.js"].totalBlockingMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("skips marks with non-finite or negative elapsedMs so they don't poison p50/p95", () => {
+    const agg = aggregate([
+      makeRun({
+        marks: [
+          // Cast through unknown so we can simulate malformed NDJSON.
+          {
+            mark: PERF_MARKS.HYDRATE_COMPLETE,
+            timestamp: "t",
+            elapsedMs: Number.NaN as unknown as number,
+          },
+          {
+            mark: PERF_MARKS.HYDRATE_COMPLETE,
+            timestamp: "t",
+            elapsedMs: 500,
+          },
+        ],
+      }),
+      makeRun({
+        marks: [
+          {
+            mark: PERF_MARKS.HYDRATE_COMPLETE,
+            timestamp: "t",
+            elapsedMs: -50,
+          },
+          {
+            mark: PERF_MARKS.HYDRATE_COMPLETE,
+            timestamp: "t",
+            elapsedMs: 700,
+          },
+        ],
+      }),
+    ]);
+
+    const stats = agg.marks[PERF_MARKS.HYDRATE_COMPLETE];
+    expect(stats.runs).toBe(2);
+    expect(Number.isFinite(stats.meanMs)).toBe(true);
+    expect(stats.meanMs).toBe(600);
+  });
+
   it("excludes event_loop_lag from the generic marks bucket", () => {
     // Without the dedicated bucket, the generic markElapsed loop would record
     // event_loop_lag.elapsedMs (since-boot timestamp) into agg.marks — which
