@@ -49,11 +49,12 @@ import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/ag
 import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
 import { actionService } from "@/services/ActionService";
 
-// Stable empty arrays — returned from `useShallow` selectors when the
-// filtered list is empty so the previous reference is reused (avoids a
-// spurious re-render emitting a new `[]` each call).
-const EMPTY_PANEL_IDS: readonly string[] = Object.freeze([]);
-const EMPTY_TERMINALS: readonly TerminalInstance[] = Object.freeze([]);
+// Stable empty arrays — returned from `useShallow` selectors and memos when
+// the filtered list is empty so the previous reference is reused (avoids a
+// spurious re-render emitting a new `[]` each call). Module-local; never
+// mutated.
+const EMPTY_PANEL_IDS: string[] = [];
+const EMPTY_TERMINALS: TerminalInstance[] = [];
 
 export function pixelSnapTransform({ x, y }: TransformProperties): string {
   const tx = typeof x === "number" ? x : parseFloat(x ?? "0") || 0;
@@ -240,7 +241,7 @@ export function useContentGridContext({
   );
 
   const gridTerminals = useMemo(() => {
-    if (gridPanelIds.length === 0) return EMPTY_TERMINALS as TerminalInstance[];
+    if (gridPanelIds.length === 0) return EMPTY_TERMINALS;
     const byId = usePanelStore.getState().panelsById;
     const result: TerminalInstance[] = [];
     for (const id of gridPanelIds) {
@@ -580,7 +581,7 @@ export function useContentGridContext({
   );
 
   const fleetPanels = useMemo(() => {
-    if (fleetPanelIds.length === 0) return EMPTY_TERMINALS as TerminalInstance[];
+    if (fleetPanelIds.length === 0) return EMPTY_TERMINALS;
     const byId = usePanelStore.getState().panelsById;
     const result: TerminalInstance[] = [];
     for (const id of fleetPanelIds) {

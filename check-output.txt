@@ -1,0 +1,32 @@
+
+> daintree@0.11.1 check
+> npm run typecheck && npm run check:channels && npm run check:ipc && npm run check:ipc-renderer && npm run check:help && npm run lint:ratchet && npm run format:check
+
+
+> daintree@0.11.1 typecheck
+> tsc --noEmit && tsc -b electron/tsconfig.json && tsc --noEmit -p electron/tsconfig.preload.json
+
+
+> daintree@0.11.1 check:channels
+> node scripts/ci/check-channel-drift.mjs
+
+[check-channel-drift] OK — preload consumes channels.ts via import
+
+> daintree@0.11.1 check:ipc
+> node scripts/codegen/ipc-map.mjs --check
+
+[ipc-map] OK — generated.ts matches handler sources
+
+> daintree@0.11.1 check:ipc-renderer
+> node scripts/codegen/ipc-renderer.mjs --check
+
+[ipc-renderer] OK — generated-api.ts matches preload sources
+
+> daintree@0.11.1 check:help
+> node scripts/build-help-prompts.mjs --check
+
+[build-help-prompts] OK — generated files match sources
+
+> daintree@0.11.1 lint:ratchet
+> node scripts/lint-ratchet.mjs
+
