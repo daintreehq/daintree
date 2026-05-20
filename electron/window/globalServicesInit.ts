@@ -42,7 +42,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
-import { getProjectViewManager } from "./windowRef.js";
+import type { ProjectViewManager } from "./ProjectViewManager.js";
 import { getProjectStatsService } from "../ipc/handlers/projectCrud/index.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import { projectStore } from "../services/ProjectStore.js";
@@ -565,7 +565,11 @@ export async function initGlobalServices(
         getPtyClient: () => getPtyClient(),
         getWorkspaceClient: () => getWorkspaceClientRef(),
         getHibernationService: () => getHibernationService(),
-        getProjectViewManager: () => getProjectViewManager(),
+        getAllProjectViewManagers: () =>
+          windowRegistry
+            ?.all()
+            .map((wCtx) => wCtx.services.projectViewManager)
+            .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? [],
         getProjectStatsService: () => getProjectStatsService(),
         getUserCachedViewLimit: () =>
           store.get("terminalConfig")?.cachedProjectViews ??

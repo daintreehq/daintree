@@ -105,7 +105,7 @@ export interface ResourceProfileDeps {
   getPtyClient: () => PtyClient | null;
   getWorkspaceClient: () => WorkspaceClient | null;
   getHibernationService: () => HibernationService | null;
-  getProjectViewManager: () => ProjectViewManager | null;
+  getAllProjectViewManagers: () => ProjectViewManager[];
   getProjectStatsService: () => ProjectStatsService | null;
   getUserCachedViewLimit: () => number;
 }
@@ -234,9 +234,9 @@ export class ResourceProfileService {
 
     // Push the initial profile's low-memory floor so the feature is armed on
     // launch even when the service stays on its default profile (`balanced`)
-    // and applyProfile() never runs.
-    const pvm = this.deps.getProjectViewManager();
-    if (pvm) {
+    // and applyProfile() never runs. Fan out to every window's PVM so
+    // multi-window sessions are armed alongside the original window.
+    for (const pvm of this.deps.getAllProjectViewManagers()) {
       try {
         pvm.setLowMemoryFreeThresholdMb(
           RESOURCE_PROFILE_CONFIGS[this.currentProfile].lowMemoryFreeThresholdMb
@@ -701,14 +701,15 @@ export class ResourceProfileService {
     // Adjust cached project view limit under memory pressure.
     // Cached WebContentsViews cost ~100–500 MB RSS each (full Chromium renderer),
     // so clamping to 1 on efficiency reclaims the largest memory chunk available.
-    // NOTE: only reaches the primary window's PVM (single-window scope) — mirrors
-    // the existing PtyClient/HibernationService ref pattern.
-    const pvm = this.deps.getProjectViewManager();
-    if (pvm) {
+    // Fan out across every open window's PVM so multi-window sessions all
+    // honor the profile change, not just the most-recently-created window.
+    for (const pvm of this.deps.getAllProjectViewManagers()) {
       // Split try/catch per call: a throw from setCachedViewLimit (e.g. an
       // onViewEvicted callback failing inside evictStaleViews) must NOT block
       // setEfficiencyFreeze(false) on the exit path — leaving renderers
-      // frozen after we've left efficiency has no recovery trigger.
+      // frozen after we've left efficiency has no recovery trigger. The same
+      // isolation applies per-PVM: a failure on one window must not skip the
+      // remaining windows in the iteration.
       if (profile === "efficiency") {
         try {
           pvm.setCachedViewLimit(1);
