@@ -269,9 +269,10 @@ describe("SavedFleetsSection", () => {
     render(<SavedFleetsSection onRequestDelete={vi.fn()} />);
     const groups = screen.getAllByTestId("dropdown-group");
     expect(groups).toHaveLength(2);
-    expect(groups[0].textContent).toContain("Pinned");
-    expect(groups[0].textContent).toContain("My terminals");
-    expect(groups[1].textContent).toContain("Smart-Sets");
-    expect(groups[1].textContent).toContain("Finished here");
+    const [first, second] = groups as [HTMLElement, HTMLElement];
+    expect(first.textContent).toContain("Pinned");
+    expect(first.textContent).toContain("My terminals");
+    expect(second.textContent).toContain("Smart-Sets");
+    expect(second.textContent).toContain("Finished here");
   });
 });
