@@ -60,6 +60,7 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
+import { logWarn } from "@/utils/logger";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
@@ -1319,7 +1320,13 @@ function TerminalPaneComponent({
                   onSend={({ trackerData, text }) => {
                     if (!isInputLocked) {
                       terminalInstanceService.notifyUserInput(id);
-                      terminalClient.submit(id, text);
+                      // submit now rejects when the PTY is gone (#8706); the
+                      // single-pane path has no recovery UI for that, so
+                      // swallow to log instead of leaking an unhandled
+                      // rejection. Banners/agent-state surface the dead pane.
+                      terminalClient.submit(id, text).catch((err) => {
+                        logWarn("[TerminalPane] submit failed", { id, error: err });
+                      });
                       handleInput(trackerData);
                     }
                   }}

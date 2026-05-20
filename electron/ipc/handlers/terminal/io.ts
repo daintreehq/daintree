@@ -105,6 +105,16 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       // `classifyFleetRejectionReason` — Electron's structured-clone error
       // serialization strips `.code` from `NodeJS.ErrnoException`, so the
       // code MUST live in the message text to survive the IPC boundary.
+      // `getTerminalAsync` returns null both when the terminal genuinely
+      // doesn't exist (the case we want to surface to fleet broadcast) and
+      // when the broker rejects from a host crash / timeout (see
+      // `PtyClient.getTerminalAsync`'s `.catch(() => null)`). During a host
+      // restart that means every concurrent fleet submit briefly classifies
+      // as permanent and disarms the whole fleet — annoying but recoverable
+      // by re-arming. Splitting the two cases would need a new PtyClient
+      // method that propagates broker errors; out of scope for #8706. The
+      // pre-fix behavior had the opposite failure mode (kept firing into
+      // dead pipes), so this trade is a net win for the common case.
       const info = await ptyClient.getTerminalAsync(id);
       if (!info) {
         throw new AppError({

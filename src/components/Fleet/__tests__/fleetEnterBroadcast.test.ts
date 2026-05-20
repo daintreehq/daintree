@@ -246,6 +246,22 @@ describe("tryFleetBroadcastFromEditor — permanent failure auto-disarm (#8706)"
     expect(useFleetArmingStore.getState().armedIds.has("slow")).toBe(true);
   });
 
+  it("announces mixed-kind failure with zero successful sends", async () => {
+    // No fulfilled targets, both kinds rejected — the announcement still
+    // needs the split so the user can tell which targets were auto-disarmed
+    // from which still appear as retryable chips.
+    submitMock.mockImplementation(async (id) => {
+      if (id === "perm") throw new Error("EPIPE");
+      if (id === "tran") throw new Error("ENOSPC");
+    });
+    arm(["perm", "tran"]);
+    tryFleetBroadcastFromEditor("perm", "hello", vi.fn());
+    await flush();
+    expect(useAnnouncerStore.getState().polite?.msg).toBe(
+      "Broadcast sent to 0 — 1 retryable, 1 unreachable"
+    );
+  });
+
   it("splits a mixed run: disarms permanent, records transient, keeps fulfilled clean", async () => {
     submitMock.mockImplementation(async (id) => {
       if (id === "dead") throw new Error("EPIPE");
