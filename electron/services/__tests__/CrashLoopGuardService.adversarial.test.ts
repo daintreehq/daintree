@@ -150,6 +150,104 @@ describe("CrashLoopGuardService adversarial", () => {
     expect(Array.isArray(parsed.launches)).toBe(true);
   });
 
+  it("quarantine survives a chmod failure (rename is authoritative)", () => {
+    writeStateFile(statePath, { not: "valid", structure: true });
+    const chmodSpy = vi.spyOn(fs, "chmodSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("EPERM: not permitted"), { code: "EPERM" });
+    });
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toMatch(/\.corrupted\.\d+$/);
+    expect(fs.existsSync(guard.getQuarantinedStatePath()!)).toBe(true);
+    chmodSpy.mockRestore();
+  });
+
+  it("rename failure in quarantine leaves quarantinedStatePath null without throwing", () => {
+    writeStateFile(statePath, { not: "valid" });
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("EBUSY"), { code: "EBUSY" });
+    });
+
+    const guard = new CrashLoopGuardService();
+    expect(() => guard.initialize()).not.toThrow();
+    expect(guard.getQuarantinedStatePath()).toBeNull();
+    renameSpy.mockRestore();
+  });
+
+  it("sweep failure (readdirSync throws) does not prevent boot", () => {
+    const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+    });
+
+    const guard = new CrashLoopGuardService();
+    expect(() => guard.initialize()).not.toThrow();
+    expect(guard.isSafeMode()).toBe(false);
+    readdirSpy.mockRestore();
+  });
+
+  it("quarantines state with non-finite numeric fields (Infinity from JSON overflow)", () => {
+    // JSON.parse turns numeric overflow into Infinity. Without an isFinite
+    // guard the file would pass type validation, then JSON.stringify on the
+    // write-back would emit `null` — corrupting the file on the next boot
+    // instead of the current one. Quarantine immediately.
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        // eslint-disable-next-line no-loss-of-precision
+        crashes: 1e309, // → Infinity after JSON.parse
+        launches: [],
+        cleanExit: false,
+        lastReset: Date.now(),
+      }),
+      "utf8"
+    );
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toMatch(/\.corrupted\.\d+$/);
+  });
+
+  it("quarantines state when lastReset is Infinity", () => {
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        crashes: 0,
+        launches: [],
+        cleanExit: false,
+        // eslint-disable-next-line no-loss-of-precision
+        lastReset: 1e309,
+      }),
+      "utf8"
+    );
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toMatch(/\.corrupted\.\d+$/);
+  });
+
+  it("prune tolerates `.corrupted.*` siblings with malformed timestamps", () => {
+    // A malformed entry that would parse to NaN if naively coerced.
+    fs.writeFileSync(
+      path.join(tmpDir, "crash-loop-state.json.corrupted.not-a-number"),
+      "x",
+      "utf8"
+    );
+    // The regex requires \d+, so this entry is ignored entirely.
+    const guard = new CrashLoopGuardService();
+    expect(() => guard.initialize()).not.toThrow();
+
+    // Non-matching entry is preserved (we only act on regex matches).
+    expect(fs.existsSync(path.join(tmpDir, "crash-loop-state.json.corrupted.not-a-number"))).toBe(
+      true
+    );
+  });
+
   it("does not keep relaunch disabled after old launches roll out of the hard-stop window", () => {
     const now = Date.now();
     writeStateFile(statePath, {

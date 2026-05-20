@@ -97,6 +97,11 @@ export interface ProjectStateRecovery {
   quarantinedPath: string;
 }
 
+/** Describes a crash-loop state file that was quarantined due to corruption */
+export interface CrashLoopStateRecovery {
+  quarantinedPath: string;
+}
+
 /**
  * Combined cold-start payload — collapses the three independent IPC round-trips
  * the renderer used to fire on mount (`crash-recovery:get-pending`,
@@ -141,4 +146,11 @@ export interface HydrateResult {
   lastCrashAt?: number;
   settingsRecovery?: SettingsRecovery | null;
   projectStateRecovery?: ProjectStateRecovery | null;
+  /**
+   * Populated only when the crash-loop state file was corrupt AND the boot
+   * also tripped safe mode — the renderer banner gates on `safeMode === true`
+   * to avoid surfacing a silent reset that didn't affect the user. Silent
+   * corruption with no safe-mode trip is log-only.
+   */
+  crashLoopStateRecovery?: CrashLoopStateRecovery | null;
 }
