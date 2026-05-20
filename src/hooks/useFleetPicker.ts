@@ -326,11 +326,13 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     return s;
   }, [eligibleTerminals]);
 
-  // Stable identity for the Fuse memo — keying on the joined id list avoids
-  // a Fuse rebuild every time `panelsById` updates a search-irrelevant field
-  // (e.g. agentState). See past lesson on useProjectSwitcherPalette (#4747).
+  // Stable identity for the Fuse memo — keying on the joined `id\x00title`
+  // pairs (NUL is illegal in panel ids/titles, so it can't collide) avoids
+  // rebuilds when `panelsById` updates a search-irrelevant field
+  // (e.g. agentState), while still invalidating when a terminal title
+  // changes via OSC. See past lesson on useProjectSwitcherPalette (#4747).
   const fuseIdKey = useMemo(
-    () => eligibleTerminals.map((t) => t.id).join(","),
+    () => eligibleTerminals.map((t) => `${t.id}\x00${t.title}`).join(","),
     [eligibleTerminals]
   );
 

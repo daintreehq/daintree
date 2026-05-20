@@ -446,6 +446,53 @@ describe("FleetPickerContent + useFleetPicker", () => {
       expect(ids).toEqual(["t1"]);
     });
 
+    it("picks up live title changes (OSC update) without remounting the picker", async () => {
+      seedTerminals([makeTerminal("t1", { title: "Server" })]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      const captured: { picker?: ReturnType<typeof useFleetPicker> } = {};
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+        capturePicker: (p) => {
+          captured.picker = p;
+        },
+      });
+      await act(async () => {});
+      // Simulate an OSC title update: same panel id, new title.
+      seedTerminals([makeTerminal("t1", { title: "Auth API" })]);
+      await act(async () => {});
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "auth" } });
+      });
+      await act(async () => {});
+      const ids = captured.picker?.visibleTerminals.map((t) => t.id) ?? [];
+      expect(ids).toEqual(["t1"]);
+    });
+
+    it("matches FALLBACK_GROUP terminals (no worktreeId) on title", async () => {
+      seedTerminals([
+        makeTerminal("loose", { title: "loose runner", worktreeId: undefined as never }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      const captured: { picker?: ReturnType<typeof useFleetPicker> } = {};
+      renderHarness([], {
+        mode: "cold-start",
+        onCommit: () => {},
+        capturePicker: (p) => {
+          captured.picker = p;
+        },
+      });
+      await act(async () => {});
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "loose" } });
+      });
+      await act(async () => {});
+      const ids = captured.picker?.visibleTerminals.map((t) => t.id) ?? [];
+      expect(ids).toEqual(["loose"]);
+    });
+
     it("does not crash on regex-special characters", async () => {
       seedTerminals([makeTerminal("alpha", { title: "Alpha runner" })]);
       useWorktreeSelectionStore.setState({ activeWorktreeId: null });
