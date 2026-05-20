@@ -31,6 +31,24 @@ export interface ResourceProfileConfig {
    * platforms it is free alone.
    */
   lowMemoryFreeThresholdMb: number | null;
+  /**
+   * Cold-start paint-gate SOFT timeout (ms). Bounds the wait for the incoming
+   * project view's renderer to emit `APP_VIEW_PAINTED`. Crossing this bound
+   * does NOT detach the outgoing view — it only logs a warning so the gate
+   * tail is observable; the outgoing view stays attached until either the
+   * paint signal arrives or the hard timeout fires. Tuned per profile because
+   * cold starts run measurably slower under memory/thermal/battery pressure
+   * (efficiency).
+   */
+  paintGateTimeoutMs: number;
+  /**
+   * Cold-start paint-gate HARD timeout (ms). Last-resort ceiling that
+   * deactivates the outgoing view even without a paint signal — assumes the
+   * incoming renderer is stuck or crashed. Should be comfortably above
+   * `paintGateTimeoutMs` so legitimately slow cold starts complete via the
+   * signal path instead of falling through.
+   */
+  paintGateHardTimeoutMs: number;
 }
 
 export interface ResourceProfilePayload {
@@ -64,6 +82,8 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     lowMemoryFreeThresholdMb: null,
     fetchIntervalActiveMs: 20_000,
     fetchIntervalBackgroundMs: 3 * 60_000,
+    paintGateTimeoutMs: 3_000,
+    paintGateHardTimeoutMs: 8_000,
   },
   balanced: {
     pollIntervalActive: 2000,
@@ -76,6 +96,8 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     lowMemoryFreeThresholdMb: 768,
     fetchIntervalActiveMs: 30_000,
     fetchIntervalBackgroundMs: 5 * 60_000,
+    paintGateTimeoutMs: 3_000,
+    paintGateHardTimeoutMs: 8_000,
   },
   efficiency: {
     pollIntervalActive: 4000,
@@ -88,5 +110,10 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     lowMemoryFreeThresholdMb: 1024,
     fetchIntervalActiveMs: 45_000,
     fetchIntervalBackgroundMs: 10 * 60_000,
+    // Cold starts under memory/thermal/battery pressure routinely run slower
+    // than the perf/balanced 3s soft bound — bumping to 5s keeps the
+    // anti-flash hand-off without false-timeout warning spam.
+    paintGateTimeoutMs: 5_000,
+    paintGateHardTimeoutMs: 12_000,
   },
 };

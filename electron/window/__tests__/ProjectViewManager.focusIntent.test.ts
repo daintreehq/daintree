@@ -201,6 +201,7 @@ describe("ProjectViewManager — pending focus intent", () => {
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 50,
+      paintGateHardTimeoutMs: 150,
       cachedProjectViews: 3,
     });
 
@@ -233,7 +234,7 @@ describe("ProjectViewManager — pending focus intent", () => {
     expect(focusSends[0][1]).toEqual({ intent: "focus-next-waiting" });
   });
 
-  it("does not deliver focus intent when paint gate times out", async () => {
+  it("does not deliver focus intent when paint gate hard timeout fires", async () => {
     vi.useFakeTimers();
     try {
       const slowWc = createMockWebContents();
@@ -243,8 +244,9 @@ describe("ProjectViewManager — pending focus intent", () => {
       const switchPromise = manager.switchTo("proj-b", "/path/b");
       await vi.advanceTimersByTimeAsync(0);
 
-      // Advance past the paint gate timeout.
-      await vi.advanceTimersByTimeAsync(60);
+      // Past hard bound (150 ms). The soft bound at 50 ms only warns —
+      // intent is dropped on hard fall-through, not on soft warning.
+      await vi.advanceTimersByTimeAsync(200);
       await switchPromise;
 
       const focusSends = slowWc.send.mock.calls.filter(

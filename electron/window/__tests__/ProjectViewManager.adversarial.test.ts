@@ -170,6 +170,7 @@ describe("ProjectViewManager adversarial", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -202,6 +203,7 @@ describe("ProjectViewManager adversarial", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -235,6 +237,7 @@ describe("ProjectViewManager adversarial", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 

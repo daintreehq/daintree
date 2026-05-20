@@ -238,15 +238,27 @@ export class ResourceProfileService {
       this.evaluate();
     }, EVAL_INTERVAL_MS);
 
-    // Push the initial profile's low-memory floor so the feature is armed on
-    // launch even when the service stays on its default profile (`balanced`)
-    // and applyProfile() never runs. Fan out to every window's PVM so
+    // Push the initial profile's PVM settings so they are armed on launch
+    // even when the service stays on its default profile (`balanced`) and
+    // applyProfile() never runs. Fan out to every window's PVM so
     // multi-window sessions are armed alongside the original window.
+    // Paint-gate values are no-ops at default but pushed for symmetry so the
+    // profile config remains the single source of truth — drift in the PVM
+    // defaults stops mattering.
+    const initialConfig = RESOURCE_PROFILE_CONFIGS[this.currentProfile];
     for (const pvm of this.deps.getAllProjectViewManagers()) {
       try {
-        pvm.setLowMemoryFreeThresholdMb(
-          RESOURCE_PROFILE_CONFIGS[this.currentProfile].lowMemoryFreeThresholdMb
-        );
+        pvm.setLowMemoryFreeThresholdMb(initialConfig.lowMemoryFreeThresholdMb);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setPaintGateTimeoutMs(initialConfig.paintGateTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setPaintGateHardTimeoutMs(initialConfig.paintGateHardTimeoutMs);
       } catch {
         // non-critical
       }
@@ -773,6 +785,22 @@ export class ResourceProfileService {
       // it, without mutating the user-configured `maxCachedViews`.
       try {
         pvm.setLowMemoryFreeThresholdMb(config.lowMemoryFreeThresholdMb);
+      } catch {
+        // non-critical
+      }
+
+      // Push per-profile paint-gate timeouts. Cold starts run measurably
+      // slower under efficiency (memory/thermal/battery pressure), so the
+      // soft warning bound stretches from 3s to 5s and the hard fall-through
+      // bound from 8s to 12s. Each setter wrapped in its own try/catch so a
+      // throw from one doesn't skip the other.
+      try {
+        pvm.setPaintGateTimeoutMs(config.paintGateTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setPaintGateHardTimeoutMs(config.paintGateHardTimeoutMs);
       } catch {
         // non-critical
       }
