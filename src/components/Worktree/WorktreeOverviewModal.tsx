@@ -1,16 +1,19 @@
 import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo } from "react";
 import { X, FilterX } from "lucide-react";
 import { Layers, Plug } from "@/components/icons";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
+import { WorktreeSidebarSearchBar } from "./WorktreeSidebarSearchBar";
 import type { WorktreeState, WorktreeSnapshot } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { actionService } from "@/services/ActionService";
 import {
   matchesFilters,
   matchesQuickStateFilter,
@@ -122,6 +125,7 @@ export interface WorktreeOverviewModalProps {
   isOpen: boolean;
   onClose: () => void;
   worktrees: WorktreeState[];
+  isLoading?: boolean;
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
   onSelectWorktree: (worktreeId: string) => void;
@@ -134,34 +138,11 @@ export interface WorktreeOverviewModalProps {
   homeDir?: string;
 }
 
-function EmptyWorktreeState() {
-  const createWorktreeShortcut = useKeybindingDisplay("worktree.createDialog.open");
-
-  return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-daintree-text/50">
-      <Layers className="w-8 h-8 text-daintree-text/30" />
-      <p className="text-sm font-medium text-daintree-text/70">No worktrees yet</p>
-      <p className="text-xs text-daintree-text/40">
-        {createWorktreeShortcut ? (
-          <>
-            Press{" "}
-            <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60">
-              {createWorktreeShortcut}
-            </kbd>{" "}
-            to create a worktree.
-          </>
-        ) : (
-          "Create a worktree to get started."
-        )}
-      </p>
-    </div>
-  );
-}
-
 export function WorktreeOverviewModal({
   isOpen,
   onClose,
   worktrees,
+  isLoading = false,
   activeWorktreeId,
   focusedWorktreeId,
   onSelectWorktree,
@@ -596,7 +577,7 @@ export function WorktreeOverviewModal({
               </Tooltip>
             )}
             {/* Filter Popover */}
-            <WorktreeFilterPopover chipCounts={chipCounts} />
+            <WorktreeFilterPopover hideSearchInput chipCounts={chipCounts} />
             {/* Clear Filters Button - only shown when filters are active */}
             {hasActiveFilters() && (
               <Tooltip>
@@ -636,31 +617,71 @@ export function WorktreeOverviewModal({
           </div>
         </div>
 
+        {/* Search bar — always visible when there are non-main worktrees */}
+        {hasNonMainWorktrees && <WorktreeSidebarSearchBar chipCounts={chipCounts} />}
+
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
-          {worktrees.length === 0 ? (
-            <EmptyWorktreeState />
-          ) : filteredWorktrees.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full gap-4 text-daintree-text/50">
-              <FilterX className="w-12 h-12 text-daintree-text/30" />
-              <div className="text-center">
-                <p className="text-sm font-medium text-daintree-text/70">
-                  No worktrees match filters
-                </p>
-                <p className="text-xs mt-1">
-                  {worktrees.length} worktree{worktrees.length !== 1 ? "s" : ""} hidden by active
-                  filters
-                </p>
+          {isLoading && worktrees.length === 0 ? (
+            <Skeleton label="Loading worktrees">
+              <div
+                className={cn(
+                  "grid gap-3",
+                  "grid-cols-[repeat(auto-fit,minmax(min(320px,100%),480px))]",
+                  "justify-center"
+                )}
+              >
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <SkeletonBone
+                    key={i}
+                    heightPx={220}
+                    className="rounded-lg border border-divider"
+                  />
+                ))}
               </div>
-              <div className="flex items-center gap-2 mt-2">
+            </Skeleton>
+          ) : worktrees.length === 0 ? (
+            <EmptyState
+              variant="zero-data"
+              scale="canvas"
+              icon={<Layers />}
+              title="No worktrees yet"
+              description="Create a worktree to get started."
+              action={
+                <Button
+                  variant="subtle"
+                  size="sm"
+                  onClick={() => {
+                    actionService.dispatch("worktree.createDialog.open", undefined, {
+                      source: "user",
+                    });
+                  }}
+                >
+                  Create worktree
+                </Button>
+              }
+            />
+          ) : filteredWorktrees.length === 0 ? (
+            <EmptyState
+              variant="filtered-empty"
+              scale="canvas"
+              instant
+              title={
+                query.trim()
+                  ? `No matches for "${query.trim().length > 40 ? query.trim().slice(0, 40) + "…" : query.trim()}"`
+                  : "No matching worktrees"
+              }
+              description={
+                worktrees.length > 0
+                  ? `${worktrees.length} worktree${worktrees.length !== 1 ? "s" : ""} hidden by active filters`
+                  : undefined
+              }
+              action={
                 <Button variant="subtle" size="sm" onClick={clearAllFilters}>
                   Clear all filters
                 </Button>
-                <Button variant="subtle" size="sm" onClick={onClose}>
-                  Close overview
-                </Button>
-              </div>
-            </div>
+              }
+            />
           ) : groupedSections ? (
             <div className="space-y-6">
               {groupedSections.map((section: GroupedSection<WorktreeState>) => (

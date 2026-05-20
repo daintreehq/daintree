@@ -419,7 +419,7 @@ function App() {
   // Grid navigation hook for directional terminal switching
   const { findNearest, findByIndex, findDockByIndex, getCurrentLocation } = useGridNavigation();
 
-  const { worktrees, worktreeMap } = useWorktrees();
+  const { worktrees, worktreeMap, isLoading } = useWorktrees();
   const newTerminalPalette = useNewTerminalPalette({ worktreeMap });
   const panelPalette = usePanelPalette();
   const projectSwitcherPalette = useProjectSwitcherPalette();
@@ -1180,6 +1180,7 @@ function App() {
                     isOpen={isWorktreeOverviewOpen}
                     onClose={closeWorktreeOverview}
                     worktrees={worktrees}
+                    isLoading={isLoading}
                     activeWorktreeId={activeWorktreeId}
                     focusedWorktreeId={focusedWorktreeId}
                     onSelectWorktree={selectWorktree}
