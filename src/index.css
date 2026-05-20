@@ -1806,6 +1806,16 @@ body,
     0 0 0 1px color-mix(in oklab, var(--color-activity-working) 8%, transparent);
 }
 
+/* Hibernated state hint — passive background state, dimmer than waiting/working
+ * because the user did not initiate it. Uses the existing idle token (already
+ * mapped to a muted gray-blue across themes). */
+.panel-state-hibernated {
+  border-color: color-mix(in oklab, var(--color-activity-idle) 60%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-activity-idle) 10%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-activity-idle) 8%, transparent);
+}
+
 /* Per-worktree color identity — left-edge stripe on grid panels */
 .panel-worktree-identity {
   position: relative;
@@ -2537,6 +2547,10 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     animation: none;
   }
 
+  .panel-state-hibernated {
+    border-color: GrayText;
+  }
+
   .terminal-pane {
     border-color: ButtonText;
   }
@@ -2578,7 +2592,8 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 
   .panel-state-waiting,
-  .panel-state-working {
+  .panel-state-working,
+  .panel-state-hibernated {
     border-width: 2px;
   }
 

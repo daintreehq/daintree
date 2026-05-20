@@ -76,6 +76,7 @@ class TerminalInstanceService {
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
+  private hibernationListeners = new Map<string, Set<() => void>>();
   private cwdProviders = new Map<string, () => string>();
   private readinessWaiters = new Map<
     string,
@@ -133,6 +134,7 @@ class TerminalInstanceService {
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
       openLink: (url, id, event) => this.linkHandler.openLink(url, id, event),
       getCwdProvider: (id) => this.cwdProviders.get(id),
+      onHibernationChanged: (id) => this.notifyHibernationListeners(id),
       ...this.makeListenerInstallDeps(),
     });
 
@@ -1401,6 +1403,36 @@ class TerminalInstanceService {
     return this.unseenTracker.subscribe(id, listener);
   }
 
+  subscribeHibernation(id: string, listener: () => void): () => void {
+    let listeners = this.hibernationListeners.get(id);
+    if (!listeners) {
+      listeners = new Set();
+      this.hibernationListeners.set(id, listeners);
+    }
+    listeners.add(listener);
+
+    return () => {
+      const current = this.hibernationListeners.get(id);
+      if (!current) return;
+      current.delete(listener);
+      if (current.size === 0) {
+        this.hibernationListeners.delete(id);
+      }
+    };
+  }
+
+  private notifyHibernationListeners(id: string): void {
+    const listeners = this.hibernationListeners.get(id);
+    if (!listeners) return;
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch (error) {
+        logWarn("Hibernation listener error", { error });
+      }
+    }
+  }
+
   getUnseenOutputSnapshot(id: string): UnseenOutputSnapshot {
     return this.unseenTracker.getSnapshot(id);
   }
@@ -1973,6 +2005,7 @@ class TerminalInstanceService {
     this.resizeController.clearSettledTimer(id);
     this.dataBuffer.resetForTerminal(id);
     this.unseenTracker.destroy(id);
+    this.hibernationListeners.delete(id);
 
     if (managed.hibernationTimer) {
       clearTimeout(managed.hibernationTimer);

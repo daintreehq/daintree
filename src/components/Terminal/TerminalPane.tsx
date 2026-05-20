@@ -48,6 +48,7 @@ import {
 } from "@/store";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
+import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
@@ -401,6 +402,8 @@ function TerminalPaneComponent({
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
+
+  const isHibernated = useIsHibernated(id);
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const preferredTerminalFocusTarget = usePanelStore((state) => state.preferredTerminalFocusTarget);
@@ -1060,6 +1063,7 @@ function TerminalPaneComponent({
       ambientAgentState={ambientAgentState}
       isSelected={isSelected}
       isFleetFollower={isFleetFollower}
+      isHibernated={isHibernated}
       tabs={tabs}
       onTabClick={onTabClick}
       onTabClose={onTabClose}
