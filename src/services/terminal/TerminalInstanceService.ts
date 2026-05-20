@@ -159,7 +159,16 @@ class TerminalInstanceService {
       onResumeFlush: (id) => this.dataBuffer.resumeFlush(id),
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
       onTierApplied: (id, tier, managed) => {
-        if (this.isHibernationEligible(tier, managed) && !managed.isVisible) {
+        // Enter scheduleHibernation whenever the terminal is BACKGROUND and
+        // offscreen, even if it's not eligible right now. scheduleHibernation
+        // owns the decision: arm the regular 30s timer if eligible now, or
+        // arm a one-shot eligibility re-check for active-state agents that
+        // are silent but inside the AGENT_IDLE_SILENCE_MS window. Gating
+        // here on isHibernationEligible (as the original did) makes the
+        // re-check unreachable — a recently-active agent that drops to
+        // BACKGROUND would be permanently exempt, the exact regression
+        // this feature was built to fix.
+        if (tier === TerminalRefreshTier.BACKGROUND && !managed.isVisible) {
           this.scheduleHibernation(id, managed);
         } else {
           this.cancelHibernation(managed);
@@ -646,10 +655,13 @@ class TerminalInstanceService {
           this.webGLManager.releaseContext(id);
         }, WEBGL_HIDE_DWELL_MS);
 
-        // If we're already in a hibernation-eligible tier, onTierApplied
-        // won't fire to start the timer — do it here instead.
+        // If we're already in BACKGROUND tier, onTierApplied won't fire to
+        // start the timer — do it here instead. Pass to scheduleHibernation
+        // even when not eligible right now (active-state agent with recent
+        // writes); the function arms either the regular timer or a one-shot
+        // eligibility re-check that fires when the silence window expires.
         const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
-        if (tier !== undefined && this.isHibernationEligible(tier, managed)) {
+        if (tier === TerminalRefreshTier.BACKGROUND) {
           this.scheduleHibernation(id, managed);
         }
       }
@@ -1880,10 +1892,6 @@ class TerminalInstanceService {
     this.hibernationManager.unhibernate(id);
   }
 
-  private isHibernationEligible(tier: TerminalRefreshTier, managed: ManagedTerminal): boolean {
-    return this.hibernationManager.isHibernationEligible(tier, managed);
-  }
-
   private scheduleHibernation(id: string, managed: ManagedTerminal, delayMs?: number): void {
     this.hibernationManager.scheduleHibernation(id, managed, delayMs);
   }
@@ -1969,6 +1977,10 @@ class TerminalInstanceService {
     if (managed.hibernationTimer) {
       clearTimeout(managed.hibernationTimer);
       managed.hibernationTimer = undefined;
+    }
+    if (managed.hibernationEligibilityTimer) {
+      clearTimeout(managed.hibernationEligibilityTimer);
+      managed.hibernationEligibilityTimer = undefined;
     }
     if (managed.tierChangeTimer !== undefined) {
       clearTimeout(managed.tierChangeTimer);

@@ -265,7 +265,8 @@ export class TerminalHibernationManager {
     managed: ManagedTerminal,
     delayMs: number = HIBERNATION_DELAY_MS
   ): void {
-    if (managed.hibernationTimer || managed.isHibernated) return;
+    if (managed.hibernationTimer || managed.hibernationEligibilityTimer || managed.isHibernated)
+      return;
 
     // Active-state agent that is silent but not yet past the idle window:
     // arm a single delayed re-check at the exact moment eligibility flips.
@@ -283,7 +284,8 @@ export class TerminalHibernationManager {
       const now = Date.now();
       const elapsed = now - managed.lastWriteAt;
       if (elapsed < AGENT_IDLE_SILENCE_MS) {
-        if (managed.hibernationEligibilityTimer) return;
+        // Outer idempotency guard already catches a re-arm attempt while
+        // hibernationEligibilityTimer is pending.
         const wait = AGENT_IDLE_SILENCE_MS - elapsed;
         managed.hibernationEligibilityTimer = setTimeout(() => {
           // Re-fetch in callback — the closed-over ref could be stale if

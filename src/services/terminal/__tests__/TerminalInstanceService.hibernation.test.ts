@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
-import { HIBERNATION_DELAY_MS } from "../types";
+import { AGENT_IDLE_SILENCE_MS, HIBERNATION_DELAY_MS } from "../types";
 
 const mockTerminalClient = {
   onData: vi.fn(() => vi.fn()),
@@ -160,6 +160,7 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     deferredOutput: [] as Array<string | Uint8Array>,
     isHibernated: false,
     hibernationTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+    hibernationEligibilityTimer: undefined as ReturnType<typeof setTimeout> | undefined,
     isInputLocked: false,
     ipcListenerCount: 0,
     ...overrides,
@@ -455,6 +456,93 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(managed.hibernationTimer).toBeUndefined();
     });
 
+    it("arms the eligibility re-check timer for a recently-active agent dropping to BACKGROUND", () => {
+      // Regression guard for the issue that motivated this feature: a
+      // recently-active working agent backgrounded by tier transition must
+      // arm the silence-window re-check (not the regular timer, not
+      // nothing). Without this re-check, the agent would be permanently
+      // exempt from hibernation, leaking memory indefinitely.
+      const startTime = Date.now();
+      vi.setSystemTime(startTime);
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        isVisible: false,
+        kind: "terminal",
+        launchAgentId: "claude",
+        canonicalAgentState: "working",
+        lastWriteAt: startTime - 1000,
+        pendingWrites: 0,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(600); // past hysteresis
+
+      expect(managed.hibernationTimer).toBeUndefined();
+      expect(managed.hibernationEligibilityTimer).toBeDefined();
+
+      vi.setSystemTime(new Date());
+    });
+
+    it("hibernates a recently-active agent after silence window + regular delay elapses", () => {
+      const startTime = Date.now();
+      vi.setSystemTime(startTime);
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        isVisible: false,
+        kind: "terminal",
+        launchAgentId: "claude",
+        canonicalAgentState: "working",
+        lastWriteAt: startTime - 1000,
+        pendingWrites: 0,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(600); // past hysteresis
+
+      // Cross the silence window (re-check fires, schedules regular timer).
+      vi.advanceTimersByTime(AGENT_IDLE_SILENCE_MS);
+      expect(managed.hibernationTimer).toBeDefined();
+
+      // Cross the regular 30s delay.
+      vi.advanceTimersByTime(HIBERNATION_DELAY_MS);
+      expect(managed.isHibernated).toBe(true);
+
+      vi.setSystemTime(new Date());
+    });
+
+    it("clears the eligibility re-check timer when tier upgrades out of BACKGROUND", () => {
+      const startTime = Date.now();
+      vi.setSystemTime(startTime);
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        isVisible: false,
+        kind: "terminal",
+        launchAgentId: "claude",
+        canonicalAgentState: "working",
+        lastWriteAt: startTime - 1000,
+        pendingWrites: 0,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(600);
+      expect(managed.hibernationEligibilityTimer).toBeDefined();
+
+      // User comes back: tier upgrades to FOCUSED before silence window
+      // expires. The re-check must be cancelled, otherwise it would fire
+      // 5 minutes later and the callback's stale managed-ref might still
+      // arm a regular timer despite the terminal being visible.
+      service.applyRendererPolicy("t1", TerminalRefreshTier.FOCUSED);
+      expect(managed.hibernationEligibilityTimer).toBeUndefined();
+
+      vi.advanceTimersByTime(AGENT_IDLE_SILENCE_MS + HIBERNATION_DELAY_MS);
+      expect(managed.isHibernated).toBeFalsy();
+
+      vi.setSystemTime(new Date());
+    });
+
     it("should start hibernation timer for offscreen completed agent terminals in BACKGROUND", () => {
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
@@ -644,6 +732,33 @@ describe("TerminalInstanceService - Hibernation", () => {
 
       // Timer should have been cleared (no lingering setTimeout)
       expect(managed.hibernationTimer).toBeUndefined();
+    });
+
+    it("should clear the eligibility re-check timer on destroy", () => {
+      // Without this cleanup, the re-check could run for up to 5 minutes
+      // post-destroy. The callback's getInstance(id) guard prevents
+      // mutation of a recreated terminal, but the leak itself is the bug.
+      const startTime = Date.now();
+      vi.setSystemTime(startTime);
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        isVisible: false,
+        kind: "terminal",
+        launchAgentId: "claude",
+        canonicalAgentState: "working",
+        lastWriteAt: startTime - 1000,
+        pendingWrites: 0,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(600);
+      expect(managed.hibernationEligibilityTimer).toBeDefined();
+
+      service.destroy("t1");
+      expect(managed.hibernationEligibilityTimer).toBeUndefined();
+
+      vi.setSystemTime(new Date());
     });
   });
 
@@ -930,6 +1045,51 @@ describe("TerminalInstanceService - Hibernation", () => {
 
       // Must NOT have hibernated — silence window unmet.
       expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("arms the eligibility re-check (not the regular timer) when accelerating a recently-active agent", () => {
+      const startTime = Date.now();
+      vi.setSystemTime(startTime);
+      const managed = makeMockManaged({
+        isVisible: false,
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        launchAgentId: "claude",
+        canonicalAgentState: "working",
+        lastWriteAt: startTime - 1000,
+        pendingWrites: 0,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.accelerateHibernation(1);
+
+      // accelerateHibernation cancels any existing timer and calls
+      // scheduleHibernation with a shorter delay — but for a silent-but-
+      // not-yet-idle agent that means arming the eligibility re-check,
+      // not the regular timer. The accelerated delay is delivered to
+      // the second scheduleHibernation call from inside the re-check.
+      expect(managed.hibernationTimer).toBeUndefined();
+      expect(managed.hibernationEligibilityTimer).toBeDefined();
+
+      vi.setSystemTime(new Date());
+    });
+
+    it("replaces an existing regular timer with the accelerated delay", () => {
+      const managed = makeMockManaged({
+        isVisible: false,
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(600); // past hysteresis — regular timer armed
+      expect(managed.hibernationTimer).toBeDefined();
+
+      service.accelerateHibernation(1);
+
+      // Tier 1 = 5s; the original 30s timer must have been cancelled and
+      // replaced — otherwise the 5s acceleration is a no-op.
+      vi.advanceTimersByTime(5_001);
+      expect(managed.isHibernated).toBe(true);
     });
 
     it("does not hibernate a non-BACKGROUND terminal even with idle agent state", () => {
