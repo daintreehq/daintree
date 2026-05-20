@@ -7,6 +7,7 @@ import {
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
 import fs from "fs/promises";
+import { z } from "zod";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { UTF8_BOM } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
@@ -287,7 +288,7 @@ export class ProjectIdentityFiles {
         if (!result.success) {
           console.warn(
             `[ProjectIdentityFiles] Skipping invalid recipe: ${entry.name}`,
-            result.error.flatten()
+            z.prettifyError(result.error)
           );
           continue;
         }

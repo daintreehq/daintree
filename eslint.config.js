@@ -201,6 +201,18 @@ export default tseslint.config(
           message:
             "Pass __html through createTrustedHTML(value) from @/lib/trustedTypesPolicy instead of a raw string. See #6392.",
         },
+        {
+          // why: ZodError.flatten() and .format() instance methods are
+          // deprecated in Zod 4 and slated for removal in Zod 5. Anchored on
+          // an object named `error` / `err` (single-hop bare ident or tail
+          // of a chain like `result.error.flatten()`) so this does not
+          // collide with Array.prototype.flat() or String.prototype.format.
+          // See #8566.
+          selector:
+            "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(flatten|format)$/]:matches([callee.object.property.name=/^(error|err)$/], [callee.object.name=/^(error|err)$/])",
+          message:
+            "Use z.flattenError(err) (shape-consuming) or z.prettifyError(err) (log-only) instead of deprecated ZodError instance methods .flatten() / .format(). See #8566.",
+        },
       ],
     },
   },
@@ -281,6 +293,18 @@ export default tseslint.config(
             "BinaryExpression[operator=/^(!==|===)$/]:matches([left.name='kind'], [left.property.name='kind'])[right.type='Literal'][right.value=/^(terminal|browser|dev-preview)$/]",
           message:
             "Don't compare panel.kind against string literals. Use registry helpers (panelKindHasPty, panelKindCanRestart) or sanctioned type guards (isPtyPanel, isBrowserPanel, isDevPreviewPanel) from @shared/types/panel. See #7672.",
+        },
+        {
+          // why: ZodError.flatten() and .format() instance methods are
+          // deprecated in Zod 4 and slated for removal in Zod 5. Anchored on
+          // an object named `error` / `err` (single-hop bare ident or tail
+          // of a chain like `result.error.flatten()`) so this does not
+          // collide with Array.prototype.flat() or String.prototype.format.
+          // See #8566.
+          selector:
+            "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(flatten|format)$/]:matches([callee.object.property.name=/^(error|err)$/], [callee.object.name=/^(error|err)$/])",
+          message:
+            "Use z.flattenError(err) (shape-consuming) or z.prettifyError(err) (log-only) instead of deprecated ZodError instance methods .flatten() / .format(). See #8566.",
         },
       ],
     },
@@ -457,6 +481,18 @@ export default tseslint.config(
             "CallExpression[callee.object.name='actionService'][callee.property.name='dispatch'] Property[key.name='source'][value.value='context-menu']",
           message:
             'Don\'t hardcode source:"context-menu" in actionService.dispatch calls. Derive it from React Context via useMenuActionSource() from @/components/ui/menu-source. Suppress with // eslint-disable-next-line no-restricted-syntax -- context-menu-source: ok when the dispatch lives outside a ContextMenu/DropdownMenu Root. See #8322.',
+        },
+        {
+          // why: ZodError.flatten() and .format() instance methods are
+          // deprecated in Zod 4 and slated for removal in Zod 5. Anchored on
+          // an object named `error` / `err` (single-hop bare ident or tail
+          // of a chain like `result.error.flatten()`) so this does not
+          // collide with Array.prototype.flat() or String.prototype.format.
+          // See #8566.
+          selector:
+            "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(flatten|format)$/]:matches([callee.object.property.name=/^(error|err)$/], [callee.object.name=/^(error|err)$/])",
+          message:
+            "Use z.flattenError(err) (shape-consuming) or z.prettifyError(err) (log-only) instead of deprecated ZodError instance methods .flatten() / .format(). See #8566.",
         },
       ],
     },

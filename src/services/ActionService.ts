@@ -285,7 +285,7 @@ export class ActionService {
         const error: ActionError = {
           code: "VALIDATION_ERROR",
           message: `Invalid arguments for action "${actionId}"`,
-          details: validation.error.format(),
+          details: z.prettifyError(validation.error),
         };
         return { ok: false, error };
       }

@@ -36,7 +36,7 @@ function parseIpcPayload<S extends z.ZodTypeAny>(
 ): z.output<S> {
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {
-    console.error(`[IPC] Validation failed for ${channel}:`, parsed.error.flatten());
+    console.error(`[IPC] Validation failed for ${channel}:`, z.prettifyError(parsed.error));
     throw new ValidationError(channel);
   }
   return parsed.data;

@@ -86,7 +86,7 @@ export function safeParse<T>(schema: z.ZodSchema<T>, value: unknown, context?: s
   const result = schema.safeParse(value);
   if (!result.success) {
     const prefix = context ? `[${context}] ` : "";
-    console.warn(`${prefix}Validation failed:`, result.error.format());
+    console.warn(`${prefix}Validation failed:`, z.prettifyError(result.error));
     return null;
   }
   return result.data;

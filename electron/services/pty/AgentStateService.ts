@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { events } from "../events.js";
 import { nextAgentState, getStateChangeTimestamp, type AgentEvent } from "../AgentStateMachine.js";
 // AgentState type used implicitly via TerminalInfo.agentState
@@ -224,7 +225,7 @@ export class AgentStateService {
     if (!validatedStateChange.success) {
       console.error(
         "[AgentStateService] Invalid agent:state-changed payload:",
-        validatedStateChange.error.format()
+        z.prettifyError(validatedStateChange.error)
       );
       return false;
     }
@@ -306,7 +307,7 @@ export class AgentStateService {
     } else {
       console.error(
         "[AgentStateService] Invalid agent:completed payload:",
-        validatedCompleted.error.format()
+        z.prettifyError(validatedCompleted.error)
       );
     }
   }
@@ -331,7 +332,7 @@ export class AgentStateService {
     } else {
       console.error(
         "[AgentStateService] Invalid agent:killed payload:",
-        validatedKilled.error.format()
+        z.prettifyError(validatedKilled.error)
       );
     }
   }

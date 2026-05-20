@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import { chmod, mkdir, writeFile } from "fs/promises";
 import { pathToFileURL } from "url";
+import { z } from "zod";
 import { CHANNELS } from "../channels.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
@@ -222,7 +223,10 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     const parseResult = CopyTreeGeneratePayloadSchema.safeParse(payload);
     if (!parseResult.success) {
-      console.error(`[${traceId}] Invalid CopyTree generate payload:`, parseResult.error.format());
+      console.error(
+        `[${traceId}] Invalid CopyTree generate payload:`,
+        z.prettifyError(parseResult.error)
+      );
       return {
         content: "",
         fileCount: 0,
@@ -284,7 +288,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     if (!parseResult.success) {
       console.error(
         `[${traceId}] Invalid CopyTree generate-and-copy-file payload:`,
-        parseResult.error.format()
+        z.prettifyError(parseResult.error)
       );
       return {
         content: "",
@@ -432,7 +436,10 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     const parseResult = CopyTreeInjectPayloadSchema.safeParse(payload);
     if (!parseResult.success) {
-      console.error(`[${traceId}] Invalid CopyTree inject payload:`, parseResult.error.format());
+      console.error(
+        `[${traceId}] Invalid CopyTree inject payload:`,
+        z.prettifyError(parseResult.error)
+      );
       return {
         content: "",
         fileCount: 0,
@@ -624,7 +631,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     if (!parseResult.success) {
       console.error(
         `[${traceId}] Invalid CopyTree test-config payload:`,
-        parseResult.error.format()
+        z.prettifyError(parseResult.error)
       );
       return {
         includedFiles: 0,

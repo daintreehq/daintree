@@ -262,7 +262,7 @@ export function filterValidTerminalEntries<T>(
           ? entry.id
           : `index-${i}`;
 
-      const flattened = result.error.flatten();
+      const flattened = z.flattenError(result.error);
       // Log both field errors and form errors for better diagnostics
       const errorDetails =
         Object.keys(flattened.fieldErrors).length > 0
@@ -552,7 +552,7 @@ export function sanitizeTabGroups(
           ? group.id
           : `index-${i}`;
 
-      const flattened = result.error.flatten();
+      const flattened = z.flattenError(result.error);
       const errorDetails =
         Object.keys(flattened.fieldErrors).length > 0
           ? flattened.fieldErrors
