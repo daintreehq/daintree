@@ -41,3 +41,27 @@
   background: var(--floating-surface-bg, var(--theme-surface-panel-elevated));
   box-shadow: var(--floating-surface-shadow, var(--theme-shadow-floating));
 }
+
+/* Applied to ContentPanel's outer container when a fleet state-preset menu
+ * item is hovered and this pane is NOT in the would-be-armed set. Recedes
+ * unmatched panes so the matched panes' title-bar preview tint stands out
+ * without competing visual chrome on the rest of the grid. Snaps on/off —
+ * the matched panes' title-bar tint already animates via PanelHeader's
+ * `transition-colors`, which carries the perceived motion. Adding an
+ * `opacity` transition here would need a stable selector (the class
+ * disappears on undim, taking its transition with it) and would clobber
+ * Tailwind's `transition-colors duration-300` on the grid-panel shorthand.
+ * A snap is also fine for a transient preview cue. */
+.fleet-pane-dimmed {
+  opacity: 0.5;
+}
+
+/* Users with reduced-transparency preference still see the matched-pane
+ * title-bar tint and the fleet ribbon's count — they don't need the dim
+ * cue, which would just feel like the app went stale. Mirrors the
+ * .surface-chrome reduced-transparency precedent above. */
+@media (prefers-reduced-transparency: reduce) {
+  .fleet-pane-dimmed {
+    opacity: 1;
+  }
+}

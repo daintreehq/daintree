@@ -20,6 +20,7 @@ import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
 import { usePreferencesStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -201,6 +202,17 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // pane's title bar lifts to a neutral surface tint (not accent) so the
   // preview is unmistakable but doesn't squat on the focus anchor color.
   const isFleetPreviewed = useFleetArmingStore((s) => s.previewArmedIds.has(id));
+
+  // Inverse of isFleetPreviewed: when a preset hover is *active* and this
+  // pane is NOT in the would-be-armed set, dim it so the matched panes
+  // stand out without competing visual chrome on the rest of the grid.
+  // Gated on PTY-backed kinds so browser, dev-preview, and other non-fleet
+  // panels (which are never in previewArmedIds) stay at full opacity —
+  // dimming them would imply they could have been armed.
+  const isPtyKind = panelKindHasPty(kind);
+  const isFleetDimmed = useFleetArmingStore(
+    (s) => isPtyKind && s.previewArmedIds.size > 0 && !s.previewArmedIds.has(id)
+  );
 
   // One-shot ring pulse when this pane becomes the new primary on fleet
   // exit. Listens for the CustomEvent dispatched from FleetArmingRibbon's
@@ -414,6 +426,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         data-runtime-icon-id={terminalChrome.iconId || undefined}
         data-selected={isSelected || undefined}
         data-hibernated={isHibernated || undefined}
+        data-fleet-dimmed={isFleetDimmed || undefined}
         style={{
           contain: "content",
           ...(worktreeAccentColor
@@ -440,6 +453,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
                     : "border-overlay hover:border-tint/[0.08]"),
           location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
           worktreeAccentColor && location === "grid" && !isMaximized && "panel-worktree-identity",
+          isFleetDimmed && "fleet-pane-dimmed",
           className
         )}
         onClick={handleClick}
