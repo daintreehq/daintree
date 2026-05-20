@@ -737,6 +737,7 @@ function TerminalPaneComponent({
       location,
       isFocused,
       isCursorPointer: xtermElement.classList.contains("xterm-cursor-pointer"),
+      isShiftKey: e.shiftKey,
     });
 
     if (!shouldSuppress) {
@@ -749,9 +750,21 @@ function TerminalPaneComponent({
     e.preventDefault();
     e.stopPropagation();
 
+    // Capture the pointer so follow-on pointermove/pointerup events route to
+    // this wrapper instead of xterm's canvas. Without this, suppressing only
+    // pointerdown still lets drag motion leak into PTY mouse-reporting modes
+    // (DECSET 1002/1003) as escape sequences.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Element was detached (e.g. LRU view eviction). Safe to ignore.
+    }
+
     setFocused(id);
     requestAnimationFrame(() => terminalInstanceService.focus(id));
   };
+
+  const handleXtermPointerNoop = () => {};
 
   const handleRestart = () => {
     restartTerminal(id);
@@ -1146,6 +1159,8 @@ function TerminalPaneComponent({
                   (isBackendDisconnected || isBackendRecovering) && "pointer-events-none opacity-50"
                 )}
                 onPointerDownCapture={handleXtermPointerDownCapture}
+                onPointerMove={handleXtermPointerNoop}
+                onPointerUp={handleXtermPointerNoop}
               >
                 <Suspense fallback={null}>
                   <XtermAdapter
