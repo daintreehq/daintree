@@ -51,7 +51,10 @@ export function useCrashRecoveryGate(boot: AppBootState): {
       return;
     }
 
-    if (config.autoRestoreOnCrash && (pending.crashCount ?? 0) < 2) {
+    // Skip silent restore when there's nothing to restore — the auto-path
+    // hands an empty backup result to the user with no dialog, which is
+    // indistinguishable from data loss. Surface the recovery dialog instead.
+    if (config.autoRestoreOnCrash && (pending.crashCount ?? 0) < 2 && pending.hasBackup) {
       const suspectCount = (pending.panels ?? []).filter((p) => p.isSuspect).length;
       const crashCount = pending.crashCount ?? 0;
       const allPanelIds = (pending.panels ?? []).map((p) => p.id);

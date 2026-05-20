@@ -432,7 +432,7 @@ const storeOptions = {
       hardwareAccelerationDisabled: false,
     },
     crashRecovery: {
-      autoRestoreOnCrash: false,
+      autoRestoreOnCrash: true,
     },
     onboarding: {
       schemaVersion: 2,

@@ -99,13 +99,19 @@ export class CrashRecoveryService {
     const stored = store.get("crashRecovery");
     return {
       autoRestoreOnCrash:
-        typeof stored?.autoRestoreOnCrash === "boolean" ? stored.autoRestoreOnCrash : false,
+        typeof stored?.autoRestoreOnCrash === "boolean" ? stored.autoRestoreOnCrash : true,
     };
   }
 
   setConfig(patch: Partial<CrashRecoveryConfig>): CrashRecoveryConfig {
     const current = this.getConfig();
-    const updated = { ...current, ...patch };
+    const updated: CrashRecoveryConfig = { ...current };
+    // Drop non-boolean values so a stray `undefined` from a caller can't
+    // erase an explicit opt-out and let getConfig() silently fall back to
+    // the new `true` default.
+    if (typeof patch.autoRestoreOnCrash === "boolean") {
+      updated.autoRestoreOnCrash = patch.autoRestoreOnCrash;
+    }
     store.set("crashRecovery", updated);
     return updated;
   }
