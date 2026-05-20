@@ -21,6 +21,8 @@ import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
+import { useDeferredLoading } from "@/hooks";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import {
@@ -52,6 +54,9 @@ export function McpServerSettingsTab() {
     apiKey: "",
   });
   const [loading, setLoading] = useState(true);
+  // Gate the "Loading…" copy past the Doherty threshold so fast IPC resolutions
+  // don't flash a loading state for sub-400ms work.
+  const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [portInput, setPortInput] = useState("");
@@ -411,7 +416,9 @@ export function McpServerSettingsTab() {
             description="The server binds to 127.0.0.1 (loopback only) — it is never accessible from outside this machine."
           >
             {loading ? (
-              <p className="text-xs text-daintree-text/50">Loading…</p>
+              showInlineLoading ? (
+                <p className="text-xs text-daintree-text/50">Loading…</p>
+              ) : null
             ) : status.port ? (
               <div className="contents">
                 <div className="flex items-center gap-2">
