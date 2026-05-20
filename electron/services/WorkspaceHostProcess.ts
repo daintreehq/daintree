@@ -491,6 +491,12 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.readyResolve = resolve;
       this.readyReject = reject;
     });
+    // Attach a no-op handler so a fork failure (which rejects readyPromise
+    // synchronously inside the catch below) doesn't surface as an unhandled
+    // rejection on internal restart paths where no external caller is
+    // awaiting. Consumers calling waitForReady() still observe the rejection
+    // on their own chain because .catch returns a new branched promise.
+    this.readyPromise.catch(() => undefined);
 
     const electronDir = path.basename(__dirname) === "chunks" ? path.dirname(__dirname) : __dirname;
     const hostPath = path.join(electronDir, "workspace-host-bootstrap.js");
