@@ -3,6 +3,7 @@ import { XCircle, Loader2, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import type { RestartBannerVariant } from "./restartStatus";
+import { RESTART_BANNER_COPY } from "./restartBannerCopy";
 
 export interface TerminalRestartStatusBannerProps {
   variant: RestartBannerVariant;
@@ -33,7 +34,7 @@ export function TerminalRestartStatusBanner({
       return (
         <InlineStatusBanner
           icon={SpinnerIcon}
-          title="Auto-restarting…"
+          title={RESTART_BANNER_COPY["auto-restarting"].title}
           severity="info"
           animated={false}
           role="status"
@@ -46,7 +47,7 @@ export function TerminalRestartStatusBanner({
       return (
         <InlineStatusBanner
           icon={XCircle}
-          title={`Session exited with code ${variant.exitCode}`}
+          title={RESTART_BANNER_COPY["exit-error"]({ exitCode: variant.exitCode }).title}
           severity="error"
           animated={false}
           actions={[

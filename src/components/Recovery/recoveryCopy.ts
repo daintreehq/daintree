@@ -1,0 +1,54 @@
+import type { CrashType } from "@shared/types/pty-host";
+
+export interface RecoveryBannerCopy {
+  title: string;
+  description: string;
+}
+
+export const HOST_CRASH_RECOVERING_COPY = {
+  title: "Terminal service restarting",
+  description: "The terminal backend stopped and is restarting automatically.",
+} as const satisfies RecoveryBannerCopy;
+
+export const HOST_CRASH_BANNER_COPY = {
+  OUT_OF_MEMORY: {
+    title: "Terminal service ran out of memory",
+    description:
+      "The terminal backend exhausted memory and gave up after three auto-restart attempts. Close unused terminals before restarting.",
+  },
+  SIGNAL_TERMINATED: {
+    title: "Terminal service was terminated",
+    description:
+      "The OS or a watchdog ended the terminal backend three times in a row. Restart the service to continue.",
+  },
+  ASSERTION_FAILURE: {
+    title: "Terminal service hit an assertion failure",
+    description:
+      "The terminal backend crashed three times in a row. Restart the service to continue.",
+  },
+  CLEAN_EXIT: {
+    title: "Terminal service stopped unexpectedly",
+    description:
+      "The terminal backend exited without an error but wasn't asked to. Restart the service to continue.",
+  },
+  UNKNOWN_CRASH: {
+    title: "Terminal service crashed",
+    description:
+      "The terminal backend stopped after three auto-restart attempts. Restart the service to continue.",
+  },
+} as const satisfies Record<CrashType, RecoveryBannerCopy>;
+
+export function getHostCrashBannerCopy(crashType: CrashType | null): RecoveryBannerCopy {
+  return HOST_CRASH_BANNER_COPY[crashType ?? "UNKNOWN_CRASH"];
+}
+
+export const SAFE_MODE_BANNER_COPY = {
+  title: "Safe mode — panels weren't restored",
+} as const;
+
+export function getRestoreConfirmationTitle(suspectCount: number): string {
+  if (suspectCount > 0) {
+    return `Session recovered after unexpected exit — ${suspectCount} ${suspectCount === 1 ? "panel" : "panels"} created near the crash may be affected.`;
+  }
+  return "Session recovered after unexpected exit.";
+}
