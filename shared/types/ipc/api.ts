@@ -658,7 +658,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * (#7673). Idempotent: a no-op when the stored version is already ≥
      * the requested value.
      */
-    stampVersion(version: number): Promise<AgentSettings>;
+    stampVersion(version: number): Promise<Record<string, unknown>>;
   };
   userAgentRegistry: {
     get(): Promise<import("../userAgentRegistry.js").UserAgentRegistry>;
