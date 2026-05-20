@@ -1753,11 +1753,16 @@ describe("CrashRecoveryService", () => {
       expect(console.warn).toHaveBeenCalled();
     });
 
-    it("accepts a flag at the exact inclusive mtime boundary (sessionStartMs - 5000)", () => {
+    it("accepts a flag just inside the inclusive grace window (sessionStartMs - 4900)", () => {
       const sessionStartMs = Date.now() - 20_000;
       writeMarker(sessionStartMs);
-      const boundaryMtime = sessionStartMs - 5_000;
-      writeWatchdogFlag({ killedAt: boundaryMtime, missedBeats: 3, mainPid: 4242 }, boundaryMtime);
+      // 100ms inside the 5s grace boundary — comfortably above filesystem
+      // mtime precision on Linux ext4 / macOS HFS+, so the test is reliable
+      // across CI platforms. The exact boundary (sessionStartMs - 5000) is
+      // unsafe to assert here because fs.utimesSync(Date) rounds through
+      // float seconds and the round-trip can land 1-2ms either side.
+      const insideMtime = sessionStartMs - 4_900;
+      writeWatchdogFlag({ killedAt: insideMtime, missedBeats: 3, mainPid: 4242 }, insideMtime);
 
       const svc = makeService();
       svc.initialize();
@@ -1765,11 +1770,12 @@ describe("CrashRecoveryService", () => {
       expect(svc.getPendingCrash()!.entry.cause).toBe("watchdog-deadlock");
     });
 
-    it("rejects a flag whose mtime is just outside the grace window", () => {
+    it("rejects a flag clearly outside the grace window", () => {
       const sessionStartMs = Date.now() - 20_000;
       writeMarker(sessionStartMs);
-      // 1ms before the inclusive boundary — should be rejected.
-      const outsideMtime = sessionStartMs - 5_001;
+      // 100ms outside the 5s grace — clearly stale, robust to fs mtime
+      // rounding on all platforms.
+      const outsideMtime = sessionStartMs - 5_100;
       writeWatchdogFlag({ killedAt: outsideMtime, missedBeats: 3, mainPid: 4242 }, outsideMtime);
 
       const svc = makeService();
