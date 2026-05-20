@@ -372,6 +372,85 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
+  it("does not clamp cached view limit when efficiency is triggered by non-memory signals", () => {
+    // Battery (+1) + thermal critical (+2) + zero memory = score 3 → efficiency.
+    // No memory contribution, so setCachedViewLimit(1) MUST NOT fire — it would
+    // destroy cached WebContentsViews (each 100–500 MB) for no memory benefit.
+    // setEfficiencyFreeze(true) still fires because freeze suppresses CPU/timer
+    // wake-ups, which IS what the thermal+battery trigger needs.
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    service.start();
+
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    (service as unknown as { thermalState: string }).thermalState = "critical";
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
+    expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
+
+    service.stop();
+  });
+
+  it("clamps cached view limit when efficiency is triggered with LOW memory pressure", () => {
+    // Battery (+1) + thermal serious (+1) + LOW memory (+1) = score 3 → efficiency.
+    // Memory contributed (+1), so the clamp DOES fire even at LOW tier.
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    service.start();
+
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
+    (service as unknown as { thermalState: string }).thermalState = "serious";
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    expect(pvm.setCachedViewLimit).toHaveBeenCalledWith(1);
+
+    service.stop();
+  });
+
+  it("still restores user cached view limit on exit after a non-memory efficiency entry", () => {
+    // Enter efficiency via battery + thermal critical (no memory), so entry does
+    // NOT clamp. On exit, the restore call must still fire — the user-configured
+    // limit might have changed mid-efficiency, and PVM's own evictStaleViews
+    // floor could have clamped while we were inside.
+    const deps = createDeps({ getUserCachedViewLimit: () => 3 });
+    const service = new ResourceProfileService(deps);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    service.start();
+
+    const onAcHandler = mockPowerMonitorOn.mock.calls.find(
+      (call: string[]) => call[0] === "on-ac"
+    )?.[1] as (() => void) | undefined;
+
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    (service as unknown as { thermalState: string }).thermalState = "critical";
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
+
+    // Clear thermal + battery — back to balanced.
+    (service as unknown as { thermalState: string }).thermalState = "nominal";
+    onAcHandler!();
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    vi.advanceTimersByTime(30_000 * 4);
+
+    expect(service.getProfile()).not.toBe("efficiency");
+    expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(3);
+    expect(pvm.setEfficiencyFreeze).toHaveBeenLastCalledWith(false);
+
+    service.stop();
+  });
+
   it("enables and disables setEfficiencyFreeze across an efficiency → balanced cycle", () => {
     const deps = createDeps({ getUserCachedViewLimit: () => 2 });
     const service = new ResourceProfileService(deps);

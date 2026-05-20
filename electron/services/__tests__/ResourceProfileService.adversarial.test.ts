@@ -400,6 +400,87 @@ describe("ResourceProfileService adversarial", () => {
       service.stop();
     });
 
+    it("lag-triggered efficiency entry does not clamp cached view limit", () => {
+      // Lag triggers efficiency directly from sampleLag(), bypassing
+      // computeTargetProfile(). Memory is not the trigger, so the
+      // setCachedViewLimit(1) clamp must NOT fire — only setEfficiencyFreeze(true)
+      // should run (freezing the renderers suppresses the CPU wake-ups that
+      // lag pressure is actually about).
+      const pvm = {
+        setCachedViewLimit: vi.fn(),
+        setLowMemoryFreeThresholdMb: vi.fn(),
+        setEfficiencyFreeze: vi.fn(),
+      };
+      const { deps } = createDeps({
+        getProjectViewManager: () =>
+          pvm as unknown as ReturnType<ResourceProfileDeps["getProjectViewManager"]>,
+      });
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      mockGetAppMetrics.mockReturnValue([]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
+      expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
+
+      service.stop();
+    });
+
+    it("lag-triggered efficiency entry clears stale memory score from prior eval", () => {
+      // A prior memory-pressure eval may have set lastMemoryScore to 2. If lag
+      // then triggers a fresh efficiency entry (the prior entry was reset by an
+      // intervening recovery), the lag path must zero the stale score so the
+      // clamp does NOT fire. Without the zero, the lag path would inherit the
+      // last memory measurement (up to 30s old) and clamp incorrectly.
+      const pvm = {
+        setCachedViewLimit: vi.fn(),
+        setLowMemoryFreeThresholdMb: vi.fn(),
+        setEfficiencyFreeze: vi.fn(),
+      };
+      const { deps } = createDeps({
+        getProjectViewManager: () =>
+          pvm as unknown as ReturnType<ResourceProfileDeps["getProjectViewManager"]>,
+        getUserCachedViewLimit: () => 3,
+      });
+      const service = new ResourceProfileService(deps);
+      mockIsOnBatteryPower.mockReturnValue(true);
+      service.start();
+
+      // Drive into efficiency via memory + battery — sets lastMemoryScore = 2.
+      mockGetAppMetrics.mockReturnValue([makeMetric(1300)]);
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("efficiency");
+      expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(1);
+
+      // Recover to balanced. Memory drops, battery off.
+      const onAcHandler = mockPowerMonitorOn.mock.calls.find(
+        (call: string[]) => call[0] === "on-ac"
+      )?.[1] as (() => void) | undefined;
+      mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
+      onAcHandler!();
+      vi.advanceTimersByTime(30_000 * 4);
+      expect(service.getProfile()).not.toBe("efficiency");
+      pvm.setCachedViewLimit.mockClear();
+
+      // Now drive efficiency via lag only. Memory is still low (no contribution).
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      // The lag entry must not have reused the stale memory score.
+      expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
+      expect(pvm.setEfficiencyFreeze).toHaveBeenLastCalledWith(true);
+
+      service.stop();
+    });
+
     it("does not enter degraded mode on an isolated lag spike", () => {
       const { deps } = createDeps();
       const service = new ResourceProfileService(deps);
