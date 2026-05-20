@@ -57,10 +57,10 @@ export function PRBadge({
 
   const prStateColor =
     prState === "merged"
-      ? "text-github-merged"
+      ? "text-pr-merged"
       : prState === "closed" || prState === "declined"
-        ? "text-github-closed"
-        : "text-github-open";
+        ? "text-pr-closed"
+        : "text-pr-open";
 
   const prStateLabel =
     prState === "merged"

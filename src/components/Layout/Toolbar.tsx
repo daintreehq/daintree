@@ -1068,11 +1068,11 @@ export function Toolbar({
                   key="gh-issues"
                   onClick={() => githubStatsRef.current?.openIssues()}
                 >
-                  <CircleDot className="mr-2 h-4 w-4 text-github-open" />
+                  <CircleDot className="mr-2 h-4 w-4 text-pr-open" />
                   Issues {ghStats?.issueCount != null ? `(${ghStats.issueCount})` : ""}
                 </DropdownMenuItem>,
                 <DropdownMenuItem key="gh-prs" onClick={() => githubStatsRef.current?.openPrs()}>
-                  <GitPullRequest className="mr-2 h-4 w-4 text-github-merged" />
+                  <GitPullRequest className="mr-2 h-4 w-4 text-pr-merged" />
                   Pull Requests {ghStats?.prCount != null ? `(${ghStats.prCount})` : ""}
                 </DropdownMenuItem>,
                 <DropdownMenuItem

@@ -2350,6 +2350,8 @@ const api: ElectronAPI = {
         data: import("../shared/types/ipc/forge.js").ForgeTokenHealthChangedPayload
       ) => void
     ) => _typedOn(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, callback),
+    classifyPushError: (payload: { cwd: string; stderr: string }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR, payload),
   },
 
   // Voice Input API

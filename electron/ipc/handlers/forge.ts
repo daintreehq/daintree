@@ -7,6 +7,7 @@ import {
   getRegisteredForgeProviders,
 } from "../../services/forgeProviderRegistry.js";
 import { resolveForCwd, getImplForNamespace } from "./forgeResolution.js";
+import type { PushErrorClassification } from "../../../shared/types/forge.js";
 import {
   makeForgeProviderId,
   normalizeProviderId,
@@ -157,6 +158,40 @@ export function registerForgeHandlers(): () => void {
       }
       return impl.validateToken(token.trim());
     })
+  );
+
+  cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_CLASSIFY_PUSH_ERROR,
+      async (payload: {
+        cwd: string;
+        stderr: string;
+      }): Promise<{
+        providerId: string;
+        classification: PushErrorClassification | null;
+      } | null> => {
+        if (
+          !payload ||
+          typeof payload !== "object" ||
+          typeof payload.cwd !== "string" ||
+          !payload.cwd ||
+          typeof payload.stderr !== "string"
+        ) {
+          return null;
+        }
+        // Classification is best-effort: any resolution failure (no remote,
+        // unregistered provider, provider throwing) collapses to the generic
+        // "push failed" banner rather than surfacing an error.
+        try {
+          const { namespaceId, providerId } = await resolveForCwd(payload.cwd);
+          const impl = getImplForNamespace(namespaceId);
+          const classification = impl.classifyPushError?.(payload.stderr) ?? null;
+          return { providerId, classification };
+        } catch {
+          return null;
+        }
+      }
+    )
   );
 
   return () => cleanups.forEach((c) => c());

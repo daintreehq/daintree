@@ -13,6 +13,8 @@ const {
   debounceCancelSpy,
   compareWorktreesMock,
   openPRMock,
+  openExternalMock,
+  classifyPushErrorMock,
   abortRepositoryOperationMock,
   continueRepositoryOperationMock,
   scanConflictMarkersMock,
@@ -38,6 +40,16 @@ const {
   debounceCancelSpy: vi.fn(),
   compareWorktreesMock: vi.fn(),
   openPRMock: vi.fn().mockResolvedValue(undefined),
+  openExternalMock: vi.fn().mockResolvedValue(undefined),
+  // Mirrors the real GitHub forge provider: extracts a GH### code from stderr
+  // and reports the resolved provider id used to route the settings CTA.
+  classifyPushErrorMock: vi.fn(async (_cwd: string, stderr: string) => {
+    const match = /\bGH\d{3,}\b/.exec(String(stderr));
+    return {
+      providerId: "github",
+      classification: match ? { code: match[0] } : null,
+    };
+  }),
   abortRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
   continueRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
   scanConflictMarkersMock: vi.fn().mockResolvedValue([]),
@@ -113,6 +125,14 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 
 vi.mock("@/clients/githubClient", () => ({
   githubClient: { openPR: openPRMock },
+}));
+
+vi.mock("@/clients/systemClient", () => ({
+  systemClient: { openExternal: openExternalMock },
+}));
+
+vi.mock("@/clients/forgeClient", () => ({
+  forgeClient: { classifyPushError: classifyPushErrorMock },
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -380,6 +400,11 @@ describe("ReviewHub", () => {
     listRemoteCommitsMock.mockReset().mockResolvedValue([]);
     listCommitsMock.mockReset().mockResolvedValue({ items: [], hasMore: false, total: 0 });
     actionDispatchMock.mockReset().mockResolvedValue({ ok: true });
+    openExternalMock.mockReset().mockResolvedValue(undefined);
+    classifyPushErrorMock.mockReset().mockImplementation(async (_cwd: string, stderr: string) => {
+      const match = /\bGH\d{3,}\b/.exec(String(stderr));
+      return { providerId: "github", classification: match ? { code: match[0] } : null };
+    });
 
     Object.defineProperty(window, "electron", {
       value: {
@@ -1051,11 +1076,14 @@ describe("ReviewHub", () => {
 
       // Clicking the pill text does not open the PR
       fireEvent.click(screen.getByText("#42"));
-      expect(openPRMock).not.toHaveBeenCalled();
+      expect(openExternalMock).not.toHaveBeenCalled();
 
-      // Clicking the external-link button opens the PR
+      // Clicking the external-link button opens the PR via the generic
+      // system opener (no GitHub-specific IPC).
       fireEvent.click(screen.getByRole("button", { name: /view pull request #42/i }));
-      expect(openPRMock).toHaveBeenCalledWith("https://github.com/test/repo/pull/42");
+      expect(openExternalMock).toHaveBeenCalledWith("https://github.com/test/repo/pull/42");
+      // The GitHub-specific IPC must not be used (works for any forge now).
+      expect(openPRMock).not.toHaveBeenCalled();
     });
 
     it("shows 'No PR' when branch has remote but no PR", async () => {
@@ -1722,7 +1750,7 @@ describe("ReviewHub", () => {
       });
     }
 
-    it("shows auth-failed banner with Open GitHub settings CTA and dispatches settings tab", async () => {
+    it("shows auth-failed banner with Open forge settings CTA routed to the resolved provider", async () => {
       const rawError = "fatal: Authentication failed for 'https://github.com/foo/bar.git/'";
       pushMock.mockRejectedValue(
         Object.assign(new Error(rawError), {
@@ -1741,8 +1769,13 @@ describe("ReviewHub", () => {
       expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
       expect(screen.queryByTestId("review-hub-push-error-toggle")).toBeNull();
 
-      const cta = screen.getByTestId("review-hub-push-error-cta");
-      expect(cta.textContent).toMatch(/Open GitHub settings/i);
+      // The settings CTA is stamped once the forge provider resolves (async).
+      const cta = await screen.findByTestId("review-hub-push-error-cta");
+      expect(cta.textContent).toMatch(/Open forge settings/i);
+      expect(classifyPushErrorMock).toHaveBeenCalledWith(
+        WORKTREE_PATH,
+        expect.stringContaining("Authentication failed")
+      );
       fireEvent.click(cta);
 
       expect(actionDispatchMock).toHaveBeenCalledWith(
@@ -1750,6 +1783,74 @@ describe("ReviewHub", () => {
         { tab: "code-forge", subtab: "github" },
         { source: "user" }
       );
+    });
+
+    it("omits the settings CTA when push-error classification fails (no provider resolved)", async () => {
+      classifyPushErrorMock.mockRejectedValue(new Error("no forge provider"));
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("fatal: Authentication failed for 'https://example.com/'"), {
+          name: "GitOperationError",
+          gitReason: "auth-failed",
+        })
+      );
+
+      await triggerCommitAndPush();
+
+      const banner = await screen.findByTestId("review-hub-push-error");
+      expect(banner.getAttribute("data-reason")).toBe("auth-failed");
+      // Message still shows, but there is no provider-agnostic settings route.
+      await waitFor(() => expect(classifyPushErrorMock).toHaveBeenCalled());
+      expect(screen.queryByTestId("review-hub-push-error-cta")).toBeNull();
+    });
+
+    it("does not show a stale code when a retry surfaces a different error", async () => {
+      // First failure is network-unavailable (has a Retry CTA) and the stderr
+      // carries a GH code so the default regex mock surfaces it.
+      pushMock.mockRejectedValueOnce(
+        Object.assign(new Error("Could not resolve host: github.com — GH999"), {
+          name: "GitOperationError",
+          gitReason: "network-unavailable",
+        })
+      );
+
+      await triggerCommitAndPush();
+      await screen.findByTestId("review-hub-push-error");
+      expect((await screen.findByTestId("review-hub-push-error-code")).textContent).toBe("GH999");
+
+      // Retry surfaces a code-less auth failure; hold the classification
+      // pending so we can observe the in-flight window.
+      let releaseSecond: (v: { providerId: string; classification: null }) => void = () => {};
+      classifyPushErrorMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseSecond = resolve;
+          })
+      );
+      pushMock.mockRejectedValueOnce(
+        Object.assign(new Error("fatal: Authentication failed for 'https://example.com/'"), {
+          name: "GitOperationError",
+          gitReason: "auth-failed",
+        })
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTestId("review-hub-push-error").getAttribute("data-reason")).toBe(
+          "auth-failed"
+        )
+      );
+      // While the second classification is pending, the stale GH999 must be gone.
+      expect(screen.queryByTestId("review-hub-push-error-code")).toBeNull();
+
+      await act(async () => {
+        releaseSecond({ providerId: "github", classification: null });
+        await Promise.resolve();
+      });
+      expect(screen.queryByTestId("review-hub-push-error-code")).toBeNull();
     });
 
     it("shows push-rejected-outdated banner with Pull-and-rebase primary CTA only when leaseSha is missing", async () => {
@@ -1957,7 +2058,8 @@ describe("ReviewHub", () => {
       expect(banner.getAttribute("data-reason")).toBe("push-rejected-policy");
       expect(banner.textContent).toMatch(/protected branch/i);
       expect(screen.queryByTestId("review-hub-push-error-cta")).toBeNull();
-      expect(screen.getByTestId("review-hub-push-error-code").textContent).toBe("GH006");
+      // The code is resolved async via the forge provider classification.
+      expect((await screen.findByTestId("review-hub-push-error-code")).textContent).toBe("GH006");
       expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
 
       const toggle = screen.getByTestId("review-hub-push-error-toggle");
@@ -2194,7 +2296,7 @@ describe("ReviewHub", () => {
       await triggerCommitAndPush();
 
       await screen.findByTestId("review-hub-push-error");
-      expect(screen.getByTestId("review-hub-push-error-code").textContent).toBe("GH013");
+      expect((await screen.findByTestId("review-hub-push-error-code")).textContent).toBe("GH013");
       // Code stays visible without expanding the toggle.
       expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
     });

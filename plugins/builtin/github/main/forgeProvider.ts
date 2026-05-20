@@ -12,6 +12,7 @@ import type {
   NormalizedPRState,
   PR,
   Page,
+  PushErrorClassification,
   RateLimitInfo,
   RepoMetadata,
   RepoRef,
@@ -524,6 +525,17 @@ function getRateLimitImpl(): Promise<RateLimitInfo> {
   });
 }
 
+/**
+ * Extracts a `GH###` code (e.g. `GH006`, `GH013`) from raw push stderr — these
+ * are GitHub's stable, googleable identifiers for protected-branch and ruleset
+ * rejections. Returns `null` when no recognized code is present so the banner
+ * falls back to its generic state.
+ */
+function classifyPushErrorImpl(stderr: string): PushErrorClassification | null {
+  const match = /\bGH\d{3,}\b/.exec(stderr);
+  return match ? { code: match[0] } : null;
+}
+
 const reviewCapability: ReviewCapability = {
   getReviewThreads: getReviewThreadsImpl,
 };
@@ -656,6 +668,8 @@ export const githubForgeProvider: ForgeProviderImpl = {
   },
 
   getRateLimit: getRateLimitImpl,
+
+  classifyPushError: classifyPushErrorImpl,
 
   reviews: reviewCapability,
 };

@@ -409,7 +409,6 @@ describe("githubClient import boundary", () => {
     "src/hooks/useGitHubRateLimit.ts",
     "src/hooks/useGitHubTokenHealth.ts",
     "src/hooks/useProjectHealth.ts",
-    "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",
     "src/components/Layout/GitHubStatsToolbarButton.tsx",
     "src/components/Worktree/IssuePickerDialog.tsx",
     "src/components/Worktree/NewWorktreeDialog.tsx",

@@ -92,7 +92,7 @@ export function IssueSelector({
         >
           {selectedIssue ? (
             <span className="flex items-center gap-2 truncate">
-              <CircleDot className="w-3 h-3 text-github-open shrink-0" />
+              <CircleDot className="w-3 h-3 text-pr-open shrink-0" />
               <span className="truncate">
                 #{selectedIssue.number} {selectedIssue.title}
               </span>
@@ -175,7 +175,7 @@ export function IssueSelector({
                   selectedIssue?.number === issue.number && "bg-daintree-border"
                 )}
               >
-                <CircleDot className="w-3 h-3 text-github-open shrink-0" />
+                <CircleDot className="w-3 h-3 text-pr-open shrink-0" />
                 <span className="truncate flex-1 min-w-0">
                   #{issue.number} {issue.title}
                 </span>

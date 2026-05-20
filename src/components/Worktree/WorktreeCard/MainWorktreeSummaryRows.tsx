@@ -64,7 +64,7 @@ export function MainWorktreeSummaryRows({ health }: MainWorktreeSummaryRowsProps
               <span className="font-mono tabular-nums">{health.prCount}</span>
             </span>
             <span className="flex items-center gap-0.5">
-              <CircleDot className="w-2.5 h-2.5 text-github-open" />
+              <CircleDot className="w-2.5 h-2.5 text-pr-open" />
               <span className="font-mono tabular-nums">{health.issueCount}</span>
             </span>
           </div>

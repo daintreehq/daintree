@@ -712,7 +712,7 @@ export function WorktreeCard({
                   className={cn(
                     "absolute w-3 h-3 z-10 cursor-default",
                     chipState === "waiting" && "bg-activity-waiting",
-                    chipState === "cleanup" && "bg-github-merged",
+                    chipState === "cleanup" && "bg-pr-merged",
                     chipState === "complete" && "bg-category-blue",
                     variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
                   )}

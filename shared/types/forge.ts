@@ -242,6 +242,17 @@ export interface Milestone {
   rawData: unknown;
 }
 
+/**
+ * Provider-recognized push-failure classification. `code` is a short,
+ * provider-stable identifier surfaced in the push-error banner so users have
+ * something searchable (e.g. GitHub's `GH###` codes). The renderer derives the
+ * settings route from the already-resolved provider's `contribution.id`, so
+ * the provider does not declare its own settings tab here.
+ */
+export interface PushErrorClassification {
+  code: string;
+}
+
 export interface ReviewCapability {
   getReviewThreads(repo: RepoRef, prNumber: number): Promise<ReviewThread[]>;
 }
@@ -317,6 +328,16 @@ export interface ForgeProviderImpl {
 
   // Host-visible rate-limit state, parsed from the provider's own transport.
   getRateLimit?(): Promise<RateLimitInfo>;
+
+  /**
+   * Optional. Classify a `git push` failure from raw stderr. Lets the host
+   * surface a provider-stable error code in the push-error banner without
+   * hardcoding any one forge's error format. Return `null` when the stderr
+   * doesn't match a recognized failure; the banner then falls back to a
+   * generic "push failed" state with the raw stderr. Must never throw —
+   * classification failures are non-fatal to the banner.
+   */
+  classifyPushError?(stderr: string): PushErrorClassification | null;
 
   // Optional capabilities — host checks presence via a truthiness guard (see above).
   reviews?: ReviewCapability;

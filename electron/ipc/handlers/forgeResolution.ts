@@ -20,6 +20,8 @@ import {
  */
 export interface ResolvedForgeContext {
   namespaceId: string;
+  /** The resolved provider's `contribution.id` — also the settings subtab key. */
+  providerId: string;
   repoRef: RepoRef;
   impl: ForgeProviderImpl;
 }
@@ -64,7 +66,7 @@ export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> 
     throw new Error("Could not parse repository identity from remote URL");
   }
 
-  return { namespaceId, repoRef, impl };
+  return { namespaceId, providerId: resolved.entry.contribution.id, repoRef, impl };
 }
 
 export function getImplForNamespace(namespaceId: string): ForgeProviderImpl {

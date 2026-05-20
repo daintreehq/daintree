@@ -179,3 +179,26 @@ describe("findPRsByBranches", () => {
     expect(matches?.length).toBe(1);
   });
 });
+
+describe("classifyPushError", () => {
+  it("extracts a GH### code from protected-branch stderr", () => {
+    expect(
+      githubForgeProvider.classifyPushError!(
+        "GH006: Protected branch update failed for refs/heads/main."
+      )
+    ).toEqual({ code: "GH006" });
+  });
+
+  it("extracts a GH### code from ruleset-violation stderr", () => {
+    expect(
+      githubForgeProvider.classifyPushError!("remote: GH013: Repository rule violations found.")
+    ).toEqual({ code: "GH013" });
+  });
+
+  it("returns null when no recognized code is present", () => {
+    expect(
+      githubForgeProvider.classifyPushError!("fatal: Authentication failed for 'https://...'")
+    ).toBeNull();
+    expect(githubForgeProvider.classifyPushError!("")).toBeNull();
+  });
+});

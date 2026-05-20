@@ -739,6 +739,7 @@ export const CHANNELS = {
   FORGE_GET_ISSUE: "forge:get-issue",
   FORGE_GET_PR: "forge:get-pr",
   FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
+  FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",

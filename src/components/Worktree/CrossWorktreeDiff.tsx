@@ -29,7 +29,7 @@ function statusLabel(status: string): { label: string; className: string } {
     case "R":
       return { label: "R", className: "text-status-info" };
     case "C":
-      return { label: "C", className: "text-github-merged" };
+      return { label: "C", className: "text-pr-merged" };
     default:
       return { label: status, className: "text-text-muted" };
   }

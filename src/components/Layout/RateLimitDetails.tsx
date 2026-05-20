@@ -116,7 +116,7 @@ function RateLimitBucketRow({ label, bucket, now }: RateLimitBucketRowProps) {
         <div
           className={cn(
             "h-full rounded-full transition-[width] duration-300 ease-out",
-            exhausted ? "bg-github-closed" : "bg-daintree-text/60"
+            exhausted ? "bg-pr-closed" : "bg-daintree-text/60"
           )}
           style={{ width: `${ratio * 100}%` }}
         />

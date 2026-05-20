@@ -50,10 +50,10 @@ function getStateIcon(state: string, type: "issue" | "pr") {
 }
 
 function getStateColor(state: string, isDraft?: boolean): string {
-  if (isDraft) return "text-github-draft";
-  if (state === "OPEN") return "text-github-open";
-  if (state === "MERGED") return "text-github-merged";
-  if (state === "CLOSED") return "text-github-closed";
+  if (isDraft) return "text-pr-draft";
+  if (state === "OPEN") return "text-pr-open";
+  if (state === "MERGED") return "text-pr-merged";
+  if (state === "CLOSED") return "text-pr-closed";
   return "text-muted-foreground";
 }
 
@@ -324,13 +324,13 @@ export function GitHubListItem({
                         e.stopPropagation();
                         onSwitchToWorktree(matchedWorktree.id);
                       }}
-                      className="shrink-0 text-github-open hover:text-github-open/80 transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
+                      className="shrink-0 text-pr-open hover:text-pr-open/80 transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
                       aria-label="Switch to worktree"
                     >
                       <FolderGit2 className="w-3.5 h-3.5" />
                     </button>
                   ) : (
-                    <span className="shrink-0 text-github-open">
+                    <span className="shrink-0 text-pr-open">
                       <FolderGit2 className="w-3.5 h-3.5" />
                     </span>
                   )}

@@ -638,8 +638,8 @@ export const GitHubStatsToolbarButton = memo(
                     : `${issueCount ?? "—"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
               }
               icon={CircleDot}
-              iconClassName={isTokenError ? "text-muted-foreground" : "text-github-open"}
-              openRingClassName="ring-1 ring-github-open/20"
+              iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-open"}
+              openRingClassName="ring-1 ring-pr-open/20"
               className={cn(
                 isTokenError && "opacity-40",
                 !isTokenError && stats?.issueCount === 0 && "opacity-50"
@@ -722,7 +722,7 @@ export const GitHubStatsToolbarButton = memo(
                 <span
                   aria-hidden="true"
                   data-visible={showIssuesChip}
-                  className="toolbar-badge-chip bg-github-open pointer-events-none absolute right-0 top-0 h-2 w-2"
+                  className="toolbar-badge-chip bg-pr-open pointer-events-none absolute right-0 top-0 h-2 w-2"
                   style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
                 />
               }
@@ -748,8 +748,8 @@ export const GitHubStatsToolbarButton = memo(
                     : `${prCount ?? "—"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
               }
               icon={GitPullRequest}
-              iconClassName={isTokenError ? "text-muted-foreground" : "text-github-merged"}
-              openRingClassName="ring-1 ring-github-merged/20"
+              iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-merged"}
+              openRingClassName="ring-1 ring-pr-merged/20"
               className={cn(
                 isTokenError && "opacity-40",
                 !isTokenError && stats?.prCount === 0 && "opacity-50"
@@ -827,7 +827,7 @@ export const GitHubStatsToolbarButton = memo(
                 <span
                   aria-hidden="true"
                   data-visible={showPrsChip}
-                  className="toolbar-badge-chip bg-github-merged pointer-events-none absolute right-0 top-0 h-2 w-2"
+                  className="toolbar-badge-chip bg-pr-merged pointer-events-none absolute right-0 top-0 h-2 w-2"
                   style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
                 />
               }
