@@ -589,15 +589,17 @@ describe("MainProcessWatchdogClient", () => {
     const listener = vi.fn();
     client.onDisabled(listener);
 
-    // First cap-hit cycle — 3 crashes within the window trip CRASH_THRESHOLD.
-    let currentChild = mockChild;
-    for (let i = 0; i < 3; i++) {
-      const next = createMockChild();
-      shared.forkMock.mockReturnValueOnce(next);
-      currentChild.emit("exit", 1);
-      vi.advanceTimersByTime(11_000);
-      currentChild = next;
-    }
+    // First cap-hit cycle: queue 2 replacements (3rd crash hits the cap and
+    // does not fork). Crashes 1 & 2 consume the queue; crash 3 trips
+    // CRASH_THRESHOLD and notifies once.
+    const second = createMockChild();
+    const third = createMockChild();
+    shared.forkMock.mockReturnValueOnce(second).mockReturnValueOnce(third);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+    second.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+    third.emit("exit", 1);
     expect(listener).toHaveBeenCalledTimes(1);
 
     // Manual restart — clears crashTimestamps + disabledNotified and forks fresh.
@@ -608,14 +610,14 @@ describe("MainProcessWatchdogClient", () => {
     expect(shared.forkMock).toHaveBeenCalledTimes(forksBeforeRestart + 1);
 
     // A second cap-hit cycle re-fires the listener (re-armed).
-    currentChild = fresh;
-    for (let i = 0; i < 3; i++) {
-      const next = createMockChild();
-      shared.forkMock.mockReturnValueOnce(next);
-      currentChild.emit("exit", 1);
-      vi.advanceTimersByTime(11_000);
-      currentChild = next;
-    }
+    const fifth = createMockChild();
+    const sixth = createMockChild();
+    shared.forkMock.mockReturnValueOnce(fifth).mockReturnValueOnce(sixth);
+    fresh.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+    fifth.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+    sixth.emit("exit", 1);
     expect(listener).toHaveBeenCalledTimes(2);
     client.dispose();
   });
