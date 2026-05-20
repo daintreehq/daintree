@@ -103,6 +103,61 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
   return { state, tick, handleMessage, disarm };
 }
 
+/** Name of the sidecar flag file the watchdog writes synchronously before
+ * SIGKILL. CrashRecoveryService reads + unlinks it on next launch to
+ * attribute the crash as a deadlock kill rather than "unknown". */
+export const WATCHDOG_KILL_FLAG_NAME = "watchdog-kill.flag";
+
+export interface WatchdogKillPayload {
+  killedAt: number;
+  missedBeats: number;
+  mainPid: number;
+}
+
+/** Pure builder for the flag-file payload. Extracted from watchdog-host.ts so
+ * the JSON shape can be tested without touching disk or the UtilityProcess
+ * runtime. The host wraps this in a try/catch synchronous write so the
+ * fail-open guarantee on the SIGKILL path is preserved. */
+export function buildWatchdogKillPayload(
+  missedBeats: number,
+  mainPid: number
+): WatchdogKillPayload {
+  return { killedAt: Date.now(), missedBeats, mainPid };
+}
+
+export interface WriteWatchdogKillFlagDeps {
+  /** Synchronous write. Defaults are injected by the host; tests inject
+   * a stub (including throw-cases) to verify fail-open behaviour. */
+  writeFileSync: (path: string, data: string) => void;
+  /** Path join shim — only needed so tests don't pull in node:path. */
+  joinPath: (userData: string, name: string) => string;
+}
+
+/** Write the sidecar flag the next-launch crash recovery reads to attribute
+ * SIGKILL-by-watchdog. Fail-open: any error is swallowed silently so the
+ * SIGKILL path is never delayed or aborted by a disk failure.
+ *
+ * Returns true on success, false on any failure (missing userData, write
+ * failure). Callers MUST treat the return value as advisory only — the
+ * SIGKILL must fire regardless.
+ */
+export function writeWatchdogKillFlag(
+  userData: string | null,
+  missedBeats: number,
+  mainPid: number,
+  deps: WriteWatchdogKillFlagDeps
+): boolean {
+  if (!userData) return false;
+  try {
+    const flagPath = deps.joinPath(userData, WATCHDOG_KILL_FLAG_NAME);
+    const payload = buildWatchdogKillPayload(missedBeats, mainPid);
+    deps.writeFileSync(flagPath, JSON.stringify(payload));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Parse the `--main-pid=<pid>` flag out of argv. Returns null if missing
  * or malformed — Chromium injects positional arguments into `process.argv`,
  * so the named flag is the only reliable transport. Strict parsing: rejects

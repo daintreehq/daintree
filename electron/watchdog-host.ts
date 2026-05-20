@@ -12,10 +12,13 @@
  * worse than missing a deadlock — every kill path is gated.
  */
 
+import fs from "node:fs";
+import path from "node:path";
 import { MessagePort } from "node:worker_threads";
 import {
   createWatchdog,
   parseMainPid,
+  writeWatchdogKillFlag,
   HEARTBEAT_INTERVAL_MS,
   MAX_MISSED,
   type WatchdogMessage,
@@ -59,6 +62,16 @@ function isMainAlive(pid: number): boolean {
   }
 }
 
+// userData path is passed through utilityProcess.fork({ env }) so the
+// watchdog can drop a sidecar flag file alongside the marker. Missing env =
+// silent no-op write (fail-open) — the SIGKILL still fires; CrashRecovery
+// just records the crash as "unknown" rather than "watchdog-deadlock".
+const userDataPath = process.env.DAINTREE_USER_DATA ?? null;
+const killFlagDeps = {
+  writeFileSync: (p: string, data: string) => fs.writeFileSync(p, data, "utf8"),
+  joinPath: (userData: string, name: string) => path.join(userData, name),
+};
+
 const watchdog = createWatchdog({
   killMain: () => {
     if (mainPid === null) return;
@@ -69,6 +82,9 @@ const watchdog = createWatchdog({
       return;
     }
     console.error(`[WatchdogHost] Sending SIGKILL to main PID ${mainPid}`);
+    // Annotation write is best-effort and must NEVER gate the kill. The
+    // helper swallows all errors internally; SIGKILL fires unconditionally.
+    writeWatchdogKillFlag(userDataPath, watchdog.state.missedBeats, mainPid, killFlagDeps);
     try {
       process.kill(mainPid, "SIGKILL");
     } catch (err) {

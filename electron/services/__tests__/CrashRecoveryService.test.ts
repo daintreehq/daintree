@@ -1469,4 +1469,177 @@ describe("CrashRecoveryService", () => {
       expect(spy).not.toHaveBeenCalled();
     });
   });
+
+  describe("watchdog attribution", () => {
+    function writeMarker(sessionStartMs: number): void {
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+    }
+
+    function writeWatchdogFlag(payload: unknown, mtimeMs?: number): string {
+      const flagPath = path.join(userData, "watchdog-kill.flag");
+      fs.writeFileSync(flagPath, JSON.stringify(payload), "utf8");
+      if (typeof mtimeMs === "number") {
+        const t = new Date(mtimeMs);
+        fs.utimesSync(flagPath, t, t);
+      }
+      return flagPath;
+    }
+
+    it("annotates the crash entry when a fresh watchdog flag is present", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      const killedAt = sessionStartMs + 16_000;
+      writeWatchdogFlag({ killedAt, missedBeats: 3, mainPid: 4242 }, killedAt);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.cause).toBe("watchdog-deadlock");
+      expect(pending!.entry.watchdogKilledAt).toBe(killedAt);
+      expect(pending!.entry.watchdogMissedBeats).toBe(3);
+      expect(pending!.entry.watchdogMainPid).toBe(4242);
+    });
+
+    it("consumes (unlinks) the flag regardless of attribution outcome", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      const flagPath = writeWatchdogFlag(
+        { killedAt: sessionStartMs + 16_000, missedBeats: 3, mainPid: 4242 },
+        sessionStartMs + 16_000
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(fs.existsSync(flagPath)).toBe(false);
+    });
+
+    it("leaves entry without cause when no watchdog flag is present", () => {
+      writeMarker(Date.now() - 5000);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.cause).toBeUndefined();
+      expect(pending!.entry.watchdogKilledAt).toBeUndefined();
+    });
+
+    it("rejects a stale flag (mtime far earlier than current session) and still unlinks it", () => {
+      const sessionStartMs = Date.now() - 1000;
+      writeMarker(sessionStartMs);
+      // Stale flag: mtime is 1 hour before this session started — clearly
+      // a leftover from a previous run where unlink failed.
+      const staleMtime = sessionStartMs - 3_600_000;
+      const flagPath = writeWatchdogFlag(
+        { killedAt: staleMtime, missedBeats: 3, mainPid: 4242 },
+        staleMtime
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.cause).toBeUndefined();
+      // Flag is still cleaned up so it can't poison the next launch.
+      expect(fs.existsSync(flagPath)).toBe(false);
+    });
+
+    it("accepts a flag whose mtime is within the 5-second grace window before sessionStartMs", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      // 3 seconds before sessionStartMs is within the 5s grace — should still
+      // be treated as fresh (clock drift / fs mtime resolution).
+      const mtime = sessionStartMs - 3_000;
+      writeWatchdogFlag({ killedAt: mtime, missedBeats: 3, mainPid: 4242 }, mtime);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending!.entry.cause).toBe("watchdog-deadlock");
+    });
+
+    it("ignores a malformed JSON flag, warns, and unlinks it", () => {
+      const sessionStartMs = Date.now() - 5_000;
+      writeMarker(sessionStartMs);
+      const flagPath = path.join(userData, "watchdog-kill.flag");
+      fs.writeFileSync(flagPath, "not valid json{{{", "utf8");
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.cause).toBeUndefined();
+      expect(fs.existsSync(flagPath)).toBe(false);
+      expect(console.warn).toHaveBeenCalled();
+    });
+
+    it("ignores a flag whose payload is the right shape but missing fields", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      // missedBeats omitted
+      writeWatchdogFlag(
+        { killedAt: sessionStartMs + 16_000, mainPid: 4242 },
+        sessionStartMs + 16_000
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending!.entry.cause).toBeUndefined();
+      expect(console.warn).toHaveBeenCalled();
+    });
+
+    it("annotates entries built from an existing crash log too", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      const crashDir = path.join(userData, "crashes");
+      fs.mkdirSync(crashDir, { recursive: true });
+      const crashLogPath = path.join(crashDir, "crash-precrash.json");
+      fs.writeFileSync(
+        crashLogPath,
+        JSON.stringify({
+          id: "precrash",
+          timestamp: Date.now() - 10_000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          osVersion: "23.0",
+          arch: "arm64",
+          errorMessage: "pre-existing crash record",
+        })
+      );
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          crashLogPath,
+        })
+      );
+      const killedAt = sessionStartMs + 16_000;
+      writeWatchdogFlag({ killedAt, missedBeats: 3, mainPid: 4242 }, killedAt);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending!.entry.errorMessage).toBe("pre-existing crash record");
+      expect(pending!.entry.cause).toBe("watchdog-deadlock");
+      expect(pending!.entry.watchdogMissedBeats).toBe(3);
+    });
+  });
 });

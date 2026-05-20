@@ -67,6 +67,16 @@ export interface CrashLogEntry {
   processUptime?: number;
   recentActions?: ActionBreadcrumb[];
   crashCause?: CrashCause;
+  /**
+   * Precise sub-classification for watchdog-driven kills. Complements
+   * crashCause (which is heuristic-only): when the external watchdog
+   * SIGKILLs main after missed heartbeats, it writes a sidecar flag and
+   * this field is set on the entry. Absent = no watchdog signal.
+   */
+  cause?: "watchdog-deadlock";
+  watchdogKilledAt?: number;
+  watchdogMissedBeats?: number;
+  watchdogMainPid?: number;
 }
 
 export interface PanelSummary {
