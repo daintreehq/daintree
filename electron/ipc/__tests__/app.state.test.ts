@@ -40,7 +40,7 @@ const crashService = {
   resetToFresh: vi.fn(),
   restoreBackup: vi.fn(() => false),
   setPanelFilter: vi.fn(),
-  getPendingCrash: vi.fn(() => null),
+  getPendingCrash: vi.fn() as any,
   getConfig: vi.fn(() => ({ autoRestoreOnCrash: false })),
 };
 
@@ -319,9 +319,13 @@ describe("app:boot handler", () => {
   it("propagates the cache-hit fast path from handleAppHydrate (no disk read)", async () => {
     const cachedResult = {
       appState: { terminals: [], sidebarWidth: 350 },
-      terminalConfig: { resourceMonitoringEnabled: true },
+      terminalConfig: {
+        scrollbackLines: 3000,
+        performanceMode: false,
+        resourceMonitoringEnabled: true,
+      },
       project: null,
-      agentSettings: {},
+      agentSettings: { agents: {} },
       gpuWebGLHardware: true,
       gpuHardwareAccelerationDisabled: false,
       safeMode: false,
