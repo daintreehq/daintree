@@ -547,7 +547,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // triggers redundant `get-all-states` fetches.
     function handleVisibilityChange() {
       if (document.visibilityState !== "visible") return;
-      wakeActiveWorktreeTerminals();
+      void wakeActiveWorktreeTerminals();
     }
     document.addEventListener("visibilitychange", handleVisibilityChange);
     cleanups.push(() => document.removeEventListener("visibilitychange", handleVisibilityChange));
@@ -558,7 +558,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // worktreePort.isReady() / onReady paths above, so only the wake fan-out
     // needs to run here.
     if (document.visibilityState === "visible") {
-      wakeActiveWorktreeTerminals();
+      void wakeActiveWorktreeTerminals();
     }
 
     return () => {

@@ -45,6 +45,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
   const historyIndexRef = useRef(-1);
   const draftBeforeHistoryRef = useRef("");
   const initialTermRef = useRef(searchTerm);
+  const didInitialSearchRef = useRef(false);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -271,12 +272,15 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
   }, [searchTerm, performSearch, cancelPendingSearch]);
 
   useEffect(() => {
+    // Run once on mount with the pre-populated history term. The ref guard
+    // keeps it single-shot while still listing `performSearch` as a dep, so
+    // no React rule needs disabling (which would bail the React Compiler).
+    if (didInitialSearchRef.current) return;
+    didInitialSearchRef.current = true;
     if (initialTermRef.current) {
       performSearch(initialTermRef.current, "next");
     }
-    // Run once on mount with the pre-populated history term.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [performSearch]);
 
   useEffect(() => {
     return () => {
