@@ -3,6 +3,8 @@ import type { PendingCrash, CrashRecoveryAction, CrashRecoveryConfig } from "@sh
 import { isElectronAvailable } from "../useElectron";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import type { AppBootState } from "./useAppBoot";
+import { startRendererSpan } from "@/utils/performance";
+import { PERF_MARKS } from "@shared/perf/marks";
 
 export type CrashRecoveryGateState =
   | { status: "loading" }
@@ -31,16 +33,20 @@ export function useCrashRecoveryGate(boot: AppBootState): {
     if (!boot.settled) return;
     hasProcessed.current = true;
 
+    const done = startRendererSpan(PERF_MARKS.CRASH_RECOVERY_GATE);
+
     // Boot failed — drop the gate so the app can still render. The cold-start
     // skeleton stays up until hydration resolves (or also fails); a stuck gate
     // would deadlock the loading screen.
     if (!boot.result) {
+      done();
       setState({ status: "none" });
       return;
     }
 
     const { crashPending: pending, crashConfig: config } = boot.result;
     if (!pending) {
+      done();
       setState({ status: "none" });
       return;
     }
@@ -52,12 +58,16 @@ export function useCrashRecoveryGate(boot: AppBootState): {
       window.electron.crashRecovery
         .resolve({ kind: "restore", panelIds: allPanelIds })
         .then(() => {
+          done();
           useRestoreConfirmationStore
             .getState()
             .showRestoreConfirmation({ suspectCount, crashCount });
           setState({ status: "none" });
         })
-        .catch(() => setState({ status: "none" }));
+        .catch(() => {
+          done();
+          setState({ status: "none" });
+        });
       return;
     }
 
@@ -65,6 +75,7 @@ export function useCrashRecoveryGate(boot: AppBootState): {
     // commits the Suspense boundary, so the dialog appears without a blank
     // fallback. The promise is cached, so the lazy() consumer reuses it.
     void import("@/components/Recovery/CrashRecoveryDialog");
+    done();
     setState({ status: "pending", crash: pending, config });
   }, [boot]);
 
