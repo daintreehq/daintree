@@ -30,6 +30,25 @@ export const WARMUP_INTERVALS = 5;
 export const PRESSURE_COUNT_TIER2 = 3;
 export const MITIGATION_COOLDOWN_MS = 10 * 60 * 1000;
 
+/**
+ * Settle window between applying a tier 1 mitigation step and re-sampling
+ * footprint via `app.getAppMetrics()`. Chromium PartitionAlloc returns freed
+ * pages to the OS via background `MemoryReclaimer` (`MADV_FREE` on
+ * macOS/Linux, Windows background trim), so privateBytes lags reclamation by
+ * a few seconds. 3s sits within the 2–5s window confirmed reliable on all
+ * three platforms while staying well under {@link POLL_INTERVAL_MS}.
+ */
+export const RECLAIM_SETTLE_MS = 3_000;
+
+/**
+ * Below this MB delta, tier 1 is considered to have reclaimed effectively
+ * nothing — if pressure also persists after the settle window, the ladder
+ * escalates to tier 2. Above this threshold tier 1 is judged to have worked
+ * (the pressure that prompted us may have legitimately re-arrived, but
+ * that's a different cycle and should not chain into immediate escalation).
+ */
+export const MIN_RECLAIMED_MB = 50;
+
 interface PidTrendState {
   startedAt: number;
   tickInBucket: number;
@@ -383,10 +402,23 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       mitigationInFlight = true;
       void (async () => {
         try {
+          let beforeMb = 0;
+          try {
+            for (const proc of app.getAppMetrics()) {
+              if (!MONITORED_TYPES.has(proc.type)) continue;
+              beforeMb += getProcessMemoryMb(proc);
+            }
+          } catch {
+            // If pre-sample fails, beforeMb stays 0; delta will be 0 and we'll
+            // err on the side of escalating if pressure persists.
+          }
+
           logInfo("memory-pressure-tier1-mitigation", {
             pollCount,
             consecutivePressureCount,
+            beforeMb: Math.round(beforeMb),
           });
+
           await actions.clearCaches();
           await actions.destroyHiddenWebviews(1);
 
@@ -401,13 +433,56 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             /* non-critical */
           }
 
+          await new Promise<void>((resolve) => setTimeout(resolve, RECLAIM_SETTLE_MS));
+
+          let afterMb = 0;
+          let pressureRemains = false;
+          let resampleFailed = false;
+          try {
+            for (const proc of app.getAppMetrics()) {
+              if (!MONITORED_TYPES.has(proc.type)) continue;
+              const mb = getProcessMemoryMb(proc);
+              afterMb += mb;
+              const threshold = WARN_THRESHOLDS_MB[proc.type];
+              if (threshold !== undefined && mb > threshold) {
+                pressureRemains = true;
+              }
+            }
+          } catch {
+            // Re-sample failed — assume pressure persists and treat reclaim
+            // as zero so the gate falls through to escalation. Without
+            // forcing afterMb=beforeMb here, deltaMb would equal the full
+            // beforeMb, satisfying `deltaMb >= MIN_RECLAIMED_MB` and
+            // *suppressing* escalation, which is the opposite of the
+            // safe-side intent.
+            pressureRemains = true;
+            resampleFailed = true;
+            afterMb = beforeMb;
+          }
+
+          const deltaMb = resampleFailed ? 0 : Math.max(0, beforeMb - afterMb);
+          logInfo("memory-pressure-tier1-reclaim", {
+            beforeMb: Math.round(beforeMb),
+            afterMb: Math.round(afterMb),
+            deltaMb: Math.round(deltaMb),
+            pressureRemains,
+            resampleFailed,
+          });
+
           if (
-            consecutivePressureCount >= PRESSURE_COUNT_TIER2 &&
+            pressureRemains &&
+            deltaMb < MIN_RECLAIMED_MB &&
             Date.now() - lastTier2At >= MITIGATION_COOLDOWN_MS
           ) {
+            // Stamp the cooldown BEFORE the tier-2 actions so a thrown
+            // hibernateIdleProjects (after destroyHiddenWebviews succeeded)
+            // doesn't leave the cooldown unconsumed and let the next poll
+            // re-fire destroyHiddenWebviews(2).
+            lastTier2At = Date.now();
             logInfo("memory-pressure-tier2-mitigation", {
               pollCount,
               consecutivePressureCount,
+              deltaMb: Math.round(deltaMb),
             });
             await actions.destroyHiddenWebviews(2);
             await actions.hibernateIdleProjects();
@@ -416,7 +491,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             } catch {
               /* non-critical */
             }
-            lastTier2At = Date.now();
           }
         } catch (err) {
           logWarn("memory-pressure-mitigation-failed", { error: String(err) });
