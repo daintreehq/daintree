@@ -275,22 +275,15 @@ const LazyCrashRecoveryDialog = lazy(() =>
   preloadCrashRecoveryDialog().then((m) => ({ default: m.CrashRecoveryDialog }))
 );
 
-function preloadSafeModeBanner() {
-  return import("./components/Recovery/SafeModeBanner");
+function preloadRecoveryBannerCoordinator() {
+  return import("./components/Recovery/RecoveryBannerCoordinator");
 }
-const LazySafeModeBanner = lazy(() =>
-  preloadSafeModeBanner().then((m) => ({ default: m.SafeModeBanner }))
+const LazyRecoveryBannerCoordinator = lazy(() =>
+  preloadRecoveryBannerCoordinator().then((m) => ({ default: m.RecoveryBannerCoordinator }))
 );
 // Fetch eagerly: `safeMode` is set synchronously during hydration, so the
 // first post-hydration render can suspend before the idle preload fires.
-void preloadSafeModeBanner();
-
-function preloadRestoreConfirmationBanner() {
-  return import("./components/Recovery/RestoreConfirmationBanner");
-}
-const LazyRestoreConfirmationBanner = lazy(() =>
-  preloadRestoreConfirmationBanner().then((m) => ({ default: m.RestoreConfirmationBanner }))
-);
+void preloadRecoveryBannerCoordinator();
 
 function preloadGitHubTokenBanner() {
   return import("./components/Recovery/GitHubTokenBanner");
@@ -304,20 +297,6 @@ function preloadCloudSyncBanner() {
 }
 const LazyCloudSyncBanner = lazy(() =>
   preloadCloudSyncBanner().then((m) => ({ default: m.CloudSyncBanner }))
-);
-
-function preloadHostCrashBanner() {
-  return import("./components/Recovery/HostCrashBanner");
-}
-const LazyHostCrashBanner = lazy(() =>
-  preloadHostCrashBanner().then((m) => ({ default: m.HostCrashBanner }))
-);
-
-function preloadWatchdogDisabledBanner() {
-  return import("./components/Recovery/WatchdogDisabledBanner");
-}
-const LazyWatchdogDisabledBanner = lazy(() =>
-  preloadWatchdogDisabledBanner().then((m) => ({ default: m.WatchdogDisabledBanner }))
 );
 
 import { Toaster } from "./components/ui/toaster";
@@ -338,7 +317,6 @@ import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore"
 import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
-import { useSafeModeStore } from "./store/safeModeStore";
 import type { BuiltInPanelKind } from "./types";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
@@ -569,12 +547,9 @@ function App() {
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();
       void preloadLogLevelPalette();
-      void preloadSafeModeBanner();
-      void preloadRestoreConfirmationBanner();
+      void preloadRecoveryBannerCoordinator();
       void preloadGitHubTokenBanner();
       void preloadCloudSyncBanner();
-      void preloadHostCrashBanner();
-      void preloadWatchdogDisabledBanner();
       import("@github-renderer/index").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
@@ -698,7 +673,6 @@ function App() {
 
   useFileDropGuard();
 
-  const isSafeMode = useSafeModeStore((s) => s.safeMode);
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
 
   if (!isElectronAvailable()) {
@@ -768,25 +742,14 @@ function App() {
             disableHoverableContent
           >
             <E2EFaultInjector />
-            {isSafeMode && (
-              <Suspense fallback={null}>
-                <LazySafeModeBanner />
-              </Suspense>
-            )}
             <Suspense fallback={null}>
-              <LazyRestoreConfirmationBanner />
+              <LazyRecoveryBannerCoordinator />
             </Suspense>
             <Suspense fallback={null}>
               <LazyGitHubTokenBanner />
             </Suspense>
             <Suspense fallback={null}>
               <LazyCloudSyncBanner />
-            </Suspense>
-            <Suspense fallback={null}>
-              <LazyHostCrashBanner />
-            </Suspense>
-            <Suspense fallback={null}>
-              <LazyWatchdogDisabledBanner />
             </Suspense>
             <DndProvider>
               <VoiceRecordingAnnouncer />
