@@ -197,7 +197,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         stampLastActive(tabId);
       }
       // If this group is maximized, update maximizedId to the new tab
-      // so "Exit Focus" works correctly
+      // so "Restore" (maximize toggle) works correctly
       if (isMaximized) {
         setMaximizedId(tabId);
       }

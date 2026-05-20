@@ -58,7 +58,7 @@ export const SEL = {
     anyPanel: "[data-panel-id]",
     close: '[data-testid="panel-close"]',
     maximize: '[aria-label*="Maximize"]',
-    exitFocus: '[aria-label*="Exit Focus"]',
+    restore: '[aria-label*="Restore grid view"]',
     overflowMenu: '[aria-label="More panel actions"]',
     minimize: '[data-testid="panel-move-to-dock"]',
     restoreFromDock: 'button[aria-label*="move to grid"]',

@@ -80,11 +80,11 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const maximizeBtn = panel.locator('[aria-label*="Maximize"]').first();
       await maximizeBtn.click();
 
-      const exitFocus = window.locator('[aria-label*="Exit Focus"]').first();
-      await expect(exitFocus).toBeVisible({ timeout: T_SHORT });
+      const restoreBtn = window.locator('[aria-label*="Restore grid view"]').first();
+      await expect(restoreBtn).toBeVisible({ timeout: T_SHORT });
 
-      await exitFocus.click();
-      await expect(exitFocus).not.toBeVisible({ timeout: T_SHORT });
+      await restoreBtn.click();
+      await expect(restoreBtn).not.toBeVisible({ timeout: T_SHORT });
     });
 
     test("minimize to dock and restore", async () => {

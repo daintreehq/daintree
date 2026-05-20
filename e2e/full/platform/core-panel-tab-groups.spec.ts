@@ -113,18 +113,18 @@ test.describe.serial("Core: Panel Tab Groups", () => {
       const { window } = ctx;
       const panel = getFirstGridPanel(window);
 
-      await test.step("Maximize the panel and verify exit-focus button appears", async () => {
+      await test.step("Maximize the panel and verify restore button appears", async () => {
         const maximizeBtn = panel.locator(SEL.panel.maximize).first();
         await maximizeBtn.click();
 
-        const exitFocus = window.locator(SEL.panel.exitFocus).first();
-        await expect(exitFocus).toBeVisible({ timeout: T_SHORT });
+        const restoreBtn = window.locator(SEL.panel.restore).first();
+        await expect(restoreBtn).toBeVisible({ timeout: T_SHORT });
       });
 
-      await test.step("Restore from maximize via exit-focus button", async () => {
-        const exitFocus = window.locator(SEL.panel.exitFocus).first();
-        await exitFocus.click();
-        await expect(exitFocus).not.toBeVisible({ timeout: T_SHORT });
+      await test.step("Restore from maximize via restore button", async () => {
+        const restoreBtn = window.locator(SEL.panel.restore).first();
+        await restoreBtn.click();
+        await expect(restoreBtn).not.toBeVisible({ timeout: T_SHORT });
       });
 
       await test.step("Verify tab list still shows both tabs after restore", async () => {
