@@ -1,5 +1,6 @@
 import { utilityProcess, UtilityProcess, app, MessagePortMain } from "electron";
 import { EventEmitter } from "events";
+import { createHash } from "crypto";
 import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
@@ -23,6 +24,19 @@ const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const RESTART_FLOOR_MS = 100;
+const RESTART_CAP_BASE_MS = 1_000;
+const RESTART_CAP_MAX_MS = 10_000;
+
+// Time-windowed crash-loop guard. Mirrors the constants in PtyHostLifecycle
+// (and CrashLoopGuardService) so the workspace-host follows the same policy:
+// three crashes within five minutes trip the cap, and a five-minute stretch
+// of clean running decays the window back to empty. Duplicated rather than
+// imported because the guards operate at independent layers.
+const CRASH_THRESHOLD = 3;
+const RAPID_CRASH_WINDOW_MS = 300_000;
+const STABILITY_TIMEOUT_MS = 300_000;
+
 export class WorkspaceHostProcess extends EventEmitter {
   private child: UtilityProcess | null = null;
   private config: Required<WorkspaceClientConfig>;
@@ -33,7 +47,30 @@ export class WorkspaceHostProcess extends EventEmitter {
 
   private healthCheckInterval: NodeJS.Timeout | null = null;
   private restartTimer: NodeJS.Timeout | null = null;
-  private restartAttempts = 0;
+  private disposeTimer: NodeJS.Timeout | null = null;
+  /**
+   * Sliding window of recent crash timestamps. Trimmed to entries within
+   * `RAPID_CRASH_WINDOW_MS` on each crash; cleared when the stability timer
+   * fires after a successful `ready`. Three crashes within the window trip
+   * the cap and emit `host-crash`.
+   */
+  private crashTimestamps: number[] = [];
+  /**
+   * Stability timer started on every `ready`. When it fires after
+   * `STABILITY_TIMEOUT_MS` of clean running, the crash window is cleared.
+   * Cleared on crash, `manualRestart()`, and `dispose()`.
+   */
+  private stabilityTimer: NodeJS.Timeout | null = null;
+  /**
+   * Authoritative crash reason captured from `app.on("child-process-gone")`.
+   * Consumed by the next `exit` handler via `setImmediate` deferral, since
+   * Electron 37-41 has a documented race where `exit` often fires before
+   * `child-process-gone` for utility-process crashes.
+   */
+  private pendingChildProcessGoneReason: { reason: string; exitCode: number } | null = null;
+  private childProcessGoneHandler:
+    | ((event: Electron.Event, details: Electron.Details) => void)
+    | null = null;
   private isHealthCheckPaused = false;
   private isWaitingForHandshake = false;
   private handshakeTimeout: NodeJS.Timeout | null = null;
@@ -74,13 +111,19 @@ export class WorkspaceHostProcess extends EventEmitter {
       .basename(projectPath)
       .replace(/[^a-zA-Z0-9_-]/g, "-")
       .slice(0, 40);
-    this.serviceName = `daintree-workspace-host:${safeName}`;
+    // Hash the full path to disambiguate same-basename projects (e.g.
+    // `/workspaces/a/api` and `/workspaces/b/api`). Without this suffix the
+    // per-instance `child-process-gone` filter would match both hosts and
+    // cross-attribute crash reasons.
+    const pathHash = createHash("sha1").update(projectPath).digest("hex").slice(0, 8);
+    this.serviceName = `daintree-workspace-host:${safeName}-${pathHash}`;
 
     this.readyPromise = new Promise((resolve, reject) => {
       this.readyResolve = resolve;
       this.readyReject = reject;
     });
 
+    this.registerChildProcessGoneListener();
     this.startHost();
   }
 
@@ -236,10 +279,11 @@ export class WorkspaceHostProcess extends EventEmitter {
 
   /**
    * Restart the host after its auto-restart budget has been exhausted.
-   * Resets `restartAttempts` so future crashes get a fresh budget, respawns
-   * the child, and emits `"restarted"` so `WorkspaceClient` can re-broker
-   * ports and reload the project — the auto-restart path emits this from
-   * its `setTimeout` callback which `manualRestart()` bypasses.
+   * Clears the crash window and pending stability timer so future crashes
+   * get a fresh budget, respawns the child, and emits `"restarted"` so
+   * `WorkspaceClient` can re-broker ports and reload the project — the
+   * auto-restart path emits this from its `setTimeout` callback which
+   * `manualRestart()` bypasses.
    */
   manualRestart(): void {
     if (this.isDisposed) {
@@ -259,7 +303,11 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.restartTimer = null;
     }
 
-    this.restartAttempts = 0;
+    this.crashTimestamps = [];
+    if (this.stabilityTimer) {
+      clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
 
     console.log(`[WorkspaceHost:${this.serviceName}] Manual restart initiated`);
     this.startHost();
@@ -286,11 +334,21 @@ export class WorkspaceHostProcess extends EventEmitter {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
+    if (this.stabilityTimer) {
+      clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
     if (this.handshakeTimeout) {
       clearTimeout(this.handshakeTimeout);
       this.handshakeTimeout = null;
     }
     this.isWaitingForHandshake = false;
+
+    if (this.childProcessGoneHandler) {
+      app.off("child-process-gone", this.childProcessGoneHandler);
+      this.childProcessGoneHandler = null;
+    }
+    this.pendingChildProcessGoneReason = null;
 
     if (this.readyReject) {
       this.readyReject(
@@ -314,7 +372,10 @@ export class WorkspaceHostProcess extends EventEmitter {
 
     if (this.child) {
       this.send({ type: "dispose" });
-      setTimeout(() => {
+      // Unref'd so the pending backstop never holds the Electron event loop
+      // alive after app.quit when the host has already cooperated.
+      this.disposeTimer = setTimeout(() => {
+        this.disposeTimer = null;
         if (this.child) {
           try {
             this.child.kill();
@@ -328,6 +389,7 @@ export class WorkspaceHostProcess extends EventEmitter {
           }
         }
       }, 1000);
+      this.disposeTimer.unref?.();
     }
 
     this.removeAllListeners();
@@ -414,6 +476,12 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.restartTimer = null;
     }
 
+    // Defensive: clear any stale crash reason from a prior host cycle. Under
+    // normal flow the `exit` handler's setImmediate consumes this, but a
+    // missed exit event (or out-of-band listener fire) would otherwise leak
+    // into the next crash.
+    this.pendingChildProcessGoneReason = null;
+
     if (this.readyReject && this.isInitialized) {
       this.readyReject(new Error("Workspace Host restarting"));
     }
@@ -423,6 +491,12 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.readyResolve = resolve;
       this.readyReject = reject;
     });
+    // Attach a no-op handler so a fork failure (which rejects readyPromise
+    // synchronously inside the catch below) doesn't surface as an unhandled
+    // rejection on internal restart paths where no external caller is
+    // awaiting. Consumers calling waitForReady() still observe the rejection
+    // on their own chain because .catch returns a new branched promise.
+    this.readyPromise.catch(() => undefined);
 
     const electronDir = path.basename(__dirname) === "chunks" ? path.dirname(__dirname) : __dirname;
     const hostPath = path.join(electronDir, "workspace-host-bootstrap.js");
@@ -484,6 +558,15 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.isInitialized = false;
       this.child = null;
 
+      // Cancel any stability timer the prior `ready` armed. If it stayed
+      // alive, it could fire moments after a crash and wipe `crashTimestamps`
+      // even though the host never ran cleanly for the full window —
+      // defeating the three-crash guard for crash-ready-crash-ready patterns.
+      if (this.stabilityTimer) {
+        clearTimeout(this.stabilityTimer);
+        this.stabilityTimer = null;
+      }
+
       for (const [, { reject, timeout }] of this.pendingRequests) {
         clearTimeout(timeout);
         reject(
@@ -503,33 +586,77 @@ export class WorkspaceHostProcess extends EventEmitter {
         this.readyReject = null;
       }
 
-      if (this.isDisposed) return;
+      if (this.isDisposed) {
+        this.pendingChildProcessGoneReason = null;
+        return;
+      }
 
       // Fire the recovery signal before restart scheduling so the renderer can
       // reject in-flight requests immediately instead of waiting up to ~10s for
       // the per-request timeout.
       this.emit("host-recovering", code);
 
-      if (this.restartAttempts < this.config.maxRestartAttempts) {
-        this.restartAttempts++;
-        const cap = Math.min(1000 * Math.pow(2, this.restartAttempts), 10000);
-        const delay = 100 + Math.floor(Math.random() * Math.max(0, cap - 100));
-        console.log(
-          `[WorkspaceHost:${this.serviceName}] Restarting in ${delay}ms (attempt ${this.restartAttempts}/${this.config.maxRestartAttempts})`
-        );
+      // Electron 37-41 race: `exit` often fires before `child-process-gone`
+      // for utility-process crashes. Defer the restart decision by one event
+      // loop tick so the authoritative reason and exit code can arrive; fall
+      // back to the exit-code from the `exit` event when no reason was
+      // captured in time.
+      setImmediate(() => {
+        if (this.isDisposed) {
+          this.pendingChildProcessGoneReason = null;
+          return;
+        }
 
-        if (this.restartTimer) clearTimeout(this.restartTimer);
-        this.restartTimer = setTimeout(() => {
-          this.restartTimer = null;
-          this.startHost();
-          if (this.child !== null) {
-            this.emit("restarted");
-          }
-        }, delay);
-      } else {
-        console.error(`[WorkspaceHost:${this.serviceName}] Max restart attempts reached`);
-        this.emit("host-crash", code);
-      }
+        const gone = this.pendingChildProcessGoneReason;
+        this.pendingChildProcessGoneReason = null;
+        // Prefer the authoritative exit code from `child-process-gone` over
+        // the (sometimes unreliable) one from `exit` — Electron 40-41 has a
+        // known signed/unsigned mangling bug on Windows for the exit event.
+        const reportedCode = gone ? gone.exitCode : code;
+
+        // If `manualRestart()` or some other path already spawned a new host
+        // during the defer window, don't schedule a second auto-restart — it
+        // would orphan that host.
+        if (this.child !== null) return;
+
+        // Time-windowed sliding crash counter. Trim entries older than the
+        // window, then append the current crash. Three crashes within five
+        // minutes trip the cap; crashes spread further apart decay out.
+        const crashAt = Date.now();
+        this.crashTimestamps = this.crashTimestamps.filter(
+          (t) => crashAt - t < RAPID_CRASH_WINDOW_MS
+        );
+        this.crashTimestamps.push(crashAt);
+
+        if (this.crashTimestamps.length < CRASH_THRESHOLD) {
+          const windowAttempt = this.crashTimestamps.length;
+          const cap = Math.min(
+            RESTART_CAP_BASE_MS * Math.pow(2, windowAttempt),
+            RESTART_CAP_MAX_MS
+          );
+          const delay =
+            RESTART_FLOOR_MS + Math.floor(Math.random() * Math.max(0, cap - RESTART_FLOOR_MS));
+          console.log(
+            `[WorkspaceHost:${this.serviceName}] Restarting in ${delay}ms (attempt ${windowAttempt}/${CRASH_THRESHOLD - 1} in window)`
+          );
+
+          if (this.restartTimer) clearTimeout(this.restartTimer);
+          this.restartTimer = setTimeout(() => {
+            this.restartTimer = null;
+            if (this.isDisposed || this.child !== null) return;
+            this.startHost();
+            if (this.child !== null) {
+              this.emit("restarted");
+            }
+          }, delay);
+          this.restartTimer.unref?.();
+        } else {
+          console.error(
+            `[WorkspaceHost:${this.serviceName}] Max restart attempts reached (${CRASH_THRESHOLD} crashes in ${RAPID_CRASH_WINDOW_MS}ms), giving up`
+          );
+          this.emit("host-crash", reportedCode);
+        }
+      });
     });
 
     this.startHealthCheckInterval();
@@ -574,6 +701,49 @@ export class WorkspaceHostProcess extends EventEmitter {
     }, this.config.healthCheckIntervalMs);
   }
 
+  /**
+   * Register the `child-process-gone` listener once. Filtered to this host's
+   * unique per-instance `serviceName` (each WorkspaceHostProcess scopes its
+   * own host). The handler only records the reason; the `exit` handler
+   * consumes it via setImmediate.
+   */
+  private registerChildProcessGoneListener(): void {
+    if (this.childProcessGoneHandler) return;
+    const handler = (_event: Electron.Event, details: Electron.Details): void => {
+      if (this.isDisposed) return;
+      if (details.type !== "Utility") return;
+      // Electron 41 populates `name` from `serviceName` at runtime, but both
+      // fields are typed as optional. Accept either to stay resilient to
+      // future runtime changes or edge cases where only one is set.
+      const matchesHost =
+        details.name === this.serviceName || details.serviceName === this.serviceName;
+      if (!matchesHost) return;
+      this.pendingChildProcessGoneReason = {
+        reason: details.reason,
+        exitCode: details.exitCode,
+      };
+    };
+    this.childProcessGoneHandler = handler;
+    app.on("child-process-gone", handler);
+  }
+
+  /**
+   * Start (or restart) the stability timer. When it fires after
+   * `STABILITY_TIMEOUT_MS` of clean running, the crash window is cleared so
+   * subsequent crashes start fresh. Unref'd so the timer never pins the
+   * Electron event loop alive after `app.quit`.
+   */
+  private startStabilityTimer(): void {
+    if (this.stabilityTimer) {
+      clearTimeout(this.stabilityTimer);
+    }
+    this.stabilityTimer = setTimeout(() => {
+      this.stabilityTimer = null;
+      this.crashTimestamps = [];
+    }, STABILITY_TIMEOUT_MS);
+    this.stabilityTimer.unref?.();
+  }
+
   private handleHostEvent(event: WorkspaceHostEvent): void {
     try {
       this.processHostEvent(event);
@@ -602,7 +772,13 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "ready": {
         if (!this.child) return;
         this.isInitialized = true;
-        this.restartAttempts = 0;
+        // Start (or restart) the stability timer. We deliberately do NOT
+        // clear `crashTimestamps` here — clearing on ready would defeat the
+        // sliding window for a crash-ready-crash-ready loop, where each
+        // fresh ready would wipe the history right before the next crash.
+        // The window is only cleared when the timer fires after a full
+        // stable interval. This is the fix for #8553.
+        this.startStabilityTimer();
 
         const token = GitHubAuth.getToken();
         if (token) {
