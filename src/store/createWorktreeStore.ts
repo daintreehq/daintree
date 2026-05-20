@@ -532,7 +532,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       if (mutationIds.length === 0) return;
       const prev = get();
       if (prev.mutationOutbox.size === 0) return;
-      let removedWorktreeId: string | null = null;
+      const removedWorktreeIds = new Set<string>();
       const acked = new Set(mutationIds);
       const next = new Map(prev.mutationOutbox);
       let changed = false;
@@ -544,9 +544,10 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           // (driven by the `worktree-removed` event). But if the host crashed
           // between sending `worktree-removed` and the result ack, the
           // renderer may still have `deletingIds.has(worktreeId)` true.
-          // Sweep it here as a safety net — without this, the card would
-          // stay stuck in the "Deleting…" state forever after a crash.
-          removedWorktreeId = entry.worktreeId;
+          // Sweep every affected id here as a safety net — without this, a
+          // batch ack that covers multiple concurrent deletes would only
+          // clear the last entry's card (#8405 review finding #3).
+          removedWorktreeIds.add(entry.worktreeId);
         }
       }
       if (!changed) return;
@@ -557,17 +558,18 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       let nextDeletingIds = prev.deletingIds;
       let nextDeleteErrors = prev.deleteErrors;
       let nextDeleteErrorArgs = prev.deleteErrorArgs;
-      if (removedWorktreeId !== null) {
+      for (const removedWorktreeId of removedWorktreeIds) {
         if (prev.deletingIds.has(removedWorktreeId)) {
-          nextDeletingIds = new Set(prev.deletingIds);
+          if (nextDeletingIds === prev.deletingIds) nextDeletingIds = new Set(prev.deletingIds);
           nextDeletingIds.delete(removedWorktreeId);
         }
         if (prev.deleteErrors.has(removedWorktreeId)) {
-          nextDeleteErrors = new Map(prev.deleteErrors);
+          if (nextDeleteErrors === prev.deleteErrors) nextDeleteErrors = new Map(prev.deleteErrors);
           nextDeleteErrors.delete(removedWorktreeId);
         }
         if (prev.deleteErrorArgs.has(removedWorktreeId)) {
-          nextDeleteErrorArgs = new Map(prev.deleteErrorArgs);
+          if (nextDeleteErrorArgs === prev.deleteErrorArgs)
+            nextDeleteErrorArgs = new Map(prev.deleteErrorArgs);
           nextDeleteErrorArgs.delete(removedWorktreeId);
         }
       }
@@ -647,6 +649,12 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const toReplay: MutationOutboxEntry[] = [];
       for (const entry of prev.mutationOutbox.values()) {
         if (entry.status === "failed") continue;
+        // Skip `in-flight` so a second `replayOutboxAfterReconnect` call
+        // (two rapid `onReady` events before the first replay's IPC settles)
+        // doesn't double-fire the same delete (#8405 review finding #4). The
+        // first call's IPC promise will still resolve/reject and update the
+        // entry; only then is another replay eligible.
+        if (entry.status === "in-flight") continue;
         if (entry.type !== "delete-worktree") continue;
         if (!prev.worktrees.has(entry.worktreeId)) {
           // Reconciled — target already absent from snapshot.

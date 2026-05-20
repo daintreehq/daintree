@@ -224,13 +224,18 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             // Mutation-outbox reconcile + replay (#8405). Order matters: prune
             // FIRST so an ack the renderer missed (host crashed between
             // `git worktree remove` and the result ack) doesn't get replayed.
-            // Then replay the survivors only on a wake reconnect — a cold start
-            // can't have outbox entries from this session, and firing the
-            // replay loop on every initial load would be wasted work. Both
-            // calls run outside the startTransition above so they aren't
-            // batched into the non-urgent render priority.
+            // Then replay the survivors when either (a) this is a wake
+            // reconnect (epoch transition with a previously-initialized store)
+            // OR (b) there are outbox entries to replay — the second condition
+            // is critical for the manual-restart-after-fatal-error path, where
+            // `setFatalError` reset `isInitialized` to false so `isWake` is
+            // false on the post-restart fetch (#8405 review finding #2). Pure
+            // cold starts can't have outbox entries from this session anyway,
+            // so the `mutationOutbox.size > 0` check costs nothing in that
+            // case. Both calls run outside the startTransition above so they
+            // aren't batched into the non-urgent render priority.
             store.getState().pruneAcknowledgedMutations(response.lastAcknowledgedMutationIds ?? []);
-            if (isWake) {
+            if (isWake || store.getState().mutationOutbox.size > 0) {
               store.getState().replayOutboxAfterReconnect();
             }
 

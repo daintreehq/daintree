@@ -833,6 +833,53 @@ describe("WorkspaceService.deleteWorktree", () => {
       );
     });
 
+    it("re-throws on failure when throwOnError=true so the port handler can reject (#8405 review #1)", async () => {
+      // Pre-PR the port path would resolve to { ok: true } on every call
+      // because `deleteWorktree` caught its own errors and emitted them via
+      // sendEvent (which the port handler doesn't observe). With
+      // `throwOnError=true` the port handler's outer catch rejects the
+      // renderer's port request.
+      await expect(
+        service.deleteWorktree(
+          "req-throws",
+          "/nonexistent/worktree",
+          false,
+          false,
+          "mut-throw",
+          /* throwOnError */ true
+        )
+      ).rejects.toThrow(/not found/);
+
+      // The legacy sendEvent path still fires for backward compat with
+      // `WorkspaceClient.sendWithResponse` callers.
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "delete-worktree-result",
+          requestId: "req-throws",
+          success: false,
+          error: expect.stringContaining("not found"),
+        })
+      );
+    });
+
+    it("does NOT re-throw on failure when throwOnError is omitted (legacy contract)", async () => {
+      // Legacy IPC callers depend on the resolved-promise + sendEvent contract.
+      // Regression guard for the bridge path (`WorkspaceClient.sendWithResponse`)
+      // and the existing test suite above this `describe` block.
+      await expect(
+        service.deleteWorktree("req-legacy-no-throw", "/nonexistent/worktree")
+      ).resolves.toBeUndefined();
+
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "delete-worktree-result",
+          requestId: "req-legacy-no-throw",
+          success: false,
+          error: expect.stringContaining("not found"),
+        })
+      );
+    });
+
     it("deleteWorktree without a mutationId still works (backward compatible)", async () => {
       const fsModule = await import("fs/promises");
       vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {

@@ -256,6 +256,48 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
       // existing setFatalError behavior).
       expect(store.getState().manualAssociations.size).toBe(0);
     });
+
+    it("replay fires after setFatalError + manual restart even though isInitialized is false (#8405 review #2)", async () => {
+      // Reproduce the post-fatal-restart sequence: outbox entry stays
+      // `pending` through `setFatalError`; the WorktreeStoreContext's
+      // post-restart `fetchInitialState` then captures `isWake = false`
+      // (because setFatalError reset isInitialized). The replay path must
+      // still fire when there are outbox entries to drain — otherwise the
+      // preserved outbox is inert and the user's pending delete is silently
+      // abandoned.
+      worktreeClientDeleteMock.mockRejectedValueOnce(
+        new Error("HOST_EXITED: Worktree port disconnected")
+      );
+
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+      store.getState().startDelete("wt-1", { force: false });
+      await flushPromises();
+      await flushPromises();
+
+      const entry = [...store.getState().mutationOutbox.values()][0]!;
+      expect(entry.status).toBe("pending");
+
+      // Simulate the fatal-disconnect + manual restart cycle.
+      store.getState().setFatalError("Workspace service crashed");
+      expect(store.getState().isInitialized).toBe(false);
+      expect(store.getState().mutationOutbox.size).toBe(1);
+
+      // Post-restart hydration: snapshot still has wt-1 because the original
+      // delete never actually ran.
+      store.getState().applySnapshot([makeSnapshot("wt-1")], nextV(OTHER_EPOCH));
+
+      // The replay must fire — the gate in WorktreeStoreContext is
+      // `isWake || mutationOutbox.size > 0`, so even with isWake=false the
+      // pending entry replays.
+      worktreeClientDeleteMock.mockResolvedValueOnce();
+      store.getState().replayOutboxAfterReconnect();
+      await flushPromises();
+      await flushPromises();
+
+      const lastCallId = worktreeClientDeleteMock.mock.calls.at(-1)![3];
+      expect(lastCallId).toBe(entry.mutationId);
+    });
   });
 
   describe("pruneAcknowledgedMutations", () => {
@@ -296,6 +338,38 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
       store.getState().pruneAcknowledgedMutations([]);
       // Identity-equal — no churn.
       expect(store.getState().mutationOutbox).toBe(before);
+    });
+
+    it("clears deletingIds for every pruned worktree, not just the last (#8405 review #3)", async () => {
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeSnapshot("wt-1"), makeSnapshot("wt-2")], nextV());
+
+      // Hold both IPCs open so both cards stay in `deletingIds` when we ack.
+      const resolvers: Array<() => void> = [];
+      worktreeClientDeleteMock.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resolvers.push(resolve);
+          })
+      );
+      store.getState().startDelete("wt-1", { force: false });
+      store.getState().startDelete("wt-2", { force: false });
+      await flushPromises();
+      const entries = [...store.getState().mutationOutbox.values()];
+      const ids = entries.map((e) => e.mutationId);
+      expect(store.getState().deletingIds.has("wt-1")).toBe(true);
+      expect(store.getState().deletingIds.has("wt-2")).toBe(true);
+
+      store.getState().pruneAcknowledgedMutations(ids);
+
+      // Both cards must be cleaned up — not just the last one in iteration order.
+      expect(store.getState().mutationOutbox.size).toBe(0);
+      expect(store.getState().deletingIds.has("wt-1")).toBe(false);
+      expect(store.getState().deletingIds.has("wt-2")).toBe(false);
+
+      // Drain the open IPCs.
+      for (const r of resolvers) r();
+      await flushPromises();
     });
 
     it("clears deletingIds for the pruned worktree as a safety sweep", async () => {
@@ -383,6 +457,34 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
       expect(store.getState().mutationOutbox.size).toBe(0);
       // No new IPC call from the replay path — only the original failure.
       expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not re-fire `in-flight` entries (#8405 review #4 — double-replay suppression)", async () => {
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+      // Hold the IPC open so the entry stays `in-flight` while we trigger a
+      // second replay sweep.
+      let resolveFirst: () => void = () => {};
+      worktreeClientDeleteMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          })
+      );
+      store.getState().startDelete("wt-1", { force: false });
+      await flushPromises();
+      expect([...store.getState().mutationOutbox.values()][0]!.status).toBe("in-flight");
+
+      // A spurious second sweep before the first IPC settles must not fire a
+      // duplicate delete.
+      store.getState().replayOutboxAfterReconnect();
+      await flushPromises();
+      expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
+
+      // Drain.
+      resolveFirst();
+      await flushPromises();
     });
 
     it("does not re-fire `failed` entries", async () => {

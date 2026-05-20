@@ -1844,7 +1844,16 @@ export class WorkspaceService {
     worktreeId: string,
     force: boolean = false,
     deleteBranch: boolean = false,
-    mutationId?: string
+    mutationId?: string,
+    /**
+     * Whether to re-throw on failure after emitting `delete-worktree-result`.
+     * Defaults to `false` to preserve the legacy callers' contract — they
+     * resolve via the requestId-keyed event, not the promise return. The port
+     * dispatcher passes `true` so semantic failures (uncommitted changes,
+     * etc.) reject the renderer's `worktreePort.request("delete-worktree")`
+     * instead of silently resolving to `{ ok: true }` (#8405 review #1).
+     */
+    throwOnError: boolean = false
   ): Promise<void> {
     // Mutation-outbox replay short-circuit (#8405): a replay of an already
     // acknowledged delete must not re-run `git worktree remove` (which would
@@ -2040,12 +2049,22 @@ export class WorkspaceService {
       // Delete failed — drop any pending entry so a real external change to
       // that name isn't masked, and cancel its safety valve.
       if (pendingDeleteKey) this.topologyClearPending(pendingDeleteKey);
+      // sendEvent for the legacy `WorkspaceClient.sendWithResponse` path, which
+      // resolves its requestId-keyed promise from `delete-worktree-result`.
       this.sendEvent({
         type: "delete-worktree-result",
         requestId,
         success: false,
         error: (error as Error).message,
       });
+      // Re-throw so the port path (`handleWorktreePortRequest`) can reject the
+      // port `request()` with the same error string — without the throw, the
+      // port handler returns `{ ok: true }` and the renderer's outbox prunes
+      // the entry as if the delete succeeded, silently masking the failure
+      // (#8405 review finding #1). Legacy callers can opt out by omitting
+      // `mutationId` and the `throwOnError` flag (`WorkspaceClient.sendWithResponse`
+      // resolves via the delete-worktree-result event, not the promise return).
+      if (throwOnError) throw error;
     }
   }
 

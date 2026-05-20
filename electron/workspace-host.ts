@@ -127,12 +127,17 @@ async function handleWorktreePortRequest(
 
       case "delete-worktree": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        // `throwOnError: true` — port-backed callers (renderer outbox) need a
+        // semantic failure to reject the port request so the outbox can
+        // classify the error. The legacy IPC path keeps the old behavior
+        // (resolve, emit `delete-worktree-result` event).
         await workspaceService.deleteWorktree(
           requestId,
           msg.payload.worktreeId,
           msg.payload.force,
           msg.payload.deleteBranch,
-          msg.payload.mutationId
+          msg.payload.mutationId,
+          true
         );
         result = { ok: true };
         break;
