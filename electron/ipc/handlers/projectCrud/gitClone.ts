@@ -7,13 +7,9 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "child_process";
 import { CHANNELS } from "../../channels.js";
+import { defineIpcNamespace, op } from "../../define.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
-import {
-  broadcastToRenderer,
-  sendToRenderer,
-  typedHandle,
-  typedHandleWithContext,
-} from "../../utils.js";
+import { broadcastToRenderer, sendToRenderer } from "../../utils.js";
 import { createAuthenticatedGit } from "../../../utils/hardenedGit.js";
 import { parseGitHubRepoUrl } from "../../../services/github/index.js";
 import type {
@@ -241,8 +237,6 @@ function killCloneProcessTree(pid: number | undefined): void {
 }
 
 export function registerGitCloneHandlers(): () => void {
-  const handlers: Array<() => void> = [];
-
   // Track every in-flight clone so cancel aborts each one independently.
   // Electron's ipcMain.handle permits concurrent invocations from multiple
   // senders; sharing a single controller would let a later clone overwrite an
@@ -454,7 +448,6 @@ export function registerGitCloneHandlers(): () => void {
       activeControllers.delete(localController);
     }
   };
-  handlers.push(typedHandleWithContext(CHANNELS.PROJECT_CLONE_REPO, handleProjectCloneRepo));
 
   const handleProjectCloneCancel = async (): Promise<void> => {
     // Cancel every in-flight clone. The renderer's clone dialog is the only
@@ -464,7 +457,12 @@ export function registerGitCloneHandlers(): () => void {
       controller.abort();
     }
   };
-  handlers.push(typedHandle(CHANNELS.PROJECT_CLONE_CANCEL, handleProjectCloneCancel));
 
-  return () => handlers.forEach((cleanup) => cleanup());
+  return defineIpcNamespace({
+    name: "gitClone",
+    ops: {
+      cloneRepo: op(CHANNELS.PROJECT_CLONE_REPO, handleProjectCloneRepo, { withContext: true }),
+      cancelClone: op(CHANNELS.PROJECT_CLONE_CANCEL, handleProjectCloneCancel),
+    },
+  }).register();
 }
