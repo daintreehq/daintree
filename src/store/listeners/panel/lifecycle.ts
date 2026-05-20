@@ -7,6 +7,7 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logError } from "@/utils/logger";
 import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
+import { enqueueFlowStatusUpdate, cancelPanelStatusBuffer } from "@/store/panelStatusBuffer";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { getMergedPresets } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -168,6 +169,7 @@ export function setupLifecycleListeners(): DisposableStore {
   const d = new DisposableStore();
 
   d.add(toDisposable(() => fallbackInFlight.clear()));
+  d.add(toDisposable(cancelPanelStatusBuffer));
 
   d.add(
     toDisposable(
@@ -346,7 +348,7 @@ export function setupLifecycleListeners(): DisposableStore {
           terminalInstanceService.injectDataLossMarker(id, droppedBytes ?? 0);
           return;
         }
-        usePanelStore.getState().updateFlowStatus(id, status, timestamp);
+        enqueueFlowStatusUpdate(id, status, timestamp);
         if (status === "suspended" || status === "paused-backpressure") {
           terminalInstanceService.wake(id);
         }
