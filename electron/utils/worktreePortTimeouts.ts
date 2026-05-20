@@ -15,12 +15,25 @@ export const DEFAULT_WORKTREE_PORT_TIMEOUT_MS = 10_000;
  * renderer stuck on a hung utility process that never crashes (so the port
  * `close` event never fires). The `close` event is the fast-failure signal;
  * these timeouts are the deadlock backstop.
+ *
+ * Values must exceed the host-side worst case so the renderer is never the
+ * limiting factor. As of writing:
+ *   - delete-worktree: host runs resource-teardown (300s, hardcoded in
+ *     WorktreeLifecycleService.runTeardown) then regular teardown (120s),
+ *     sequentially → 7 min worst case. Renderer gets 10 min headroom.
+ *   - resource-action: per-action defaults are 300s
+ *     (ResourceActionExecutor.DEFAULT_TIMEOUT_MS); user configs in
+ *     `.daintree/config.json` may extend this without an enforced ceiling.
+ *     15 min covers all realistic cloud provision/teardown workflows.
+ *   - run-lifecycle-setup: arbitrary user-defined setup scripts.
+ *   - create-worktree: git worktree add + branch creation on slow
+ *     filesystems / large repos.
  */
 export const WORKTREE_PORT_TIMEOUTS_MS: Partial<Record<WorktreePortAction, number>> = {
-  "create-worktree": 5 * 60_000, // git worktree add + branch creation
-  "delete-worktree": 5 * 60_000, // git worktree remove + optional branch delete
-  "resource-action": 10 * 60_000, // cloud provision/teardown can run for minutes
-  "run-lifecycle-setup": 10 * 60_000, // arbitrary user-defined setup scripts
+  "create-worktree": 5 * 60_000,
+  "delete-worktree": 10 * 60_000,
+  "resource-action": 15 * 60_000,
+  "run-lifecycle-setup": 15 * 60_000,
 };
 
 /**

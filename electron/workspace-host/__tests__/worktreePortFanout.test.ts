@@ -85,6 +85,45 @@ describe("fanoutEventToPorts", () => {
     expect(ports).toEqual([]);
   });
 
+  it("handles alternating good/bad ports without skipping any good port (reverse iteration)", () => {
+    const good1 = makePort();
+    const bad1 = makePort(true);
+    const good2 = makePort();
+    const bad2 = makePort(true);
+    const good3 = makePort();
+    const ports = [good1, bad1, good2, bad2, good3];
+    const logger = { error: vi.fn() };
+
+    fanoutEventToPorts(ports, { type: "worktree-update" }, logger);
+
+    expect(good1.postMessage).toHaveBeenCalledTimes(1);
+    expect(good2.postMessage).toHaveBeenCalledTimes(1);
+    expect(good3.postMessage).toHaveBeenCalledTimes(1);
+    expect(bad1.close).toHaveBeenCalledTimes(1);
+    expect(bad2.close).toHaveBeenCalledTimes(1);
+    expect(ports).toEqual([good1, good2, good3]);
+    expect(logger.error).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes ALL renderer ports when the event itself is non-serializable", () => {
+    // Simulates the DataCloneError fan-out fail mode — every port throws on
+    // the same event. All ports must be removed and closed so the renderers'
+    // close-event recovery paths can re-broker fresh ports.
+    const a = makePort(true);
+    const b = makePort(true);
+    const c = makePort(true);
+    const ports = [a, b, c];
+    const logger = { error: vi.fn() };
+
+    fanoutEventToPorts(ports, { fn: () => undefined }, logger);
+
+    expect(a.close).toHaveBeenCalledTimes(1);
+    expect(b.close).toHaveBeenCalledTimes(1);
+    expect(c.close).toHaveBeenCalledTimes(1);
+    expect(ports).toEqual([]);
+    expect(logger.error).toHaveBeenCalledTimes(3);
+  });
+
   it("swallows errors thrown by close() itself", () => {
     const bad = makePort(true);
     bad.close = vi.fn(() => {
