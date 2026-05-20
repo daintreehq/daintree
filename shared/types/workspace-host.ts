@@ -452,6 +452,12 @@ export type WorkspaceHostEvent =
       states: WorktreeSnapshot[];
       epoch: string;
       seq: number;
+      // Epoch-scoped mutation IDs the host has successfully acknowledged so
+      // the renderer can prune outbox entries that landed before a crash
+      // (#8405). Optional in the event union for compatibility with hosts
+      // that predate this field; the port `get-all-states` response always
+      // includes it.
+      lastAcknowledgedMutationIds?: string[];
     }
   | { type: "monitor"; requestId: string; state: WorktreeSnapshot | null }
   // Worktree operation responses

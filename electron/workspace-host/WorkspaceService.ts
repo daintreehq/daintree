@@ -162,6 +162,19 @@ export class WorkspaceService {
   /** Monotonic event counter within `epoch`. */
   private seq = 0;
 
+  /**
+   * Epoch-scoped set of mutation IDs that have been successfully acknowledged
+   * by this host run. The renderer mints a stable mutationId per delete intent
+   * (#8405) and the host records each successful delete here so a replay of
+   * the same mutationId after a transient port hiccup is short-circuited to a
+   * success ack instead of re-running `git worktree remove` (which would throw
+   * once the monitor is already gone). Cleared implicitly on host restart —
+   * the new epoch starts with an empty set, which matches the renderer's
+   * outbox semantics: a fresh epoch means the prior run's acks no longer apply
+   * and the renderer's outbox replay flow takes over.
+   */
+  private readonly acknowledgedMutations = new Set<string>();
+
   /** Advance and return the next monotonic seq for an outgoing event. */
   private nextSeq(): number {
     return ++this.seq;
@@ -1322,6 +1335,7 @@ export class WorkspaceService {
       states,
       epoch: this.epoch,
       seq: this.seq,
+      lastAcknowledgedMutationIds: [...this.acknowledgedMutations],
     });
   }
 
@@ -1331,6 +1345,18 @@ export class WorkspaceService {
       states.push(monitor.getSnapshot());
     }
     return states;
+  }
+
+  /**
+   * Snapshot of mutation IDs successfully acknowledged in the current epoch
+   * (#8405). The renderer reads this on every `get-all-states` reply to prune
+   * outbox entries whose result already landed before a host crash. Each id
+   * stays in the set for the lifetime of the host process — replays of the
+   * same id are cheap (a Set lookup) and the cardinality is bounded by the
+   * delete activity within a single session.
+   */
+  getAcknowledgedMutationIds(): string[] {
+    return [...this.acknowledgedMutations];
   }
 
   getMonitor(requestId: string, worktreeId: string): void {
@@ -1817,14 +1843,44 @@ export class WorkspaceService {
     requestId: string,
     worktreeId: string,
     force: boolean = false,
-    deleteBranch: boolean = false
+    deleteBranch: boolean = false,
+    mutationId?: string,
+    /**
+     * Whether to re-throw on failure after emitting `delete-worktree-result`.
+     * Defaults to `false` to preserve the legacy callers' contract — they
+     * resolve via the requestId-keyed event, not the promise return. The port
+     * dispatcher passes `true` so semantic failures (uncommitted changes,
+     * etc.) reject the renderer's `worktreePort.request("delete-worktree")`
+     * instead of silently resolving to `{ ok: true }` (#8405 review #1).
+     */
+    throwOnError: boolean = false
   ): Promise<void> {
+    // Mutation-outbox replay short-circuit (#8405): a replay of an already
+    // acknowledged delete must not re-run `git worktree remove` (which would
+    // fail with "not a working tree" or "worktree not found" depending on
+    // whether the metadata was pruned). The original ack stuck — the renderer
+    // just didn't observe the result before the port dropped. Re-emit the
+    // success ack so the renderer can resolve and prune the outbox entry.
+    if (mutationId && this.acknowledgedMutations.has(mutationId)) {
+      this.sendEvent({ type: "delete-worktree-result", requestId, success: true });
+      return;
+    }
     // Hoisted so the catch can clear the pending entry even though `monitor`
     // is block-scoped to the try.
     let pendingDeleteKey: string | null = null;
     try {
       const monitor = this.monitors.get(worktreeId);
       if (!monitor) {
+        // Replay path: the monitor was cleaned up by the original successful
+        // delete but the ack never reached the renderer (port dropped between
+        // `worktree-removed` and the result ack). If we know this mutation
+        // succeeded earlier we ack idempotently; otherwise this is a genuine
+        // unknown id and we surface the error. The earlier `acknowledgedMutations`
+        // check covers cleanly-acked replays, but a host that crashed AFTER
+        // monitor cleanup but BEFORE recording the ack would land here — there's
+        // no way to distinguish that from a never-existed delete without further
+        // bookkeeping, so we keep the strict error and rely on the renderer to
+        // surface it once the user dismisses or retries.
         throw new Error(`Worktree not found: ${worktreeId}`);
       }
 
@@ -1981,17 +2037,34 @@ export class WorkspaceService {
         }
       }
 
+      // Record the successful ack before sending the result so the next port
+      // reconnect's `get-all-states` advertises it (#8405). If the port drops
+      // between the record and the send, the renderer's outbox replay path
+      // sees the id in `lastAcknowledgedMutationIds` and prunes without firing
+      // a second delete — the operation completed once, the renderer just
+      // missed the live ack.
+      if (mutationId) this.acknowledgedMutations.add(mutationId);
       this.sendEvent({ type: "delete-worktree-result", requestId, success: true });
     } catch (error) {
       // Delete failed — drop any pending entry so a real external change to
       // that name isn't masked, and cancel its safety valve.
       if (pendingDeleteKey) this.topologyClearPending(pendingDeleteKey);
+      // sendEvent for the legacy `WorkspaceClient.sendWithResponse` path, which
+      // resolves its requestId-keyed promise from `delete-worktree-result`.
       this.sendEvent({
         type: "delete-worktree-result",
         requestId,
         success: false,
         error: (error as Error).message,
       });
+      // Re-throw so the port path (`handleWorktreePortRequest`) can reject the
+      // port `request()` with the same error string — without the throw, the
+      // port handler returns `{ ok: true }` and the renderer's outbox prunes
+      // the entry as if the delete succeeded, silently masking the failure
+      // (#8405 review finding #1). Legacy callers can opt out by omitting
+      // `mutationId` and the `throwOnError` flag (`WorkspaceClient.sendWithResponse`
+      // resolves via the delete-worktree-result event, not the promise return).
+      if (throwOnError) throw error;
     }
   }
 

@@ -81,6 +81,87 @@ export interface WorktreeDeleteOptions {
   closeTerminals?: boolean;
 }
 
+/**
+ * Maximum number of generic (unclassified) error retries for a single outbox
+ * entry before it's marked `failed` and surfaced to the user. Connectivity
+ * failures (port not ready, host exited) don't count — they're driven by the
+ * port reconnect lifecycle, not by the entry itself. Permanent errors (e.g.
+ * "uncommitted changes", "Cannot delete the main worktree") flip to `failed`
+ * after a single attempt without burning the cap. The 3-attempt budget is the
+ * standard transient-retry ceiling; past that the failure is almost certainly
+ * deterministic and the user should be asked.
+ */
+export const OUTBOX_RETRY_CAP = 3;
+
+/**
+ * Renderer-side mutation outbox entry (#8405) — one per user-intent worktree
+ * mutation, keyed by `mutationId`. The outbox survives `setFatalError` so a
+ * delete that was in flight when the host crashed can be replayed once the
+ * host comes back. The stable `mutationId` is what lets the host dedupe — a
+ * replay carries the same id and is short-circuited to the original success
+ * ack instead of re-running `git worktree remove`.
+ */
+export interface MutationOutboxEntry {
+  mutationId: string;
+  worktreeId: string;
+  type: "delete-worktree";
+  options: WorktreeDeleteOptions;
+  /** Number of generic (unclassified) attempts so far; counted toward {@link OUTBOX_RETRY_CAP}. */
+  retryCount: number;
+  /**
+   * `pending` — eligible for the next replay sweep (initial or post-failure).
+   * `in-flight` — IPC request currently outstanding; no replay until it settles.
+   * `failed` — terminal state for this entry; will not replay automatically.
+   *   The user can dismiss the entry or hit Retry, which resets to `pending`.
+   */
+  status: "pending" | "in-flight" | "failed";
+  lastError?: string;
+}
+
+/**
+ * Error patterns that cannot be remedied by retrying — e.g. uncommitted
+ * changes block the delete until the user resolves them. These flip the
+ * outbox entry to `failed` after a single attempt rather than burning the
+ * generic-retry budget on a deterministic failure. The strings are checked
+ * via `includes` against the error message so wrapped/prefixed variants
+ * still match. All patterns come from {@link WorkspaceService.deleteWorktree}
+ * — they're our own error messages, not git's, so they're stable.
+ */
+const PERMANENT_ERROR_PATTERNS = [
+  "uncommitted changes",
+  "untracked files",
+  "Cannot delete the main worktree",
+  "Cannot delete active worktree",
+  "Cannot delete branch:",
+  "has unmerged changes",
+  "(detached HEAD)",
+];
+
+function isPermanentDeleteError(message: string): boolean {
+  for (const pattern of PERMANENT_ERROR_PATTERNS) {
+    if (message.includes(pattern)) return true;
+  }
+  return false;
+}
+
+/**
+ * Connectivity-class errors thrown by `WorktreePortClient` when the host has
+ * gone away. The port client encodes these as `BrokerError("HOST_EXITED", ...)`
+ * which surfaces in the renderer as a string prefix; the renderer also throws
+ * its own "Worktree port not ready" when the port is null. These shouldn't
+ * count toward the retry cap — the failure is the port being down, and the
+ * port reconnect path drives the next attempt.
+ */
+function isConnectivityError(message: string): boolean {
+  return (
+    message.includes("HOST_EXITED") ||
+    message.includes("port not ready") ||
+    message.includes("port disconnected") ||
+    message.includes("port replaced") ||
+    message.includes("APP_SHUTDOWN")
+  );
+}
+
 export interface WorktreeViewState {
   worktrees: Map<string, WorktreeSnapshot>;
   manualAssociations: Map<string, ManualIssueAssociation>;
@@ -105,6 +186,15 @@ export interface WorktreeViewState {
   deletingIds: Set<string>;
   deleteErrors: Map<string, string>;
   deleteErrorArgs: Map<string, WorktreeDeleteOptions>;
+  /**
+   * Mutation outbox keyed by `mutationId` (#8405). Survives `setFatalError`
+   * so a delete that was in flight when the workspace host crashed can be
+   * replayed once the host returns. Entries are pruned on a successful ack
+   * (via `applyRemove` for the success path and `pruneAcknowledgedMutations`
+   * for the post-crash replay path) or marked `failed` on a permanent error
+   * / cap-exceeded retry.
+   */
+  mutationOutbox: Map<string, MutationOutboxEntry>;
   isLoading: boolean;
   error: string | null;
   isInitialized: boolean;
@@ -132,6 +222,35 @@ export interface WorktreeViewActions {
   startDelete(worktreeId: string, options: WorktreeDeleteOptions): void;
   retryDelete(worktreeId: string): void;
   clearDeleteError(worktreeId: string): void;
+  /**
+   * Prune outbox entries whose `mutationId` is in the supplied set. Called
+   * after every `get-all-states` reply so acks the renderer missed (host
+   * crash mid-call) are converged on without firing a duplicate replay.
+   */
+  pruneAcknowledgedMutations(mutationIds: readonly string[]): void;
+  /**
+   * Reset a `failed` outbox entry to `pending` and re-fire its IPC. The user
+   * triggers this from the card's Retry button after a permanent error or
+   * cap-exceeded auto-retry. Reuses the original `mutationId` so the host
+   * still recognizes the replay.
+   */
+  retryOutboxEntry(mutationId: string): void;
+  /**
+   * Remove an outbox entry without retrying — the user clicked Dismiss on a
+   * failed entry. Also clears the matching `deleteErrors`/`deleteErrorArgs`
+   * entries so the card returns to its idle state.
+   */
+  dismissOutboxEntry(mutationId: string): void;
+  /**
+   * Replay every `pending` outbox entry whose target worktree still appears
+   * in the current snapshot — entries whose target is already gone are pruned
+   * (the original delete succeeded but the ack was lost in the crash window
+   * between `git worktree remove` and the result ack — the worktree's
+   * absence from the post-restart snapshot is the renderer's source of truth
+   * for "this delete already happened"). Called by the context after
+   * `applySnapshot` on a reconnect (`isWake` path), not on cold start.
+   */
+  replayOutboxAfterReconnect(): void;
   setLoading(loading: boolean): void;
   setError(error: string | null): void;
   setFatalError(message: string): void;
@@ -151,6 +270,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     deletingIds: new Set(),
     deleteErrors: new Map(),
     deleteErrorArgs: new Map(),
+    mutationOutbox: new Map(),
     isLoading: true,
     error: null,
     isInitialized: false,
@@ -305,6 +425,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const hadDeletingId = prevState.deletingIds.has(worktreeId);
       const hadDeleteError = prevState.deleteErrors.has(worktreeId);
       const hadDeleteErrorArgs = prevState.deleteErrorArgs.has(worktreeId);
+      const outboxEntry = findOutboxEntryForWorktree(prevState.mutationOutbox, worktreeId);
 
       const nextWorktrees = hadWorktree ? new Map(prevState.worktrees) : prevState.worktrees;
       if (hadWorktree) nextWorktrees.delete(worktreeId);
@@ -320,12 +441,21 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         ? new Map(prevState.deleteErrorArgs)
         : prevState.deleteErrorArgs;
       if (hadDeleteErrorArgs) nextDeleteErrorArgs.delete(worktreeId);
+      // Mutation outbox: `worktree-removed` is the authoritative "this delete
+      // succeeded" signal — prune any live entry for the same worktree (#8405)
+      // so a late reply replay can't re-fire a delete that already landed.
+      // `runDeleteAsync` also prunes on its own success branch; this is the
+      // belt-and-braces convergence for the case where `worktree-removed`
+      // arrives before the IPC promise resolves (a common ordering).
+      const nextOutbox = outboxEntry ? new Map(prevState.mutationOutbox) : prevState.mutationOutbox;
+      if (outboxEntry) nextOutbox.delete(outboxEntry.mutationId);
 
       set({
         worktrees: nextWorktrees,
         deletingIds: nextDeletingIds,
         deleteErrors: nextDeleteErrors,
         deleteErrorArgs: nextDeleteErrorArgs,
+        mutationOutbox: nextOutbox,
         version,
         tombstones,
       });
@@ -344,13 +474,32 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const nextDeleteErrorArgs = new Map(prev.deleteErrorArgs);
       nextDeleteErrorArgs.set(worktreeId, options);
 
+      // Mint a stable mutationId per user-intent delete (#8405). The same id
+      // is reused across automatic retries (replay after host crash) AND user-
+      // initiated retries — only a fresh `startDelete` for a worktree that has
+      // no live outbox entry mints a new id. This is what lets the host's ack
+      // map dedupe replays.
+      const existingEntry = findOutboxEntryForWorktree(prev.mutationOutbox, worktreeId);
+      const mutationId = existingEntry?.mutationId ?? mintMutationId();
+      const nextOutbox = new Map(prev.mutationOutbox);
+      nextOutbox.set(mutationId, {
+        mutationId,
+        worktreeId,
+        type: "delete-worktree",
+        options,
+        retryCount: existingEntry?.retryCount ?? 0,
+        status: "in-flight",
+        lastError: undefined,
+      });
+
       set({
         deletingIds: nextDeletingIds,
         deleteErrors: nextDeleteErrors,
         deleteErrorArgs: nextDeleteErrorArgs,
+        mutationOutbox: nextOutbox,
       });
 
-      void runDeleteAsync(get, set, worktreeId, options);
+      void runDeleteAsync(get, set, worktreeId, options, mutationId);
     },
 
     retryDelete(worktreeId: string) {
@@ -358,7 +507,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const args = prev.deleteErrorArgs.get(worktreeId);
       if (!args) return;
       // Re-fire with the original confirm-dialog options. `startDelete`
-      // clears the previous error and re-marks `deletingIds` atomically.
+      // clears the previous error and re-marks `deletingIds` atomically, and
+      // reuses the existing outbox `mutationId` if one is still in flight so
+      // the host's ack map dedupes correctly.
       get().startDelete(worktreeId, args);
     },
 
@@ -375,6 +526,162 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         deleteErrors: nextDeleteErrors,
         deleteErrorArgs: nextDeleteErrorArgs,
       });
+    },
+
+    pruneAcknowledgedMutations(mutationIds: readonly string[]) {
+      if (mutationIds.length === 0) return;
+      const prev = get();
+      if (prev.mutationOutbox.size === 0) return;
+      const removedWorktreeIds = new Set<string>();
+      const acked = new Set(mutationIds);
+      const next = new Map(prev.mutationOutbox);
+      let changed = false;
+      for (const entry of prev.mutationOutbox.values()) {
+        if (acked.has(entry.mutationId)) {
+          next.delete(entry.mutationId);
+          changed = true;
+          // The success path normally clears `deletingIds` via `applyRemove`
+          // (driven by the `worktree-removed` event). But if the host crashed
+          // between sending `worktree-removed` and the result ack, the
+          // renderer may still have `deletingIds.has(worktreeId)` true.
+          // Sweep every affected id here as a safety net — without this, a
+          // batch ack that covers multiple concurrent deletes would only
+          // clear the last entry's card (#8405 review finding #3).
+          removedWorktreeIds.add(entry.worktreeId);
+        }
+      }
+      if (!changed) return;
+      // We only need to touch `deletingIds`/error maps if a swept entry's
+      // worktreeId still appears in them — the snapshot from the new host
+      // run should have already filtered them out via `applyRemove`-equivalent
+      // semantics, but defensive cleanup keeps the card in sync.
+      let nextDeletingIds = prev.deletingIds;
+      let nextDeleteErrors = prev.deleteErrors;
+      let nextDeleteErrorArgs = prev.deleteErrorArgs;
+      for (const removedWorktreeId of removedWorktreeIds) {
+        if (prev.deletingIds.has(removedWorktreeId)) {
+          if (nextDeletingIds === prev.deletingIds) nextDeletingIds = new Set(prev.deletingIds);
+          nextDeletingIds.delete(removedWorktreeId);
+        }
+        if (prev.deleteErrors.has(removedWorktreeId)) {
+          if (nextDeleteErrors === prev.deleteErrors) nextDeleteErrors = new Map(prev.deleteErrors);
+          nextDeleteErrors.delete(removedWorktreeId);
+        }
+        if (prev.deleteErrorArgs.has(removedWorktreeId)) {
+          if (nextDeleteErrorArgs === prev.deleteErrorArgs)
+            nextDeleteErrorArgs = new Map(prev.deleteErrorArgs);
+          nextDeleteErrorArgs.delete(removedWorktreeId);
+        }
+      }
+      set({
+        mutationOutbox: next,
+        deletingIds: nextDeletingIds,
+        deleteErrors: nextDeleteErrors,
+        deleteErrorArgs: nextDeleteErrorArgs,
+      });
+    },
+
+    retryOutboxEntry(mutationId: string) {
+      const prev = get();
+      const entry = prev.mutationOutbox.get(mutationId);
+      if (!entry) return;
+      if (entry.status === "in-flight") return;
+      // Reset retry budget on a user-initiated retry — the user is making a
+      // fresh judgment that the failure is worth another attempt, and an
+      // exhausted auto-retry budget should not stick. Reuses the original
+      // `mutationId` so the host's ack map still recognizes the replay.
+      const next = new Map(prev.mutationOutbox);
+      next.set(mutationId, {
+        ...entry,
+        status: "in-flight",
+        retryCount: 0,
+        lastError: undefined,
+      });
+      const nextDeletingIds = prev.deletingIds.has(entry.worktreeId)
+        ? prev.deletingIds
+        : new Set(prev.deletingIds).add(entry.worktreeId);
+      const nextDeleteErrors = prev.deleteErrors.has(entry.worktreeId)
+        ? new Map(prev.deleteErrors)
+        : prev.deleteErrors;
+      if (prev.deleteErrors.has(entry.worktreeId)) nextDeleteErrors.delete(entry.worktreeId);
+      set({
+        mutationOutbox: next,
+        deletingIds: nextDeletingIds,
+        deleteErrors: nextDeleteErrors,
+      });
+      void runDeleteAsync(get, set, entry.worktreeId, entry.options, mutationId);
+    },
+
+    dismissOutboxEntry(mutationId: string) {
+      const prev = get();
+      const entry = prev.mutationOutbox.get(mutationId);
+      if (!entry) return;
+      const next = new Map(prev.mutationOutbox);
+      next.delete(mutationId);
+      const nextDeleteErrors = prev.deleteErrors.has(entry.worktreeId)
+        ? new Map(prev.deleteErrors)
+        : prev.deleteErrors;
+      if (prev.deleteErrors.has(entry.worktreeId)) nextDeleteErrors.delete(entry.worktreeId);
+      const nextDeleteErrorArgs = prev.deleteErrorArgs.has(entry.worktreeId)
+        ? new Map(prev.deleteErrorArgs)
+        : prev.deleteErrorArgs;
+      if (prev.deleteErrorArgs.has(entry.worktreeId)) nextDeleteErrorArgs.delete(entry.worktreeId);
+      set({
+        mutationOutbox: next,
+        deleteErrors: nextDeleteErrors,
+        deleteErrorArgs: nextDeleteErrorArgs,
+      });
+    },
+
+    replayOutboxAfterReconnect() {
+      const prev = get();
+      if (prev.mutationOutbox.size === 0) return;
+      // Two passes: first reconcile any entries whose target is already gone
+      // from the post-crash snapshot (the original delete succeeded but the
+      // ack never reached the renderer), then fire replays for entries whose
+      // target still exists. The reconcile pass is critical for correctness —
+      // without it, a delete that the host completed pre-crash would re-fire
+      // and hit "Worktree not found", showing a spurious permanent error.
+      let outboxChanged = false;
+      let deletingChanged = false;
+      const nextOutbox = new Map(prev.mutationOutbox);
+      const nextDeletingIds = new Set(prev.deletingIds);
+      const toReplay: MutationOutboxEntry[] = [];
+      for (const entry of prev.mutationOutbox.values()) {
+        if (entry.status === "failed") continue;
+        // Skip `in-flight` so a second `replayOutboxAfterReconnect` call
+        // (two rapid `onReady` events before the first replay's IPC settles)
+        // doesn't double-fire the same delete (#8405 review finding #4). The
+        // first call's IPC promise will still resolve/reject and update the
+        // entry; only then is another replay eligible.
+        if (entry.status === "in-flight") continue;
+        if (entry.type !== "delete-worktree") continue;
+        if (!prev.worktrees.has(entry.worktreeId)) {
+          // Reconciled — target already absent from snapshot.
+          nextOutbox.delete(entry.mutationId);
+          outboxChanged = true;
+          if (nextDeletingIds.delete(entry.worktreeId)) deletingChanged = true;
+          continue;
+        }
+        // Replay candidate — flip to in-flight so a duplicate replay during
+        // the same reconnect window is suppressed.
+        nextOutbox.set(entry.mutationId, { ...entry, status: "in-flight" });
+        outboxChanged = true;
+        if (!nextDeletingIds.has(entry.worktreeId)) {
+          nextDeletingIds.add(entry.worktreeId);
+          deletingChanged = true;
+        }
+        toReplay.push(entry);
+      }
+      if (outboxChanged || deletingChanged) {
+        set({
+          mutationOutbox: outboxChanged ? nextOutbox : prev.mutationOutbox,
+          deletingIds: deletingChanged ? nextDeletingIds : prev.deletingIds,
+        });
+      }
+      for (const entry of toReplay) {
+        void runDeleteAsync(get, set, entry.worktreeId, entry.options, entry.mutationId);
+      }
     },
 
     setLoading(loading: boolean) {
@@ -396,6 +703,11 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       // Drop cached manual associations too — the post-restart
       // `fetchInitialState` re-hydrates them from the Electron store, so a
       // stale renderer copy must not leak across the crash boundary.
+      // `mutationOutbox` is DELIBERATELY preserved (#8405) — it has no
+      // server-side fallback to re-hydrate from, and the whole point of the
+      // outbox is that a delete in flight when the host crashed gets to
+      // replay on the next port reconnect. Clearing it here would silently
+      // drop the user's request mid-flight.
       set({
         error: message,
         manualAssociations: new Map(),
@@ -433,12 +745,42 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
   }));
 }
 
+/** Locate the live outbox entry (if any) for a given worktreeId. Used to
+ *  reuse `mutationId` across user-initiated retries so the host's ack map
+ *  dedupes correctly. */
+function findOutboxEntryForWorktree(
+  outbox: Map<string, MutationOutboxEntry>,
+  worktreeId: string
+): MutationOutboxEntry | undefined {
+  for (const entry of outbox.values()) {
+    if (entry.worktreeId === worktreeId) return entry;
+  }
+  return undefined;
+}
+
+/** Renderer-minted opaque id for a single user-intent mutation. UUIDv4 via
+ *  `crypto.randomUUID` for cryptographic uniqueness across renderer sessions
+ *  (the host ack map is global per-epoch and the renderer must not collide
+ *  even across project switches that share a host process). */
+function mintMutationId(): string {
+  return crypto.randomUUID();
+}
+
 /**
  * Fire-and-forget delete async chain. The dialog dismisses immediately after
  * calling `startDelete`; this runs in the background driven by the store, so
  * `get()` / `set()` must never close over component state. The success cleanup
  * is handled by `applyRemove` (triggered by the `worktree-removed` IPC event),
  * not here — the only thing we own is the failure path.
+ *
+ * `mutationId` (#8405) is the renderer's stable identifier for this delete
+ * intent and is threaded through to the host so a replay after a crash is
+ * deduplicated against the host's ack map. On a connectivity failure (host
+ * crashed mid-call) the entry is left as `pending` and the renderer's
+ * `replayOutboxAfterReconnect` re-fires it once the port returns. On a
+ * permanent error (uncommitted changes, etc.) the entry flips to `failed`
+ * immediately. Generic errors increment the retry counter and flip to
+ * `failed` once {@link OUTBOX_RETRY_CAP} is reached.
  */
 async function runDeleteAsync(
   get: () => WorktreeViewStore,
@@ -446,15 +788,20 @@ async function runDeleteAsync(
     partial: Partial<WorktreeViewStore> | ((state: WorktreeViewStore) => Partial<WorktreeViewStore>)
   ) => void,
   worktreeId: string,
-  options: WorktreeDeleteOptions
+  options: WorktreeDeleteOptions,
+  mutationId: string
 ): Promise<void> {
   try {
     if (options.closeTerminals) {
       await closeTerminalsForWorktree(worktreeId);
     }
-    await worktreeClient.delete(worktreeId, options.force, options.deleteBranch);
+    await worktreeClient.delete(worktreeId, options.force, options.deleteBranch, mutationId);
     // Success: `worktree-removed` will fire `applyRemove`, which clears
-    // `deletingIds` + delete-error maps. No-op here.
+    // `deletingIds` + delete-error maps. The outbox entry is pruned either by
+    // `applyRemove` (success path) or by the next `get-all-states` reply via
+    // `pruneAcknowledgedMutations` (post-crash replay path). Either way, no
+    // post-success bookkeeping is owned here.
+    pruneOutboxEntry(get, set, mutationId);
   } catch (err) {
     const message = formatErrorMessage(err, "Failed to delete worktree");
     const prev = get();
@@ -465,6 +812,7 @@ async function runDeleteAsync(
     // learns the branch was not cleaned up. Without this, the failure is
     // silently swallowed (the original race guard's bug).
     if (!prev.deletingIds.has(worktreeId) && !prev.worktrees.has(worktreeId)) {
+      pruneOutboxEntry(get, set, mutationId);
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
         type: "error",
@@ -475,18 +823,110 @@ async function runDeleteAsync(
       });
       return;
     }
-    const nextDeletingIds = new Set(prev.deletingIds);
-    nextDeletingIds.delete(worktreeId);
-    const nextDeleteErrors = new Map(prev.deleteErrors);
-    nextDeleteErrors.set(worktreeId, message);
-    const nextDeleteErrorArgs = new Map(prev.deleteErrorArgs);
-    nextDeleteErrorArgs.set(worktreeId, options);
+    handleDeleteFailure(get, set, worktreeId, options, mutationId, message);
+  }
+}
+
+/** Remove an outbox entry by mutationId. Used on success and on partial
+ *  success. No-op when the entry is already gone (a concurrent
+ *  `pruneAcknowledgedMutations` may have removed it). */
+function pruneOutboxEntry(
+  get: () => WorktreeViewStore,
+  set: (
+    partial: Partial<WorktreeViewStore> | ((state: WorktreeViewStore) => Partial<WorktreeViewStore>)
+  ) => void,
+  mutationId: string
+): void {
+  const prev = get();
+  if (!prev.mutationOutbox.has(mutationId)) return;
+  const next = new Map(prev.mutationOutbox);
+  next.delete(mutationId);
+  set({ mutationOutbox: next });
+}
+
+/** Classify a delete failure and update the outbox entry accordingly.
+ *
+ *  Three branches:
+ *   1. **Connectivity** — port not ready / host exited. Leave the entry as
+ *      `pending` (no retry-cap charge) so the reconnect-driven replay fires.
+ *      The card surface flips back to idle so the user isn't stuck looking at
+ *      a spinner during the reconnect window; the persistent error indicator
+ *      is the workspace-host reconnecting state itself, not the card.
+ *   2. **Permanent** — uncommitted changes, main worktree, etc. Flip the
+ *      entry to `failed` (no retry) and surface the error on the card.
+ *   3. **Generic** — anything else. Increment the retry counter. If still
+ *      under the cap, leave as `pending`; otherwise flip to `failed`. */
+function handleDeleteFailure(
+  get: () => WorktreeViewStore,
+  set: (
+    partial: Partial<WorktreeViewStore> | ((state: WorktreeViewStore) => Partial<WorktreeViewStore>)
+  ) => void,
+  worktreeId: string,
+  options: WorktreeDeleteOptions,
+  mutationId: string,
+  message: string
+): void {
+  const prev = get();
+  const entry = prev.mutationOutbox.get(mutationId);
+  const isConnectivity = isConnectivityError(message);
+  const isPermanent = !isConnectivity && isPermanentDeleteError(message);
+
+  const nextDeletingIds = new Set(prev.deletingIds);
+  nextDeletingIds.delete(worktreeId);
+
+  if (isConnectivity) {
+    // Card returns to idle; outbox entry stays `pending` for the reconnect
+    // replay to pick up. Surface no per-card error — the global
+    // workspace-host reconnect indicator covers it.
+    const nextOutbox = entry ? new Map(prev.mutationOutbox) : prev.mutationOutbox;
+    if (entry) {
+      nextOutbox.set(mutationId, {
+        ...entry,
+        status: "pending",
+        lastError: message,
+      });
+    }
+    set({
+      deletingIds: nextDeletingIds,
+      mutationOutbox: nextOutbox,
+    });
+    return;
+  }
+
+  const nextDeleteErrors = new Map(prev.deleteErrors);
+  nextDeleteErrors.set(worktreeId, message);
+  const nextDeleteErrorArgs = new Map(prev.deleteErrorArgs);
+  nextDeleteErrorArgs.set(worktreeId, options);
+
+  if (!entry) {
+    // No outbox entry — shouldn't happen since `startDelete` always creates
+    // one, but defensive: still surface the error on the card.
     set({
       deletingIds: nextDeletingIds,
       deleteErrors: nextDeleteErrors,
       deleteErrorArgs: nextDeleteErrorArgs,
     });
+    return;
   }
+
+  const nextOutbox = new Map(prev.mutationOutbox);
+  const nextRetryCount = isPermanent ? entry.retryCount : entry.retryCount + 1;
+  const exceededCap = nextRetryCount >= OUTBOX_RETRY_CAP;
+  const nextStatus: MutationOutboxEntry["status"] =
+    isPermanent || exceededCap ? "failed" : "pending";
+  nextOutbox.set(mutationId, {
+    ...entry,
+    status: nextStatus,
+    retryCount: nextRetryCount,
+    lastError: message,
+  });
+
+  set({
+    deletingIds: nextDeletingIds,
+    deleteErrors: nextDeleteErrors,
+    deleteErrorArgs: nextDeleteErrorArgs,
+    mutationOutbox: nextOutbox,
+  });
 }
 
 export function cleanupOrphanedTerminals(): void {

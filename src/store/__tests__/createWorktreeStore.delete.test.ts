@@ -12,7 +12,9 @@ function nextV(): WorktreeEventVersion {
 
 const { worktreeClientDeleteMock, closeTerminalsForWorktreeMock, notifyMock } = vi.hoisted(() => ({
   worktreeClientDeleteMock:
-    vi.fn<(id: string, force?: boolean, deleteBranch?: boolean) => Promise<void>>(),
+    vi.fn<
+      (id: string, force?: boolean, deleteBranch?: boolean, mutationId?: string) => Promise<void>
+    >(),
   closeTerminalsForWorktreeMock: vi.fn<(id: string) => Promise<void>>(),
   notifyMock: vi.fn(),
 }));
@@ -108,7 +110,12 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     await flushPromises();
 
     expect(closeTerminalsForWorktreeMock).toHaveBeenCalledWith("wt-1");
-    expect(worktreeClientDeleteMock).toHaveBeenCalledWith("wt-1", undefined, undefined);
+    expect(worktreeClientDeleteMock).toHaveBeenCalledWith(
+      "wt-1",
+      undefined,
+      undefined,
+      expect.any(String)
+    );
   });
 
   it("startDelete without closeTerminals skips terminal cleanup", async () => {
@@ -118,7 +125,7 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     await flushPromises();
 
     expect(closeTerminalsForWorktreeMock).not.toHaveBeenCalled();
-    expect(worktreeClientDeleteMock).toHaveBeenCalledWith("wt-1", true, true);
+    expect(worktreeClientDeleteMock).toHaveBeenCalledWith("wt-1", true, true, expect.any(String));
   });
 
   it("on success, deletingIds and error maps are cleared by applyRemove", async () => {
@@ -176,7 +183,18 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     await flushPromises();
 
     expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(2);
-    expect(worktreeClientDeleteMock).toHaveBeenLastCalledWith("wt-1", true, true);
+    expect(worktreeClientDeleteMock).toHaveBeenLastCalledWith(
+      "wt-1",
+      true,
+      true,
+      expect.any(String)
+    );
+    // retryDelete reuses the original mutationId so the host's ack map can
+    // dedupe across the retry boundary (#8405).
+    const firstId = worktreeClientDeleteMock.mock.calls[0]![3];
+    const secondId = worktreeClientDeleteMock.mock.calls[1]![3];
+    expect(firstId).toBeDefined();
+    expect(secondId).toBe(firstId);
   });
 
   it("retryDelete with no stored args is a no-op", () => {
@@ -329,7 +347,12 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     await flushPromises();
 
     expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
-    expect(worktreeClientDeleteMock).toHaveBeenCalledWith("wt-1", false, undefined);
+    expect(worktreeClientDeleteMock).toHaveBeenCalledWith(
+      "wt-1",
+      false,
+      undefined,
+      expect.any(String)
+    );
 
     resolveDelete();
     await flushPromises();
