@@ -37,6 +37,7 @@ function defaultHandlerFiles() {
 export async function generateRendererApi({ handlerFiles = defaultHandlerFiles() } = {}) {
   const namespaces = new Map();
   const seenChannels = new Map();
+  const seenMethods = new Map();
 
   for (const filePath of handlerFiles) {
     const source = readFileSync(filePath, "utf8");
@@ -50,7 +51,9 @@ export async function generateRendererApi({ handlerFiles = defaultHandlerFiles()
       if (!namespace) {
         namespace = { name: namespaceName, methods: [] };
         namespaces.set(namespaceName, namespace);
+        seenMethods.set(namespaceName, new Map());
       }
+      const namespaceMethods = seenMethods.get(namespaceName);
 
       for (const entry of constant.entries) {
         const prior = seenChannels.get(entry.channel);
@@ -60,7 +63,15 @@ export async function generateRendererApi({ handlerFiles = defaultHandlerFiles()
             filePath
           );
         }
+        const priorMethod = namespaceMethods.get(entry.method);
+        if (priorMethod) {
+          throw codegenError(
+            `namespace "${namespaceName}" already has method "${entry.method}" from ${priorMethod} — cannot redeclare in ${path.relative(REPO_ROOT, filePath)}`,
+            filePath
+          );
+        }
         seenChannels.set(entry.channel, path.relative(REPO_ROOT, filePath));
+        namespaceMethods.set(entry.method, path.relative(REPO_ROOT, filePath));
         namespace.methods.push(entry);
       }
     }
@@ -74,7 +85,14 @@ export async function generateRendererApi({ handlerFiles = defaultHandlerFiles()
 }
 
 function hasRendererApiSkip(source) {
-  return /export\s+const\s+RENDERER_API_SKIP\s*=\s*true\b/.test(source);
+  // Strip comments first so a documentation reference like
+  // `// export const RENDERER_API_SKIP = true` in a JSDoc paragraph cannot
+  // accidentally suppress the whole namespace.
+  return /export\s+const\s+RENDERER_API_SKIP\s*=\s*true\b/.test(stripComments(source));
+}
+
+function stripComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 }
 
 // Pulls every `export const <NAME>_METHOD_CHANNELS = { ... } as const ...`
@@ -104,8 +122,9 @@ function extractMethodChannelConstants(source, filePath) {
 
 function parseChannelEntries(body, filePath, constantName) {
   const entries = [];
-  // Strip line comments so they can't masquerade as entries.
-  const stripped = body.replace(/\/\/[^\n]*/g, "");
+  // Strip both block and line comments so commented-out entries cannot
+  // masquerade as live methods.
+  const stripped = stripComments(body);
   // Match `method: "channel-string",` — channel strings have a colon prefix
   // (`namespace:verb-noun`) so we require it to avoid picking up unrelated
   // string properties.

@@ -74,4 +74,35 @@ describe("ipc-renderer codegen", () => {
     expect(output).not.toContain("commentedOut");
     expect(output).not.toContain("alpha:commented-out");
   });
+
+  it("ignores entries inside block comments", async () => {
+    const output = await runFixture(["block-commented-entries.preload.ts"]);
+    expect(output).toContain('IpcInvokeMap["alpha:kept"]');
+    expect(output).not.toContain("disabled");
+    expect(output).not.toContain("alpha:disabled");
+  });
+
+  it("does not skip files that only reference RENDERER_API_SKIP in a comment", async () => {
+    const output = await runFixture(["comment-renderer-skip.preload.ts"]);
+    expect(output).toContain("alpha: {");
+    expect(output).toContain('IpcInvokeMap["alpha:ping"]');
+  });
+
+  it("parses the `as const satisfies Record<...>` production tail", async () => {
+    const output = await runFixture(["as-const-satisfies.preload.ts"]);
+    expect(output).toContain("alpha: {");
+    expect(output).toContain('IpcInvokeMap["alpha:hello"]');
+  });
+
+  it("rejects an empty METHOD_CHANNELS constant", async () => {
+    await expect(runFixture(["empty-constant.preload.ts"])).rejects.toThrow(
+      /EMPTY_METHOD_CHANNELS is empty/i
+    );
+  });
+
+  it("rejects two files contributing the same method to the same namespace", async () => {
+    await expect(runFixture(["alpha.preload.ts", "alpha-extra.preload.ts"])).rejects.toThrow(
+      /namespace "alpha" already has method "getEnabled"/i
+    );
+  });
 });
