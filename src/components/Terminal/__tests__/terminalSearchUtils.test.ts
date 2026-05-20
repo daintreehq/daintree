@@ -61,6 +61,13 @@ describe("validateRegexTerm", () => {
     const result = validateRegexTerm("", true);
     expect(result.isValid).toBe(true);
   });
+
+  it("does not lowercase the pattern in case-insensitive mode (preserves named groups)", () => {
+    // Lowercasing this pattern would collapse (?<A>...) and (?<a>...) into
+    // duplicate group names, which is a regex syntax error.
+    const result = validateRegexTerm("(?<A>x)(?<a>y)", false);
+    expect(result.isValid).toBe(true);
+  });
 });
 
 describe("buildSearchOptions", () => {

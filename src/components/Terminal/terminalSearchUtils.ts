@@ -16,8 +16,7 @@ export function validateRegexTerm(
   error?: string;
 } {
   try {
-    const normalizedTerm = caseSensitive ? term : term.toLowerCase();
-    new RegExp(normalizedTerm, "g");
+    new RegExp(term, caseSensitive ? "g" : "gi");
     return { isValid: true };
   } catch (e) {
     return {

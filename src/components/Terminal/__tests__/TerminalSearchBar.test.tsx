@@ -305,7 +305,7 @@ describe("TerminalSearchBar", () => {
     expect(lastCall[1]).toMatchObject({ regex: true, wholeWord: true });
   });
 
-  it("marks the input invalid and surfaces the regex error in DOM on invalid pattern", async () => {
+  it("marks the input invalid and surfaces the verbatim regex engine error", async () => {
     const mock = createMockManaged(true);
     vi.mocked(terminalInstanceService.get).mockReturnValue(
       mock as unknown as ReturnType<typeof terminalInstanceService.get>
@@ -325,9 +325,39 @@ describe("TerminalSearchBar", () => {
     });
 
     expect(input.getAttribute("aria-invalid")).toBe("true");
-    // Tooltip mock renders content inline; verify the engine message text is in DOM
+    // Tooltip mock renders content inline; require the engine-native message
+    // so a regression that swallows validation.error and shows only the
+    // generic fallback fails the test.
     const renderedHtml = document.body.textContent ?? "";
-    expect(renderedHtml).toMatch(/Invalid regular expression|Invalid regex pattern/);
+    expect(renderedHtml).toMatch(/Invalid regular expression/);
+  });
+
+  it("does not let a pending debounce overwrite an immediate toggle search", async () => {
+    const mock = createMockManaged(true);
+    vi.mocked(terminalInstanceService.get).mockReturnValue(
+      mock as unknown as ReturnType<typeof terminalInstanceService.get>
+    );
+
+    renderSearchBar();
+    const input = screen.getByPlaceholderText("Find in terminal");
+
+    // User types — schedules the 150ms debounce
+    await act(() => {
+      fireEvent.change(input, { target: { value: "foo" } });
+    });
+    // Before the debounce fires, click whole-word — should cancel the
+    // pending literal search and run an immediate {wholeWord: true} search.
+    await act(() => {
+      fireEvent.click(screen.getByLabelText("Toggle whole word"));
+    });
+    // Advance past the (now-cancelled) debounce horizon.
+    await act(() => {
+      vi.advanceTimersByTime(200);
+    });
+
+    expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(1);
+    const onlyCall = mock.searchAddon.findNext.mock.calls[0]!;
+    expect(onlyCall[1]).toMatchObject({ wholeWord: true });
   });
 
   it("clears the regex error state when the regex toggle is turned off", async () => {

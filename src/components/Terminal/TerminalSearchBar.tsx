@@ -112,13 +112,21 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     [terminalId, caseSensitive, regexEnabled, wholeWord]
   );
 
+  const cancelPendingSearch = useCallback(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+  }, []);
+
   const clearSearch = useCallback(() => {
+    cancelPendingSearch();
     const managed = terminalInstanceService.get(terminalId);
     managed?.searchAddon.clearDecorations();
     setSearchStatus("idle");
     setMatchResults(null);
     setRegexError(null);
-  }, [terminalId]);
+  }, [terminalId, cancelPendingSearch]);
 
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -167,11 +175,12 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     setCaseSensitive((prev) => {
       const nextCaseSensitive = !prev;
       if (searchTerm) {
+        cancelPendingSearch();
         performSearch(searchTerm, "next", { caseSensitive: nextCaseSensitive });
       }
       return nextCaseSensitive;
     });
-  }, [searchTerm, performSearch]);
+  }, [searchTerm, performSearch, cancelPendingSearch]);
 
   const handleRegexToggle = useCallback(() => {
     setRegexEnabled((prev) => {
@@ -180,21 +189,23 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         setRegexError(null);
       }
       if (searchTerm) {
+        cancelPendingSearch();
         performSearch(searchTerm, "next", { regexEnabled: nextRegexEnabled });
       }
       return nextRegexEnabled;
     });
-  }, [searchTerm, performSearch]);
+  }, [searchTerm, performSearch, cancelPendingSearch]);
 
   const handleWholeWordToggle = useCallback(() => {
     setWholeWord((prev) => {
       const nextWholeWord = !prev;
       if (searchTerm) {
+        cancelPendingSearch();
         performSearch(searchTerm, "next", { wholeWord: nextWholeWord });
       }
       return nextWholeWord;
     });
-  }, [searchTerm, performSearch]);
+  }, [searchTerm, performSearch, cancelPendingSearch]);
 
   useEffect(() => {
     return () => {
