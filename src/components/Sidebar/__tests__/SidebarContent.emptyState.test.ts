@@ -368,13 +368,13 @@ describe("SidebarContent initial loading skeleton — issue #7215", () => {
     source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
   });
 
-  it("imports the Skeleton primitive from the ui directory", () => {
-    expect(source).toMatch(/import \{ Skeleton \} from "@\/components\/ui\/Skeleton"/);
+  it("imports Skeleton, SkeletonBone, SkeletonText, and SkeletonHint from the ui directory", () => {
+    expect(source).toMatch(
+      /import \{ Skeleton, SkeletonBone, SkeletonText, SkeletonHint \} from "@\/components\/ui\/Skeleton"/
+    );
   });
 
   it("does not render the legacy 'Loading worktrees...' text in the loading branch", () => {
-    // Doherty Threshold: showing immediate text on mount draws attention to a
-    // sub-400ms wait. The skeleton's animate-pulse-delayed gates the reveal.
     expect(source).not.toContain("Loading worktrees...");
   });
 
@@ -395,25 +395,44 @@ describe("SidebarContent initial loading skeleton — issue #7215", () => {
     expect(branch).toMatch(/<h2[^>]*>Worktrees<\/h2>/);
   });
 
-  it("uses animate-pulse-delayed on the bone elements (CSS-gated 400ms reveal)", () => {
-    // The CSS-only delay is sufficient — see CLAUDE.md "Loading Indicators":
-    // animate-pulse-delayed enforces the gate automatically. Do not stack a
-    // useDeferredLoading hook on top of it (double-gating).
+  it("uses SkeletonBone and SkeletonText without the immediate prop (400ms gate)", () => {
     const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
-    expect(branch).toContain("animate-pulse-delayed");
-    expect(branch).not.toContain("animate-pulse-immediate");
+    expect(branch).toContain("<SkeletonBone");
+    expect(branch).toContain("<SkeletonText");
+    expect(branch).not.toContain("immediate");
   });
 
-  it("marks bone row containers aria-hidden so AT only announces the wrapper status", () => {
-    // Per Skeleton.tsx's documented contract: each bone should be aria-hidden.
-    // The wrapper carries role=status + aria-busy=true for the live-region
-    // announcement; the placeholder bones must not pollute the AT tree.
+  it("marks the row wrapper aria-hidden and uses primitives that own inner aria-hidden", () => {
     const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toContain('aria-hidden="true"');
+  });
+
+  it("defines SKELETON_ROW_HEIGHT_PX = 47 matching the collapsed worktree row height", () => {
+    expect(source).toContain("SKELETON_ROW_HEIGHT_PX = 47");
+  });
+
+  it("uses fixed-height row containers with SKELETON_ROW_HEIGHT_PX to prevent layout shift", () => {
+    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
+    const branch = source.slice(branchStart, branchEnd);
+    expect(branch).toContain("SKELETON_ROW_HEIGHT_PX");
+  });
+
+  it("computes dynamic row count via useResizeObserverRaf with MIN_SKELETON_ROWS floor", () => {
+    expect(source).toContain("MIN_SKELETON_ROWS = 3");
+    expect(source).toContain("useResizeObserverRaf");
+  });
+
+  it("renders SkeletonHint as sibling of Skeleton, not nested inside", () => {
+    expect(source).toContain("<SkeletonHint");
+    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
+    const branch = source.slice(branchStart, branchEnd);
+    expect(branch).toMatch(/<\/Skeleton>[\s\S]*?<SkeletonHint/);
   });
 });
 
