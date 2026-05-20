@@ -65,7 +65,7 @@ describe("ContentGrid EmptyState — quiet no-worktree variants (issue #6935)", 
     expect(content).toContain("Open a Git repository to get started");
     expect(content).toContain("Worktrees let you work on multiple tasks in isolated environments.");
     expect(content).toContain("Open directory...");
-    expect(content).toContain("project.openDialog");
+    expect(content).toContain('"project.add"');
   });
 
   it("gates the project-icon hero on hasActiveWorktree so empty states stay silent", async () => {
@@ -120,9 +120,9 @@ describe("ContentGrid EmptyState — structured empty state integration (issue #
     expect(content).toContain("Open directory...");
   });
 
-  it("dispatches project.openDialog via actionService with source: user", async () => {
+  it("dispatches project.add via actionService with source: user", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).toContain('actionService.dispatch("project.openDialog"');
+    expect(content).toContain('actionService.dispatch("project.add"');
     expect(content).toContain('source: "user"');
   });
 

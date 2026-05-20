@@ -172,7 +172,7 @@ export function ContentGridEmptyState({
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  void actionService.dispatch("project.openDialog", undefined, { source: "user" });
+                  void actionService.dispatch("project.add", undefined, { source: "user" });
                 }}
               >
                 Open directory...
