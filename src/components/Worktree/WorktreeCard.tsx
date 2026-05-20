@@ -88,6 +88,13 @@ export interface WorktreeCardProps {
   canMoveUp?: boolean;
   canMoveDown?: boolean;
   projectHealth?: import("@shared/types").ProjectHealthData | null;
+  /**
+   * Multi-select state (grid variant only). When provided, modifier-clicks
+   * (Ctrl/Cmd/Shift) route through `onToggleSelect` instead of `onSelect`
+   * and a checkbox affordance becomes visible on hover or when selected.
+   */
+  isSelected?: boolean;
+  onToggleSelect?: (event: React.MouseEvent) => void;
 }
 
 export function WorktreeCard({
@@ -115,8 +122,27 @@ export function WorktreeCard({
   canMoveUp,
   canMoveDown,
   projectHealth,
+  isSelected = false,
+  onToggleSelect,
 }: WorktreeCardProps) {
   "use memo";
+  const isMultiSelectEnabled = variant === "grid" && onToggleSelect !== undefined;
+
+  const handleCardClick = (e: React.MouseEvent) => {
+    if (isMultiSelectEnabled && (e.metaKey || e.ctrlKey || e.shiftKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      onToggleSelect?.(e);
+      return;
+    }
+    onSelect();
+  };
+
+  const handleCheckboxClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onToggleSelect?.(e);
+  };
   const isExpanded = useWorktreeSelectionStore((state) => state.expandedWorktrees.has(worktree.id));
   const toggleWorktreeExpanded = useWorktreeSelectionStore((state) => state.toggleWorktreeExpanded);
 
@@ -668,13 +694,19 @@ export function WorktreeCard({
           role={variant === "grid" ? "group" : undefined}
           aria-current={variant === "grid" && isActive ? "true" : undefined}
           aria-label={`Worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (selected, current)" : ""}, Status: ${spineState}${gitStateIndicator ? `, ${gitStateIndicator.label}` : ""}${!gitStateIndicator && hasChanges ? ", has uncommitted changes" : ""}`}
-          onClick={onSelect}
+          onClick={handleCardClick}
           onDoubleClick={handleDoubleClick}
           onPointerEnter={handlePointerEnter}
           onPointerLeave={handlePointerLeave}
         >
           <button
             type="button"
+            tabIndex={variant === "grid" ? -1 : undefined}
+            // Grid variant: suppress focus shift on click so the role="grid"
+            // container retains the keyboard tab stop after a modifier-click.
+            onMouseDown={
+              variant === "grid" ? (e: React.MouseEvent) => e.preventDefault() : undefined
+            }
             className={cn(
               "absolute inset-0 z-0 outline-hidden",
               variant === "grid" && "rounded-lg",
@@ -738,6 +770,45 @@ export function WorktreeCard({
                 }
               </TooltipContent>
             </Tooltip>
+          )}
+          {isMultiSelectEnabled && (
+            <div
+              className={cn(
+                "absolute top-2 right-2 z-30 transition-opacity duration-150",
+                isSelected
+                  ? "opacity-100"
+                  : "opacity-0 group-hover/card:opacity-100 focus-within:opacity-100"
+              )}
+            >
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={isSelected}
+                aria-label={isSelected ? "Deselect worktree" : "Select worktree"}
+                tabIndex={-1}
+                onClick={handleCheckboxClick}
+                className={cn(
+                  "flex items-center justify-center w-5 h-5 rounded",
+                  "border border-divider transition-colors",
+                  isSelected
+                    ? "bg-overlay-emphasis text-text-primary"
+                    : "bg-daintree-bg/80 text-transparent hover:bg-overlay-subtle"
+                )}
+              >
+                <svg
+                  className="w-3 h-3"
+                  viewBox="0 0 12 12"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M2.5 6.5l2.5 2.5 4.5-5" />
+                </svg>
+              </button>
+            </div>
           )}
           <div className="relative z-10 flex">
             {(dragHandleListeners || isDragHandleDisabled) &&

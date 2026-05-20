@@ -1,0 +1,413 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import type React from "react";
+
+const CELL_DOM_ID_PREFIX = "worktree-overview-cell-";
+
+/**
+ * Stable DOM id used by aria-activedescendant on every overview grid cell.
+ *
+ * Worktree ids are filesystem paths; on macOS especially these often contain
+ * spaces, which produce invalid HTML `id` attributes (and break the
+ * activeDescendant lookup downstream). encodeURIComponent normalizes the path
+ * into an id-safe string while remaining a pure, deterministic function of
+ * the worktree id so the same id resolves to the same DOM node every render.
+ */
+export function getWorktreeOverviewCellId(worktreeId: string): string {
+  return `${CELL_DOM_ID_PREFIX}${encodeURIComponent(worktreeId)}`;
+}
+
+function parseColumnCount(template: string): number {
+  const trimmed = template.trim();
+  if (!trimmed || trimmed === "none") return 1;
+  // gridTemplateColumns resolves to "200px 200px 200px" in Chromium when
+  // computed — split on whitespace runs and count tracks.
+  return Math.max(1, trimmed.split(/\s+/).length);
+}
+
+/**
+ * Resolve the target index for ArrowUp/Down across section-aware layouts.
+ *
+ * When `sectionSizes` is provided, section breaks render as full-width
+ * separators (CSS `col-[1/-1]`) that force a row break. A naive
+ * `currentIndex ± columnCount` jump miscounts whenever a section ends on a
+ * partial row, because the visually-adjacent cell in the next section is
+ * not `columnCount` away in the flat ordering.
+ *
+ * Algorithm:
+ *  - Locate which section contains `fromIndex` and the local row/column.
+ *  - Try to stay in the same section: target row ± 1 at the same column.
+ *  - If that row doesn't exist in the current section, fall through to the
+ *    neighbouring section: target = first/last visual row at the same
+ *    column (clamped to that section's actual width).
+ *  - If no neighbour exists, return `fromIndex` (caller clamps).
+ *
+ * `delta` is +1 for ArrowDown, -1 for ArrowUp.
+ */
+export function computeVerticalMove(
+  fromIndex: number,
+  delta: 1 | -1,
+  columnCount: number,
+  total: number,
+  sectionSizes: readonly number[] | undefined
+): number {
+  if (total <= 0 || fromIndex < 0 || fromIndex >= total) return fromIndex;
+  if (columnCount <= 0) columnCount = 1;
+
+  // No section grouping → single-section stride math.
+  const sizes = sectionSizes && sectionSizes.length > 0 ? sectionSizes : [total];
+
+  // Find which section owns fromIndex and the local offset within it.
+  let sectionIdx = 0;
+  let sectionStart = 0;
+  for (; sectionIdx < sizes.length; sectionIdx++) {
+    const size = sizes[sectionIdx] ?? 0;
+    if (fromIndex < sectionStart + size) break;
+    sectionStart += size;
+  }
+  const sectionSize = sizes[sectionIdx] ?? 0;
+  if (sectionSize === 0) return fromIndex;
+  const localIdx = fromIndex - sectionStart;
+  const localRow = Math.floor(localIdx / columnCount);
+  const localCol = localIdx % columnCount;
+
+  // Try staying in the current section.
+  const nextLocalRow = localRow + delta;
+  if (nextLocalRow >= 0) {
+    const nextLocal = nextLocalRow * columnCount + localCol;
+    if (nextLocal < sectionSize) {
+      return sectionStart + nextLocal;
+    }
+    // ArrowDown past last row of this section but the row exists past the
+    // column boundary — fall through to the last cell of this section
+    // before moving to the next section.
+    if (delta === 1) {
+      const lastLocal = sectionSize - 1;
+      // Only step partway down if it's strictly below the current row;
+      // otherwise let the cross-section branch handle it.
+      const lastLocalRow = Math.floor(lastLocal / columnCount);
+      if (lastLocalRow > localRow) {
+        return sectionStart + lastLocal;
+      }
+    }
+  }
+
+  // Cross-section move.
+  if (delta === 1) {
+    const nextSectionIdx = sectionIdx + 1;
+    if (nextSectionIdx >= sizes.length) return fromIndex;
+    const nextSectionStart = sectionStart + sectionSize;
+    const nextSectionSize = sizes[nextSectionIdx] ?? 0;
+    if (nextSectionSize === 0) return fromIndex;
+    const targetLocal = Math.min(localCol, nextSectionSize - 1);
+    return nextSectionStart + targetLocal;
+  }
+
+  // ArrowUp — previous section's last visual row, same column where
+  // available, otherwise the last cell of that section's final row.
+  const prevSectionIdx = sectionIdx - 1;
+  if (prevSectionIdx < 0) return fromIndex;
+  let prevSectionStart = 0;
+  for (let i = 0; i < prevSectionIdx; i++) prevSectionStart += sizes[i] ?? 0;
+  const prevSectionSize = sizes[prevSectionIdx] ?? 0;
+  if (prevSectionSize === 0) return fromIndex;
+  const prevLastRow = Math.floor((prevSectionSize - 1) / columnCount);
+  const candidateLocal = prevLastRow * columnCount + localCol;
+  if (candidateLocal < prevSectionSize) {
+    return prevSectionStart + candidateLocal;
+  }
+  // Column has no cell in that visual row (partial-tail row) — clamp to
+  // last cell of the previous section.
+  return prevSectionStart + prevSectionSize - 1;
+}
+
+export interface UseWorktreeOverviewKeyboardOptions {
+  /** Ordered list of worktree ids visible in the current filter set. */
+  worktreeIds: readonly string[];
+  /**
+   * Sizes of visual section blocks in order, summing to worktreeIds.length.
+   * Each entry is the number of cards in one grouped section. When omitted
+   * the list is treated as a single section. Section headers force a CSS
+   * row break (col-[1/-1]), so naive flat-index stride math (idx ± columns)
+   * skips into the wrong column whenever a section ends on a partial row.
+   * Passing sizes lets the hook resolve ArrowUp/Down to the visually
+   * adjacent cell instead.
+   */
+  sectionSizes?: readonly number[];
+  /** The grid container element that carries the role="grid" + tabIndex. */
+  gridRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Anchor for contiguous range selection. The parent owns this ref so the
+   * anchor persists across keyboard navigation but survives filter changes
+   * (lesson #4729 — don't reset on filtered-set churn).
+   */
+  selectionAnchorRef: React.MutableRefObject<string | null>;
+  onActivate: (worktreeId: string) => void;
+  onToggleSelection: (worktreeId: string) => void;
+  onSelectRange: (anchorId: string, targetId: string) => void;
+  onSelectAll: () => void;
+  onClearSelection: () => void;
+  /** Called when Escape is pressed with no selection — modal close. */
+  onEscapeWithoutSelection: () => void;
+  /** True if anything is currently selected; gates Escape's two-stage close. */
+  hasSelection: boolean;
+}
+
+export interface UseWorktreeOverviewKeyboardReturn {
+  activeWorktreeId: string | null;
+  activeDescendantId: string | undefined;
+  handleGridKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
+  handleGridFocus: (e: React.FocusEvent<HTMLDivElement>) => void;
+  setActiveWorktreeId: (id: string | null) => void;
+}
+
+/**
+ * 2D keyboard navigation + selection substrate for the worktree overview grid.
+ *
+ * Built parallel to {@link useWorktreeSidebarKeyboard}: one tab stop on the
+ * grid container, aria-activedescendant points at the focused cell, all
+ * keystrokes are intercepted at the container level so we never fight focus
+ * with the card's internal buttons. Arrow keys move in a 2D grid whose column
+ * count is sampled from `getComputedStyle().gridTemplateColumns` (refreshed
+ * via `ResizeObserver`). Selection and range operations are routed to the
+ * parent via callbacks — selection state itself is owned by the modal so it
+ * resets naturally when the modal unmounts.
+ *
+ * The hook deliberately holds no store dependencies (lesson
+ * `feedback_throwing_context_hooks_break_isolated_tests`) — it is testable
+ * standalone in jsdom without provider scaffolding.
+ */
+export function useWorktreeOverviewKeyboard({
+  worktreeIds,
+  sectionSizes,
+  gridRef,
+  selectionAnchorRef,
+  onActivate,
+  onToggleSelection,
+  onSelectRange,
+  onSelectAll,
+  onClearSelection,
+  onEscapeWithoutSelection,
+  hasSelection,
+}: UseWorktreeOverviewKeyboardOptions): UseWorktreeOverviewKeyboardReturn {
+  const [activeWorktreeId, setActiveWorktreeId] = useState<string | null>(null);
+  // Column count is read inside event handlers only — keeping it in a ref
+  // avoids a re-render every ResizeObserver tick.
+  const columnCountRef = useRef<number>(1);
+  // Mirror callbacks so listener identity doesn't churn the grid container.
+  const callbacksRef = useRef({
+    onActivate,
+    onToggleSelection,
+    onSelectRange,
+    onSelectAll,
+    onClearSelection,
+    onEscapeWithoutSelection,
+  });
+  useEffect(() => {
+    callbacksRef.current = {
+      onActivate,
+      onToggleSelection,
+      onSelectRange,
+      onSelectAll,
+      onClearSelection,
+      onEscapeWithoutSelection,
+    };
+  });
+  const worktreeIdsRef = useRef(worktreeIds);
+  useEffect(() => {
+    worktreeIdsRef.current = worktreeIds;
+  });
+  const sectionSizesRef = useRef(sectionSizes);
+  useEffect(() => {
+    sectionSizesRef.current = sectionSizes;
+  });
+  const hasSelectionRef = useRef(hasSelection);
+  useEffect(() => {
+    hasSelectionRef.current = hasSelection;
+  });
+
+  // Clamp active id back into the visible set when it shrinks. Without this,
+  // a filter change or worktree removal would orphan aria-activedescendant.
+  useEffect(() => {
+    if (activeWorktreeId === null) return;
+    if (worktreeIds.includes(activeWorktreeId)) return;
+    setActiveWorktreeId(worktreeIds[0] ?? null);
+  }, [worktreeIds, activeWorktreeId]);
+
+  // Track column count from the live grid layout. `getComputedStyle` on the
+  // grid container returns resolved track sizes (e.g. "320px 320px 320px"),
+  // which is exactly the count we need for ArrowUp/Down stride math.
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid || typeof ResizeObserver === "undefined") return;
+    const refresh = () => {
+      const template = window.getComputedStyle(grid).gridTemplateColumns;
+      columnCountRef.current = parseColumnCount(template);
+    };
+    refresh();
+    const observer = new ResizeObserver(refresh);
+    observer.observe(grid);
+    return () => observer.disconnect();
+  }, [gridRef]);
+
+  const activeDescendantId = activeWorktreeId
+    ? getWorktreeOverviewCellId(activeWorktreeId)
+    : undefined;
+
+  const handleGridFocus = useCallback(
+    (_e: React.FocusEvent<HTMLDivElement>) => {
+      if (activeWorktreeId !== null) return;
+      const first = worktreeIdsRef.current[0];
+      if (first) setActiveWorktreeId(first);
+    },
+    [activeWorktreeId]
+  );
+
+  const handleGridKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      // Only process events that originated on the grid container itself.
+      // Keys typed in an inner card button (terminal action, menu trigger)
+      // would otherwise bubble here and re-trigger selection from the
+      // grid's perspective — Space on an inner button would both click
+      // the button AND toggle the gridcell selection.
+      if (e.target !== gridRef.current) return;
+
+      const ids = worktreeIdsRef.current;
+      const callbacks = callbacksRef.current;
+
+      // Ctrl/Cmd+A — select all in the current filtered set.
+      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+      if (isCmdOrCtrl && (e.key === "a" || e.key === "A")) {
+        if (ids.length === 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        // Anchor at the first visible item so a subsequent Shift+Click reads
+        // as "extend from the start of the current view."
+        selectionAnchorRef.current = ids[0] ?? null;
+        callbacks.onSelectAll();
+        return;
+      }
+
+      // Escape — clear selection first, then propagate to modal close.
+      if (e.key === "Escape") {
+        if (hasSelectionRef.current) {
+          e.preventDefault();
+          e.stopPropagation();
+          selectionAnchorRef.current = null;
+          callbacks.onClearSelection();
+          return;
+        }
+        // No selection — let the modal-level handler close the dialog.
+        callbacks.onEscapeWithoutSelection();
+        return;
+      }
+
+      if (ids.length === 0) return;
+
+      // Lazily establish the active cell so first-keypress navigation starts
+      // at index 0 instead of doing nothing.
+      let currentIndex = activeWorktreeId ? ids.indexOf(activeWorktreeId) : -1;
+      if (currentIndex === -1) {
+        currentIndex = 0;
+        setActiveWorktreeId(ids[0] ?? null);
+      }
+      const currentId = ids[currentIndex];
+      if (currentId === undefined) return;
+
+      const columnCount = columnCountRef.current;
+      const total = ids.length;
+      let targetIndex: number | null = null;
+
+      switch (e.key) {
+        case "ArrowRight":
+          targetIndex = Math.min(total - 1, currentIndex + 1);
+          break;
+        case "ArrowLeft":
+          targetIndex = Math.max(0, currentIndex - 1);
+          break;
+        case "ArrowDown":
+          targetIndex = computeVerticalMove(
+            currentIndex,
+            1,
+            columnCount,
+            total,
+            sectionSizesRef.current
+          );
+          break;
+        case "ArrowUp":
+          targetIndex = computeVerticalMove(
+            currentIndex,
+            -1,
+            columnCount,
+            total,
+            sectionSizesRef.current
+          );
+          break;
+        case "Home":
+          targetIndex = 0;
+          break;
+        case "End":
+          targetIndex = total - 1;
+          break;
+        case "PageDown": {
+          const stride = Math.max(1, columnCount * 3);
+          targetIndex = Math.min(total - 1, currentIndex + stride);
+          break;
+        }
+        case "PageUp": {
+          const stride = Math.max(1, columnCount * 3);
+          targetIndex = Math.max(0, currentIndex - stride);
+          break;
+        }
+        case " ":
+        case "Spacebar": {
+          e.preventDefault();
+          e.stopPropagation();
+          selectionAnchorRef.current = currentId;
+          callbacks.onToggleSelection(currentId);
+          return;
+        }
+        case "Enter": {
+          e.preventDefault();
+          e.stopPropagation();
+          callbacks.onActivate(currentId);
+          return;
+        }
+      }
+
+      if (targetIndex === null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const targetId = ids[targetIndex];
+      if (targetId === undefined) return;
+
+      // Shift+Arrow extends selection from the persistent anchor; pure arrow
+      // movement just moves focus without touching selection. The anchor is
+      // set when the user makes their first deliberate selection action
+      // (Space, click, Ctrl/Cmd+A) — Shift+Arrow without a prior anchor, OR
+      // with an anchor that no longer points at a visible cell (filter
+      // narrowed it away), bootstraps from the current cell so the range
+      // has a stable origin.
+      if (e.shiftKey && targetIndex !== currentIndex) {
+        const storedAnchor = selectionAnchorRef.current;
+        const anchorVisible = storedAnchor !== null && ids.indexOf(storedAnchor) !== -1;
+        if (!anchorVisible) {
+          selectionAnchorRef.current = currentId;
+        }
+        callbacks.onSelectRange(selectionAnchorRef.current!, targetId);
+      }
+
+      if (targetIndex !== currentIndex) {
+        setActiveWorktreeId(targetId);
+      }
+    },
+    [activeWorktreeId, selectionAnchorRef, gridRef]
+  );
+
+  return {
+    activeWorktreeId,
+    activeDescendantId,
+    handleGridKeyDown,
+    handleGridFocus,
+    setActiveWorktreeId,
+  };
+}
