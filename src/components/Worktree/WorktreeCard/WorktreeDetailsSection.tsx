@@ -6,12 +6,9 @@ import type { ErrorRecord } from "@/store/errorStore";
 import { useAnimate, useReducedMotion } from "framer-motion";
 import { DURATION_200 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
-import { ActivityLight } from "../ActivityLight";
-import { LiveTimeAgo } from "../LiveTimeAgo";
 import { WorktreeDetails } from "../WorktreeDetails";
-import { Avatar } from "@/components/ui/Avatar";
+import { CommitChip } from "./CommitChip";
 import { Spinner } from "@/components/ui/Spinner";
-import { getGravatarUrl, isBotAuthor } from "@/utils/gravatar";
 import {
   Activity,
   AlertTriangle,
@@ -422,64 +419,14 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     </span>
                   )}
 
-                {worktree.worktreeChanges?.lastCommitTimestampMs != null && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <div className="relative z-10 ml-3 flex shrink-0 items-center gap-1 text-xs text-text-muted">
-                        {worktree.worktreeChanges?.lastCommitAuthor && (
-                          <Avatar
-                            src={getGravatarUrl(
-                              worktree.worktreeChanges.lastCommitAuthor.email,
-                              32
-                            )}
-                            alt={worktree.worktreeChanges.lastCommitAuthor.name}
-                            shape={
-                              isBotAuthor(worktree.worktreeChanges.lastCommitAuthor.name)
-                                ? "square"
-                                : "circle"
-                            }
-                            className="w-4 h-4"
-                          />
-                        )}
-                        <LiveTimeAgo
-                          timestamp={worktree.worktreeChanges.lastCommitTimestampMs}
-                          noTooltip
-                        />
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      {worktree.worktreeChanges?.lastCommitMessage
-                        ? `"${worktree.worktreeChanges.lastCommitMessage}"`
-                        : "Last commit"}
-                      {worktree.worktreeChanges?.lastCommitAuthor
-                        ? ` by ${worktree.worktreeChanges.lastCommitAuthor.name}`
-                        : ""}
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="relative z-10 ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
-                      {worktree.lastActivityTimestamp != null ? (
-                        <>
-                          <ActivityLight
-                            lastActivityTimestamp={worktree.lastActivityTimestamp}
-                            className="w-1.5 h-1.5"
-                          />
-                          <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} noTooltip />
-                        </>
-                      ) : (
-                        <span>No activity</span>
-                      )}
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {worktree.lastActivityTimestamp != null
-                      ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
-                      : "No recent activity recorded"}
-                  </TooltipContent>
-                </Tooltip>
+                {worktree.worktreeChanges?.lastCommitTimestampMs != null &&
+                  Number.isFinite(worktree.worktreeChanges.lastCommitTimestampMs) && (
+                    <CommitChip
+                      lastCommitTimestampMs={worktree.worktreeChanges.lastCommitTimestampMs}
+                      author={worktree.worktreeChanges.lastCommitAuthor}
+                      commitMessage={worktree.worktreeChanges.lastCommitMessage}
+                    />
+                  )}
               </div>
 
               {showReviewHubButton && (
