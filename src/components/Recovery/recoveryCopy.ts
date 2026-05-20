@@ -52,3 +52,16 @@ export function getRestoreConfirmationTitle(suspectCount: number): string {
   }
   return "Session recovered after unexpected exit.";
 }
+
+export function getSuspectPanelBannerTitle(count: number, deselected: boolean): string {
+  const noun = count === 1 ? "panel" : "panels";
+  if (deselected) {
+    return `${count} ${noun} deselected — created shortly before the crash`;
+  }
+  return `${count} ${noun} created shortly before the crash`;
+}
+
+export const SUSPECT_PANEL_BANNER_DESCRIPTION_DESELECTED =
+  "These panels may have caused the crash. Re-check to include them.";
+export const SUSPECT_PANEL_BANNER_DESCRIPTION_SELECTED =
+  "These panels may be related to the crash. Consider deselecting before restoring.";

@@ -84,6 +84,25 @@ vi.mock("@/components/ui/button", () => ({
   ),
 }));
 
+vi.mock("@/components/Terminal/InlineStatusBanner", () => ({
+  InlineStatusBanner: ({
+    title,
+    description,
+    severity,
+  }: {
+    title: ReactNode;
+    description?: ReactNode;
+    severity?: string;
+  }) => (
+    <div data-testid="inline-status-banner" data-severity={severity ?? "error"}>
+      <span data-testid="inline-status-banner-title">{title}</span>
+      {description ? (
+        <span data-testid="inline-status-banner-description">{description}</span>
+      ) : null}
+    </div>
+  ),
+}));
+
 const mockPanels = [
   {
     id: "t1",
@@ -224,12 +243,96 @@ describe("CrashRecoveryDialog", () => {
       expect(screen.getByTestId("suspect-warning")).toBeTruthy();
     });
 
+    it("renders the suspect warning as a warning-severity InlineStatusBanner", () => {
+      setup();
+      const banner = within(screen.getByTestId("suspect-warning")).getByTestId(
+        "inline-status-banner"
+      );
+      expect(banner.getAttribute("data-severity")).toBe("warning");
+    });
+
+    it("suspect banner title uses the 'created shortly before the crash' phrasing when crashCount is undefined", () => {
+      setup();
+      const title = within(screen.getByTestId("suspect-warning")).getByTestId(
+        "inline-status-banner-title"
+      );
+      expect(title.textContent).toContain("1 panel created shortly before the crash");
+    });
+
+    it("suspect banner title says 'deselected' when crashCount is at least 1", () => {
+      setup({ crash: { crashCount: 1 } });
+      const title = within(screen.getByTestId("suspect-warning")).getByTestId(
+        "inline-status-banner-title"
+      );
+      expect(title.textContent).toContain("1 panel deselected");
+      expect(title.textContent).toContain("created shortly before the crash");
+    });
+
+    it("suspect banner description prompts re-check when suspects were auto-deselected", () => {
+      setup({ crash: { crashCount: 1 } });
+      const desc = within(screen.getByTestId("suspect-warning")).getByTestId(
+        "inline-status-banner-description"
+      );
+      expect(desc.textContent).toContain("Re-check");
+    });
+
+    it("suspect banner is omitted when there are no suspect panels", () => {
+      setup({
+        crash: {
+          panels: [
+            { id: "t1", kind: "terminal", title: "Shell", location: "grid", isSuspect: false },
+          ],
+        },
+      });
+      expect(screen.queryByTestId("suspect-warning")).toBeNull();
+    });
+
     it("all panels are selected by default", () => {
       setup();
       const checkbox1 = screen.getByTestId("panel-checkbox-t1") as HTMLInputElement;
       const checkbox2 = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
       expect(checkbox1.checked).toBe(true);
       expect(checkbox2.checked).toBe(true);
+    });
+
+    it("pre-deselects suspect panels when crashCount is at least 1", () => {
+      setup({ crash: { crashCount: 1 } });
+      const suspect = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
+      const nonSuspect1 = screen.getByTestId("panel-checkbox-t1") as HTMLInputElement;
+      const nonSuspect3 = screen.getByTestId("panel-checkbox-t3") as HTMLInputElement;
+      expect(suspect.checked).toBe(false);
+      expect(nonSuspect1.checked).toBe(true);
+      expect(nonSuspect3.checked).toBe(true);
+    });
+
+    it("pre-deselects suspect panels when crashCount is in a crash loop", () => {
+      setup({ crash: { crashCount: 3 } });
+      const suspect = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
+      expect(suspect.checked).toBe(false);
+    });
+
+    it("keeps suspect panels selected when crashCount is 0", () => {
+      setup({ crash: { crashCount: 0 } });
+      const suspect = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
+      expect(suspect.checked).toBe(true);
+    });
+
+    it("restore-selected omits pre-deselected suspect panels by default when crashCount >= 1", async () => {
+      const { onResolve } = setup({ crash: { crashCount: 1 } });
+      fireEvent.click(screen.getByTestId("restore-selected-button"));
+      await waitFor(() =>
+        expect(onResolve).toHaveBeenCalledWith({
+          kind: "restore",
+          panelIds: expect.arrayContaining(["t1", "t3"]),
+        })
+      );
+      const call = (onResolve as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+      expect(call.panelIds).not.toContain("t2");
+    });
+
+    it("selection count reflects auto-deselection when crashCount >= 1", () => {
+      setup({ crash: { crashCount: 1 } });
+      expect(screen.getByText("2 of 3 selected")).toBeTruthy();
     });
 
     it("calls onResolve with selected panel IDs when Restore Selected is clicked", async () => {
