@@ -105,10 +105,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     try {
       const parseResult = TerminalResizePayloadSchema.safeParse(payload);
       if (!parseResult.success) {
-        console.error(
-          "[IPC] Invalid terminal resize payload:",
-          z.prettifyError(parseResult.error)
-        );
+        console.error("[IPC] Invalid terminal resize payload:", z.prettifyError(parseResult.error));
         return;
       }
 
