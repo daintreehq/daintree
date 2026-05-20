@@ -10,7 +10,7 @@ import type {
   WorkspaceClientConfig,
 } from "../../shared/types/workspace-host.js";
 import { GitHubAuth } from "./github/GitHubAuth.js";
-import { BrokerError } from "./rpc/RequestResponseBroker.js";
+import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { createLogger } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../shared/utils/forgeProviderIds.js";
@@ -77,15 +77,12 @@ export class WorkspaceHostProcess extends EventEmitter {
   private missedHeartbeats = 0;
   private readonly MAX_MISSED_HEARTBEATS = 3;
 
-  private pendingRequests = new Map<
-    string,
-    {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      resolve: (value: any) => void;
-      reject: (error: Error) => void;
-      timeout: NodeJS.Timeout;
-    }
-  >();
+  private broker = new RequestResponseBroker({
+    idPrefix: "workspace",
+    // Slow git ops (project-pulse, file-diff, create-worktree) need the legacy
+    // 30s ceiling; collapsing to the broker's 5s default would break them.
+    defaultTimeoutMs: 30000,
+  });
 
   private readyPromise: Promise<void>;
   private readyResolve: (() => void) | null = null;
@@ -136,7 +133,7 @@ export class WorkspaceHostProcess extends EventEmitter {
   }
 
   generateRequestId(): string {
-    return `req-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    return this.broker.generateId();
   }
 
   send(request: WorkspaceHostRequest): boolean {
@@ -187,38 +184,39 @@ export class WorkspaceHostProcess extends EventEmitter {
       );
     }
 
-    return new Promise((resolve, reject) => {
-      const existing = this.pendingRequests.get(request.requestId);
-      if (existing) {
-        clearTimeout(existing.timeout);
-        existing.reject(new Error(`Duplicate request ID: ${request.requestId}`));
-        this.pendingRequests.delete(request.requestId);
-      }
+    const promise = this.broker.register<T>(request.requestId, {
+      method: request.type,
+      timeoutMs,
+    });
 
-      const timeout = setTimeout(() => {
-        if (this.pendingRequests.has(request.requestId)) {
-          this.pendingRequests.delete(request.requestId);
-          reject(
-            new BrokerError("TIMEOUT", "Request timeout", {
-              projectScopeId: this.projectPath,
-            })
-          );
-        }
-      }, timeoutMs);
-
-      this.pendingRequests.set(request.requestId, { resolve, reject, timeout });
-      try {
-        if (!this.child) {
-          throw new BrokerError("HOST_EXITED", "Workspace Host not running", {
-            projectScopeId: this.projectPath,
-          });
-        }
-        this.child.postMessage(request);
-      } catch (error) {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(request.requestId);
-        reject(error instanceof Error ? error : new Error(String(error)));
+    try {
+      if (!this.child) {
+        throw new BrokerError("HOST_EXITED", "Workspace Host not running", {
+          projectScopeId: this.projectPath,
+        });
       }
+      this.child.postMessage(request);
+    } catch (error) {
+      this.broker.reject(
+        request.requestId,
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+
+    // The broker emits plain BrokerError("TIMEOUT", ...) on timeout; callers
+    // here have always seen projectScopeId on the rejection, so wrap to preserve
+    // that contract without re-running the timer.
+    return promise.catch((err: unknown) => {
+      if (
+        err instanceof BrokerError &&
+        err.code === "TIMEOUT" &&
+        err.projectScopeId === undefined
+      ) {
+        throw new BrokerError("TIMEOUT", "Request timeout", {
+          projectScopeId: this.projectPath,
+        });
+      }
+      throw err;
     });
   }
 
@@ -360,15 +358,11 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.readyResolve = null;
     }
 
-    for (const [, { reject, timeout }] of this.pendingRequests) {
-      clearTimeout(timeout);
-      reject(
-        new BrokerError("APP_SHUTDOWN", "WorkspaceHostProcess disposed", {
-          projectScopeId: this.projectPath,
-        })
-      );
-    }
-    this.pendingRequests.clear();
+    this.broker.clear(
+      new BrokerError("APP_SHUTDOWN", "WorkspaceHostProcess disposed", {
+        projectScopeId: this.projectPath,
+      })
+    );
 
     if (this.child) {
       this.send({ type: "dispose" });
@@ -567,15 +561,11 @@ export class WorkspaceHostProcess extends EventEmitter {
         this.stabilityTimer = null;
       }
 
-      for (const [, { reject, timeout }] of this.pendingRequests) {
-        clearTimeout(timeout);
-        reject(
-          new BrokerError("HOST_EXITED", "Workspace Host crashed", {
-            projectScopeId: this.projectPath,
-          })
-        );
-      }
-      this.pendingRequests.clear();
+      this.broker.clear(
+        new BrokerError("HOST_EXITED", "Workspace Host crashed", {
+          projectScopeId: this.projectPath,
+        })
+      );
 
       if (this.readyReject) {
         this.readyReject(
@@ -753,14 +743,10 @@ export class WorkspaceHostProcess extends EventEmitter {
 
       const requestId = (event as { requestId?: string })?.requestId;
       if (requestId) {
-        const pending = this.pendingRequests.get(requestId);
-        if (pending) {
-          clearTimeout(pending.timeout);
-          this.pendingRequests.delete(requestId);
-          pending.reject(
-            error instanceof Error ? error : new Error(`Event processing failed: ${eventType}`)
-          );
-        }
+        this.broker.reject(
+          requestId,
+          error instanceof Error ? error : new Error(`Event processing failed: ${eventType}`)
+        );
       }
     }
   }
@@ -815,12 +801,7 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "error":
         console.error(`[WorkspaceHost:${this.serviceName}] Host error:`, event.error);
         if (event.requestId) {
-          const pending = this.pendingRequests.get(event.requestId);
-          if (pending) {
-            clearTimeout(pending.timeout);
-            this.pendingRequests.delete(event.requestId);
-            pending.reject(new Error(event.error));
-          }
+          this.broker.reject(event.requestId, new Error(event.error));
         }
         break;
 
@@ -907,15 +888,10 @@ export class WorkspaceHostProcess extends EventEmitter {
     success?: boolean;
     error?: string;
   }): void {
-    const pending = this.pendingRequests.get(event.requestId);
-    if (pending) {
-      clearTimeout(pending.timeout);
-      this.pendingRequests.delete(event.requestId);
-      if (event.success === false || event.error) {
-        pending.reject(new Error(event.error || "Operation failed"));
-      } else {
-        pending.resolve(event);
-      }
+    if (event.success === false || event.error) {
+      this.broker.reject(event.requestId, new Error(event.error || "Operation failed"));
+    } else {
+      this.broker.resolve(event.requestId, event);
     }
   }
 

@@ -29,7 +29,9 @@ export class BrokerError extends Error {
 export interface PendingRequest<T = unknown> {
   resolve: (value: T) => void;
   reject: (error: Error) => void;
-  timeout: NodeJS.Timeout;
+  // ReturnType<typeof setTimeout> rather than NodeJS.Timeout so the broker
+  // typechecks under preload's DOM lib (no @types/node) as well as main.
+  timeout: ReturnType<typeof setTimeout>;
   createdAt: number;
   method?: string;
 }
@@ -106,7 +108,7 @@ export class RequestResponseBroker {
         } catch {
           // onTimeout is a best-effort callback and must not block timeout rejection.
         }
-        pending.reject(new Error(`Request timeout: ${requestId}`));
+        pending.reject(new BrokerError("TIMEOUT", `Request timeout: ${requestId}`));
       }, effectiveTimeout);
 
       this.pendingRequests.set(requestId, {
