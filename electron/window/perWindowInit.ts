@@ -102,6 +102,17 @@ export async function initPerWindowServices(
     // otherwise invisible to packaged builds (#8625). Awaiting a settled
     // promise is a no-op when the refresh already finished. If the kick-off
     // never ran (test/headless contexts), skip the await rather than block.
+    //
+    // Trade-off note: this still gates the first renderer load — IPC
+    // handlers and `startRendererLoad` in windowServices.ts run after
+    // `await initPerWindowServices`. In the P95 case the probe is already
+    // settled (~50ms via shell-env) and the await is instant; in the
+    // worst case it inherits refreshPath's 10s internal timeout, which is
+    // strictly better than the old fixPath() that ran synchronously at
+    // module load, before app.whenReady's intrinsic startup work could
+    // overlap. Fully unblocking renderer load is a follow-up — it requires
+    // registering IPC handlers with a deferred ptyClient ref so PtyClient
+    // construction can move past startRendererLoad.
     const earlyPathRefresh = getEarlyPathRefreshPromise();
     if (earlyPathRefresh) {
       await earlyPathRefresh;

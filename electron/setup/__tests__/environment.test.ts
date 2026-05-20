@@ -923,4 +923,31 @@ describe("kickOffEarlyPathRefresh", () => {
     await Promise.all([env.refreshPath(), env.refreshPath(), env.refreshPath()]);
     expect(shellEnvCallCount).toBe(1);
   });
+
+  it("kick-off swallows shell-env rejection and leaves PATH unchanged", async () => {
+    vi.doMock("shell-env", () => ({
+      shellEnv: vi.fn(async () => {
+        throw new Error("broken .zshrc");
+      }),
+    }));
+    process.env.PATH = "/old/path";
+    const env = await import("../environment.js");
+    await expect(env.kickOffEarlyPathRefresh()).resolves.toBeUndefined();
+    const settled = env.getEarlyPathRefreshPromise();
+    expect(settled).not.toBeNull();
+    // Awaiting the settled promise must also not reject — the PtyClient gate
+    // depends on this guarantee or the first PTY spawn would abort.
+    await expect(settled).resolves.toBeUndefined();
+    expect(process.env.PATH).toBe("/old/path");
+  });
+
+  it("kick-off preserves PATH when shell-env returns no PATH key", async () => {
+    vi.doMock("shell-env", () => ({
+      shellEnv: vi.fn(async () => ({})),
+    }));
+    process.env.PATH = "/old/path";
+    const env = await import("../environment.js");
+    await env.kickOffEarlyPathRefresh();
+    expect(process.env.PATH).toBe("/old/path");
+  });
 });
