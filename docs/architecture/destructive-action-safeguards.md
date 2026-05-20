@@ -188,6 +188,7 @@ Direct `window.electron.*` IPC calls that skip `ActionService`. These are the hi
 | `src/components/Worktree/ReviewHub/ReviewHubContent.tsx` | `checkoutOursTheirs` | **Yes** — per-file `ConfirmDialog` in `ConflictPanel` (#8242) |
 | `src/components/Worktree/ReviewHub/ForcePushConfirmDialog.tsx` | `forcePushWithLease` | **Yes** — model implementation |
 | `src/hooks/useDevServer.ts:299` | `devPreview.restart` (dev-preview restart button) | **No** — hook invokes IPC directly; sibling UI issue migrates to the `devPreview.restart` action |
+| `src/components/Recovery/SafeModeBanner.tsx` | `app.resetAndRelaunch` (safe-mode restart) | **Yes** — `ConfirmDialog` with destructive variant + `logs.openFile` recovery (#8685) |
 
 ## Maintenance
 

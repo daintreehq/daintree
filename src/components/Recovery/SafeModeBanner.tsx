@@ -3,6 +3,8 @@ import { AlertTriangle } from "lucide-react";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 
 function formatRelativeTime(timestamp: number): string {
@@ -25,6 +27,7 @@ export function SafeModeBanner() {
   const lastCrashAt = useSafeModeStore((s) => s.lastCrashAt);
   const dismiss = useSafeModeStore((s) => s.dismiss);
   const [isRestarting, setIsRestarting] = useState(false);
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
 
   if (!safeMode || dismissed) return null;
 
@@ -87,23 +90,45 @@ export function SafeModeBanner() {
   ) : undefined;
 
   return (
-    <InlineStatusBanner
-      icon={AlertTriangle}
-      title="Safe mode — panels weren't restored"
-      severity="warning"
-      role="status"
-      trailingSlot={detailsPopover}
-      actions={[
-        {
-          id: "restart",
-          label: isRestarting ? "Restarting…" : "Restart normally",
-          variant: "primary",
-          onClick: handleRestart,
-          disabled: isRestarting,
-        },
-      ]}
-      onClose={dismiss}
-      closeAriaLabel="Dismiss safe mode banner"
-    />
+    <>
+      <InlineStatusBanner
+        icon={AlertTriangle}
+        title="Safe mode — panels weren't restored"
+        severity="warning"
+        role="status"
+        trailingSlot={detailsPopover}
+        actions={[
+          {
+            id: "restart",
+            label: isRestarting ? "Restarting…" : "Restart normally",
+            variant: "primary",
+            onClick: () => setIsConfirmOpen(true),
+            disabled: isRestarting,
+          },
+        ]}
+        onClose={dismiss}
+        closeAriaLabel="Dismiss safe mode banner"
+      />
+      <ConfirmDialog
+        isOpen={isConfirmOpen}
+        onClose={isRestarting ? undefined : () => setIsConfirmOpen(false)}
+        title="Restart Daintree normally?"
+        description="All running terminals and agent sessions will be killed. Scrollback and in-flight agent work will be lost."
+        confirmLabel="Restart normally"
+        variant="destructive"
+        onConfirm={handleRestart}
+        isConfirmLoading={isRestarting}
+      >
+        <button
+          type="button"
+          onClick={() => {
+            void actionService.dispatch("logs.openFile", undefined, { source: "user" });
+          }}
+          className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline decoration-daintree-text/30 underline-offset-2"
+        >
+          View logs
+        </button>
+      </ConfirmDialog>
+    </>
   );
 }

@@ -1,12 +1,37 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act, within, waitFor } from "@testing-library/react";
 import { SafeModeBanner } from "../SafeModeBanner";
 import { useSafeModeStore } from "@/store/safeModeStore";
 
 const resetAndRelaunch = vi.fn();
 
+vi.mock("@/services/ActionService", () => ({
+  actionService: {
+    dispatch: vi.fn(),
+  },
+}));
+
+vi.mock("@/utils/logger", () => ({
+  logError: vi.fn(),
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+}));
+
+import { actionService } from "@/services/ActionService";
+
+const mockedDispatch = vi.mocked(actionService.dispatch);
+
 beforeAll(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  );
   Object.defineProperty(window, "matchMedia", {
     writable: true,
     value: vi.fn().mockImplementation((query: string) => ({
@@ -25,6 +50,9 @@ beforeAll(() => {
 beforeEach(() => {
   resetAndRelaunch.mockReset();
   resetAndRelaunch.mockResolvedValue(undefined);
+  mockedDispatch.mockReset();
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  mockedDispatch.mockResolvedValue({ ok: true, result: undefined } as never);
   // Minimal stub of window.electron.app for the restart action
   Object.defineProperty(window, "electron", {
     value: { app: { resetAndRelaunch } },
@@ -134,13 +162,44 @@ describe("SafeModeBanner", () => {
     expect(screen.getByRole("button", { name: /Show details/i })).toBeTruthy();
   });
 
-  it("calls resetAndRelaunch when Restart normally is clicked, and disables on subsequent clicks", () => {
+  it("opens confirm dialog when Restart normally is clicked, does not call resetAndRelaunch", () => {
     useSafeModeStore.setState({ safeMode: true });
     render(<SafeModeBanner />);
-    const button = screen.getByRole("button", { name: /Restart normally/i });
-    fireEvent.click(button);
-    fireEvent.click(button);
+    fireEvent.click(screen.getByRole("button", { name: /Restart normally/i }));
+    expect(screen.getByText("Restart Daintree normally?")).toBeTruthy();
+    expect(
+      screen.getByText(/All running terminals and agent sessions will be killed/)
+    ).toBeTruthy();
+    expect(resetAndRelaunch).not.toHaveBeenCalled();
+  });
+
+  it("confirming the dialog calls resetAndRelaunch", () => {
+    useSafeModeStore.setState({ safeMode: true });
+    render(<SafeModeBanner />);
+    fireEvent.click(screen.getByRole("button", { name: /Restart normally/i }));
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: /^Restart normally$/ })
+    );
     expect(resetAndRelaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it("canceling the dialog does not call resetAndRelaunch", async () => {
+    useSafeModeStore.setState({ safeMode: true });
+    render(<SafeModeBanner />);
+    fireEvent.click(screen.getByRole("button", { name: /Restart normally/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Cancel/i }));
+    expect(resetAndRelaunch).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByText("Restart Daintree normally?")).toBeNull();
+    });
+  });
+
+  it("View logs dispatches logs.openFile", () => {
+    useSafeModeStore.setState({ safeMode: true });
+    render(<SafeModeBanner />);
+    fireEvent.click(screen.getByRole("button", { name: /Restart normally/i }));
+    fireEvent.click(screen.getByRole("button", { name: /View logs/i }));
+    expect(mockedDispatch).toHaveBeenCalledWith("logs.openFile", undefined, { source: "user" });
   });
 
   it("re-enables the restart button when resetAndRelaunch rejects", async () => {
@@ -149,8 +208,10 @@ describe("SafeModeBanner", () => {
     render(<SafeModeBanner />);
     const button = screen.getByRole("button", { name: /Restart normally/i }) as HTMLButtonElement;
     fireEvent.click(button);
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: /^Restart normally$/ })
+    );
     expect(button.disabled).toBe(true);
-    // Wait one microtask tick for the rejected promise to flush
     await act(async () => {
       await Promise.resolve();
     });
