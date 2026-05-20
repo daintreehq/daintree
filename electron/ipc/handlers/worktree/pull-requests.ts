@@ -6,26 +6,23 @@ import type {
   DetachIssuePayload,
   IssueAssociation,
 } from "../../../../shared/types/ipc/worktree.js";
-import { typedHandle } from "../../utils.js";
+import type { PRServiceStatus } from "../../../../shared/types/workspace-host.js";
+import { defineIpcNamespace, op } from "../../define.js";
 
 export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): () => void {
-  const handlers: Array<() => void> = [];
-
-  const handleWorktreePRRefresh = async () => {
+  const handleWorktreePRRefresh = async (): Promise<void> => {
     if (!deps.worktreeService) {
       return;
     }
     await deps.worktreeService.refreshPullRequests();
   };
-  handlers.push(typedHandle(CHANNELS.WORKTREE_PR_REFRESH, handleWorktreePRRefresh));
 
-  const handleWorktreePRStatus = async () => {
+  const handleWorktreePRStatus = async (): Promise<PRServiceStatus | null> => {
     if (!deps.worktreeService) {
       return null;
     }
     return await deps.worktreeService.getPRStatus();
   };
-  handlers.push(typedHandle(CHANNELS.WORKTREE_PR_STATUS, handleWorktreePRStatus));
 
   const handleWorktreeAttachIssue = async (payload: AttachIssuePayload): Promise<void> => {
     if (!payload || typeof payload !== "object") {
@@ -60,7 +57,6 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
     const currentMap = store.get("worktreeIssueMap") ?? {};
     store.set("worktreeIssueMap", { ...currentMap, [worktreeId]: association });
   };
-  handlers.push(typedHandle(CHANNELS.WORKTREE_ATTACH_ISSUE, handleWorktreeAttachIssue));
 
   const handleWorktreeDetachIssue = async (payload: DetachIssuePayload): Promise<void> => {
     if (!payload || typeof payload !== "object") {
@@ -77,7 +73,6 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
     const { [worktreeId]: _removed, ...rest } = currentMap;
     store.set("worktreeIssueMap", rest);
   };
-  handlers.push(typedHandle(CHANNELS.WORKTREE_DETACH_ISSUE, handleWorktreeDetachIssue));
 
   const handleWorktreeGetIssueAssociation = async (
     worktreeId: string
@@ -89,18 +84,30 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
     const currentMap = store.get("worktreeIssueMap") ?? {};
     return currentMap[worktreeId] ?? null;
   };
-  handlers.push(
-    typedHandle(CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION, handleWorktreeGetIssueAssociation)
-  );
 
   const handleWorktreeGetAllIssueAssociations = async (): Promise<
     Record<string, IssueAssociation>
   > => {
     return store.get("worktreeIssueMap") ?? {};
   };
-  handlers.push(
-    typedHandle(CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS, handleWorktreeGetAllIssueAssociations)
-  );
 
-  return () => handlers.forEach((cleanup) => cleanup());
+  const namespace = defineIpcNamespace({
+    name: "worktreePullRequests",
+    ops: {
+      prRefresh: op(CHANNELS.WORKTREE_PR_REFRESH, handleWorktreePRRefresh),
+      prStatus: op(CHANNELS.WORKTREE_PR_STATUS, handleWorktreePRStatus),
+      attachIssue: op(CHANNELS.WORKTREE_ATTACH_ISSUE, handleWorktreeAttachIssue),
+      detachIssue: op(CHANNELS.WORKTREE_DETACH_ISSUE, handleWorktreeDetachIssue),
+      getIssueAssociation: op(
+        CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION,
+        handleWorktreeGetIssueAssociation
+      ),
+      getAllIssueAssociations: op(
+        CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS,
+        handleWorktreeGetAllIssueAssociations
+      ),
+    },
+  });
+
+  return namespace.register();
 }

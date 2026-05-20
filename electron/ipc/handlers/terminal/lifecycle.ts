@@ -6,12 +6,8 @@ import crypto from "crypto";
 import os from "os";
 import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
-import {
-  waitForRateLimitSlot,
-  consumeRestoreQuota,
-  typedHandle,
-  typedHandleValidated,
-} from "../../utils.js";
+import { waitForRateLimitSlot, consumeRestoreQuota } from "../../utils.js";
+import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { mcpServerService } from "../../../services/McpServerService.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
@@ -40,7 +36,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   if (!ptyClient) {
     return () => {};
   }
-  const handlers: Array<() => void> = [];
 
   const handleTerminalSpawn = async (
     validatedOptions: ValidatedTerminalSpawnOptions
@@ -448,11 +443,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(`Failed to spawn terminal: ${errorMessage}`);
     }
   };
-  handlers.push(
-    typedHandleValidated(CHANNELS.TERMINAL_SPAWN, TerminalSpawnOptionsSchema, handleTerminalSpawn)
-  );
 
-  const handleTerminalKill = async (id: string) => {
+  const handleTerminalKill = async (id: string): Promise<void> => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
@@ -463,7 +455,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(`Failed to kill terminal: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_KILL, handleTerminalKill));
 
   const handleTerminalGracefulKill = async (id: string): Promise<string | null> => {
     if (typeof id !== "string") {
@@ -471,9 +462,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
     return ptyClient.gracefulKill(id);
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_GRACEFUL_KILL, handleTerminalGracefulKill));
 
-  const handleTerminalTrash = async (id: string) => {
+  const handleTerminalTrash = async (id: string): Promise<void> => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
@@ -484,7 +474,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(`Failed to trash terminal: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_TRASH, handleTerminalTrash));
 
   const handleTerminalRestore = async (id: string): Promise<boolean> => {
     try {
@@ -497,24 +486,34 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(`Failed to restore terminal: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_RESTORE, handleTerminalRestore));
 
-  const handleTerminalRestartService = async () => {
+  const handleTerminalRestartService = async (): Promise<void> => {
     ptyClient.manualRestart();
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService));
 
   const handleAgentSessionList = async (payload: { worktreeId?: string }) => {
     const { app } = await import("electron");
     return listAgentSessions(payload?.worktreeId, app.getPath("userData"));
   };
-  handlers.push(typedHandle(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList));
 
-  const handleAgentSessionClear = async (payload: { worktreeId?: string }) => {
+  const handleAgentSessionClear = async (payload: { worktreeId?: string }): Promise<void> => {
     const { app } = await import("electron");
     await clearAgentSessions(payload?.worktreeId, app.getPath("userData"));
   };
-  handlers.push(typedHandle(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear));
 
-  return () => handlers.forEach((cleanup) => cleanup());
+  const namespace = defineIpcNamespace({
+    name: "terminalLifecycle",
+    ops: {
+      spawn: opValidated(CHANNELS.TERMINAL_SPAWN, TerminalSpawnOptionsSchema, handleTerminalSpawn),
+      kill: op(CHANNELS.TERMINAL_KILL, handleTerminalKill),
+      gracefulKill: op(CHANNELS.TERMINAL_GRACEFUL_KILL, handleTerminalGracefulKill),
+      trash: op(CHANNELS.TERMINAL_TRASH, handleTerminalTrash),
+      restore: op(CHANNELS.TERMINAL_RESTORE, handleTerminalRestore),
+      restartService: op(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService),
+      agentSessionList: op(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList),
+      agentSessionClear: op(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear),
+    },
+  });
+
+  return namespace.register();
 }

@@ -8,7 +8,7 @@ import type { HandlerDependencies } from "../../types.js";
 import { TerminalReplayHistoryPayloadSchema } from "../../../schemas/index.js";
 import { logDebug, logInfo, logWarn } from "../../../utils/logger.js";
 import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
-import { typedHandle, typedHandleValidated } from "../../utils.js";
+import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 
 type ValidatedReplayHistoryPayload = z.output<typeof TerminalReplayHistoryPayloadSchema>;
@@ -18,7 +18,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   if (!ptyClient) {
     return () => {};
   }
-  const handlers: Array<() => void> = [];
 
   const handleTerminalWake = async (
     id: string
@@ -33,7 +32,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to wake terminal: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_WAKE, handleTerminalWake));
 
   const handleTerminalGetSerializedState = async (terminalId: string): Promise<string | null> => {
     try {
@@ -54,9 +52,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to get serialized terminal state: ${errorMessage}`);
     }
   };
-  handlers.push(
-    typedHandle(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, handleTerminalGetSerializedState)
-  );
 
   const handleTerminalGetSerializedStates = async (
     terminalIds: string[]
@@ -94,9 +89,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
     return Object.fromEntries(results);
   };
-  handlers.push(
-    typedHandle(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, handleTerminalGetSerializedStates)
-  );
 
   const handleTerminalGetInfo = async (
     id: string
@@ -118,7 +110,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to get terminal info: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_INFO, handleTerminalGetInfo));
 
   const handleTerminalGetSharedBuffers = async (): Promise<{
     visualBuffers: SharedArrayBuffer[];
@@ -131,7 +122,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       return { visualBuffers: [], signalBuffer: null };
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_SHARED_BUFFERS, handleTerminalGetSharedBuffers));
 
   const handleTerminalGetAnalysisBuffer = async (): Promise<SharedArrayBuffer | null> => {
     try {
@@ -141,9 +131,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       return null;
     }
   };
-  handlers.push(
-    typedHandle(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER, handleTerminalGetAnalysisBuffer)
-  );
 
   const handleTerminalReplayHistory = async ({
     terminalId,
@@ -159,13 +146,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to replay terminal history: ${errorMessage}`);
     }
   };
-  handlers.push(
-    typedHandleValidated(
-      CHANNELS.TERMINAL_REPLAY_HISTORY,
-      TerminalReplayHistoryPayloadSchema,
-      handleTerminalReplayHistory
-    )
-  );
 
   const handleTerminalGetForProject = async (
     projectId: string
@@ -231,7 +211,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to get terminals for project: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_FOR_PROJECT, handleTerminalGetForProject));
 
   const handleTerminalGetAvailable = async (): Promise<
     import("../../../../shared/types/ipc.js").BackendTerminalInfo[]
@@ -275,7 +254,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to get available terminals: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_AVAILABLE, handleTerminalGetAvailable));
 
   const handleTerminalGetByState = async (
     state: string
@@ -330,7 +308,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to get terminals by state: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_BY_STATE, handleTerminalGetByState));
 
   const handleTerminalGetAll = async (): Promise<
     import("../../../../shared/types/ipc.js").BackendTerminalInfo[]
@@ -374,7 +351,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to get all terminals: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_ALL, handleTerminalGetAll));
 
   const handleTerminalSearchSemanticBuffers = async (
     query: string,
@@ -398,9 +374,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       return [];
     }
   };
-  handlers.push(
-    typedHandle(CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS, handleTerminalSearchSemanticBuffers)
-  );
 
   const handleTerminalReconnect = async (
     terminalId: string
@@ -453,7 +426,38 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to reconnect to terminal: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_RECONNECT, handleTerminalReconnect));
 
-  return () => handlers.forEach((cleanup) => cleanup());
+  const namespace = defineIpcNamespace({
+    name: "terminalSnapshots",
+    ops: {
+      wake: op(CHANNELS.TERMINAL_WAKE, handleTerminalWake),
+      getSerializedState: op(
+        CHANNELS.TERMINAL_GET_SERIALIZED_STATE,
+        handleTerminalGetSerializedState
+      ),
+      getSerializedStates: op(
+        CHANNELS.TERMINAL_GET_SERIALIZED_STATES,
+        handleTerminalGetSerializedStates
+      ),
+      getInfo: op(CHANNELS.TERMINAL_GET_INFO, handleTerminalGetInfo),
+      getSharedBuffers: op(CHANNELS.TERMINAL_GET_SHARED_BUFFERS, handleTerminalGetSharedBuffers),
+      getAnalysisBuffer: op(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER, handleTerminalGetAnalysisBuffer),
+      replayHistory: opValidated(
+        CHANNELS.TERMINAL_REPLAY_HISTORY,
+        TerminalReplayHistoryPayloadSchema,
+        handleTerminalReplayHistory
+      ),
+      getForProject: op(CHANNELS.TERMINAL_GET_FOR_PROJECT, handleTerminalGetForProject),
+      getAvailable: op(CHANNELS.TERMINAL_GET_AVAILABLE, handleTerminalGetAvailable),
+      getByState: op(CHANNELS.TERMINAL_GET_BY_STATE, handleTerminalGetByState),
+      getAll: op(CHANNELS.TERMINAL_GET_ALL, handleTerminalGetAll),
+      searchSemanticBuffers: op(
+        CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+        handleTerminalSearchSemanticBuffers
+      ),
+      reconnect: op(CHANNELS.TERMINAL_RECONNECT, handleTerminalReconnect),
+    },
+  });
+
+  return namespace.register();
 }

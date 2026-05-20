@@ -6,35 +6,31 @@ import { dialog } from "electron";
 import os from "os";
 import path from "path";
 import { CHANNELS } from "../../channels.js";
-import type { HandlerDependencies } from "../../types.js";
-import { typedHandle, typedHandleWithContext } from "../../utils.js";
+import type { HandlerDependencies, IpcContext } from "../../types.js";
+import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import type {
+  SaveArtifactOptions,
+  SaveArtifactResult,
+  ApplyPatchOptions,
+  ApplyPatchResult,
+} from "../../../../shared/types/ipc/agent.js";
 
 export function registerArtifactHandlers(deps: HandlerDependencies): () => void {
   const mainWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
-  const handlers: Array<() => void> = [];
 
   const handleArtifactSaveToFile = async (
-    options: unknown
-  ): Promise<{ filePath: string } | null> => {
-    if (
-      typeof options !== "object" ||
-      options === null ||
-      !("content" in options) ||
-      typeof (options as Record<string, unknown>).content !== "string"
-    ) {
+    options: SaveArtifactOptions
+  ): Promise<SaveArtifactResult | null> => {
+    if (typeof options !== "object" || options === null || typeof options.content !== "string") {
       throw new AppError({
         code: "VALIDATION",
         message: "Invalid saveToFile payload: missing or invalid content",
       });
     }
 
-    const { content, suggestedFilename, cwd } = options as {
-      content: string;
-      suggestedFilename?: string;
-      cwd?: string;
-    };
+    const { content, suggestedFilename, cwd } = options;
 
     if (content.length > 10 * 1024 * 1024) {
       throw new AppError({
@@ -90,19 +86,16 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
       });
     }
   };
-  handlers.push(typedHandle(CHANNELS.ARTIFACT_SAVE_TO_FILE, handleArtifactSaveToFile));
 
   const handleArtifactApplyPatch = async (
-    ctx: import("../../types.js").IpcContext,
-    options: unknown
-  ): Promise<{ modifiedFiles: string[] }> => {
+    ctx: IpcContext,
+    options: ApplyPatchOptions
+  ): Promise<ApplyPatchResult> => {
     if (
       typeof options !== "object" ||
       options === null ||
-      !("patchContent" in options) ||
-      !("cwd" in options) ||
-      typeof (options as Record<string, unknown>).patchContent !== "string" ||
-      typeof (options as Record<string, unknown>).cwd !== "string"
+      typeof options.patchContent !== "string" ||
+      typeof options.cwd !== "string"
     ) {
       throw new AppError({
         code: "VALIDATION",
@@ -110,7 +103,7 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
       });
     }
 
-    const { patchContent, cwd } = options as { patchContent: string; cwd: string };
+    const { patchContent, cwd } = options;
 
     if (patchContent.length > 5 * 1024 * 1024) {
       throw new AppError({
@@ -203,7 +196,15 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
       await fs.unlink(tmpPatchPath).catch(() => {});
     }
   };
-  handlers.push(typedHandleWithContext(CHANNELS.ARTIFACT_APPLY_PATCH, handleArtifactApplyPatch));
+  const namespace = defineIpcNamespace({
+    name: "artifacts",
+    ops: {
+      saveToFile: op(CHANNELS.ARTIFACT_SAVE_TO_FILE, handleArtifactSaveToFile),
+      applyPatch: op(CHANNELS.ARTIFACT_APPLY_PATCH, handleArtifactApplyPatch, {
+        withContext: true,
+      }),
+    },
+  });
 
-  return () => handlers.forEach((cleanup) => cleanup());
+  return namespace.register();
 }

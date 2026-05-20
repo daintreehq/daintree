@@ -1,5 +1,5 @@
 import type { StagingStatus } from "../git.js";
-import type { AgentId, AgentState } from "../agent.js";
+import type { AgentId } from "../agent.js";
 import type { VoiceInputStatus } from "../voice.js";
 import type { TabGroup } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
@@ -24,29 +24,9 @@ import type {
   VoiceInputSettings,
 } from "./api.js";
 
+import type { WorktreeConfig } from "./worktree.js";
+import type { TerminalActivityPayload } from "./terminal.js";
 import type {
-  WorktreeSetActivePayload,
-  WorktreeDeletePayload,
-  CreateWorktreeOptions,
-  BranchInfo,
-  WorktreeConfig,
-  AttachIssuePayload,
-  DetachIssuePayload,
-  IssueAssociation,
-} from "./worktree.js";
-import type {
-  TerminalSpawnOptions,
-  TerminalReconnectResult,
-  BackendTerminalInfo,
-  TerminalInfoPayload,
-  TerminalActivityPayload,
-  SemanticSearchMatch,
-} from "./terminal.js";
-import type {
-  SaveArtifactOptions,
-  SaveArtifactResult,
-  ApplyPatchOptions,
-  ApplyPatchResult,
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
@@ -173,7 +153,6 @@ import type {
 } from "./system.js";
 import type { CloneRepoOptions, CloneRepoResult } from "./gitClone.js";
 import type { AppAgentConfig } from "../appAgent.js";
-import type { AgentSessionRecord } from "./agentSessionHistory.js";
 import type { GeneratedIpcInvokeMap } from "./generated.js";
 import type {
   AuthValidation,
@@ -254,145 +233,6 @@ export interface MainProcessToastPayload {
 
 /** Maps IPC channels to their args/result types for type-safe invoke/handle */
 export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
-  // Worktree channels
-  "worktree:get-all": {
-    args: [];
-    result: WorktreeState[];
-  };
-  "worktree:refresh": {
-    args: [worktreeId?: string];
-    result: void;
-  };
-  "worktree:pr-refresh": {
-    args: [];
-    result: void;
-  };
-  "worktree:pr-status": {
-    args: [];
-    result: import("../workspace-host.js").PRServiceStatus | null;
-  };
-  "worktree:set-active": {
-    args: [payload: WorktreeSetActivePayload];
-    result: void;
-  };
-  "worktree:create": {
-    args: [payload: { rootPath: string; options: CreateWorktreeOptions }];
-    result: string;
-  };
-  "worktree:list-branches": {
-    args: [payload: { rootPath: string }];
-    result: BranchInfo[];
-  };
-  "worktree:get-recent-branches": {
-    args: [payload: { rootPath: string }];
-    result: string[];
-  };
-  "worktree:get-default-path": {
-    args: [payload: { rootPath: string; branchName: string }];
-    result: string;
-  };
-  "worktree:get-available-branch": {
-    args: [payload: { rootPath: string; branchName: string }];
-    result: string;
-  };
-  "worktree:delete": {
-    args: [payload: WorktreeDeletePayload];
-    result: void;
-  };
-  "worktree:attach-issue": {
-    args: [payload: AttachIssuePayload];
-    result: void;
-  };
-  "worktree:detach-issue": {
-    args: [payload: DetachIssuePayload];
-    result: void;
-  };
-  "worktree:get-issue-association": {
-    args: [worktreeId: string];
-    result: IssueAssociation | null;
-  };
-  "worktree:get-all-issue-associations": {
-    args: [];
-    result: Record<string, IssueAssociation>;
-  };
-  "worktree:restart-service": {
-    args: [];
-    result: void;
-  };
-  "worktree:retry-project-load": {
-    args: [];
-    result: void;
-  };
-
-  // Terminal channels
-  "terminal:spawn": {
-    args: [options: TerminalSpawnOptions];
-    result: string;
-  };
-  "terminal:submit": {
-    args: [id: string, text: string];
-    result: void;
-  };
-  "terminal:kill": {
-    args: [id: string];
-    result: void;
-  };
-  "terminal:trash": {
-    args: [id: string];
-    result: void;
-  };
-  "terminal:restore": {
-    args: [id: string];
-    result: boolean;
-  };
-  "terminal:wake": {
-    args: [id: string];
-    result: { state: string | null; warnings?: string[] };
-  };
-  "terminal:get-for-project": {
-    args: [projectId: string];
-    result: BackendTerminalInfo[];
-  };
-  "terminal:reconnect": {
-    args: [terminalId: string];
-    result: TerminalReconnectResult;
-  };
-  "terminal:replay-history": {
-    args: [payload: { terminalId: string; maxLines?: number }];
-    result: { replayed: number };
-  };
-  "terminal:get-serialized-state": {
-    args: [terminalId: string];
-    result: string | null;
-  };
-  "terminal:get-serialized-states": {
-    args: [terminalIds: string[]];
-    result: Record<string, string | null>;
-  };
-  "terminal:get-shared-buffers": {
-    args: [];
-    result: {
-      visualBuffers: SharedArrayBuffer[];
-      signalBuffer: SharedArrayBuffer | null;
-    };
-  };
-  "terminal:get-analysis-buffer": {
-    args: [];
-    result: SharedArrayBuffer | null;
-  };
-  "terminal:get-info": {
-    args: [id: string];
-    result: TerminalInfoPayload;
-  };
-  "terminal:force-resume": {
-    args: [id: string];
-    result: void;
-  };
-  "terminal:restart-service": {
-    args: [];
-    result: void;
-  };
-
   // Files channels
   "files:search": {
     args: [payload: FileSearchPayload];
@@ -408,16 +248,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "agent-help:get": {
     args: [request: AgentHelpRequest];
     result: AgentHelpResult;
-  };
-
-  // Artifact channels
-  "artifact:save-to-file": {
-    args: [options: SaveArtifactOptions];
-    result: SaveArtifactResult | null;
-  };
-  "artifact:apply-patch": {
-    args: [options: ApplyPatchOptions];
-    result: ApplyPatchResult;
   };
 
   // CopyTree channels
@@ -1887,16 +1717,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
 
   // Demo mode channels (dev-only, gated by --demo-mode flag)
-  // Agent session history channels
-  "agent-session:list": {
-    args: [payload: { worktreeId?: string }];
-    result: AgentSessionRecord[];
-  };
-  "agent-session:clear": {
-    args: [payload: { worktreeId?: string }];
-    result: void;
-  };
-
   // App Agent channels
   "app-agent:get-config": {
     args: [];
@@ -2116,28 +1936,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-  // Additional terminal snapshot channels
-  "terminal:get-all": {
-    args: [];
-    result: BackendTerminalInfo[];
-  };
-  "terminal:get-available": {
-    args: [];
-    result: BackendTerminalInfo[];
-  };
-  "terminal:get-by-state": {
-    args: [state: AgentState];
-    result: BackendTerminalInfo[];
-  };
-  "terminal:graceful-kill": {
-    args: [id: string];
-    result: string | null;
-  };
-  "terminal:search-semantic-buffers": {
-    args: [query: string, isRegex: boolean];
-    result: SemanticSearchMatch[];
-  };
-
   // Webview lifecycle / dialog / OAuth channels
   "webview:set-lifecycle-state": {
     args: [webContentsId: number, frozen: boolean];
@@ -2162,12 +1960,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "webview:cancel-oauth-loopback": {
     args: [payload: { panelId: string }];
-    result: void;
-  };
-
-  // Additional worktree channels
-  "worktree:fetch-pr-branch": {
-    args: [payload: { rootPath: string; prNumber: number; headRefName: string }];
     result: void;
   };
 }

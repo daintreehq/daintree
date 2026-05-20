@@ -8,6 +8,22 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "agent-session:clear": {
+    args: [payload: { worktreeId?: string | undefined }];
+    result: void;
+  };
+  "agent-session:list": {
+    args: [payload: { worktreeId?: string | undefined }];
+    result: import("./agentSessionHistory.js").AgentSessionRecord[];
+  };
+  "artifact:apply-patch": {
+    args: [options: import("./agent.js").ApplyPatchOptions];
+    result: import("./agent.js").ApplyPatchResult;
+  };
+  "artifact:save-to-file": {
+    args: [options: import("./agent.js").SaveArtifactOptions];
+    result: import("./agent.js").SaveArtifactResult | null;
+  };
   "clipboard:read-selection": {
     args: [];
     result: { text: string };
@@ -332,5 +348,194 @@ export interface GeneratedIpcInvokeMap {
   "slash-commands:list": {
     args: [payload: import("../slashCommands.js").SlashCommandListRequest];
     result: import("../slashCommands.js").SlashCommand[];
+  };
+  "terminal:force-resume": {
+    args: [id: string];
+    result: void;
+  };
+  "terminal:get-all": {
+    args: [];
+    result: import("./terminal.js").BackendTerminalInfo[];
+  };
+  "terminal:get-analysis-buffer": {
+    args: [];
+    result: SharedArrayBuffer | null;
+  };
+  "terminal:get-available": {
+    args: [];
+    result: import("./terminal.js").BackendTerminalInfo[];
+  };
+  "terminal:get-by-state": {
+    args: [state: string];
+    result: import("./terminal.js").BackendTerminalInfo[];
+  };
+  "terminal:get-for-project": {
+    args: [projectId: string];
+    result: import("./terminal.js").BackendTerminalInfo[];
+  };
+  "terminal:get-info": {
+    args: [id: string];
+    result: import("./terminal.js").TerminalInfoPayload;
+  };
+  "terminal:get-serialized-state": {
+    args: [terminalId: string];
+    result: string | null;
+  };
+  "terminal:get-serialized-states": {
+    args: [terminalIds: string[]];
+    result: Record<string, string | null>;
+  };
+  "terminal:get-shared-buffers": {
+    args: [];
+    result: { visualBuffers: SharedArrayBuffer[]; signalBuffer: SharedArrayBuffer | null };
+  };
+  "terminal:graceful-kill": {
+    args: [id: string];
+    result: string | null;
+  };
+  "terminal:kill": {
+    args: [id: string];
+    result: void;
+  };
+  "terminal:reconnect": {
+    args: [terminalId: string];
+    result: import("./terminal.js").TerminalReconnectResult;
+  };
+  "terminal:replay-history": {
+    args: [__0: { terminalId: string; maxLines: number }];
+    result: { replayed: number };
+  };
+  "terminal:restart-service": {
+    args: [];
+    result: void;
+  };
+  "terminal:restore": {
+    args: [id: string];
+    result: boolean;
+  };
+  "terminal:search-semantic-buffers": {
+    args: [query: string, isRegex: boolean];
+    result: import("./terminal.js").SemanticSearchMatch[];
+  };
+  "terminal:spawn": {
+    args: [
+      validatedOptions: {
+        cols: number;
+        rows: number;
+        id?: string | undefined;
+        kind?: string | undefined;
+        launchAgentId?: string | undefined;
+        projectId?: string | undefined;
+        cwd?: string | undefined;
+        shell?: string | undefined;
+        command?: string | undefined;
+        env?: Record<string, string> | undefined;
+        title?: string | undefined;
+        titleMode?: "default" | "custom" | undefined;
+        restore?: boolean | undefined;
+        isEphemeral?: boolean | undefined;
+        agentLaunchFlags?: string[] | undefined;
+        agentModelId?: string | undefined;
+        worktreeId?: string | undefined;
+        agentPresetId?: string | undefined;
+        agentPresetColor?: string | undefined;
+        originalAgentPresetId?: string | undefined;
+      },
+    ];
+    result: string;
+  };
+  "terminal:submit": {
+    args: [id: string, text: string];
+    result: void;
+  };
+  "terminal:trash": {
+    args: [id: string];
+    result: void;
+  };
+  "terminal:wake": {
+    args: [id: string];
+    result: { state: string | null; warnings?: string[] | undefined };
+  };
+  "worktree:attach-issue": {
+    args: [payload: import("./worktree.js").AttachIssuePayload];
+    result: void;
+  };
+  "worktree:create": {
+    args: [
+      payload: {
+        rootPath: string;
+        options: {
+          baseBranch: string;
+          newBranch: string;
+          path: string;
+          fromRemote?: boolean | undefined;
+        };
+      },
+    ];
+    result: string;
+  };
+  "worktree:delete": {
+    args: [payload: import("./worktree.js").WorktreeDeletePayload];
+    result: void;
+  };
+  "worktree:detach-issue": {
+    args: [payload: import("./worktree.js").DetachIssuePayload];
+    result: void;
+  };
+  "worktree:fetch-pr-branch": {
+    args: [payload: { rootPath: string; prNumber: number; headRefName: string }];
+    result: void;
+  };
+  "worktree:get-all": {
+    args: [];
+    result: import("../worktree.js").WorktreeState[];
+  };
+  "worktree:get-all-issue-associations": {
+    args: [];
+    result: Record<string, import("./worktree.js").IssueAssociation>;
+  };
+  "worktree:get-available-branch": {
+    args: [payload: { rootPath: string; branchName: string }];
+    result: string;
+  };
+  "worktree:get-default-path": {
+    args: [payload: { rootPath: string; branchName: string }];
+    result: string;
+  };
+  "worktree:get-issue-association": {
+    args: [worktreeId: string];
+    result: import("./worktree.js").IssueAssociation | null;
+  };
+  "worktree:get-recent-branches": {
+    args: [payload: { rootPath: string }];
+    result: string[];
+  };
+  "worktree:list-branches": {
+    args: [payload: { rootPath: string }];
+    result: import("../git.js").BranchInfo[];
+  };
+  "worktree:pr-refresh": {
+    args: [];
+    result: void;
+  };
+  "worktree:pr-status": {
+    args: [];
+    result: import("../workspace-host.js").PRServiceStatus | null;
+  };
+  "worktree:refresh": {
+    args: [worktreeId?: string | undefined];
+    result: void;
+  };
+  "worktree:restart-service": {
+    args: [];
+    result: void;
+  };
+  "worktree:retry-project-load": {
+    args: [];
+    result: void;
+  };
+  "worktree:set-active": {
+    args: [payload: import("./worktree.js").WorktreeSetActivePayload];
+    result: void;
   };
 }
