@@ -152,4 +152,101 @@ describe("useTabLoad", () => {
       });
     }).not.toThrow();
   });
+
+  it("keeps the timeout error when the timed-out attempt later resolves", async () => {
+    vi.useFakeTimers();
+    let resolveOriginal: (() => void) | undefined;
+    const initialize = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveOriginal = resolve;
+        })
+    );
+
+    const { result } = renderHook(() =>
+      useTabLoad({ initialize, timeoutMs: 100, timeoutMessage: "Timed out" })
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(result.current.loadError).toBe("Timed out");
+
+    await act(async () => {
+      resolveOriginal?.();
+      vi.useRealTimers();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.loadError).toBe("Timed out");
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("keeps the timeout error when the timed-out attempt later rejects", async () => {
+    vi.useFakeTimers();
+    let rejectOriginal: ((err: Error) => void) | undefined;
+    const initialize = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectOriginal = reject;
+        })
+    );
+
+    const { result } = renderHook(() =>
+      useTabLoad({ initialize, timeoutMs: 100, timeoutMessage: "Timed out" })
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(result.current.loadError).toBe("Timed out");
+
+    await act(async () => {
+      rejectOriginal?.(new Error("late failure"));
+      vi.useRealTimers();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.loadError).toBe("Timed out");
+  });
+
+  it("ignores a stale rejection from the initial attempt after retry succeeds", async () => {
+    let rejectFirst: ((err: Error) => void) | undefined;
+    const initialize = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectFirst = reject;
+        })
+    );
+    const retry = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useTabLoad({ initialize, retry }));
+
+    act(() => {
+      result.current.retryAction();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.loadError).toBeNull();
+
+    await act(async () => {
+      rejectFirst?.(new Error("stale failure"));
+      await Promise.resolve();
+    });
+    expect(result.current.loadError).toBeNull();
+  });
+
+  it("clears loadError synchronously on retry before the new attempt resolves", async () => {
+    const initialize = vi.fn().mockRejectedValue(new Error("first failure"));
+    const retry = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useTabLoad({ initialize, retry }));
+
+    await waitFor(() => expect(result.current.loadError).toBe("first failure"));
+
+    act(() => {
+      result.current.retryAction();
+    });
+    expect(result.current.loadError).toBeNull();
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.loadError).toBeNull();
+  });
 });

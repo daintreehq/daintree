@@ -74,6 +74,10 @@ export function useTabLoad(options: UseTabLoadOptions): UseTabLoadResult {
 
     const timer = setTimeout(() => {
       if (cancelled || myEpoch !== loadEpochRef.current) return;
+      // Invalidate this attempt's epoch so the slow original promise can't
+      // later resolve and silently clear the timeout banner. A subsequent
+      // retry bumps the epoch again to win against any in-flight load.
+      loadEpochRef.current = myEpoch + 1;
       setLoadError(timeoutMessageRef.current);
       setIsLoading(false);
     }, timeoutMs);
