@@ -272,13 +272,13 @@ describe("gridPanelPropsAreEqual", () => {
     const prev = baseProps({
       terminal: {
         ...baseTerminal,
-        browserHistory: { entries: [], currentIndex: -1 },
+        browserHistory: { past: [], present: "http://a", future: [] },
       } as TerminalInstance,
     });
     const next = baseProps({
       terminal: {
         ...baseTerminal,
-        browserHistory: { entries: [{ url: "http://x" }], currentIndex: 0 },
+        browserHistory: { past: ["http://a"], present: "http://x", future: [] },
       } as TerminalInstance,
     });
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
@@ -354,7 +354,7 @@ describe("gridPanelPropsAreEqual", () => {
         agentState: "idle",
         runtimeStatus: "running",
         agentLaunchFlags: ["--print"],
-        browserHistory: { entries: [], currentIndex: -1 },
+        browserHistory: { past: [], present: "http://a", future: [] },
         browserZoom: 1.0,
       } as TerminalInstance;
 
@@ -389,7 +389,7 @@ describe("gridPanelPropsAreEqual", () => {
 });
 
 function mutateTerminalField(terminal: TerminalInstance, key: string): TerminalInstance {
-  const current = (terminal as Record<string, unknown>)[key];
+  const current = (terminal as unknown as Record<string, unknown>)[key];
   let mutated: unknown;
   if (typeof current === "string") mutated = `${current}__drift`;
   else if (typeof current === "number") mutated = current + 1;
