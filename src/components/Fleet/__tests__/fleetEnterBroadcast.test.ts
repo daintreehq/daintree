@@ -92,7 +92,10 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
   });
 
   it("announces singular form when exactly one target succeeds", async () => {
-    // Two armed; only one fires successfully (dead pty rejects).
+    // Two armed; only one fires successfully (dead pty rejects with EPIPE,
+    // which is a permanent classification — the announcer calls it out as
+    // "unreachable" so the user can tell auto-disarmed targets apart from
+    // retryable transient failures).
     submitMock.mockImplementation(async (id) => {
       if (id === "b") throw new Error("EPIPE");
     });
@@ -100,13 +103,22 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
     const onSent = vi.fn();
     tryFleetBroadcastFromEditor("a", "hello", onSent);
     await flush();
-    // Partial failure path — N=1 success, 1 failure.
-    expect(useAnnouncerStore.getState().polite?.msg).toBe("Broadcast sent to 1 — 1 failed");
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Broadcast sent to 1 — 1 unreachable");
   });
 
-  it("announces partial failure with success/failure split", async () => {
+  it("announces partial failure with success/failure split (permanent → unreachable)", async () => {
     submitMock.mockImplementation(async (id) => {
       if (id === "c") throw new Error("EPIPE");
+    });
+    arm(["a", "b", "c"]);
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    await flush();
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Broadcast sent to 2 — 1 unreachable");
+  });
+
+  it("announces transient-only failures as 'N failed' (retry chip is the recovery)", async () => {
+    submitMock.mockImplementation(async (id) => {
+      if (id === "c") throw new Error("ENOSPC: disk full");
     });
     arm(["a", "b", "c"]);
     tryFleetBroadcastFromEditor("a", "hello", vi.fn());
@@ -148,11 +160,24 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
     }
   });
 
-  it("announces partial cancel with both sent and failed counts", async () => {
-    // Cancel after a non-batched fan-out where one target rejected: result
-    // arrives with cancelled: true, successCount: 1, failureCount: 1. The
-    // user needs to see both numbers — silently dropping the failure count
-    // would hide a real outcome.
+  it("announces mixed-kind failure split as 'N retryable, M unreachable'", async () => {
+    submitMock.mockImplementation(async (id) => {
+      if (id === "c") throw new Error("ENOSPC: disk full");
+      if (id === "d") throw new Error("EPIPE");
+    });
+    arm(["a", "b", "c", "d"]);
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    await flush();
+    expect(useAnnouncerStore.getState().polite?.msg).toBe(
+      "Broadcast sent to 2 — 1 retryable, 1 unreachable"
+    );
+  });
+
+  it("announces partial cancel with split when permanent failures occurred", async () => {
+    // Cancel after a non-batched fan-out where one target rejected with
+    // EPIPE: result arrives with cancelled: true, successCount: 1,
+    // permanentlyFailedIds: 1. User needs to see both numbers AND the
+    // unreachable distinction so they know the dead target was disarmed.
     arm(["a", "b"]);
     const pending: Array<() => void> = [];
     submitMock.mockImplementation(
@@ -172,7 +197,75 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
     for (const fn of pending) fn();
     pending.length = 0;
     for (let i = 0; i < 10; i += 1) await flush();
-    expect(useAnnouncerStore.getState().polite?.msg).toBe("Broadcast cancelled — 1 sent, 1 failed");
+    expect(useAnnouncerStore.getState().polite?.msg).toBe(
+      "Broadcast cancelled — 1 sent, 1 unreachable"
+    );
+  });
+});
+
+describe("tryFleetBroadcastFromEditor — permanent failure auto-disarm (#8706)", () => {
+  it("auto-disarms targets whose submit rejects with a permanent errno", async () => {
+    // Dead PTY: submit rejection carries EPIPE → fleet must disarm the
+    // target so the next broadcast doesn't fire into the gone pipe.
+    submitMock.mockImplementation(async (id) => {
+      if (id === "dead") throw new Error("EPIPE: terminal dead has no live PTY (exited)");
+    });
+    arm(["alive", "dead"]);
+    expect(useFleetArmingStore.getState().armedIds.has("dead")).toBe(true);
+    tryFleetBroadcastFromEditor("alive", "hello", vi.fn());
+    await flush();
+    expect(useFleetArmingStore.getState().armedIds.has("dead")).toBe(false);
+    // Alive target stays armed.
+    expect(useFleetArmingStore.getState().armedIds.has("alive")).toBe(true);
+  });
+
+  it("does NOT record a failure chip for permanently-failed targets (would auto-dismiss anyway)", async () => {
+    submitMock.mockImplementation(async (id) => {
+      if (id === "dead") throw new Error("EPIPE");
+    });
+    arm(["alive", "dead"]);
+    tryFleetBroadcastFromEditor("alive", "hello", vi.fn());
+    await flush();
+    // The dead target was disarmed; no transient chip should exist for it.
+    expect(useFleetFailureStore.getState().failedIds.has("dead")).toBe(false);
+    // No payload retained either — transient set is empty, so there's
+    // nothing for the retry chip to fire on.
+    expect(useFleetFailureStore.getState().payload).toBe(null);
+  });
+
+  it("records a failure chip for transient errors and leaves arming intact", async () => {
+    submitMock.mockImplementation(async (id) => {
+      if (id === "slow") throw new Error("ENOSPC: disk full");
+    });
+    arm(["alive", "slow"]);
+    tryFleetBroadcastFromEditor("alive", "hello", vi.fn());
+    await flush();
+    // Transient → chip recorded so user can retry, arming unchanged.
+    expect(useFleetFailureStore.getState().failedIds.has("slow")).toBe(true);
+    expect(useFleetFailureStore.getState().payload).toBe("hello");
+    expect(useFleetArmingStore.getState().armedIds.has("slow")).toBe(true);
+  });
+
+  it("splits a mixed run: disarms permanent, records transient, keeps fulfilled clean", async () => {
+    submitMock.mockImplementation(async (id) => {
+      if (id === "dead") throw new Error("EPIPE");
+      if (id === "slow") throw new Error("ENOSPC");
+    });
+    arm(["alive", "dead", "slow"]);
+    tryFleetBroadcastFromEditor("alive", "hello", vi.fn());
+    await flush();
+
+    // Permanent → disarmed, no chip.
+    expect(useFleetArmingStore.getState().armedIds.has("dead")).toBe(false);
+    expect(useFleetFailureStore.getState().failedIds.has("dead")).toBe(false);
+
+    // Transient → still armed, chip recorded for retry.
+    expect(useFleetArmingStore.getState().armedIds.has("slow")).toBe(true);
+    expect(useFleetFailureStore.getState().failedIds.has("slow")).toBe(true);
+
+    // Fulfilled → still armed, no chip.
+    expect(useFleetArmingStore.getState().armedIds.has("alive")).toBe(true);
+    expect(useFleetFailureStore.getState().failedIds.has("alive")).toBe(false);
   });
 });
 

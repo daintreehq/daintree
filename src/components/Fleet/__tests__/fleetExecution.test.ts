@@ -109,6 +109,37 @@ describe("broadcastFleetLiteralPaste", () => {
     expect(result.failedIds).toEqual(["t2"]);
   });
 
+  it("classifies rejections by errno token into permanent / transient buckets", async () => {
+    submitMock.mockReset();
+    submitMock.mockImplementation(async (id: string) => {
+      if (id === "dead") throw new Error("EPIPE: terminal dead has no live PTY (exited)");
+      if (id === "slow") throw new Error("ENOSPC: device full");
+    });
+    seedPanels([makeAgent("ok"), makeAgent("dead"), makeAgent("slow")]);
+    const result = await broadcastFleetLiteralPaste("x", ["ok", "dead", "slow"]);
+    expect(result.failedIds.sort()).toEqual(["dead", "slow"]);
+    expect(result.permanentlyFailedIds).toEqual(["dead"]);
+    expect(result.transientlyFailedIds).toEqual(["slow"]);
+    const deadEntry = result.perTarget.find((t) => t.terminalId === "dead");
+    const slowEntry = result.perTarget.find((t) => t.terminalId === "slow");
+    expect(deadEntry?.kind).toBe("permanent");
+    expect(slowEntry?.kind).toBe("transient");
+  });
+
+  it("treats rejections without a recognized errno as transient (retry chip wins over silent disarm)", async () => {
+    // Submit rejections come from many sources (IPC framework, handler
+    // errors). Disarming on unknown would silently drop fleet membership
+    // for an infra blip — leave arming alone and let the user retry.
+    submitMock.mockReset();
+    submitMock.mockImplementation(async (id: string) => {
+      if (id === "mystery") throw new Error("submit blew up for reasons unknown");
+    });
+    seedPanels([makeAgent("ok"), makeAgent("mystery")]);
+    const result = await broadcastFleetLiteralPaste("x", ["ok", "mystery"]);
+    expect(result.transientlyFailedIds).toEqual(["mystery"]);
+    expect(result.permanentlyFailedIds).toEqual([]);
+  });
+
   it("returns an empty result on zero targets", async () => {
     const result = await broadcastFleetLiteralPaste("x");
     expect(submitMock).not.toHaveBeenCalled();
@@ -156,6 +187,25 @@ describe("executeFleetBroadcast", () => {
     expect(result.successCount).toBe(2);
     expect(result.failureCount).toBe(1);
     expect(result.failedIds).toEqual(["dead"]);
+    // EPIPE is a permanent classification — caller can disarm.
+    expect(result.permanentlyFailedIds).toEqual(["dead"]);
+    expect(result.transientlyFailedIds).toEqual([]);
+  });
+
+  it("classifies permanent (EBADF/EPIPE) and transient (ENOSPC) failures into split buckets", async () => {
+    submitMock.mockReset();
+    submitMock.mockImplementation(async (id: string) => {
+      if (id === "gone") throw new Error("EBADF: terminal gone not found");
+      if (id === "full") throw new Error("ENOSPC: disk full");
+    });
+    seedPanels([makeAgent("ok"), makeAgent("gone"), makeAgent("full")]);
+    const result = await executeFleetBroadcast("hello", ["ok", "gone", "full"]);
+    expect(result.permanentlyFailedIds).toEqual(["gone"]);
+    expect(result.transientlyFailedIds).toEqual(["full"]);
+    const goneEntry = result.perTarget.find((t) => t.terminalId === "gone");
+    const fullEntry = result.perTarget.find((t) => t.terminalId === "full");
+    expect(goneEntry?.kind).toBe("permanent");
+    expect(fullEntry?.kind).toBe("transient");
   });
 
   it("batches target fan-out when payload ≥100KB and targets exceed batch size", async () => {

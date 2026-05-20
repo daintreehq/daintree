@@ -6,6 +6,57 @@ import type { RecipeContext } from "@/utils/recipeVariables";
 export const FLEET_BROADCAST_HISTORY_KEY = "fleet-broadcast" as const;
 
 /**
+ * Errno codes that mean the target PTY is permanently gone — the renderer
+ * should auto-disarm so the user isn't typing into a dead pane. Other
+ * failures still surface the failure chip but leave the arming alone.
+ *
+ * Shared by both fleet broadcast paths:
+ *   - Raw-input (`fleetRawInputBroadcast`) reads `result.error.code` from the
+ *     `broadcast-write-result` IPC payload.
+ *   - Structured-submit (`fleetExecution.buildResult` /
+ *     `broadcastFleetLiteralPaste`) extracts the code from the rejection's
+ *     stringified message — Electron's structured-clone serialization strips
+ *     `NodeJS.ErrnoException.code`, so `handleTerminalSubmit` embeds the code
+ *     as a leading `"CODE: …"` token in the thrown error's message.
+ */
+export const PERMANENT_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "EPIPE",
+  "EIO",
+  "EBADF",
+  "ECONNRESET",
+  "ENOTCONN",
+  "ENXIO",
+  "EINVAL",
+]);
+
+/**
+ * Classify a stringified rejection reason from `terminalClient.submit` as a
+ * permanent (dead-PTY) failure or a transient one. Permanent failures
+ * auto-disarm the target; transient failures surface a retryable chip.
+ *
+ * Submit path note: classification leans on the errno token the IPC handler
+ * embeds in the message (`handleTerminalSubmit` prefixes its dead-PTY
+ * AppErrors with `"EBADF: …"` / `"EPIPE: …"` because Electron's
+ * structured-clone error serialization strips `.code`). An unknown reason
+ * is treated as **transient** — submit rejections can come from many
+ * sources (infra hiccup, IPC framework error) where the user's retry is
+ * the right recovery. Wrongly disarming on a transient infra blip would
+ * silently drop fleet membership, which is the worse failure mode here.
+ * Contrast with the raw-input path: a missing `.code` there means a
+ * single keystroke that's not meaningful to replay, so it disarms on
+ * unknown (see `applyFleetBroadcastResult`).
+ */
+export function classifyFleetRejectionReason(
+  reason: string | undefined
+): "permanent" | "transient" {
+  if (!reason) return "transient";
+  for (const code of PERMANENT_FAILURE_CODES) {
+    if (reason.includes(code)) return "permanent";
+  }
+  return "transient";
+}
+
+/**
  * Build a per-project fleet history key so broadcast history doesn't leak
  * across projects. Falls back to the global key when no project is active.
  */

@@ -23,7 +23,21 @@ function plural(count: number, singular: string, pluralForm: string): string {
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
+function describeFailureSplit(permanent: number, transient: number): string {
+  // Both kinds present → call out the user-visible distinction (retryable vs
+  // unreachable) so the user can tell the chip-recoverable cases apart from
+  // the panes we just auto-disarmed. When only one kind is present, the
+  // single "N failed" count suffices.
+  if (permanent > 0 && transient > 0) {
+    return `${transient} retryable, ${permanent} unreachable`;
+  }
+  if (permanent > 0) return `${permanent} unreachable`;
+  return `${transient} failed`;
+}
+
 function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
+  const permanent = result.permanentlyFailedIds.length;
+  const transient = result.transientlyFailedIds.length;
   const skipped =
     result.skippedCount > 0
       ? `, ${plural(result.skippedCount, "terminal", "terminals")} skipped`
@@ -37,12 +51,12 @@ function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
       return "Broadcast cancelled";
     }
     if (result.failureCount > 0) {
-      return `Broadcast cancelled — ${result.successCount} sent, ${result.failureCount} failed${skipped}`;
+      return `Broadcast cancelled — ${result.successCount} sent, ${describeFailureSplit(permanent, transient)}${skipped}`;
     }
     return `Broadcast cancelled — ${result.successCount} sent${skipped}`;
   }
   if (result.failureCount > 0) {
-    return `Broadcast sent to ${result.successCount} — ${result.failureCount} failed`;
+    return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}`;
   }
   return `Broadcast sent to ${plural(result.successCount, "terminal", "terminals")}`;
 }
@@ -98,8 +112,34 @@ export function tryFleetBroadcastFromEditor(
         logWarn("[fleetEnterBroadcast] broadcast had rejections", {
           failureCount: result.failureCount,
           failedIds: result.failedIds,
+          permanentlyFailedIds: result.permanentlyFailedIds,
+          transientlyFailedIds: result.transientlyFailedIds,
         });
-        useFleetFailureStore.getState().recordFailure(text, result.failedIds);
+        if (result.permanentlyFailedIds.length > 0) {
+          // Mirror the raw-input path (`applyFleetBroadcastResult`): a dead
+          // PTY can't take the broadcast, so disarm it rather than leave the
+          // user typing into a gone pane. The failure chip is intentionally
+          // NOT recorded for these — `fleetFailureStore`'s `armedIds`
+          // subscription would auto-dismiss it the moment we disarm, so the
+          // chip would never appear and we'd just thrash the store.
+          const arming = useFleetArmingStore.getState();
+          for (const id of result.permanentlyFailedIds) {
+            arming.disarmId(id);
+            // `executeFleetBroadcast` already calls `clearDirectingState` on
+            // every rejected target, so we don't repeat it here.
+            useFleetFailureStore.getState().dismissId(id);
+          }
+        }
+        if (result.transientlyFailedIds.length > 0) {
+          useFleetFailureStore.getState().recordFailure(text, result.transientlyFailedIds);
+        }
+        // Successful targets in a partial-failure run still clear their
+        // stale failure dots — same logic as the all-success branch below.
+        for (const t of result.perTarget) {
+          if (t.status === "fulfilled") {
+            useFleetFailureStore.getState().dismissId(t.terminalId);
+          }
+        }
       } else if (!result.cancelled) {
         // A successful broadcast clears any stale failure dot on these
         // targets — the partial-failure state from a prior attempt is

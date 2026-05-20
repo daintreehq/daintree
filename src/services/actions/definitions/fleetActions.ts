@@ -340,7 +340,18 @@ export function registerFleetActions(actions: ActionRegistry): void {
       retryInFlight = true;
       try {
         const result = await broadcastFleetLiteralPaste(payload, targets);
-        const stillFailed = new Set(result.failedIds);
+        // Permanent failures (dead PTYs) auto-disarm so a future retry doesn't
+        // keep firing into the same dead pipes. The retry chip clears for them
+        // too — the user already saw them once; surfacing the same id again
+        // after we've stopped including it in broadcasts would be noise.
+        if (result.permanentlyFailedIds.length > 0) {
+          const arming = useFleetArmingStore.getState();
+          for (const id of result.permanentlyFailedIds) {
+            arming.disarmId(id);
+            useFleetFailureStore.getState().dismissId(id);
+          }
+        }
+        const stillFailed = new Set(result.transientlyFailedIds);
         for (const id of targets) {
           if (!stillFailed.has(id)) useFleetFailureStore.getState().dismissId(id);
         }

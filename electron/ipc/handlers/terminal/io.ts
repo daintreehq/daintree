@@ -94,8 +94,37 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       if (typeof id !== "string" || typeof text !== "string") {
         throw new Error("Invalid terminal submit parameters");
       }
+      // PtyClient.submit is fire-and-forget — the pty-host silently no-ops
+      // a write to a terminal that's gone or has already exited (see
+      // `PtyManager.submit` / `TerminalProcess.submit`). That left structured
+      // fleet broadcast (`fleetExecution.executeFleetBroadcast`) seeing all
+      // submits as fulfilled and never disarming dead PTYs (#8706). Probe
+      // liveness here so the renderer gets an actual rejection it can
+      // classify and act on. Errno tokens (`EBADF`, `EPIPE`) lead the
+      // message so the renderer can match them via
+      // `classifyFleetRejectionReason` — Electron's structured-clone error
+      // serialization strips `.code` from `NodeJS.ErrnoException`, so the
+      // code MUST live in the message text to survive the IPC boundary.
+      const info = await ptyClient.getTerminalAsync(id);
+      if (!info) {
+        throw new AppError({
+          code: "NOT_FOUND",
+          message: `EBADF: terminal ${id} not found`,
+          context: { terminalId: id },
+        });
+      }
+      if (info.hasPty === false) {
+        throw new AppError({
+          code: "NOT_FOUND",
+          message: `EPIPE: terminal ${id} has no live PTY (exited)`,
+          context: { terminalId: id },
+        });
+      }
       ptyClient.submit(id, text);
     } catch (error) {
+      // Preserve AppError shape so the renderer sees the embedded errno
+      // token in the message — wrapping would lose the prefix.
+      if (error instanceof AppError) throw error;
       const errorMessage = formatErrorMessage(error, "Failed to submit to terminal");
       throw new Error(`Failed to submit to terminal: ${errorMessage}`);
     }
