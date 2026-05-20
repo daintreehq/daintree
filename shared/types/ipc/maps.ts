@@ -151,7 +151,7 @@ import type {
   DiagnosticsReviewPayload,
   DiagnosticsBundleSavePayload,
 } from "./system.js";
-import type { CloneRepoOptions, CloneRepoResult } from "./gitClone.js";
+import type { CloneRepoOptions, CloneRepoProgressEvent, CloneRepoResult } from "./gitClone.js";
 import type { AppAgentConfig } from "../appAgent.js";
 import type { GeneratedIpcInvokeMap } from "./generated.js";
 import type {
@@ -2024,6 +2024,13 @@ export interface IpcEventMap {
   // Git init events
   "project:init-git-progress": GitInitProgressEvent;
 
+  /**
+   * Git clone progress (main → renderer). Targeted to the originating window
+   * when known, broadcast to all renderers as a fallback. Lifecycle stages and
+   * payload shape live in `shared/types/ipc/gitClone.ts`.
+   */
+  "project:clone-progress": CloneRepoProgressEvent;
+
   // PR detection events
   "pr:detected": PRDetectedPayload;
   "pr:cleared": PRClearedPayload;
@@ -2059,6 +2066,29 @@ export interface IpcEventMap {
    * binary reachability.
    */
   "mcp-server:runtime-state-changed": import("./mcpServer.js").McpRuntimeSnapshot;
+
+  /**
+   * Pinned MCP help-session manifest request. Main process emits this on the
+   * pinned WebContents and awaits a renderer `ipcRenderer.send` reply on
+   * `CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE`, correlated by `requestId`.
+   * The response channel itself is a renderer→main fire-and-forget send and
+   * is tracked in `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
+   */
+  "mcp:get-manifest-request": { requestId: string };
+
+  /**
+   * Pinned MCP help-session action dispatch request. Same request/response
+   * pattern as `mcp:get-manifest-request`; renderer replies via
+   * `CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE`. `context` is the optional
+   * pinned-session `ActionContext` override (#8317).
+   */
+  "mcp:dispatch-action-request": {
+    requestId: string;
+    actionId: string;
+    args: unknown;
+    confirmed: boolean;
+    context?: import("../actions.js").ActionContext;
+  };
 
   /**
    * Targeted push: a help-session tool call was denied because its tier
