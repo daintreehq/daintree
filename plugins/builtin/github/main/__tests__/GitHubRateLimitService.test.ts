@@ -1,10 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { gitHubRateLimitService } from "../GitHubRateLimitService.js";
+import {
+  gitHubRateLimitService,
+  computeThrottleMultiplier,
+  INTERACTIVE_RESERVE,
+  MAX_THROTTLE_MULTIPLIER,
+} from "../GitHubRateLimitService.js";
 import type { GitHubRateLimitPayload } from "../../../../../shared/types/ipc/github.js";
 
 function makeHeaders(entries: Record<string, string>): Headers {
   return new Headers(entries);
+}
+
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
+/** Build a GraphQL `rateLimit`-carrying payload with a reset one hour out. */
+function graphQLData(remaining: number, limit?: number): Record<string, unknown> {
+  return {
+    rateLimit: {
+      cost: 1,
+      remaining,
+      resetAt: new Date(Date.now() + ONE_HOUR_MS).toISOString(),
+      ...(limit !== undefined ? { limit } : {}),
+    },
+  };
 }
 
 describe("GitHubRateLimitService", () => {
@@ -253,12 +272,13 @@ describe("GitHubRateLimitService", () => {
       expect(block.reason).toBe("primary");
     });
 
-    it("does nothing when remaining > 0", () => {
-      gitHubRateLimitService.updateFromGraphQL({
-        rateLimit: { cost: 5, remaining: 4995, resetAt: new Date().toISOString() },
-      });
+    it("does not block on a healthy budget", () => {
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(4995, 5000));
 
       expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
+      const budget = gitHubRateLimitService._getBudgetStateForTests();
+      expect(budget?.engaged).toBe(false);
+      expect(budget?.multiplier).toBe(1);
     });
 
     it("ignores missing rateLimit object", () => {
@@ -276,6 +296,130 @@ describe("GitHubRateLimitService", () => {
         rateLimit: { remaining: "0", resetAt: new Date().toISOString() },
       });
       expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
+    });
+
+    it("hard-blocks at or below the hard-block threshold", () => {
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(30, 5000));
+
+      const block = gitHubRateLimitService.shouldBlockRequest("graphql");
+      expect(block.blocked).toBe(true);
+      expect(block.reason).toBe("primary");
+      expect(gitHubRateLimitService._getBudgetStateForTests()?.multiplier).toBe(
+        MAX_THROTTLE_MULTIPLIER
+      );
+    });
+
+    it("does not throttle without a reported limit", () => {
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(200));
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(200));
+
+      // No `limit` → no depletion ratio → budget state never recorded.
+      expect(gitHubRateLimitService._getBudgetStateForTests()).toBeNull();
+    });
+
+    it("does not engage the throttle on a single depleted reading", () => {
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+
+      const budget = gitHubRateLimitService._getBudgetStateForTests();
+      expect(budget?.engaged).toBe(false);
+      expect(budget?.consecutiveDepletedReadings).toBe(1);
+      expect(budget?.multiplier).toBe(1);
+    });
+
+    it("engages a graduated throttle after two consecutive depleted readings", () => {
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+
+      const budget = gitHubRateLimitService._getBudgetStateForTests();
+      expect(budget?.engaged).toBe(true);
+      // remaining 150, reserve 100 → 50 spendable over ~1h → ~2.4x cadence.
+      expect(budget?.multiplier).toBeGreaterThan(1);
+      expect(budget?.multiplier).toBeLessThanOrEqual(MAX_THROTTLE_MULTIPLIER);
+      expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
+    });
+
+    it("releases the throttle once the budget recovers above the release ratio", () => {
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+      expect(gitHubRateLimitService._getBudgetStateForTests()?.engaged).toBe(true);
+
+      // 3500 / 5000 = 70% — above the 60% release ratio.
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(3500, 5000));
+
+      const budget = gitHubRateLimitService._getBudgetStateForTests();
+      expect(budget?.engaged).toBe(false);
+      expect(budget?.multiplier).toBe(1);
+    });
+
+    it("stays engaged within the hysteresis band (50–60%)", () => {
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+
+      // 2800 / 5000 = 56% — between engage (50%) and release (60%).
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(2800, 5000));
+
+      expect(gitHubRateLimitService._getBudgetStateForTests()?.engaged).toBe(true);
+    });
+
+    it("carries remaining, limit, and throttleMultiplier in the pushed payload", () => {
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+
+      const state = gitHubRateLimitService.getState();
+      expect(state.blocked).toBe(false);
+      expect(state.remaining).toBe(150);
+      expect(state.limit).toBe(5000);
+      expect(state.throttleMultiplier).toBeGreaterThan(1);
+    });
+
+    it("does not re-notify on a sub-threshold budget reading", () => {
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+      const callsAfterEngage = listener.mock.calls.length;
+
+      // Identical reading — multiplier unchanged, so no fresh notification.
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+
+      expect(listener.mock.calls.length).toBe(callsAfterEngage);
+    });
+  });
+
+  describe("computeThrottleMultiplier()", () => {
+    const now = Date.now();
+
+    it("returns 1 for a healthy budget", () => {
+      expect(computeThrottleMultiplier(4000, 5000, now + ONE_HOUR_MS, now)).toBe(1);
+    });
+
+    it("returns a multiplier above 1 for a depleted budget", () => {
+      // 150 remaining − 100 reserve = 50 spendable over 1h → 72s/poll → 2.4x.
+      const m = computeThrottleMultiplier(150, 5000, now + ONE_HOUR_MS, now);
+      expect(m).toBeCloseTo(2.4, 1);
+    });
+
+    it("returns the max multiplier when the spendable budget is exhausted", () => {
+      expect(computeThrottleMultiplier(INTERACTIVE_RESERVE, 5000, now + ONE_HOUR_MS, now)).toBe(
+        MAX_THROTTLE_MULTIPLIER
+      );
+      expect(computeThrottleMultiplier(40, 5000, now + ONE_HOUR_MS, now)).toBe(
+        MAX_THROTTLE_MULTIPLIER
+      );
+    });
+
+    it("clamps an extreme stretch to the max multiplier", () => {
+      expect(computeThrottleMultiplier(101, 5000, now + 24 * ONE_HOUR_MS, now)).toBe(
+        MAX_THROTTLE_MULTIPLIER
+      );
+    });
+
+    it("returns 1 when the reset is already in the past", () => {
+      expect(computeThrottleMultiplier(150, 5000, now - 1000, now)).toBe(1);
+    });
+
+    it("returns 1 for invalid inputs", () => {
+      expect(computeThrottleMultiplier(Number.NaN, 5000, now + ONE_HOUR_MS, now)).toBe(1);
+      expect(computeThrottleMultiplier(150, 0, now + ONE_HOUR_MS, now)).toBe(1);
+      expect(computeThrottleMultiplier(150, 5000, Number.NaN, now)).toBe(1);
     });
   });
 

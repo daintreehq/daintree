@@ -32,11 +32,15 @@ import type { RateLimitInfo } from "../../../shared/types/forge.js";
 // two in sync if the projection rule changes.
 function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
   if (!payload.blocked) {
-    return { limit: null, remaining: null, resetAt: null };
+    return {
+      limit: payload.limit ?? null,
+      remaining: payload.remaining ?? null,
+      resetAt: null,
+    };
   }
   return {
-    limit: null,
-    remaining: 0,
+    limit: payload.limit ?? null,
+    remaining: payload.remaining ?? 0,
     resetAt: payload.resetAt ?? null,
     ...(payload.kind === "secondary" ? { secondaryThrottled: true } : {}),
   };
