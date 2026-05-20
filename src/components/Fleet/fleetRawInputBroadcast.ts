@@ -137,7 +137,7 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
   for (const result of payload.results) {
     if (result.ok) continue;
     const code = result.error?.code;
-    // Unknown errno → permanent. We can't tell if the target is recoverable,
+    // Missing errno → permanent. We can't tell if the target is recoverable,
     // so the safer default is to disarm rather than keep firing keystrokes.
     if (!code || PERMANENT_FAILURE_CODES.has(code)) {
       permanentlyFailedIds.push(result.id);

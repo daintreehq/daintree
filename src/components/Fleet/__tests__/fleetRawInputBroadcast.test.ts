@@ -403,6 +403,8 @@ describe("applyFleetBroadcastResult", () => {
 
     const arming = useFleetArmingStore.getState();
     expect(arming.armedIds.has("t2")).toBe(true);
+
+    expect(clearDirectingStateMock).not.toHaveBeenCalled();
   });
 
   it("treats failures with no errno code as permanent (defensive default)", () => {
@@ -453,7 +455,7 @@ describe("applyFleetBroadcastResult", () => {
       results: [
         { id: "t1", ok: true },
         { id: "t2", ok: false, error: { code: "EPIPE", message: "broken pipe" } },
-        { id: "t3", ok: false, error: { code: "ENOSPC", message: "no space" } },
+        { id: "t3", ok: false, error: { code: "EAGAIN", message: "would block" } },
         { id: "t4", ok: true },
       ],
     });
@@ -463,6 +465,9 @@ describe("applyFleetBroadcastResult", () => {
     expect(arming.armedIds.has("t3")).toBe(true);
 
     expect(Array.from(useFleetFailureStore.getState().failedIds)).toEqual(["t3"]);
+
+    expect(clearDirectingStateMock).toHaveBeenCalledWith("t2");
+    expect(clearDirectingStateMock).not.toHaveBeenCalledWith("t3");
   });
 
   it("does nothing when every target succeeded", () => {
