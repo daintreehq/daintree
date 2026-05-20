@@ -23,13 +23,39 @@ import {
   clearTokenAndSync,
 } from "../../services/github/index.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
+import type { GitHubRateLimitPayload } from "../../../shared/types/ipc/github.js";
+import type { RateLimitInfo } from "../../../shared/types/forge.js";
+
+// Project a GitHub rate-limit payload onto the provider-agnostic RateLimitInfo
+// shape. Mirrors `toRateLimitInfo` in electron/workspace-host.ts — keep the
+// two in sync if the projection rule changes.
+function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
+  if (!payload.blocked) {
+    return { limit: null, remaining: null, resetAt: null };
+  }
+  return {
+    limit: null,
+    remaining: 0,
+    resetAt: payload.resetAt ?? null,
+    ...(payload.kind === "secondary" ? { secondaryThrottled: true } : {}),
+  };
+}
 
 export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
   // Main-process transport: push rate-limit state changes to every renderer.
+  // The legacy GitHub channel is kept for backward compat; the provider-keyed
+  // forge channel is what `githubClient.onRateLimitChanged` now subscribes to,
+  // so main-process-sourced GitHub blocks (REST 403/429, rate-limit headers)
+  // still reach the renderer after the workspace-host fast-path was removed.
   const unsubscribeRateLimit = gitHubRateLimitService.onStateChange((state) => {
     broadcastToRenderer(CHANNELS.GITHUB_RATE_LIMIT_CHANGED, state);
+    broadcastToRenderer(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+      providerId: BUILTIN_GITHUB_PROVIDER_ID,
+      state: toRateLimitInfo(state),
+    });
   });
   handlers.push(unsubscribeRateLimit);
 

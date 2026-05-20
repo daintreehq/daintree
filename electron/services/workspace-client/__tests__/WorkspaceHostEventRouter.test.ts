@@ -17,12 +17,19 @@ vi.mock("../../events.js", () => ({
   events: { emit: vi.fn() },
 }));
 
-vi.mock("../../github/index.js", () => ({
-  gitHubRateLimitService: { applyRemoteState: vi.fn() },
-}));
-
 import { broadcastToRenderer } from "../../../ipc/utils.js";
 import { events } from "../../events.js";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../../shared/utils/forgeProviderIds.js";
+import type { RateLimitInfo } from "../../../../shared/types/forge.js";
+
+const FAKE_PROVIDER_ID = "acme.gitlab.gitlab";
+
+function forgeRateLimitEvent(
+  providerId: string,
+  state: RateLimitInfo
+): Extract<WorkspaceHostEvent, { type: "forge-rate-limit-changed" }> {
+  return { type: "forge-rate-limit-changed", providerId, state };
+}
 
 function makeEntry(overrides: Partial<ProcessEntry> = {}): ProcessEntry {
   return {
@@ -442,6 +449,173 @@ describe("WorkspaceHostEventRouter", () => {
           repo: "my-project",
         })
       );
+    });
+  });
+
+  describe("forge-rate-limit-changed (provider-agnostic routing)", () => {
+    const blocked: RateLimitInfo = { limit: null, remaining: 0, resetAt: 1_700_000_000_000 };
+    const cleared: RateLimitInfo = { limit: null, remaining: null, resetAt: null };
+
+    it("broadcasts GitHub's state on the forge channel tagged with its providerId", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
+        state: blocked,
+      });
+    });
+
+    it("broadcasts a non-GitHub provider's state on the same channel with its own providerId", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, forgeRateLimitEvent(FAKE_PROVIDER_ID, blocked));
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+        providerId: FAKE_PROVIDER_ID,
+        state: blocked,
+      });
+    });
+
+    it("never calls gitHubRateLimitService — there is no GitHub fast-path", () => {
+      // The router no longer imports gitHubRateLimitService; the only side
+      // effect for a forge rate-limit event is the broadcast asserted above.
+      const entry = makeEntry();
+      router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
+        CHANNELS.FORGE_RATE_LIMIT_CHANGED,
+        expect.objectContaining({ providerId: BUILTIN_GITHUB_PROVIDER_ID })
+      );
+    });
+
+    it("forwards cleared state through the same channel", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, forgeRateLimitEvent(FAKE_PROVIDER_ID, cleared));
+
+      expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+        providerId: FAKE_PROVIDER_ID,
+        state: cleared,
+      });
+    });
+
+    it("suppresses an exhausted-quota block within the credential-change guard window", () => {
+      const now = 10_000_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+      try {
+        const entry = makeEntry();
+        router.updateForgeCredentials(BUILTIN_GITHUB_PROVIDER_ID, {
+          kind: "bearer",
+          value: "tok",
+        });
+        router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+
+        expect(broadcastToRenderer).not.toHaveBeenCalled();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("applies the guard per-provider — a different provider is unaffected", () => {
+      const now = 10_000_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+      try {
+        const entry = makeEntry();
+        router.updateForgeCredentials(BUILTIN_GITHUB_PROVIDER_ID, {
+          kind: "bearer",
+          value: "tok",
+        });
+        // Fake provider had no credential change — its block is not suppressed.
+        router.routeHostEvent(entry, forgeRateLimitEvent(FAKE_PROVIDER_ID, blocked));
+
+        expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+        expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+          providerId: FAKE_PROVIDER_ID,
+          state: blocked,
+        });
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("respects the exact guard-window fence-post (4999 suppress, 5000 pass)", () => {
+      const nowSpy = vi.spyOn(Date, "now");
+      try {
+        nowSpy.mockReturnValue(1_000_000);
+        const entry = makeEntry();
+        router.updateForgeCredentials(BUILTIN_GITHUB_PROVIDER_ID, {
+          kind: "bearer",
+          value: "tok",
+        });
+
+        // 4999ms after the credential change — still inside the window.
+        nowSpy.mockReturnValue(1_004_999);
+        router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+        expect(broadcastToRenderer).not.toHaveBeenCalled();
+
+        // Exactly 5000ms — `delta < GUARD_MS` is false, so it passes.
+        nowSpy.mockReturnValue(1_005_000);
+        router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+        expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("broadcasts the exact ForgeRateLimitChangedPayload shape", () => {
+      const entry = makeEntry();
+      const state: RateLimitInfo = {
+        limit: 5000,
+        remaining: 0,
+        resetAt: 1_700_000_000_000,
+        secondaryThrottled: true,
+      };
+      router.routeHostEvent(entry, forgeRateLimitEvent(FAKE_PROVIDER_ID, state));
+
+      expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+        providerId: FAKE_PROVIDER_ID,
+        state: { limit: 5000, remaining: 0, resetAt: 1_700_000_000_000, secondaryThrottled: true },
+      });
+    });
+
+    it("broadcasts again once the guard window elapses", () => {
+      const nowSpy = vi.spyOn(Date, "now");
+      try {
+        nowSpy.mockReturnValue(10_000_000);
+        const entry = makeEntry();
+        router.updateForgeCredentials(BUILTIN_GITHUB_PROVIDER_ID, {
+          kind: "bearer",
+          value: "tok",
+        });
+        router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+        expect(broadcastToRenderer).not.toHaveBeenCalled();
+
+        // 6s later — past the 5s guard window.
+        nowSpy.mockReturnValue(10_006_000);
+        router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+        expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+  });
+
+  describe("forge-token-health-changed", () => {
+    it("broadcasts provider-keyed token health on the forge channel", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, {
+        type: "forge-token-health-changed",
+        providerId: FAKE_PROVIDER_ID,
+        isUnhealthy: true,
+      });
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, {
+        providerId: FAKE_PROVIDER_ID,
+        isUnhealthy: true,
+      });
     });
   });
 });

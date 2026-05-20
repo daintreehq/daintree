@@ -185,6 +185,7 @@ import type {
   RepoMetadata,
   ListOptions,
 } from "../forge.js";
+import type { ForgeRateLimitChangedPayload, ForgeTokenHealthChangedPayload } from "./forge.js";
 
 export type ChecklistItemId =
   | "openedProject"
@@ -2239,6 +2240,12 @@ export interface IpcEventMap {
 
   // GitHub token health state push (expiry/revocation detection)
   "github:token-health-changed": GitHubTokenHealthPayload;
+
+  // Provider-keyed forge rate-limit / token-health state push. Carries the
+  // canonical providerId so the renderer keys state per provider — GitHub and
+  // any additional forge provider share these channels without cross-talk.
+  "forge:rate-limit-changed": ForgeRateLimitChangedPayload;
+  "forge:token-health-changed": ForgeTokenHealthChangedPayload;
 
   // Combined repo stats + first page of open issues + open PRs push, emitted
   // after every successful poll. Lets renderers prime githubResourceCache

@@ -1374,6 +1374,22 @@ export interface ElectronAPI {
     getPR(payload: { cwd: string; prNumber: number }): Promise<PR | null>;
     /** Fetch the normalized repository metadata roll-up. */
     getRepoMetadata(payload: { cwd: string }): Promise<RepoMetadata>;
+    /**
+     * Provider-keyed rate-limit state push. Every forge provider (GitHub
+     * included) flows through this channel tagged with its canonical
+     * `providerId`; consumers filter to the provider they care about.
+     */
+    onRateLimitChanged(
+      callback: (data: import("./forge.js").ForgeRateLimitChangedPayload) => void
+    ): () => void;
+    /**
+     * Provider-keyed token-health state push. Forward-compat — no provider
+     * implementation emits this yet; GitHub token health still flows over
+     * `github.onTokenHealthChanged`.
+     */
+    onTokenHealthChanged(
+      callback: (data: import("./forge.js").ForgeTokenHealthChangedPayload) => void
+    ): () => void;
   };
   voiceInput: {
     getSettings(): Promise<VoiceInputSettings>;

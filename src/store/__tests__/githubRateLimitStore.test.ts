@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
+import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 
 describe("githubRateLimitStore", () => {
   beforeEach(() => {
-    useGitHubRateLimitStore.setState({ blocked: false, kind: null, resetAt: null });
+    // The shim holds no state of its own — reset the backing provider-keyed
+    // store instead.
+    useForgeProviderHealthStore.setState({ providers: {} });
   });
 
   it("starts in the unblocked state", () => {
@@ -58,6 +61,22 @@ describe("githubRateLimitStore", () => {
     expect(state.blocked).toBe(false);
     expect(state.kind).toBeNull();
     expect(state.resetAt).toBeNull();
+  });
+
+  it("delegates .setState through to the backing keyed store", () => {
+    useGitHubRateLimitStore.setState({ blocked: true, kind: "primary", resetAt: 123 });
+
+    const state = useGitHubRateLimitStore.getState();
+    expect(state.blocked).toBe(true);
+    expect(state.kind).toBe("primary");
+    expect(state.resetAt).toBe(123);
+
+    const slice = useForgeProviderHealthStore.getState().providers["daintree.github.github"];
+    expect(slice).toMatchObject({
+      rateLimitBlocked: true,
+      rateLimitKind: "primary",
+      rateLimitResetAt: 123,
+    });
   });
 
   it("replaces stale state on repeated apply() calls", () => {
