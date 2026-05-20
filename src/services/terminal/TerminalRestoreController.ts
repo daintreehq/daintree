@@ -177,6 +177,11 @@ export class TerminalRestoreController {
     };
 
     const writePromise = managed.writeChain.then(task).catch((err) => {
+      // Fires when writeChain itself was already poisoned (a prior link
+      // rejected). `task` never ran, so its own catch never set the error
+      // channel — surface it here so the scheduler still sees a real
+      // failure instead of silently marking the restore "done".
+      managed.lastScrollbackRestoreError = classifyRestoreError(err);
       logError(`Write chain error for ${id}`, err);
       return false;
     });

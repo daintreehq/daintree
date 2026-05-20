@@ -35,14 +35,17 @@ function getErrorTitle(type: TerminalScrollbackRestoreError["type"]): string {
 }
 
 function getErrorDescription(type: TerminalScrollbackRestoreError["type"], message: string): string {
-  const detail = boundedErrorText(message);
+  // The terminal itself is still operational — only the replayed buffer is
+  // missing — so lead with that reassurance. The raw message is only useful
+  // for the generic "error" case, where the title doesn't already convey
+  // the cause; for "timeout" and "parse" the title is sufficient.
   switch (type) {
     case "timeout":
-      return `Replay didn't finish in time. The terminal still works, but its earlier output isn't visible. ${detail}`;
+      return "Replay didn't finish in time. The terminal still works — only its earlier output is missing.";
     case "parse":
-      return `The saved buffer couldn't be parsed. The terminal still works, but its earlier output isn't visible. ${detail}`;
+      return "The saved buffer couldn't be replayed. The terminal still works — only its earlier output is missing.";
     default:
-      return `The terminal still works, but its earlier output isn't visible. ${detail}`;
+      return `${boundedErrorText(message)} The terminal still works — only its earlier output is missing.`;
   }
 }
 

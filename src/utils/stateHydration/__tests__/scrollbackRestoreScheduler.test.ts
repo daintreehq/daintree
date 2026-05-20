@@ -129,7 +129,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
     expect(setScrollbackRestoreErrorMock).not.toHaveBeenCalled();
   });
 
-  it("doRestore bails when isCurrent returns false (no fetch, state stays pending)", async () => {
+  it("doRestore bails when isCurrent returns false and resets state to 'none' so retry remains possible (#8535 regression)", async () => {
     const managed = fakeManaged("none");
     getMock.mockReturnValue(managed);
 
@@ -142,10 +142,13 @@ describe("scheduleScrollbackRestore — background mode", () => {
     await getScheduledDoRestore()();
 
     expect(fetchAndRestoreMock).not.toHaveBeenCalled();
-    expect(managed.scrollbackRestoreState).toBe("pending");
+    // Without the reset, the scheduler's entry guard
+    // (state !== "none" → continue) would permanently strand the terminal
+    // after the user navigates away and back.
+    expect(managed.scrollbackRestoreState).toBe("none");
   });
 
-  it("doRestore bails when terminal instance is replaced (LRU swap detection)", async () => {
+  it("doRestore bails when terminal instance is replaced (LRU swap detection) and resets state to 'none'", async () => {
     const original = fakeManaged("none");
     getMock.mockReturnValueOnce(original); // initial schedule call
 
@@ -162,7 +165,34 @@ describe("scheduleScrollbackRestore — background mode", () => {
     await getScheduledDoRestore()();
 
     expect(fetchAndRestoreMock).not.toHaveBeenCalled();
-    expect(original.scrollbackRestoreState).toBe("pending");
+    expect(original.scrollbackRestoreState).toBe("none");
+  });
+
+  it("after isCurrent() bail, a subsequent scheduleScrollbackRestore call picks the terminal up again", async () => {
+    const managed = fakeManaged("none");
+    getMock.mockReturnValue(managed);
+
+    // First call: isCurrent → false. doRestore bails and resets state.
+    scheduleScrollbackRestore(
+      [{ terminalId: "t1", label: "x", location: "grid" }],
+      () => false,
+      "background"
+    );
+    await getScheduledDoRestore(0)();
+    expect(managed.scrollbackRestoreState).toBe("none");
+
+    // Second call (user navigated back): isCurrent → true. The entry guard
+    // now passes because state was reset. fetchAndRestore should run.
+    fetchAndRestoreMock.mockResolvedValue(undefined);
+    scheduleScrollbackRestore(
+      [{ terminalId: "t1", label: "x", location: "grid" }],
+      () => true,
+      "background"
+    );
+    expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(2);
+    await getScheduledDoRestore(1)();
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1");
+    expect(managed.scrollbackRestoreState).toBe("done");
   });
 
   it("doRestore bails when scrollbackRestoreState diverged from 'pending' (mid-flight cancel)", async () => {

@@ -28,9 +28,28 @@ export function scheduleScrollbackRestore(
     managed.scrollbackRestoreState = "pending";
 
     const doRestore = async () => {
-      if (!isCurrent()) return;
+      // On bail paths where state is still "pending" (we never started),
+      // reset to "none" so a subsequent scheduleScrollbackRestore call —
+      // e.g. after the user navigates back into a project view — picks the
+      // terminal up again. Without this reset, a project switch mid-flight
+      // permanently strands the terminal in "pending" and scrollback is
+      // never restored. The "state !== 'pending'" bail below is left alone:
+      // there, external code (destroy/done) already set a deliberate state.
+      const resetIfStillPending = () => {
+        if (managed.scrollbackRestoreState === "pending") {
+          managed.scrollbackRestoreState = "none";
+        }
+      };
+
+      if (!isCurrent()) {
+        resetIfStillPending();
+        return;
+      }
       const current = terminalInstanceService.get(task.terminalId);
-      if (!current || current !== managed) return;
+      if (!current || current !== managed) {
+        resetIfStillPending();
+        return;
+      }
       if (managed.scrollbackRestoreState !== "pending") return;
 
       managed.scrollbackRestoreState = "in-progress";
