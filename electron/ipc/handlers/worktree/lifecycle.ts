@@ -5,6 +5,7 @@ import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { WorktreeSetActivePayload, WorktreeDeletePayload } from "../../../types/index.js";
 import type { WorktreeState } from "../../../../shared/types/worktree.js";
+import type { CreateWorktreeOptions } from "../../../../shared/types/git.js";
 import { fileSearchService } from "../../../services/FileSearchService.js";
 import { getSoundService } from "../../../services/getSoundService.js";
 import type * as SoundServiceModule from "../../../services/SoundService.js";
@@ -50,7 +51,7 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleWorktreeCreate = async (payload: {
     rootPath: string;
-    options: { baseBranch: string; newBranch: string; path: string; fromRemote?: boolean };
+    options: CreateWorktreeOptions;
   }): Promise<string> => {
     if (
       !payload ||

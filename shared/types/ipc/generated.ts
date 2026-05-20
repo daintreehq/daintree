@@ -461,17 +461,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "worktree:create": {
-    args: [
-      payload: {
-        rootPath: string;
-        options: {
-          baseBranch: string;
-          newBranch: string;
-          path: string;
-          fromRemote?: boolean | undefined;
-        };
-      },
-    ];
+    args: [payload: { rootPath: string; options: import("../git.js").CreateWorktreeOptions }];
     result: string;
   };
   "worktree:delete": {
