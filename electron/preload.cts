@@ -939,6 +939,9 @@ const api: ElectronAPI = {
 
     onReclaimMemory: (callback: () => void) =>
       _eventBusOn("window:reclaim-memory", () => callback()),
+
+    onAccelerateHibernation: (callback: (data: { level: 1 | 2 }) => void) =>
+      _eventBusOn("window:accelerate-hibernation", callback),
   },
 
   // Files API

@@ -166,6 +166,13 @@ export interface ManagedTerminal {
   // Hibernation: xterm.js Terminal instance disposed to free memory
   isHibernated?: boolean;
   hibernationTimer?: ReturnType<typeof setTimeout>;
+  // Delayed re-check for active-state agent terminals (working/waiting/directing)
+  // that are not yet idle-eligible because their last write was too recent.
+  // Armed once at `lastWriteAt + AGENT_IDLE_SILENCE_MS - now`; on fire it
+  // re-calls scheduleHibernation, which arms the regular hibernationTimer if
+  // the terminal is now eligible. Cleared by cancelHibernation, hibernate, and
+  // tier upgrade alongside hibernationTimer.
+  hibernationEligibilityTimer?: ReturnType<typeof setTimeout>;
   ipcListenerCount: number;
 
   // Visibility-driven WebGL restore debounce. Show path waits ~100ms before
@@ -214,6 +221,27 @@ export const SCROLLBACK_REDUCE_COOLDOWN_MS = 2000;
 export const WRITE_BURST_RECENCY_MS = 2000;
 
 export const HIBERNATION_DELAY_MS = 30_000;
+
+// Silence window after which an agent terminal in an ACTIVE_AGENT_STATE
+// (working/waiting/directing) becomes hibernation-eligible despite a live
+// runtimeAgentId. The fixed permanent exemption used to strand idle agent
+// terminals that had been parked for hours with no output — 5 minutes is the
+// shortest window where it's plausible the agent or downstream tool is truly
+// dormant (long enough to outlast bursty prompt round-trips and long tool
+// invocations, short enough to recover the memory before the user notices).
+// "idle"/"completed"/"exited" are not gated by this — they're treated as
+// resting states and qualify for the normal HIBERNATION_DELAY_MS timer.
+export const AGENT_IDLE_SILENCE_MS = 5 * 60 * 1000;
+
+// Accelerated hibernation delays under OS memory pressure. Tier 1 (mild
+// pressure) drops the BACKGROUND→hibernate delay from HIBERNATION_DELAY_MS to
+// 5 seconds — still enough headroom for an in-flight write burst to drain
+// (WRITE_BURST_RECENCY_MS = 2s) and to absorb tab-flip oscillation. Tier 2
+// (sustained pressure) forces immediate hibernation; pendingWrites/agent-state
+// guards in `hibernate()` still apply so an actively-writing terminal can't be
+// torn down mid-burst.
+export const HIBERNATION_DELAY_PRESSURE_TIER1_MS = 5_000;
+export const HIBERNATION_DELAY_PRESSURE_TIER2_MS = 0;
 
 export const INCREMENTAL_RESTORE_CONFIG = {
   chunkBytes: 32768,

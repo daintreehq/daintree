@@ -199,6 +199,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     cleanup: vi.fn(),
     applyAgentPromotion: applyAgentPromotionMock,
     clearAgentPromotion: clearAgentPromotionMock,
+    accelerateHibernation: vi.fn(),
   },
 }));
 
@@ -209,6 +210,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     onResourceMetrics: vi.fn(() => vi.fn()),
     onReclaimMemory: vi.fn(() => vi.fn()),
     onFdLeakWarning: vi.fn(() => vi.fn()),
+    onAccelerateHibernation: vi.fn(() => vi.fn()),
   },
   terminalConfig: {
     get: vi.fn().mockResolvedValue({}),
