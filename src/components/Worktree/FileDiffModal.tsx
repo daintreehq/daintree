@@ -1,8 +1,34 @@
-import { useEffect, useCallback, useState, useRef } from "react";
+import { Suspense, lazy, useEffect, useCallback, useState, useRef } from "react";
 import type { GitStatus } from "@shared/types";
 import { actionService } from "@/services/ActionService";
-import { FileViewerModal } from "@/components/FileViewer/FileViewerModal";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { useBranchForPath } from "@/hooks/useBranchForPath";
+
+// Lazy boundary cutting the static edge to `react-diff-view` + `refractor`
+// (vendor-editor chunk). `FileChangeList` mounts `FileDiffModal` on the
+// sidebar's first-paint path, so without this seam the diff viewer would
+// land in the eager closure even when no file is open. The chunk is also
+// pre-warmed after first paint via `App.tsx`'s post-paint preload block.
+const LazyFileViewerModal = lazy(() =>
+  import("@/components/FileViewer/FileViewerModal").then((m) => ({
+    default: m.FileViewerModal,
+  }))
+);
+
+// Fallback only renders bones while the modal is actually open. When closed
+// the underlying `AppDialog` returns null anyway, so a null fallback keeps
+// the sidebar from flashing a skeleton on every mount before the chunk warms.
+function FileViewerModalFallback({ isOpen }: { isOpen: boolean }) {
+  if (!isOpen) return null;
+  return (
+    <Skeleton
+      label="Loading file viewer"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-backdrop"
+    >
+      <SkeletonBone className="w-[min(80vw,720px)] h-[min(70vh,480px)]" />
+    </Skeleton>
+  );
+}
 
 export interface FileDiffModalProps {
   isOpen: boolean;
@@ -60,15 +86,17 @@ export function FileDiffModal({
   }, [isOpen, fetchDiff]);
 
   return (
-    <FileViewerModal
-      isOpen={isOpen}
-      filePath={absoluteFilePath}
-      rootPath={worktreePath}
-      branch={branch}
-      diff={diff}
-      defaultMode="diff"
-      onRetryDiff={fetchDiff}
-      onClose={onClose}
-    />
+    <Suspense fallback={<FileViewerModalFallback isOpen={isOpen} />}>
+      <LazyFileViewerModal
+        isOpen={isOpen}
+        filePath={absoluteFilePath}
+        rootPath={worktreePath}
+        branch={branch}
+        diff={diff}
+        defaultMode="diff"
+        onRetryDiff={fetchDiff}
+        onClose={onClose}
+      />
+    </Suspense>
   );
 }
