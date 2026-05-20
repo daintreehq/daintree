@@ -74,6 +74,26 @@ function makeMetric(type: string, privateMb: number): Electron.ProcessMetric {
   } as unknown as Electron.ProcessMetric;
 }
 
+// Simulates the actual macOS/Linux shape where privateBytes is reported as 0
+// (the API field exists but is unpopulated outside Windows). Used to lock in
+// the workingSetSize-only memory signal — a regression to `privateBytes ??
+// workingSetSize` would silently treat these processes as zero-footprint.
+function makeMetricMacShape(type: string, workingSetMb: number): Electron.ProcessMetric {
+  return {
+    pid: Math.floor(Math.random() * 10000),
+    type,
+    creationTime: Date.now(),
+    cpu: { percentCPUUsage: 0, idleWakeupsPerSecond: 0 },
+    memory: {
+      workingSetSize: workingSetMb * 1024,
+      peakWorkingSetSize: workingSetMb * 1024,
+      privateBytes: 0,
+    },
+    sandboxed: false,
+    integrityLevel: "untrusted",
+  } as unknown as Electron.ProcessMetric;
+}
+
 interface MockPtyClient {
   setResourceProfile: Mock;
   getAllTerminalsAsync: Mock;
@@ -869,6 +889,27 @@ describe("ResourceProfileService", () => {
     mockIsOnBatteryPower.mockReturnValue(false);
 
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    service.stop();
+  });
+
+  it("uses workingSetSize when privateBytes is 0 (macOS/Linux shape) — regression for issue #8633", () => {
+    // 8 GB → LOW ~655 MB, HIGH ~1229 MB. Battery (+1) + thermal serious (+1)
+    // alone is score 2 = balanced. With workingSetSize 700 MB > LOW threshold
+    // memory contributes +1 → score 3 = efficiency. If the production code
+    // regressed to `privateBytes ?? workingSetSize`, privateBytes = 0 would
+    // resolve first, memory contributes 0, score stays 2, profile stays balanced.
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    service.start();
+    (service as unknown as { thermalState: string }).thermalState = "serious";
+
+    mockGetAppMetrics.mockReturnValue([makeMetricMacShape("Browser", 700)]);
+
+    // Warmup (2 ticks) + first eval + 90s downgrade hold
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
     service.stop();

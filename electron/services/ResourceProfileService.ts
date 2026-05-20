@@ -595,7 +595,10 @@ export class ResourceProfileService {
       const metrics = app.getAppMetrics();
       let totalPrivateMb = 0;
       for (const proc of metrics) {
-        totalPrivateMb += (proc.memory.privateBytes ?? proc.memory.workingSetSize) / 1024;
+        // workingSetSize is the only cross-platform field — privateBytes is
+        // Windows-only and returns 0 (not undefined) on macOS/Linux, so the
+        // previous `?? workingSetSize` fallback silently never fired there.
+        totalPrivateMb += proc.memory.workingSetSize / 1024;
       }
 
       if (totalPrivateMb > this.memoryThresholdHighMb) {
