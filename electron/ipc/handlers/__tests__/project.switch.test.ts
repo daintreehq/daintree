@@ -53,6 +53,10 @@ vi.mock("../../../services/RunCommandDetector.js", () => ({
 const mockGetWindowForWebContents = vi.fn();
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: (...args: unknown[]) => mockGetWindowForWebContents(...args),
+  // broadcastProjectSwitchUpdates → broadcastToRenderer → getAllAppWebContents.
+  // Returning [] keeps the broadcast a no-op in this suite; PROJECT_UPDATED
+  // delivery is covered by projectSwitchBroadcast.test.ts.
+  getAllAppWebContents: vi.fn(() => []),
 }));
 
 vi.mock("../../../window/portDistribution.js", () => ({

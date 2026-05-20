@@ -805,11 +805,11 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
-    actionId: "project.mruCycleOlder",
+    actionId: "project.mruCycleNewer",
     combo: "Cmd+Shift+Alt+=",
     scope: "global",
     priority: 10,
-    description: "Switch project forward",
+    description: "Switch project backward",
     category: "Project",
   },
   {

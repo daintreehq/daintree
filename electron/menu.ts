@@ -1,6 +1,7 @@
 import { Menu, dialog, BrowserWindow, shell, app, webContents } from "electron";
 import { projectStore } from "./services/ProjectStore.js";
 import { CHANNELS } from "./ipc/channels.js";
+import { broadcastProjectSwitchUpdates } from "./ipc/projectSwitchBroadcast.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
 import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
@@ -575,7 +576,14 @@ export async function handleDirectoryOpen(
     const pvm = getProjectViewManager();
     if (pvm) {
       const { view, isNew } = await pvm.switchTo(project.id, project.path);
+      // Capture the outgoing project id before the pointer flips so we can
+      // broadcast its bumped `lastOpened` to every cached view (#8561).
+      const previousProjectId = projectStore.getCurrentProjectId();
       await projectStore.setCurrentProject(project.id);
+      // Mirror the IPC switch path: fan out `project:updated` for both
+      // departing and activated rows so cached views' MRU timestamps stay
+      // fresh; otherwise the next `Cmd+Alt+=` targets the wrong project.
+      broadcastProjectSwitchUpdates(previousProjectId, project.id);
 
       // Re-attach producer ports for cached-view reactivation. The IPC switch
       // handler (projectCrud/switch.ts:activateProjectView) does this in the
