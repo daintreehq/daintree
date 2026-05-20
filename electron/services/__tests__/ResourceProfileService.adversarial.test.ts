@@ -76,11 +76,31 @@ const mockPowerMonitorRemoveListener = powerMonitor.removeListener as unknown as
 
 interface MockPtyClient {
   setResourceProfile: Mock;
+  getAllTerminalsAsync: Mock;
 }
 
 interface MockWorkspaceClient {
   updateMonitorConfig: Mock;
   getAllStatesAsync: Mock;
+}
+
+function makeActiveAgentTerminals(count: number): Array<Record<string, unknown>> {
+  const terminals: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < count; i += 1) {
+    terminals.push({
+      id: `t-${i}`,
+      agentState: "working",
+      detectedAgentId: "claude",
+      isTrashed: false,
+    });
+  }
+  return terminals;
+}
+
+async function flushAsync(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) {
+    await Promise.resolve();
+  }
 }
 
 interface MockHibernationService {
@@ -132,6 +152,7 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
 } {
   const pty: MockPtyClient = {
     setResourceProfile: vi.fn(),
+    getAllTerminalsAsync: vi.fn().mockResolvedValue([]),
   };
   const workspace: MockWorkspaceClient = {
     updateMonitorConfig: vi.fn(),
@@ -228,31 +249,21 @@ describe("ResourceProfileService adversarial", () => {
     service.stop();
   });
 
-  it("ignores an in-flight getAllStatesAsync resolution after stop", async () => {
-    const pendingStates = deferred<Array<{ id: string }>>();
-    const { deps, workspace } = createDeps();
-    workspace.getAllStatesAsync.mockReturnValueOnce(pendingStates.promise);
+  it("ignores an in-flight getAllTerminalsAsync resolution after stop", async () => {
+    const pendingTerminals = deferred<Array<Record<string, unknown>>>();
+    const { deps, pty } = createDeps();
+    pty.getAllTerminalsAsync.mockReturnValueOnce(pendingTerminals.promise);
 
     const service = new ResourceProfileService(deps);
     service.start();
     service.stop();
 
-    pendingStates.resolve([
-      { id: "wt-1" },
-      { id: "wt-2" },
-      { id: "wt-3" },
-      { id: "wt-4" },
-      { id: "wt-5" },
-      { id: "wt-6" },
-      { id: "wt-7" },
-      { id: "wt-8" },
-      { id: "wt-9" },
-    ]);
-    await pendingStates.promise;
+    pendingTerminals.resolve(makeActiveAgentTerminals(20));
+    await pendingTerminals.promise;
     await Promise.resolve();
 
-    const internals = service as unknown as { cachedWorktreeCount: number };
-    expect(internals.cachedWorktreeCount).toBe(0);
+    const internals = service as unknown as { cachedActiveAgentCount: number };
+    expect(internals.cachedActiveAgentCount).toBe(0);
   });
 
   it("clears pending evaluation timers on stop", () => {
@@ -274,18 +285,20 @@ describe("ResourceProfileService adversarial", () => {
     expect(broadcastToRenderer).not.toHaveBeenCalled();
   });
 
-  it("prefers the most constrained profile when memory and worktree pressure spike together", () => {
-    const { deps } = createDeps();
+  it("prefers the most constrained profile when memory and fleet pressure spike together", async () => {
+    const { deps, pty } = createDeps();
+    pty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(9));
     const service = new ResourceProfileService(deps);
 
-    service.setWorktreeCount(9);
     service.start();
+    await flushAsync();
 
     mockGetAppMetrics.mockReturnValue([makeMetric(1300)]);
     mockIsOnBatteryPower.mockReturnValue(false);
 
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
 
+    // HIGH memory (+2) + 9 agents (+1 at FLEET_COUNT_HIGH) = 3 => efficiency
     expect(service.getProfile()).toBe("efficiency");
     service.stop();
   });
@@ -331,15 +344,16 @@ describe("ResourceProfileService adversarial", () => {
     service.stop();
   });
 
-  it("thermal and speed-limit signals combine with worktree count for efficiency", () => {
-    const { deps } = createDeps();
+  it("thermal and speed-limit signals combine with active-agent count for efficiency", async () => {
+    const { deps, pty } = createDeps();
+    pty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(9));
     const service = new ResourceProfileService(deps);
 
-    service.setWorktreeCount(9);
     mockIsOnBatteryPower.mockReturnValue(true);
     service.start();
+    await flushAsync();
 
-    // Low memory (0) + battery (+1) + thermal serious (+1) + worktrees (+1) = 3 => efficiency
+    // Low memory (0) + battery (+1) + thermal serious (+1) + 9 agents (+1) = 3 => efficiency
     mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
     (service as unknown as { thermalState: string }).thermalState = "serious";
 
@@ -672,13 +686,13 @@ describe("ResourceProfileService adversarial", () => {
       service.stop();
     });
 
-    it("escalation skips refreshWorktreeCount", async () => {
-      const { deps, workspace } = createDeps();
+    it("escalation skips refreshFleetState", async () => {
+      const { deps, pty } = createDeps();
       const service = new ResourceProfileService(deps);
       service.start();
 
-      // start() invokes refreshWorktreeCount once unconditionally.
-      const initialCalls = workspace.getAllStatesAsync.mock.calls.length;
+      // start() invokes refreshFleetState once unconditionally.
+      const initialCalls = pty.getAllTerminalsAsync.mock.calls.length;
 
       // Enter degraded.
       setLag(300, 0.85);
@@ -690,9 +704,9 @@ describe("ResourceProfileService adversarial", () => {
       vi.advanceTimersByTime(5_000);
       expect((service as unknown as { lagEscalatedActive: boolean }).lagEscalatedActive).toBe(true);
 
-      // The next 30s eval should NOT call refreshWorktreeCount.
+      // The next 30s eval should NOT call refreshFleetState (no new IPC fetch).
       vi.advanceTimersByTime(30_000);
-      expect(workspace.getAllStatesAsync).toHaveBeenCalledTimes(initialCalls);
+      expect(pty.getAllTerminalsAsync).toHaveBeenCalledTimes(initialCalls);
 
       service.stop();
     });
@@ -1013,6 +1027,194 @@ describe("ResourceProfileService adversarial", () => {
       };
       expect(internals.lagInterval).toBeNull();
       expect(internals.lagHistogram).toBeNull();
+    });
+  });
+
+  describe("active-agent count filtering", () => {
+    it("counts terminals across all ACTIVE_AGENT_STATES (working, waiting, directing)", async () => {
+      const { deps, pty } = createDeps();
+      pty.getAllTerminalsAsync.mockResolvedValue([
+        { id: "a", agentState: "working", detectedAgentId: "claude" },
+        { id: "b", agentState: "waiting", detectedAgentId: "gemini" },
+        { id: "c", agentState: "directing", detectedAgentId: "claude" },
+        { id: "d", agentState: "working", detectedAgentId: "codex" },
+        { id: "e", agentState: "waiting", detectedAgentId: "claude" },
+        { id: "f", agentState: "directing", detectedAgentId: "claude" },
+        { id: "g", agentState: "working", detectedAgentId: "claude" },
+        { id: "h", agentState: "working", detectedAgentId: "claude" },
+      ]);
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+
+      // 8 active agents → +1; no other pressure → balanced
+      mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("balanced");
+
+      service.stop();
+    });
+
+    it("accepts launchAgentId before runtime detection ever fired", async () => {
+      const { deps, pty } = createDeps();
+      // Cold-launched agents before first state-machine detection. Identity
+      // comes from launchAgentId; everDetectedAgent is undefined (false-ish).
+      pty.getAllTerminalsAsync.mockResolvedValue(
+        Array.from({ length: 24 }, (_, i) => ({
+          id: `launch-${i}`,
+          agentState: "working",
+          launchAgentId: "claude",
+        }))
+      );
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+
+      // 24 agents alone (+3) → efficiency
+      mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      service.stop();
+    });
+
+    it("excludes terminals whose agent exited (everDetectedAgent=true, no detectedAgentId)", async () => {
+      const { deps, pty } = createDeps();
+      // Residual shell after agent exit: everDetectedAgent sticky, detectedAgentId cleared.
+      // These would falsely inflate the fleet count if not filtered.
+      pty.getAllTerminalsAsync.mockResolvedValue(
+        Array.from({ length: 24 }, (_, i) => ({
+          id: `exit-${i}`,
+          agentState: "working",
+          launchAgentId: "claude",
+          everDetectedAgent: true,
+          // no detectedAgentId
+        }))
+      );
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+
+      mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      // Zero qualifying agents → performance (after upgrade hold)
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("performance");
+
+      service.stop();
+    });
+
+    it("resets fleet count to 0 when PtyClient returns [] under IPC failure", async () => {
+      // Documents the real production behavior: PtyClient.getAllTerminalsAsync
+      // catches its own IPC failures and resolves [], so the service's cache
+      // resets to 0. The 90s upgrade hold prevents transient drops from
+      // immediately upgrading the profile.
+      const { deps, pty } = createDeps();
+      pty.getAllTerminalsAsync.mockResolvedValueOnce(makeActiveAgentTerminals(24));
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+      expect(
+        (service as unknown as { cachedActiveAgentCount: number }).cachedActiveAgentCount
+      ).toBe(24);
+
+      // Subsequent refreshes fail in the PtyClient layer — surfaced as [].
+      pty.getAllTerminalsAsync.mockResolvedValue([]);
+
+      vi.advanceTimersByTime(30_000);
+      await flushAsync();
+      expect(
+        (service as unknown as { cachedActiveAgentCount: number }).cachedActiveAgentCount
+      ).toBe(0);
+
+      service.stop();
+    });
+
+    it("excludes terminals with hasPty=false from the active-agent count", async () => {
+      const { deps, pty } = createDeps();
+      // 24 terminals that look 'live' by every other signal but their PTY exited.
+      // ProjectStatsService applies the same hasPty filter; without it the
+      // service would lock to efficiency indefinitely on a fleet that exited
+      // without being trashed.
+      pty.getAllTerminalsAsync.mockResolvedValue(
+        Array.from({ length: 24 }, (_, i) => ({
+          id: `orphan-${i}`,
+          agentState: "working",
+          detectedAgentId: "claude",
+          hasPty: false,
+        }))
+      );
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+
+      mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("performance");
+
+      service.stop();
+    });
+
+    it("ignores a stale getAllTerminalsAsync result from a previous lifecycle", async () => {
+      const pendingTerminals = deferred<Array<Record<string, unknown>>>();
+      const { deps, pty } = createDeps();
+      // The very first call (during the first start()) is the slow one.
+      pty.getAllTerminalsAsync.mockReturnValueOnce(pendingTerminals.promise);
+      // Calls after that resolve immediately with [] (fresh lifecycle: no fleet).
+      pty.getAllTerminalsAsync.mockResolvedValue([]);
+
+      const service = new ResourceProfileService(deps);
+      service.start();
+      service.stop();
+      service.start();
+      // Drain the fresh-lifecycle refresh to set cachedActiveAgentCount = 0.
+      await flushAsync();
+
+      // The slow promise from lifecycle #1 finally resolves with a huge fleet.
+      // Without the generation guard, this would write 24 into the new
+      // lifecycle's cache.
+      pendingTerminals.resolve(makeActiveAgentTerminals(24));
+      await pendingTerminals.promise;
+      await flushAsync();
+
+      const internals = service as unknown as { cachedActiveAgentCount: number };
+      expect(internals.cachedActiveAgentCount).toBe(0);
+
+      service.stop();
+    });
+
+    it("zeros cachedActiveAgentCount on restart even if the prior refresh succeeded", async () => {
+      const { deps, pty } = createDeps();
+      pty.getAllTerminalsAsync.mockResolvedValueOnce(makeActiveAgentTerminals(24));
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+      expect(
+        (service as unknown as { cachedActiveAgentCount: number }).cachedActiveAgentCount
+      ).toBe(24);
+
+      // Stop, then keep the next refresh deferred so it can't immediately
+      // overwrite the cache. The restart itself must reset the count.
+      service.stop();
+      const pending = deferred<Array<Record<string, unknown>>>();
+      pty.getAllTerminalsAsync.mockReturnValue(pending.promise);
+
+      service.start();
+      // No flushAsync — the new refresh hasn't resolved yet. The reset must
+      // come from start() itself, not from the refresh result.
+      expect(
+        (service as unknown as { cachedActiveAgentCount: number }).cachedActiveAgentCount
+      ).toBe(0);
+
+      pending.resolve([]);
+      service.stop();
     });
   });
 });
