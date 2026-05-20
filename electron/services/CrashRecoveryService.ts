@@ -260,10 +260,17 @@ export class CrashRecoveryService {
         // the crashed-* file gives the full pre-crash terminal list again.
         const appState = { ...(snapshot.appState as Record<string, unknown>) };
         if (Array.isArray(appState.terminals)) {
+          const originalTerminals = appState.terminals as Array<{ id: string }>;
           const idSet = new Set(panelIds);
-          appState.terminals = (appState.terminals as Array<{ id: string }>).filter((t) =>
-            idSet.has(t.id)
-          );
+          const filtered = originalTerminals.filter((t) => idSet.has(t.id));
+          // Stale or typo'd panel IDs would otherwise empty the filter and
+          // succeed-then-unlink the crashed-* file, dropping the recovery
+          // source the user might still want. Return false so they can
+          // retry with the correct IDs or no filter at all.
+          if (filtered.length === 0 && originalTerminals.length > 0) {
+            return false;
+          }
+          appState.terminals = filtered;
         }
         snapshot = { ...snapshot, appState };
       }
@@ -341,13 +348,15 @@ export class CrashRecoveryService {
         return null;
       }
 
-      this.deleteMarker();
-
-      // Move the live backup aside before any other code path (notably
-      // startBackupTimer in this new session) can overwrite it. The renamed
-      // file becomes the durable source of truth for restoreBackup and
-      // extractPanelSummaries — no in-memory cache, no race.
+      // Move the live backup aside BEFORE deleting the marker. A kill
+      // between the two operations would otherwise wipe the marker (and
+      // skip crash detection on the next launch) while session-state.json
+      // is still present and recoverable. preserveBackupForRecovery is
+      // idempotent — if a crashed-{sessionStartMs}.json already exists
+      // from a partially-completed prior attempt it is reused.
       this.crashedBackupPath = this.preserveBackupForRecovery(marker.sessionStartMs);
+
+      this.deleteMarker();
 
       let backupTimestamp: number | undefined;
       if (this.crashedBackupPath !== null) {
@@ -391,13 +400,18 @@ export class CrashRecoveryService {
    * backup existed.
    */
   private preserveBackupForRecovery(markerSessionStartMs: number): string | null {
-    if (!fs.existsSync(this.backupPath)) return null;
-
     const crashedBackupPath = path.join(
       this.userData,
       BACKUP_DIR,
       `${CRASHED_BACKUP_PREFIX}${markerSessionStartMs}.json`
     );
+
+    // Idempotency: if a prior consumeMarker run completed the rename but
+    // was killed before deleteMarker, the destination is already on disk
+    // and the live backup is gone. Reuse the existing crashed-* file.
+    if (fs.existsSync(crashedBackupPath)) return crashedBackupPath;
+
+    if (!fs.existsSync(this.backupPath)) return null;
 
     try {
       resilientRenameSync(this.backupPath, crashedBackupPath);
@@ -475,20 +489,29 @@ export class CrashRecoveryService {
       const terminals = appState.terminals;
       if (!Array.isArray(terminals)) return [];
 
-      return terminals.map((t: Record<string, unknown>) => ({
-        id: String(t.id ?? ""),
-        kind: String(t.kind ?? "terminal"),
-        title: String(t.title ?? ""),
-        cwd: t.cwd ? String(t.cwd) : undefined,
-        worktreeId: t.worktreeId ? String(t.worktreeId) : undefined,
-        location: (t.location === "dock" ? "dock" : "grid") as "grid" | "dock",
-        isSuspect:
-          typeof t.createdAt === "number"
-            ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
-            : false,
-        agentState: coerceAgentState(t.agentState),
-        lastStateChange: typeof t.lastStateChange === "number" ? t.lastStateChange : undefined,
-      }));
+      // Per-item guard so one malformed entry (null, primitive, missing
+      // fields) cannot drop the entire panel list. Returning fewer
+      // summaries is acceptable; returning none when some were valid is not.
+      const summaries: PanelSummary[] = [];
+      for (const entry of terminals) {
+        if (typeof entry !== "object" || entry === null) continue;
+        const t = entry as Record<string, unknown>;
+        summaries.push({
+          id: String(t.id ?? ""),
+          kind: String(t.kind ?? "terminal"),
+          title: String(t.title ?? ""),
+          cwd: t.cwd ? String(t.cwd) : undefined,
+          worktreeId: t.worktreeId ? String(t.worktreeId) : undefined,
+          location: (t.location === "dock" ? "dock" : "grid") as "grid" | "dock",
+          isSuspect:
+            typeof t.createdAt === "number"
+              ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
+              : false,
+          agentState: coerceAgentState(t.agentState),
+          lastStateChange: typeof t.lastStateChange === "number" ? t.lastStateChange : undefined,
+        });
+      }
+      return summaries;
     } catch {
       return [];
     }

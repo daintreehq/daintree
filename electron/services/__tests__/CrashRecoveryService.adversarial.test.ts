@@ -204,6 +204,108 @@ describe("CrashRecoveryService adversarial", () => {
     expect(pending!.panels![0]).toMatchObject({ id: "agent-1", title: "Pre-Crash" });
   });
 
+  it("PRESERVE_BEFORE_DELETE_MARKER_AVOIDS_LOST_CRASH_DETECTION", () => {
+    // Issue #8681 review finding: if deleteMarker fires before the backup
+    // is preserved, a kill between the two leaves no marker on disk and
+    // the next launch silently skips crash detection. Order must be:
+    // preserve first, then delete. Simulate the kill-after-preserve case
+    // by leaving the crashed-* file from a "prior attempt" on disk; the
+    // second consumeMarker pass must reuse it idempotently.
+    const sessionStartMs = Date.now() - 5_000;
+    fs.writeFileSync(
+      path.join(tmpDir, "running.lock"),
+      JSON.stringify({
+        sessionStartMs,
+        appVersion: "1.0.0",
+        platform: "darwin",
+      })
+    );
+
+    // Pre-existing crashed-* file from a previous (killed) consumeMarker
+    // attempt. session-state.json is absent — already renamed last time.
+    const backupDir = path.join(tmpDir, "backups");
+    fs.mkdirSync(backupDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(backupDir, `session-state.crashed-${sessionStartMs}.json`),
+      JSON.stringify({
+        capturedAt: Date.now(),
+        appState: { terminals: [{ id: "agent-1", kind: "terminal", title: "Survived" }] },
+      })
+    );
+
+    const service = makeService();
+    service.initialize();
+
+    const pending = service.getPendingCrash();
+    expect(pending).not.toBeNull();
+    expect(pending!.hasBackup).toBe(true);
+    expect(pending!.panels!.length).toBe(1);
+    expect(pending!.panels![0]).toMatchObject({ id: "agent-1", title: "Survived" });
+    expect(service.restoreBackup()).toBe(true);
+    expect(storeMock.set).toHaveBeenCalledWith("appState", {
+      terminals: [{ id: "agent-1", kind: "terminal", title: "Survived" }],
+    });
+  });
+
+  it("FILTER_WITH_NO_MATCHES_KEEPS_RECOVERY_SOURCE_FOR_RETRY", () => {
+    // Stale or typo'd panel IDs would otherwise empty the filter, succeed
+    // restoreBackup, and unlink the crashed-* file — silently dropping
+    // the recovery source. Return false instead so a follow-up restore
+    // (without the bad filter) still finds the snapshot.
+    writeBackup(tmpDir, {
+      capturedAt: Date.now(),
+      appState: {
+        terminals: [
+          { id: "a", kind: "terminal", title: "Alpha" },
+          { id: "b", kind: "terminal", title: "Bravo" },
+        ],
+      },
+    });
+    writeMarker(tmpDir);
+
+    const service = makeService();
+    service.initialize();
+
+    expect(service.restoreBackup(["nonexistent"])).toBe(false);
+    expect(storeMock.set).not.toHaveBeenCalled();
+
+    // Retry with no filter — must still see both panels.
+    expect(service.restoreBackup()).toBe(true);
+    expect(storeMock.set).toHaveBeenCalledWith("appState", {
+      terminals: [
+        { id: "a", kind: "terminal", title: "Alpha" },
+        { id: "b", kind: "terminal", title: "Bravo" },
+      ],
+    });
+  });
+
+  it("NULL_TERMINAL_IN_BACKUP_DOES_NOT_DROP_VALID_PANELS", () => {
+    // Issue #8681 review finding: one malformed terminal entry must not
+    // drop all panel summaries. Per-item guard yields the valid subset.
+    writeBackup(tmpDir, {
+      capturedAt: Date.now(),
+      appState: {
+        terminals: [
+          { id: "t1", kind: "terminal", title: "Alpha" },
+          null,
+          "garbage",
+          { id: "t2", kind: "terminal", title: "Bravo" },
+        ],
+      },
+    });
+    writeMarker(tmpDir);
+
+    const service = makeService();
+    service.initialize();
+
+    const pending = service.getPendingCrash();
+    expect(pending).not.toBeNull();
+    expect(pending!.panels).toBeDefined();
+    expect(pending!.panels!.length).toBe(2);
+    expect(pending!.panels![0]).toMatchObject({ id: "t1", title: "Alpha" });
+    expect(pending!.panels![1]).toMatchObject({ id: "t2", title: "Bravo" });
+  });
+
   it("RENAME_FAILURE_FALLS_BACK_TO_COPY_PLUS_UNLINK", () => {
     // Windows antivirus and search indexers can hold session-state.json
     // open long enough that resilientRenameSync exhausts its 500ms retry
