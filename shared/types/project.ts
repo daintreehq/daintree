@@ -133,6 +133,12 @@ export interface PanelSnapshot {
    * when its registration is gone.
    */
   pluginId?: string;
+  /**
+   * Timestamp (ms) of the last user-initiated focus on this panel. Used by
+   * panel restore to promote the most-recently-active panel per worktree to
+   * the priority restore tier.
+   */
+  lastActiveAt?: number;
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 

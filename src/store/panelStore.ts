@@ -162,7 +162,9 @@ export const usePanelStore = create<PanelGridState>()(
     })(set, get, api);
 
     const getActiveWorktreeId = () => useWorktreeSelectionStore.getState().activeWorktreeId;
-    const focusSlice = createTerminalFocusSlice(getTerminals, getActiveWorktreeId)(set, get, api);
+    const focusSlice = createTerminalFocusSlice(getTerminals, getActiveWorktreeId, (id) =>
+      get().stampLastActive(id)
+    )(set, get, api);
     const commandQueueSlice = createTerminalCommandQueueSlice(getTerminal)(set, get, api);
     const mruSlice = createTerminalMruSlice(set, get, api);
     const watchedPanelsSlice = createWatchedPanelsSlice()(set, get, api);
