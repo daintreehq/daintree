@@ -790,7 +790,6 @@ export function WorktreeCard({
                 className={cn(
                   "flex items-center justify-center w-5 h-5 rounded",
                   "border border-divider transition-colors",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
                   isSelected
                     ? "bg-overlay-emphasis text-text-primary"
                     : "bg-daintree-bg/80 text-transparent hover:bg-overlay-subtle"
