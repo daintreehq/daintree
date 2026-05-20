@@ -44,12 +44,6 @@ import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
 import { useHeldShortcutReveal } from "./hooks/useHeldShortcutReveal";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
-import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
-import { SafeModeBanner } from "./components/Recovery/SafeModeBanner";
-import { CloudSyncBanner } from "./components/Recovery/CloudSyncBanner";
-import { GitHubTokenBanner } from "./components/Recovery/GitHubTokenBanner";
-import { HostCrashBanner } from "./components/Recovery/HostCrashBanner";
-import { RestoreConfirmationBanner } from "./components/Recovery/RestoreConfirmationBanner";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
@@ -273,6 +267,48 @@ const LazyGitPullRebaseConfirmDialog = lazy(() =>
   }))
 );
 
+function preloadCrashRecoveryDialog() {
+  return import("./components/Recovery/CrashRecoveryDialog");
+}
+const LazyCrashRecoveryDialog = lazy(() =>
+  preloadCrashRecoveryDialog().then((m) => ({ default: m.CrashRecoveryDialog }))
+);
+
+function preloadSafeModeBanner() {
+  return import("./components/Recovery/SafeModeBanner");
+}
+const LazySafeModeBanner = lazy(() =>
+  preloadSafeModeBanner().then((m) => ({ default: m.SafeModeBanner }))
+);
+
+function preloadRestoreConfirmationBanner() {
+  return import("./components/Recovery/RestoreConfirmationBanner");
+}
+const LazyRestoreConfirmationBanner = lazy(() =>
+  preloadRestoreConfirmationBanner().then((m) => ({ default: m.RestoreConfirmationBanner }))
+);
+
+function preloadGitHubTokenBanner() {
+  return import("./components/Recovery/GitHubTokenBanner");
+}
+const LazyGitHubTokenBanner = lazy(() =>
+  preloadGitHubTokenBanner().then((m) => ({ default: m.GitHubTokenBanner }))
+);
+
+function preloadCloudSyncBanner() {
+  return import("./components/Recovery/CloudSyncBanner");
+}
+const LazyCloudSyncBanner = lazy(() =>
+  preloadCloudSyncBanner().then((m) => ({ default: m.CloudSyncBanner }))
+);
+
+function preloadHostCrashBanner() {
+  return import("./components/Recovery/HostCrashBanner");
+}
+const LazyHostCrashBanner = lazy(() =>
+  preloadHostCrashBanner().then((m) => ({ default: m.HostCrashBanner }))
+);
+
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
@@ -288,7 +324,6 @@ import {
   usePreferencesStore,
 } from "./store";
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
-import "@github-renderer/index";
 import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
@@ -511,6 +546,12 @@ function App() {
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();
       void preloadLogLevelPalette();
+      void preloadSafeModeBanner();
+      void preloadRestoreConfirmationBanner();
+      void preloadGitHubTokenBanner();
+      void preloadCloudSyncBanner();
+      void preloadHostCrashBanner();
+      import("@github-renderer/index").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
     };
@@ -643,12 +684,14 @@ function App() {
   if (crashState.status === "pending") {
     return (
       <div className="h-screen w-screen bg-daintree-bg">
-        <CrashRecoveryDialog
-          crash={crashState.crash}
-          config={crashState.config}
-          onResolve={resolveCrash}
-          onUpdateConfig={updateCrashConfig}
-        />
+        <Suspense fallback={null}>
+          <LazyCrashRecoveryDialog
+            crash={crashState.crash}
+            config={crashState.config}
+            onResolve={resolveCrash}
+            onUpdateConfig={updateCrashConfig}
+          />
+        </Suspense>
       </div>
     );
   }
@@ -695,11 +738,23 @@ function App() {
             disableHoverableContent
           >
             <E2EFaultInjector />
-            {isSafeMode && <SafeModeBanner />}
-            <RestoreConfirmationBanner />
-            <GitHubTokenBanner />
-            <CloudSyncBanner />
-            <HostCrashBanner />
+            {isSafeMode && (
+              <Suspense fallback={null}>
+                <LazySafeModeBanner />
+              </Suspense>
+            )}
+            <Suspense fallback={null}>
+              <LazyRestoreConfirmationBanner />
+            </Suspense>
+            <Suspense fallback={null}>
+              <LazyGitHubTokenBanner />
+            </Suspense>
+            <Suspense fallback={null}>
+              <LazyCloudSyncBanner />
+            </Suspense>
+            <Suspense fallback={null}>
+              <LazyHostCrashBanner />
+            </Suspense>
             <DndProvider>
               <VoiceRecordingAnnouncer />
               <AccessibilityAnnouncer />
