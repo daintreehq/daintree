@@ -276,12 +276,9 @@ describe("ForgeIntegrationsTab source guards", () => {
     source = await fs.readFile(path.resolve(__dirname, "../ForgeIntegrationsTab.tsx"), "utf-8");
   });
 
-  it("gates the remotes loading text on useDeferredLoading + UI_DOHERTY_THRESHOLD", () => {
-    expect(source).toContain("useDeferredLoading");
-    expect(source).toContain("UI_DOHERTY_THRESHOLD");
-    expect(source).toMatch(
-      /showRemotesLoading\s*=\s*useDeferredLoading\(\s*remotesLoading\s*,\s*UI_DOHERTY_THRESHOLD\s*\)/
-    );
+  it("gates the remotes loading text on useDohertyGate", () => {
+    expect(source).toContain("useDohertyGate");
+    expect(source).toMatch(/showRemotesLoading\s*=\s*useDohertyGate\(\s*remotesLoading\s*\)/);
     expect(source).toMatch(/loading=\{showRemotesLoading\}/);
     expect(source).not.toMatch(/loading=\{remotesLoading\}/);
   });

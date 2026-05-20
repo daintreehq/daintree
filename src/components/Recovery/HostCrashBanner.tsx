@@ -5,8 +5,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { logError } from "@/utils/logger";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { HOST_CRASH_RECOVERING_COPY, getHostCrashBannerCopy } from "./recoveryCopy";
 
 function SpinnerIcon({ className, style }: { className?: string; style?: CSSProperties }) {
@@ -23,7 +22,7 @@ export function HostCrashBanner() {
   const backendStatus = usePanelStore((s) => s.backendStatus);
   const lastCrashType = usePanelStore((s) => s.lastCrashType);
   const [isRestarting, setIsRestarting] = useState(false);
-  const recoveringShown = useDeferredLoading(backendStatus === "recovering", UI_DOHERTY_THRESHOLD);
+  const recoveringShown = useDohertyGate(backendStatus === "recovering");
 
   if (backendStatus === "connected") return null;
 

@@ -1,5 +1,4 @@
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 
 interface DevPreviewLoadingStateProps {
@@ -20,7 +19,7 @@ function SkeletonBone({ className }: { className?: string }) {
 }
 
 function FullSkeleton({ phaseLabel, isLoading }: { phaseLabel: string; isLoading: boolean }) {
-  const showPhaseLabel = useDeferredLoading(isLoading, UI_DOHERTY_THRESHOLD);
+  const showPhaseLabel = useDohertyGate(isLoading);
 
   return (
     <div className="relative flex flex-col items-center justify-center h-full bg-daintree-bg px-6">
@@ -67,7 +66,7 @@ function OverlaySkeleton({
   isLoading: boolean;
   onCancel?: () => void;
 }) {
-  const showOverlay = useDeferredLoading(isLoading, UI_DOHERTY_THRESHOLD);
+  const showOverlay = useDohertyGate(isLoading);
 
   if (!showOverlay) return null;
 

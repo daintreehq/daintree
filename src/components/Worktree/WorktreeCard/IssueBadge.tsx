@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { CircleDot, Clock, CloudOff } from "lucide-react";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { useIssueTooltip } from "@/hooks/useGitHubTooltip";
 import { useGitHubBadgeTooltip } from "./hooks/useGitHubBadgeTooltip";
@@ -58,7 +57,7 @@ export function IssueBadge({
   // the store, so this gate only fires on genuine issue-number transitions.
   const prevIssueNumber = useRef<number | undefined>(undefined);
   const isColdTitleGap = !issueTitle && issueNumber !== prevIssueNumber.current;
-  const showColdFallback = useDeferredLoading(isColdTitleGap, UI_DOHERTY_THRESHOLD);
+  const showColdFallback = useDohertyGate(isColdTitleGap);
   useEffect(() => {
     prevIssueNumber.current = issueNumber;
   }, [issueNumber]);

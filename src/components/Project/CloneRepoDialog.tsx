@@ -7,8 +7,7 @@ import { FolderGit2 } from "@/components/icons";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
-import { useDeferredLoading } from "@/hooks";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { validateFolderName } from "@shared/utils/folderName";
 import { isGitHubRemoteUrl } from "@shared/utils/githubUrl";
@@ -207,10 +206,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   // Doherty gate: don't flash the progress box / spinner for a sub-400ms gap
   // before the first git progress event — only reveal it if the wait exceeds
   // the threshold. Once real progress arrives the box stays up regardless.
-  const showConnecting = useDeferredLoading(
-    isCloning && progressEvents.length === 0,
-    UI_DOHERTY_THRESHOLD
-  );
+  const showConnecting = useDohertyGate(isCloning && progressEvents.length === 0);
   const showProgress = showConnecting || progressEvents.length > 0;
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {

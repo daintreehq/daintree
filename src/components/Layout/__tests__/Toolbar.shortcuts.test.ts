@@ -165,18 +165,12 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
   });
 
   describe("copy-tree button polish — issue #8179", () => {
-    it("imports useDeferredLoading from @/hooks", () => {
-      expect(source).toMatch(/useDeferredLoading[\s\S]*?from "@\/hooks"/);
+    it("imports useDohertyGate from @/hooks", () => {
+      expect(source).toMatch(/useDohertyGate[\s\S]*?from "@\/hooks"/);
     });
 
-    it("imports UI_DOHERTY_THRESHOLD from @/lib/animationUtils", () => {
-      expect(source).toContain('import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils"');
-    });
-
-    it("derives showCopyingSpinner via useDeferredLoading at the Doherty threshold", () => {
-      expect(source).toContain(
-        "const showCopyingSpinner = useDeferredLoading(isCopyingTree, UI_DOHERTY_THRESHOLD);"
-      );
+    it("derives showCopyingSpinner via useDohertyGate at the Doherty threshold", () => {
+      expect(source).toContain("const showCopyingSpinner = useDohertyGate(isCopyingTree);");
     });
 
     it("renders the spinner glyph gated on showCopyingSpinner, not raw isCopyingTree", () => {

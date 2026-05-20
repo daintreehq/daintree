@@ -36,8 +36,7 @@ import { useProjectStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useFindInPage } from "@/hooks/useFindInPage";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { logError } from "@/utils/logger";
 
 export interface BrowserPaneProps extends BasePanelProps {
@@ -145,7 +144,7 @@ export function BrowserPane({
 
   const [isLoading, setIsLoading] = useState(true);
   // Doherty 400ms gate: skip loading affordances on fast loads to prevent flicker.
-  const showLoadingOverlay = useDeferredLoading(isLoading, UI_DOHERTY_THRESHOLD);
+  const showLoadingOverlay = useDohertyGate(isLoading);
   const [loadError, setLoadError] = useState<LoadError | null>(null);
   const [blockedNav, setBlockedNav] = useState<{
     url: string;

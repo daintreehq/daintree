@@ -2,8 +2,7 @@ import { useCallback, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { actionService } from "@/services/ActionService";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
+import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 
 interface UpstreamSyncBadgeProps {
@@ -41,7 +40,7 @@ export function UpstreamSyncBadge({
 }: UpstreamSyncBadgeProps) {
   const hasAhead = aheadCount !== undefined && aheadCount > 0;
   const hasBehind = behindCount !== undefined && behindCount > 0;
-  const showPulse = useDeferredLoading(isFetchInFlight, UI_SKELETON_GATE_MS);
+  const showPulse = useSkeletonGate(isFetchInFlight);
 
   const isStale = useMemo(() => {
     if (lastFetchedAt == null || fetchIntervalMs == null) return false;

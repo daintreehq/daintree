@@ -8,8 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
-import { useProjectSwitcherPalette, useDeferredLoading } from "@/hooks";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useProjectSwitcherPalette, useDohertyGate } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "./ProjectSwitcherPalette";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
@@ -34,7 +33,7 @@ export function ProjectSwitcher() {
   const projects = useProjectStore((state) => state.projects);
   const currentProject = useProjectStore((state) => state.currentProject);
   const isLoading = useProjectStore((state) => state.isLoading);
-  const showLoadingSpinner = useDeferredLoading(isLoading, UI_DOHERTY_THRESHOLD);
+  const showLoadingSpinner = useDohertyGate(isLoading);
   const projectSwitcher = useProjectSwitcherPalette();
   const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
   const isDropdownOpen = projectSwitcher.isOpen && projectSwitcher.mode === "dropdown";

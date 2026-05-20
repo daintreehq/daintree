@@ -1,7 +1,6 @@
 import { Search, ExternalLink, Plus, Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
+import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 
 export const RESOURCE_ITEM_HEIGHT_PX = 68;
 export const COMMIT_ITEM_HEIGHT_PX = 64;
@@ -27,7 +26,7 @@ export function GitHubResourceListSkeleton({
   type = "issue",
 }: ResourceListSkeletonProps) {
   const renderCount = normalizeCount(count);
-  const showImmediate = useDeferredLoading(Boolean(immediate), UI_SKELETON_GATE_MS);
+  const showImmediate = useSkeletonGate(Boolean(immediate));
   const pulseClass = showImmediate ? "animate-pulse-immediate" : "animate-pulse-delayed";
 
   const stateTabs =
@@ -160,7 +159,7 @@ export function GitHubResourceRowsSkeleton({ count, immediate }: SkeletonProps) 
 
 export function CommitListSkeleton({ count, immediate }: SkeletonProps) {
   const renderCount = normalizeCount(count);
-  const showImmediate = useDeferredLoading(Boolean(immediate), UI_SKELETON_GATE_MS);
+  const showImmediate = useSkeletonGate(Boolean(immediate));
   const pulseClass = showImmediate ? "animate-pulse-immediate" : "animate-pulse-delayed";
 
   return (

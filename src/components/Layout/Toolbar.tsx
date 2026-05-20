@@ -50,11 +50,10 @@ import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import {
   useAriaKeyshortcuts,
-  useDeferredLoading,
+  useDohertyGate,
   useKeybindingDisplay,
   useShortcutHintHover,
 } from "@/hooks";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useProjectStore } from "@/store/projectStore";
@@ -254,7 +253,7 @@ export function Toolbar({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [treeCopied, setTreeCopied] = useState(false);
   const [isCopyingTree, setIsCopyingTree] = useState(false);
-  const showCopyingSpinner = useDeferredLoading(isCopyingTree, UI_DOHERTY_THRESHOLD);
+  const showCopyingSpinner = useDohertyGate(isCopyingTree);
   const [copyFeedback, setCopyFeedback] = useState<string>("");
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
