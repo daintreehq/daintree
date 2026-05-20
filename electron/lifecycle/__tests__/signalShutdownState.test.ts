@@ -29,7 +29,7 @@ describe("signalShutdownState", () => {
         await import("../signalShutdownState.js");
 
       const callback = vi.fn();
-      const handle = setTimeout(callback, 1000);
+      const handle = setTimeout(callback, 1000) as unknown as ReturnType<typeof setTimeout>;
       setSafetyBeltTimer(handle);
 
       clearSafetyBeltTimer();
@@ -58,7 +58,7 @@ describe("signalShutdownState", () => {
         await import("../signalShutdownState.js");
 
       const callback = vi.fn();
-      const handle = setTimeout(callback, 1000);
+      const handle = setTimeout(callback, 1000) as unknown as ReturnType<typeof setTimeout>;
       setSafetyBeltTimer(handle);
 
       // Simulate the belt firing and nulling itself — subsequent clear is no-op.
