@@ -4,17 +4,15 @@ import { AnimatePresence, m, useReducedMotion } from "framer-motion";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
-import { useEscapeStack } from "@/hooks";
+import { useEscapeStack, useDeferredLoading } from "@/hooks";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import "./fleetRawInputBroadcast";
 import { useFleetEscapeChords } from "./useFleetEscapeChords";
 import { useFleetRibbonFlashes } from "./useFleetRibbonFlashes";
 import { buildConfirmMessage, type FleetConfirmActionId } from "./buildConfirmMessage";
 import { FleetCountChip } from "./FleetCountChip";
 import { SavedFleetsSection } from "./SavedFleetsSection";
-import {
-  FLEET_LARGE_PASTE_BATCH_SIZE,
-  FLEET_PROGRESS_VISIBILITY_THRESHOLD,
-} from "./fleetBroadcast";
+import { FLEET_LARGE_PASTE_BATCH_SIZE } from "./fleetBroadcast";
 import { cancelActiveBroadcast } from "./fleetEnterBroadcast";
 import {
   useFleetArmingStore,
@@ -61,6 +59,7 @@ export function FleetArmingRibbon(): ReactElement | null {
   const progressTotal = useFleetBroadcastProgressStore((s) => s.total);
   const progressFailed = useFleetBroadcastProgressStore((s) => s.failed);
   const progressActive = useFleetBroadcastProgressStore((s) => s.isActive);
+  const showProgress = useDeferredLoading(progressActive, UI_DOHERTY_THRESHOLD);
 
   const [popoverOpen, setPopoverOpen] = useState(false);
   // The selection menu is controlled so a fleet-delete request can close it
@@ -524,7 +523,7 @@ export function FleetArmingRibbon(): ReactElement | null {
             open={popoverOpen}
             onOpenChange={setPopoverOpen}
           />
-          {progressActive && progressTotal >= FLEET_PROGRESS_VISIBILITY_THRESHOLD && (
+          {showProgress && (
             <span
               className="text-[11px] tabular-nums text-daintree-text/70"
               data-testid="fleet-broadcast-progress"
