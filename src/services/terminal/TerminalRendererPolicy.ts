@@ -96,6 +96,19 @@ export class TerminalRendererPolicy {
         managed.tierChangeTimer = undefined;
         managed.pendingTier = undefined;
       }
+      // First apply after mount: `lastAppliedTier` is undefined, so the
+      // backend has not yet received its cadence hint for this terminal. Seed
+      // it now even when the resolved tier already matches the
+      // getRefreshTier() default — otherwise a fleet-demoted initial mount
+      // would skip `setBackendTier` and the PTY host would stay at the
+      // 50ms ActivityMonitor default. Subsequent identical applies are a
+      // no-op because `setBackendTier` itself dedupes (#8596 review).
+      if (managed.lastAppliedTier === undefined) {
+        managed.lastAppliedTier = tier;
+        const backendTier: "active" | "background" =
+          tier === TerminalRefreshTier.BACKGROUND ? "background" : "active";
+        this.setBackendTier(id, backendTier, backendPollingIntervalForTier(tier));
+      }
       return;
     }
 

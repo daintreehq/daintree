@@ -10,14 +10,24 @@ import { logError } from "@/utils/logger";
 import type { TerminalInstance } from "./types";
 
 /**
- * Count panels whose agent is currently in `"working"` state. O(N), called
- * from any slice action that mutates `agentState`, `panelsById`, or `panelIds`.
- * Driven by issue #8596 — the result feeds fleet-aware refresh-tier demotion.
+ * Count grid-visible panels currently in `agentState === "working"`. O(N) over
+ * the panel registry, called from the `selectWorkingGridAgentCount` selector
+ * to feed fleet-aware refresh-tier demotion (issue #8596). Excludes dock,
+ * trash, backgrounded, and explicitly-hidden panels — they don't put visible
+ * pressure on the renderer budget. Derived rather than maintained at
+ * write-time because many listeners (`onAgentExited`, identity reducers,
+ * restart paths) bypass `updateAgentState` and silently desync a counter.
  */
-export function computeWorkingPanelCount(panelsById: Record<string, TerminalInstance>): number {
+export function computeWorkingGridAgentCount(panelsById: Record<string, TerminalInstance>): number {
   let count = 0;
   for (const id in panelsById) {
-    if (panelsById[id]?.agentState === "working") count++;
+    const t = panelsById[id];
+    if (!t) continue;
+    if (t.agentState !== "working") continue;
+    const location = t.location ?? "grid";
+    if (location !== "grid") continue;
+    if (t.isVisible === false) continue;
+    count++;
   }
   return count;
 }

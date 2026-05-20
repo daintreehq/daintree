@@ -413,7 +413,24 @@ function TerminalPaneComponent({
   // Panel kind is always "terminal" for PTY panels; live identity is runtime chrome.
   const kind = "terminal" as const;
   const queueCount = usePanelStore((state) => state.commandQueueCountById[id] ?? 0);
-  const workingPanelCount = usePanelStore((state) => state.workingPanelCount);
+  // Derived per-render so listeners that bypass `updateAgentState` (raw
+  // setState from identity reducers, exit handlers) can't desync a maintained
+  // counter (#8596 review feedback). Scoped to grid-visible panels — dock /
+  // trash / background / explicitly-hidden panels don't contribute to fleet
+  // pressure on the user's screen.
+  const workingPanelCount = usePanelStore((state) => {
+    let count = 0;
+    for (const tid in state.panelsById) {
+      const t = state.panelsById[tid];
+      if (!t) continue;
+      if (t.agentState !== "working") continue;
+      const location = t.location ?? "grid";
+      if (location !== "grid") continue;
+      if (t.isVisible === false) continue;
+      count++;
+    }
+    return count;
+  });
 
   // Live preset color — re-derives from settings whenever the user edits a preset's color
   const presetCustomPresets = useAgentSettingsStore((s) =>

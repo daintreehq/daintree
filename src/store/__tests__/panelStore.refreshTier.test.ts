@@ -347,4 +347,24 @@ describe("getTerminalRefreshTier - fleet-aware demotion (#8596)", () => {
       TerminalRefreshTier.VISIBLE
     );
   });
+
+  it("returns the same tier for a focused non-working agent regardless of workingCount", () => {
+    // Stronger structural check: confirm the fleet guard does not change
+    // behavior for non-working states. With or without fleet pressure, a
+    // focused idle agent must always resolve to FOCUSED via the focus rule.
+    const idleAgent = makeTerminal({
+      kind: "terminal",
+      launchAgentId: "claude",
+      detectedAgentId: "claude",
+      agentState: "idle",
+      hasPty: true,
+      runtimeStatus: "running",
+    });
+    expect(getTerminalRefreshTier(idleAgent, true, { workingCount: 3 })).toBe(
+      TerminalRefreshTier.FOCUSED
+    );
+    expect(getTerminalRefreshTier(idleAgent, true, { workingCount: 0 })).toBe(
+      TerminalRefreshTier.FOCUSED
+    );
+  });
 });

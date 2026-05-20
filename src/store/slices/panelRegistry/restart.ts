@@ -467,15 +467,7 @@ export const createRestartActions = (
         };
         const newById = { ...state.panelsById, [id]: updated };
         saveNormalized(newById, state.panelIds);
-        const wasWorking = t.agentState === "working";
-        const isWorking = updated.agentState === "working";
-        const workingDelta = (isWorking ? 1 : 0) - (wasWorking ? 1 : 0);
-        return {
-          panelsById: newById,
-          ...(workingDelta !== 0
-            ? { workingPanelCount: state.workingPanelCount + workingDelta }
-            : {}),
-        };
+        return { panelsById: newById };
       });
 
       await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });
@@ -953,14 +945,7 @@ export const createRestartActions = (
         };
         const newById = { ...state.panelsById, [id]: updated };
         saveNormalized(newById, state.panelIds);
-        const wasWorking = t.agentState === "working";
-        const workingDelta = wasWorking ? 0 : 1;
-        return {
-          panelsById: newById,
-          ...(workingDelta !== 0
-            ? { workingPanelCount: state.workingPanelCount + workingDelta }
-            : {}),
-        };
+        return { panelsById: newById };
       });
 
       await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });

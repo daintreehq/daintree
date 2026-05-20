@@ -138,6 +138,38 @@ describe("TerminalRendererPolicy", () => {
       // FOCUSED → BURST keeps tier=active and polling=50ms — both unchanged.
       expect(terminalClient.setActivityTier).not.toHaveBeenCalled();
     });
+
+    it("seeds backend polling hint on the first apply even when tier matches default (#8596)", async () => {
+      const { terminalClient } = await import("@/clients");
+
+      // Fleet-demoted initial mount: provider returns VISIBLE (the demoted
+      // resolution) on the very first read, and `lastAppliedTier` is still
+      // undefined. The PTY host's ActivityMonitor defaults to 50ms, so
+      // skipping `setActivityTier` here would defeat the entire 200ms
+      // VISIBLE cadence. The policy must send the hint anyway.
+      mockManagedTerminal.lastAppliedTier = undefined;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.VISIBLE;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.VISIBLE);
+
+      expect(terminalClient.setActivityTier).toHaveBeenCalledWith("test-id", "active", 200);
+      expect(mockManagedTerminal.lastAppliedTier).toBe(TerminalRefreshTier.VISIBLE);
+    });
+
+    it("does not re-send the polling hint on subsequent matching applies (idempotent)", async () => {
+      const { terminalClient } = await import("@/clients");
+      mockManagedTerminal.lastAppliedTier = undefined;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.VISIBLE;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.VISIBLE);
+      vi.clearAllMocks();
+
+      // After the seed, lastAppliedTier === VISIBLE, so a second identical
+      // apply hits the early return and skips IPC.
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.VISIBLE);
+
+      expect(terminalClient.setActivityTier).not.toHaveBeenCalled();
+    });
   });
 
   describe("onPostWake callback", () => {

@@ -1,44 +1,12 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect } from "vitest";
+import { computeWorkingGridAgentCount } from "../helpers";
+import type { TerminalInstance } from "@shared/types";
 
-vi.mock("@/clients", () => ({
-  terminalClient: {
-    spawn: vi.fn(),
-    write: vi.fn(),
-    resize: vi.fn(),
-    kill: vi.fn().mockResolvedValue(undefined),
-    trash: vi.fn().mockResolvedValue(undefined),
-    restore: vi.fn().mockResolvedValue(undefined),
-    onData: vi.fn(),
-    onExit: vi.fn(),
-    onAgentStateChanged: vi.fn(),
-    setActivityTier: vi.fn(),
-  },
-  appClient: { setState: vi.fn().mockResolvedValue(undefined) },
-  projectClient: {
-    getTerminals: vi.fn().mockResolvedValue([]),
-    setTerminals: vi.fn().mockResolvedValue(undefined),
-    setTabGroups: vi.fn().mockResolvedValue(undefined),
-  },
-  agentSettingsClient: { get: vi.fn().mockResolvedValue({}) },
-}));
+// Selector-based fleet workload counter (issue #8596). Derived rather than
+// maintained at write-time so listeners that bypass `updateAgentState`
+// (identity reducers, raw setState, restart catch blocks) can't desync it.
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
-    cleanup: vi.fn(),
-    applyRendererPolicy: vi.fn(),
-    destroy: vi.fn(),
-  },
-}));
-
-const { usePanelStore } = await import("../../../panelStore");
-
-type StoreTerminal = Parameters<typeof usePanelStore.setState>[0] extends infer S
-  ? S extends { panelsById: Record<string, infer T> }
-    ? T
-    : never
-  : never;
-
-function terminal(id: string, overrides: Partial<StoreTerminal> = {}): StoreTerminal {
+function panel(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
   return {
     id,
     kind: "terminal",
@@ -49,114 +17,101 @@ function terminal(id: string, overrides: Partial<StoreTerminal> = {}): StoreTerm
     location: "grid",
     isVisible: true,
     ...overrides,
-  } as StoreTerminal;
+  } as TerminalInstance;
 }
 
-describe("workingPanelCount maintenance (#8596)", () => {
-  beforeEach(async () => {
-    await usePanelStore.getState().reset();
+describe("computeWorkingGridAgentCount (#8596)", () => {
+  it("returns 0 for an empty registry", () => {
+    expect(computeWorkingGridAgentCount({})).toBe(0);
   });
 
-  it("starts at 0 when the store has no panels", () => {
-    expect(usePanelStore.getState().workingPanelCount).toBe(0);
+  it("counts a single working grid panel", () => {
+    expect(
+      computeWorkingGridAgentCount({
+        "t-1": panel("t-1", { agentState: "working" }),
+      })
+    ).toBe(1);
   });
 
-  it("increments when updateAgentState transitions a panel to working", () => {
-    usePanelStore.setState({
-      panelsById: { "t-1": terminal("t-1", { agentState: "idle" }) },
-      panelIds: ["t-1"],
-    });
-
-    usePanelStore.getState().updateAgentState("t-1", "working");
-
-    expect(usePanelStore.getState().workingPanelCount).toBe(1);
+  it("counts multiple working grid panels", () => {
+    expect(
+      computeWorkingGridAgentCount({
+        "t-1": panel("t-1", { agentState: "working" }),
+        "t-2": panel("t-2", { agentState: "working" }),
+        "t-3": panel("t-3", { agentState: "working" }),
+      })
+    ).toBe(3);
   });
 
-  it("decrements when a working panel transitions away from working", () => {
-    usePanelStore.setState({
-      panelsById: { "t-1": terminal("t-1", { agentState: "working" }) },
-      panelIds: ["t-1"],
-      workingPanelCount: 1,
-    });
-
-    usePanelStore.getState().updateAgentState("t-1", "waiting");
-
-    expect(usePanelStore.getState().workingPanelCount).toBe(0);
+  it("excludes non-working panels", () => {
+    expect(
+      computeWorkingGridAgentCount({
+        "t-1": panel("t-1", { agentState: "working" }),
+        "t-2": panel("t-2", { agentState: "idle" }),
+        "t-3": panel("t-3", { agentState: "waiting" }),
+        "t-4": panel("t-4", { agentState: "completed" }),
+        "t-5": panel("t-5", { agentState: "exited" }),
+      })
+    ).toBe(1);
   });
 
-  it("does not change when transitioning between two non-working states", () => {
-    usePanelStore.setState({
-      panelsById: { "t-1": terminal("t-1", { agentState: "idle" }) },
-      panelIds: ["t-1"],
-      workingPanelCount: 0,
-    });
-
-    usePanelStore.getState().updateAgentState("t-1", "waiting");
-
-    expect(usePanelStore.getState().workingPanelCount).toBe(0);
+  it("excludes panels with undefined agentState", () => {
+    expect(
+      computeWorkingGridAgentCount({
+        "t-1": panel("t-1", { agentState: undefined }),
+      })
+    ).toBe(0);
   });
 
-  it("counts multiple working panels independently", () => {
-    usePanelStore.setState({
-      panelsById: {
-        "t-1": terminal("t-1", { agentState: "idle" }),
-        "t-2": terminal("t-2", { agentState: "idle" }),
-        "t-3": terminal("t-3", { agentState: "idle" }),
-      },
-      panelIds: ["t-1", "t-2", "t-3"],
-    });
-
-    usePanelStore.getState().updateAgentState("t-1", "working");
-    usePanelStore.getState().updateAgentState("t-2", "working");
-
-    expect(usePanelStore.getState().workingPanelCount).toBe(2);
-
-    usePanelStore.getState().updateAgentState("t-3", "working");
-    expect(usePanelStore.getState().workingPanelCount).toBe(3);
-
-    usePanelStore.getState().updateAgentState("t-1", "waiting");
-    expect(usePanelStore.getState().workingPanelCount).toBe(2);
+  it("excludes dock-located working panels (not visible on screen)", () => {
+    expect(
+      computeWorkingGridAgentCount({
+        "t-1": panel("t-1", { agentState: "working", location: "grid" }),
+        "t-2": panel("t-2", { agentState: "working", location: "dock" }),
+      })
+    ).toBe(1);
   });
 
-  it("decrements when a working panel is removed", () => {
-    usePanelStore.setState({
-      panelsById: {
-        "t-1": terminal("t-1", { agentState: "working", hasPty: false }),
-        "t-2": terminal("t-2", { agentState: "working", hasPty: false }),
-      },
-      panelIds: ["t-1", "t-2"],
-      workingPanelCount: 2,
-    });
-
-    usePanelStore.getState().removePanel("t-1");
-
-    expect(usePanelStore.getState().workingPanelCount).toBe(1);
+  it("excludes trashed working panels", () => {
+    expect(
+      computeWorkingGridAgentCount({
+        "t-1": panel("t-1", { agentState: "working", location: "grid" }),
+        "t-2": panel("t-2", { agentState: "working", location: "trash" }),
+      })
+    ).toBe(1);
   });
 
-  it("does not change when a non-working panel is removed", () => {
-    usePanelStore.setState({
-      panelsById: {
-        "t-1": terminal("t-1", { agentState: "working", hasPty: false }),
-        "t-2": terminal("t-2", { agentState: "idle", hasPty: false }),
-      },
-      panelIds: ["t-1", "t-2"],
-      workingPanelCount: 1,
-    });
-
-    usePanelStore.getState().removePanel("t-2");
-
-    expect(usePanelStore.getState().workingPanelCount).toBe(1);
+  it("excludes backgrounded working panels", () => {
+    expect(
+      computeWorkingGridAgentCount({
+        "t-1": panel("t-1", { agentState: "working", location: "grid" }),
+        "t-2": panel("t-2", { agentState: "working", location: "background" }),
+      })
+    ).toBe(1);
   });
 
-  it("resets workingPanelCount to 0 on reset()", async () => {
-    usePanelStore.setState({
-      panelsById: { "t-1": terminal("t-1", { agentState: "working", hasPty: false }) },
-      panelIds: ["t-1"],
-      workingPanelCount: 1,
-    });
+  it("excludes explicitly invisible panels", () => {
+    expect(
+      computeWorkingGridAgentCount({
+        "t-1": panel("t-1", { agentState: "working", isVisible: true }),
+        "t-2": panel("t-2", { agentState: "working", isVisible: false }),
+      })
+    ).toBe(1);
+  });
 
-    await usePanelStore.getState().reset();
+  it("treats undefined location as grid (legacy default)", () => {
+    expect(
+      computeWorkingGridAgentCount({
+        "t-1": panel("t-1", { agentState: "working", location: undefined }),
+      })
+    ).toBe(1);
+  });
 
-    expect(usePanelStore.getState().workingPanelCount).toBe(0);
+  it("treats undefined isVisible as visible (legacy default)", () => {
+    expect(
+      computeWorkingGridAgentCount({
+        "t-1": panel("t-1", { agentState: "working", isVisible: undefined }),
+      })
+    ).toBe(1);
   });
 });

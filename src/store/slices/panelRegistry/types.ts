@@ -60,13 +60,6 @@ export interface PanelRegistrySlice {
    * panels with no worktree is the literal "__none__". See issue #7451.
    */
   panelIdsByWorktreeId: Record<string, string[]>;
-  /**
-   * Number of panels currently in `agentState === "working"`. Maintained at
-   * write-time so per-terminal selectors can read fleet workload in O(1)
-   * instead of scanning `panelsById` on every render. See issue #8596 — used
-   * to demote sibling working agents from FOCUSED to VISIBLE.
-   */
-  workingPanelCount: number;
   trashedTerminals: Map<string, TrashedTerminal>;
   backgroundedTerminals: Map<string, BackgroundedTerminal>;
   /** Explicit tab group storage - single source of truth for tab membership and order */

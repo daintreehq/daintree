@@ -455,28 +455,12 @@ export const createAddPanelActions = (
             id
           );
           saveNormalized(newById, state.panelIds);
-          const wasWorking = existing.agentState === "working";
-          const isWorking = preservedTerminal.agentState === "working";
-          const workingDelta = (isWorking ? 1 : 0) - (wasWorking ? 1 : 0);
-          return {
-            panelsById: newById,
-            panelIdsByWorktreeId: newIndex,
-            ...(workingDelta !== 0
-              ? { workingPanelCount: state.workingPanelCount + workingDelta }
-              : {}),
-          };
+          return { panelsById: newById, panelIdsByWorktreeId: newIndex };
         }
         const newById = { ...state.panelsById, [id]: terminal };
         const newIds = [...state.panelIds, id];
         const newIndex = addToWorktreeIndex(state.panelIdsByWorktreeId, terminal.worktreeId, id);
         saveNormalized(newById, newIds);
-        // New agent panels are committed in `agentState === "working"` (the
-        // optimistic spawn placeholder in #5789). Reflect it in the count so
-        // sibling tier demotion picks up the new worker on the same commit.
-        const startsWorking = terminal.agentState === "working";
-        const workingPanelCount = startsWorking
-          ? state.workingPanelCount + 1
-          : state.workingPanelCount;
         // Fold dock activation into this commit so the watchdog effect in
         // `DockPanelOffscreenContainer` cannot observe `activeDockTerminalId`
         // set across a microtask boundary from the panel landing in
@@ -495,7 +479,6 @@ export const createAddPanelActions = (
               panelsById: newById,
               panelIds: newIds,
               panelIdsByWorktreeId: newIndex,
-              ...(startsWorking ? { workingPanelCount } : {}),
             };
           }
           return {
@@ -504,15 +487,9 @@ export const createAddPanelActions = (
             panelIdsByWorktreeId: newIndex,
             activeDockTerminalId: id,
             focusedId: id,
-            ...(startsWorking ? { workingPanelCount } : {}),
           };
         }
-        return {
-          panelsById: newById,
-          panelIds: newIds,
-          panelIdsByWorktreeId: newIndex,
-          ...(startsWorking ? { workingPanelCount } : {}),
-        };
+        return { panelsById: newById, panelIds: newIds, panelIdsByWorktreeId: newIndex };
       });
     }
 

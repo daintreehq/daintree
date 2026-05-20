@@ -17,7 +17,6 @@ import {
   getDefaultTitle,
   removePanelIdsFromTabGroups,
   stopDevPreviewByPanelId,
-  computeWorkingPanelCount,
 } from "./helpers";
 import type { TrashExpiryHelpers } from "./trash";
 import { logError, logWarn } from "@/utils/logger";
@@ -66,13 +65,7 @@ export const createCorePanelActions = (
       );
       const newIds = additions.length > 0 ? [...state.panelIds, ...additions] : state.panelIds;
       saveNormalized(state.panelsById, newIds);
-      const workingPanelCount = computeWorkingPanelCount(state.panelsById);
-      const countChanged = workingPanelCount !== state.workingPanelCount;
-      if (additions.length === 0 && !countChanged) return {};
-      return {
-        ...(additions.length > 0 ? { panelIds: newIds } : {}),
-        ...(countChanged ? { workingPanelCount } : {}),
-      };
+      return additions.length > 0 ? { panelIds: newIds } : {};
     });
   },
 
@@ -135,10 +128,6 @@ export const createCorePanelActions = (
 
       saveNormalized(restById, newIds);
       saveTabGroups(newTabGroups);
-      const workingPanelCount =
-        terminal?.agentState === "working"
-          ? computeWorkingPanelCount(restById)
-          : state.workingPanelCount;
       return {
         panelsById: restById,
         panelIds: newIds,
@@ -146,7 +135,6 @@ export const createCorePanelActions = (
         trashedTerminals: newTrashed,
         backgroundedTerminals: newBackgrounded,
         tabGroups: newTabGroups,
-        workingPanelCount,
       };
     });
 
@@ -199,12 +187,6 @@ export const createCorePanelActions = (
         return state;
       }
 
-      const wasWorking = terminal.agentState === "working";
-      const isWorking = agentState === "working";
-      const workingDelta = (isWorking ? 1 : 0) - (wasWorking ? 1 : 0);
-      const workingPanelCount =
-        workingDelta !== 0 ? state.workingPanelCount + workingDelta : state.workingPanelCount;
-
       return {
         panelsById: {
           ...state.panelsById,
@@ -230,7 +212,6 @@ export const createCorePanelActions = (
                   : terminal.sessionTokens,
           },
         },
-        ...(workingDelta !== 0 ? { workingPanelCount } : {}),
       };
     });
   },
