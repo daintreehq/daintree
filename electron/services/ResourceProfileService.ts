@@ -29,6 +29,7 @@ import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.j
 type ActiveAgentTerminalLike = {
   agentState?: AgentState;
   isTrashed?: boolean;
+  hasPty?: boolean;
   detectedAgentId?: string;
   launchAgentId?: string;
   everDetectedAgent?: boolean;
@@ -117,6 +118,10 @@ export class ResourceProfileService {
   private tickCount = 0;
   private disposed = false;
   private cachedActiveAgentCount = 0;
+  // Monotonic counter; bumped on every start() and refreshFleetState() invocation
+  // so that promises from a previous lifecycle (or out-of-order responses within
+  // one lifecycle) can be detected and dropped without contaminating the cache.
+  private refreshGeneration = 0;
   private thermalState: "unknown" | "nominal" | "fair" | "serious" | "critical" = "unknown";
   private speedLimit = 100;
   private isOnBattery = false;
@@ -197,6 +202,14 @@ export class ResourceProfileService {
     this.tickCount = 0;
     this.candidateProfile = null;
     this.candidateFirstSeenAt = null;
+    // Zero the fleet-count cache so a stop → start cycle does not inherit
+    // pressure from a previous lifecycle's fleet. The first refresh below
+    // re-populates from the live PTY host.
+    this.cachedActiveAgentCount = 0;
+    // Bump the generation so any in-flight promise from the previous lifecycle
+    // (or any earlier refresh in this lifecycle) will see a stale generation
+    // in its .then() and drop its result.
+    this.refreshGeneration += 1;
 
     logInfo("resource-profile-service-started", { profile: this.currentProfile });
 
@@ -424,14 +437,23 @@ export class ResourceProfileService {
     const ptyClient = this.deps.getPtyClient();
     if (!ptyClient) return;
 
+    // Capture the generation at request time. Any later refresh (or a stop →
+    // start cycle) bumps the counter, so when our .then() runs we can detect
+    // that a fresher request is in flight and drop our stale result.
+    this.refreshGeneration += 1;
+    const generation = this.refreshGeneration;
+
     ptyClient
       .getAllTerminalsAsync()
       .then((terminals) => {
         if (this.disposed) return;
+        if (generation !== this.refreshGeneration) return;
         this.cachedActiveAgentCount = this.countActiveAgentTerminals(terminals);
       })
       .catch(() => {
-        // non-critical — use last known count
+        // PtyClient.getAllTerminalsAsync absorbs IPC failures and resolves
+        // with []; this branch only fires for an unexpected throw inside the
+        // .then() above. Leave the cache untouched in that case.
       });
   }
 
@@ -439,6 +461,11 @@ export class ResourceProfileService {
     let count = 0;
     for (const t of terminals) {
       if (t.isTrashed) continue;
+      // Orphaned terminals whose PTY process exited still carry stale agent
+      // metadata. Mirrors ProjectStatsService's per-project active-agent
+      // counter — without this, a fleet that exited without being trashed
+      // would keep the score pinned to `efficiency` forever.
+      if (t.hasPty === false) continue;
       if (!t.agentState || !ACTIVE_AGENT_STATES.has(t.agentState)) continue;
       // Only count terminals with an agent identity. `detectedAgentId` is the
       // strongest signal (runtime-detected). A non-empty `launchAgentId` is

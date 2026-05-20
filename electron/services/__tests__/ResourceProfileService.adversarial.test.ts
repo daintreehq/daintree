@@ -1109,24 +1109,111 @@ describe("ResourceProfileService adversarial", () => {
       service.stop();
     });
 
-    it("retains last-known agent count when getAllTerminalsAsync rejects", async () => {
+    it("resets fleet count to 0 when PtyClient returns [] under IPC failure", async () => {
+      // Documents the real production behavior: PtyClient.getAllTerminalsAsync
+      // catches its own IPC failures and resolves [], so the service's cache
+      // resets to 0. The 90s upgrade hold prevents transient drops from
+      // immediately upgrading the profile.
       const { deps, pty } = createDeps();
       pty.getAllTerminalsAsync.mockResolvedValueOnce(makeActiveAgentTerminals(24));
       const service = new ResourceProfileService(deps);
       service.start();
       await flushAsync();
+      expect(
+        (service as unknown as { cachedActiveAgentCount: number }).cachedActiveAgentCount
+      ).toBe(24);
 
-      // Subsequent refreshes fail.
-      pty.getAllTerminalsAsync.mockRejectedValue(new Error("ipc down"));
+      // Subsequent refreshes fail in the PtyClient layer — surfaced as [].
+      pty.getAllTerminalsAsync.mockResolvedValue([]);
+
+      vi.advanceTimersByTime(30_000);
+      await flushAsync();
+      expect(
+        (service as unknown as { cachedActiveAgentCount: number }).cachedActiveAgentCount
+      ).toBe(0);
+
+      service.stop();
+    });
+
+    it("excludes terminals with hasPty=false from the active-agent count", async () => {
+      const { deps, pty } = createDeps();
+      // 24 terminals that look 'live' by every other signal but their PTY exited.
+      // ProjectStatsService applies the same hasPty filter; without it the
+      // service would lock to efficiency indefinitely on a fleet that exited
+      // without being trashed.
+      pty.getAllTerminalsAsync.mockResolvedValue(
+        Array.from({ length: 24 }, (_, i) => ({
+          id: `orphan-${i}`,
+          agentState: "working",
+          detectedAgentId: "claude",
+          hasPty: false,
+        }))
+      );
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
 
       mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
       mockIsOnBatteryPower.mockReturnValue(false);
 
-      // Should still drive to efficiency because the 24-count was already cached.
-      vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-      await flushAsync();
-      expect(service.getProfile()).toBe("efficiency");
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("performance");
 
+      service.stop();
+    });
+
+    it("ignores a stale getAllTerminalsAsync result from a previous lifecycle", async () => {
+      const pendingTerminals = deferred<Array<Record<string, unknown>>>();
+      const { deps, pty } = createDeps();
+      // The very first call (during the first start()) is the slow one.
+      pty.getAllTerminalsAsync.mockReturnValueOnce(pendingTerminals.promise);
+      // Calls after that resolve immediately with [] (fresh lifecycle: no fleet).
+      pty.getAllTerminalsAsync.mockResolvedValue([]);
+
+      const service = new ResourceProfileService(deps);
+      service.start();
+      service.stop();
+      service.start();
+      // Drain the fresh-lifecycle refresh to set cachedActiveAgentCount = 0.
+      await flushAsync();
+
+      // The slow promise from lifecycle #1 finally resolves with a huge fleet.
+      // Without the generation guard, this would write 24 into the new
+      // lifecycle's cache.
+      pendingTerminals.resolve(makeActiveAgentTerminals(24));
+      await pendingTerminals.promise;
+      await flushAsync();
+
+      const internals = service as unknown as { cachedActiveAgentCount: number };
+      expect(internals.cachedActiveAgentCount).toBe(0);
+
+      service.stop();
+    });
+
+    it("zeros cachedActiveAgentCount on restart even if the prior refresh succeeded", async () => {
+      const { deps, pty } = createDeps();
+      pty.getAllTerminalsAsync.mockResolvedValueOnce(makeActiveAgentTerminals(24));
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+      expect(
+        (service as unknown as { cachedActiveAgentCount: number }).cachedActiveAgentCount
+      ).toBe(24);
+
+      // Stop, then keep the next refresh deferred so it can't immediately
+      // overwrite the cache. The restart itself must reset the count.
+      service.stop();
+      const pending = deferred<Array<Record<string, unknown>>>();
+      pty.getAllTerminalsAsync.mockReturnValue(pending.promise);
+
+      service.start();
+      // No flushAsync — the new refresh hasn't resolved yet. The reset must
+      // come from start() itself, not from the refresh result.
+      expect(
+        (service as unknown as { cachedActiveAgentCount: number }).cachedActiveAgentCount
+      ).toBe(0);
+
+      pending.resolve([]);
       service.stop();
     });
   });

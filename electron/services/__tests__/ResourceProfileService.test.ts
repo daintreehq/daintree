@@ -706,6 +706,25 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
+  it("exactly 8 active agents alone (FLEET_COUNT_HIGH boundary) reach balanced", async () => {
+    const deps = createDeps();
+    const mockPty = deps.getPtyClient() as unknown as MockPtyClient;
+    mockPty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(8));
+    const service = new ResourceProfileService(deps);
+    service.start();
+    await flushAsync();
+
+    // Discriminating: with no other pressure, score 0 → "performance" after
+    // upgrade hold. Adding 8 agents pulls the score to +1 → blocks performance.
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("balanced");
+
+    service.stop();
+  });
+
   it("16 active agents alone reach balanced from performance", async () => {
     const deps = createDeps();
     const mockPty = deps.getPtyClient() as unknown as MockPtyClient;
