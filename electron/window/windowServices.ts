@@ -185,11 +185,11 @@ export async function setupWindowServices(
       if (isSmokeTest) console.error("[SMOKE] CHECK: Renderer did-finish-load — OK");
       markPerformance(PERF_MARKS.RENDERER_READY);
       createAndDistributePorts(win, ctx);
-      // Refresh workspace direct port on reload (preload context is reset).
-      // With early-renderer mode (default), workspaceClient may still be null
-      // on the first did-finish-load — the initial direct-port attach is
-      // performed by the loadProject() path below once the workspace host is
-      // ready.
+      // Re-register the renderer in directPortViews on reload so
+      // sendToEntryWindows continues routing host events to it. With
+      // early-renderer mode (default), workspaceClient may still be null on
+      // the first did-finish-load — the initial registration is performed by
+      // the loadProject() path below once the workspace host is ready.
       const workspaceClient = getWorkspaceClientRef();
       if (workspaceClient) {
         workspaceClient.attachDirectPort(win.id, appWc);
@@ -435,7 +435,8 @@ export async function setupWindowServices(
       await workspaceClient.loadProject(projectPathForWorktrees, win.id);
       console.log("[MAIN] Worktrees loaded");
 
-      // Attach direct MessagePort for workspace events (bypasses main-process relay)
+      // Register the renderer in directPortViews so sendToEntryWindows
+      // routes host events (worktree updates, PR detection, etc.) to it.
       const directPortTarget = opts.initialAppView?.webContents ?? getAppWebContents(win);
       if (directPortTarget && !directPortTarget.isDestroyed()) {
         workspaceClient.attachDirectPort(win.id, directPortTarget);
