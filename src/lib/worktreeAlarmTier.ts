@@ -1,8 +1,8 @@
 import type { CIStatusState } from "@shared/types/forge";
 
-export type AlarmTier = 0 | 1 | 2 | 3 | 4;
+export type AlarmTier = 0 | 1 | 2 | 3;
 
-export type AlarmKind = "none" | "detached" | "behind" | "auth-failed" | "ci-failed";
+export type AlarmKind = "none" | "behind" | "auth-failed" | "ci-failed";
 
 export type AlarmTone = "none" | "warning" | "error";
 
@@ -14,10 +14,18 @@ export interface AlarmDescriptor {
 }
 
 export interface AlarmTierInput {
+  /**
+   * CI roll-up state for the worktree's linked PR. Callers should pass
+   * `undefined` when the PR is closed/declined so a stale `"failure"` value
+   * doesn't surface a phantom alarm on a closed PR.
+   */
   ciState?: CIStatusState;
-  fetchAuthFailed?: boolean;
+  /**
+   * True when the auth-failed treatment is eligible to render — caller must
+   * have applied any provider gate (e.g. GitHub-only) before passing this in.
+   */
+  authFailed?: boolean;
   behindCount?: number;
-  isDetached?: boolean;
 }
 
 const NONE: AlarmDescriptor = { tier: 0, kind: "none", label: "", tone: "none" };
@@ -25,22 +33,20 @@ const NONE: AlarmDescriptor = { tier: 0, kind: "none", label: "", tone: "none" }
 /**
  * Reduce a worktree's alarm-relevant fields to a single salience tier so the
  * collapsed alarm pill and the expanded badge ordering share one source of
- * truth. Only `"failure"` CI maps to the top tier — transient pending/neutral
- * states stay at tier 0 to avoid spatial churn on every push. Inputs are
- * primitives so callers can pin a narrow `useMemo` dep array.
+ * truth. Only `"failure"` CI maps above tier 0 — transient pending/neutral
+ * states stay quiet to avoid spatial churn on every push. Detached HEAD is
+ * deliberately not in the alarm set; `gitStateIndicator` already surfaces it
+ * in the title row, so adding it here would double-label collapsed rows.
  */
 export function computeAlarmTier(input: AlarmTierInput): AlarmDescriptor {
   if (input.ciState === "failure") {
-    return { tier: 4, kind: "ci-failed", label: "CI failed", tone: "error" };
+    return { tier: 3, kind: "ci-failed", label: "CI failed", tone: "error" };
   }
-  if (input.fetchAuthFailed === true) {
-    return { tier: 3, kind: "auth-failed", label: "Auth failed", tone: "warning" };
+  if (input.authFailed === true) {
+    return { tier: 2, kind: "auth-failed", label: "Auth failed", tone: "warning" };
   }
   if ((input.behindCount ?? 0) > 0) {
-    return { tier: 2, kind: "behind", label: "Behind", tone: "warning" };
-  }
-  if (input.isDetached === true) {
-    return { tier: 1, kind: "detached", label: "Detached", tone: "warning" };
+    return { tier: 1, kind: "behind", label: "Behind", tone: "warning" };
   }
   return NONE;
 }

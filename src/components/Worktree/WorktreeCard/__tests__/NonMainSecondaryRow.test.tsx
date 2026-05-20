@@ -148,10 +148,14 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
     const order = Array.from(container.querySelectorAll("[data-testid]")).map((el) =>
       el.getAttribute("data-testid")
     );
-    expect(order.indexOf("pr-badge")).toBeLessThan(order.indexOf("upstream-sync-badge"));
+    const prIdx = order.indexOf("pr-badge");
+    const upIdx = order.indexOf("upstream-sync-badge");
+    expect(prIdx).toBeGreaterThanOrEqual(0);
+    expect(upIdx).toBeGreaterThanOrEqual(0);
+    expect(prIdx).toBeLessThan(upIdx);
   });
 
-  it("UpstreamSync moves before PR when fetchAuthFailed (auth > healthy PR)", () => {
+  it("UpstreamSync moves before PR when auth-failed (auth > healthy PR)", () => {
     const { container } = renderRow({
       worktree: {
         ...baseWorktree,
@@ -164,7 +168,11 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
     const order = Array.from(container.querySelectorAll("[data-testid]")).map((el) =>
       el.getAttribute("data-testid")
     );
-    expect(order.indexOf("upstream-sync-badge")).toBeLessThan(order.indexOf("pr-badge"));
+    const prIdx = order.indexOf("pr-badge");
+    const upIdx = order.indexOf("upstream-sync-badge");
+    expect(prIdx).toBeGreaterThanOrEqual(0);
+    expect(upIdx).toBeGreaterThanOrEqual(0);
+    expect(upIdx).toBeLessThan(prIdx);
   });
 
   it("UpstreamSync moves before PR when behindCount > 0 (no CI failure)", () => {
@@ -175,10 +183,14 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
     const order = Array.from(container.querySelectorAll("[data-testid]")).map((el) =>
       el.getAttribute("data-testid")
     );
-    expect(order.indexOf("upstream-sync-badge")).toBeLessThan(order.indexOf("pr-badge"));
+    const prIdx = order.indexOf("pr-badge");
+    const upIdx = order.indexOf("upstream-sync-badge");
+    expect(prIdx).toBeGreaterThanOrEqual(0);
+    expect(upIdx).toBeGreaterThanOrEqual(0);
+    expect(upIdx).toBeLessThan(prIdx);
   });
 
-  it("CI failed beats fetchAuthFailed — PR stays first", () => {
+  it("CI failed beats auth-failed — PR stays first", () => {
     const { container } = renderRow({
       worktree: {
         ...baseWorktree,
@@ -191,7 +203,11 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
     const order = Array.from(container.querySelectorAll("[data-testid]")).map((el) =>
       el.getAttribute("data-testid")
     );
-    expect(order.indexOf("pr-badge")).toBeLessThan(order.indexOf("upstream-sync-badge"));
+    const prIdx = order.indexOf("pr-badge");
+    const upIdx = order.indexOf("upstream-sync-badge");
+    expect(prIdx).toBeGreaterThanOrEqual(0);
+    expect(upIdx).toBeGreaterThanOrEqual(0);
+    expect(prIdx).toBeLessThan(upIdx);
   });
 
   it("CI 'pending' does not flip the order (transient — no spatial churn)", () => {
@@ -208,6 +224,10 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
     const order = Array.from(container.querySelectorAll("[data-testid]")).map((el) =>
       el.getAttribute("data-testid")
     );
-    expect(order.indexOf("upstream-sync-badge")).toBeLessThan(order.indexOf("pr-badge"));
+    const prIdx = order.indexOf("pr-badge");
+    const upIdx = order.indexOf("upstream-sync-badge");
+    expect(prIdx).toBeGreaterThanOrEqual(0);
+    expect(upIdx).toBeGreaterThanOrEqual(0);
+    expect(upIdx).toBeLessThan(prIdx);
   });
 });

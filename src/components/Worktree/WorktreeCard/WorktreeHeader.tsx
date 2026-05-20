@@ -273,16 +273,17 @@ export function WorktreeHeader({
   );
   const isMainStandardLayout = !!(isMainOnStandardBranch && !hasIssueTitle);
 
-  const ciState = worktree.linked?.pr?.ciStatus?.state;
+  const prState = worktree.linked?.pr?.state;
+  const isPrLive = prState !== undefined && prState !== "closed" && prState !== "declined";
+  const ciState = isPrLive ? worktree.linked?.pr?.ciStatus?.state : undefined;
   const collapsedAlarm = useMemo(
     () =>
       computeAlarmTier({
         ciState,
-        fetchAuthFailed: worktree.fetchAuthFailed,
+        authFailed: hasAuthFailedSignIn,
         behindCount: worktree.behindCount,
-        isDetached: worktree.isDetached,
       }),
-    [ciState, worktree.fetchAuthFailed, worktree.behindCount, worktree.isDetached]
+    [ciState, hasAuthFailedSignIn, worktree.behindCount]
   );
 
   const { visibleStates, sessionAriaLabel } = useMemo(() => {

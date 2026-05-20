@@ -9,6 +9,7 @@ import type { WorktreeState } from "@/types";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
+import { computeAlarmTier } from "@/lib/worktreeAlarmTier";
 
 interface NonMainSecondaryRowProps {
   worktree: WorktreeState;
@@ -54,8 +55,13 @@ export function NonMainSecondaryRow({
     worktree.linked.pr.state !== "declined";
   const showUpstreamBadge = hasUpstreamDelta || hasAuthFailedSignIn;
 
-  const prTier = worktree.linked?.pr?.ciStatus?.state === "failure" ? 4 : 0;
-  const upstreamTier = worktree.fetchAuthFailed ? 3 : (worktree.behindCount ?? 0) > 0 ? 2 : 0;
+  const prTier = showPRBadge
+    ? computeAlarmTier({ ciState: worktree.linked?.pr?.ciStatus?.state }).tier
+    : 0;
+  const upstreamTier = computeAlarmTier({
+    authFailed: hasAuthFailedSignIn,
+    behindCount: worktree.behindCount,
+  }).tier;
   const upstreamFirst = upstreamTier > prTier;
 
   const prBadge = showPRBadge ? (

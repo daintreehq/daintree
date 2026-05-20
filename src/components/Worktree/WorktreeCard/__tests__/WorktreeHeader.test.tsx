@@ -983,14 +983,30 @@ describe("WorktreeHeader collapsed alarm pill", () => {
     expect(pill.textContent).toBe("CI failed");
   });
 
-  it("renders the pill with warning treatment for fetchAuthFailed", () => {
+  it("renders the pill with warning treatment for GitHub auth-failed remote", () => {
     renderHeader({
       isCollapsed: true,
-      worktree: { ...baseWorktree, fetchAuthFailed: true },
+      worktree: {
+        ...baseWorktree,
+        fetchAuthFailed: true,
+        isGitHubRemote: true,
+      },
     });
     const pill = screen.getByTestId("collapsed-alarm-pill");
     expect(pill.getAttribute("data-alarm-kind")).toBe("auth-failed");
     expect(pill.className).toContain("text-status-warning");
+  });
+
+  it("suppresses the auth-failed pill for non-GitHub remotes (matches expanded gating)", () => {
+    renderHeader({
+      isCollapsed: true,
+      worktree: {
+        ...baseWorktree,
+        fetchAuthFailed: true,
+        isGitHubRemote: false,
+      },
+    });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
   });
 
   it("renders the pill with warning treatment for behindCount > 0", () => {
@@ -1003,14 +1019,17 @@ describe("WorktreeHeader collapsed alarm pill", () => {
     expect(pill.className).toContain("text-status-warning");
   });
 
-  it("renders the pill with warning treatment for isDetached", () => {
+  it("does not duplicate gitStateIndicator for detached HEAD", () => {
+    // gitStateIndicator already labels detached in the title row;
+    // computeAlarmTier deliberately excludes detached so collapsed rows
+    // don't end up with two side-by-side "detached"/"Detached" labels.
     renderHeader({
       isCollapsed: true,
       worktree: { ...baseWorktree, isDetached: true },
+      gitStateIndicator: { kind: "detached", label: "detached", tone: "warning" },
     });
-    const pill = screen.getByTestId("collapsed-alarm-pill");
-    expect(pill.getAttribute("data-alarm-kind")).toBe("detached");
-    expect(pill.className).toContain("text-status-warning");
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+    expect(screen.getByText("detached")).toBeDefined();
   });
 
   it("does not render when collapsed but no alarm fires", () => {
@@ -1026,14 +1045,28 @@ describe("WorktreeHeader collapsed alarm pill", () => {
     expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
   });
 
+  it("does not fire a stale CI-failed alarm when the linked PR is closed", () => {
+    const closed = ciFailureLinked(101);
+    closed.linked.pr.state = "closed";
+    renderHeader({ isCollapsed: true, worktree: { ...baseWorktree, ...closed } });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
+  it("does not fire a stale CI-failed alarm when the linked PR is declined", () => {
+    const declined = ciFailureLinked(101);
+    declined.linked.pr.state = "declined";
+    renderHeader({ isCollapsed: true, worktree: { ...baseWorktree, ...declined } });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
   it("caps to exactly one pill when multiple alarms fire (CI wins over auth)", () => {
     const { container } = renderHeader({
       isCollapsed: true,
       worktree: {
         ...baseWorktree,
         fetchAuthFailed: true,
+        isGitHubRemote: true,
         behindCount: 5,
-        isDetached: true,
         ...ciFailureLinked(101),
       },
     });

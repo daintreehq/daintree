@@ -7,21 +7,15 @@ import { CollapsedAlarmPill } from "../CollapsedAlarmPill";
 import type { AlarmDescriptor } from "@/lib/worktreeAlarmTier";
 
 const none: AlarmDescriptor = { tier: 0, kind: "none", label: "", tone: "none" };
-const detached: AlarmDescriptor = {
-  tier: 1,
-  kind: "detached",
-  label: "Detached",
-  tone: "warning",
-};
-const behind: AlarmDescriptor = { tier: 2, kind: "behind", label: "Behind", tone: "warning" };
+const behind: AlarmDescriptor = { tier: 1, kind: "behind", label: "Behind", tone: "warning" };
 const authFailed: AlarmDescriptor = {
-  tier: 3,
+  tier: 2,
   kind: "auth-failed",
   label: "Auth failed",
   tone: "warning",
 };
 const ciFailed: AlarmDescriptor = {
-  tier: 4,
+  tier: 3,
   kind: "ci-failed",
   label: "CI failed",
   tone: "error",
@@ -57,14 +51,6 @@ describe("CollapsedAlarmPill", () => {
     expect(pill.className).toContain("bg-status-warning/10");
     expect(pill.textContent).toBe("Behind");
     expect(pill.getAttribute("data-alarm-kind")).toBe("behind");
-  });
-
-  it("renders detached chip with warning tone", () => {
-    const { getByTestId } = render(<CollapsedAlarmPill alarm={detached} />);
-    const pill = getByTestId("collapsed-alarm-pill");
-    expect(pill.className).toContain("bg-status-warning/10");
-    expect(pill.textContent).toBe("Detached");
-    expect(pill.getAttribute("data-alarm-kind")).toBe("detached");
   });
 
   it("does not use accent classes", () => {

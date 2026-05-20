@@ -39,40 +39,37 @@ describe("computeAlarmTier", () => {
     it("treats missing ciState as tier 0", () => {
       expect(computeAlarmTier({ ciState: undefined }).tier).toBe(0);
     });
+
+    it("does not include detached HEAD — gitStateIndicator already labels it", () => {
+      // Detached is intentionally NOT in the alarm set; the title row's
+      // gitStateIndicator surfaces it on both collapsed and expanded states.
+      expect(computeAlarmTier({}).tier).toBe(0);
+    });
   });
 
   describe("single-tier resolutions", () => {
-    it("returns tier 1 (detached)", () => {
-      expect(computeAlarmTier({ isDetached: true })).toEqual({
-        tier: 1,
-        kind: "detached",
-        label: "Detached",
-        tone: "warning",
-      });
-    });
-
-    it("returns tier 2 (behind) for any behindCount > 0", () => {
+    it("returns tier 1 (behind) for any behindCount > 0", () => {
       expect(computeAlarmTier({ behindCount: 1 })).toEqual({
-        tier: 2,
+        tier: 1,
         kind: "behind",
         label: "Behind",
         tone: "warning",
       });
-      expect(computeAlarmTier({ behindCount: 99 }).tier).toBe(2);
+      expect(computeAlarmTier({ behindCount: 99 }).tier).toBe(1);
     });
 
-    it("returns tier 3 (auth-failed)", () => {
-      expect(computeAlarmTier({ fetchAuthFailed: true })).toEqual({
-        tier: 3,
+    it("returns tier 2 (auth-failed)", () => {
+      expect(computeAlarmTier({ authFailed: true })).toEqual({
+        tier: 2,
         kind: "auth-failed",
         label: "Auth failed",
         tone: "warning",
       });
     });
 
-    it("returns tier 4 (CI failed) for ciState === 'failure'", () => {
+    it("returns tier 3 (CI failed) for ciState === 'failure'", () => {
       expect(computeAlarmTier({ ciState: "failure" })).toEqual({
-        tier: 4,
+        tier: 3,
         kind: "ci-failed",
         label: "CI failed",
         tone: "error",
@@ -82,38 +79,25 @@ describe("computeAlarmTier", () => {
 
   describe("priority cascade — higher tier wins", () => {
     it("CI failure beats auth-failed", () => {
-      expect(computeAlarmTier({ ciState: "failure", fetchAuthFailed: true }).tier).toBe(4);
+      expect(computeAlarmTier({ ciState: "failure", authFailed: true }).tier).toBe(3);
     });
 
     it("CI failure beats behind", () => {
-      expect(computeAlarmTier({ ciState: "failure", behindCount: 3 }).tier).toBe(4);
-    });
-
-    it("CI failure beats detached", () => {
-      expect(computeAlarmTier({ ciState: "failure", isDetached: true }).tier).toBe(4);
+      expect(computeAlarmTier({ ciState: "failure", behindCount: 3 }).tier).toBe(3);
     });
 
     it("auth-failed beats behind", () => {
-      expect(computeAlarmTier({ fetchAuthFailed: true, behindCount: 5 }).tier).toBe(3);
+      expect(computeAlarmTier({ authFailed: true, behindCount: 5 }).tier).toBe(2);
     });
 
-    it("auth-failed beats detached", () => {
-      expect(computeAlarmTier({ fetchAuthFailed: true, isDetached: true }).tier).toBe(3);
-    });
-
-    it("behind beats detached", () => {
-      expect(computeAlarmTier({ behindCount: 1, isDetached: true }).tier).toBe(2);
-    });
-
-    it("all alarms at once → tier 4", () => {
+    it("all alarms at once → tier 3", () => {
       expect(
         computeAlarmTier({
           ciState: "failure",
-          fetchAuthFailed: true,
+          authFailed: true,
           behindCount: 7,
-          isDetached: true,
         }).tier
-      ).toBe(4);
+      ).toBe(3);
     });
   });
 });
