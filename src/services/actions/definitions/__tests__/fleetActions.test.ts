@@ -600,8 +600,9 @@ describe("fleet.retryFailures", () => {
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
     expect(broadcastFleetLiteralPaste).toHaveBeenCalledTimes(1);
-    const [payload, targets] = (broadcastFleetLiteralPaste as ReturnType<typeof vi.fn>).mock
-      .calls[0];
+    const call = (broadcastFleetLiteralPaste as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call).toBeDefined();
+    const [payload, targets] = call as [string, string[]];
     expect(payload).toBe("ls\r");
     expect((targets as string[]).slice().sort()).toEqual(["t1", "t2"]);
   });
@@ -670,7 +671,7 @@ describe("fleet.retryFailures", () => {
     // Second call happens while the first is awaiting the broadcast.
     await run(registry, "fleet.retryFailures");
     expect(broadcastFleetLiteralPaste).toHaveBeenCalledTimes(1);
-    resolveBroadcast?.({ failedIds: [] });
+    (resolveBroadcast as ((value: { failedIds: string[] }) => void) | null)?.({ failedIds: [] });
     await first;
   });
 });
