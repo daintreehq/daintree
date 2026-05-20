@@ -6,6 +6,7 @@ import { render, screen, fireEvent, act, cleanup } from "@testing-library/react"
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
 import type { WorktreeState } from "@shared/types";
+import type { NormalizedPRState } from "@shared/types/forge";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
 
@@ -43,7 +44,7 @@ vi.mock("@/services/ActionService", () => ({
 
 const noop = () => {};
 
-function prLinked(num: number, state: "open" | "merged" | "closed" | "declined" = "open") {
+function prLinked(num: number, state: NormalizedPRState = "open") {
   return {
     linked: {
       providerId: "daintree.github.github",
@@ -55,7 +56,7 @@ function prLinked(num: number, state: "open" | "merged" | "closed" | "declined" 
           number: num,
           rawData: null,
         },
-        state,
+        state: state as NormalizedPRState,
         url: `https://github.com/test/repo/pull/${num}`,
       },
     },
@@ -941,6 +942,150 @@ describe("WorktreeHeader cleanup button", () => {
     fireEvent.click(button);
     expect(onCleanupWorktree).toHaveBeenCalledOnce();
     expect(onParentClick).not.toHaveBeenCalled();
+  });
+});
+
+function ciFailureLinked(num: number) {
+  return {
+    linked: {
+      providerId: "daintree.github.github",
+      pr: {
+        ref: {
+          providerId: "daintree.github.github",
+          owner: "",
+          repo: "",
+          number: num,
+          rawData: null,
+        },
+        state: "open" as NormalizedPRState,
+        url: `https://github.com/test/repo/pull/${num}`,
+        ciStatus: {
+          state: "failure" as const,
+          total: 1,
+          passed: 0,
+          failed: 1,
+          pending: 0,
+          rawData: null,
+        },
+      },
+    },
+  };
+}
+
+describe("WorktreeHeader collapsed alarm pill", () => {
+  it("renders the pill with CI-failed treatment when collapsed and CI failed", () => {
+    renderHeader({
+      isCollapsed: true,
+      worktree: { ...baseWorktree, ...ciFailureLinked(101) },
+    });
+    const pill = screen.getByTestId("collapsed-alarm-pill");
+    expect(pill.getAttribute("data-alarm-kind")).toBe("ci-failed");
+    expect(pill.className).toContain("text-status-error");
+    expect(pill.textContent).toBe("CI failed");
+  });
+
+  it("renders the pill with warning treatment for GitHub auth-failed remote", () => {
+    renderHeader({
+      isCollapsed: true,
+      worktree: {
+        ...baseWorktree,
+        fetchAuthFailed: true,
+        isGitHubRemote: true,
+      },
+    });
+    const pill = screen.getByTestId("collapsed-alarm-pill");
+    expect(pill.getAttribute("data-alarm-kind")).toBe("auth-failed");
+    expect(pill.className).toContain("text-status-warning");
+  });
+
+  it("suppresses the auth-failed pill for non-GitHub remotes (matches expanded gating)", () => {
+    renderHeader({
+      isCollapsed: true,
+      worktree: {
+        ...baseWorktree,
+        fetchAuthFailed: true,
+        isGitHubRemote: false,
+      },
+    });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
+  it("renders the pill with warning treatment for behindCount > 0", () => {
+    renderHeader({
+      isCollapsed: true,
+      worktree: { ...baseWorktree, behindCount: 3 },
+    });
+    const pill = screen.getByTestId("collapsed-alarm-pill");
+    expect(pill.getAttribute("data-alarm-kind")).toBe("behind");
+    expect(pill.className).toContain("text-status-warning");
+  });
+
+  it("does not duplicate gitStateIndicator for detached HEAD", () => {
+    // gitStateIndicator already labels detached in the title row;
+    // computeAlarmTier deliberately excludes detached so collapsed rows
+    // don't end up with two side-by-side "detached"/"Detached" labels.
+    renderHeader({
+      isCollapsed: true,
+      worktree: { ...baseWorktree, isDetached: true },
+      gitStateIndicator: { kind: "detached", label: "detached", tone: "warning" },
+    });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+    expect(screen.getByText("detached")).toBeDefined();
+  });
+
+  it("does not render when collapsed but no alarm fires", () => {
+    renderHeader({ isCollapsed: true });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
+  it("does not render when expanded — even with a CI failure", () => {
+    renderHeader({
+      isCollapsed: false,
+      worktree: { ...baseWorktree, ...ciFailureLinked(101) },
+    });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
+  it("does not fire a stale CI-failed alarm when the linked PR is closed", () => {
+    const closed = ciFailureLinked(101);
+    closed.linked.pr.state = "closed";
+    renderHeader({ isCollapsed: true, worktree: { ...baseWorktree, ...closed } });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
+  it("does not fire a stale CI-failed alarm when the linked PR is declined", () => {
+    const declined = ciFailureLinked(101);
+    declined.linked.pr.state = "declined";
+    renderHeader({ isCollapsed: true, worktree: { ...baseWorktree, ...declined } });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
+  it("caps to exactly one pill when multiple alarms fire (CI wins over auth)", () => {
+    const { container } = renderHeader({
+      isCollapsed: true,
+      worktree: {
+        ...baseWorktree,
+        fetchAuthFailed: true,
+        isGitHubRemote: true,
+        behindCount: 5,
+        ...ciFailureLinked(101),
+      },
+    });
+    const pills = container.querySelectorAll("[data-testid='collapsed-alarm-pill']");
+    expect(pills.length).toBe(1);
+    expect(pills[0]!.getAttribute("data-alarm-kind")).toBe("ci-failed");
+  });
+
+  it("renders for main worktree rows too (collapsed + behind)", () => {
+    renderHeader({
+      isCollapsed: true,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      worktree: { ...baseWorktree, isMainWorktree: true, behindCount: 2 },
+    });
+    expect(screen.getByTestId("collapsed-alarm-pill").getAttribute("data-alarm-kind")).toBe(
+      "behind"
+    );
   });
 });
 
