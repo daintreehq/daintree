@@ -1,9 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  buildWatchdogKillPayload,
   createWatchdog,
   parseMainPid,
+  writeWatchdogKillFlag,
   HEARTBEAT_INTERVAL_MS,
   MAX_MISSED,
+  WATCHDOG_KILL_FLAG_NAME,
 } from "../watchdog-host-core.js";
 
 describe("parseMainPid", () => {
@@ -195,5 +198,75 @@ describe("createWatchdog", () => {
 
   it("HEARTBEAT_INTERVAL_MS × MAX_MISSED gives the conservative ~15s threshold", () => {
     expect(HEARTBEAT_INTERVAL_MS * MAX_MISSED).toBe(15000);
+  });
+});
+
+describe("buildWatchdogKillPayload", () => {
+  it("captures missedBeats and mainPid plus a fresh killedAt timestamp", () => {
+    const before = Date.now();
+    const payload = buildWatchdogKillPayload(MAX_MISSED, 4242);
+    const after = Date.now();
+
+    expect(payload.missedBeats).toBe(MAX_MISSED);
+    expect(payload.mainPid).toBe(4242);
+    expect(payload.killedAt).toBeGreaterThanOrEqual(before);
+    expect(payload.killedAt).toBeLessThanOrEqual(after);
+  });
+
+  it("produces a JSON-serialisable object (the host writes it to disk)", () => {
+    const payload = buildWatchdogKillPayload(3, 1234);
+    const round = JSON.parse(JSON.stringify(payload));
+    expect(round).toEqual({
+      killedAt: payload.killedAt,
+      missedBeats: 3,
+      mainPid: 1234,
+    });
+  });
+
+  it("uses a stable flag filename (writer/reader must agree)", () => {
+    expect(WATCHDOG_KILL_FLAG_NAME).toBe("watchdog-kill.flag");
+  });
+});
+
+describe("writeWatchdogKillFlag", () => {
+  function makeDeps(overrides: Partial<{ throwOnWrite: boolean }> = {}) {
+    const writes: Array<{ path: string; data: string }> = [];
+    const deps = {
+      writeFileSync: vi.fn((p: string, data: string) => {
+        if (overrides.throwOnWrite) throw new Error("disk full");
+        writes.push({ path: p, data });
+      }),
+      joinPath: (userData: string, name: string) => `${userData}/${name}`,
+    };
+    return { deps, writes };
+  }
+
+  it("writes the flag at <userData>/watchdog-kill.flag with the expected payload", () => {
+    const { deps, writes } = makeDeps();
+    const ok = writeWatchdogKillFlag("/fake/userData", MAX_MISSED, 4242, deps);
+    expect(ok).toBe(true);
+    expect(writes).toHaveLength(1);
+    expect(writes[0].path).toBe(`/fake/userData/${WATCHDOG_KILL_FLAG_NAME}`);
+    const parsed = JSON.parse(writes[0].data);
+    expect(parsed.missedBeats).toBe(MAX_MISSED);
+    expect(parsed.mainPid).toBe(4242);
+    expect(typeof parsed.killedAt).toBe("number");
+  });
+
+  it("returns false and writes nothing when userData is null (env missing)", () => {
+    const { deps, writes } = makeDeps();
+    const ok = writeWatchdogKillFlag(null, 3, 4242, deps);
+    expect(ok).toBe(false);
+    expect(writes).toHaveLength(0);
+    expect(deps.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it("returns false (and does NOT throw) when the write itself fails — fail-open", () => {
+    const { deps } = makeDeps({ throwOnWrite: true });
+    // The contract is: writeWatchdogKillFlag must never propagate. The caller
+    // immediately fires SIGKILL after this returns.
+    const ok = writeWatchdogKillFlag("/fake/userData", 3, 4242, deps);
+    expect(ok).toBe(false);
+    expect(deps.writeFileSync).toHaveBeenCalledTimes(1);
   });
 });

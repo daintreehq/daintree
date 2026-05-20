@@ -15,6 +15,7 @@ import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { getActionBreadcrumbService } from "./ActionBreadcrumbService.js";
 import { resilientAtomicWriteFileSync, resilientRenameSync } from "../utils/fs.js";
+import { WATCHDOG_KILL_FLAG_NAME } from "../watchdog-host-core.js";
 
 const MAX_CRASH_LOGS = 10;
 const MARKER_FILENAME = "running.lock";
@@ -30,6 +31,18 @@ const SUSPECT_WINDOW_MS = 30_000;
 // previous session was almost certainly killed externally (SIGKILL, OOM killer,
 // force-quit) before its backup tick could refresh the stamp.
 const HEARTBEAT_STALE_THRESHOLD_MS = 120_000;
+// Negative margin on the watchdog flag's mtime check: filesystem mtime
+// resolution (HFS+, ext3) can be up to ~1s, and a flag written in the
+// current session will always be ≥ HEARTBEAT_INTERVAL_MS × MAX_MISSED (~15s)
+// after sessionStartMs. 5s of grace safely absorbs clock drift and fs jitter
+// without admitting any flag from a prior session.
+const WATCHDOG_GRACE_MS = 5_000;
+
+interface WatchdogKillAnnotation {
+  killedAt: number;
+  missedBeats: number;
+  mainPid: number;
+}
 
 export class CrashRecoveryService {
   private userData: string;
@@ -342,7 +355,19 @@ export class CrashRecoveryService {
         return null;
       }
 
-      if (!app.isPackaged && marker.isPackaged === false && !marker.crashLogPath) {
+      // Read the watchdog kill flag BEFORE the dev-mode discard branch — even
+      // an orphaned dev marker may have a fresh flag (real watchdog kill in
+      // dev). Consume it unconditionally so a stale flag can't linger across
+      // dev restarts. The mtime guard inside consumeWatchdogKillFlag ensures
+      // only a fresh flag is treated as an annotation.
+      const watchdogAnnotation = this.consumeWatchdogKillFlag(marker);
+
+      if (
+        !app.isPackaged &&
+        marker.isPackaged === false &&
+        !marker.crashLogPath &&
+        !watchdogAnnotation
+      ) {
         console.log("[CrashRecovery] Orphaned dev-mode marker — discarding (not a crash)");
         this.deleteMarker();
         return null;
@@ -370,6 +395,23 @@ export class CrashRecoveryService {
       const logPath = marker.crashLogPath ?? null;
       const entry = logPath ? this.readCrashLog(logPath) : this.buildCrashEntryFromMarker(marker);
       entry.crashCause = this.classifyCrashCause(marker);
+      if (watchdogAnnotation) {
+        entry.cause = "watchdog-deadlock";
+        entry.watchdogKilledAt = watchdogAnnotation.killedAt;
+        entry.watchdogMissedBeats = watchdogAnnotation.missedBeats;
+        entry.watchdogMainPid = watchdogAnnotation.mainPid;
+        // Persist the annotation onto the on-disk crash log too, so a user
+        // who opens the JSON file directly (via the dialog's "open log file"
+        // affordance, or for support) sees the watchdog attribution. Failure
+        // is non-fatal — the in-memory entry is the source of truth.
+        if (logPath) {
+          try {
+            resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8");
+          } catch (err) {
+            console.error("[CrashRecovery] Failed to persist watchdog annotation:", err);
+          }
+        }
+      }
       const panels =
         this.crashedBackupPath !== null ? this.extractPanelSummaries(entry.timestamp) : undefined;
 
@@ -472,6 +514,60 @@ export class CrashRecoveryService {
       // File may already be gone (multiple cleanup paths can race); ignore.
     }
     this.crashedBackupPath = null;
+  }
+
+  /**
+   * Read and consume the sidecar flag the watchdog writes synchronously
+   * before SIGKILLing main. Returns the annotation when the flag is fresh
+   * (mtime >= sessionStartMs - GRACE_MS), or null when missing/stale/malformed.
+   * The flag is unlinked unconditionally so a stale flag can't poison
+   * subsequent launches.
+   */
+  private consumeWatchdogKillFlag(marker: MarkerFile): WatchdogKillAnnotation | null {
+    const flagPath = path.join(this.userData, WATCHDOG_KILL_FLAG_NAME);
+    if (!fs.existsSync(flagPath)) return null;
+
+    let annotation: WatchdogKillAnnotation | null = null;
+    try {
+      const stat = fs.statSync(flagPath);
+      const isFresh = stat.mtimeMs >= marker.sessionStartMs - WATCHDOG_GRACE_MS;
+      if (isFresh) {
+        const raw = fs.readFileSync(flagPath, "utf8");
+        const parsed = JSON.parse(raw) as Partial<WatchdogKillAnnotation>;
+        // Defensive range checks: a corrupted flag with all-zero numbers
+        // would pass a bare `typeof === "number"` check and produce a
+        // misleading attribution. Real values from buildWatchdogKillPayload
+        // are always positive (killedAt = Date.now(), missedBeats >= 1,
+        // mainPid > 0).
+        if (
+          typeof parsed.killedAt === "number" &&
+          parsed.killedAt > 0 &&
+          typeof parsed.missedBeats === "number" &&
+          parsed.missedBeats >= 1 &&
+          typeof parsed.mainPid === "number" &&
+          parsed.mainPid > 0
+        ) {
+          annotation = {
+            killedAt: parsed.killedAt,
+            missedBeats: parsed.missedBeats,
+            mainPid: parsed.mainPid,
+          };
+        } else {
+          console.warn("[CrashRecovery] Malformed watchdog kill flag, ignoring");
+        }
+      }
+    } catch (err) {
+      console.warn("[CrashRecovery] Failed to read watchdog kill flag:", err);
+    }
+
+    try {
+      fs.unlinkSync(flagPath);
+    } catch {
+      // best-effort; a stuck flag will be re-evaluated next launch and the
+      // mtime guard will reject it if it doesn't match the new session.
+    }
+
+    return annotation;
   }
 
   private extractPanelSummaries(crashTimestamp: number): PanelSummary[] {
