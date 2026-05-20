@@ -249,15 +249,29 @@ function attachWorktreePort(newPort: MessagePort): void {
 // Global error handlers to prevent silent crashes
 process.on("uncaughtException", (err) => {
   console.error("[WorkspaceHost] Uncaught Exception:", err);
-  sendEvent({ type: "error", error: err.message });
+  try {
+    sendEvent({ type: "error", error: err.message });
+  } catch {
+    // ignore
+  }
+  // Electron 37+ no longer crashes on unhandled rejection by default — exit explicitly
+  // so the parent's child-process-gone supervision path triggers.
+  setImmediate(() => process.exit(1));
 });
 
 process.on("unhandledRejection", (reason) => {
   console.error("[WorkspaceHost] Unhandled Rejection:", reason);
-  sendEvent({
-    type: "error",
-    error: formatErrorMessage(reason, "Unhandled rejection in workspace host"),
-  });
+  try {
+    sendEvent({
+      type: "error",
+      error: formatErrorMessage(reason, "Unhandled rejection in workspace host"),
+    });
+  } catch {
+    // ignore
+  }
+  // Electron 37+ no longer crashes on unhandled rejection by default — exit explicitly
+  // so the parent's child-process-gone supervision path triggers.
+  setImmediate(() => process.exit(1));
 });
 
 // Helper to send events to Main process (and directly to renderers for spontaneous events)

@@ -66,9 +66,11 @@ export class WorkspaceHostProcess extends EventEmitter {
   private stabilityTimer: NodeJS.Timeout | null = null;
   /**
    * Authoritative crash reason captured from `app.on("child-process-gone")`.
-   * Consumed by the next `exit` handler via `setImmediate` deferral, since
-   * Electron 37-41 has a documented race where `exit` often fires before
-   * `child-process-gone` for utility-process crashes.
+   * Consumed by the next `exit` handler via `setImmediate` deferral, since the
+   * Electron `exit`/`child-process-gone` ordering race (electron/electron#42283)
+   * causes `exit` to often fire before `child-process-gone` for utility-process
+   * crashes. This is distinct from the Windows exit-code mangling bug
+   * (electron/electron#50386, fixed in Electron 41.0.4).
    */
   private pendingChildProcessGoneReason: { reason: string; exitCode: number } | null = null;
   private childProcessGoneHandler:
@@ -602,11 +604,11 @@ export class WorkspaceHostProcess extends EventEmitter {
       // the per-request timeout.
       this.emit("host-recovering", code);
 
-      // Electron 37-41 race: `exit` often fires before `child-process-gone`
-      // for utility-process crashes. Defer the restart decision by one event
-      // loop tick so the authoritative reason and exit code can arrive; fall
-      // back to the exit-code from the `exit` event when no reason was
-      // captured in time.
+      // `exit`/`child-process-gone` ordering race (electron/electron#42283):
+      // `exit` often fires before `child-process-gone` for utility-process
+      // crashes. Defer the restart decision by one event loop tick so the
+      // authoritative reason and exit code can arrive; fall back to the
+      // exit-code from the `exit` event when no reason was captured in time.
       setImmediate(() => {
         if (this.isDisposed) {
           this.pendingChildProcessGoneReason = null;
@@ -616,8 +618,9 @@ export class WorkspaceHostProcess extends EventEmitter {
         const gone = this.pendingChildProcessGoneReason;
         this.pendingChildProcessGoneReason = null;
         // Prefer the authoritative exit code from `child-process-gone` over
-        // the (sometimes unreliable) one from `exit` — Electron 40-41 has a
-        // known signed/unsigned mangling bug on Windows for the exit event.
+        // the (sometimes unreliable) one from `exit` — defense-in-depth for
+        // pre-41.0.4 builds and future regressions of the Windows signed/unsigned
+        // mangling bug (fixed in electron/electron#50386, landed Electron 41.0.4).
         const reportedCode = gone ? gone.exitCode : code;
 
         // If `manualRestart()` or some other path already spawned a new host
