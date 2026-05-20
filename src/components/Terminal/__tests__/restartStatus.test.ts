@@ -9,6 +9,7 @@ const base: RestartBannerInput = {
   isRestarting: false,
   isAutoRestarting: false,
   exitBehavior: "keep",
+  backendStatus: "connected",
 };
 
 describe("getRestartBannerVariant", () => {
@@ -161,5 +162,33 @@ describe("getRestartBannerVariant", () => {
       } as never,
     });
     expect(result).toEqual({ type: "none" });
+  });
+
+  it("returns none for exit-error candidate when backendStatus is disconnected", () => {
+    const result = getRestartBannerVariant({ ...base, backendStatus: "disconnected" });
+    expect(result).toEqual({ type: "none" });
+  });
+
+  it("returns none for exit-error candidate when backendStatus is recovering", () => {
+    const result = getRestartBannerVariant({ ...base, backendStatus: "recovering" });
+    expect(result).toEqual({ type: "none" });
+  });
+
+  it("returns auto-restarting when backendStatus is disconnected and auto-restart conditions are met", () => {
+    const result = getRestartBannerVariant({
+      ...base,
+      isAutoRestarting: true,
+      backendStatus: "disconnected",
+    });
+    expect(result).toEqual({ type: "auto-restarting" });
+  });
+
+  it("returns auto-restarting when backendStatus is recovering and auto-restart conditions are met", () => {
+    const result = getRestartBannerVariant({
+      ...base,
+      isAutoRestarting: true,
+      backendStatus: "recovering",
+    });
+    expect(result).toEqual({ type: "auto-restarting" });
   });
 });

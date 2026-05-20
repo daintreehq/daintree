@@ -1,5 +1,6 @@
 import type { PanelExitBehavior } from "@shared/types/panel";
 import type { TerminalRestartError, SpawnError, TerminalReconnectError } from "@/types";
+import type { BackendStatus } from "@/store/panelStore";
 
 export type RestartBannerVariant =
   | { type: "auto-restarting" }
@@ -16,6 +17,7 @@ export interface RestartBannerInput {
   exitBehavior: PanelExitBehavior | undefined;
   reconnectError?: TerminalReconnectError;
   spawnError?: SpawnError;
+  backendStatus: BackendStatus;
 }
 
 export function getRestartBannerVariant(input: RestartBannerInput): RestartBannerVariant {
@@ -24,6 +26,7 @@ export function getRestartBannerVariant(input: RestartBannerInput): RestartBanne
   }
 
   if (
+    input.backendStatus === "connected" &&
     input.isExited &&
     input.exitCode !== null &&
     input.exitCode !== 0 &&
