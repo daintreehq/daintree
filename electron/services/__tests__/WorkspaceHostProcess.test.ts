@@ -1,7 +1,18 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "events";
+import { createHash } from "crypto";
 import { Readable } from "node:stream";
+
+function serviceNameFor(projectPath: string): string {
+  const safeName = projectPath
+    .split("/")
+    .pop()!
+    .replace(/[^a-zA-Z0-9_-]/g, "-")
+    .slice(0, 40);
+  const pathHash = createHash("sha1").update(projectPath).digest("hex").slice(0, 8);
+  return `daintree-workspace-host:${safeName}-${pathHash}`;
+}
 
 const { forkMock, mockChildren, loggerCalls, appMock } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -786,7 +797,7 @@ describe("WorkspaceHostProcess crash window", () => {
       {} as Electron.Event,
       {
         type: "Utility",
-        name: "daintree-workspace-host:project",
+        name: serviceNameFor("/tmp/project"),
         reason: "oom",
         exitCode: 137,
       } as Electron.Details
@@ -813,6 +824,48 @@ describe("WorkspaceHostProcess crash window", () => {
     host.dispose();
   });
 
+  it("uses child-process-gone reason when it arrives AFTER exit (named Electron 37-41 race)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "ready" });
+
+    const crashSpy = vi.fn();
+    host.on("host-crash", crashSpy);
+
+    // Pre-fill the crash window so the next crash trips the cap.
+    (host as any).crashTimestamps = [Date.now() - 1000, Date.now() - 500];
+
+    // Exit fires first — sync teardown runs, but the deferred restart
+    // decision has NOT executed yet (setImmediate is queued).
+    child.emit("exit", 1);
+
+    // The authoritative reason arrives between exit and the setImmediate.
+    appMock.emit(
+      "child-process-gone",
+      {} as Electron.Event,
+      {
+        type: "Utility",
+        name: serviceNameFor("/tmp/project"),
+        reason: "oom",
+        exitCode: 137,
+      } as Electron.Details
+    );
+
+    // Flush setImmediate — the deferred handler must now consume the
+    // late-arriving reason instead of the exit-event's code.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(crashSpy).toHaveBeenCalledWith(137);
+
+    host.dispose();
+  });
+
   it("child-process-gone with non-matching serviceName is ignored", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {
@@ -826,7 +879,7 @@ describe("WorkspaceHostProcess crash window", () => {
       {} as Electron.Event,
       {
         type: "Utility",
-        name: "daintree-workspace-host:some-other-project",
+        name: serviceNameFor("/tmp/some-other-project"),
         reason: "oom",
         exitCode: 137,
       } as Electron.Details
@@ -850,13 +903,86 @@ describe("WorkspaceHostProcess crash window", () => {
       {} as Electron.Event,
       {
         type: "Tab",
-        name: "daintree-workspace-host:project",
+        name: serviceNameFor("/tmp/project"),
         reason: "crashed",
         exitCode: 1,
       } as unknown as Electron.Details
     );
 
     expect((host as any).pendingChildProcessGoneReason).toBeNull();
+
+    host.dispose();
+  });
+
+  it("same-basename projects do not cross-attribute crash reasons", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const hostA = new WorkspaceHostProcess("/workspaces/a/api", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    hostA.waitForReady().catch(() => {});
+    const hostB = new WorkspaceHostProcess("/workspaces/b/api", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    hostB.waitForReady().catch(() => {});
+
+    // The service names must be distinct despite identical basename.
+    expect(serviceNameFor("/workspaces/a/api")).not.toBe(serviceNameFor("/workspaces/b/api"));
+
+    // A gone event for hostA only — hostB must NOT capture it.
+    appMock.emit(
+      "child-process-gone",
+      {} as Electron.Event,
+      {
+        type: "Utility",
+        name: serviceNameFor("/workspaces/a/api"),
+        reason: "oom",
+        exitCode: 137,
+      } as Electron.Details
+    );
+
+    expect((hostA as any).pendingChildProcessGoneReason).toEqual({
+      reason: "oom",
+      exitCode: 137,
+    });
+    expect((hostB as any).pendingChildProcessGoneReason).toBeNull();
+
+    hostA.dispose();
+    hostB.dispose();
+  });
+
+  it("does NOT fork a fourth time after the crash threshold is reached", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    // Crash 1 → restart
+    mockChildren[0].emit("message", { type: "ready" });
+    mockChildren[0].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_001);
+    expect(forkMock).toHaveBeenCalledTimes(2);
+
+    // Crash 2 → restart
+    host.waitForReady().catch(() => {});
+    mockChildren[1].emit("message", { type: "ready" });
+    mockChildren[1].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(4_001);
+    expect(forkMock).toHaveBeenCalledTimes(3);
+
+    // Crash 3 → threshold tripped, NO further fork
+    host.waitForReady().catch(() => {});
+    mockChildren[2].emit("message", { type: "ready" });
+    mockChildren[2].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    // Advance well past any possible restart-delay cap to prove no timer fires.
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(forkMock).toHaveBeenCalledTimes(3);
 
     host.dispose();
   });
@@ -897,7 +1023,7 @@ describe("WorkspaceHostProcess crash window", () => {
       {} as Electron.Event,
       {
         type: "Utility",
-        name: "daintree-workspace-host:projectA",
+        name: serviceNameFor("/tmp/projectA"),
         reason: "oom",
         exitCode: 137,
       } as Electron.Details

@@ -1,5 +1,6 @@
 import { utilityProcess, UtilityProcess, app, MessagePortMain } from "electron";
 import { EventEmitter } from "events";
+import { createHash } from "crypto";
 import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
@@ -46,6 +47,7 @@ export class WorkspaceHostProcess extends EventEmitter {
 
   private healthCheckInterval: NodeJS.Timeout | null = null;
   private restartTimer: NodeJS.Timeout | null = null;
+  private disposeTimer: NodeJS.Timeout | null = null;
   /**
    * Sliding window of recent crash timestamps. Trimmed to entries within
    * `RAPID_CRASH_WINDOW_MS` on each crash; cleared when the stability timer
@@ -109,7 +111,12 @@ export class WorkspaceHostProcess extends EventEmitter {
       .basename(projectPath)
       .replace(/[^a-zA-Z0-9_-]/g, "-")
       .slice(0, 40);
-    this.serviceName = `daintree-workspace-host:${safeName}`;
+    // Hash the full path to disambiguate same-basename projects (e.g.
+    // `/workspaces/a/api` and `/workspaces/b/api`). Without this suffix the
+    // per-instance `child-process-gone` filter would match both hosts and
+    // cross-attribute crash reasons.
+    const pathHash = createHash("sha1").update(projectPath).digest("hex").slice(0, 8);
+    this.serviceName = `daintree-workspace-host:${safeName}-${pathHash}`;
 
     this.readyPromise = new Promise((resolve, reject) => {
       this.readyResolve = resolve;
@@ -365,7 +372,10 @@ export class WorkspaceHostProcess extends EventEmitter {
 
     if (this.child) {
       this.send({ type: "dispose" });
-      setTimeout(() => {
+      // Unref'd so the pending backstop never holds the Electron event loop
+      // alive after app.quit when the host has already cooperated.
+      this.disposeTimer = setTimeout(() => {
+        this.disposeTimer = null;
         if (this.child) {
           try {
             this.child.kill();
@@ -379,6 +389,7 @@ export class WorkspaceHostProcess extends EventEmitter {
           }
         }
       }, 1000);
+      this.disposeTimer.unref?.();
     }
 
     this.removeAllListeners();
