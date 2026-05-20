@@ -1389,7 +1389,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-
   // Forge integration
   "forge:get-settings": {
     args: [];
@@ -1471,7 +1470,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; stderr: string }];
     result: { providerId: string; classification: PushErrorClassification | null } | null;
   };
-
 
   // Voice input
   "voice-input:get-settings": {
