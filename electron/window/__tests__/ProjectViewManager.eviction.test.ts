@@ -802,6 +802,28 @@ describe("ProjectViewManager — telemetry", () => {
     expect(manager.getAllViews().length).toBe(0);
   });
 
+  it("does not emit projectview.warm-swap on cold-start switches (no prior cached view)", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    vi.mocked(logInfo).mockClear();
+
+    // Cold start to proj-b — no cached view exists, so warm-swap must not fire.
+    await manager.switchTo("proj-b", "/path/b");
+
+    const warmSwapCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.warm-swap");
+    expect(warmSwapCalls.length).toBe(0);
+  });
+
   it("emits projectview.warm-swap on every cache-hit reactivation with visibleMs", async () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -921,6 +943,49 @@ describe("ProjectViewManager — telemetry", () => {
       .mocked(logInfo)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(0);
+  });
+
+  it("sampleCachedViewMemory keeps sampling remaining views when one per-view call throws", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      cachedProjectViews: 4,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    await manager.switchTo("proj-c", "/path/c");
+    // proj-c is now active; proj-a and proj-b are cached.
+    const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")?.view
+      .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    // proj-a's getOSProcessId throws — the iteration over proj-a must be skipped,
+    // but proj-b must still be sampled.
+    wcA.getOSProcessId = vi.fn(() => {
+      throw new Error("view glitch");
+    });
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcB.osPid, memory: { privateBytes: 400 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    vi.mocked(logInfo).mockClear();
+
+    expect(() =>
+      (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory()
+    ).not.toThrow();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(1);
+    expect(memoryCalls[0][1]).toMatchObject({
+      projectId: "proj-b",
+      memoryKb: 400 * 1024,
+    });
   });
 
   it("sampleCachedViewMemory swallows app.getAppMetrics() failures", async () => {

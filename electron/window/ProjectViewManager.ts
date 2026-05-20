@@ -190,9 +190,21 @@ export class ProjectViewManager {
     win.on("enter-full-screen", this.resizeHandler);
     win.on("leave-full-screen", this.resizeHandler);
 
+    // Outer try/catch is load-bearing: `setAlignedInterval` calls the callback
+    // synchronously on the first aligned tick BEFORE installing the recurring
+    // `setInterval`. If the first tick throws, the recurring interval is never
+    // installed and all subsequent sampling is silently lost. Any uncaught throw
+    // also reaches `uncaughtException`. Sampling failures are pure telemetry
+    // and must never destabilise the manager.
     this.cachedMemoryTimerCleanup = setAlignedInterval(() => {
       if (this.disposed) return;
-      this.sampleCachedViewMemory();
+      try {
+        this.sampleCachedViewMemory();
+      } catch (error) {
+        logWarn("projectview.cached-memory.error", {
+          error: formatErrorMessage(error, "sampleCachedViewMemory threw"),
+        });
+      }
     }, CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS);
   }
 
@@ -1255,19 +1267,25 @@ export class ProjectViewManager {
 
     for (const [projectId, entry] of this.views) {
       if (projectId === activeProjectId) continue;
-      const wc = entry.view.webContents;
-      if (wc.isDestroyed()) continue;
-      const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
-      if (typeof getPid !== "function") continue;
-      const pid = getPid.call(wc);
-      if (typeof pid !== "number" || pid <= 0) continue;
-      const memoryKb = memoryByPid.get(pid);
-      if (typeof memoryKb !== "number" || memoryKb <= 0) continue;
-      logInfo("projectview.cached-memory", {
-        projectId,
-        memoryKb,
-        pid,
-      });
+      // Per-view try/catch keeps a TOCTOU-killed renderer (or any other
+      // per-view glitch) from skipping the rest of the cache in this tick.
+      try {
+        const wc = entry.view.webContents;
+        if (wc.isDestroyed()) continue;
+        const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
+        if (typeof getPid !== "function") continue;
+        const pid = getPid.call(wc);
+        if (typeof pid !== "number" || pid <= 0) continue;
+        const memoryKb = memoryByPid.get(pid);
+        if (typeof memoryKb !== "number" || memoryKb <= 0) continue;
+        logInfo("projectview.cached-memory", {
+          projectId,
+          memoryKb,
+          pid,
+        });
+      } catch {
+        // Telemetry only — skip this view and continue with the rest.
+      }
     }
   }
 
