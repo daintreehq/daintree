@@ -1044,7 +1044,7 @@ function PanelHeaderComponent({
                       onRestore();
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="p-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-[opacity,color,background-color] duration-150"
+                    className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
                     aria-label="Open in grid"
                     data-testid="panel-open-in-grid"
                   >

@@ -656,7 +656,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                           handlePopOut();
                         }}
                         onPointerDown={(e) => e.stopPropagation()}
-                        className="shrink-0 p-1.5 text-daintree-text/40 hover:text-daintree-text hover:bg-daintree-text/10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                        className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
                         aria-label="Open in grid"
                       >
                         <SquareArrowOutUpRight className="w-3 h-3" aria-hidden="true" />
