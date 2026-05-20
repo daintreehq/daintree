@@ -16,6 +16,7 @@ import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { AnimatedLabel } from "../ui/AnimatedLabel";
+import { SettingsSwitch } from "../Settings/SettingsSwitch";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -437,21 +438,22 @@ export function CrashRecoveryDialog({
               </p>
             )
           ) : (
-            <label
-              className="flex items-center gap-2 cursor-pointer"
-              data-testid="auto-restore-label"
-            >
-              <input
-                type="checkbox"
+            <div className="flex items-center justify-between gap-3" data-testid="auto-restore-label">
+              <div className="text-left">
+                <div id="auto-restore-title" className="text-sm font-medium text-daintree-text">
+                  Restore automatically next time
+                </div>
+                <div className="text-xs text-daintree-text/60">
+                  Skips this dialog. Shows again if Daintree crashes twice in a row.
+                </div>
+              </div>
+              <SettingsSwitch
                 checked={config.autoRestoreOnCrash}
-                onChange={(e) => handleAutoRestore(e.target.checked)}
-                className="accent-daintree-accent h-4 w-4"
+                onCheckedChange={handleAutoRestore}
+                aria-labelledby="auto-restore-title"
                 data-testid="auto-restore-checkbox"
               />
-              <span className="text-xs text-daintree-text/60">
-                Always restore sessions automatically
-              </span>
-            </label>
+            </div>
           )}
         </AppDialog.Body>
       </AppDialog>

@@ -28,6 +28,7 @@ interface SettingsSwitchProps {
   "aria-label"?: string;
   "aria-labelledby"?: string;
   "aria-describedby"?: string;
+  "data-testid"?: string;
   id?: string;
   name?: string;
   colorScheme?: ColorScheme;
@@ -41,6 +42,7 @@ export function SettingsSwitch({
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledby,
   "aria-describedby": ariaDescribedby,
+  "data-testid": dataTestId,
   id,
   name,
   colorScheme = "accent",
@@ -58,6 +60,7 @@ export function SettingsSwitch({
       aria-label={ariaLabel}
       aria-labelledby={ariaLabelledby}
       aria-describedby={ariaDescribedby}
+      data-testid={dataTestId}
       className={cn(
         "relative inline-flex items-center shrink-0 rounded-full transition-colors duration-200 ease-out",
         "w-11 h-6",

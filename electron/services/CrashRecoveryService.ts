@@ -99,7 +99,7 @@ export class CrashRecoveryService {
     const stored = store.get("crashRecovery");
     return {
       autoRestoreOnCrash:
-        typeof stored?.autoRestoreOnCrash === "boolean" ? stored.autoRestoreOnCrash : false,
+        typeof stored?.autoRestoreOnCrash === "boolean" ? stored.autoRestoreOnCrash : true,
     };
   }
 

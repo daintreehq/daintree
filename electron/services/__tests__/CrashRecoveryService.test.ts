@@ -868,10 +868,10 @@ describe("CrashRecoveryService", () => {
       expect(svc.getConfig()).toEqual({ autoRestoreOnCrash: true });
     });
 
-    it("defaults to false for invalid stored value", () => {
+    it("defaults to true for invalid stored value", () => {
       storeMock.get.mockReturnValue({ autoRestoreOnCrash: "yes" });
       const svc = makeService();
-      expect(svc.getConfig().autoRestoreOnCrash).toBe(false);
+      expect(svc.getConfig().autoRestoreOnCrash).toBe(true);
     });
 
     it("setConfig persists to store", () => {

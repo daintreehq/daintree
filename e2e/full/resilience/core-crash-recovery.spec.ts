@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   mkdirSync,
   writeFileSync,
+  readFileSync,
   readdirSync,
   existsSync,
   rmSync,
@@ -41,6 +42,20 @@ interface CrashLogEntry {
   errorStack?: string;
 }
 
+function forceAutoRestoreOff(userDataDir: string): void {
+  const configPath = path.join(userDataDir, "config.json");
+  let config: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    try {
+      config = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+    } catch {
+      config = {};
+    }
+  }
+  config.crashRecovery = { autoRestoreOnCrash: false };
+  writeFileSync(configPath, JSON.stringify(config));
+}
+
 function seedCrashData(userDataDir: string): void {
   const now = Date.now();
   const crashId = "e2e-test-crash";
@@ -49,6 +64,11 @@ function seedCrashData(userDataDir: string): void {
   const backupsDir = path.join(userDataDir, "backups");
   mkdirSync(crashesDir, { recursive: true });
   mkdirSync(backupsDir, { recursive: true });
+
+  // Opt out of auto-restore so the dialog appears for UI tests. The app
+  // defaults to silent restore — these specs exercise the explicit-recovery
+  // path that users only see when they've previously turned auto-restore off.
+  forceAutoRestoreOff(userDataDir);
 
   const crashLog: CrashLogEntry = {
     id: crashId,
@@ -207,17 +227,17 @@ test.describe.serial("Core: Crash Recovery", () => {
     await expect(details).not.toBeVisible();
   });
 
-  test("auto-restore checkbox toggles", async () => {
+  test("auto-restore switch toggles", async () => {
     const { window } = ctx;
-    const checkbox = window.locator(SEL.crashRecovery.autoRestoreCheckbox);
+    const switchEl = window.locator(SEL.crashRecovery.autoRestoreCheckbox);
 
-    await expect(checkbox).not.toBeChecked();
+    await expect(switchEl).not.toBeChecked();
 
-    await checkbox.click();
-    await expect(checkbox).toBeChecked();
+    await switchEl.click();
+    await expect(switchEl).toBeChecked();
 
-    await checkbox.click();
-    await expect(checkbox).not.toBeChecked();
+    await switchEl.click();
+    await expect(switchEl).not.toBeChecked();
   });
 
   test("start fresh dismisses dialog and shows main UI", async () => {
@@ -301,6 +321,11 @@ function seedCrashDataForRestore(
   const backupsDir = path.join(userDataDir, "backups");
   mkdirSync(crashesDir, { recursive: true });
   mkdirSync(backupsDir, { recursive: true });
+
+  // Opt out of auto-restore so the dialog appears for the panel-restoration
+  // specs. The app defaults to silent restore — this block covers the explicit
+  // recovery path users only see after turning auto-restore off.
+  forceAutoRestoreOff(userDataDir);
 
   const crashLog: CrashLogEntry = {
     id: crashId,
