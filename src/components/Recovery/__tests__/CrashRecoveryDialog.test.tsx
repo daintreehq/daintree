@@ -335,6 +335,70 @@ describe("CrashRecoveryDialog", () => {
       expect(screen.getByText("2 of 3 selected")).toBeTruthy();
     });
 
+    it("lets the user re-check a pre-deselected suspect and include it in restore", async () => {
+      const { onResolve } = setup({ crash: { crashCount: 1 } });
+      const suspect = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
+      expect(suspect.checked).toBe(false);
+      fireEvent.click(suspect);
+      expect((screen.getByTestId("panel-checkbox-t2") as HTMLInputElement).checked).toBe(true);
+      fireEvent.click(screen.getByTestId("restore-selected-button"));
+      await waitFor(() =>
+        expect(onResolve).toHaveBeenCalledWith({
+          kind: "restore",
+          panelIds: expect.arrayContaining(["t1", "t2", "t3"]),
+        })
+      );
+    });
+
+    it("pre-deselects every suspect when multiple panels are flagged", () => {
+      setup({
+        crash: {
+          crashCount: 1,
+          panels: [
+            { id: "t1", kind: "terminal", title: "Shell", location: "grid", isSuspect: false },
+            { id: "t2", kind: "terminal", title: "Claude", location: "dock", isSuspect: true },
+            { id: "t3", kind: "browser", title: "Docs", location: "grid", isSuspect: true },
+          ],
+        },
+      });
+      expect((screen.getByTestId("panel-checkbox-t1") as HTMLInputElement).checked).toBe(true);
+      expect((screen.getByTestId("panel-checkbox-t2") as HTMLInputElement).checked).toBe(false);
+      expect((screen.getByTestId("panel-checkbox-t3") as HTMLInputElement).checked).toBe(false);
+      expect(screen.getByText("1 of 3 selected")).toBeTruthy();
+      const title = within(screen.getByTestId("suspect-warning")).getByTestId(
+        "inline-status-banner-title"
+      );
+      expect(title.textContent).toContain("2 panels deselected");
+    });
+
+    it("disables restore-selected when every panel is a pre-deselected suspect", () => {
+      setup({
+        crash: {
+          crashCount: 1,
+          panels: [
+            { id: "t1", kind: "terminal", title: "Shell", location: "grid", isSuspect: true },
+            { id: "t2", kind: "terminal", title: "Claude", location: "dock", isSuspect: true },
+          ],
+        },
+      });
+      expect((screen.getByTestId("panel-checkbox-t1") as HTMLInputElement).checked).toBe(false);
+      expect((screen.getByTestId("panel-checkbox-t2") as HTMLInputElement).checked).toBe(false);
+      const restoreBtn = screen.getByTestId("restore-selected-button") as HTMLButtonElement;
+      expect(restoreBtn.disabled).toBe(true);
+      // Toggle-all should still let the user opt back in
+      fireEvent.click(screen.getByTestId("toggle-all-button"));
+      expect((screen.getByTestId("panel-checkbox-t1") as HTMLInputElement).checked).toBe(true);
+      expect((screen.getByTestId("panel-checkbox-t2") as HTMLInputElement).checked).toBe(true);
+    });
+
+    it("suspect banner description suggests deselecting when crashCount is 0", () => {
+      setup({ crash: { crashCount: 0 } });
+      const desc = within(screen.getByTestId("suspect-warning")).getByTestId(
+        "inline-status-banner-description"
+      );
+      expect(desc.textContent).toContain("Consider deselecting");
+    });
+
     it("calls onResolve with selected panel IDs when Restore Selected is clicked", async () => {
       const { onResolve } = setup();
       // Deselect t2
