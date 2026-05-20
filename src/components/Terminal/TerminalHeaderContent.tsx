@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pause, Lock, CheckCircle2 } from "lucide-react";
+import { Pause, Lock, CheckCircle2, Moon } from "lucide-react";
 import type {
   AgentState,
   PanelKind,
@@ -57,6 +57,11 @@ export interface TerminalHeaderContentProps {
    * so users get a quiet confirmation instead of the chip silently disappearing.
    */
   completedWithNoChanges?: boolean;
+  /**
+   * True when the terminal's renderer is hibernated (PTY preserved, xterm
+   * disposed). Drives the ambient Moon pill — Tier-1 only, no toast.
+   */
+  isHibernated?: boolean;
 }
 
 function formatMemory(kb: number): string {
@@ -96,6 +101,7 @@ export function TerminalHeaderContent({
   queueCount = 0,
   flowStatus,
   completedWithNoChanges = false,
+  isHibernated = false,
 }: TerminalHeaderContentProps) {
   const resourceEnabled = useResourceMonitoringStore((s) => s.enabled);
   const resourceState = useResourceMonitoringStore((s) => s.metrics.get(id));
@@ -423,6 +429,32 @@ export function TerminalHeaderContent({
             <div className="flex flex-col gap-0.5">
               <span className="font-medium">Output suspended</span>
               <span>Streaming stalled. Recovers automatically on focus.</span>
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      )}
+
+      {/* Hibernated badge — ambient cue that the pane's renderer is asleep.
+          Uses the idle activity color, not accent. The PTY survives; focus wakes it.
+          Renders after Paused/Suspended so higher-urgency flow-control states lead
+          visually when both apply (a lingering flowStatus can outlive hibernation). */}
+      {isHibernated && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className="flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded ml-1 border border-divider"
+              role="status"
+              aria-live="polite"
+              data-testid="terminal-hibernated-badge"
+            >
+              <Moon className="w-3 h-3" aria-hidden="true" />
+              Hibernated
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-xs">
+            <div className="flex flex-col gap-0.5">
+              <span className="font-medium">Renderer asleep</span>
+              <span>PTY preserved. Wakes on focus.</span>
             </div>
           </TooltipContent>
         </Tooltip>

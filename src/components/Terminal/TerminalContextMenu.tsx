@@ -11,6 +11,7 @@ import { actionService } from "@/services/ActionService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isBrowserPanel, isDevPreviewPanel, isReviewPanel } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
@@ -27,6 +28,7 @@ import {
   Lock,
   Maximize2,
   Minimize2,
+  Moon,
   OctagonX,
   PanelBottomClose,
   PanelTopClose,
@@ -90,6 +92,7 @@ export function TerminalContextMenu({
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
+  const isHibernated = useIsHibernated(terminalId);
   // Pull the panel directly here (rather than indexing through the shallow
   // selector above) so the eligibility check sees the live record. The
   // dropdown only renders fleet items when the panel is fleet-arm-eligible
@@ -289,6 +292,13 @@ export function TerminalContextMenu({
         case "background":
           void actionService.dispatch(
             "terminal.background",
+            { terminalId },
+            { source: sourceRef.current }
+          );
+          break;
+        case "hibernate":
+          void actionService.dispatch(
+            "terminal.hibernate",
             { terminalId },
             { source: sourceRef.current }
           );
@@ -747,6 +757,15 @@ export function TerminalContextMenu({
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
             Send to Background
           </ContextMenuItem>
+          {hasPty && (
+            <ContextMenuItem
+              disabled={isHibernated || terminalHasRunningAgentSession(terminal)}
+              onSelect={() => handleAction("hibernate")}
+            >
+              <Moon className={ICON_CLASS} aria-hidden="true" />
+              Sleep Terminal
+            </ContextMenuItem>
+          )}
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
             Trash Terminal

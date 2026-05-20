@@ -113,6 +113,11 @@ export interface ContentPanelProps extends BasePanelProps {
   // looking up at the fleet ribbon.
   isFleetFollower?: boolean;
 
+  // True when this pane's PTY is hibernated — the renderer is released but
+  // the process is preserved. Drives the panel-state-hibernated border cue
+  // and the Moon icon in the header.
+  isHibernated?: boolean;
+
   // Tab support
   tabs?: TabInfo[];
   groupId?: string;
@@ -175,6 +180,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     ambientAgentState,
     isSelected = false,
     isFleetFollower = false,
+    isHibernated = false,
     tabs,
     groupId,
     onTabClick,
@@ -301,6 +307,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           queueCount={queueCount}
           flowStatus={flowStatus}
           completedWithNoChanges={completedWithNoChanges}
+          isHibernated={isHibernated}
         />
       );
     }
@@ -318,6 +325,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     queueCount,
     flowStatus,
     completedWithNoChanges,
+    isHibernated,
   ]);
 
   const handleTitleDoubleClick = useCallback(
@@ -405,6 +413,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         data-runtime-kind={terminalChrome.runtimeKind}
         data-runtime-icon-id={terminalChrome.iconId || undefined}
         data-selected={isSelected || undefined}
+        data-hibernated={isHibernated || undefined}
         style={{
           contain: "content",
           ...(worktreeAccentColor
@@ -426,7 +435,9 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
                 ? "panel-state-waiting"
                 : showGridAttention && showGridAgentHighlights && isWorkingState
                   ? "panel-state-working"
-                  : "border-overlay hover:border-tint/[0.08]"),
+                  : showGridAttention && isHibernated
+                    ? "panel-state-hibernated"
+                    : "border-overlay hover:border-tint/[0.08]"),
           location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
           worktreeAccentColor && location === "grid" && !isMaximized && "panel-worktree-identity",
           className

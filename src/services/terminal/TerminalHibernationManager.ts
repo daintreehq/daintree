@@ -20,6 +20,7 @@ export interface HibernationManagerDeps extends TerminalListenerInstallDeps {
   applyDeferredResize: (id: string) => void;
   openLink: (url: string, id: string, event?: MouseEvent) => void;
   getCwdProvider: (id: string) => (() => string) | undefined;
+  onHibernationChanged: (id: string) => void;
 }
 
 export class TerminalHibernationManager {
@@ -129,6 +130,10 @@ export class TerminalHibernationManager {
     // Clear resize state
     this.deps.clearResizeJob(managed);
     this.deps.clearSettledTimer(id);
+
+    // Notify after the flag is written so React snapshot reads return the
+    // new value during the synchronous useSyncExternalStore consistency check.
+    this.deps.onHibernationChanged(id);
   }
 
   unhibernate(id: string): void {
@@ -200,6 +205,8 @@ export class TerminalHibernationManager {
     if (managed.isOpened) {
       managed.isDetached = false;
     }
+
+    this.deps.onHibernationChanged(id);
   }
 
   /**

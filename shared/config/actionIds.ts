@@ -306,6 +306,8 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.viewInfo",
   "terminal.restartService",
   "terminal.new",
+  "terminal.hibernate",
+  "terminal.hibernateAllIdle",
 
   // -- terminalNavigationActions --
   "terminal.moveToDock",
