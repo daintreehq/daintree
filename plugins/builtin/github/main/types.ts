@@ -1,4 +1,9 @@
-import type { GitHubPRCIStatus, PRTooltipData } from "../../../../shared/types/github.js";
+import type {
+  GitHubIssue,
+  GitHubPR,
+  GitHubPRCIStatus,
+  PRTooltipData,
+} from "../../../../shared/types/github.js";
 
 export interface RepoContext {
   owner: string;
@@ -10,6 +15,36 @@ export interface RepoStats {
   prCount: number;
   stale?: boolean;
   lastUpdated?: number;
+}
+
+/**
+ * Result of {@link REPO_ACTIVITY_PROBE_QUERY} — three timestamps that, taken
+ * together, change whenever anything `REPO_STATS_AND_PAGE_QUERY` observes could
+ * have changed. `getRepoStatsAndPage` compares a fresh probe against the
+ * previous one to decide whether the expensive stats query can be skipped.
+ */
+export interface RepoActivityProbe {
+  pushedAt: string | null;
+  issueUpdatedAt: string | null;
+  prUpdatedAt: string | null;
+}
+
+/** One connection page (issues or PRs) as returned by `getRepoStatsAndPage`. */
+export interface RepoConnectionPage<TItem> {
+  items: TItem[];
+  endCursor: string | null;
+  hasNextPage: boolean;
+  totalCount: number;
+}
+
+/**
+ * Full result of a network `getRepoStatsAndPage` fetch, cached so a matching
+ * activity probe can return it without re-issuing `REPO_STATS_AND_PAGE_QUERY`.
+ */
+export interface RepoStatsAndPageSnapshot {
+  stats: RepoStats;
+  issues: RepoConnectionPage<GitHubIssue>;
+  prs: RepoConnectionPage<GitHubPR>;
 }
 
 export interface RepoStatsResult {

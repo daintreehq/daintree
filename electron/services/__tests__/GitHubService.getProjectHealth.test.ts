@@ -71,12 +71,32 @@ vi.mock("../GitHubStatsCache.js", () => ({
 }));
 
 import { getProjectHealth, clearGitHubCaches } from "../../../plugins/builtin/github/main/index.js";
+import { velocityCache } from "../../../plugins/builtin/github/main/GitHubCaches.js";
+import { buildVelocityCacheKey } from "../../../plugins/builtin/github/main/GitHubHealth.js";
 
 beforeEach(() => {
   clearGitHubCaches();
   vi.restoreAllMocks();
   mockGetRemoteUrl.mockReset();
   mockGraphqlClient.mockReset();
+  // Pre-warm the velocity cache for every repo these tests resolve to. The
+  // slow-cadence merged-PR velocity query (issue #8757) then makes no GraphQL
+  // call, so the retry-guard call counts below count only the health query.
+  for (const owner of [
+    "old-owner",
+    "new-owner",
+    "owner-a",
+    "owner-b",
+    "owner-c",
+    "same-owner",
+    "owner",
+  ]) {
+    velocityCache.set(buildVelocityCacheKey(`${owner}/repo`, new Date()), {
+      60: 0,
+      120: 0,
+      180: 0,
+    });
+  }
 });
 
 describe("getProjectHealth retry guard", () => {

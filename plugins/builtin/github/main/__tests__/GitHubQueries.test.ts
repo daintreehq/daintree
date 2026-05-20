@@ -7,9 +7,11 @@ import {
   REPO_STATS_QUERY,
   LIST_PRS_QUERY,
   REPO_STATS_AND_PAGE_QUERY,
+  REPO_ACTIVITY_PROBE_QUERY,
   SEARCH_QUERY,
   GET_PR_QUERY,
   PROJECT_HEALTH_QUERY,
+  MERGE_VELOCITY_QUERY,
 } from "../GitHubQueries.js";
 
 describe("PROJECT_HEALTH_QUERY", () => {
@@ -30,22 +32,78 @@ describe("PROJECT_HEALTH_QUERY", () => {
     expect(PROJECT_HEALTH_QUERY).toContain("totalCount");
   });
 
+  it("does not duplicate the open issue/PR counts already fetched by the stats query", () => {
+    // Issue #8757: open counts are read from `repoStatsCache` (populated by
+    // REPO_STATS_AND_PAGE_QUERY), so re-fetching them here is wasteful.
+    expect(PROJECT_HEALTH_QUERY).not.toContain("issues(states: OPEN)");
+    expect(PROJECT_HEALTH_QUERY).not.toContain("pullRequests(states: OPEN)");
+  });
+
+  it("does not run merged-PR velocity search blocks (moved to MERGE_VELOCITY_QUERY)", () => {
+    // Issue #8757: the three `search` blocks change on a days timescale and
+    // moved to MERGE_VELOCITY_QUERY behind a long-lived cache.
+    expect(PROJECT_HEALTH_QUERY).not.toContain("search(");
+    expect(PROJECT_HEALTH_QUERY).not.toContain("$merged60");
+    expect(PROJECT_HEALTH_QUERY).not.toContain("$merged120");
+    expect(PROJECT_HEALTH_QUERY).not.toContain("$merged180");
+  });
+
+  it("declares only owner and repo as variables", () => {
+    expect(PROJECT_HEALTH_QUERY).toContain("$owner: String!");
+    expect(PROJECT_HEALTH_QUERY).toContain("$repo: String!");
+  });
+});
+
+describe("MERGE_VELOCITY_QUERY", () => {
   it("uses search API for accurate merged PR counts per range", () => {
-    expect(PROJECT_HEALTH_QUERY).toContain("mergedPRs60: search");
-    expect(PROJECT_HEALTH_QUERY).toContain("mergedPRs120: search");
-    expect(PROJECT_HEALTH_QUERY).toContain("mergedPRs180: search");
-    expect(PROJECT_HEALTH_QUERY).toContain("issueCount");
+    expect(MERGE_VELOCITY_QUERY).toContain("mergedPRs60: search");
+    expect(MERGE_VELOCITY_QUERY).toContain("mergedPRs120: search");
+    expect(MERGE_VELOCITY_QUERY).toContain("mergedPRs180: search");
+    expect(MERGE_VELOCITY_QUERY).toContain("issueCount");
   });
 
-  it("accepts merged search query variables for each range", () => {
-    expect(PROJECT_HEALTH_QUERY).toContain("$merged60: String!");
-    expect(PROJECT_HEALTH_QUERY).toContain("$merged120: String!");
-    expect(PROJECT_HEALTH_QUERY).toContain("$merged180: String!");
+  it("accepts a merged-search query variable for each range", () => {
+    expect(MERGE_VELOCITY_QUERY).toContain("$merged60: String!");
+    expect(MERGE_VELOCITY_QUERY).toContain("$merged120: String!");
+    expect(MERGE_VELOCITY_QUERY).toContain("$merged180: String!");
   });
 
-  it("fetches open issue and PR counts", () => {
-    expect(PROJECT_HEALTH_QUERY).toContain("issues(states: OPEN)");
-    expect(PROJECT_HEALTH_QUERY).toContain("pullRequests(states: OPEN)");
+  it("does not declare a $query variable (rejected by @octokit/graphql)", () => {
+    // Past lesson #1376: @octokit/graphql reserves `query` for the document.
+    expect(MERGE_VELOCITY_QUERY).not.toContain("$query");
+  });
+
+  it("includes rateLimit so velocity fetches keep rate-limit state in sync", () => {
+    expect(MERGE_VELOCITY_QUERY).toContain("rateLimit {");
+    expect(MERGE_VELOCITY_QUERY).toContain("cost");
+    expect(MERGE_VELOCITY_QUERY).toContain("remaining");
+    expect(MERGE_VELOCITY_QUERY).toContain("resetAt");
+  });
+});
+
+describe("REPO_ACTIVITY_PROBE_QUERY", () => {
+  it("fetches the three activity timestamps used as the change sentinel", () => {
+    expect(REPO_ACTIVITY_PROBE_QUERY).toContain("pushedAt");
+    expect(REPO_ACTIVITY_PROBE_QUERY).toContain("updatedAt");
+  });
+
+  it("orders both connections by UPDATED_AT desc so the freshest node is first", () => {
+    const matches = REPO_ACTIVITY_PROBE_QUERY.match(
+      /orderBy: \{field: UPDATED_AT, direction: DESC\}/g
+    );
+    expect(matches).not.toBeNull();
+    expect(matches!.length).toBe(2);
+  });
+
+  it("spans every issue and PR state so closes and merges advance the probe", () => {
+    expect(REPO_ACTIVITY_PROBE_QUERY).toContain("issues(first: 1, states: [OPEN, CLOSED]");
+    expect(REPO_ACTIVITY_PROBE_QUERY).toContain(
+      "pullRequests(first: 1, states: [OPEN, CLOSED, MERGED]"
+    );
+  });
+
+  it("includes rateLimit so the probe keeps rate-limit state in sync", () => {
+    expect(REPO_ACTIVITY_PROBE_QUERY).toContain("rateLimit {");
   });
 });
 
