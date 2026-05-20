@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
@@ -6,6 +6,8 @@ import { FleetPickerContent } from "@/components/Fleet/FleetPickerContent";
 import { useFleetPicker } from "@/hooks/useFleetPicker";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
+
+type CommitMode = "replace" | "append";
 
 export interface FleetPickerPaletteProps {
   isOpen: boolean;
@@ -19,19 +21,34 @@ export interface FleetPickerPaletteProps {
  * Mounts `FleetPickerContent` inside `AppPaletteDialog` so the picker inherits
  * the canonical centered/scrimmed/aria-modal palette tier-fast animation
  * (~150ms enter / ~100ms exit). Cold-start mode: pre-selects active-worktree
- * eligibles, REPLACES the armed set on confirm via `armIds`. The ribbon's
- * `+ Add panes…` flow uses a different consumer (ribbon-add owner, append
- * semantics) — see `FleetArmingRibbon.tsx`.
+ * eligibles. A footer segmented control lets the user choose between replace
+ * (`armIds`, default) and append (`addToFleet`) semantics per session. The
+ * palette is mounted persistently by its parent (only `isOpen` toggles), so
+ * `commitMode` is explicitly reset to `"replace"` whenever the palette closes
+ * — relying on unmount-driven reset would silently retain Append across opens.
+ * The hook's `mode` prop is kept frozen at `"cold-start"` regardless of the
+ * toggle, because changing it would re-fire the pre-selection effect and wipe
+ * the user's picks.
  */
 export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps): ReactElement {
   const armIds = useFleetArmingStore((s) => s.armIds);
+  const addToFleet = useFleetArmingStore((s) => s.addToFleet);
+  const [commitMode, setCommitMode] = useState<CommitMode>("replace");
+
+  useEffect(() => {
+    if (!isOpen) setCommitMode("replace");
+  }, [isOpen]);
 
   const handleCommit = useCallback(
     (selected: string[]) => {
-      armIds(selected);
+      if (commitMode === "append") {
+        addToFleet(selected);
+      } else {
+        armIds(selected);
+      }
       onClose();
     },
-    [armIds, onClose]
+    [armIds, addToFleet, commitMode, onClose]
   );
 
   const picker = useFleetPicker({
@@ -163,6 +180,45 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                 </button>
               </div>
               <div className="flex items-center gap-1.5">
+                <div
+                  className="flex gap-1 text-[11px]"
+                  role="radiogroup"
+                  aria-label="Commit mode"
+                  data-testid="fleet-picker-cold-start-commit-mode"
+                >
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={commitMode === "replace"}
+                    onClick={() => setCommitMode("replace")}
+                    data-testid="fleet-picker-cold-start-commit-mode-replace"
+                    className={cn(
+                      "rounded px-2 py-1 transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+                      commitMode === "replace"
+                        ? "bg-tint/[0.14] text-daintree-text"
+                        : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
+                    )}
+                  >
+                    Replace
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={commitMode === "append"}
+                    onClick={() => setCommitMode("append")}
+                    data-testid="fleet-picker-cold-start-commit-mode-append"
+                    className={cn(
+                      "rounded px-2 py-1 transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+                      commitMode === "append"
+                        ? "bg-tint/[0.14] text-daintree-text"
+                        : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
+                    )}
+                  >
+                    Append
+                  </button>
+                </div>
                 <button
                   type="button"
                   onClick={onClose}
@@ -186,9 +242,13 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
                   )}
                 >
-                  {picker.confirmedIds.length === 0
-                    ? "Arm selected"
-                    : `Arm ${picker.confirmedIds.length} selected`}
+                  {commitMode === "append"
+                    ? picker.confirmedIds.length === 0
+                      ? "Add"
+                      : `Add ${picker.confirmedIds.length}`
+                    : picker.confirmedIds.length === 0
+                      ? "Arm selected"
+                      : `Arm ${picker.confirmedIds.length} selected`}
                 </button>
               </div>
             </div>
