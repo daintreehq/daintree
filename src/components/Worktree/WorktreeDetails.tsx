@@ -3,8 +3,9 @@ import type { WorktreeState } from "../../types";
 import type { ErrorRecord, RetryAction } from "../../store/errorStore";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { FileChangeList } from "./FileChangeList";
-import { ActivityLight } from "./ActivityLight";
 import { LiveTimeAgo } from "./LiveTimeAgo";
+import { CommitAuthorAvatar } from "./WorktreeCard/CommitAuthorAvatar";
+import { CommitInfoTooltip } from "./WorktreeCard/CommitInfoTooltip";
 import { cn } from "../../lib/utils";
 import { GitCommit, Copy, Check, ExternalLink } from "lucide-react";
 import { parseNoteWithLinks, formatPath, type TextSegment } from "../../utils/textParsing";
@@ -24,6 +25,8 @@ export interface WorktreeDetailsProps {
   showLastCommit?: boolean;
   lastActivityTimestamp?: number | null;
   showTime?: boolean;
+  /** Forge profile picture for the committer, tried before Gravatar. */
+  forgeAvatarUrl?: string;
 
   onPathClick: () => void;
   onDismissError: (id: string) => void;
@@ -47,10 +50,45 @@ export function WorktreeDetails({
   showLastCommit,
   lastActivityTimestamp,
   showTime = false,
+  forgeAvatarUrl,
 }: WorktreeDetailsProps) {
   const displayPath = formatPath(worktree.path, homeDir);
   const rawLastCommitMsg = worktree.worktreeChanges?.lastCommitMessage;
   const { copied: pathCopied, copy: copyPath } = useCopyWithFeedback();
+
+  // "Last active" footer line. Prefers the worktree's activity timestamp, but
+  // falls back to the last-commit time so a worktree with no in-session
+  // activity still reports something meaningful.
+  const lastCommitAuthor = worktree.worktreeChanges?.lastCommitAuthor ?? null;
+  const lastCommitTs = worktree.worktreeChanges?.lastCommitTimestampMs;
+  const hasCommit = lastCommitTs != null && Number.isFinite(lastCommitTs);
+  const activityTime =
+    lastActivityTimestamp != null && Number.isFinite(lastActivityTimestamp)
+      ? lastActivityTimestamp
+      : hasCommit
+        ? lastCommitTs!
+        : null;
+  const showLastActive = showTime && activityTime != null;
+
+  const lastActiveLine = (
+    <div className="flex items-center gap-2 text-xs">
+      {lastCommitAuthor && (
+        <CommitAuthorAvatar author={lastCommitAuthor} forgeAvatarUrl={forgeAvatarUrl} size={20} />
+      )}
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="shrink-0 font-medium text-text-secondary">Last active</span>
+        <LiveTimeAgo timestamp={activityTime} className="shrink-0 text-text-muted" />
+        {lastCommitAuthor && (
+          <>
+            <span className="shrink-0 text-text-muted" aria-hidden="true">
+              ·
+            </span>
+            <span className="min-w-0 truncate text-text-muted">{lastCommitAuthor.name}</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
 
   const parsedNoteSegments: TextSegment[] = useMemo(() => {
     return effectiveNote ? parseNoteWithLinks(effectiveNote) : [];
@@ -72,24 +110,12 @@ export function WorktreeDetails({
     effectiveNote ||
     effectiveSummary ||
     (showLastCommit && rawLastCommitMsg) ||
-    (hasChanges && worktree.worktreeChanges) ||
-    (showTime && lastActivityTimestamp != null);
+    (hasChanges && worktree.worktreeChanges);
 
   return (
     <div className="space-y-4">
       {hasDetailsContent && (
         <>
-          {/* Time Display for Expanded View */}
-          {showTime && lastActivityTimestamp != null && (
-            <div className="flex items-center gap-2 border-b border-border-divider pb-2">
-              <div className="flex items-center gap-1.5 text-xs text-text-secondary">
-                <span className="text-xs font-medium">Last active:</span>
-                <ActivityLight lastActivityTimestamp={lastActivityTimestamp} />
-                <LiveTimeAgo timestamp={lastActivityTimestamp} />
-              </div>
-            </div>
-          )}
-
           {/* Errors (if any) */}
           {worktreeErrors.length > 0 && (
             <div className="space-y-1">
@@ -169,8 +195,8 @@ export function WorktreeDetails({
         </>
       )}
 
-      {/* System path footer */}
-      <div className="border-t border-border-subtle pt-3">
+      {/* Footer: system path, then the last-active line */}
+      <div className="space-y-2.5 border-t border-border-subtle pt-3">
         <div className="flex items-center gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -213,6 +239,24 @@ export function WorktreeDetails({
             </TooltipContent>
           </Tooltip>
         </div>
+
+        {showLastActive &&
+          (hasCommit ? (
+            <Tooltip>
+              <TooltipTrigger asChild>{lastActiveLine}</TooltipTrigger>
+              <TooltipContent side="bottom" className="p-3">
+                <CommitInfoTooltip
+                  lastCommitTimestampMs={lastCommitTs!}
+                  author={lastCommitAuthor}
+                  commitMessage={rawLastCommitMsg}
+                  forgeAvatarUrl={forgeAvatarUrl}
+                  lastActivityTimestamp={lastActivityTimestamp}
+                />
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            lastActiveLine
+          ))}
       </div>
     </div>
   );

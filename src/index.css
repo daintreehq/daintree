@@ -1763,16 +1763,6 @@ body,
   }
 }
 
-/* Avatar freshness ring — 1000ms box-shadow colour decay (mirrors
- * ActivityLight's transition-colors). Snap to the final colour under
- * reduced-motion; the decay still steps via the tick-driven inline style,
- * it just no longer interpolates between steps. WCAG 2.3.3. */
-@variant reduce-motion {
-  .avatar-freshness-ring {
-    transition: none;
-  }
-}
-
 /* Terminal Selection State */
 .terminal-selected {
   border-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));

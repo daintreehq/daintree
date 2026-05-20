@@ -228,6 +228,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 showLastCommit={true}
                 lastActivityTimestamp={worktree.lastActivityTimestamp}
                 showTime={true}
+                forgeAvatarUrl={forgeAuthorAvatarUrl}
               />
             </div>
           </div>
