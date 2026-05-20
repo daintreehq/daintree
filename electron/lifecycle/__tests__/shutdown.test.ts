@@ -110,6 +110,116 @@ vi.mock("../../setup/environment.js", () => ({
   },
 }));
 
+const hibernationMock = vi.hoisted(() => ({ stop: vi.fn() }));
+vi.mock("../../services/HibernationService.js", () => ({
+  getHibernationService: vi.fn(() => hibernationMock),
+}));
+
+const idleTerminalMock = vi.hoisted(() => ({ stop: vi.fn() }));
+vi.mock("../../services/IdleTerminalNotificationService.js", () => ({
+  getIdleTerminalNotificationService: vi.fn(() => idleTerminalMock),
+}));
+
+const systemSleepMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+vi.mock("../../services/SystemSleepService.js", () => ({
+  getSystemSleepService: vi.fn(() => systemSleepMock),
+}));
+
+const ghTokenHealthMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+vi.mock("../../services/github/GitHubTokenHealthService.js", () => ({
+  gitHubTokenHealthService: ghTokenHealthMock,
+}));
+
+const agentConnectivityMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+const connectivityRegistryMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+vi.mock("../../services/connectivity/index.js", () => ({
+  agentConnectivityService: agentConnectivityMock,
+  getServiceConnectivityRegistry: vi.fn(() => connectivityRegistryMock),
+}));
+
+const notificationServiceMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+vi.mock("../../services/NotificationService.js", () => ({
+  notificationService: notificationServiceMock,
+}));
+
+const preAgentSnapshotMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+vi.mock("../../services/PreAgentSnapshotService.js", () => ({
+  preAgentSnapshotService: preAgentSnapshotMock,
+}));
+
+const pluginServiceMock = vi.hoisted(() => ({ setWorkspaceClient: vi.fn() }));
+vi.mock("../../services/PluginService.js", () => ({
+  pluginService: pluginServiceMock,
+}));
+
+const ccrConfigMock = vi.hoisted(() => ({ stopWatching: vi.fn(() => Promise.resolve()) }));
+const resourceProfileMock = vi.hoisted(() => ({ stop: vi.fn() }));
+const worktreePortBrokerMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+const mainProcessWatchdogMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+const agentNotificationMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+const autoUpdaterMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+const windowsStoreNotifierMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+
+const serviceRefsMock = vi.hoisted(() => {
+  let ccr: { stopWatching: () => Promise<void> } | null = null;
+  let resourceProfile: { stop: () => void } | null = null;
+  let worktreePortBroker: { dispose: () => void } | null = null;
+  let watchdog: { dispose: () => void } | null = null;
+  let agentNotification: { dispose: () => void } | null = null;
+  let autoUpdater: { dispose: () => void } | null = null;
+  let windowsStoreNotifier: { dispose: () => void } | null = null;
+  return {
+    setInitialState: (state: {
+      ccr?: typeof ccr;
+      resourceProfile?: typeof resourceProfile;
+      worktreePortBroker?: typeof worktreePortBroker;
+      watchdog?: typeof watchdog;
+      agentNotification?: typeof agentNotification;
+      autoUpdater?: typeof autoUpdater;
+      windowsStoreNotifier?: typeof windowsStoreNotifier;
+    }) => {
+      ccr = state.ccr ?? null;
+      resourceProfile = state.resourceProfile ?? null;
+      worktreePortBroker = state.worktreePortBroker ?? null;
+      watchdog = state.watchdog ?? null;
+      agentNotification = state.agentNotification ?? null;
+      autoUpdater = state.autoUpdater ?? null;
+      windowsStoreNotifier = state.windowsStoreNotifier ?? null;
+    },
+    getCcrConfigService: vi.fn(() => ccr),
+    setCcrConfigService: vi.fn((v: typeof ccr) => {
+      ccr = v;
+    }),
+    getResourceProfileService: vi.fn(() => resourceProfile),
+    setResourceProfileService: vi.fn((v: typeof resourceProfile) => {
+      resourceProfile = v;
+    }),
+    getWorktreePortBrokerRef: vi.fn(() => worktreePortBroker),
+    setWorktreePortBrokerRef: vi.fn((v: typeof worktreePortBroker) => {
+      worktreePortBroker = v;
+    }),
+    setWorkspaceClientRef: vi.fn(),
+    getMainProcessWatchdogClientRef: vi.fn(() => watchdog),
+    setMainProcessWatchdogClientRef: vi.fn((v: typeof watchdog) => {
+      watchdog = v;
+    }),
+    getAgentNotificationServiceRef: vi.fn(() => agentNotification),
+    setAgentNotificationServiceRef: vi.fn((v: typeof agentNotification) => {
+      agentNotification = v;
+    }),
+    getAutoUpdaterServiceRef: vi.fn(() => autoUpdater),
+    setAutoUpdaterServiceRef: vi.fn((v: typeof autoUpdater) => {
+      autoUpdater = v;
+    }),
+    getWindowsStoreNotifierServiceRef: vi.fn(() => windowsStoreNotifier),
+    setWindowsStoreNotifierServiceRef: vi.fn((v: typeof windowsStoreNotifier) => {
+      windowsStoreNotifier = v;
+    }),
+  };
+});
+
+vi.mock("../../window/serviceRefs.js", () => serviceRefsMock);
+
 import type { ShutdownDeps } from "../shutdown.js";
 
 function makeDeps(overrides?: Partial<ShutdownDeps>): ShutdownDeps {
@@ -146,6 +256,8 @@ describe("registerShutdownHandler", () => {
     signalShutdownMock.isSignalShutdown.mockReturnValue(false);
     quitWarningMock.getActiveAgentCount.mockReturnValue(0);
     quitWarningMock.showQuitWarning.mockResolvedValue(true);
+    ccrConfigMock.stopWatching.mockResolvedValue(undefined);
+    serviceRefsMock.setInitialState({});
   });
 
   async function setup(overrides?: Partial<ShutdownDeps>) {
@@ -566,6 +678,203 @@ describe("registerShutdownHandler", () => {
       );
 
       consoleSpy.mockRestore();
+    });
+  });
+
+  // The global services below used to be torn down by the `win.on("closed")`
+  // handler in electron/window/windowServices.ts when the last window closed.
+  // Issue #8604: on macOS, last-window-close does NOT quit the app, so a dock
+  // reactivation could race the async teardown. They now live in `before-quit`
+  // so they are disposed exactly once at app quit time.
+  describe("global service disposal moved from last-window-close (issue #8604)", () => {
+    it("disposes hibernation, idle-terminal, system-sleep, and connectivity services", async () => {
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(hibernationMock.stop).toHaveBeenCalledTimes(1);
+      expect(idleTerminalMock.stop).toHaveBeenCalledTimes(1);
+      expect(systemSleepMock.dispose).toHaveBeenCalledTimes(1);
+      expect(ghTokenHealthMock.dispose).toHaveBeenCalledTimes(1);
+      expect(agentConnectivityMock.dispose).toHaveBeenCalledTimes(1);
+      expect(connectivityRegistryMock.dispose).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.dispose).toHaveBeenCalledTimes(1);
+      expect(preAgentSnapshotMock.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("disposes optional refs only when present and nulls them after", async () => {
+      serviceRefsMock.setInitialState({
+        ccr: ccrConfigMock,
+        resourceProfile: resourceProfileMock,
+        worktreePortBroker: worktreePortBrokerMock,
+        watchdog: mainProcessWatchdogMock,
+        agentNotification: agentNotificationMock,
+        autoUpdater: autoUpdaterMock,
+        windowsStoreNotifier: windowsStoreNotifierMock,
+      });
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(ccrConfigMock.stopWatching).toHaveBeenCalledTimes(1);
+      expect(resourceProfileMock.stop).toHaveBeenCalledTimes(1);
+      expect(worktreePortBrokerMock.dispose).toHaveBeenCalledTimes(1);
+      expect(mainProcessWatchdogMock.dispose).toHaveBeenCalledTimes(1);
+      expect(agentNotificationMock.dispose).toHaveBeenCalledTimes(1);
+      expect(autoUpdaterMock.dispose).toHaveBeenCalledTimes(1);
+      expect(windowsStoreNotifierMock.dispose).toHaveBeenCalledTimes(1);
+
+      // Refs nulled so any late callbacks no-op.
+      expect(serviceRefsMock.setCcrConfigService).toHaveBeenCalledWith(null);
+      expect(serviceRefsMock.setResourceProfileService).toHaveBeenCalledWith(null);
+      expect(serviceRefsMock.setWorktreePortBrokerRef).toHaveBeenCalledWith(null);
+      expect(serviceRefsMock.setMainProcessWatchdogClientRef).toHaveBeenCalledWith(null);
+      expect(serviceRefsMock.setAgentNotificationServiceRef).toHaveBeenCalledWith(null);
+      expect(serviceRefsMock.setAutoUpdaterServiceRef).toHaveBeenCalledWith(null);
+      expect(serviceRefsMock.setWindowsStoreNotifierServiceRef).toHaveBeenCalledWith(null);
+    });
+
+    it("clears PluginService's WorkspaceClient reference during shutdown", async () => {
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(pluginServiceMock.setWorkspaceClient).toHaveBeenCalledWith(null);
+    });
+
+    it("still exits cleanly when a moved disposal throws", async () => {
+      hibernationMock.stop.mockImplementationOnce(() => {
+        throw new Error("hibernation boom");
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[MAIN] HibernationService.stop failed:",
+        expect.any(Error)
+      );
+      // Sibling disposals still run.
+      expect(idleTerminalMock.stop).toHaveBeenCalled();
+      expect(notificationServiceMock.dispose).toHaveBeenCalled();
+
+      warnSpy.mockRestore();
+    });
+
+    it("still exits cleanly when ccrConfigService.stopWatching rejects", async () => {
+      serviceRefsMock.setInitialState({ ccr: ccrConfigMock });
+      ccrConfigMock.stopWatching.mockRejectedValueOnce(new Error("ccr boom"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[MAIN] CcrConfigService.stopWatching failed:",
+        expect.any(Error)
+      );
+      // Ref still cleared after the failed stop.
+      expect(serviceRefsMock.setCcrConfigService).toHaveBeenCalledWith(null);
+
+      warnSpy.mockRestore();
+    });
+
+    it("stops CCR watcher and clears PluginService before WorkspaceClient disposal", async () => {
+      const order: string[] = [];
+      serviceRefsMock.setInitialState({ ccr: ccrConfigMock });
+
+      ccrConfigMock.stopWatching.mockImplementationOnce(async () => {
+        order.push("ccr:stop");
+      });
+      pluginServiceMock.setWorkspaceClient.mockImplementationOnce(() => {
+        order.push("plugin:setWorkspaceClient(null)");
+      });
+      const workspaceDispose = vi.fn(async () => {
+        order.push("workspace:dispose");
+      });
+
+      const { beforeQuitCb } = await setup({
+        getWorkspaceClient: () => ({ dispose: workspaceDispose }) as never,
+      });
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      // CCR + plugin unwiring must complete before workspaceClient.dispose()
+      // runs; otherwise a file-change callback could fire into a disposing client.
+      const ccrIdx = order.indexOf("ccr:stop");
+      const pluginIdx = order.indexOf("plugin:setWorkspaceClient(null)");
+      const workspaceIdx = order.indexOf("workspace:dispose");
+      expect(ccrIdx).toBeGreaterThanOrEqual(0);
+      expect(pluginIdx).toBeGreaterThanOrEqual(0);
+      expect(workspaceIdx).toBeGreaterThanOrEqual(0);
+      expect(ccrIdx).toBeLessThan(workspaceIdx);
+      expect(pluginIdx).toBeLessThan(workspaceIdx);
+    });
+
+    it("nulls workspaceClientRef after disposeWorkspaceClient runs", async () => {
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(serviceRefsMock.setWorkspaceClientRef).toHaveBeenCalledWith(null);
+    });
+
+    it("still tears down PTY/workspace/watchdog when an earlier optional-ref dispose throws", async () => {
+      serviceRefsMock.setInitialState({
+        autoUpdater: autoUpdaterMock,
+        worktreePortBroker: worktreePortBrokerMock,
+        watchdog: mainProcessWatchdogMock,
+      });
+      autoUpdaterMock.dispose.mockImplementationOnce(() => {
+        throw new Error("auto-updater boom");
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      // The throwing optional-ref dispose must not strand the rest of the
+      // sync block — the WorktreePortBroker, watchdog, and ref-nullers all
+      // sit after it in source order.
+      expect(worktreePortBrokerMock.dispose).toHaveBeenCalled();
+      expect(mainProcessWatchdogMock.dispose).toHaveBeenCalled();
+      expect(serviceRefsMock.setAutoUpdaterServiceRef).toHaveBeenCalledWith(null);
+      expect(serviceRefsMock.setWorkspaceClientRef).toHaveBeenCalledWith(null);
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[MAIN] AutoUpdaterService.dispose failed:",
+        expect.any(Error)
+      );
+
+      warnSpy.mockRestore();
     });
   });
 });
