@@ -127,6 +127,12 @@ export function truncateBody(body: string | null | undefined, maxLength = 150): 
 export function clearPRCaches(): void {
   etagCacheVersion++;
   prListCache.clear();
+  // The snapshot embeds the first-page PR list and the probe gates whether it
+  // is served — both can resurface a stale PR list after a refresh, so they
+  // must drop with the PR caches. `velocityCache` is repo-level metadata on a
+  // days timescale, not PR-list state, so it deliberately survives here.
+  repoActivityProbeCache.clear();
+  repoStatsAndPageSnapshotCache.clear();
   prTooltipCache.clear();
   prTooltipWrittenAt.clear();
   prETagCache.clear();

@@ -56,6 +56,7 @@ import {
   prListCache,
   repoActivityProbeCache,
   repoStatsAndPageSnapshotCache,
+  clearPRCaches,
 } from "../GitHubCaches.js";
 
 const CACHE_KEY = "testowner/testrepo";
@@ -228,5 +229,45 @@ describe("getRepoStatsAndPage — activity-probe gate (issue #8757)", () => {
 
     expect(repoActivityProbeCache.get(CACHE_KEY)).toBeUndefined();
     expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBeUndefined();
+  });
+
+  it("keeps the prior probe + snapshot when a later full query fails", async () => {
+    let probe = probeResponse("p1", "i1", "r1");
+    let statsShouldFail = false;
+    mockClient.mockImplementation(async (query: string) => {
+      if (query.includes("GetRepoActivityProbe")) return probe;
+      if (statsShouldFail) throw new Error("stats boom");
+      return statsResponse(5, 3);
+    });
+
+    await getRepoStatsAndPage("/test", false);
+    const goodProbe = repoActivityProbeCache.get(CACHE_KEY);
+    const goodSnapshot = repoStatsAndPageSnapshotCache.get(CACHE_KEY);
+    expect(goodProbe).toBeDefined();
+    expect(goodSnapshot).toBeDefined();
+
+    expireMemoryCaches();
+    probe = probeResponse("p2", "i1", "r1"); // changed — forces a full query
+    statsShouldFail = true;
+    await getRepoStatsAndPage("/test", false);
+
+    // A failed fetch must not clobber the last good probe/snapshot.
+    expect(repoActivityProbeCache.get(CACHE_KEY)).toEqual(goodProbe);
+    expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toEqual(goodSnapshot);
+  });
+
+  it("re-runs the full query after clearPRCaches invalidates the snapshot", async () => {
+    mockClient.mockImplementation(async (query: string) => {
+      if (query.includes("GetRepoActivityProbe")) return probeResponse("p1", "i1", "r1");
+      return statsResponse(5, 3);
+    });
+
+    await getRepoStatsAndPage("/test", false);
+    expireMemoryCaches();
+    // A user-initiated GitHub refresh must not be defeated by a probe hit.
+    clearPRCaches();
+    await getRepoStatsAndPage("/test", false);
+
+    expect(statsQueryCount()).toBe(2);
   });
 });

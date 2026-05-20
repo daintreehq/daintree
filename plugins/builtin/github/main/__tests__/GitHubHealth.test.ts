@@ -190,6 +190,45 @@ describe("getProjectHealth — merged-PR velocity cadence", () => {
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });
+
+  it("retries the velocity query on the next poll — a failed fetch is not cached", async () => {
+    let velocityShouldFail = true;
+    mockClient.mockImplementation(async (query: string) => {
+      if (query.includes("GetMergeVelocity")) {
+        if (velocityShouldFail) throw new Error("velocity boom");
+        return velocityResponse(7, 11, 19);
+      }
+      return healthResponse();
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const first = await getProjectHealth("/test", false);
+    expect(first.health?.mergeVelocity.mergedCounts).toEqual({ 60: 0, 120: 0, 180: 0 });
+
+    // Next poll (project-health cache expired): velocity recovers and is used.
+    projectHealthCache.clear();
+    velocityShouldFail = false;
+    const second = await getProjectHealth("/test", false);
+    expect(second.health?.mergeVelocity.mergedCounts).toEqual({ 60: 7, 120: 11, 180: 19 });
+
+    warnSpy.mockRestore();
+  });
+
+  it("bypassCache re-runs the health query past a warm projectHealthCache", async () => {
+    warmVelocity({ 60: 1, 120: 2, 180: 3 });
+    mockClient.mockResolvedValue(healthResponse("SUCCESS"));
+
+    await getProjectHealth("/test", false); // warms projectHealthCache
+    const result = await getProjectHealth("/test", true); // bypassCache
+
+    expect(result.health?.ciStatus).toBe("success");
+    const healthCalls = mockClient.mock.calls.filter((c) =>
+      String(c[0]).includes("GetProjectHealth")
+    );
+    expect(healthCalls).toHaveLength(2);
+    // bypassCache must still not re-run the slow-cadence velocity query.
+    expect(velocityQueryCount()).toBe(0);
+  });
 });
 
 describe("buildVelocityCacheKey", () => {

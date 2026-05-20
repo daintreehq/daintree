@@ -117,7 +117,14 @@ describe("polling-optimization caches (issue #8757)", () => {
     expect(repoStatsAndPageSnapshotCache.get("owner/repo")).toBeUndefined();
   });
 
-  it("clearPRCaches leaves them intact — they only clear on a full GitHub reset", () => {
+  it("clearPRCaches drops the probe + snapshot caches (they can serve a stale PR list)", () => {
+    seedAll();
+    clearPRCaches();
+    expect(repoActivityProbeCache.get("owner/repo")).toBeUndefined();
+    expect(repoStatsAndPageSnapshotCache.get("owner/repo")).toBeUndefined();
+  });
+
+  it("clearPRCaches keeps the velocity cache — it is repo metadata, not PR-list state", () => {
     seedAll();
     clearPRCaches();
     expect(velocityCache.get("owner/repo::velocity::2026-05-20")).toEqual({
@@ -125,7 +132,5 @@ describe("polling-optimization caches (issue #8757)", () => {
       120: 2,
       180: 3,
     });
-    expect(repoActivityProbeCache.get("owner/repo")).not.toBeUndefined();
-    expect(repoStatsAndPageSnapshotCache.get("owner/repo")).not.toBeUndefined();
   });
 });
