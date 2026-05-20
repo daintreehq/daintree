@@ -1189,7 +1189,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     };
   };
   gpu: {
-    getStatus(): Promise<{ hardwareAccelerationDisabled: boolean }>;
+    getStatus(): Promise<{ hardwareAccelerationDisabled: boolean; angleFallbackActive: boolean }>;
     setHardwareAcceleration(enabled: boolean): Promise<void>;
   };
   // Invoke methods come from GeneratedElectronAPI; onTelemetryConsentChanged is a renderer-only subscription.

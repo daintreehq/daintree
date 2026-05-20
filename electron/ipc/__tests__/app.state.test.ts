@@ -64,6 +64,7 @@ vi.mock("../../utils/gpuDetection.js", () => ({
 
 vi.mock("../../services/GpuCrashMonitorService.js", () => ({
   isGpuDisabledByFlag: vi.fn(() => false),
+  isGpuAngleFallbackApplied: vi.fn(() => false),
 }));
 
 const crashGuard = {
@@ -328,6 +329,7 @@ describe("app:boot handler", () => {
       agentSettings: { agents: {} },
       gpuWebGLHardware: true,
       gpuHardwareAccelerationDisabled: false,
+      gpuAngleFallbackActive: false,
       safeMode: false,
       isWindowsStore: false,
     };

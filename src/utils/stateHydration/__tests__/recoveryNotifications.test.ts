@@ -19,6 +19,7 @@ function makeHydrateResult(overrides: Partial<HydrateResult>): HydrateResult {
     project: null,
     gpuWebGLHardware: true,
     gpuHardwareAccelerationDisabled: false,
+    gpuAngleFallbackActive: false,
     safeMode: false,
     settingsRecovery: null,
     projectStateRecovery: null,
@@ -58,6 +59,13 @@ describe("dispatchRecoveryNotifications", () => {
 
     it("does not fire when the flag is false", () => {
       dispatchRecoveryNotifications(makeHydrateResult({ gpuHardwareAccelerationDisabled: false }));
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("GPU ANGLE fallback", () => {
+    it("does not fire a toast — ANGLE state is surfaced only as an inline Settings banner", () => {
+      dispatchRecoveryNotifications(makeHydrateResult({ gpuAngleFallbackActive: true }));
       expect(notifyMock).not.toHaveBeenCalled();
     });
   });

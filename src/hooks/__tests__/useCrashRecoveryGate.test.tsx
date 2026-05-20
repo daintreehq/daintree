@@ -39,6 +39,7 @@ function makeBootResult(overrides?: Partial<BootResult>): BootResult {
     agentSettings: {} as BootResult["agentSettings"],
     gpuWebGLHardware: true,
     gpuHardwareAccelerationDisabled: false,
+    gpuAngleFallbackActive: false,
     safeMode: false,
     isWindowsStore: false,
     settingsRecovery: null,

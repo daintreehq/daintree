@@ -227,10 +227,20 @@ async function collectGpu() {
   const result: Record<string, unknown> = {};
 
   try {
-    const { isGpuDisabledByFlag } = await import("./GpuCrashMonitorService.js");
-    result.hardwareAccelerationDisabled = isGpuDisabledByFlag(app.getPath("userData"));
+    const { isGpuDisabledByFlag, isGpuAngleFallbackByFlag, isGpuAngleFallbackApplied } =
+      await import("./GpuCrashMonitorService.js");
+    const userDataPath = app.getPath("userData");
+    result.hardwareAccelerationDisabled = isGpuDisabledByFlag(userDataPath);
+    // Both surfaced: `angleFallbackActive` reflects what the app is actually
+    // running with (platform-gated, matches the renderer signal). The raw
+    // flag is also reported so support can tell when a non-Linux-Wayland
+    // user has tripped the crash listener even though ANGLE wasn't engaged.
+    result.angleFallbackActive = isGpuAngleFallbackApplied(userDataPath);
+    result.angleFallbackFlag = isGpuAngleFallbackByFlag(userDataPath);
   } catch {
     result.hardwareAccelerationDisabled = "unknown";
+    result.angleFallbackActive = "unknown";
+    result.angleFallbackFlag = "unknown";
   }
 
   try {

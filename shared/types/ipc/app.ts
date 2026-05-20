@@ -119,6 +119,13 @@ export interface HydrateResult {
   agentSettings: import("../agentSettings.js").AgentSettings;
   gpuWebGLHardware: boolean;
   gpuHardwareAccelerationDisabled: boolean;
+  /**
+   * True when the app is running with ANGLE/Vulkan fallback rendering after a
+   * prior GPU crash (the `gpu-angle-fallback.flag` file exists in userData).
+   * Surfaced so the renderer can show a Tier 2 inline warning explaining the
+   * degraded backend; re-enabling hardware acceleration clears the flag.
+   */
+  gpuAngleFallbackActive: boolean;
   safeMode: boolean;
   /**
    * True when running inside an MSIX/AppX (Microsoft Store) container, where

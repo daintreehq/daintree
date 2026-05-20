@@ -60,6 +60,7 @@ import {
   writeGpuDisabledFlag,
   clearGpuDisabledFlag,
   isGpuAngleFallbackByFlag,
+  isGpuAngleFallbackApplied,
   writeGpuAngleFallbackFlag,
   clearGpuAngleFallbackFlag,
   GPU_CRASH_WINDOW_MS,
@@ -137,6 +138,60 @@ describe("GpuCrashMonitorService", () => {
       clearGpuAngleFallbackFlag(tmpDir);
       expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
       expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
+    });
+  });
+
+  describe("isGpuAngleFallbackApplied (platform-gated)", () => {
+    const originalPlatform = process.platform;
+    const originalSessionType = process.env.XDG_SESSION_TYPE;
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+      if (originalSessionType === undefined) {
+        delete process.env.XDG_SESSION_TYPE;
+      } else {
+        process.env.XDG_SESSION_TYPE = originalSessionType;
+      }
+    });
+
+    it("returns false on macOS even when the flag exists", () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      writeGpuAngleFallbackFlag(tmpDir);
+      expect(isGpuAngleFallbackApplied(tmpDir)).toBe(false);
+    });
+
+    it("returns false on Windows even when the flag exists", () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      writeGpuAngleFallbackFlag(tmpDir);
+      expect(isGpuAngleFallbackApplied(tmpDir)).toBe(false);
+    });
+
+    it("returns false on Linux X11 (XDG_SESSION_TYPE != wayland)", () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.env.XDG_SESSION_TYPE = "x11";
+      writeGpuAngleFallbackFlag(tmpDir);
+      expect(isGpuAngleFallbackApplied(tmpDir)).toBe(false);
+    });
+
+    it("returns false on Linux Wayland when hardware acceleration is nuclear-disabled", () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.env.XDG_SESSION_TYPE = "wayland";
+      writeGpuAngleFallbackFlag(tmpDir);
+      writeGpuDisabledFlag(tmpDir);
+      expect(isGpuAngleFallbackApplied(tmpDir)).toBe(false);
+    });
+
+    it("returns true on Linux Wayland with the flag present and acceleration on", () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.env.XDG_SESSION_TYPE = "wayland";
+      writeGpuAngleFallbackFlag(tmpDir);
+      expect(isGpuAngleFallbackApplied(tmpDir)).toBe(true);
+    });
+
+    it("returns false on Linux Wayland when the flag is absent", () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.env.XDG_SESSION_TYPE = "wayland";
+      expect(isGpuAngleFallbackApplied(tmpDir)).toBe(false);
     });
   });
 
