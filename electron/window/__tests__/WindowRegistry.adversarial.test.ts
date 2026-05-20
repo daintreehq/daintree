@@ -217,6 +217,63 @@ describe("WindowRegistry adversarial", () => {
     expect(registry.getPrimary()?.windowId).toBe(1);
   });
 
+  it("UNREGISTER_PRIMARY_PREFERS_FOCUS_ORDER_NOT_MAP_ORDER", () => {
+    const registry = new WindowRegistry();
+    const mockApp = makeMockApp();
+    const win1 = makeMockWindow(1, 100);
+    const win2 = makeMockWindow(2, 200);
+    const win3 = makeMockWindow(3, 300);
+
+    registry.wireFocusTracking(mockApp);
+    registry.register(win1);
+    registry.register(win2);
+    registry.register(win3);
+
+    // Focus B, then C. Now close C. Fallback should pick B (last-focused-
+    // surviving), NOT A (first inserted in Map).
+    mockApp.emit("browser-window-focus", null, win2);
+    mockApp.emit("browser-window-focus", null, win3);
+
+    registry.unregister(3);
+
+    expect(registry.getPrimary()?.windowId).toBe(2);
+  });
+
+  it("UNREGISTER_FALLS_BACK_TO_MAP_ORDER_WHEN_FOCUS_HISTORY_EXHAUSTED", () => {
+    const registry = new WindowRegistry();
+    const win1 = makeMockWindow(1, 100);
+    const win2 = makeMockWindow(2, 200);
+
+    // No focus events ever fired.
+    registry.register(win1);
+    registry.register(win2);
+    expect(registry.getPrimary()?.windowId).toBe(1);
+
+    registry.unregister(1);
+
+    // Empty focus history → fall back to Map insertion order (only win2 left).
+    expect(registry.getPrimary()?.windowId).toBe(2);
+  });
+
+  it("FOCUS_EVENT_FOR_DESTROYED_BUT_STILL_REGISTERED_WINDOW_IGNORED", () => {
+    const registry = new WindowRegistry();
+    const mockApp = makeMockApp();
+    const win1 = makeMockWindow(1, 100);
+    const win2 = makeMockWindow(2, 200);
+
+    registry.wireFocusTracking(mockApp);
+    registry.register(win1);
+    registry.register(win2);
+
+    // Simulate the window being destroyed mid-flight without its registry
+    // entry being cleaned up yet.
+    win2._destroyed = true;
+
+    mockApp.emit("browser-window-focus", null, win2);
+
+    expect(registry.getPrimary()?.windowId).toBe(1);
+  });
+
   it("UNKNOWN_APP_VIEW_UNREGISTER_NO_OP", () => {
     const registry = new WindowRegistry();
     const win = makeMockWindow(1, 100);

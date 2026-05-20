@@ -264,6 +264,47 @@ describe("WindowRegistry", () => {
       registry.unregister(2);
       expect(registry.getPrimary()?.windowId).toBe(3);
     });
+
+    it("FOCUS_SEQUENCE_LAST_EVENT_WINS_THREE_WINDOWS", () => {
+      const registry = new WindowRegistry();
+      const mockApp = makeMockApp();
+      const win1 = makeMockWindow(1, 100);
+      const win2 = makeMockWindow(2, 200);
+      const win3 = makeMockWindow(3, 300);
+
+      registry.wireFocusTracking(mockApp);
+      registry.register(win1);
+      registry.register(win2);
+      registry.register(win3);
+
+      mockApp.emit("browser-window-focus", null, win1);
+      expect(registry.getPrimary()?.windowId).toBe(1);
+
+      mockApp.emit("browser-window-focus", null, win2);
+      expect(registry.getPrimary()?.windowId).toBe(2);
+
+      mockApp.emit("browser-window-focus", null, win1);
+      expect(registry.getPrimary()?.windowId).toBe(1);
+    });
+
+    it("REGISTER_ALREADY_FOCUSED_THIRD_WINDOW_PROMOTES_OVER_EXISTING_PRIMARY", () => {
+      const registry = new WindowRegistry();
+      const mockApp = makeMockApp();
+      const win1 = makeMockWindow(1, 100, { focused: false });
+      const win2 = makeMockWindow(2, 200, { focused: false });
+      const win3 = makeMockWindow(3, 300, { focused: true });
+
+      registry.wireFocusTracking(mockApp);
+      registry.register(win1);
+      registry.register(win2);
+
+      mockApp.emit("browser-window-focus", null, win2);
+      expect(registry.getPrimary()?.windowId).toBe(2);
+
+      registry.register(win3);
+
+      expect(registry.getPrimary()?.windowId).toBe(3);
+    });
   });
 
   it("auto-unregisters on window closed event", () => {

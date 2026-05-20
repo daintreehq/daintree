@@ -47,6 +47,10 @@ export class WindowRegistry {
   private webContentsIndex = new Map<number, number>();
   private appViewWebContentsIds = new Map<number, Set<number>>(); // windowId → all view webContentsIds
   private primaryWindowId: number | null = null;
+  // Ordered list of recent focus targets (oldest → newest). Used to find the
+  // next primary when the current primary is unregistered, so the surviving
+  // window with the most recent focus wins instead of the first-registered.
+  private focusHistory: number[] = [];
   private focusTrackingWired = false;
 
   register(win: BrowserWindow, opts?: WindowRegistryOptions): WindowContext {
@@ -80,6 +84,7 @@ export class WindowRegistry {
     // before the async browser-window-focus event arrives), promote it now.
     if (typeof win.isFocused === "function" && win.isFocused()) {
       this.primaryWindowId = windowId;
+      this.recordFocus(windowId);
     }
 
     const doUnregister = () => {
@@ -103,12 +108,25 @@ export class WindowRegistry {
    */
   wireFocusTracking(app: FocusTrackingApp): void {
     if (this.focusTrackingWired) return;
-    this.focusTrackingWired = true;
     app.on("browser-window-focus", (_event, win) => {
-      if (this.windows.has(win.id)) {
-        this.primaryWindowId = win.id;
-      }
+      const ctx = this.windows.get(win.id);
+      if (!ctx) return;
+      // Defend against a focus event delivered for a window whose underlying
+      // BrowserWindow has been destroyed but whose registry entry hasn't been
+      // cleaned up yet.
+      if (typeof win.isDestroyed === "function" && win.isDestroyed()) return;
+      this.primaryWindowId = win.id;
+      this.recordFocus(win.id);
     });
+    this.focusTrackingWired = true;
+  }
+
+  private recordFocus(windowId: number): void {
+    const existing = this.focusHistory.indexOf(windowId);
+    if (existing !== -1) {
+      this.focusHistory.splice(existing, 1);
+    }
+    this.focusHistory.push(windowId);
   }
 
   /**
@@ -155,12 +173,30 @@ export class WindowRegistry {
     }
     this.windows.delete(windowId);
 
+    // Drop the closing window from the focus history before falling back.
+    const historyIdx = this.focusHistory.indexOf(windowId);
+    if (historyIdx !== -1) {
+      this.focusHistory.splice(historyIdx, 1);
+    }
+
     if (this.primaryWindowId === windowId) {
       this.primaryWindowId = null;
-      for (const [id, c] of this.windows) {
-        if (!c.browserWindow.isDestroyed()) {
+      // Prefer the most recently focused live window over Map insertion order
+      // so the user lands on the window they were last looking at.
+      for (let i = this.focusHistory.length - 1; i >= 0; i--) {
+        const id = this.focusHistory[i];
+        const c = this.windows.get(id);
+        if (c && !c.browserWindow.isDestroyed()) {
           this.primaryWindowId = id;
           break;
+        }
+      }
+      if (this.primaryWindowId === null) {
+        for (const [id, c] of this.windows) {
+          if (!c.browserWindow.isDestroyed()) {
+            this.primaryWindowId = id;
+            break;
+          }
         }
       }
     }
