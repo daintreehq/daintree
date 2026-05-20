@@ -6,69 +6,11 @@ import {
   getForgeProviderImpl,
   getRegisteredForgeProviders,
 } from "../../services/forgeProviderRegistry.js";
-import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
-import { gitServiceCache } from "../../services/GitServiceCache.js";
-import type { RepoRef } from "../../../shared/types/forge.js";
+import { resolveForCwd, getImplForNamespace } from "./forgeResolution.js";
 import {
   makeForgeProviderId,
   normalizeProviderId,
 } from "../../../shared/utils/forgeProviderIds.js";
-
-interface ResolvedContext {
-  namespaceId: string;
-  repoRef: RepoRef;
-}
-
-async function resolveForCwd(cwd: string): Promise<ResolvedContext> {
-  if (typeof cwd !== "string" || !cwd) {
-    throw new Error("Invalid working directory");
-  }
-
-  const gitService = gitServiceCache.getGitService(cwd);
-  if (!gitService) {
-    throw new Error("Not a git repository");
-  }
-
-  const remoteUrl = await gitService.getRemoteUrl(cwd).catch(() => null);
-  if (!remoteUrl) {
-    throw new Error("No remote URL found for this repository");
-  }
-
-  const globalDefaultProviderId = normalizeProviderId(store.get("forgeDefaultProviderId"));
-
-  const resolved = resolveForgeProvider({
-    remoteUrl,
-    forgeProviderOverride: null,
-    globalDefaultProviderId,
-  });
-
-  if (!resolved.entry) {
-    throw new Error("No forge provider registered for this repository");
-  }
-
-  const namespaceId = makeForgeProviderId(resolved.entry.pluginId, resolved.entry.contribution.id);
-  const impl = getForgeProviderImpl(namespaceId);
-  if (!impl) {
-    throw new Error(
-      `Forge provider "${resolved.entry.contribution.id}" not activated. Activate it in Settings.`
-    );
-  }
-
-  const repoRef = impl.parseRemote(remoteUrl);
-  if (!repoRef) {
-    throw new Error("Could not parse repository identity from remote URL");
-  }
-
-  return { namespaceId, repoRef };
-}
-
-function getImplForNamespace(namespaceId: string) {
-  const impl = getForgeProviderImpl(namespaceId);
-  if (!impl) {
-    throw new Error(`Forge provider "${namespaceId}" not activated. Activate it in Settings.`);
-  }
-  return impl;
-}
 
 export function registerForgeHandlers(): () => void {
   const cleanups: Array<() => void> = [];

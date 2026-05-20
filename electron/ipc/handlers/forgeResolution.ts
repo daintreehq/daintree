@@ -1,0 +1,76 @@
+import { store } from "../../store.js";
+import { getForgeProviderImpl } from "../../services/forgeProviderRegistry.js";
+import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
+import { gitServiceCache } from "../../services/GitServiceCache.js";
+import type { ForgeProviderImpl, RepoRef } from "../../../shared/types/forge.js";
+import {
+  makeForgeProviderId,
+  normalizeProviderId,
+} from "../../../shared/utils/forgeProviderIds.js";
+
+/**
+ * Shared `cwd → forge provider` resolution. Both the action handlers
+ * (`forge.ts` — open/assign) and the data handlers (`forgeData.ts` —
+ * list/get) resolve the same way: remote URL → registered provider →
+ * activated implementation → parsed {@link RepoRef}. Keeping one copy
+ * means the precedence chain can't drift between the two surfaces.
+ *
+ * `impl` is returned alongside so data handlers don't need a second
+ * registry lookup per call.
+ */
+export interface ResolvedForgeContext {
+  namespaceId: string;
+  repoRef: RepoRef;
+  impl: ForgeProviderImpl;
+}
+
+export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> {
+  if (typeof cwd !== "string" || !cwd) {
+    throw new Error("Invalid working directory");
+  }
+
+  const gitService = gitServiceCache.getGitService(cwd);
+  if (!gitService) {
+    throw new Error("Not a git repository");
+  }
+
+  const remoteUrl = await gitService.getRemoteUrl(cwd).catch(() => null);
+  if (!remoteUrl) {
+    throw new Error("No remote URL found for this repository");
+  }
+
+  const globalDefaultProviderId = normalizeProviderId(store.get("forgeDefaultProviderId"));
+
+  const resolved = resolveForgeProvider({
+    remoteUrl,
+    forgeProviderOverride: null,
+    globalDefaultProviderId,
+  });
+
+  if (!resolved.entry) {
+    throw new Error("No forge provider registered for this repository");
+  }
+
+  const namespaceId = makeForgeProviderId(resolved.entry.pluginId, resolved.entry.contribution.id);
+  const impl = getForgeProviderImpl(namespaceId);
+  if (!impl) {
+    throw new Error(
+      `Forge provider "${resolved.entry.contribution.id}" not activated. Activate it in Settings.`
+    );
+  }
+
+  const repoRef = impl.parseRemote(remoteUrl);
+  if (!repoRef) {
+    throw new Error("Could not parse repository identity from remote URL");
+  }
+
+  return { namespaceId, repoRef, impl };
+}
+
+export function getImplForNamespace(namespaceId: string): ForgeProviderImpl {
+  const impl = getForgeProviderImpl(namespaceId);
+  if (!impl) {
+    throw new Error(`Forge provider "${namespaceId}" not activated. Activate it in Settings.`);
+  }
+  return impl;
+}

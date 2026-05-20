@@ -175,7 +175,16 @@ import type { CloneRepoOptions, CloneRepoResult } from "./gitClone.js";
 import type { AppAgentConfig } from "../appAgent.js";
 import type { AgentSessionRecord } from "./agentSessionHistory.js";
 import type { GeneratedIpcInvokeMap } from "./generated.js";
-import type { AuthValidation, ForgeProviderEntry, ResolvedForgeProvider } from "../forge.js";
+import type {
+  AuthValidation,
+  ForgeProviderEntry,
+  ResolvedForgeProvider,
+  Issue,
+  PR,
+  Page,
+  RepoMetadata,
+  ListOptions,
+} from "../forge.js";
 
 export type ChecklistItemId =
   | "openedProject"
@@ -1669,6 +1678,26 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "forge:clear-credential": {
     args: [providerId: string];
     result: void;
+  };
+  "forge:list-issues": {
+    args: [payload: { cwd: string; opts?: ListOptions }];
+    result: Page<Issue>;
+  };
+  "forge:list-prs": {
+    args: [payload: { cwd: string; opts?: ListOptions }];
+    result: Page<PR>;
+  };
+  "forge:get-issue": {
+    args: [payload: { cwd: string; issueNumber: number }];
+    result: Issue | null;
+  };
+  "forge:get-pr": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: PR | null;
+  };
+  "forge:get-repo-metadata": {
+    args: [payload: { cwd: string }];
+    result: RepoMetadata;
   };
 
   // Shortcut Hints

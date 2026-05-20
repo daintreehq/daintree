@@ -22,7 +22,16 @@ import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { VoiceInputStatus } from "../voice.js";
 export type { VoiceInputStatus };
-import type { AuthValidation, ForgeProviderEntry, ResolvedForgeProvider } from "../forge.js";
+import type {
+  AuthValidation,
+  ForgeProviderEntry,
+  ResolvedForgeProvider,
+  Issue,
+  PR,
+  Page,
+  RepoMetadata,
+  ListOptions,
+} from "../forge.js";
 import type { ResourceProfilePayload } from "../resourceProfile.js";
 import type {
   CreateWorktreeOptions,
@@ -1343,6 +1352,20 @@ export interface ElectronAPI {
     getCredentialStatus(providerId: string): Promise<{ hasCredential: boolean }>;
     /** Clear stored credentials for the given forge provider id. */
     clearCredential(providerId: string): Promise<void>;
+    /**
+     * List issues for the resolved forge provider. Provider-agnostic — returns
+     * normalized {@link Issue} rows, not GitHub-shaped types. Listing filters
+     * go through `opts`, never client-side across pages.
+     */
+    listIssues(payload: { cwd: string; opts?: ListOptions }): Promise<Page<Issue>>;
+    /** List pull/merge requests for the resolved forge provider. */
+    listPRs(payload: { cwd: string; opts?: ListOptions }): Promise<Page<PR>>;
+    /** Fetch a single normalized issue, or `null` when it doesn't exist. */
+    getIssue(payload: { cwd: string; issueNumber: number }): Promise<Issue | null>;
+    /** Fetch a single normalized PR, or `null` when it doesn't exist. */
+    getPR(payload: { cwd: string; prNumber: number }): Promise<PR | null>;
+    /** Fetch the normalized repository metadata roll-up. */
+    getRepoMetadata(payload: { cwd: string }): Promise<RepoMetadata>;
   };
   voiceInput: {
     getSettings(): Promise<VoiceInputSettings>;

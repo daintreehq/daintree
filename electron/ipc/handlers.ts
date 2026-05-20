@@ -43,6 +43,7 @@ import { registerOnboardingHandlers } from "./handlers/onboarding.js";
 import { registerMilestonesHandlers } from "./handlers/milestones.js";
 import { registerShortcutHintsHandlers } from "./handlers/shortcutHints.js";
 import { registerForgeHandlers } from "./handlers/forge.js";
+import { registerForgeDataHandlers } from "./handlers/forgeData.js";
 import { registerForgeSettingsHandlers } from "./handlers/forgeSettings.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
@@ -145,6 +146,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerShortcutHintsHandlers());
     register(() => registerForgeSettingsHandlers());
     register(() => registerForgeHandlers());
+    register(() => registerForgeDataHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerMcpServerHandlers());
     register(() => registerHelpAssistantHandlers());

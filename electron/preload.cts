@@ -2398,6 +2398,16 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.FORGE_GET_CREDENTIAL_STATUS, providerId),
     clearCredential: (providerId: string) =>
       _unwrappingInvoke(CHANNELS.FORGE_CLEAR_CREDENTIAL, providerId),
+    listIssues: (payload: { cwd: string; opts?: unknown }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_LIST_ISSUES, payload),
+    listPRs: (payload: { cwd: string; opts?: unknown }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_LIST_PRS, payload),
+    getIssue: (payload: { cwd: string; issueNumber: number }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE, payload),
+    getPR: (payload: { cwd: string; prNumber: number }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_PR, payload),
+    getRepoMetadata: (payload: { cwd: string }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_METADATA, payload),
   },
 
   // Voice Input API
