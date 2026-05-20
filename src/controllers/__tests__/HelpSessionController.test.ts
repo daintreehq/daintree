@@ -346,7 +346,7 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
     expect(ctrl.getSnapshot().isApprovingTier).toBe(true);
     // "Approve once" is now a per-tool grant (#8442) — it must NOT
     // elevate the session tier, only mint a grant for this exact tool.
-    expect(mockMcpIssueGrant).toHaveBeenCalledWith("s1", "t1");
+    expect(mockMcpIssueGrant).toHaveBeenCalledWith({ sessionId: "s1", toolId: "t1" });
     expect(mockMcpSetSessionTier).not.toHaveBeenCalled();
 
     await vi.waitFor(() => {

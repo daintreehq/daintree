@@ -17,7 +17,6 @@ import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
 import type {
-  HelpAssistantSettings,
   KeybindingImportResult,
   MicPermissionStatus,
   NotificationSettings,
@@ -105,8 +104,6 @@ import type {
   SnapshotRevertResult,
 } from "./git.js";
 import type { TerminalConfig } from "./config.js";
-import type { SystemSleepMetrics } from "./systemSleep.js";
-import type { ShowContextMenuPayload } from "../menu.js";
 import type {
   FileSearchPayload,
   FileSearchResult,
@@ -114,7 +111,7 @@ import type {
   FileReadResult,
 } from "./files.js";
 import type { DevPreviewStateChangedPayload } from "./devPreview.js";
-import type { ServiceConnectivityPayload, ServiceConnectivitySnapshot } from "./connectivity.js";
+import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type {
@@ -131,9 +128,8 @@ import type {
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
 } from "../pty-host.js";
-import type { HibernationConfig, HibernationProjectHibernatedPayload } from "./hibernation.js";
-import type { IdleTerminalNotifyConfig, IdleTerminalNotifyPayload } from "./idleTerminals.js";
-import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
+import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
+import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { AppThemeConfig } from "../appTheme.js";
 import type {
   DemoMoveToPayload,
@@ -473,11 +469,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: { success: boolean };
   };
-  "menu:show-context": {
-    args: [payload: ShowContextMenuPayload];
-    result: string | null;
-  };
-
   // Window channels
   "window:toggle-fullscreen": {
     args: [];
@@ -1077,48 +1068,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
 
   // Portal channels
-  // System Sleep channels
-  "system-sleep:get-metrics": {
-    args: [];
-    result: SystemSleepMetrics;
-  };
-  "system-sleep:get-awake-time": {
-    args: [startTimestamp: number];
-    result: number;
-  };
-  "system-sleep:reset": {
-    args: [];
-    result: void;
-  };
-
-  // Hibernation channels
-  "hibernation:get-config": {
-    args: [];
-    result: HibernationConfig;
-  };
-  "hibernation:update-config": {
-    args: [config: Partial<HibernationConfig>];
-    result: HibernationConfig;
-  };
-
-  // Idle terminal notification channels
-  "idle-terminal:get-config": {
-    args: [];
-    result: IdleTerminalNotifyConfig;
-  };
-  "idle-terminal:update-config": {
-    args: [config: Partial<IdleTerminalNotifyConfig>];
-    result: IdleTerminalNotifyConfig;
-  };
-  "idle-terminal:close-project": {
-    args: [projectId: string];
-    result: void;
-  };
-  "idle-terminal:dismiss-project": {
-    args: [projectId: string];
-    result: void;
-  };
-
   // Keybinding channels
   "keybinding:get-overrides": {
     args: [];
@@ -1163,16 +1112,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-  // Gemini channels
-  "gemini:get-status": {
-    args: [];
-    result: { exists: boolean; alternateBufferEnabled: boolean; error?: string };
-  };
-  "gemini:enable-alternate-buffer": {
-    args: [];
-    result: { success: boolean };
-  };
-
   // Plugin channels
   // Dev Preview channels
   // Auto-update channels
@@ -1213,28 +1152,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "store-update:set-settings": {
     args: [enabled: boolean];
     result: { enabled: boolean };
-  };
-
-  // Agent Capabilities channels
-  "agent-capabilities:get-registry": {
-    args: [];
-    result: AgentRegistry;
-  };
-  "agent-capabilities:get-agent-ids": {
-    args: [];
-    result: string[];
-  };
-  "agent-capabilities:get-agent-metadata": {
-    args: [agentId: string];
-    result: AgentMetadata | null;
-  };
-  "agent-capabilities:is-agent-enabled": {
-    args: [agentId: string];
-    result: boolean;
-  };
-  "agent-capabilities:get-ccr-presets": {
-    args: [];
-    result: AgentPreset[];
   };
 
   // Daintree CLI install channels
@@ -1311,31 +1228,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [schemeId: string];
     result: void;
   };
-  "telemetry:get": {
-    args: [];
-    result: { enabled: boolean; hasSeenPrompt: boolean };
-  };
-  "telemetry:set-enabled": {
-    args: [enabled: boolean];
-    result: void;
-  };
-  "telemetry:mark-prompt-shown": {
-    args: [];
-    result: void;
-  };
-  "telemetry:track": {
-    args: [event: string, properties: Record<string, unknown>];
-    result: void;
-  };
-  "telemetry:preview-get-state": {
-    args: [];
-    result: TelemetryPreviewState;
-  };
-  "telemetry:preview-toggle": {
-    args: [active: boolean];
-    result: TelemetryPreviewState;
-  };
-
   // GPU
   "gpu:get-status": {
     args: [];
@@ -1343,114 +1235,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "gpu:set-hardware-acceleration": {
     args: [enabled: boolean];
-    result: void;
-  };
-
-  // Privacy & Data
-  "privacy:get-settings": {
-    args: [];
-    result: {
-      telemetryLevel: "off" | "errors" | "full";
-      logRetentionDays: 0 | 7 | 30 | 90;
-      dataFolderPath: string;
-    };
-  };
-  "privacy:set-telemetry-level": {
-    args: [level: "off" | "errors" | "full"];
-    result: void;
-  };
-  "privacy:set-log-retention": {
-    args: [days: 0 | 7 | 30 | 90];
-    result: void;
-  };
-  "privacy:open-data-folder": {
-    args: [];
-    result: void;
-  };
-  "privacy:clear-cache": {
-    args: [];
-    result: void;
-  };
-  "privacy:reset-all-data": {
-    args: [];
-    result: void;
-  };
-  "privacy:get-data-folder-path": {
-    args: [];
-    result: string;
-  };
-
-  // Sentry
-  "sentry:get-consent-state": {
-    args: [];
-    result: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
-  };
-
-  // Onboarding
-  "onboarding:get": {
-    args: [];
-    result: OnboardingState;
-  };
-  "onboarding:set-step": {
-    args: [step: string | null | { step: string | null; agentSetupIds?: string[] }];
-    result: void;
-  };
-  "onboarding:complete": {
-    args: [];
-    result: void;
-  };
-  "onboarding:mark-toast-seen": {
-    args: [];
-    result: void;
-  };
-  "onboarding:mark-newsletter-seen": {
-    args: [];
-    result: void;
-  };
-  "onboarding:mark-waiting-nudge-seen": {
-    args: [];
-    result: void;
-  };
-  "onboarding:mark-agents-seen": {
-    args: [agentIds: string[]];
-    result: OnboardingState;
-  };
-  "onboarding:record-agent-first-seen": {
-    args: [agentIds: string[]];
-    result: OnboardingState;
-  };
-  "onboarding:dismiss-welcome-card": {
-    args: [];
-    result: OnboardingState;
-  };
-  "onboarding:dismiss-setup-banner": {
-    args: [];
-    result: OnboardingState;
-  };
-  "onboarding:checklist-get": {
-    args: [];
-    result: ChecklistState;
-  };
-  "onboarding:checklist-dismiss": {
-    args: [];
-    result: void;
-  };
-  "onboarding:checklist-mark-item": {
-    args: [item: ChecklistItemId];
-    result: void;
-  };
-  "onboarding:checklist-mark-celebration-shown": {
-    args: [];
-    result: void;
-  };
-
-  // Milestones
-  "milestones:get": {
-    args: [];
-    result: Record<string, boolean>;
-  };
-  "milestones:mark-shown": {
-    args: [milestoneId: string];
     result: void;
   };
 
@@ -1536,16 +1320,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: { providerId: string; classification: PushErrorClassification | null } | null;
   };
 
-  // Shortcut Hints
-  "shortcut-hints:get-counts": {
-    args: [];
-    result: Record<string, number>;
-  };
-  "shortcut-hints:increment-count": {
-    args: [actionId: string];
-    result: void;
-  };
-
   // Voice input
   "voice-input:get-settings": {
     args: [];
@@ -1556,15 +1330,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-  // Help assistant
-  "help-assistant:get-settings": {
-    args: [];
-    result: HelpAssistantSettings;
-  };
-  "help-assistant:set-settings": {
-    args: [patch: Partial<HelpAssistantSettings>];
-    result: void;
-  };
   "voice-input:start": {
     args: [];
     result: { ok: true } | { ok: false; error: string };
@@ -1614,80 +1379,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "crash-recovery:set-config": {
     args: [config: Partial<import("./crashRecovery.js").CrashRecoveryConfig>];
     result: import("./crashRecovery.js").CrashRecoveryConfig;
-  };
-
-  // MCP Server channels
-  "mcp-server:get-status": {
-    args: [];
-    result: import("./mcpServer.js").McpServerStatusSnapshot;
-  };
-  "mcp-server:set-enabled": {
-    args: [enabled: boolean];
-    result: import("./mcpServer.js").McpServerStatusSnapshot;
-  };
-  "mcp-server:set-port": {
-    args: [port: number | null];
-    result: import("./mcpServer.js").McpServerStatusSnapshot;
-  };
-  "mcp-server:rotate-api-key": {
-    args: [];
-    result: string;
-  };
-  "mcp-server:get-config-snippet": {
-    args: [];
-    result: string;
-  };
-  "mcp-server:get-audit-records": {
-    args: [];
-    result: import("./mcpServer.js").McpAuditRecord[];
-  };
-  "mcp-server:get-audit-config": {
-    args: [];
-    result: { enabled: boolean; maxRecords: number };
-  };
-  "mcp-server:get-audit-stats": {
-    args: [];
-    result: import("./mcpServer.js").McpAuditStats;
-  };
-  "mcp-server:clear-audit-log": {
-    args: [];
-    result: void;
-  };
-  "mcp-server:get-turn-outcome-records": {
-    args: [];
-    result: import("./mcpServer.js").AssistantTurnRecord[];
-  };
-  "mcp-server:clear-turn-outcome-log": {
-    args: [];
-    result: void;
-  };
-  "mcp-server:set-audit-enabled": {
-    args: [enabled: boolean];
-    result: { enabled: boolean; maxRecords: number };
-  };
-  "mcp-server:set-audit-max-records": {
-    args: [max: number];
-    result: { enabled: boolean; maxRecords: number };
-  };
-  "mcp-server:get-runtime-state": {
-    args: [];
-    result: import("./mcpServer.js").McpRuntimeSnapshot;
-  };
-  "mcp-server:export-audit-log": {
-    args: [records: import("./mcpServer.js").McpAuditRecord[]];
-    result: boolean;
-  };
-  "mcp-server:set-session-tier": {
-    args: [payload: { sessionId: string; tier: "workbench" | "action" | "system" }];
-    result: { sessionId: string; tier: "workbench" | "action" | "system" };
-  };
-  "mcp-server:issue-grant": {
-    args: [payload: { sessionId: string; toolId: string }];
-    result: import("./mcpServer.js").McpIssueGrantResult;
-  };
-  "mcp-server:revoke-session-grants": {
-    args: [payload: { sessionId: string }];
-    result: import("./mcpServer.js").McpRevokeSessionGrantsResult;
   };
 
   // Webview console capture
@@ -1782,12 +1473,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "github:resolve-author-avatar": {
     args: [email: string];
     result: string | null;
-  };
-
-  // Per-service connectivity channels
-  "connectivity:get-state": {
-    args: [];
-    result: ServiceConnectivitySnapshot;
   };
 
   // Scratch (throwaway one-off agent workspace) channels

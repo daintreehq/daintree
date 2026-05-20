@@ -14,10 +14,9 @@ import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
 import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
-import type { McpAuditRecord, McpRuntimeSnapshot } from "../shared/types/ipc/mcpServer.js";
+import type { McpRuntimeSnapshot } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
-import type { HelpAssistantTier } from "../shared/types/ipc/maps.js";
 import { CHANNELS } from "./ipc/channels.js";
 import {
   BrokerError,
@@ -35,6 +34,21 @@ import { buildPortalPreloadBindings } from "./ipc/handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "./ipc/handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
+import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
+import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
+import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
+import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
+import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
+import { buildSentryPreloadBindings } from "./ipc/handlers/sentry.preload.js";
+import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
+import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
+import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
+import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
+import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
+import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
+import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
+import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
+import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 
 import type {
   WorktreeState,
@@ -65,14 +79,12 @@ import type {
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
   ServiceConnectivityPayload,
-  ServiceConnectivitySnapshot,
   GitStatus,
   KeyAction,
   TerminalRecipe,
   AttachIssuePayload,
   IssueAssociation,
   VoiceInputStatus,
-  ChecklistItemId,
 } from "../shared/types/index.js";
 import type { ColorVisionMode, AppColorScheme } from "../shared/types/appTheme.js";
 import type {
@@ -103,7 +115,6 @@ import type {
 
 type SpawnResultPayload = SpawnResult;
 import type { PortalNewTabMenuAction } from "../shared/types/portal.js";
-import type { ShowContextMenuPayload } from "../shared/types/menu.js";
 import type { ResourceProfilePayload } from "../shared/types/resourceProfile.js";
 import type { PluginActionDescriptor } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
@@ -1106,10 +1117,7 @@ const api: ElectronAPI = {
     onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
   },
 
-  menu: {
-    showContext: (payload: ShowContextMenuPayload) =>
-      _unwrappingInvoke(CHANNELS.MENU_SHOW_CONTEXT, payload),
-  },
+  menu: buildMenuPreloadBindings(_unwrappingInvoke),
 
   // Logs API
   logs: {
@@ -1600,8 +1608,7 @@ const api: ElectronAPI = {
 
   // Per-service connectivity API
   connectivity: {
-    getState: (): Promise<ServiceConnectivitySnapshot> =>
-      _unwrappingInvoke(CHANNELS.CONNECTIVITY_GET_STATE) as Promise<ServiceConnectivitySnapshot>,
+    ...buildConnectivityPreloadBindings(_unwrappingInvoke),
 
     onServiceChanged: (callback: (payload: ServiceConnectivityPayload) => void) =>
       _typedOn(CHANNELS.CONNECTIVITY_SERVICE_CHANGED, callback),
@@ -1875,13 +1882,7 @@ const api: ElectronAPI = {
 
   // Hibernation API
   hibernation: {
-    getConfig: (): Promise<{ enabled: boolean; inactiveThresholdHours: number }> =>
-      _unwrappingInvoke(CHANNELS.HIBERNATION_GET_CONFIG),
-
-    updateConfig: (
-      config: Partial<{ enabled: boolean; inactiveThresholdHours: number }>
-    ): Promise<{ enabled: boolean; inactiveThresholdHours: number }> =>
-      _unwrappingInvoke(CHANNELS.HIBERNATION_UPDATE_CONFIG, config),
+    ...buildHibernationPreloadBindings(_unwrappingInvoke),
 
     onProjectHibernated: (
       callback: (payload: {
@@ -1896,19 +1897,7 @@ const api: ElectronAPI = {
 
   // Idle Terminal Notification API
   idleTerminals: {
-    getConfig: (): Promise<{ enabled: boolean; thresholdMinutes: number }> =>
-      _unwrappingInvoke(CHANNELS.IDLE_TERMINAL_GET_CONFIG),
-
-    updateConfig: (
-      config: Partial<{ enabled: boolean; thresholdMinutes: number }>
-    ): Promise<{ enabled: boolean; thresholdMinutes: number }> =>
-      _unwrappingInvoke(CHANNELS.IDLE_TERMINAL_UPDATE_CONFIG, config),
-
-    closeProject: (projectId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.IDLE_TERMINAL_CLOSE_PROJECT, projectId),
-
-    dismissProject: (projectId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.IDLE_TERMINAL_DISMISS_PROJECT, projectId),
+    ...buildIdleTerminalPreloadBindings(_unwrappingInvoke),
 
     onNotify: (
       callback: (payload: {
@@ -1925,12 +1914,7 @@ const api: ElectronAPI = {
 
   // System Sleep API
   systemSleep: {
-    getMetrics: () => _unwrappingInvoke(CHANNELS.SYSTEM_SLEEP_GET_METRICS),
-
-    getAwakeTimeSince: (startTimestamp: number) =>
-      _unwrappingInvoke(CHANNELS.SYSTEM_SLEEP_GET_AWAKE_TIME, startTimestamp),
-
-    reset: () => _unwrappingInvoke(CHANNELS.SYSTEM_SLEEP_RESET),
+    ...buildSystemSleepPreloadBindings(_unwrappingInvoke),
 
     onSuspend: (callback: () => void) => _typedOn(CHANNELS.SYSTEM_SLEEP_ON_SUSPEND, callback),
 
@@ -2129,11 +2113,7 @@ const api: ElectronAPI = {
   },
 
   // Gemini API
-  gemini: {
-    getStatus: () => _unwrappingInvoke(CHANNELS.GEMINI_GET_STATUS),
-
-    enableAlternateBuffer: () => _unwrappingInvoke(CHANNELS.GEMINI_ENABLE_ALTERNATE_BUFFER),
-  },
+  gemini: buildGeminiPreloadBindings(_unwrappingInvoke),
 
   // Commands API
   commands: buildCommandsPreloadBindings(_unwrappingInvoke),
@@ -2191,15 +2171,7 @@ const api: ElectronAPI = {
 
   // Agent Capabilities API
   agentCapabilities: {
-    getRegistry: () => _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_GET_REGISTRY),
-
-    getAgentIds: () => _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_GET_AGENT_IDS),
-
-    getAgentMetadata: (agentId: string) =>
-      _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_GET_AGENT_METADATA, agentId),
-
-    isAgentEnabled: (agentId: string) =>
-      _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED, agentId),
+    ...buildAgentCapabilitiesPreloadBindings(_unwrappingInvoke),
 
     onPresetsUpdated: (
       callback: (payload: {
@@ -2213,8 +2185,6 @@ const api: ElectronAPI = {
         }>;
       }) => void
     ) => _typedOn(CHANNELS.AGENT_PRESETS_UPDATED, callback),
-
-    getCcrPresets: () => _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_GET_CCR_PRESETS),
   },
 
   // Agent Session History API
@@ -2270,29 +2240,31 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.APP_THEME_SYSTEM_APPEARANCE_CHANGED, callback),
   },
 
-  telemetry: {
-    get: () => _unwrappingInvoke(CHANNELS.TELEMETRY_GET),
-    setEnabled: (enabled: boolean) => _unwrappingInvoke(CHANNELS.TELEMETRY_SET_ENABLED, enabled),
-    markPromptShown: () => _unwrappingInvoke(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN),
-    track: (event: string, properties: Record<string, unknown>) =>
-      _unwrappingInvoke(CHANNELS.TELEMETRY_TRACK, event, properties),
-    preview: {
-      getState: () => _unwrappingInvoke(CHANNELS.TELEMETRY_PREVIEW_GET_STATE),
-      toggle: (active: boolean) => _unwrappingInvoke(CHANNELS.TELEMETRY_PREVIEW_TOGGLE, active),
-      subscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_SUBSCRIBE),
-      unsubscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_UNSUBSCRIBE),
-      onEventBatch: (
-        callback: (
-          events: import("../shared/types/ipc/telemetryPreview.js").SanitizedTelemetryEvent[]
-        ) => void
-      ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_EVENT_BATCH, callback),
-      onStateChanged: (
-        callback: (
-          state: import("../shared/types/ipc/telemetryPreview.js").TelemetryPreviewState
-        ) => void
-      ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_STATE_CHANGED, callback),
-    },
-  },
+  telemetry: (() => {
+    const flat = buildTelemetryPreloadBindings(_unwrappingInvoke);
+    return {
+      get: flat.get,
+      setEnabled: flat.setEnabled,
+      markPromptShown: flat.markPromptShown,
+      track: flat.track,
+      preview: {
+        getState: flat.previewGetState,
+        toggle: flat.previewToggle,
+        subscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_SUBSCRIBE),
+        unsubscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_UNSUBSCRIBE),
+        onEventBatch: (
+          callback: (
+            events: import("../shared/types/ipc/telemetryPreview.js").SanitizedTelemetryEvent[]
+          ) => void
+        ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_EVENT_BATCH, callback),
+        onStateChanged: (
+          callback: (
+            state: import("../shared/types/ipc/telemetryPreview.js").TelemetryPreviewState
+          ) => void
+        ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_STATE_CHANGED, callback),
+      },
+    };
+  })(),
 
   gpu: {
     getStatus: () => _unwrappingInvoke(CHANNELS.GPU_GET_STATUS),
@@ -2301,59 +2273,26 @@ const api: ElectronAPI = {
   },
 
   privacy: {
-    getSettings: () => _unwrappingInvoke(CHANNELS.PRIVACY_GET_SETTINGS),
-    setTelemetryLevel: (level: "off" | "errors" | "full") =>
-      _unwrappingInvoke(CHANNELS.PRIVACY_SET_TELEMETRY_LEVEL, level),
-    setLogRetention: (days: 7 | 30 | 90 | 0) =>
-      _unwrappingInvoke(CHANNELS.PRIVACY_SET_LOG_RETENTION, days),
-    openDataFolder: () => _unwrappingInvoke(CHANNELS.PRIVACY_OPEN_DATA_FOLDER),
-    clearCache: () => _unwrappingInvoke(CHANNELS.PRIVACY_CLEAR_CACHE),
-    resetAllData: () => _unwrappingInvoke(CHANNELS.PRIVACY_RESET_ALL_DATA),
-    getDataFolderPath: () => _unwrappingInvoke(CHANNELS.PRIVACY_GET_DATA_FOLDER_PATH),
+    ...buildPrivacyPreloadBindings(_unwrappingInvoke),
+
     onTelemetryConsentChanged: (
       callback: (payload: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean }) => void
     ) => _typedOn(CHANNELS.PRIVACY_TELEMETRY_CONSENT_CHANGED, callback),
   },
 
-  sentry: {
-    getConsentState: () => _unwrappingInvoke(CHANNELS.SENTRY_GET_CONSENT_STATE),
-  },
+  sentry: buildSentryPreloadBindings(_unwrappingInvoke),
 
   onboarding: {
-    get: () => _unwrappingInvoke(CHANNELS.ONBOARDING_GET),
-    setStep: (step: string | null | { step: string | null; agentSetupIds?: string[] }) =>
-      _unwrappingInvoke(CHANNELS.ONBOARDING_SET_STEP, step),
-    complete: () => _unwrappingInvoke(CHANNELS.ONBOARDING_COMPLETE),
-    markToastSeen: () => _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_TOAST_SEEN),
-    markNewsletterSeen: () => _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN),
-    markWaitingNudgeSeen: () => _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_WAITING_NUDGE_SEEN),
-    markAgentsSeen: (agentIds: string[]) =>
-      _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_AGENTS_SEEN, agentIds),
-    recordAgentFirstSeen: (agentIds: string[]) =>
-      _unwrappingInvoke(CHANNELS.ONBOARDING_RECORD_AGENT_FIRST_SEEN, agentIds),
-    dismissWelcomeCard: () => _unwrappingInvoke(CHANNELS.ONBOARDING_DISMISS_WELCOME_CARD),
-    dismissSetupBanner: () => _unwrappingInvoke(CHANNELS.ONBOARDING_DISMISS_SETUP_BANNER),
-    getChecklist: () => _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_GET),
-    dismissChecklist: () => _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_DISMISS),
-    markChecklistItem: (item: ChecklistItemId) =>
-      _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, item),
-    markChecklistCelebrationShown: () =>
-      _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN),
+    ...buildOnboardingPreloadBindings(_unwrappingInvoke),
+
     onChecklistPush: (
       callback: (state: IpcEventMap["onboarding:checklist-push"]) => void
     ): (() => void) => _typedOn(CHANNELS.ONBOARDING_CHECKLIST_PUSH, callback),
   },
 
-  milestones: {
-    get: () => _unwrappingInvoke(CHANNELS.MILESTONES_GET),
-    markShown: (id: string) => _unwrappingInvoke(CHANNELS.MILESTONES_MARK_SHOWN, id),
-  },
+  milestones: buildMilestonesPreloadBindings(_unwrappingInvoke),
 
-  shortcutHints: {
-    getCounts: () => _unwrappingInvoke(CHANNELS.SHORTCUT_HINTS_GET_COUNTS),
-    incrementCount: (actionId: string) =>
-      _unwrappingInvoke(CHANNELS.SHORTCUT_HINTS_INCREMENT_COUNT, actionId),
-  },
+  shortcutHints: buildShortcutHintsPreloadBindings(_unwrappingInvoke),
 
   forge: {
     getSettings: () => _unwrappingInvoke(CHANNELS.FORGE_GET_SETTINGS),
@@ -2449,32 +2388,10 @@ const api: ElectronAPI = {
   },
 
   mcpServer: {
-    getStatus: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_STATUS),
-    setEnabled: (enabled: boolean) => _unwrappingInvoke(CHANNELS.MCP_SERVER_SET_ENABLED, enabled),
-    setPort: (port: number | null) => _unwrappingInvoke(CHANNELS.MCP_SERVER_SET_PORT, port),
-    rotateApiKey: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_ROTATE_API_KEY),
-    getConfigSnippet: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_CONFIG_SNIPPET),
-    getAuditRecords: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_AUDIT_RECORDS),
-    getAuditConfig: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_AUDIT_CONFIG),
-    getAuditStats: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_AUDIT_STATS),
-    clearAuditLog: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_CLEAR_AUDIT_LOG),
-    getTurnOutcomeRecords: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_TURN_OUTCOME_RECORDS),
-    clearTurnOutcomeLog: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_CLEAR_TURN_OUTCOME_LOG),
-    setAuditEnabled: (enabled: boolean) =>
-      _unwrappingInvoke(CHANNELS.MCP_SERVER_SET_AUDIT_ENABLED, enabled),
-    setAuditMaxRecords: (max: number) =>
-      _unwrappingInvoke(CHANNELS.MCP_SERVER_SET_AUDIT_MAX_RECORDS, max),
-    getRuntimeState: () => _unwrappingInvoke(CHANNELS.MCP_SERVER_GET_RUNTIME_STATE),
+    ...buildMcpServerPreloadBindings(_unwrappingInvoke),
+
     onRuntimeStateChanged: (callback: (snapshot: McpRuntimeSnapshot) => void) =>
       _typedOn(CHANNELS.MCP_SERVER_RUNTIME_STATE_CHANGED, callback),
-    exportAuditLog: (records: McpAuditRecord[]) =>
-      _unwrappingInvoke(CHANNELS.MCP_SERVER_EXPORT_AUDIT_LOG, records),
-    setSessionTier: (sessionId: string, tier: "workbench" | "action" | "system") =>
-      _unwrappingInvoke(CHANNELS.MCP_SERVER_SET_SESSION_TIER, { sessionId, tier }),
-    issueGrant: (sessionId: string, toolId: string) =>
-      _unwrappingInvoke(CHANNELS.MCP_SERVER_ISSUE_GRANT, { sessionId, toolId }),
-    revokeSessionGrants: (sessionId: string) =>
-      _unwrappingInvoke(CHANNELS.MCP_SERVER_REVOKE_SESSION_GRANTS, { sessionId }),
     onTierNotPermitted: (
       callback: (payload: {
         sessionId: string;
@@ -2495,18 +2412,7 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.MCP_GRANT_LIFECYCLE, callback),
   },
 
-  helpAssistant: {
-    getSettings: () => _unwrappingInvoke(CHANNELS.HELP_ASSISTANT_GET_SETTINGS),
-    setSettings: (
-      patch: Partial<{
-        docSearch: boolean;
-        daintreeControl: boolean;
-        tier: HelpAssistantTier;
-        bypassPermissions: boolean;
-        auditRetention: 7 | 30 | 0;
-      }>
-    ) => _unwrappingInvoke(CHANNELS.HELP_ASSISTANT_SET_SETTINGS, patch),
-  },
+  helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),
 
   mcpBridge: {
     onGetManifestRequest: (callback: (requestId: string) => void) => {

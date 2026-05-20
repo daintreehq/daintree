@@ -11,13 +11,7 @@ import type {
   TerminalRecipe,
   TerminalSnapshot,
 } from "../project.js";
-import type {
-  OnboardingState,
-  ChecklistState,
-  ChecklistItemId,
-  HelpAssistantTier,
-  IpcEventBusMap,
-} from "./maps.js";
+import type { ChecklistState, HelpAssistantTier, IpcEventBusMap, IpcInvokeMap } from "./maps.js";
 import type { GeneratedElectronAPI } from "./generated-api.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
@@ -126,9 +120,8 @@ import type {
   IssueNotFoundPayload,
 } from "./github.js";
 import type { TerminalConfig } from "./config.js";
-import type { HibernationConfig, HibernationProjectHibernatedPayload } from "./hibernation.js";
-import type { IdleTerminalNotifyConfig, IdleTerminalNotifyPayload } from "./idleTerminals.js";
-import type { SystemSleepMetrics } from "./systemSleep.js";
+import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
+import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { KeyAction } from "../keymap.js";
 
 export interface KeybindingImportResult {
@@ -146,7 +139,6 @@ import type {
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
 } from "../pty-host.js";
-import type { ShowContextMenuPayload } from "../menu.js";
 import type {
   FileSearchPayload,
   FileSearchResult,
@@ -156,7 +148,6 @@ import type {
 import type { DevPreviewStateChangedPayload } from "./devPreview.js";
 import type { AppAgentConfig } from "../appAgent.js";
 import type { ActionContext } from "../actions.js";
-import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 
@@ -396,9 +387,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;
   };
-  menu: {
-    showContext(payload: ShowContextMenuPayload): Promise<string | null>;
-  };
+  // menu is generated — see GeneratedElectronAPI.
   logs: {
     getAll(filters?: LogFilterOptions): Promise<LogEntry[]>;
     getSources(): Promise<string[]>;
@@ -733,8 +722,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRepoStatsAndPageUpdated(callback: (data: RepoStatsAndPagePayload) => void): () => void;
     getTokenHealth(): Promise<GitHubTokenHealthPayload>;
   };
-  connectivity: {
-    getState(): Promise<import("./connectivity.js").ServiceConnectivitySnapshot>;
+  // getState comes from GeneratedElectronAPI; onServiceChanged is a renderer-only subscription.
+  connectivity: GeneratedElectronAPI["connectivity"] & {
     onServiceChanged(
       callback: (payload: import("./connectivity.js").ServiceConnectivityPayload) => void
     ): () => void;
@@ -926,27 +915,30 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Read the current scroll position from Blink layout — works on frozen pages */
     getScrollPosition(webContentsId: number): Promise<number>;
   };
-  hibernation: {
-    getConfig(): Promise<HibernationConfig>;
-    updateConfig(config: Partial<HibernationConfig>): Promise<HibernationConfig>;
+  // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
+  hibernation: GeneratedElectronAPI["hibernation"] & {
     onProjectHibernated(
       callback: (payload: HibernationProjectHibernatedPayload) => void
     ): () => void;
   };
+  // Channel is `idle-terminal:*` (singular) but the renderer surface uses
+  // `idleTerminals` (plural). The preload opts out of the API codegen via
+  // RENDERER_API_SKIP — methods are hand-typed here against IpcInvokeMap.
   idleTerminals: {
-    getConfig(): Promise<IdleTerminalNotifyConfig>;
-    updateConfig(config: Partial<IdleTerminalNotifyConfig>): Promise<IdleTerminalNotifyConfig>;
-    closeProject(projectId: string): Promise<void>;
-    dismissProject(projectId: string): Promise<void>;
+    getConfig(): Promise<IpcInvokeMap["idle-terminal:get-config"]["result"]>;
+    updateConfig(
+      ...args: IpcInvokeMap["idle-terminal:update-config"]["args"]
+    ): Promise<IpcInvokeMap["idle-terminal:update-config"]["result"]>;
+    closeProject(
+      ...args: IpcInvokeMap["idle-terminal:close-project"]["args"]
+    ): Promise<IpcInvokeMap["idle-terminal:close-project"]["result"]>;
+    dismissProject(
+      ...args: IpcInvokeMap["idle-terminal:dismiss-project"]["args"]
+    ): Promise<IpcInvokeMap["idle-terminal:dismiss-project"]["result"]>;
     onNotify(callback: (payload: IdleTerminalNotifyPayload) => void): () => void;
   };
-  systemSleep: {
-    /** Get metrics about system sleep tracking */
-    getMetrics(): Promise<SystemSleepMetrics>;
-    /** Get elapsed awake time since timestamp, excluding sleep periods */
-    getAwakeTimeSince(startTimestamp: number): Promise<number>;
-    /** Reset accumulated sleep tracking */
-    reset(): Promise<void>;
+  // Invoke methods come from GeneratedElectronAPI; suspend/wake are renderer-only subscriptions.
+  systemSleep: GeneratedElectronAPI["systemSleep"] & {
     /** Subscribe to suspend events */
     onSuspend(callback: () => void): () => void;
     /** Subscribe to wake events with sleep duration */
@@ -1097,12 +1089,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Toggle Store update notifications on/off. */
     setSettings(enabled: boolean): Promise<{ enabled: boolean }>;
   };
-  gemini: {
-    /** Get Gemini config status (exists, alternate buffer enabled) */
-    getStatus(): Promise<{ exists: boolean; alternateBufferEnabled: boolean; error?: string }>;
-    /** Enable alternate buffer in Gemini settings */
-    enableAlternateBuffer(): Promise<{ success: boolean }>;
-  };
+  // gemini is generated — see GeneratedElectronAPI.
   // commands is generated — see GeneratedElectronAPI.
   appAgent: {
     /** Get the current app agent config (without API key) */
@@ -1143,16 +1130,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Send confirmation response back to main process */
     sendConfirmationResponse(payload: { requestId: string; approved: boolean }): void;
   };
-  agentCapabilities: {
-    /** Get effective registry (built-in + user overrides) */
-    getRegistry(): Promise<AgentRegistry>;
-    /** Get list of effective agent IDs */
-    getAgentIds(): Promise<string[]>;
-    /** Get metadata for specific agent */
-    getAgentMetadata(agentId: string): Promise<AgentMetadata | null>;
-    /** Check if agent is enabled/available */
-    isAgentEnabled(agentId: string): Promise<boolean>;
-    /** Subscribe to CCR preset updates from main process */
+  // Invoke methods come from GeneratedElectronAPI; onPresetsUpdated is a renderer-only subscription.
+  agentCapabilities: GeneratedElectronAPI["agentCapabilities"] & {
     onPresetsUpdated(
       callback: (payload: {
         agentId: string;
@@ -1169,20 +1148,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         }>;
       }) => void
     ): () => void;
-    /** Fetch current CCR presets from main process */
-    getCcrPresets(): Promise<
-      Array<{
-        id: string;
-        name: string;
-        description?: string;
-        env?: Record<string, string>;
-        args?: string[];
-        color?: string;
-        dangerousEnabled?: boolean;
-        customFlags?: string;
-        inlineMode?: boolean;
-      }>
-    >;
   };
   agentSessionHistory: {
     list(worktreeId?: string): Promise<AgentSessionRecord[]>;
@@ -1226,53 +1191,19 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getStatus(): Promise<{ hardwareAccelerationDisabled: boolean }>;
     setHardwareAcceleration(enabled: boolean): Promise<void>;
   };
-  privacy: {
-    getSettings(): Promise<{
-      telemetryLevel: "off" | "errors" | "full";
-      logRetentionDays: 7 | 30 | 90 | 0;
-      dataFolderPath: string;
-    }>;
-    setTelemetryLevel(level: "off" | "errors" | "full"): Promise<void>;
-    setLogRetention(days: 7 | 30 | 90 | 0): Promise<void>;
-    openDataFolder(): Promise<void>;
-    clearCache(): Promise<void>;
-    resetAllData(): Promise<void>;
-    getDataFolderPath(): Promise<string>;
+  // Invoke methods come from GeneratedElectronAPI; onTelemetryConsentChanged is a renderer-only subscription.
+  privacy: GeneratedElectronAPI["privacy"] & {
     onTelemetryConsentChanged(
       callback: (payload: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean }) => void
     ): () => void;
   };
-  sentry: {
-    getConsentState(): Promise<{
-      level: "off" | "errors" | "full";
-      hasSeenPrompt: boolean;
-    }>;
-  };
-  onboarding: {
-    get(): Promise<OnboardingState>;
-    setStep(step: string | null | { step: string | null; agentSetupIds?: string[] }): Promise<void>;
-    complete(): Promise<void>;
-    markToastSeen(): Promise<void>;
-    markNewsletterSeen(): Promise<void>;
-    markWaitingNudgeSeen(): Promise<void>;
-    markAgentsSeen(agentIds: string[]): Promise<OnboardingState>;
-    recordAgentFirstSeen(agentIds: string[]): Promise<OnboardingState>;
-    dismissWelcomeCard(): Promise<OnboardingState>;
-    dismissSetupBanner(): Promise<OnboardingState>;
-    getChecklist(): Promise<ChecklistState>;
-    dismissChecklist(): Promise<void>;
-    markChecklistItem(item: ChecklistItemId): Promise<void>;
-    markChecklistCelebrationShown(): Promise<void>;
+  // sentry is generated — see GeneratedElectronAPI.
+  // Invoke methods come from GeneratedElectronAPI; onChecklistPush is a renderer-only subscription.
+  onboarding: GeneratedElectronAPI["onboarding"] & {
     onChecklistPush(callback: (state: ChecklistState) => void): () => void;
   };
-  milestones: {
-    get(): Promise<Record<string, boolean>>;
-    markShown(id: string): Promise<void>;
-  };
-  shortcutHints: {
-    getCounts(): Promise<Record<string, number>>;
-    incrementCount(actionId: string): Promise<void>;
-  };
+  // milestones is generated — see GeneratedElectronAPI.
+  // shortcutHints is generated — see GeneratedElectronAPI.
   forge: {
     /** Read the persisted forge settings (global default provider id). */
     getSettings(): Promise<{ defaultProviderId: string | null }>;
@@ -1398,100 +1329,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
     ): () => void;
   };
-  mcpServer: {
-    /** Get current MCP server status and configuration */
-    getStatus(): Promise<{
-      enabled: boolean;
-      port: number | null;
-      configuredPort: number | null;
-      apiKey: string;
-    }>;
-    /** Enable or disable the MCP server */
-    setEnabled(enabled: boolean): Promise<{
-      enabled: boolean;
-      port: number | null;
-      configuredPort: number | null;
-      apiKey: string;
-    }>;
-    /** Set a fixed port (null = auto-assign ephemeral port) */
-    setPort(port: number | null): Promise<{
-      enabled: boolean;
-      port: number | null;
-      configuredPort: number | null;
-      apiKey: string;
-    }>;
-    /**
-     * Mint a fresh bearer token, persist it to electron-store, and return the
-     * new key. Clients pick up the new key on their next request — no server
-     * restart is needed. External clients holding the old bearer in their own
-     * config break and must re-paste from Settings.
-     */
-    rotateApiKey(): Promise<string>;
-    /** Get the JSON config snippet to paste into an MCP client config */
-    getConfigSnippet(): Promise<string>;
-    /** Read the audit-log ring buffer (newest first). */
-    getAuditRecords(): Promise<import("./mcpServer.js").McpAuditRecord[]>;
-    /** Get the persisted audit-log configuration. */
-    getAuditConfig(): Promise<{ enabled: boolean; maxRecords: number }>;
-    /**
-     * Read the session-scoped audit health counters (currently the
-     * since-launch 401 counter). Resets on app restart.
-     */
-    getAuditStats(): Promise<import("./mcpServer.js").McpAuditStats>;
-    /** Clear all audit records from the ring buffer and persistence. */
-    clearAuditLog(): Promise<void>;
-    /** Read the turn-outcome ring buffer (newest first). */
-    getTurnOutcomeRecords(): Promise<import("./mcpServer.js").AssistantTurnRecord[]>;
-    /** Clear all turn-outcome records from the ring buffer and persistence. */
-    clearTurnOutcomeLog(): Promise<void>;
-    /** Toggle audit-log capture without losing existing records. */
-    setAuditEnabled(enabled: boolean): Promise<{ enabled: boolean; maxRecords: number }>;
-    /** Update the ring-buffer cap (clamped to MCP_AUDIT_MIN/MAX). */
-    setAuditMaxRecords(max: number): Promise<{ enabled: boolean; maxRecords: number }>;
-    /**
-     * Get the derived runtime-state snapshot
-     * (`disabled|starting|ready|failed`). Distinct from `getStatus()` —
-     * surfaces the dock-pip readiness state and last-failure reason.
-     */
-    getRuntimeState(): Promise<import("./mcpServer.js").McpRuntimeSnapshot>;
+  // Invoke methods come from GeneratedElectronAPI; the rest are
+  // renderer-only event subscriptions.
+  mcpServer: GeneratedElectronAPI["mcpServer"] & {
     /** Subscribe to runtime-state transitions. */
     onRuntimeStateChanged(
       callback: (snapshot: import("./mcpServer.js").McpRuntimeSnapshot) => void
     ): () => void;
     /**
-     * Elevate an active help-session's tier (Always allow — pairs with a
-     * project-level `daintreeMcpTier` write). Server-side validates that
-     * the new tier is not a downgrade. The per-tool "Approve once" flow
-     * uses {@link issueGrant} instead (#8442).
-     */
-    setSessionTier(
-      sessionId: string,
-      tier: "workbench" | "action" | "system"
-    ): Promise<{ sessionId: string; tier: "workbench" | "action" | "system" }>;
-    /**
-     * Mint a per-`(sessionId, toolId)` time-bounded grant — the "Approve
-     * once" pathway that replaces sticky session-tier elevation for one-
-     * off tool calls. Returns the TTL window so the renderer can render
-     * a countdown without polling (#8442).
-     */
-    issueGrant(
-      sessionId: string,
-      toolId: string
-    ): Promise<import("./mcpServer.js").McpIssueGrantResult>;
-    /**
-     * Drop every grant currently held by the session. Returns the count
-     * of revoked grants for the renderer's confirmation copy.
-     */
-    revokeSessionGrants(
-      sessionId: string
-    ): Promise<import("./mcpServer.js").McpRevokeSessionGrantsResult>;
-    /**
      * Subscribe to tier-not-permitted pushes for the pinned help-session in
      * this WebContents. The callback fires when a tool call is denied because
      * the session tier doesn't permit it.
      */
-    /** Export filtered audit records as scrubbed NDJSON via OS save dialog. Returns false if canceled. */
-    exportAuditLog(records: import("./mcpServer.js").McpAuditRecord[]): Promise<boolean>;
     onTierNotPermitted(
       callback: (payload: {
         sessionId: string;
@@ -1509,10 +1358,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: import("./mcpServer.js").McpGrantLifecyclePayload) => void
     ): () => void;
   };
-  helpAssistant: {
-    getSettings(): Promise<HelpAssistantSettings>;
-    setSettings(settings: Partial<HelpAssistantSettings>): Promise<void>;
-  };
+  // helpAssistant is generated — see GeneratedElectronAPI.
   mcpBridge: {
     /** Listen for manifest requests from main process */
     onGetManifestRequest(callback: (requestId: string) => void): () => void;

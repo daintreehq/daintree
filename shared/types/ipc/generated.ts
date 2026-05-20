@@ -8,6 +8,26 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "agent-capabilities:get-agent-ids": {
+    args: [];
+    result: string[];
+  };
+  "agent-capabilities:get-agent-metadata": {
+    args: [agentId: string];
+    result: import("./agentCapabilities.js").AgentMetadata | null;
+  };
+  "agent-capabilities:get-ccr-presets": {
+    args: [];
+    result: import("../../config/agentRegistry.js").AgentPreset[];
+  };
+  "agent-capabilities:get-registry": {
+    args: [];
+    result: import("./agentCapabilities.js").AgentRegistry;
+  };
+  "agent-capabilities:is-agent-enabled": {
+    args: [agentId: string];
+    result: boolean;
+  };
   "agent-session:clear": {
     args: [payload: { worktreeId?: string | undefined }];
     result: void;
@@ -63,6 +83,10 @@ export interface GeneratedIpcInvokeMap {
   "commands:list": {
     args: [context?: import("../commands.js").CommandContext | undefined];
     result: import("../commands.js").CommandManifestEntry[];
+  };
+  "connectivity:get-state": {
+    args: [];
+    result: import("./connectivity.js").ServiceConnectivitySnapshot;
   };
   "demo:annotate": {
     args: [payload: import("./demo.js").DemoAnnotatePayload];
@@ -188,12 +212,28 @@ export interface GeneratedIpcInvokeMap {
     args: [filters: import("./events.js").EventFilterOptions];
     result: import("./events.js").EventRecord[];
   };
+  "gemini:enable-alternate-buffer": {
+    args: [];
+    result: { success: boolean };
+  };
+  "gemini:get-status": {
+    args: [];
+    result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
+  };
   "global-env:get": {
     args: [];
     result: Record<string, string>;
   };
   "global-env:set": {
     args: [payload: { variables: Record<string, string> }];
+    result: void;
+  };
+  "help-assistant:get-settings": {
+    args: [];
+    result: import("./api.js").HelpAssistantSettings;
+  };
+  "help-assistant:set-settings": {
+    args: [patch: Partial<import("./api.js").HelpAssistantSettings>];
     result: void;
   };
   "help:get-folder-path": {
@@ -232,6 +272,170 @@ export interface GeneratedIpcInvokeMap {
   };
   "help:unmark-terminal": {
     args: [terminalId: string];
+    result: void;
+  };
+  "hibernation:get-config": {
+    args: [];
+    result: import("./hibernation.js").HibernationConfig;
+  };
+  "hibernation:update-config": {
+    args: [config: Partial<import("./hibernation.js").HibernationConfig>];
+    result: import("./hibernation.js").HibernationConfig;
+  };
+  "idle-terminal:close-project": {
+    args: [projectId: string];
+    result: void;
+  };
+  "idle-terminal:dismiss-project": {
+    args: [projectId: string];
+    result: void;
+  };
+  "idle-terminal:get-config": {
+    args: [];
+    result: import("./idleTerminals.js").IdleTerminalNotifyConfig;
+  };
+  "idle-terminal:update-config": {
+    args: [config: Partial<import("./idleTerminals.js").IdleTerminalNotifyConfig>];
+    result: import("./idleTerminals.js").IdleTerminalNotifyConfig;
+  };
+  "mcp-server:clear-audit-log": {
+    args: [];
+    result: void;
+  };
+  "mcp-server:clear-turn-outcome-log": {
+    args: [];
+    result: void;
+  };
+  "mcp-server:export-audit-log": {
+    args: [records: import("./mcpServer.js").McpAuditRecord[]];
+    result: boolean;
+  };
+  "mcp-server:get-audit-config": {
+    args: [];
+    result: { enabled: boolean; maxRecords: number };
+  };
+  "mcp-server:get-audit-records": {
+    args: [];
+    result: import("./mcpServer.js").McpAuditRecord[];
+  };
+  "mcp-server:get-audit-stats": {
+    args: [];
+    result: import("./mcpServer.js").McpAuditStats;
+  };
+  "mcp-server:get-config-snippet": {
+    args: [];
+    result: string;
+  };
+  "mcp-server:get-runtime-state": {
+    args: [];
+    result: import("./mcpServer.js").McpRuntimeSnapshot;
+  };
+  "mcp-server:get-status": {
+    args: [];
+    result: import("./mcpServer.js").McpServerStatusSnapshot;
+  };
+  "mcp-server:get-turn-outcome-records": {
+    args: [];
+    result: import("./mcpServer.js").AssistantTurnRecord[];
+  };
+  "mcp-server:issue-grant": {
+    args: [payload: { sessionId: string; toolId: string }];
+    result: import("./mcpServer.js").McpIssueGrantResult;
+  };
+  "mcp-server:revoke-session-grants": {
+    args: [payload: { sessionId: string }];
+    result: import("./mcpServer.js").McpRevokeSessionGrantsResult;
+  };
+  "mcp-server:rotate-api-key": {
+    args: [];
+    result: string;
+  };
+  "mcp-server:set-audit-enabled": {
+    args: [enabled: boolean];
+    result: { enabled: boolean; maxRecords: number };
+  };
+  "mcp-server:set-audit-max-records": {
+    args: [max: number];
+    result: { enabled: boolean; maxRecords: number };
+  };
+  "mcp-server:set-enabled": {
+    args: [enabled: boolean];
+    result: import("./mcpServer.js").McpServerStatusSnapshot;
+  };
+  "mcp-server:set-port": {
+    args: [port: number | null];
+    result: import("./mcpServer.js").McpServerStatusSnapshot;
+  };
+  "mcp-server:set-session-tier": {
+    args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
+    result: { sessionId: string; tier: "action" | "workbench" | "system" };
+  };
+  "menu:show-context": {
+    args: [payload: import("../menu.js").ShowContextMenuPayload];
+    result: string | null;
+  };
+  "milestones:get": {
+    args: [];
+    result: Record<string, boolean>;
+  };
+  "milestones:mark-shown": {
+    args: [milestoneId: string];
+    result: void;
+  };
+  "onboarding:checklist-dismiss": {
+    args: [];
+    result: void;
+  };
+  "onboarding:checklist-get": {
+    args: [];
+    result: import("./maps.js").ChecklistState;
+  };
+  "onboarding:checklist-mark-celebration-shown": {
+    args: [];
+    result: void;
+  };
+  "onboarding:checklist-mark-item": {
+    args: [item: import("./maps.js").ChecklistItemId];
+    result: void;
+  };
+  "onboarding:complete": {
+    args: [];
+    result: void;
+  };
+  "onboarding:dismiss-setup-banner": {
+    args: [];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:dismiss-welcome-card": {
+    args: [];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:get": {
+    args: [];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:mark-agents-seen": {
+    args: [agentIds: string[]];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:mark-newsletter-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:mark-toast-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:mark-waiting-nudge-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:record-agent-first-seen": {
+    args: [agentIds: string[]];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:set-step": {
+    args: [arg: string | { step: string | null; agentSetupIds?: string[] | undefined } | null];
     result: void;
   };
   "plugin:actions-get": {
@@ -314,6 +518,38 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../portal.js").PortalShowNewTabMenuPayload];
     result: void;
   };
+  "privacy:clear-cache": {
+    args: [];
+    result: void;
+  };
+  "privacy:get-data-folder-path": {
+    args: [];
+    result: string;
+  };
+  "privacy:get-settings": {
+    args: [];
+    result: {
+      telemetryLevel: "off" | "errors" | "full";
+      logRetentionDays: 0 | 7 | 30 | 90;
+      dataFolderPath: string;
+    };
+  };
+  "privacy:open-data-folder": {
+    args: [];
+    result: void;
+  };
+  "privacy:reset-all-data": {
+    args: [];
+    result: void;
+  };
+  "privacy:set-log-retention": {
+    args: [days: 0 | 7 | 30 | 90];
+    result: void;
+  };
+  "privacy:set-telemetry-level": {
+    args: [level: "off" | "errors" | "full"];
+    result: void;
+  };
   "project:clone-cancel": {
     args: [];
     result: void;
@@ -353,9 +589,57 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("../scratch.js").Scratch;
   };
+  "sentry:get-consent-state": {
+    args: [];
+    result: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
+  };
+  "shortcut-hints:get-counts": {
+    args: [];
+    result: Record<string, number>;
+  };
+  "shortcut-hints:increment-count": {
+    args: [actionId: string];
+    result: void;
+  };
   "slash-commands:list": {
     args: [payload: import("../slashCommands.js").SlashCommandListRequest];
     result: import("../slashCommands.js").SlashCommand[];
+  };
+  "system-sleep:get-awake-time": {
+    args: [startTimestamp: number];
+    result: number;
+  };
+  "system-sleep:get-metrics": {
+    args: [];
+    result: import("./systemSleep.js").SystemSleepMetrics;
+  };
+  "system-sleep:reset": {
+    args: [];
+    result: void;
+  };
+  "telemetry:get": {
+    args: [];
+    result: { enabled: boolean; hasSeenPrompt: boolean };
+  };
+  "telemetry:mark-prompt-shown": {
+    args: [];
+    result: void;
+  };
+  "telemetry:preview-get-state": {
+    args: [];
+    result: import("./telemetryPreview.js").TelemetryPreviewState;
+  };
+  "telemetry:preview-toggle": {
+    args: [active: boolean];
+    result: import("./telemetryPreview.js").TelemetryPreviewState;
+  };
+  "telemetry:set-enabled": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "telemetry:track": {
+    args: [eventName: string, properties: Record<string, unknown>];
+    result: void;
   };
   "terminal:force-resume": {
     args: [id: string];
