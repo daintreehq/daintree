@@ -146,8 +146,17 @@ export class TerminalResizeController {
 
     const currentTier =
       managed.lastAppliedTier ?? managed.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED;
+    // Defer the xterm reflow only when the terminal is genuinely hidden
+    // (offscreen / content-visibility:hidden). A freshly prewarmed terminal
+    // carries a stale lastAppliedTier === BACKGROUND — seeded by
+    // prewarmTerminal — until XtermAdapter's applyRendererPolicy effect
+    // promotes it, yet by then it may already be attached and visible.
+    // Skipping terminal.resize() for a *visible* terminal strands xterm's grid
+    // at the 80x24 open() default while the PTY runs at the real size. isVisible
+    // is set synchronously by setVisible(true) during attach, before the first
+    // fit, so it is a reliable discriminator here.
     const isBackgroundUnfocused =
-      currentTier === TerminalRefreshTier.BACKGROUND && !managed.isFocused;
+      currentTier === TerminalRefreshTier.BACKGROUND && !managed.isFocused && !managed.isVisible;
 
     if (Math.abs(managed.lastWidth - width) < 1 && Math.abs(managed.lastHeight - height) < 1) {
       return null;
