@@ -1,3 +1,4 @@
+import os from "os";
 import v8 from "node:v8";
 import path from "node:path";
 import { mkdirSync } from "node:fs";
@@ -10,11 +11,21 @@ import { getWritesSuppressed } from "./diskPressureState.js";
 const POLL_INTERVAL_MS = 30_000;
 const SNAPSHOT_COOLDOWN_MS = 5 * 60 * 1000;
 
-const WARN_THRESHOLDS_MB: Record<string, number> = {
-  Browser: 300,
-  Tab: 768,
-  Utility: 500,
-};
+// Per-process-type warn thresholds as fractions of total device RAM. Calibrated
+// against the previous absolute ceilings (Browser 300 / Tab 768 / Utility 500)
+// on an 8 GB baseline — fraction × 8192 MB reproduces the legacy value exactly,
+// so behavior on a typical low-end machine is unchanged.
+const BROWSER_MEMORY_FRACTION = 300 / 8192;
+const TAB_MEMORY_FRACTION = 768 / 8192;
+const UTILITY_MEMORY_FRACTION = 500 / 8192;
+
+// Combined working-set ceiling across all monitored processes. Working-set
+// sums double-count shared library pages on macOS, so this is intentionally
+// generous — it is a pressure heuristic, not a precise private-footprint
+// budget. 25% of total RAM is enough headroom that the per-process thresholds
+// trip first under typical leak shapes while still catching fan-out cases
+// where several processes individually stay below their own limits.
+const AGGREGATE_MEMORY_FRACTION = 0.25;
 
 const SNAPSHOT_THRESHOLD_MB = 600;
 
@@ -229,8 +240,12 @@ export interface MemoryPressureActions {
   sampleRendererElu?: () => void;
 }
 
+// workingSetSize is the only memory field Electron guarantees on all three
+// platforms: privateBytes is Windows-only and reported as 0 (not undefined)
+// on macOS/Linux, which silently defeated the previous `privateBytes ??
+// workingSetSize` fallback.
 function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
-  return (proc.memory.privateBytes ?? proc.memory.workingSetSize) / 1024;
+  return proc.memory.workingSetSize / 1024;
 }
 
 let currentAppMetricsPollIntervalMs = POLL_INTERVAL_MS;
@@ -248,6 +263,17 @@ export function refreshAppMetricsMonitor(): void {
 }
 
 export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => void {
+  // Scale thresholds to device RAM once per monitor lifetime. os.totalmem() is
+  // stable for the process lifetime; mirroring ResourceProfileService's
+  // constructor pattern keeps the spy-on-totalmem pattern working in tests.
+  const totalMemMb = os.totalmem() / 1024 / 1024;
+  const warnThresholdsMb: Record<string, number> = {
+    Browser: totalMemMb * BROWSER_MEMORY_FRACTION,
+    Tab: totalMemMb * TAB_MEMORY_FRACTION,
+    Utility: totalMemMb * UTILITY_MEMORY_FRACTION,
+  };
+  const aggregateWarnThresholdMb = totalMemMb * AGGREGATE_MEMORY_FRACTION;
+
   const snapshotCooldowns = new Map<number, number>();
   const trendState = new Map<number, PidTrendState>();
   let removeSuspendListener: (() => void) | null = null;
@@ -275,15 +301,17 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       const metrics = app.getAppMetrics();
       const activePids = new Set<number>();
       let hasPressure = false;
+      let aggregateMb = 0;
 
       for (const proc of metrics) {
         if (!MONITORED_TYPES.has(proc.type)) continue;
 
         activePids.add(proc.pid);
         const mb = getProcessMemoryMb(proc);
+        aggregateMb += mb;
         logDebug("process-memory-sample", { pid: proc.pid, type: proc.type, mb: Math.round(mb) });
 
-        const threshold = WARN_THRESHOLDS_MB[proc.type];
+        const threshold = warnThresholdsMb[proc.type];
         if (threshold !== undefined && mb > threshold) {
           hasPressure = true;
           if (!thresholdExceededPids.has(proc.pid)) {
@@ -292,7 +320,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               pid: proc.pid,
               type: proc.type,
               mb: Math.round(mb),
-              thresholdMb: threshold,
+              thresholdMb: Math.round(threshold),
             });
           }
         } else if (threshold !== undefined) {
@@ -372,6 +400,15 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
         }
       }
 
+      // Aggregate working-set check: fans-out of small processes can collectively
+      // exceed a safe footprint without any single one tripping its per-type
+      // threshold. Feeds the same hasPressure signal so the existing tiered
+      // mitigation pipeline handles the response — no separate log emission to
+      // avoid noisy parallel warnings alongside per-process notices.
+      if (aggregateMb > aggregateWarnThresholdMb) {
+        hasPressure = true;
+      }
+
       for (const pid of trendState.keys()) {
         if (!activePids.has(pid)) trendState.delete(pid);
       }
@@ -443,7 +480,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               if (!MONITORED_TYPES.has(proc.type)) continue;
               const mb = getProcessMemoryMb(proc);
               afterMb += mb;
-              const threshold = WARN_THRESHOLDS_MB[proc.type];
+              const threshold = warnThresholdsMb[proc.type];
               if (threshold !== undefined && mb > threshold) {
                 pressureRemains = true;
               }
