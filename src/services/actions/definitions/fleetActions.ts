@@ -455,6 +455,18 @@ export function registerFleetActions(actions: ActionRegistry): void {
         const scope = (current.fleetSavedScopes ?? []).find((s) => s.id === id);
         if (!scope) return;
         applySavedScope(scope);
+
+        const now = Date.now();
+        scope.lastUsedAt = now;
+        scope.usageHistory = [...(scope.usageHistory ?? []), now].slice(-20);
+
+        if (useProjectStore.getState().currentProject?.id !== projectId) return;
+        projectClient.saveSettings(projectId, current).catch((err) => {
+          console.warn("Failed to persist fleet recency stamp:", err);
+        });
+        if (useProjectSettingsStore.getState().projectId === projectId) {
+          useProjectSettingsStore.getState().setSettings(current);
+        }
       } catch (error) {
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({

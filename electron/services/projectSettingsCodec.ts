@@ -18,9 +18,11 @@ import type {
   CopyTreeSettings,
   DaintreeMcpTier,
   FleetSavedScope,
+  PredicateFleetSavedScope,
   ProjectSettings,
   ProjectTerminalSettings,
   ResourceEnvironment,
+  SnapshotFleetSavedScope,
 } from "../../shared/types/project.js";
 import type { CommandOverride } from "../../shared/types/commands.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
@@ -151,27 +153,41 @@ function decodeFleetSavedScopes(raw: unknown): FleetSavedScope[] | undefined {
     if (typeof o.id !== "string" || !o.id.trim()) continue;
     if (typeof o.name !== "string" || !o.name.trim()) continue;
     if (typeof o.createdAt !== "number" || !Number.isFinite(o.createdAt)) continue;
+
+    const lastUsedAt =
+      typeof o.lastUsedAt === "number" && Number.isFinite(o.lastUsedAt) ? o.lastUsedAt : undefined;
+    const usageHistory = Array.isArray(o.usageHistory)
+      ? o.usageHistory.filter((t): t is number => typeof t === "number" && Number.isFinite(t))
+      : undefined;
+    const usageHistoryFiltered = usageHistory && usageHistory.length > 0 ? usageHistory : undefined;
+
     if (o.kind === "snapshot") {
       if (!Array.isArray(o.terminalIds)) continue;
       const terminalIds = o.terminalIds.filter((t): t is string => typeof t === "string");
-      out.push({
+      const scope: SnapshotFleetSavedScope = {
         kind: "snapshot",
         id: o.id,
         name: o.name,
         terminalIds,
         createdAt: o.createdAt,
-      });
+      };
+      if (lastUsedAt !== undefined) scope.lastUsedAt = lastUsedAt;
+      if (usageHistoryFiltered !== undefined) scope.usageHistory = usageHistoryFiltered;
+      out.push(scope);
     } else if (o.kind === "predicate") {
       if (typeof o.scope !== "string" || !VALID_PREDICATE_SCOPES.has(o.scope)) continue;
       if (typeof o.stateFilter !== "string" || !VALID_PREDICATE_STATES.has(o.stateFilter)) continue;
-      out.push({
+      const scope: PredicateFleetSavedScope = {
         kind: "predicate",
         id: o.id,
         name: o.name,
         scope: o.scope as "current" | "all",
         stateFilter: o.stateFilter as "all" | "working" | "waiting" | "finished",
         createdAt: o.createdAt,
-      });
+      };
+      if (lastUsedAt !== undefined) scope.lastUsedAt = lastUsedAt;
+      if (usageHistoryFiltered !== undefined) scope.usageHistory = usageHistoryFiltered;
+      out.push(scope);
     }
   }
   return out.length > 0 ? out : undefined;
