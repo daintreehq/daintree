@@ -6,6 +6,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 
 import { TerminalRefreshTier, PanelKind, AgentState } from "@/types";
+import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
@@ -138,6 +139,12 @@ export interface ManagedTerminal {
   // Deferred scrollback restore state — prevents double-restore and tracks lifecycle
   scrollbackRestoreState: "none" | "pending" | "in-progress" | "done";
   scrollbackRestoreDisposable?: { dispose: () => void };
+  // Out-of-band failure channel set by TerminalRestoreController catch blocks
+  // when the deferred restore replay fails (write timeout, parse error). The
+  // scheduler reads this after fetchAndRestore() resolves to surface the
+  // failure to the panel store. Cleared at the start of each restore attempt
+  // and on the success path. See issue #8535.
+  lastScrollbackRestoreError?: TerminalScrollbackRestoreError;
 
   // Alternate screen buffer state (tracked via xterm.js onBufferChange).
   // Used to adapt UI (remove padding) and resize strategy for TUI applications.

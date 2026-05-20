@@ -170,6 +170,16 @@ export interface TerminalReconnectError {
   };
 }
 
+/** Structured error state for scrollback restore failures (issue #8535) */
+export interface TerminalScrollbackRestoreError {
+  /** Human-readable error message */
+  message: string;
+  /** Error classification: write timeout, parse error from xterm, or other */
+  type: "timeout" | "parse" | "error";
+  /** Timestamp when error occurred (milliseconds since epoch) */
+  timestamp: number;
+}
+
 /** Exit behavior for panels/terminals after process exits */
 export type PanelExitBehavior = "keep" | "trash" | "remove" | "restart";
 
@@ -252,6 +262,8 @@ export interface PtyPanelData extends BasePanelData {
   restartError?: TerminalRestartError;
   /** Reconnection failure error - set when reconnection fails during project switch */
   reconnectError?: TerminalReconnectError;
+  /** Scrollback restore failure - set when deferred scrollback replay fails */
+  scrollbackRestoreError?: TerminalScrollbackRestoreError;
   /** Flow control status - indicates if terminal is paused/suspended due to backpressure or safety policy.
    *  Excludes `data-loss` (transient pulse only — never persisted as state). */
   flowStatus?: PersistableFlowStatus;
@@ -487,6 +499,8 @@ export interface TerminalInstance {
   reconnectError?: TerminalReconnectError;
   /** Error that occurred when spawning the PTY process */
   spawnError?: import("./pty-host.js").SpawnError;
+  /** Error that occurred during deferred scrollback restore (issue #8535) */
+  scrollbackRestoreError?: TerminalScrollbackRestoreError;
   flowStatus?: PersistableFlowStatus;
   runtimeStatus?: TerminalRuntimeStatus;
   flowStatusTimestamp?: number;

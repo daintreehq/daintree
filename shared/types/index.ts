@@ -48,6 +48,7 @@ export type {
   PanelTitleMode,
   TerminalRestartError,
   TerminalReconnectError,
+  TerminalScrollbackRestoreError,
   TerminalRuntimeStatus,
   PersistableFlowStatus,
   TerminalSpawnSource,

@@ -7,6 +7,7 @@ import type {
   TerminalRuntimeStatus,
   SpawnError,
   TerminalReconnectError,
+  TerminalScrollbackRestoreError,
   TabGroup,
   TabGroupLocation,
   BrowserHistory,
@@ -186,6 +187,8 @@ export interface PanelRegistrySlice {
   clearSpawnError: (id: string) => void;
   setReconnectError: (id: string, error: TerminalReconnectError) => void;
   clearReconnectError: (id: string) => void;
+  setScrollbackRestoreError: (id: string, error: TerminalScrollbackRestoreError) => void;
+  clearScrollbackRestoreError: (id: string) => void;
 
   // Tab grouping methods - TabGroup is the single source of truth
   /** Get all panels in a group, ordered by group's panelIds array. Location param is deprecated. */
