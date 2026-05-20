@@ -215,10 +215,12 @@ export class CrashLoopGuardService {
       if (
         parsed.version === 1 &&
         typeof parsed.crashes === "number" &&
+        Number.isFinite(parsed.crashes) &&
         Array.isArray(parsed.launches) &&
         parsed.launches.every((ts) => typeof ts === "number" && Number.isFinite(ts)) &&
         typeof parsed.cleanExit === "boolean" &&
-        typeof parsed.lastReset === "number"
+        typeof parsed.lastReset === "number" &&
+        Number.isFinite(parsed.lastReset)
       ) {
         return parsed as CrashLoopState;
       }
@@ -349,10 +351,12 @@ export function isSafeModeActive(userDataPath?: string): boolean {
     if (
       parsed.version === 1 &&
       typeof parsed.crashes === "number" &&
+      Number.isFinite(parsed.crashes) &&
       Array.isArray(parsed.launches) &&
       parsed.launches.every((ts) => typeof ts === "number" && Number.isFinite(ts)) &&
       typeof parsed.cleanExit === "boolean" &&
-      typeof parsed.lastReset === "number"
+      typeof parsed.lastReset === "number" &&
+      Number.isFinite(parsed.lastReset)
     ) {
       if (parsed.cleanExit) return false;
       const now = Date.now();

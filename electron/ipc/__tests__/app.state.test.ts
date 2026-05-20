@@ -318,6 +318,32 @@ describe("app:boot handler", () => {
     expect(result.crashPending).toBeNull();
   });
 
+  it("surfaces crashLoopStateRecovery only when in safe mode AND quarantine path is set", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    crashGuard.getQuarantinedStatePath.mockReturnValue("/tmp/crash-loop-state.json.corrupted.42");
+
+    const result = (await invokeBoot()) as { crashLoopStateRecovery: unknown };
+    expect(result.crashLoopStateRecovery).toEqual({
+      quarantinedPath: "/tmp/crash-loop-state.json.corrupted.42",
+    });
+  });
+
+  it("omits crashLoopStateRecovery when not in safe mode (silent corruption is log-only)", async () => {
+    crashGuard.isSafeMode.mockReturnValue(false);
+    crashGuard.getQuarantinedStatePath.mockReturnValue("/tmp/crash-loop-state.json.corrupted.42");
+
+    const result = (await invokeBoot()) as { crashLoopStateRecovery: unknown };
+    expect(result.crashLoopStateRecovery).toBeNull();
+  });
+
+  it("omits crashLoopStateRecovery when in safe mode but no quarantine occurred", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    crashGuard.getQuarantinedStatePath.mockReturnValue(null);
+
+    const result = (await invokeBoot()) as { crashLoopStateRecovery: unknown };
+    expect(result.crashLoopStateRecovery).toBeNull();
+  });
+
   it("propagates the cache-hit fast path from handleAppHydrate (no disk read)", async () => {
     const cachedResult = {
       appState: { terminals: [], sidebarWidth: 350 },

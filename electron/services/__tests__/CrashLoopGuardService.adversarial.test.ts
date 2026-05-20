@@ -187,6 +187,48 @@ describe("CrashLoopGuardService adversarial", () => {
     readdirSpy.mockRestore();
   });
 
+  it("quarantines state with non-finite numeric fields (Infinity from JSON overflow)", () => {
+    // JSON.parse turns numeric overflow into Infinity. Without an isFinite
+    // guard the file would pass type validation, then JSON.stringify on the
+    // write-back would emit `null` — corrupting the file on the next boot
+    // instead of the current one. Quarantine immediately.
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        crashes: 1e309, // → Infinity after JSON.parse
+        launches: [],
+        cleanExit: false,
+        lastReset: Date.now(),
+      }),
+      "utf8"
+    );
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toMatch(/\.corrupted\.\d+$/);
+  });
+
+  it("quarantines state when lastReset is Infinity", () => {
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        crashes: 0,
+        launches: [],
+        cleanExit: false,
+        lastReset: 1e309,
+      }),
+      "utf8"
+    );
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toMatch(/\.corrupted\.\d+$/);
+  });
+
   it("prune tolerates `.corrupted.*` siblings with malformed timestamps", () => {
     // A malformed entry that would parse to NaN if naively coerced.
     fs.writeFileSync(
