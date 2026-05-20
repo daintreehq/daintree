@@ -23,9 +23,11 @@
  * (`.npmrc`, `~/.config/pipx`) from these. Omitting them silently breaks
  * private-registry auth for users behind corporate proxies.
  *
- * Callers must invoke after `app.ready` and after any startup `fixPath()`
- * has completed, since these functions read `process.env.PATH` directly.
- * IPC-handled service methods are safe by construction.
+ * Callers must invoke after `app.ready` and after the startup
+ * `kickOffEarlyPathRefresh()` promise has settled, since these functions
+ * read `process.env.PATH` directly. IPC-handled service methods are safe by
+ * construction (they run after `setupWindowServices` awaits the early
+ * refresh before creating the PTY host).
  */
 
 import os from "os";

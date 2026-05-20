@@ -1,5 +1,7 @@
 export const PERF_MARKS = {
   APP_BOOT_START: "app_boot_start",
+  EARLY_PATH_REFRESH_START: "early_path_refresh_start",
+  EARLY_PATH_REFRESH_COMPLETE: "early_path_refresh_complete",
   MAIN_WINDOW_CREATED: "main_window_created",
   RENDERER_READY: "renderer_ready",
   RENDERER_FIRST_INTERACTIVE: "renderer_first_interactive",

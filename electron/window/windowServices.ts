@@ -144,7 +144,7 @@ export async function setupWindowServices(
   }
 
   // ── Per-window initialization ──
-  const handlerDeps = initPerWindowServices(win, ctx, windowRegistry);
+  const handlerDeps = await initPerWindowServices(win, ctx, windowRegistry);
   const cliAvailabilityService = getCliAvailabilityServiceRef();
 
   console.log("[MAIN] Registering IPC handlers...");

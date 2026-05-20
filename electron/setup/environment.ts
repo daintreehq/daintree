@@ -23,7 +23,6 @@ import path from "path";
 import fs from "fs";
 import { existsSync } from "fs";
 import os from "os";
-import fixPath from "fix-path";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
 
 export let exposeGc: (() => void) | undefined;
@@ -33,10 +32,6 @@ try {
   (globalThis as Record<string, unknown>).__daintree_gc = exposeGc;
 } catch {
   // GC exposure not available — non-critical
-}
-
-if (app.isPackaged) {
-  fixPath();
 }
 
 // In development, use a separate userData directory so the dev instance
@@ -461,7 +456,27 @@ function resolvePathViaShellProbe(): Promise<string | null> {
   return probe;
 }
 
+// Module-level singleton for the outer refreshPath() Promise. Concurrent
+// callers (the early kick-off, CliAvailabilityService, SystemHealthCheck)
+// all share one in-flight refresh — without this the inner shellProbePromise
+// dedup helps but Promise.race + timeout state is still per-call. Cleared on
+// settlement so a subsequent caller can retry after a transient failure.
+let pathRefreshPromise: Promise<void> | null = null;
+
 export async function refreshPath(): Promise<void> {
+  if (pathRefreshPromise) return pathRefreshPromise;
+
+  const promise = runRefreshPath();
+  pathRefreshPromise = promise;
+  promise.finally(() => {
+    if (pathRefreshPromise === promise) {
+      pathRefreshPromise = null;
+    }
+  });
+  return promise;
+}
+
+async function runRefreshPath(): Promise<void> {
   let timeoutId: NodeJS.Timeout | undefined;
   let shellEnvFailed = false;
   // Guards against late inner-IIFE writes to process.env.PATH after the
@@ -550,6 +565,24 @@ export async function refreshPath(): Promise<void> {
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }
+}
+
+// One-shot startup gate: kicked off as the first async work in
+// app.whenReady() so the shell probe runs concurrently with the rest of
+// startup. The PtyClient creation site awaits this before spawning the PTY
+// host so node-pty sees the user's full PATH. Unlike `pathRefreshPromise`,
+// this stays set after settlement — awaiting a settled Promise is a no-op,
+// and second-window startup must not trigger a fresh shell probe.
+let earlyPathRefreshPromise: Promise<void> | null = null;
+
+export function kickOffEarlyPathRefresh(): Promise<void> {
+  if (earlyPathRefreshPromise) return earlyPathRefreshPromise;
+  earlyPathRefreshPromise = refreshPath();
+  return earlyPathRefreshPromise;
+}
+
+export function getEarlyPathRefreshPromise(): Promise<void> | null {
+  return earlyPathRefreshPromise;
 }
 
 export const isDemoMode = !app.isPackaged && process.argv.includes("--demo-mode");
