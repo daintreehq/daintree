@@ -39,8 +39,9 @@ describe("fleetBroadcastConfirmStore", () => {
       expect(parsed.text).toBe("rm -rf /");
       expect(parsed.warningReasons).toEqual(["destructive"]);
       // Guard against regression: onConfirm must not exist on pending.
-      // `divergence` is optional (omitted when absent serializes to undefined,
-      // which JSON.stringify drops) — guard sorts on whatever keys survive.
+      // `divergence` and `destructiveMatch` are optional (omitted when
+      // absent serializes to undefined, which JSON.stringify drops) —
+      // guard sorts on whatever keys survive.
       expect(Object.keys(parsed).sort()).toEqual(["requestId", "text", "warningReasons"].sort());
     });
 
@@ -74,6 +75,16 @@ describe("fleetBroadcastConfirmStore", () => {
       const { pending } = useFleetBroadcastConfirmStore.getState();
       expect(pending!.divergence?.targets).toHaveLength(2);
       expect(pending!.divergence?.targets[1]!.unresolvedVars).toEqual(["branch_name"]);
+    });
+
+    it("carries destructiveMatch when provided", () => {
+      requestFleetBroadcastConfirmation({
+        text: "rm -rf /",
+        warningReasons: ["destructive"],
+        destructiveMatch: { substring: "rm -rf ", index: 0 },
+      }).catch(() => {});
+      const { pending } = useFleetBroadcastConfirmStore.getState();
+      expect(pending!.destructiveMatch).toEqual({ substring: "rm -rf ", index: 0 });
     });
   });
 

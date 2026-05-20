@@ -522,6 +522,15 @@ export function FleetArmingRibbon(): ReactElement | null {
         onConfirm={confirmPendingBroadcast}
         onClose={cancelPendingBroadcast}
       >
+        {pendingBroadcast?.destructiveMatch ? (
+          <div
+            data-testid="fleet-broadcast-destructive-callout"
+            className="mb-2 rounded border border-category-rose-border bg-category-rose-subtle px-2 py-1.5 text-[11px] text-category-rose-text"
+          >
+            Destructive command detected:{" "}
+            <code className="font-mono">{pendingBroadcast.destructiveMatch.substring}</code>
+          </div>
+        ) : null}
         <ul
           data-testid="fleet-divergence-preview-list"
           className="max-h-[280px] overflow-y-auto rounded border border-daintree-border bg-tint/[0.03]"

@@ -9,7 +9,12 @@ import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewSt
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logWarn } from "@/utils/logger";
-import { getFleetBroadcastWarnings, resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
+import {
+  getFleetBroadcastDestructiveMatch,
+  getFleetBroadcastWarnings,
+  needsFleetBroadcastConfirmation,
+  resolveFleetBroadcastTargetIds,
+} from "./fleetBroadcast";
 import {
   buildFleetTargetPreviews,
   executeFleetBroadcast,
@@ -118,6 +123,12 @@ function buildDivergenceTargets(
  * variables) route through a confirm dialog before dispatch so the user
  * sees the actual per-target content — the silent-fallback comment that
  * used to live here is gone because we no longer silently fall back.
+ *
+ * Recipe-variable expansion can also push a safe-looking draft past the
+ * 512-byte threshold or surface a destructive substring not in the source
+ * draft. `needsFleetBroadcastConfirmation` re-checks the resolved per-
+ * target payloads so the confirm gate sees what each pane will actually
+ * receive, not just the source text.
  */
 export function tryFleetBroadcastFromEditor(
   terminalId: string,
@@ -163,6 +174,14 @@ export function tryFleetBroadcastFromEditor(
     livePreviews.length > 0 ? livePreviews : buildFleetTargetPreviews(text);
 
   const reasons = describeWarnings(text);
+  const destructiveMatch = getFleetBroadcastDestructiveMatch(text);
+
+  // Resolved-payload gate: recipe-variable expansion can push a safe-
+  // looking draft past the 512-byte threshold or surface a destructive
+  // substring per-target. Re-check against the resolved fan-out so the
+  // confirm reflects what each pane will actually receive.
+  const resolvedPayloads = previews.filter((p) => !p.excluded).map((p) => p.resolvedPayload);
+  const requiresWarningConfirm = needsFleetBroadcastConfirmation(text, resolvedPayloads);
 
   // Divergence is scoped to live armed targets: a stale override for a
   // terminal that has since disarmed must not force a spurious confirm
@@ -285,7 +304,7 @@ export function tryFleetBroadcastFromEditor(
     }
   };
 
-  if (reasons.length > 0 || divergent) {
+  if (requiresWarningConfirm || divergent) {
     void requestFleetBroadcastConfirmation({
       text,
       warningReasons: reasons,
@@ -294,6 +313,7 @@ export function tryFleetBroadcastFromEditor(
             targets: buildDivergenceTargets(previews, initialOverrides, initialSkipped),
           }
         : undefined,
+      destructiveMatch,
     }).then(doSend);
     return true;
   }

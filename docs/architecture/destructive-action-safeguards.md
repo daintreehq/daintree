@@ -114,6 +114,7 @@ Columns:
 | `fleet.recallNamedFleet` | safe | n/a | n/a | reversible (re-arm) | armed set | D0 | Leave | — |
 | `fleet.deleteNamedFleet` | **confirm** (updated #8023) | yes (`ConfirmDialog` hoisted to `FleetArmingRibbon`, outside the dropdown tree) | Boolean via dispatch | local-irreversible (settings entry gone) | one saved fleet | D1 | Done (#8023) — confirm state lifted above the Radix `DropdownMenu` so the dialog survives the menu closing (#2828) | — |
 | `fleet.retryFailures` | safe | n/a | n/a | local-undo (just re-fires the last broadcast) | failed broadcast targets | D0 | Leave | — |
+| `fleet.broadcast` (Enter-broadcast / `tryFleetBroadcastFromEditor`) | **confirm** (updated #8689) | yes (`ConfirmDialog` via `fleetBroadcastConfirmStore` + `FleetArmingRibbon`) — renders resolved per-target commands after recipe-variable substitution, surfaces the destructive substring + character offset, allows per-target opt-out, and re-evaluates the byte-threshold against the resolved fan-out rather than only the source draft | n/a (bypass — direct confirm-store call, not `ActionService`) | shared-state (sends a command to N PTYs; already-dispatched IPC writes cannot be revoked) | N armed panes | D2 | Done (#8689) — same silent-fallback class as #7880: confirm gate must show the actual bytes each pane will receive, not just a category label and target count | — |
 
 ### Project / window
 
@@ -198,6 +199,7 @@ Direct `window.electron.*` IPC calls that skip `ActionService`. These are the hi
 | `src/hooks/useDevServer.ts:299` | `devPreview.restart` (dev-preview restart button) | **No** — hook invokes IPC directly; sibling UI issue migrates to the `devPreview.restart` action |
 | `src/components/Recovery/SafeModeBanner.tsx` | `app.resetAndRelaunch` (safe-mode restart) | **Yes** — `ConfirmDialog` with destructive variant + `logs.openFile` recovery (#8685) |
 | `public/recovery-renderer.js` | `recovery:reset-and-reload` (emergency recovery page) | **Yes** — inline vanilla-JS Disclosure confirm with panel count + backup timestamp preview; React is unavailable on this surface (#8697) |
+| `src/components/Fleet/fleetEnterBroadcast.ts` | `fleet.broadcast` (Enter-broadcast → `executeFleetBroadcast` → `terminalClient.submit`) | **Yes** — `ConfirmDialog` via `fleetBroadcastConfirmStore` + `FleetArmingRibbon` with per-target resolved-payload preview, destructive-substring callout, and per-target opt-out (#8689) |
 
 ## Maintenance
 
