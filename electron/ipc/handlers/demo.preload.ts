@@ -1,5 +1,12 @@
 import type { IpcInvokeMap } from "../../types/index.js";
 
+// Opt out of `scripts/codegen/ipc-renderer.mjs` — the renderer-facing
+// `window.electron.demo` API takes positional args (e.g.
+// `moveTo(x, y, durationMs)`) while channels carry a single payload
+// object. The translation lives inline in `preload.cts`, so the
+// generator must skip this namespace.
+export const RENDERER_API_SKIP = true as const;
+
 // `demo:exec-*`, `demo:command-done`, `demo:capture-chunk`, and
 // `demo:capture-stop` are renderer→main / main→renderer send channels
 // (used by the demo runner harness) and are intentionally NOT part of
