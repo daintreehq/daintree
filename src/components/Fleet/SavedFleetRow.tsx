@@ -16,13 +16,16 @@ export function SavedFleetRow({ scope, onRequestDelete }: SavedFleetRowProps): R
   // need for a panelStore subscription that would burn cycles while closed.
   const count = computeSavedScopePaneCount(scope);
   const flavorLabel = scope.kind === "snapshot" ? "Snapshot" : "Live";
+  const isStale = scope.kind === "snapshot" && count === 0;
   return (
     <DropdownMenuItem
+      aria-disabled={isStale || undefined}
       onSelect={() => {
+        if (isStale) return;
         void actionService.dispatch("fleet.recallNamedFleet", { id: scope.id }, { source: "user" });
       }}
       data-testid="fleet-saved-row"
-      className="flex items-center gap-2"
+      className={isStale ? "flex items-center gap-2 opacity-50" : "flex items-center gap-2"}
     >
       <span className="flex-1 truncate">{scope.name}</span>
       <span className="text-[10px] text-daintree-text/50 tabular-nums">
