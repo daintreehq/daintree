@@ -79,6 +79,8 @@ Columns:
 | `worktree.sessions.closeCompleted` | safe | n/a | n/a | local-irreversible (trashed terminals lose scrollback) | one worktree | D0 | Leave — only targets completed/exited terminals | — |
 | `worktree.sessions.trashAll` | confirm | yes (`useWorktreeActions.ts` `handleCloseAll`, updated #8245) — verb-noun "Trash all sessions" with consequence preview | Boolean via dispatch | local-irreversible (scrollback lost; trashed) | one worktree | D1 | Done (#8245) | — |
 | `worktree.sessions.endAll` | confirm | yes (`useWorktreeActions.ts:130-148`) | Boolean via dispatch | local-irreversible | one worktree | D1 | Leave — current pattern is the model for D1 confirms | — |
+| `worktree.bulk.closeSessions` (bypass — `WorktreeOverviewModal` fans out `bulkCloseByWorktree`) | confirm | yes (`ConfirmDialog`, default variant) — names blast radius "Close sessions for N worktrees" before running | Modal-local (selection-driven) | local-irreversible (scrollback lost) | every selected worktree | D1 | Done (#8655) — action metadata is classification-only; the modal's bulk action bar wires the dialog | — |
+| `worktree.bulk.remove` (bypass — `useWorktreeBulkRemove` calls `worktreeClient.delete` directly through a p-queue) | confirm | yes (`ConfirmDialog`, destructive variant) — typed-name gate `"N worktrees"`, full target list with per-worktree dirty / unpushed warnings, main worktrees excluded inside confirm step | Modal-local (selection-driven) | shared-state (working trees + branch worktree associations) | every non-main selected worktree | D3 | Done (#8655) — partial-failure surfaced via warning toast naming success/total ratio; selection cleared regardless of outcome (modal is the retry surface) | — |
 
 ### Terminal lifecycle
 

@@ -29,6 +29,7 @@ import { registerVoiceActions } from "./definitions/voiceActions";
 import { registerWatchdogActions } from "./definitions/watchdogActions";
 import { registerWorktreeActions } from "./definitions/worktreeActions";
 import { registerWorktreeSessionActions } from "./definitions/worktreeSessionActions";
+import { registerWorktreeBulkActions } from "./definitions/worktreeBulkActions";
 import { registerWorkflowActions } from "./definitions/workflowActions";
 
 export type { ActionCallbacks, ActionRegistry } from "./actionTypes";
@@ -51,6 +52,7 @@ export function createActionDefinitions(
   registerPanelActions(actions, callbacks);
   registerWorktreeActions(actions, callbacks);
   registerWorktreeSessionActions(actions, callbacks);
+  registerWorktreeBulkActions(actions);
   registerRecipeActions(actions, callbacks);
   registerProjectActions(actions, callbacks);
   registerEnvActions(actions, callbacks);

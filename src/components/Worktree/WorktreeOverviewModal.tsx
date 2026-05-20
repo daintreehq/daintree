@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo, useState } from "react";
-import { X, FilterX } from "lucide-react";
+import { X, FilterX, AlertTriangle, Trash2, GitBranch } from "lucide-react";
 import { Layers, Plug } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
 import { WorktreeSidebarSearchBar } from "./WorktreeSidebarSearchBar";
+import { useWorktreeBulkRemove } from "./useWorktreeBulkRemove";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   useWorktreeOverviewKeyboard,
   getWorktreeOverviewCellId,
@@ -564,6 +566,61 @@ export function WorktreeOverviewModal({
 
   const hasSelection = selectedIds.size > 0;
 
+  // Build a lookup map so the bulk-remove hook can snapshot per-target
+  // metadata (dirty / unpushed / main-worktree) at confirm-click time
+  // without re-deriving from the filtered list (lesson #4729 — reactive
+  // derivations silently shrink as deletes land).
+  const worktreeMap = useMemo(() => {
+    const map = new Map<string, WorktreeState>();
+    for (const w of worktrees) map.set(w.id, w);
+    return map;
+  }, [worktrees]);
+
+  // Bulk-remove orchestrator. Owns the confirm-dialog state, the typed-
+  // name target, the p-queue (concurrency:4 to stay under the
+  // worktree:delete 10/10s rate-limit window on large selections), and
+  // the summary toast.
+  const bulkRemove = useWorktreeBulkRemove({
+    selectedIds,
+    worktreeMap,
+    clearSelection,
+  });
+
+  // D1 close-sessions confirm — single-step, no typed-name gate. The
+  // fan-out is local-store-only (no IPC, no rate limit), so we just
+  // need a yes/no surface that names the blast radius.
+  //
+  // The id set is snapshotted at click time (lesson #4729) so a
+  // selection change between the click and the user pressing the
+  // confirm button doesn't silently retarget the close fan-out. The
+  // dialog title also reads from this snapshot so the surface stays
+  // consistent with the actual blast radius.
+  const [isCloseSessionsConfirmOpen, setIsCloseSessionsConfirmOpen] = useState(false);
+  const closeSessionsIdsRef = useRef<readonly string[]>([]);
+  const [closeSessionsCount, setCloseSessionsCount] = useState(0);
+
+  const handleCloseSessionsClick = useCallback(() => {
+    const snapshot = Array.from(selectedIds);
+    closeSessionsIdsRef.current = snapshot;
+    setCloseSessionsCount(snapshot.length);
+    setIsCloseSessionsConfirmOpen(true);
+  }, [selectedIds]);
+
+  const handleCloseSessionsConfirm = useCallback(() => {
+    const state = usePanelStore.getState();
+    for (const id of closeSessionsIdsRef.current) {
+      state.bulkCloseByWorktree(id);
+    }
+    closeSessionsIdsRef.current = [];
+    setIsCloseSessionsConfirmOpen(false);
+    clearSelection();
+  }, [clearSelection]);
+
+  const handleCloseSessionsCancel = useCallback(() => {
+    closeSessionsIdsRef.current = [];
+    setIsCloseSessionsConfirmOpen(false);
+  }, []);
+
   const gridRef = useRef<HTMLDivElement | null>(null);
   const closeModal = useCallback(() => onClose(), [onClose]);
 
@@ -686,156 +743,220 @@ export function WorktreeOverviewModal({
         )}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-divider shrink-0">
-          <div className="flex items-center gap-3">
-            <Layers className="w-5 h-5 text-daintree-text/60" />
-            <h2
-              id="worktree-overview-title"
-              className="text-daintree-text font-semibold text-base tracking-wide"
-            >
-              Worktrees Overview
-            </h2>
-            <span className="text-daintree-text/50 text-sm tabular-nums">
-              ({filteredWorktrees.length}
-              {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
-            </span>
-            {/* Aggregate activity statistics — clickable chips that set quickStateFilter */}
-            {(aggregateStats.workingCount > 0 || aggregateStats.waitingCount > 0) && (
-              <div
-                className="flex items-center gap-1 ml-2 pl-3 border-l border-divider"
-                role="group"
-                aria-label="Filter by agent state"
+        {/* Header — swaps to a contextual action bar while a selection
+            is active. The Clear control and Close button always remain
+            so the user can escape selection mode without keyboard. */}
+        {hasSelection ? (
+          <div className="flex items-center justify-between px-6 py-4 border-b border-divider shrink-0">
+            <div className="flex items-center gap-3">
+              <span
+                className="text-daintree-text font-semibold text-base tracking-wide tabular-nums"
+                aria-live="polite"
               >
-                {aggregateStats.workingCount > 0 && (
-                  <button
-                    type="button"
-                    aria-pressed={quickStateFilter === "working"}
-                    onClick={() =>
-                      setQuickStateFilter(quickStateFilter === "working" ? "all" : "working")
-                    }
-                    className={cn(
-                      "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-0.5 transition-colors",
-                      "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
-                      quickStateFilter === "working"
-                        ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
-                        : "hover:bg-tint/[0.04]"
-                    )}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-state-working)] motion-safe:animate-pulse" />
-                    <span className="text-[var(--color-state-working)]">
-                      {aggregateStats.workingCount} working
-                    </span>
-                  </button>
+                {selectedIds.size} selected
+              </span>
+              <button
+                type="button"
+                onClick={clearSelection}
+                className={cn(
+                  "flex items-center gap-1.5 px-2 py-1 rounded text-xs",
+                  "text-daintree-text/60 hover:text-daintree-text",
+                  "hover:bg-tint/[0.06]",
+                  "transition-colors",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                 )}
-                {aggregateStats.waitingCount > 0 && (
-                  <button
-                    type="button"
-                    aria-pressed={quickStateFilter === "waiting"}
-                    onClick={() =>
-                      setQuickStateFilter(quickStateFilter === "waiting" ? "all" : "waiting")
-                    }
-                    className={cn(
-                      "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-0.5 transition-colors",
-                      "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
-                      quickStateFilter === "waiting"
-                        ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
-                        : "hover:bg-tint/[0.04]"
-                    )}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
-                    <span className="text-status-warning">
-                      {aggregateStats.waitingCount} waiting
-                    </span>
-                  </button>
+                aria-label="Clear selection"
+              >
+                Clear
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="subtle"
+                size="sm"
+                onClick={handleCloseSessionsClick}
+                data-testid="worktree-bulk-close-sessions"
+              >
+                Close sessions
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={bulkRemove.handleRemoveClick}
+                disabled={bulkRemove.isExecuting}
+                data-testid="worktree-bulk-remove"
+              >
+                Remove worktrees
+              </Button>
+              <button
+                ref={closeButtonRef}
+                onClick={onClose}
+                className={cn(
+                  "p-2 rounded-lg transition-colors",
+                  "text-daintree-text/60 hover:text-daintree-text",
+                  "hover:bg-tint/[0.06]",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                 )}
-              </div>
-            )}
+                aria-label="Close overview"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            {/* Hide main worktree toggle - show if there are non-main worktrees OR if filter is active (to allow recovery) */}
-            {(hasNonMainWorktrees || hideMainWorktree) && !hasOnlyMainWorktree && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={!hideMainWorktree}
-                    aria-label={hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
-                    onClick={() => setHideMainWorktree(!hideMainWorktree)}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
-                      "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
-                      hideMainWorktree
-                        ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
-                        : "bg-tint/[0.10] text-daintree-text/70 hover:text-daintree-text/90"
-                    )}
-                  >
-                    <Plug
+        ) : (
+          <div className="flex items-center justify-between px-6 py-4 border-b border-divider shrink-0">
+            <div className="flex items-center gap-3">
+              <Layers className="w-5 h-5 text-daintree-text/60" />
+              <h2
+                id="worktree-overview-title"
+                className="text-daintree-text font-semibold text-base tracking-wide"
+              >
+                Worktrees Overview
+              </h2>
+              <span className="text-daintree-text/50 text-sm tabular-nums">
+                ({filteredWorktrees.length}
+                {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
+              </span>
+              {/* Aggregate activity statistics — clickable chips that set quickStateFilter */}
+              {(aggregateStats.workingCount > 0 || aggregateStats.waitingCount > 0) && (
+                <div
+                  className="flex items-center gap-1 ml-2 pl-3 border-l border-divider"
+                  role="group"
+                  aria-label="Filter by agent state"
+                >
+                  {aggregateStats.workingCount > 0 && (
+                    <button
+                      type="button"
+                      aria-pressed={quickStateFilter === "working"}
+                      onClick={() =>
+                        setQuickStateFilter(quickStateFilter === "working" ? "all" : "working")
+                      }
                       className={cn(
-                        "w-3 h-3 transition-colors",
-                        hideMainWorktree ? "text-daintree-text/30" : "text-daintree-text/50"
-                      )}
-                    />
-                    <span
-                      className={cn(
-                        "transition",
-                        hideMainWorktree && "line-through decoration-daintree-text/30"
+                        "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-0.5 transition-colors",
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                        quickStateFilter === "working"
+                          ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
+                          : "hover:bg-tint/[0.04]"
                       )}
                     >
-                      main
-                    </span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
-                </TooltipContent>
-              </Tooltip>
-            )}
-            {/* Filter Popover — only shown in header when the search bar (with its own popover) is absent */}
-            {!hasNonMainWorktrees && (
-              <WorktreeFilterPopover hideSearchInput chipCounts={chipCounts} />
-            )}
-            {/* Clear Filters Button - only shown when filters are active */}
-            {hasActiveFilters() && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={clearAllFilters}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs",
-                      "text-daintree-text/60 hover:text-daintree-text",
-                      "hover:bg-tint/[0.06]",
-                      "transition-colors",
-                      "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-                    )}
-                    aria-label="Clear all filters"
-                  >
-                    <FilterX className="w-3.5 h-3.5" />
-                    <span>Clear</span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Clear all filters</TooltipContent>
-              </Tooltip>
-            )}
-            {/* Close Button */}
-            <button
-              ref={closeButtonRef}
-              onClick={onClose}
-              className={cn(
-                "p-2 rounded-lg transition-colors",
-                "text-daintree-text/60 hover:text-daintree-text",
-                "hover:bg-tint/[0.06]",
-                "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-state-working)] motion-safe:animate-pulse" />
+                      <span className="text-[var(--color-state-working)]">
+                        {aggregateStats.workingCount} working
+                      </span>
+                    </button>
+                  )}
+                  {aggregateStats.waitingCount > 0 && (
+                    <button
+                      type="button"
+                      aria-pressed={quickStateFilter === "waiting"}
+                      onClick={() =>
+                        setQuickStateFilter(quickStateFilter === "waiting" ? "all" : "waiting")
+                      }
+                      className={cn(
+                        "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-0.5 transition-colors",
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                        quickStateFilter === "waiting"
+                          ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
+                          : "hover:bg-tint/[0.04]"
+                      )}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
+                      <span className="text-status-warning">
+                        {aggregateStats.waitingCount} waiting
+                      </span>
+                    </button>
+                  )}
+                </div>
               )}
-              aria-label="Close overview"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Hide main worktree toggle - show if there are non-main worktrees OR if filter is active (to allow recovery) */}
+              {(hasNonMainWorktrees || hideMainWorktree) && !hasOnlyMainWorktree && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!hideMainWorktree}
+                      aria-label={hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
+                      onClick={() => setHideMainWorktree(!hideMainWorktree)}
+                      className={cn(
+                        "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                        hideMainWorktree
+                          ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
+                          : "bg-tint/[0.10] text-daintree-text/70 hover:text-daintree-text/90"
+                      )}
+                    >
+                      <Plug
+                        className={cn(
+                          "w-3 h-3 transition-colors",
+                          hideMainWorktree ? "text-daintree-text/30" : "text-daintree-text/50"
+                        )}
+                      />
+                      <span
+                        className={cn(
+                          "transition",
+                          hideMainWorktree && "line-through decoration-daintree-text/30"
+                        )}
+                      >
+                        main
+                      </span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+              {/* Filter Popover — only shown in header when the search bar (with its own popover) is absent */}
+              {!hasNonMainWorktrees && (
+                <WorktreeFilterPopover hideSearchInput chipCounts={chipCounts} />
+              )}
+              {/* Clear Filters Button - only shown when filters are active */}
+              {hasActiveFilters() && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={clearAllFilters}
+                      className={cn(
+                        "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs",
+                        "text-daintree-text/60 hover:text-daintree-text",
+                        "hover:bg-tint/[0.06]",
+                        "transition-colors",
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                      )}
+                      aria-label="Clear all filters"
+                    >
+                      <FilterX className="w-3.5 h-3.5" />
+                      <span>Clear</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Clear all filters</TooltipContent>
+                </Tooltip>
+              )}
+              {/* Close Button */}
+              <button
+                ref={closeButtonRef}
+                onClick={onClose}
+                className={cn(
+                  "p-2 rounded-lg transition-colors",
+                  "text-daintree-text/60 hover:text-daintree-text",
+                  "hover:bg-tint/[0.06]",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                )}
+                aria-label="Close overview"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Search bar — always visible when there are non-main worktrees */}
+        {/* Search bar — always visible when there are non-main worktrees.
+            Stays mounted during selection mode so the user can refine the
+            target set without losing the selection (visible-id sync drops
+            hidden selections naturally — see selectedIds reconciliation). */}
         {hasNonMainWorktrees && <WorktreeSidebarSearchBar chipCounts={chipCounts} />}
 
         {/* Content */}
@@ -1000,6 +1121,91 @@ export function WorktreeOverviewModal({
           </div>
         </div>
       </div>
+
+      {/* D1 — close sessions confirm. No typed-name gate (action is local,
+          reversible by re-launching the agent), but the explicit yes/no
+          step prevents stray Enter/keybinding dispatch from ending
+          scrollback for every selected worktree at once. */}
+      <ConfirmDialog
+        isOpen={isCloseSessionsConfirmOpen}
+        onClose={handleCloseSessionsCancel}
+        title={
+          closeSessionsCount === 1
+            ? "Close sessions for 1 worktree?"
+            : `Close sessions for ${closeSessionsCount} worktrees?`
+        }
+        description="Every grid and dock session for the selected worktrees will end. Scrollback is lost for each terminal."
+        confirmLabel="Close sessions"
+        cancelLabel="Cancel"
+        variant="default"
+        onConfirm={handleCloseSessionsConfirm}
+      />
+
+      {/* D3 — bulk remove. Typed-name gate ("N worktrees"), full target
+          list in the body so the user sees the actual blast radius, and
+          per-target warning rows for dirty trees and unpushed commits.
+          Main worktrees were filtered out at confirm-derive time (see
+          useWorktreeBulkRemove); the excluded count surfaces here so the
+          user isn't silently surprised. */}
+      <ConfirmDialog
+        isOpen={bulkRemove.isConfirmOpen}
+        onClose={bulkRemove.handleCancel}
+        title={
+          bulkRemove.targets.length === 1
+            ? `Remove '${bulkRemove.targets[0]?.branch ?? bulkRemove.targets[0]?.name ?? "worktree"}'?`
+            : `Remove ${bulkRemove.targets.length} worktrees?`
+        }
+        description={
+          bulkRemove.excludedMainCount > 0
+            ? `${bulkRemove.excludedMainCount} main worktree${bulkRemove.excludedMainCount === 1 ? "" : "s"} excluded — only non-main worktrees can be removed here.`
+            : "Each worktree directory is deleted from disk and the branch worktree association is removed. Uncommitted changes are discarded."
+        }
+        confirmLabel={
+          bulkRemove.targets.length === 1
+            ? "Remove worktree"
+            : `Remove ${bulkRemove.targets.length} worktrees`
+        }
+        cancelLabel="Cancel"
+        variant="destructive"
+        typedNameTarget={bulkRemove.typedNameTarget}
+        onConfirm={bulkRemove.handleConfirm}
+        isConfirmLoading={bulkRemove.isExecuting}
+      >
+        {bulkRemove.targets.length > 0 && (
+          <div className="border border-divider rounded max-h-64 overflow-y-auto divide-y divide-divider">
+            {bulkRemove.targets.map((target) => {
+              const hasTrackedChanges = target.trackedChangeCount > 0;
+              const hasUnpushed = target.aheadCount > 0;
+              return (
+                <div key={target.id} className="flex flex-col gap-1 px-3 py-2 bg-daintree-bg/40">
+                  <div className="flex items-center gap-2 text-sm text-daintree-text">
+                    <GitBranch className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
+                    <span className="font-mono truncate" title={target.path}>
+                      {target.branch ?? target.name}
+                    </span>
+                  </div>
+                  {(hasTrackedChanges || hasUnpushed) && (
+                    <div className="flex items-start gap-1.5 text-xs text-status-warning">
+                      <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                      <span>
+                        {hasTrackedChanges &&
+                          `${target.trackedChangeCount} uncommitted file${target.trackedChangeCount === 1 ? "" : "s"}`}
+                        {hasTrackedChanges && hasUnpushed && " · "}
+                        {hasUnpushed &&
+                          `${target.aheadCount} unpushed commit${target.aheadCount === 1 ? "" : "s"}`}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded text-status-error text-xs">
+          <Trash2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>This is irreversible. Type the count to confirm.</span>
+        </div>
+      </ConfirmDialog>
     </div>
   );
 }
