@@ -53,6 +53,7 @@ export interface PanelSummary {
   worktreeId?: string;
   location: "grid" | "dock";
   isSuspect: boolean;
+  createdAt?: number;
   agentState?: string;
   lastStateChange?: number;
 }

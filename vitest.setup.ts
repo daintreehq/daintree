@@ -33,6 +33,27 @@ if (typeof globalThis !== "undefined") {
   }
 }
 
+// jsdom does not implement window.matchMedia. Several renderer components
+// (InlineStatusBanner, etc.) call it at render time to check reduced-motion
+// preferences. Install a stub that returns a no-preference match so tests
+// render the animated path by default.
+if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
 // node env does not implement requestAnimationFrame/cancelAnimationFrame.
 // Several renderer-side modules (TerminalWebGLManager, etc.) schedule work via
 // rAF in production. Install a sync default that runs the callback inline so

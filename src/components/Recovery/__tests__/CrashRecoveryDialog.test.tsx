@@ -53,6 +53,8 @@ vi.mock("@/components/ui/button", () => ({
   ),
 }));
 
+const CRASH_TIMESTAMP = 1700000000000;
+
 const mockPanels = [
   {
     id: "t1",
@@ -69,6 +71,7 @@ const mockPanels = [
     cwd: "/project",
     location: "dock" as const,
     isSuspect: true,
+    createdAt: CRASH_TIMESTAMP - 10_000,
     agentState: "working",
   },
   { id: "t3", kind: "browser", title: "Docs", location: "grid" as const, isSuspect: false },
@@ -190,7 +193,7 @@ describe("CrashRecoveryDialog", () => {
 
     it("shows suspect warning message", () => {
       setup();
-      expect(screen.getByTestId("suspect-warning")).toBeTruthy();
+      expect(screen.getByText(/panel was created shortly before the crash/)).toBeTruthy();
     });
 
     it("all panels are selected by default", () => {
@@ -199,6 +202,76 @@ describe("CrashRecoveryDialog", () => {
       const checkbox2 = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
       expect(checkbox1.checked).toBe(true);
       expect(checkbox2.checked).toBe(true);
+    });
+
+    it("deselects suspect panels when crashCount >= 1", () => {
+      setup({ crash: { crashCount: 1 } });
+      const checkbox1 = screen.getByTestId("panel-checkbox-t1") as HTMLInputElement;
+      const checkbox2 = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
+      const checkbox3 = screen.getByTestId("panel-checkbox-t3") as HTMLInputElement;
+      expect(checkbox1.checked).toBe(true);
+      expect(checkbox2.checked).toBe(false);
+      expect(checkbox3.checked).toBe(true);
+    });
+
+    it("deselects suspect panels when crashCount is 2", () => {
+      setup({ crash: { crashCount: 2 } });
+      const checkbox2 = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
+      expect(checkbox2.checked).toBe(false);
+    });
+
+    it("shows per-row reason text for suspect panels with createdAt", () => {
+      setup({ crash: { crashCount: 1 } });
+      expect(screen.getByTestId("suspect-reason-t2")).toBeTruthy();
+      expect(screen.getByTestId("suspect-reason-t2").textContent).toContain("Created");
+    });
+
+    it("does not show reason text for non-suspect panels", () => {
+      setup();
+      expect(screen.queryByTestId("suspect-reason-t1")).toBeNull();
+    });
+
+    it("includes suspect panel IDs in restore after user reselects them", async () => {
+      const { onResolve } = setup({ crash: { crashCount: 1 } });
+      // Suspect panel t2 should be deselected initially
+      const checkbox2 = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
+      expect(checkbox2.checked).toBe(false);
+      // User reselects it
+      fireEvent.click(checkbox2);
+      expect(checkbox2.checked).toBe(true);
+      // Restore
+      fireEvent.click(screen.getByTestId("restore-selected-button"));
+      await waitFor(() =>
+        expect(onResolve).toHaveBeenCalledWith({
+          kind: "restore",
+          panelIds: expect.arrayContaining(["t1", "t2", "t3"]),
+        })
+      );
+    });
+
+    it("handle all-suspect case: zero selected when crashCount >= 1", () => {
+      const allSuspectPanels = [
+        {
+          id: "s1",
+          kind: "terminal" as const,
+          title: "A",
+          location: "grid" as const,
+          isSuspect: true,
+          createdAt: CRASH_TIMESTAMP - 5_000,
+        },
+        {
+          id: "s2",
+          kind: "terminal" as const,
+          title: "B",
+          location: "grid" as const,
+          isSuspect: true,
+          createdAt: CRASH_TIMESTAMP - 10_000,
+        },
+      ];
+      setup({ crash: { crashCount: 1, panels: allSuspectPanels } });
+      expect(screen.getByText("0 of 2 selected")).toBeTruthy();
+      const btn = screen.getByTestId("restore-selected-button") as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
     });
 
     it("calls onResolve with selected panel IDs when Restore Selected is clicked", async () => {

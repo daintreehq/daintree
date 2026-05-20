@@ -15,6 +15,7 @@ import { Plug } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
 import { AnimatedLabel } from "../ui/AnimatedLabel";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -33,6 +34,19 @@ interface CrashRecoveryDialogProps {
   config: CrashRecoveryConfig;
   onResolve: (action: CrashRecoveryAction) => Promise<void>;
   onUpdateConfig: (patch: Partial<CrashRecoveryConfig>) => Promise<void>;
+}
+
+function getInitialSelectedPanelIds(panels: PanelSummary[], crashCount: number): Set<string> {
+  return new Set(panels.filter((p) => !(p.isSuspect && crashCount >= 1)).map((p) => p.id));
+}
+
+function formatSuspectReason(createdAt: number, crashTimestamp: number): string {
+  const diffMs = crashTimestamp - createdAt;
+  const diffSec = Math.round(diffMs / 1000);
+  if (diffSec <= 5) return "Created moments before crash";
+  if (diffSec < 60) return `Created ${diffSec}s before crash`;
+  const diffMin = Math.round(diffSec / 60);
+  return `Created ${diffMin}m before crash`;
 }
 
 function getPanelIcon(kind: string) {
@@ -58,10 +72,11 @@ export function CrashRecoveryDialog({
 }: CrashRecoveryDialogProps) {
   const panels = useMemo(() => crash.panels ?? [], [crash.panels]);
   const hasPanels = panels.length > 0;
-  const isInCrashLoop = (crash.crashCount ?? 0) >= 2;
+  const crashCount = crash.crashCount ?? 0;
+  const isInCrashLoop = crashCount >= 2;
 
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(
-    () => new Set(panels.map((p) => p.id))
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() =>
+    getInitialSelectedPanelIds(panels, crashCount)
   );
   const [resolving, setResolving] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -201,20 +216,24 @@ export function CrashRecoveryDialog({
                     panel={panel}
                     selected={selectedIds.has(panel.id)}
                     onToggle={togglePanel}
+                    crashTimestamp={crash.entry.timestamp}
                   />
                 ))}
               </div>
             </div>
 
             {suspectCount > 0 && (
-              <p
-                className="text-xs text-status-warning/90 bg-status-warning/10 rounded px-2 py-1.5"
-                data-testid="suspect-warning"
-              >
-                <span className="tabular-nums">{suspectCount}</span> panel
-                {suspectCount > 1 ? "s were" : " was"} created shortly before the crash and may be
-                related.
-              </p>
+              <InlineStatusBanner
+                icon={AlertTriangle}
+                title={
+                  suspectCount > 1
+                    ? `${suspectCount} panels were created shortly before the crash and may be related.`
+                    : `${suspectCount} panel was created shortly before the crash and may be related.`
+                }
+                severity="warning"
+                role="status"
+                actions={[]}
+              />
             )}
 
             <div className="flex gap-2">
@@ -446,11 +465,18 @@ function PanelRow({
   panel,
   selected,
   onToggle,
+  crashTimestamp,
 }: {
   panel: PanelSummary;
   selected: boolean;
   onToggle: (id: string) => void;
+  crashTimestamp: number;
 }) {
+  const reason =
+    panel.isSuspect && panel.createdAt
+      ? formatSuspectReason(panel.createdAt, crashTimestamp)
+      : undefined;
+
   return (
     <label
       className="flex items-center gap-3 px-3 py-2 hover:bg-overlay-soft cursor-pointer transition-colors"
@@ -467,6 +493,14 @@ function PanelRow({
       <div className="flex-1 min-w-0">
         <div className="text-sm text-daintree-text truncate">{panel.title || panel.kind}</div>
         {panel.cwd && <div className="text-xs text-daintree-text/40 truncate">{panel.cwd}</div>}
+        {reason && (
+          <div
+            className="text-xs text-status-warning/80 truncate"
+            data-testid={`suspect-reason-${panel.id}`}
+          >
+            {reason}
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
         {panel.agentState && (

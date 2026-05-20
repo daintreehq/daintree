@@ -391,6 +391,7 @@ export class CrashRecoveryService {
           typeof t.createdAt === "number"
             ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
             : false,
+        createdAt: typeof t.createdAt === "number" ? t.createdAt : undefined,
         agentState: coerceAgentState(t.agentState),
         lastStateChange: typeof t.lastStateChange === "number" ? t.lastStateChange : undefined,
       }));
