@@ -214,6 +214,7 @@ export class WorkspaceService {
             url: data.prUrl,
             state: data.prState,
             ciStatus: data.ciStatus,
+            baseRef: data.baseRef,
           },
           issue:
             data.issueNumber && data.issueTitle
@@ -473,7 +474,14 @@ export class WorkspaceService {
     monitorConfig?: MonitorConfig,
     skipInitialGitStatus: boolean = false
   ): Promise<void> {
-    this.mainBranch = mainBranch;
+    // Derive the repository's main/integration branch from the actual main
+    // worktree rather than trusting the caller. The legacy `mainBranch`
+    // argument is never populated with a real value — internal callers pass
+    // the stale field straight back — so base-branch divergence was pinned to
+    // "main" for every repo whose integration branch isn't named "main"
+    // (e.g. gitflow repos on "develop"). The caller's value stays as the
+    // last-resort fallback for a detached-HEAD main worktree.
+    this.mainBranch = worktrees.find((wt) => wt.isMainWorktree)?.branch ?? mainBranch;
     this.activeWorktreeId = activeWorktreeId;
 
     if (monitorConfig?.pollIntervalActive !== undefined) {
@@ -546,6 +554,9 @@ export class WorkspaceService {
         existingMonitor.name = wt.name;
         existingMonitor.isCurrent = isActive;
         existingMonitor.isMainWorktree = wt.isMainWorktree ?? false;
+        // Keep the base-branch divergence fallback fresh if the main worktree
+        // switched branches since this monitor was created.
+        existingMonitor.setMainBranch(this.mainBranch);
 
         const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
         existingMonitor.updateConfig({
@@ -886,6 +897,7 @@ export class WorkspaceService {
       url: string;
       state: "open" | "merged" | "closed";
       ciStatus?: CIStatus;
+      baseRef?: string;
     };
     issue?: { number: number; title?: string };
   }): PluginWorktreeLinked {
@@ -903,6 +915,7 @@ export class WorkspaceService {
         url: params.pr.url,
         state: params.pr.state,
         ...(params.pr.ciStatus ? { ciStatus: params.pr.ciStatus } : {}),
+        ...(params.pr.baseRef ? { baseRef: params.pr.baseRef } : {}),
       };
     }
     if (params.issue) {

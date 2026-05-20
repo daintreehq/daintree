@@ -908,6 +908,7 @@ class PullRequestService {
               providerId: detectedPR.providerId,
               owner: repo.owner,
               repo: repo.repo,
+              baseRef: pr.baseRef,
               timestamp: Date.now(),
             });
           }
@@ -1080,6 +1081,7 @@ class PullRequestService {
             providerId,
             owner: repo.owner,
             repo: repo.repo,
+            baseRef: pr.baseRef,
             timestamp: Date.now(),
           });
         }

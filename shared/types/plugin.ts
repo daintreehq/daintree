@@ -150,6 +150,8 @@ export interface PluginWorktreeLinkedPR {
   readonly url: string;
   readonly state: NormalizedPRState;
   readonly ciStatus?: import("./forge.js").CIStatus;
+  /** Branch this PR merges into (e.g. "develop"). Drives base-branch divergence display. */
+  readonly baseRef?: string;
 }
 
 export interface PluginWorktreeLinked {

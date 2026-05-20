@@ -631,6 +631,15 @@ export class WorktreeMonitor {
     this._linked = linked;
   }
 
+  /**
+   * Update the repository's main/integration branch — the base-branch
+   * divergence fallback used when this worktree has no linked PR. Called by
+   * `syncMonitors` so existing monitors track a main-worktree branch switch.
+   */
+  setMainBranch(branch: string): void {
+    this.mainBranch = branch;
+  }
+
   clearLinked(): void {
     this._linked = null;
   }
@@ -1772,10 +1781,17 @@ export class WorktreeMonitor {
       : createHardenedGit(this.path, this._pollAbortController.signal);
 
     try {
+      // Pick the branch to diff against. A linked PR's base branch is
+      // authoritative — it's exactly where this worktree's work will merge,
+      // which may differ from the repo's integration branch (e.g. a hotfix
+      // PR targeting `main` in a gitflow repo). Without a PR, fall back to
+      // the repository's main/integration branch.
+      const baseBranch = this._linked?.pr?.baseRef?.trim() || this.mainBranch;
+
       // Resolve base ref: try origin/<branch> first (remote ref stays fresh
       // after fetch), fall back to local branch for repos without a remote.
-      const remoteRef = `origin/${this.mainBranch}`;
-      const localRef = this.mainBranch;
+      const remoteRef = `origin/${baseBranch}`;
+      const localRef = baseBranch;
       let resolvedRef: string;
       try {
         await git.raw(["rev-parse", "--verify", remoteRef]);
@@ -1789,7 +1805,7 @@ export class WorktreeMonitor {
         }
       }
 
-      const baseBranchName = this.mainBranch;
+      const baseBranchName = baseBranch;
       const result = await git.raw([
         "rev-list",
         "--count",

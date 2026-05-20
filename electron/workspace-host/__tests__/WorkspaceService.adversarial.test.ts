@@ -192,6 +192,48 @@ describe("WorkspaceService adversarial", () => {
     expect(removedEvents).toEqual([]);
   });
 
+  it("syncMonitors derives the main branch from the main worktree, not the caller's argument", async () => {
+    // The base-branch divergence badge was pinned to "main" because the
+    // `mainBranch` argument is never populated with a real value — internal
+    // callers pass the stale field straight back. syncMonitors must instead
+    // read the actual main worktree's branch (e.g. "develop" in a gitflow
+    // repo) so non-PR worktrees diff against the real integration branch.
+    const mainWorktree = {
+      id: "/repo",
+      path: "/repo",
+      name: "repo",
+      branch: "develop",
+      isCurrent: true,
+      isMainWorktree: true,
+      gitDir: "/repo/.git",
+    };
+    const featureWorktree = {
+      id: "/repo/wt-feature",
+      path: "/repo/wt-feature",
+      name: "feature/x",
+      branch: "feature/x",
+      isCurrent: false,
+      isMainWorktree: false,
+      gitDir: "/repo/wt-feature/.git",
+    };
+
+    await (
+      service as unknown as {
+        syncMonitors: (
+          worktrees: unknown[],
+          activeId: string | null,
+          mainBranch: string,
+          monitorConfig: undefined,
+          skipInitialGitStatus: boolean
+        ) => Promise<void>;
+      }
+    ).syncMonitors([mainWorktree, featureWorktree], null, "main", undefined, true);
+
+    // The caller passed the stale "main" default; the real integration branch
+    // ("develop") is taken from the main worktree instead.
+    expect(service["mainBranch"]).toBe("develop");
+  });
+
   it("succeeds without calling listService.list — the Worktree is built from inputs, so an empty list can never fail the create", async () => {
     const listService = service["listService"] as unknown as {
       invalidateCache: Mock;

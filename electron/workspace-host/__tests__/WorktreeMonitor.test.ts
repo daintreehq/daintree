@@ -696,6 +696,80 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
+    it("diffs base divergence against the constructor main branch when no PR is linked", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(
+        cleanChangesWith({ tracking: "origin/test-branch", ahead: 1, behind: 0 })
+      );
+      mockGitRaw.mockResolvedValue("0\t3\n");
+
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "develop");
+      await monitor.start();
+      await flushInitialStatus();
+
+      expect(mockGitRaw).toHaveBeenCalledWith([
+        "rev-list",
+        "--count",
+        "--left-right",
+        "origin/develop...HEAD",
+      ]);
+      expect(monitor.getSnapshot().baseBranchName).toBe("develop");
+
+      monitor.stop();
+    });
+
+    it("diffs base divergence against the linked PR's base branch, overriding the main branch", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(
+        cleanChangesWith({ tracking: "origin/test-branch", ahead: 1, behind: 0 })
+      );
+      mockGitRaw.mockResolvedValue("0\t3\n");
+
+      // Repo main branch is "main", but this worktree's PR targets "develop".
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      monitor.setLinked({
+        providerId: "github",
+        pr: {
+          ref: { providerId: "github", owner: "o", repo: "r", number: 7, rawData: null },
+          url: "u",
+          state: "open",
+          baseRef: "develop",
+        },
+      });
+      await monitor.start();
+      await flushInitialStatus();
+
+      expect(mockGitRaw).toHaveBeenCalledWith([
+        "rev-list",
+        "--count",
+        "--left-right",
+        "origin/develop...HEAD",
+      ]);
+      expect(mockGitRaw).not.toHaveBeenCalledWith([
+        "rev-list",
+        "--count",
+        "--left-right",
+        "origin/main...HEAD",
+      ]);
+      expect(monitor.getSnapshot().baseBranchName).toBe("develop");
+
+      monitor.stop();
+    });
+
+    it("setMainBranch updates the base divergence fallback for an existing monitor", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(
+        cleanChangesWith({ tracking: "origin/test-branch", ahead: 1, behind: 0 })
+      );
+      mockGitRaw.mockResolvedValue("0\t3\n");
+
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      monitor.setMainBranch("develop");
+      await monitor.start();
+      await flushInitialStatus();
+
+      expect(monitor.getSnapshot().baseBranchName).toBe("develop");
+
+      monitor.stop();
+    });
+
     it("reports zero counts when branch is in sync with upstream", async () => {
       mockGetWorktreeChangesWithStats.mockResolvedValue(
         cleanChangesWith({ tracking: "origin/main", ahead: 0, behind: 0 })

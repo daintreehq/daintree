@@ -45,6 +45,8 @@ export interface PRIntegrationCallbacks {
       repo: string;
       /** Provider-agnostic CI status (forge format). */
       ciStatus?: import("../../shared/types/forge.js").CIStatus;
+      /** Branch the PR merges into (e.g. "develop"); drives base-branch divergence display. */
+      baseRef?: string;
     }
   ): void;
   onPRCleared(worktreeId: string, data: { branchName?: string; providerId?: string }): void;
@@ -118,6 +120,7 @@ export class PRIntegrationService {
           owner: data.owner,
           repo: data.repo,
           ciStatus: data.ciStatus,
+          baseRef: data.baseRef,
         });
       })
     );

@@ -457,6 +457,8 @@ export type DaintreeEventMap = {
     repo: string;
     /** Provider-agnostic CI status (forge format). */
     ciStatus?: import("../../shared/types/forge.js").CIStatus;
+    /** Branch the PR merges into (e.g. "develop"); drives base-branch divergence display. */
+    baseRef?: string;
     timestamp: number;
   };
   "sys:pr:cleared": {

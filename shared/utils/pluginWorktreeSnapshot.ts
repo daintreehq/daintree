@@ -121,6 +121,7 @@ function freezeLinked(linked: PluginWorktreeLinked): PluginWorktreeLinked {
       url: linked.pr.url,
       state: linked.pr.state,
       ...(linked.pr.ciStatus ? { ciStatus: linked.pr.ciStatus } : {}),
+      ...(linked.pr.baseRef ? { baseRef: linked.pr.baseRef } : {}),
     });
   }
 
