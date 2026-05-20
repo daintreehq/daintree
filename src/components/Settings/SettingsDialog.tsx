@@ -76,6 +76,12 @@ let rememberedProjectTab: SettingsTab = "project:general";
 // attention after the user has oriented.
 const SETTINGS_HIGHLIGHT_DECAY_MS = 1500;
 
+// Hover-intent delay before speculatively mounting a settings tab's lazy
+// panel. Short enough that the panel's IPC reads are usually settled by the
+// time the user clicks; long enough that a mouse sweep across nav items
+// doesn't mount every tab at once.
+export const SETTINGS_TAB_HOVER_INTENT_MS = 150;
+
 // Lowercase the first letter so the label reads naturally mid-sentence
 // ("Requires voice input"), unless it starts with an initialism like
 // MCP / AI / API — those stay uppercase.
@@ -132,6 +138,15 @@ function SettingsDialogInner({
   const [visitedTabs, setVisitedTabs] = useState<Set<SettingsTab>>(
     () => new Set<SettingsTab>([initialTab])
   );
+
+  // AppDialog uses useAnimatedPresence and keeps children mounted through
+  // the ~120ms exit animation, so a hover-intent timer scheduled near close
+  // can fire while the dialog is animating out. Read this ref inside the
+  // timer callback to skip the speculative mount when the dialog is closing.
+  const isOpenRef = useRef(isOpen);
+  useEffect(() => {
+    isOpenRef.current = isOpen;
+  }, [isOpen]);
 
   const hasProject = !!projectId;
 
@@ -613,6 +628,7 @@ function SettingsDialogInner({
               <NavGroup key={group.label} label={group.label}>
                 {group.entries.map((entry) => {
                   const tabId = entry.id as SettingsTab;
+                  const isLazy = entry.importKind === "lazy";
                   return (
                     <NavItem
                       key={entry.id}
@@ -625,6 +641,14 @@ function SettingsDialogInner({
                       modified={modifiedTabs.has(tabId)}
                       hasError={tabsWithErrors.has(tabId)}
                       onSelect={handleNavSelect}
+                      onPrefetchImport={isLazy ? entry.importer : undefined}
+                      onPrefetchMount={
+                        isLazy
+                          ? () => {
+                              if (isOpenRef.current) markTabVisited(tabId);
+                            }
+                          : undefined
+                      }
                     />
                   );
                 })}
@@ -1062,6 +1086,61 @@ export function scrollAndHighlightSettingsSection(sectionId: string): boolean {
   return true;
 }
 
+// Two-tier hover/focus prefetch for lazy settings tabs.
+//
+// - `onPrefetchImport` fires synchronously on enter — call the chunk's
+//   `import()` thunk. Idempotent: the browser module map dedupes repeat calls.
+// - `onPrefetchMount` fires after `delayMs` of sustained hover/focus — used
+//   to flip the tab into `visitedTabs` so its hidden panel mounts and the
+//   panel's `useEffect` IPC reads run before the user clicks.
+//
+// The delay timer is cancelled on leave/blur and on unmount to keep a
+// mouse-sweep across nav items from mounting every tab at once.
+export function useHoverIntentPrefetch({
+  onPrefetchImport,
+  onPrefetchMount,
+  delayMs = SETTINGS_TAB_HOVER_INTENT_MS,
+}: {
+  onPrefetchImport?: () => void;
+  onPrefetchMount?: () => void;
+  delayMs?: number;
+}): { onEnter: () => void; onLeave: () => void } {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    },
+    []
+  );
+
+  const onEnter = () => {
+    onPrefetchImport?.();
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (onPrefetchMount) {
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        onPrefetchMount();
+      }, delayMs);
+    }
+  };
+
+  const onLeave = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  return { onEnter, onLeave };
+}
+
 // Fires the scroll/highlight when its host subtree commits (via
 // useLayoutEffect — runs after DOM mutation, before paint). The active-tab
 // guard keeps inactive panels from racing each other when state cycles.
@@ -1119,6 +1198,13 @@ interface NavItemProps {
   modified?: boolean;
   hasError?: boolean;
   onSelect: (tab: SettingsTab) => void;
+  // Fires synchronously on pointer-enter / focus. Use to start downloading
+  // the tab's lazy chunk (import() is idempotent, no debounce needed).
+  onPrefetchImport?: () => void;
+  // Fires after SETTINGS_TAB_HOVER_INTENT_MS of sustained hover or focus.
+  // Use to speculatively mount the hidden tab panel so its IPC reads fire
+  // before the user clicks. Cancelled on leave/blur.
+  onPrefetchMount?: () => void;
 }
 
 function NavItem({
@@ -1131,9 +1217,15 @@ function NavItem({
   modified,
   hasError,
   onSelect,
+  onPrefetchImport,
+  onPrefetchMount,
 }: NavItemProps) {
   const active = activeTab === tab && !isSearching;
   const selected = activeTab === tab;
+  const { onEnter, onLeave } = useHoverIntentPrefetch({
+    onPrefetchImport,
+    onPrefetchMount,
+  });
   return (
     <button
       role="tab"
@@ -1143,6 +1235,10 @@ function NavItem({
       tabIndex={selected ? 0 : -1}
       data-tab={tab}
       onClick={() => onSelect(tab)}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      onFocus={onEnter}
+      onBlur={onLeave}
       className={cn(
         "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
