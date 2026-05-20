@@ -9,7 +9,7 @@ import type { TerminalResizePayload } from "../../../types/index.js";
 import { TerminalResizePayloadSchema } from "../../../schemas/ipc.js";
 import type { PtyHostActivityTier } from "../../../../shared/types/pty-host.js";
 import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
-import { typedHandle } from "../../utils.js";
+import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 
@@ -88,7 +88,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeListener(CHANNELS.TERMINAL_BROADCAST_WRITE, handleTerminalBroadcastWrite)
   );
 
-  const handleTerminalSubmit = async (id: string, text: string) => {
+  const handleTerminalSubmit = async (id: string, text: string): Promise<void> => {
     try {
       if (typeof id !== "string" || typeof text !== "string") {
         throw new Error("Invalid terminal submit parameters");
@@ -99,7 +99,6 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       throw new Error(`Failed to submit to terminal: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit));
 
   const handleTerminalResize = (_event: Electron.IpcMainEvent, payload: TerminalResizePayload) => {
     try {
@@ -227,7 +226,15 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       });
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume));
+
+  const namespace = defineIpcNamespace({
+    name: "terminalIo",
+    ops: {
+      submit: op(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit),
+      forceResume: op(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume),
+    },
+  });
+  handlers.push(namespace.register());
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

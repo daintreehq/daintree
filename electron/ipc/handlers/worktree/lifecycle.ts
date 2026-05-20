@@ -5,9 +5,14 @@ import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { WorktreeSetActivePayload, WorktreeDeletePayload } from "../../../types/index.js";
 import type { WorktreeState } from "../../../../shared/types/worktree.js";
+import type { CreateWorktreeOptions } from "../../../../shared/types/git.js";
 import { fileSearchService } from "../../../services/FileSearchService.js";
 import { getSoundService } from "../../../services/getSoundService.js";
 import type * as SoundServiceModule from "../../../services/SoundService.js";
+import { defineIpcNamespace, op } from "../../define.js";
+import { checkRateLimit, waitForRateLimitSlot } from "../../utils.js";
+import { validateBranchName } from "../../../../shared/utils/pathPattern.js";
+import { WORKTREE_RATE_LIMIT_KEY, WORKTREE_RATE_LIMIT_INTERVAL_MS } from "./constants.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
@@ -16,35 +21,26 @@ function playSoundFireAndForget(id: SoundId): void {
     .then((svc) => svc.play(id))
     .catch((err) => console.error("[worktree.lifecycle] sound play failed:", err));
 }
-import {
-  checkRateLimit,
-  waitForRateLimitSlot,
-  typedHandle,
-  typedHandleWithContext,
-} from "../../utils.js";
-import { validateBranchName } from "../../../../shared/utils/pathPattern.js";
-import { WORKTREE_RATE_LIMIT_KEY, WORKTREE_RATE_LIMIT_INTERVAL_MS } from "./constants.js";
 
 export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): () => void {
-  const handlers: Array<() => void> = [];
-
   const handleWorktreeGetAll = async (ctx: IpcContext): Promise<WorktreeState[]> => {
     if (!deps.worktreeService) {
       return [];
     }
     return (await deps.worktreeService.getAllStatesAsync(ctx.senderWindow?.id)) as WorktreeState[];
   };
-  handlers.push(typedHandleWithContext(CHANNELS.WORKTREE_GET_ALL, handleWorktreeGetAll));
 
-  const handleWorktreeRefresh = async (worktreeId?: string) => {
+  const handleWorktreeRefresh = async (worktreeId?: string): Promise<void> => {
     if (!deps.worktreeService) {
       return;
     }
     await deps.worktreeService.refresh(worktreeId);
   };
-  handlers.push(typedHandle(CHANNELS.WORKTREE_REFRESH, handleWorktreeRefresh));
 
-  const handleWorktreeSetActive = async (ctx: IpcContext, payload: WorktreeSetActivePayload) => {
+  const handleWorktreeSetActive = async (
+    ctx: IpcContext,
+    payload: WorktreeSetActivePayload
+  ): Promise<void> => {
     if (!deps.worktreeService) {
       return;
     }
@@ -52,11 +48,10 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       silent: true,
     });
   };
-  handlers.push(typedHandleWithContext(CHANNELS.WORKTREE_SET_ACTIVE, handleWorktreeSetActive));
 
   const handleWorktreeCreate = async (payload: {
     rootPath: string;
-    options: { baseBranch: string; newBranch: string; path: string; fromRemote?: boolean };
+    options: CreateWorktreeOptions;
   }): Promise<string> => {
     if (
       !payload ||
@@ -94,7 +89,6 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
     }
     return worktreeId;
   };
-  handlers.push(typedHandle(CHANNELS.WORKTREE_CREATE, handleWorktreeCreate));
 
   const handleWorktreeRestartService = async (ctx: IpcContext): Promise<void> => {
     if (!deps.worktreeService) return;
@@ -107,9 +101,6 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
     }
     deps.worktreeService.manualRestartForWindow(windowId);
   };
-  handlers.push(
-    typedHandleWithContext(CHANNELS.WORKTREE_RESTART_SERVICE, handleWorktreeRestartService)
-  );
 
   // Recovery path for a project switch whose worktree load threw (#8400).
   // The switch forward-fails to the new project, so the current project is
@@ -133,11 +124,11 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(formatErrorMessage(error, "Failed to load worktrees"), { cause: error });
     }
   };
-  handlers.push(
-    typedHandleWithContext(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD, handleWorktreeRetryProjectLoad)
-  );
 
-  const handleWorktreeDelete = async (ctx: IpcContext, payload: WorktreeDeletePayload) => {
+  const handleWorktreeDelete = async (
+    ctx: IpcContext,
+    payload: WorktreeDeletePayload
+  ): Promise<void> => {
     checkRateLimit(CHANNELS.WORKTREE_DELETE, 10, 10_000);
     if (!deps.worktreeService) {
       throw new Error("Workspace client not initialized");
@@ -183,7 +174,23 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       store.set("worktreeIssueMap", rest);
     }
   };
-  handlers.push(typedHandleWithContext(CHANNELS.WORKTREE_DELETE, handleWorktreeDelete));
 
-  return () => handlers.forEach((cleanup) => cleanup());
+  const namespace = defineIpcNamespace({
+    name: "worktreeLifecycle",
+    ops: {
+      getAll: op(CHANNELS.WORKTREE_GET_ALL, handleWorktreeGetAll, { withContext: true }),
+      refresh: op(CHANNELS.WORKTREE_REFRESH, handleWorktreeRefresh),
+      setActive: op(CHANNELS.WORKTREE_SET_ACTIVE, handleWorktreeSetActive, { withContext: true }),
+      create: op(CHANNELS.WORKTREE_CREATE, handleWorktreeCreate),
+      restartService: op(CHANNELS.WORKTREE_RESTART_SERVICE, handleWorktreeRestartService, {
+        withContext: true,
+      }),
+      retryProjectLoad: op(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD, handleWorktreeRetryProjectLoad, {
+        withContext: true,
+      }),
+      delete: op(CHANNELS.WORKTREE_DELETE, handleWorktreeDelete, { withContext: true }),
+    },
+  });
+
+  return namespace.register();
 }
