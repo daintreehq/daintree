@@ -23,6 +23,12 @@ const CRASHES_DIR = "crashes";
 const BACKUP_DIR = "backups";
 const BACKUP_FILENAME = "session-state.json";
 const CRASHED_BACKUP_PREFIX = "session-state.crashed-";
+// Previous-generation backup, kept as a Firefox-style rolling pair so a
+// corrupt write (truncated, partial, or unparseable) doesn't destroy the only
+// recovery snapshot. takeBackup() rotates current → previous before writing
+// new current; restoreBackup()/readBackupInfo() fall back to previous when
+// current is missing or fails to parse.
+const PREVIOUS_BACKUP_FILENAME = "session-state.previous.json";
 const BACKUP_INTERVAL_MS = 60_000;
 const DEBOUNCE_BACKUP_MS = 1_500;
 const BLUR_BACKUP_DEBOUNCE_MS = 100;
@@ -49,6 +55,7 @@ export class CrashRecoveryService {
   private markerPath: string;
   private crashesDir: string;
   private backupPath: string;
+  private previousBackupPath: string;
   private sessionStartMs: number;
   private pendingCrash: PendingCrash | null = null;
   private backupTimer: ReturnType<typeof setInterval> | null = null;
@@ -71,6 +78,7 @@ export class CrashRecoveryService {
     this.markerPath = path.join(this.userData, MARKER_FILENAME);
     this.crashesDir = path.join(this.userData, CRASHES_DIR);
     this.backupPath = path.join(this.userData, BACKUP_DIR, BACKUP_FILENAME);
+    this.previousBackupPath = path.join(this.userData, BACKUP_DIR, PREVIOUS_BACKUP_FILENAME);
     this.sessionStartMs = Date.now();
   }
 
@@ -259,10 +267,28 @@ export class CrashRecoveryService {
       const backupDir = path.join(this.userData, BACKUP_DIR);
       fs.mkdirSync(backupDir, { recursive: true });
 
+      // Rotate current → previous BEFORE writing new current. If a future
+      // write produces corrupt JSON, the previous-generation file still holds
+      // the last good snapshot. Rotation is best-effort: a rename failure on
+      // Windows under transient lock contention is non-fatal — we proceed with
+      // the write and the previous file just isn't refreshed this cycle.
+      this.rotateBackup();
+
       const snapshot = this.captureSessionSnapshot();
       resilientAtomicWriteFileSync(this.backupPath, JSON.stringify(snapshot, null, 2), "utf-8");
     } catch (err) {
       console.error("[CrashRecovery] Failed to take backup:", err);
+    }
+  }
+
+  private rotateBackup(): void {
+    if (!fs.existsSync(this.backupPath)) return;
+    try {
+      resilientRenameSync(this.backupPath, this.previousBackupPath);
+    } catch (err) {
+      // Rotation is best-effort; the new write below will still proceed and
+      // overwrite the (possibly stale) previous file on the next cycle.
+      console.warn("[CrashRecovery] Backup rotation rename failed:", err);
     }
   }
 
@@ -272,11 +298,20 @@ export class CrashRecoveryService {
       // timestamped crashed-* path. Read from that path so the current
       // session's backup tick can recreate session-state.json without
       // clobbering the pre-crash snapshot. Fall back to the live path for
-      // explicit user-driven restores in a non-crash session.
+      // explicit user-driven restores in a non-crash session, then to the
+      // rotated previous-generation file when the current file is corrupt
+      // or missing.
+      let snapshot: SessionSnapshot | null = null;
       const sourcePath = this.crashedBackupPath ?? this.backupPath;
-      if (!fs.existsSync(sourcePath)) return false;
-      const raw = fs.readFileSync(sourcePath, "utf8");
-      let snapshot = JSON.parse(raw) as SessionSnapshot;
+      snapshot = this.readBackupFile(sourcePath);
+      if (!snapshot && sourcePath !== this.previousBackupPath) {
+        const previous = this.readBackupFile(this.previousBackupPath);
+        if (previous) {
+          console.log("[CrashRecovery] Current backup unreadable; using previous generation");
+          snapshot = previous;
+        }
+      }
+      if (!snapshot) return false;
 
       if (panelIds !== undefined && panelIds.length > 0 && snapshot.appState) {
         // Filter onto a shallow copy so we don't mutate the parsed snapshot.
@@ -919,13 +954,38 @@ export class CrashRecoveryService {
     return this.buildCrashEntry();
   }
 
-  private readBackupInfo(): { exists: boolean; timestamp?: number } {
+  private readBackupInfo(): { exists: boolean; timestamp?: number; path?: string } {
+    // Prefer current; fall back to previous so the rotation pair is fully
+    // observable. `path` lets callers (consumeMarker, extractPanelSummaries)
+    // read from the file that readBackupInfo determined as usable.
     try {
-      if (!fs.existsSync(this.backupPath)) return { exists: false };
-      const stat = fs.statSync(this.backupPath);
-      return { exists: true, timestamp: stat.mtimeMs };
+      if (fs.existsSync(this.backupPath)) {
+        const stat = fs.statSync(this.backupPath);
+        return { exists: true, timestamp: stat.mtimeMs, path: this.backupPath };
+      }
     } catch {
-      return { exists: false };
+      // fall through to previous
+    }
+    try {
+      if (fs.existsSync(this.previousBackupPath)) {
+        const stat = fs.statSync(this.previousBackupPath);
+        return { exists: true, timestamp: stat.mtimeMs, path: this.previousBackupPath };
+      }
+    } catch {
+      // ignore
+    }
+    return { exists: false };
+  }
+
+  private readBackupFile(filePath: string): SessionSnapshot | null {
+    try {
+      if (!fs.existsSync(filePath)) return null;
+      const raw = fs.readFileSync(filePath, "utf8");
+      const parsed = JSON.parse(raw) as SessionSnapshot;
+      if (!hasRestorableSnapshotContent(parsed)) return null;
+      return parsed;
+    } catch {
+      return null;
     }
   }
 

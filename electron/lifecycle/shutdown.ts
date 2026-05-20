@@ -44,7 +44,7 @@ import {
 import { closeSharedDb } from "../services/persistence/db.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
-import { isSignalShutdown } from "./signalShutdownState.js";
+import { isSignalShutdown, clearSafetyBeltTimer } from "./signalShutdownState.js";
 import { CLEANUP_TIMEOUT_MS } from "./shutdownConfig.js";
 
 export { CLEANUP_TIMEOUT_MS };
@@ -112,6 +112,18 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     }
 
     isQuitting = true;
+
+    // Eager snapshot at quit-intent so the next launch has a post-quit-intent
+    // backup regardless of which branch of the cleanup race wins. Without this,
+    // a hard-timeout dirty exit skips cleanupOnExit() entirely and leaves the
+    // user with whatever the 60s backup timer last captured. takeBackup() is
+    // synchronous and best-effort (swallows its own errors), so it cannot
+    // block or fail the shutdown chain.
+    try {
+      getCrashRecoveryService().takeBackup();
+    } catch (err) {
+      console.warn("[MAIN] Eager takeBackup at quit-intent failed:", err);
+    }
 
     console.log("[MAIN] Starting graceful shutdown...");
     const { drainRateLimitQueues } = await import("../ipc/utils.js");
@@ -404,6 +416,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         } catch (err) {
           console.warn("[MAIN] closeTelemetry failed:", err);
         }
+        // Cancel the signal-handler safety-belt before exiting cleanly so a slow
+        // closeTelemetry() above can't let the belt fire after app.exit(0) and
+        // clobber the exit code (signal handlers in appLifecycle.ts schedule
+        // SAFETY_BELT_TIMEOUT_MS to app.exit(1) on the dirty path).
+        clearSafetyBeltTimer();
         app.exit(0);
       })
       .catch(async (error) => {
@@ -418,6 +435,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         } catch (err) {
           console.warn("[MAIN] closeTelemetry failed:", err);
         }
+        clearSafetyBeltTimer();
         app.exit(1);
       });
   });

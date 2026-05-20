@@ -26,6 +26,7 @@ vi.mock("../../services/ProjectStore.js", () => ({
 
 const crashRecoveryMock = vi.hoisted(() => ({
   cleanupOnExit: vi.fn(),
+  takeBackup: vi.fn(),
 }));
 
 vi.mock("../../services/CrashRecoveryService.js", () => ({
@@ -78,6 +79,7 @@ vi.mock("../../ipc/utils.js", () => ({
 
 const signalShutdownMock = vi.hoisted(() => ({
   isSignalShutdown: vi.fn(() => false),
+  clearSafetyBeltTimer: vi.fn(),
 }));
 
 vi.mock("../signalShutdownState.js", () => signalShutdownMock);
@@ -875,6 +877,102 @@ describe("registerShutdownHandler", () => {
       );
 
       warnSpy.mockRestore();
+    });
+  });
+
+  describe("eager backup at quit-intent (issue #8699)", () => {
+    it("snapshots backup at quit-intent before the cleanup chain runs", async () => {
+      const order: string[] = [];
+      crashRecoveryMock.takeBackup.mockImplementationOnce(() => {
+        order.push("eager-backup");
+      });
+      mcpServerMock.stop.mockImplementationOnce(async () => {
+        order.push("cleanup-chain");
+      });
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(crashRecoveryMock.takeBackup).toHaveBeenCalled();
+      // Eager backup must run before any async cleanup so a hard-timeout exit
+      // can never skip the post-quit-intent snapshot.
+      const eagerIdx = order.indexOf("eager-backup");
+      const chainIdx = order.indexOf("cleanup-chain");
+      expect(eagerIdx).toBeGreaterThanOrEqual(0);
+      expect(chainIdx).toBeGreaterThanOrEqual(0);
+      expect(eagerIdx).toBeLessThan(chainIdx);
+    });
+
+    it("skips eager backup in smoke test mode", async () => {
+      isSmokeTestMock.value = true;
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+      expect(crashRecoveryMock.takeBackup).not.toHaveBeenCalled();
+    });
+
+    it("continues shutdown when eager takeBackup throws", async () => {
+      crashRecoveryMock.takeBackup.mockImplementationOnce(() => {
+        throw new Error("eager backup boom");
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[MAIN] Eager takeBackup at quit-intent failed:",
+        expect.any(Error)
+      );
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe("safety-belt timer cancellation (issue #8699)", () => {
+    it("clears safety-belt timer before app.exit(0) on clean shutdown", async () => {
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(signalShutdownMock.clearSafetyBeltTimer).toHaveBeenCalled();
+      // Order matters: belt MUST be cancelled before app.exit, otherwise a
+      // slow closeTelemetry() above could let the belt fire after exit(0)
+      // and clobber the exit code with exit(1).
+      const exitOrder = appMock.exit.mock.invocationCallOrder[0];
+      const clearOrders = signalShutdownMock.clearSafetyBeltTimer.mock.invocationCallOrder;
+      const lastClearOrder = clearOrders[clearOrders.length - 1];
+      expect(lastClearOrder).toBeLessThan(exitOrder);
+    });
+
+    it("clears safety-belt timer before app.exit(1) on hard timeout", async () => {
+      vi.useFakeTimers();
+      mcpServerMock.stop.mockReturnValue(new Promise(() => {}));
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.runAllTimersAsync();
+
+      expect(appMock.exit).toHaveBeenCalledWith(1);
+      expect(signalShutdownMock.clearSafetyBeltTimer).toHaveBeenCalled();
+      const exitOrder = appMock.exit.mock.invocationCallOrder[0];
+      const clearOrders = signalShutdownMock.clearSafetyBeltTimer.mock.invocationCallOrder;
+      const lastClearOrder = clearOrders[clearOrders.length - 1];
+      expect(lastClearOrder).toBeLessThan(exitOrder);
+
+      consoleSpy.mockRestore();
+      vi.useRealTimers();
     });
   });
 });

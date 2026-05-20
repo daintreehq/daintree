@@ -4,6 +4,7 @@ const appMock = vi.hoisted(() => ({
   isPackaged: false as boolean,
   on: vi.fn(),
   quit: vi.fn(),
+  exit: vi.fn(),
 }));
 
 const browserWindowMock = vi.hoisted(() => ({
@@ -26,8 +27,10 @@ vi.mock("../../menu.js", () => ({
 }));
 
 const setSignalShutdownMock = vi.fn();
+const setSafetyBeltTimerMock = vi.fn();
 vi.mock("../signalShutdownState.js", () => ({
   setSignalShutdown: setSignalShutdownMock,
+  setSafetyBeltTimer: setSafetyBeltTimerMock,
 }));
 
 const isWindowRecreatingMock = vi.fn(() => false);
@@ -37,7 +40,7 @@ vi.mock("../windowRecreationState.js", () => ({
 
 import type { AppLifecycleOptions } from "../appLifecycle.js";
 import { handleDirectoryOpen } from "../../menu.js";
-import { CLEANUP_TIMEOUT_MS } from "../shutdownConfig.js";
+import { SAFETY_BELT_TIMEOUT_MS } from "../shutdownConfig.js";
 
 function makeOpts(overrides?: Partial<AppLifecycleOptions>): AppLifecycleOptions {
   return {
@@ -93,7 +96,7 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     expect(processOnSpy.mock.calls.some(([sig]: string[]) => sig === "SIGHUP")).toBe(false);
   });
 
-  it("signal handler calls setSignalShutdown, schedules timeout, and calls app.quit", async () => {
+  it("signal handler calls setSignalShutdown, schedules safety-belt timer, and calls app.quit", async () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
 
@@ -104,14 +107,39 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
 
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();
+    // Belt handle must be stored so shutdown.ts can cancel it on clean exit.
+    // Without this, a slow closeTelemetry() could let the belt fire after
+    // app.exit(0) and clobber the exit code with a wrong-direction exit(1).
+    expect(setSafetyBeltTimerMock).toHaveBeenCalledWith(expect.anything());
 
-    // Belt must outlast CLEANUP_TIMEOUT_MS plus telemetry-drain buffer so it
-    // doesn't fire mid-cleanup. Advancing to (CLEANUP_TIMEOUT_MS + 3000 - 1)
+    // Belt must outlast the full cleanup chain: CLEANUP_TIMEOUT_MS + 3000ms
+    // buffer + 2500ms closeTelemetry budget. Advancing to (SAFETY_BELT_TIMEOUT_MS - 1)
     // confirms the belt hasn't fired prematurely.
-    vi.advanceTimersByTime(CLEANUP_TIMEOUT_MS + 3000 - 1);
+    vi.advanceTimersByTime(SAFETY_BELT_TIMEOUT_MS - 1);
+    expect(appMock.exit).not.toHaveBeenCalled();
     expect(processExitSpy).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
-    expect(processExitSpy).toHaveBeenCalledWith(0);
+    // Belt fires app.exit(1) — dirty exit signals supervisors correctly and
+    // runs Electron's native teardown. Never process.exit(0).
+    expect(appMock.exit).toHaveBeenCalledWith(1);
+    expect(processExitSpy).not.toHaveBeenCalledWith(0);
+  });
+
+  it("safety-belt nulls the stored handle when it fires", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
+    const handler = sigTermCall![1] as () => void;
+
+    handler();
+    setSafetyBeltTimerMock.mockClear();
+
+    vi.advanceTimersByTime(SAFETY_BELT_TIMEOUT_MS);
+
+    // Belt fired → handle cleared so a late clearSafetyBeltTimer() from
+    // shutdown.ts is a no-op rather than canceling an already-fired timer.
+    expect(setSafetyBeltTimerMock).toHaveBeenCalledWith(null);
   });
 
   it("rapid second signal within 2s force-exits with status 1", async () => {
