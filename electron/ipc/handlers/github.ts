@@ -32,10 +32,17 @@ import type { RateLimitInfo } from "../../../shared/types/forge.js";
 // two in sync if the projection rule changes.
 function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
   if (!payload.blocked) {
-    return { limit: null, remaining: null, resetAt: null };
+    return {
+      limit: payload.limit ?? null,
+      remaining: payload.remaining ?? null,
+      resetAt: null,
+    };
   }
+  // When blocked, force `remaining: 0` — the renderer's GitHub-flavored
+  // projection treats `remaining === 0` as the "blocked" signal, so the exact
+  // (1–50) hard-stop-band count must not leak through as a non-zero value.
   return {
-    limit: null,
+    limit: payload.limit ?? null,
     remaining: 0,
     resetAt: payload.resetAt ?? null,
     ...(payload.kind === "secondary" ? { secondaryThrottled: true } : {}),

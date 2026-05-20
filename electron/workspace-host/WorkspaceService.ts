@@ -92,6 +92,11 @@ export class WorkspaceService {
   private pollIntervalBackground: number = DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS;
   private fetchIntervalActiveMs: number = 30_000;
   private fetchIntervalBackgroundMs: number = 5 * 60_000;
+  // Last GitHub rate-limit cadence multiplier applied to monitor fetch
+  // schedulers. Tracked so a recovery (multiplier back to 1) can be detected
+  // and trigger an immediate re-arm. The user-configured base intervals above
+  // are never overwritten by throttling — see applyFetchThrottle.
+  private _lastAppliedThrottleMultiplier: number = 1;
   private adaptiveBackoff: boolean = true;
   private pollIntervalMax: number = 30000;
   private circuitBreakerThreshold: number = 3;
@@ -550,8 +555,8 @@ export class WorkspaceService {
           circuitBreakerThreshold: this.circuitBreakerThreshold,
           gitWatchEnabled: this.gitWatchEnabled,
           gitWatchDebounceMs: this.gitWatchDebounceMs,
-          fetchIntervalActiveMs: this.fetchIntervalActiveMs,
-          fetchIntervalBackgroundMs: this.fetchIntervalBackgroundMs,
+          fetchIntervalActiveMs: this.throttledFetchActiveMs,
+          fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
         });
 
         existingMonitor.ensureWatcherState();
@@ -690,8 +695,8 @@ export class WorkspaceService {
         circuitBreakerThreshold: this.circuitBreakerThreshold,
         gitWatchEnabled: this.gitWatchEnabled,
         gitWatchDebounceMs: this.gitWatchDebounceMs,
-        fetchIntervalActiveMs: this.fetchIntervalActiveMs,
-        fetchIntervalBackgroundMs: this.fetchIntervalBackgroundMs,
+        fetchIntervalActiveMs: this.throttledFetchActiveMs,
+        fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
       },
       {
         onUpdate: (snapshot) => {
@@ -2211,10 +2216,60 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       const baseInterval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
       monitor.updateConfig({
         basePollingInterval: baseInterval,
-        fetchIntervalActiveMs: this.fetchIntervalActiveMs,
-        fetchIntervalBackgroundMs: this.fetchIntervalBackgroundMs,
+        fetchIntervalActiveMs: this.throttledFetchActiveMs,
+        fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
       });
     }
+  }
+
+  /**
+   * Focused-tier fetch interval with the active GitHub rate-limit throttle
+   * folded in. Used everywhere a monitor's fetch cadence is (re)written —
+   * syncMonitors, addNewWorktreeMonitor, updateMonitorConfig — so an unrelated
+   * config push can't silently clobber an in-effect throttle back to baseline.
+   */
+  private get throttledFetchActiveMs(): number {
+    return Math.round(this.fetchIntervalActiveMs * this._lastAppliedThrottleMultiplier);
+  }
+
+  /** Background-tier fetch interval with the active throttle folded in. */
+  private get throttledFetchBackgroundMs(): number {
+    return Math.round(this.fetchIntervalBackgroundMs * this._lastAppliedThrottleMultiplier);
+  }
+
+  /**
+   * Apply a GitHub rate-limit cadence multiplier to every monitor's background
+   * fetch scheduler.
+   *
+   * The multiplier always scales the user-configured base intervals
+   * (`fetchIntervalActiveMs` / `fetchIntervalBackgroundMs`) — never an
+   * already-throttled value — so repeated calls can't compound. When the
+   * multiplier returns to `1` (budget recovered), each scheduler is re-armed at
+   * the short startup-tier delay so fresh ahead/behind data lands promptly
+   * instead of waiting out a previously-stretched window.
+   *
+   * Driven by `gitHubRateLimitService` budget notifications relayed through the
+   * workspace-host `onStateChange` handler.
+   */
+  applyFetchThrottle(multiplier: number): void {
+    const safeMultiplier = Number.isFinite(multiplier) && multiplier >= 1 ? multiplier : 1;
+    const previous = this._lastAppliedThrottleMultiplier;
+    const recovered = safeMultiplier === 1 && previous > 1;
+
+    const activeMs = Math.round(this.fetchIntervalActiveMs * safeMultiplier);
+    const backgroundMs = Math.round(this.fetchIntervalBackgroundMs * safeMultiplier);
+
+    for (const monitor of this.monitors.values()) {
+      monitor.updateConfig({
+        fetchIntervalActiveMs: activeMs,
+        fetchIntervalBackgroundMs: backgroundMs,
+      });
+      if (recovered) {
+        monitor.rescheduleFetch(true);
+      }
+    }
+
+    this._lastAppliedThrottleMultiplier = safeMultiplier;
   }
 
   setPollingEnabled(enabled: boolean): void {

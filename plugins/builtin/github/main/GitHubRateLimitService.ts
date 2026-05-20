@@ -23,11 +23,108 @@ const SECONDARY_BACKOFF_MAX_MS = 5 * 60 * 1000;
 // primary blocks where the response header is absent.
 const GLOBAL_RESOURCE_KEY = "__global__";
 
+// Points held back from background-poll budgeting so interactive, on-demand
+// GitHub requests always keep headroom even while background pollers throttle.
+export const INTERACTIVE_RESERVE = 100;
+
+// At or below this remaining-points figure the GraphQL budget is treated as
+// exhausted and background GraphQL calls are hard-blocked until the window
+// resets. A small non-zero band (vs. a strict `=== 0`) absorbs the cost of a
+// poll that races the reset boundary.
+export const HARD_BLOCK_THRESHOLD = 50;
+
+// Graduated throttling engages once remaining drops below this fraction of the
+// window limit and releases once it climbs back above THROTTLE_RELEASE_RATIO.
+// The gap between the two is deliberate hysteresis (lesson #4629) so a budget
+// hovering near 50% doesn't flap the multiplier on every poll.
+const THROTTLE_ENGAGE_RATIO = 0.5;
+const THROTTLE_RELEASE_RATIO = 0.6;
+
+// A single anomalously-low reading must not stretch intervals — require this
+// many consecutive depleted readings before engaging the throttle.
+const DEPLETED_READINGS_TO_ENGAGE = 2;
+
+// Upper bound on the cadence multiplier so a near-empty budget can't stretch a
+// background interval into effectively never polling.
+export const MAX_THROTTLE_MULTIPLIER = 10;
+
+// Denominator for the dimensionless multiplier — the focused-tier base cadence.
+// `computeThrottleMultiplier` returns "safe per-poll interval ÷ this", which
+// callers then apply uniformly to both focused and background intervals.
+const THROTTLE_BASE_INTERVAL_MS = 30_000;
+
+// Suppress listener churn: only re-notify on a budget reading when the
+// multiplier moves by more than this fraction of its last-notified value.
+const MEANINGFUL_MULTIPLIER_DELTA = 0.05;
+
+// Extra delay past the budget window's reset before the one-shot recovery
+// sweep runs. Covers the PRIMARY_RESET_BUFFER_MS applied to a hard block
+// raised in the same window, so a single timer clears both the throttle and
+// the block.
+const BUDGET_SWEEP_BUFFER_MS = PRIMARY_RESET_BUFFER_MS + 1_000;
+
 interface BlockState {
   kind: GitHubRateLimitKind;
   resumeAt: number;
   resource: string;
   requestId?: string;
+}
+
+/**
+ * Observed GraphQL budget state. Distinct from {@link BlockState}: a depleted
+ * budget stretches the background poll cadence (graduated throttle) without
+ * gating requests, whereas a block hard-stops them.
+ */
+export interface BudgetState {
+  /** Points left in the window at the last observed reading. */
+  remaining: number;
+  /** Window limit (5000 for authenticated users), or null if not reported. */
+  limit: number | null;
+  /** Epoch milliseconds when the budget window resets. */
+  resetAt: number;
+  /** Background-poll cadence multiplier derived from the reading (≥ 1). */
+  multiplier: number;
+  /** Whether graduated throttling is currently engaged (hysteresis-gated). */
+  engaged: boolean;
+  /** Consecutive depleted readings — drives the engage hysteresis. */
+  consecutiveDepletedReadings: number;
+}
+
+/**
+ * Compute a background-poll cadence multiplier from an observed GraphQL budget.
+ *
+ * Spreads the spendable budget (`remaining` minus {@link INTERACTIVE_RESERVE})
+ * evenly across the time left until the window resets, yielding a safe
+ * per-poll interval, then expresses that as a multiple of the focused-tier
+ * base cadence. Returns `1` (no throttling) for healthy budgets, invalid
+ * inputs, or an already-past reset; returns {@link MAX_THROTTLE_MULTIPLIER}
+ * when the spendable budget is exhausted.
+ */
+export function computeThrottleMultiplier(
+  remaining: number,
+  limit: number,
+  resetAtMs: number,
+  nowMs: number = Date.now()
+): number {
+  if (
+    !Number.isFinite(remaining) ||
+    !Number.isFinite(limit) ||
+    !Number.isFinite(resetAtMs) ||
+    limit <= 0
+  ) {
+    return 1;
+  }
+
+  const spendable = remaining - INTERACTIVE_RESERVE;
+  if (spendable <= 0) return MAX_THROTTLE_MULTIPLIER;
+
+  const timeToResetMs = resetAtMs - nowMs;
+  if (timeToResetMs <= 0) return 1;
+
+  const safeIntervalMs = timeToResetMs / spendable;
+  const multiplier = safeIntervalMs / THROTTLE_BASE_INTERVAL_MS;
+  if (!Number.isFinite(multiplier) || multiplier <= 1) return 1;
+  return Math.min(multiplier, MAX_THROTTLE_MULTIPLIER);
 }
 
 export interface ShouldBlockResult {
@@ -45,6 +142,17 @@ class GitHubRateLimitServiceImpl {
   // Drives jittered exponential backoff when GitHub returns a 403/429 without
   // an explicit `retry-after` header.
   private consecutiveSecondaryHits = 0;
+  // Last observed GraphQL budget, or null until a budget-carrying response is
+  // seen. Drives the graduated background-poll throttle.
+  private _budgetState: BudgetState | null = null;
+  // Multiplier carried by the last listener notification — used to suppress
+  // re-notifying on sub-threshold budget drift.
+  private _lastNotifiedMultiplier = 1;
+  // Whether the first budget reading has been pushed to listeners yet.
+  private _hasNotifiedBudget = false;
+  // One-shot timer that sweeps stale budget state just after the window
+  // resets, so a stretched cadence doesn't defer throttle recovery.
+  private _budgetResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Register a subscriber that fires on every state transition (entering a
@@ -189,14 +297,22 @@ class GitHubRateLimitServiceImpl {
   }
 
   /**
-   * Feed GraphQL `rateLimit { cost remaining resetAt }` data into the
-   * service. When `remaining` is 0 the service marks a `"primary"` block
-   * under the `"graphql"` resource key. Ignores missing or malformed
-   * rateLimit objects silently.
+   * Feed GraphQL `rateLimit { cost remaining resetAt limit }` data into the
+   * service.
+   *
+   * - At or below {@link HARD_BLOCK_THRESHOLD} remaining points, marks a
+   *   `"primary"` block under the `"graphql"` resource key (the legacy
+   *   `remaining === 0` behavior, widened by a small hard-stop band).
+   * - Above that, when `limit` is reported, records the budget and computes a
+   *   graduated background-poll throttle multiplier. The multiplier engages
+   *   only after two consecutive depleted readings (single-blip immunity) and
+   *   releases with hysteresis once the budget recovers.
+   *
+   * Ignores missing or malformed rateLimit objects silently.
    */
   updateFromGraphQL(data: Record<string, unknown>): void {
     const rateLimit = data?.rateLimit as
-      | { cost?: number; remaining?: number; resetAt?: string }
+      | { cost?: number; remaining?: number; resetAt?: string; limit?: number }
       | undefined;
     if (!rateLimit) return;
 
@@ -204,17 +320,120 @@ class GitHubRateLimitServiceImpl {
     const resetAt = rateLimit.resetAt;
     if (typeof remaining !== "number" || typeof resetAt !== "string") return;
 
-    if (remaining === 0) {
-      const resetMs = Date.parse(resetAt);
-      if (Number.isFinite(resetMs)) {
-        this.markBlocked("primary", resetMs + PRIMARY_RESET_BUFFER_MS, "graphql");
-      }
+    const resetMs = Date.parse(resetAt);
+    if (!Number.isFinite(resetMs)) return;
+
+    const limit = typeof rateLimit.limit === "number" ? rateLimit.limit : null;
+
+    // Budget exhausted (or within the hard-stop band): hard-block GraphQL
+    // until the window resets, exactly as the legacy `remaining === 0` path.
+    if (remaining <= HARD_BLOCK_THRESHOLD) {
+      this._budgetState = {
+        remaining,
+        limit,
+        resetAt: resetMs,
+        multiplier: MAX_THROTTLE_MULTIPLIER,
+        engaged: true,
+        consecutiveDepletedReadings: DEPLETED_READINGS_TO_ENGAGE,
+      };
+      this._lastNotifiedMultiplier = MAX_THROTTLE_MULTIPLIER;
+      this._hasNotifiedBudget = true;
+      this.scheduleBudgetResetSweep(resetMs);
+      this.markBlocked("primary", resetMs + PRIMARY_RESET_BUFFER_MS, "graphql");
+      return;
+    }
+
+    // Graduated throttling needs a window limit to compute a depletion ratio.
+    if (limit === null || limit <= 0) return;
+
+    this.recordBudgetReading(remaining, limit, resetMs);
+  }
+
+  /**
+   * Fold a healthy (non-blocking) budget reading into {@link _budgetState},
+   * applying engage/release hysteresis, and notify listeners when the derived
+   * multiplier moves meaningfully.
+   */
+  private recordBudgetReading(remaining: number, limit: number, resetAt: number): void {
+    const previous = this._budgetState;
+    const depleted = remaining < limit * THROTTLE_ENGAGE_RATIO;
+    const recovered = remaining > limit * THROTTLE_RELEASE_RATIO;
+
+    const consecutiveDepletedReadings = depleted
+      ? (previous?.consecutiveDepletedReadings ?? 0) + 1
+      : 0;
+
+    let engaged = previous?.engaged ?? false;
+    if (engaged) {
+      // Stay engaged through the 50–60% hysteresis band; release only above it.
+      if (recovered) engaged = false;
+    } else if (consecutiveDepletedReadings >= DEPLETED_READINGS_TO_ENGAGE) {
+      engaged = true;
+    }
+
+    const multiplier = engaged ? computeThrottleMultiplier(remaining, limit, resetAt) : 1;
+
+    this._budgetState = {
+      remaining,
+      limit,
+      resetAt,
+      multiplier,
+      engaged,
+      consecutiveDepletedReadings,
+    };
+
+    const lastMultiplier = this._lastNotifiedMultiplier;
+    const meaningfulChange =
+      Math.abs(multiplier - lastMultiplier) >
+      Math.max(lastMultiplier, 1) * MEANINGFUL_MULTIPLIER_DELTA;
+
+    if (!this._hasNotifiedBudget || meaningfulChange) {
+      this._hasNotifiedBudget = true;
+      this._lastNotifiedMultiplier = multiplier;
+      this.notifyListeners();
+    }
+
+    // Arm the recovery sweep only while throttling — an un-throttled cadence
+    // polls often enough to refresh budget state on its own.
+    if (engaged) {
+      this.scheduleBudgetResetSweep(resetAt);
+    } else {
+      this.clearBudgetResetTimer();
+    }
+  }
+
+  /**
+   * Arm a one-shot timer that runs {@link autoClearExpired} just after the
+   * GraphQL budget window resets, so the throttle snaps back to baseline
+   * promptly even when a stretched cadence means no GitHub call would
+   * otherwise touch the service for a while.
+   */
+  private scheduleBudgetResetSweep(resetAtMs: number): void {
+    this.clearBudgetResetTimer();
+    const delay = Math.max(0, resetAtMs + BUDGET_SWEEP_BUFFER_MS - Date.now());
+    const timer = setTimeout(() => {
+      this._budgetResetTimer = null;
+      this.autoClearExpired();
+    }, delay);
+    timer.unref?.();
+    this._budgetResetTimer = timer;
+  }
+
+  private clearBudgetResetTimer(): void {
+    if (this._budgetResetTimer) {
+      clearTimeout(this._budgetResetTimer);
+      this._budgetResetTimer = null;
     }
   }
 
   /** Snapshot for push/pull consumers. Collapses multi-resource state to a single payload. */
   getState(): GitHubRateLimitPayload {
     this.autoClearExpired();
+    return this.withBudget(this.computeBlockPayload());
+  }
+
+  /** Block-only projection of current state, before budget fields are folded in. */
+  private computeBlockPayload(): GitHubRateLimitPayload {
     if (this.states.size === 0) {
       return { blocked: false, kind: null };
     }
@@ -237,10 +456,38 @@ class GitHubRateLimitServiceImpl {
     return { blocked: false, kind: null };
   }
 
-  /** Drop any active block (token change, fresh 2xx, manual reset). */
+  /**
+   * Fold the observed GraphQL budget (remaining / limit / throttle multiplier)
+   * into a payload. No-op when no budget has been observed, so the unblocked
+   * cold-start payload stays `{ blocked: false, kind: null }`.
+   */
+  private withBudget(payload: GitHubRateLimitPayload): GitHubRateLimitPayload {
+    const budget = this._budgetState;
+    if (!budget) return payload;
+    const decorated: GitHubRateLimitPayload = {
+      ...payload,
+      remaining: budget.remaining,
+      throttleMultiplier: budget.multiplier,
+    };
+    if (budget.limit !== null) {
+      decorated.limit = budget.limit;
+    }
+    return decorated;
+  }
+
+  /** Drop any active block and budget state (token change, fresh 2xx, manual reset). */
   clear(): void {
     this.consecutiveSecondaryHits = 0;
-    if (this.states.size === 0) return;
+    const hadBudget = this._budgetState !== null;
+    this._budgetState = null;
+    this._lastNotifiedMultiplier = 1;
+    this._hasNotifiedBudget = false;
+    this.clearBudgetResetTimer();
+    if (this.states.size === 0) {
+      // Still surface the cleared budget so consumers snap back to baseline.
+      if (hadBudget) this.notifyListeners();
+      return;
+    }
     this.states.clear();
     logInfo("GitHub rate limit cleared");
     this.notifyListeners();
@@ -250,11 +497,20 @@ class GitHubRateLimitServiceImpl {
   _resetForTests(): void {
     this.states.clear();
     this.consecutiveSecondaryHits = 0;
+    this._budgetState = null;
+    this._lastNotifiedMultiplier = 1;
+    this._hasNotifiedBudget = false;
+    this.clearBudgetResetTimer();
   }
 
   /** Test-only inspector. */
   _getConsecutiveSecondaryHitsForTests(): number {
     return this.consecutiveSecondaryHits;
+  }
+
+  /** Test-only inspector for the observed GraphQL budget state. */
+  _getBudgetStateForTests(): Readonly<BudgetState> | null {
+    return this._budgetState;
   }
 
   private clearResource(resource: string): void {
@@ -295,15 +551,31 @@ class GitHubRateLimitServiceImpl {
   }
 
   private autoClearExpired(): void {
-    let anyCleared = false;
+    let blocksCleared = false;
     for (const [key, state] of this.states) {
       if (state.resumeAt <= Date.now()) {
         this.states.delete(key);
-        anyCleared = true;
+        blocksCleared = true;
       }
     }
-    if (anyCleared) {
+
+    // The GraphQL budget window rolls over at its own `resetAt`; once past, the
+    // observed remaining/limit and any throttle derived from them are stale.
+    // Drop them so the cadence snaps back to baseline — recovery is
+    // server-authoritative and needs no hysteresis (lesson #4629).
+    let budgetCleared = false;
+    if (this._budgetState && this._budgetState.resetAt <= Date.now()) {
+      this._budgetState = null;
+      this._lastNotifiedMultiplier = 1;
+      this._hasNotifiedBudget = false;
+      this.clearBudgetResetTimer();
+      budgetCleared = true;
+    }
+
+    if (blocksCleared) {
       logInfo("GitHub rate limit block(s) expired");
+    }
+    if (blocksCleared || budgetCleared) {
       this.notifyListeners();
     }
   }

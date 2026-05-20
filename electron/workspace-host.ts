@@ -319,10 +319,19 @@ const workspaceService = new WorkspaceService(sendEvent);
 // event payload is provider-agnostic.
 function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
   if (!payload.blocked) {
-    return { limit: null, remaining: null, resetAt: null };
+    // Forward the observed GraphQL budget (if any) so the toolbar can show a
+    // remaining-quota indicator even while requests still flow.
+    return {
+      limit: payload.limit ?? null,
+      remaining: payload.remaining ?? null,
+      resetAt: null,
+    };
   }
+  // When blocked, force `remaining: 0` — the renderer's GitHub-flavored
+  // projection treats `remaining === 0` as the "blocked" signal, so the exact
+  // (1–50) hard-stop-band count must not leak through as a non-zero value.
   return {
-    limit: null,
+    limit: payload.limit ?? null,
     remaining: 0,
     resetAt: payload.resetAt ?? null,
     ...(payload.kind === "secondary" ? { secondaryThrottled: true } : {}),
@@ -344,6 +353,10 @@ gitHubRateLimitService.onStateChange((state) => {
     providerId: BUILTIN_GITHUB_PROVIDER_ID,
     state: rateLimitInfo,
   });
+  // Pace background fetch cadence against the observed GraphQL budget so
+  // multiple instances drawing on the same per-user token budget back off in
+  // step as it depletes — and snap back when it resets.
+  workspaceService.applyFetchThrottle(state.throttleMultiplier ?? 1);
 });
 
 // Handle requests from Main

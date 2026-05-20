@@ -10,6 +10,7 @@ export const REPO_STATS_QUERY = `
       cost
       remaining
       resetAt
+      limit
     }
   }
 `;
@@ -81,6 +82,7 @@ export const REPO_STATS_AND_PAGE_QUERY = `
       cost
       remaining
       resetAt
+      limit
     }
   }
 `;
@@ -121,6 +123,7 @@ export const PROJECT_HEALTH_QUERY = `
       cost
       remaining
       resetAt
+      limit
     }
   }
 `;
@@ -193,6 +196,7 @@ export const LIST_ISSUES_QUERY = `
       cost
       remaining
       resetAt
+      limit
     }
   }
 `;
@@ -252,6 +256,7 @@ export const LIST_PRS_QUERY = `
       cost
       remaining
       resetAt
+      limit
     }
   }
 `;
@@ -340,6 +345,7 @@ export const SEARCH_QUERY = `
       cost
       remaining
       resetAt
+      limit
     }
   }
 `;
@@ -405,6 +411,7 @@ export const GET_ISSUE_QUERY = `
       cost
       remaining
       resetAt
+      limit
     }
   }
 `;
@@ -430,6 +437,7 @@ export const GET_PR_REVIEW_THREADS_QUERY = `
       cost
       remaining
       resetAt
+      limit
     }
   }
 `;
@@ -485,6 +493,7 @@ export const GET_PR_QUERY = `
       cost
       remaining
       resetAt
+      limit
     }
   }
 `;
@@ -631,7 +640,7 @@ export function buildBatchPRQuery(
     }
   }
 
-  return `query { ${issueQueries.join("\n")} ${branchQueries.join("\n")} rateLimit { cost remaining resetAt } }`;
+  return `query { ${issueQueries.join("\n")} ${branchQueries.join("\n")} rateLimit { cost remaining resetAt limit } }`;
 }
 
 /**
@@ -694,7 +703,7 @@ export function buildBatchBranchPRQuery(owner: string, repo: string, branches: s
     `;
   });
 
-  return `query { ${parts.join("\n")} rateLimit { cost remaining resetAt } }`;
+  return `query { ${parts.join("\n")} rateLimit { cost remaining resetAt limit } }`;
 }
 
 /**
@@ -749,5 +758,5 @@ export function buildBatchRequiredChecksQuery(
     `
   );
 
-  return `query { ${parts.join("\n")} rateLimit { cost remaining resetAt } }`;
+  return `query { ${parts.join("\n")} rateLimit { cost remaining resetAt limit } }`;
 }

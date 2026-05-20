@@ -933,6 +933,16 @@ export class WorktreeMonitor {
     return this.fetchScheduler.triggerNow();
   }
 
+  /**
+   * Re-arm the background fetch timer. `initial=true` uses the short
+   * startup-tier delay (2-5s) so a snap-back after GitHub rate-limit recovery
+   * gets fresh data promptly instead of waiting a full (possibly stretched)
+   * cadence window.
+   */
+  rescheduleFetch(initial: boolean): void {
+    this.fetchScheduler.reschedule(initial);
+  }
+
   async refresh(): Promise<void> {
     // A stopped monitor has nothing to refresh. This also makes the ENOENT
     // preflight below idempotent: the first removal detection calls stop(),
