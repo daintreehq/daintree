@@ -19,11 +19,13 @@
  *
  * Behavior preserved:
  *   - `pendingChildProcessGoneReason` is consumed via `setImmediate` to bridge
- *     the Electron 37-41 race where `exit` often fires before
- *     `child-process-gone`.
+ *     the Electron `exit`/`child-process-gone` ordering race (electron/electron#42283),
+ *     where `exit` often fires before `child-process-gone` for utility-process
+ *     crashes.
  *   - On Windows, the `child-process-gone` exitCode is preferred over the
- *     `exit` event's code (Electron 40-41 has a known signed/unsigned mangling
- *     bug on the `exit` path).
+ *     `exit` event's code as defense-in-depth for pre-41.0.4 builds and future
+ *     regressions of the signed/unsigned mangling bug (fixed in
+ *     electron/electron#50386, landed Electron 41.0.4).
  *   - Restart attempts use full jitter with a 100ms floor and a cap of
  *     `min(2^N * 1000ms, 10000ms)` per attempt N.
  *   - If `manualRestart()` already spawned a host during the setImmediate
@@ -484,10 +486,11 @@ export class PtyHostLifecycle {
 
     this.callbacks.onExitSync({ code, wasReady, fallbackCrashType });
 
-    // Electron 37-41 race: `exit` often fires before `child-process-gone`
-    // for utility-process crashes. Defer crash classification by one event
-    // loop tick so the authoritative reason can arrive; fall back to the
-    // exit-code heuristic when no reason was captured in time.
+    // `exit`/`child-process-gone` ordering race (electron/electron#42283): `exit`
+    // often fires before `child-process-gone` for utility-process crashes. Defer
+    // crash classification by one event loop tick so the authoritative reason
+    // can arrive; fall back to the exit-code heuristic when no reason was
+    // captured in time.
     setImmediate(() => {
       if (this.callbacks.isDisposed()) {
         this.pendingChildProcessGoneReason = null;
@@ -498,8 +501,9 @@ export class PtyHostLifecycle {
       this.pendingChildProcessGoneReason = null;
       const crashType: CrashType = gone ? mapGoneReasonToCrashType(gone.reason) : fallbackCrashType;
       // Prefer the authoritative exit code from `child-process-gone` over the
-      // (sometimes unreliable) one from `exit` — Electron 40-41 has a known
-      // signed/unsigned mangling bug on Windows for the exit event.
+      // (sometimes unreliable) one from `exit` — defense-in-depth for pre-41.0.4
+      // builds and future regressions of the Windows signed/unsigned mangling
+      // bug (fixed in electron/electron#50386, landed Electron 41.0.4).
       const reportedCode = gone ? gone.exitCode : code;
 
       console.error(
