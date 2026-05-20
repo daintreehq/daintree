@@ -35,7 +35,14 @@ export const useTerminalSearchHistoryStore = create<TerminalSearchHistoryState>(
       name: "daintree-terminal-search-history",
       storage: createSafeJSONStorage(),
       version: 0,
-      migrate: (persistedState) => persistedState as TerminalSearchHistoryState,
+      migrate: (persistedState, _version) => {
+        const state = (persistedState ?? {}) as Partial<TerminalSearchHistoryState>;
+        return {
+          searches: Array.isArray(state.searches) ? state.searches : [],
+          caseSensitive: typeof state.caseSensitive === "boolean" ? state.caseSensitive : false,
+          regexEnabled: typeof state.regexEnabled === "boolean" ? state.regexEnabled : false,
+        };
+      },
       partialize: (state) => ({
         searches: state.searches,
         caseSensitive: state.caseSensitive,
