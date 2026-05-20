@@ -130,3 +130,21 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     }
   });
 }
+
+// Windows-only: route `WM_ENDSESSION` (planned shutdown, logoff, restart,
+// Windows Update reboot, Fast Startup) through the same `before-quit` cleanup
+// chain as the signal path. Without this, Windows tears the process down
+// directly and `running.lock` stays on disk — the next launch then thinks we
+// crashed. Best-effort: the OS `HungAppTimeout` is 5s by default and the
+// full cleanup chain (`CLEANUP_TIMEOUT_MS` + safety belt) exceeds that, so
+// cleanup may be truncated mid-flight. The dirty-marker fallback in
+// `CrashRecoveryService` covers truncation. `TerminateProcess`/`taskkill /F`
+// bypass `WM_ENDSESSION` entirely; that case is also handled by the marker
+// fallback. See `docs/architecture/fatal-error-spine.md`.
+export function registerWindowSessionEndHandler(win: BrowserWindow): void {
+  if (process.platform !== "win32") return;
+  win.on("session-end", () => {
+    setSignalShutdown();
+    app.quit();
+  });
+}

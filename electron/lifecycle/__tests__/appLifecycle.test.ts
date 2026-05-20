@@ -399,3 +399,80 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     expect(appMock.quit).toHaveBeenCalledOnce();
   });
 });
+
+describe("registerWindowSessionEndHandler – Windows planned-shutdown wiring", () => {
+  const originalPlatform = process.platform;
+
+  function makeWin() {
+    return { on: vi.fn() } as unknown as import("electron").BrowserWindow & {
+      on: ReturnType<typeof vi.fn>;
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+  });
+
+  it("registers a session-end listener on win32 and nothing else", async () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
+    const win = makeWin();
+
+    registerWindowSessionEndHandler(win);
+
+    const winOn = win.on as unknown as ReturnType<typeof vi.fn>;
+    const sessionEndCalls = winOn.mock.calls.filter(([event]) => event === "session-end");
+    expect(sessionEndCalls).toHaveLength(1);
+    // Locks in the documented "no veto" decision — wiring query-session-end
+    // with event.preventDefault() would block the user's planned shutdown.
+    const queryEndCalls = winOn.mock.calls.filter(([event]) => event === "query-session-end");
+    expect(queryEndCalls).toHaveLength(0);
+  });
+
+  it("invoking the session-end listener calls setSignalShutdown then app.quit", async () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
+    const win = makeWin();
+    registerWindowSessionEndHandler(win);
+
+    const winOn = win.on as unknown as ReturnType<typeof vi.fn>;
+    const sessionEndCall = winOn.mock.calls.find(([event]) => event === "session-end");
+    const handler = sessionEndCall![1] as () => void;
+
+    handler();
+
+    // setSignalShutdown must run before app.quit so the before-quit handler in
+    // shutdown.ts skips the agent-count dialog (isSignalShutdown gate).
+    expect(setSignalShutdownMock).toHaveBeenCalledOnce();
+    expect(appMock.quit).toHaveBeenCalledOnce();
+    expect(setSignalShutdownMock.mock.invocationCallOrder[0]).toBeLessThan(
+      appMock.quit.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("registers nothing on darwin", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
+    const win = makeWin();
+
+    registerWindowSessionEndHandler(win);
+
+    const winOn = win.on as unknown as ReturnType<typeof vi.fn>;
+    expect(winOn).not.toHaveBeenCalled();
+  });
+
+  it("registers nothing on linux", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
+    const win = makeWin();
+
+    registerWindowSessionEndHandler(win);
+
+    const winOn = win.on as unknown as ReturnType<typeof vi.fn>;
+    expect(winOn).not.toHaveBeenCalled();
+  });
+});
