@@ -2,15 +2,26 @@ import fs from "fs/promises";
 import path from "path";
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS } from "./GitHubAuth.js";
-import { REPO_STATS_QUERY, REPO_STATS_AND_PAGE_QUERY } from "./GitHubQueries.js";
+import {
+  REPO_STATS_QUERY,
+  REPO_STATS_AND_PAGE_QUERY,
+  REPO_ACTIVITY_PROBE_QUERY,
+} from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { rateLimitMessage } from "./GitHubErrors.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { getRepoContext, isRepoNotFoundError } from "./GitHubRepoContext.js";
-import { repoContextCache, repoStatsCache, issueListCache, prListCache } from "./GitHubCaches.js";
+import {
+  repoContextCache,
+  repoStatsCache,
+  issueListCache,
+  prListCache,
+  repoActivityProbeCache,
+  repoStatsAndPageSnapshotCache,
+} from "./GitHubCaches.js";
 import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
 import { GitHubFirstPageCache } from "../../../../electron/services/GitHubFirstPageCache.js";
-import type { RepoStats, RepoStatsResult } from "./types.js";
+import type { RepoActivityProbe, RepoStats, RepoStatsResult } from "./types.js";
 import type { GitHubIssue, GitHubPR } from "../../../../shared/types/github.js";
 import { parseIssueNode } from "./GitHubIssues.js";
 import { parsePRNode, buildListCacheKey } from "./GitHubPRs.js";
@@ -155,6 +166,55 @@ export interface RepoStatsAndPageResult {
   error?: string;
 }
 
+type GraphQLClient = NonNullable<ReturnType<typeof GitHubAuth.createClient>>;
+
+/**
+ * Run the cheap {@link REPO_ACTIVITY_PROBE_QUERY} to capture the repo's three
+ * activity timestamps. Returns `null` on any failure — the probe is purely an
+ * optimization, so a failure must silently fall through to the full fetch.
+ */
+async function fetchActivityProbe(
+  client: GraphQLClient,
+  owner: string,
+  repo: string
+): Promise<RepoActivityProbe | null> {
+  try {
+    const result = (await client(REPO_ACTIVITY_PROBE_QUERY, {
+      owner,
+      repo,
+      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+    })) as GraphQlQueryResponseData;
+
+    gitHubRateLimitService.updateFromGraphQL(result);
+
+    const repository = result?.repository;
+    if (!repository) return null;
+
+    const issueNode = (
+      repository.issues as { nodes?: Array<{ updatedAt?: string }> } | undefined
+    )?.nodes?.[0];
+    const prNode = (
+      repository.pullRequests as { nodes?: Array<{ updatedAt?: string }> } | undefined
+    )?.nodes?.[0];
+
+    return {
+      pushedAt: (repository.pushedAt as string | null | undefined) ?? null,
+      issueUpdatedAt: issueNode?.updatedAt ?? null,
+      prUpdatedAt: prNode?.updatedAt ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function activityProbesEqual(a: RepoActivityProbe, b: RepoActivityProbe): boolean {
+  return (
+    a.pushedAt === b.pushedAt &&
+    a.issueUpdatedAt === b.issueUpdatedAt &&
+    a.prUpdatedAt === b.prUpdatedAt
+  );
+}
+
 export async function getRepoStatsAndPage(
   cwd: string,
   bypassCache = false,
@@ -168,6 +228,25 @@ export async function getRepoStatsAndPage(
   const cacheKey = `${context.owner}/${context.repo}`;
   const persistentCache = GitHubStatsCache.getInstance();
   const client = GitHubAuth.createClient();
+
+  const issuesListCacheKey = buildListCacheKey(
+    "issue",
+    context.owner,
+    context.repo,
+    "open",
+    "",
+    "created",
+    ""
+  );
+  const prsListCacheKey = buildListCacheKey(
+    "pr",
+    context.owner,
+    context.repo,
+    "open",
+    "",
+    "created",
+    ""
+  );
 
   if (!client) {
     const diskCached = persistentCache.get(cacheKey);
@@ -214,26 +293,8 @@ export async function getRepoStatsAndPage(
 
   if (!bypassCache) {
     const cachedStats = repoStatsCache.get(cacheKey);
-    const issuesCacheKey = buildListCacheKey(
-      "issue",
-      context.owner,
-      context.repo,
-      "open",
-      "",
-      "created",
-      ""
-    );
-    const prsCacheKey = buildListCacheKey(
-      "pr",
-      context.owner,
-      context.repo,
-      "open",
-      "",
-      "created",
-      ""
-    );
-    const cachedIssues = issueListCache.get(issuesCacheKey);
-    const cachedPRs = prListCache.get(prsCacheKey);
+    const cachedIssues = issueListCache.get(issuesListCacheKey);
+    const cachedPRs = prListCache.get(prsListCacheKey);
     if (cachedStats && cachedIssues && cachedPRs) {
       return {
         stats: cachedStats,
@@ -251,6 +312,44 @@ export async function getRepoStatsAndPage(
         },
         source: "memory-cache",
       };
+    }
+  }
+
+  // Activity-probe gate: when the short-lived memory cache has expired, a cheap
+  // probe (~3 rate-limit points) decides whether the expensive stats query
+  // (~6+ points) is needed at all. If the probe timestamps match the previous
+  // run, nothing the stats query observes can have changed, so the cached
+  // snapshot is re-warmed and returned without the heavy fetch.
+  let probeResult: RepoActivityProbe | null = null;
+  if (!bypassCache) {
+    probeResult = await fetchActivityProbe(client, context.owner, context.repo);
+    if (probeResult) {
+      const lastProbe = repoActivityProbeCache.get(cacheKey);
+      const snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
+      if (lastProbe && snapshot && activityProbesEqual(lastProbe, probeResult)) {
+        const freshStats: RepoStats = { ...snapshot.stats, lastUpdated: Date.now() };
+        repoStatsCache.set(cacheKey, freshStats);
+        issueListCache.set(issuesListCacheKey, {
+          items: snapshot.issues.items,
+          pageInfo: {
+            hasNextPage: snapshot.issues.hasNextPage,
+            endCursor: snapshot.issues.endCursor,
+          },
+        });
+        prListCache.set(prsListCacheKey, {
+          items: snapshot.prs.items,
+          pageInfo: {
+            hasNextPage: snapshot.prs.hasNextPage,
+            endCursor: snapshot.prs.endCursor,
+          },
+        });
+        return {
+          stats: freshStats,
+          issues: { ...snapshot.issues },
+          prs: { ...snapshot.prs },
+          source: "network",
+        };
+      }
     }
   }
 
@@ -328,24 +427,6 @@ export async function getRepoStatsAndPage(
       cwd
     );
 
-    const issuesListCacheKey = buildListCacheKey(
-      "issue",
-      context.owner,
-      context.repo,
-      "open",
-      "",
-      "created",
-      ""
-    );
-    const prsListCacheKey = buildListCacheKey(
-      "pr",
-      context.owner,
-      context.repo,
-      "open",
-      "",
-      "created",
-      ""
-    );
     const issuesPage = {
       items: parsedIssues,
       endCursor: issuesData?.pageInfo?.endCursor ?? null,
@@ -365,6 +446,18 @@ export async function getRepoStatsAndPage(
     prListCache.set(prsListCacheKey, {
       items: prsPage.items,
       pageInfo: { hasNextPage: prsPage.hasNextPage, endCursor: prsPage.endCursor },
+    });
+
+    // Record the snapshot + the probe that preceded this fetch so the next
+    // poll can skip the heavy query if nothing changed. Both are only written
+    // on a successful network fetch — a failed fetch must not advance them.
+    if (probeResult) {
+      repoActivityProbeCache.set(cacheKey, probeResult);
+    }
+    repoStatsAndPageSnapshotCache.set(cacheKey, {
+      stats,
+      issues: issuesPage,
+      prs: prsPage,
     });
 
     return { stats, issues: issuesPage, prs: prsPage, source: "network" };

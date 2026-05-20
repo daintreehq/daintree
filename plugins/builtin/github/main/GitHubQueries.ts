@@ -87,11 +87,14 @@ export const REPO_STATS_AND_PAGE_QUERY = `
   }
 `;
 
+// Fast-changing project health: CI status, latest release, security alerts.
+// The open issue/PR counts are NOT fetched here — they are already retrieved
+// (and cached) by REPO_STATS_AND_PAGE_QUERY, so `getProjectHealth` reads them
+// from `repoStatsCache` instead of duplicating the fetch every poll cycle.
+// The slow-changing merged-PR velocity windows moved to MERGE_VELOCITY_QUERY.
 export const PROJECT_HEALTH_QUERY = `
-  query GetProjectHealth($owner: String!, $repo: String!, $merged60: String!, $merged120: String!, $merged180: String!) {
+  query GetProjectHealth($owner: String!, $repo: String!) {
     repository(owner: $owner, name: $repo) {
-      issues(states: OPEN) { totalCount }
-      pullRequests(states: OPEN) { totalCount }
       defaultBranchRef {
         target {
           ... on Commit {
@@ -110,6 +113,20 @@ export const PROJECT_HEALTH_QUERY = `
         totalCount
       }
     }
+    rateLimit {
+      cost
+      remaining
+      resetAt
+    }
+  }
+`;
+
+// Slow-changing 60/120/180-day merged-PR velocity. Each `search` block is the
+// heaviest GraphQL connection type, so this query runs at most once per cache
+// window (4h / UTC day) instead of every 30s poll — the velocity windows shift
+// on a days timescale, not seconds.
+export const MERGE_VELOCITY_QUERY = `
+  query GetMergeVelocity($merged60: String!, $merged120: String!, $merged180: String!) {
     mergedPRs60: search(query: $merged60, type: ISSUE, first: 1) {
       issueCount
     }
@@ -124,6 +141,33 @@ export const PROJECT_HEALTH_QUERY = `
       remaining
       resetAt
       limit
+    }
+  }
+`;
+
+// Cheap (~3 rate-limit points) change probe. `getRepoStatsAndPage` runs this
+// before the expensive REPO_STATS_AND_PAGE_QUERY (~6+ points): if all three
+// timestamps match the previous probe, nothing the stats query observes can
+// have changed, so the expensive fetch is skipped and the cached snapshot is
+// returned. `repository.updatedAt` is intentionally NOT used — it only
+// advances on repo-metadata edits, not on issue/PR activity. The two
+// `first: 1` connections are ordered by UPDATED_AT and span every state so a
+// close/merge advances the probe just like an open.
+export const REPO_ACTIVITY_PROBE_QUERY = `
+  query GetRepoActivityProbe($owner: String!, $repo: String!) {
+    repository(owner: $owner, name: $repo) {
+      pushedAt
+      issues(first: 1, states: [OPEN, CLOSED], orderBy: {field: UPDATED_AT, direction: DESC}) {
+        nodes { updatedAt }
+      }
+      pullRequests(first: 1, states: [OPEN, CLOSED, MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) {
+        nodes { updatedAt }
+      }
+    }
+    rateLimit {
+      cost
+      remaining
+      resetAt
     }
   }
 `;

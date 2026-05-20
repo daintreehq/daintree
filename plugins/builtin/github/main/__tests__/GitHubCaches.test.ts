@@ -5,6 +5,9 @@ import {
   getETagCacheVersion,
   clearGitHubCaches,
   clearPRCaches,
+  velocityCache,
+  repoActivityProbeCache,
+  repoStatsAndPageSnapshotCache,
 } from "../GitHubCaches.js";
 
 describe("GitHubCaches ETag caches", () => {
@@ -82,5 +85,47 @@ describe("clearGitHubCaches / clearPRCaches symmetry", () => {
     const before = getETagCacheVersion();
     clearGitHubCaches();
     expect(getETagCacheVersion()).toBeGreaterThan(before);
+  });
+});
+
+describe("polling-optimization caches (issue #8757)", () => {
+  beforeEach(() => {
+    velocityCache.clear();
+    repoActivityProbeCache.clear();
+    repoStatsAndPageSnapshotCache.clear();
+  });
+
+  function seedAll(): void {
+    velocityCache.set("owner/repo::velocity::2026-05-20", { 60: 1, 120: 2, 180: 3 });
+    repoActivityProbeCache.set("owner/repo", {
+      pushedAt: "2026-05-20T00:00:00Z",
+      issueUpdatedAt: "2026-05-20T00:00:00Z",
+      prUpdatedAt: "2026-05-20T00:00:00Z",
+    });
+    repoStatsAndPageSnapshotCache.set("owner/repo", {
+      stats: { issueCount: 4, prCount: 5, lastUpdated: 1 },
+      issues: { items: [], endCursor: null, hasNextPage: false, totalCount: 4 },
+      prs: { items: [], endCursor: null, hasNextPage: false, totalCount: 5 },
+    });
+  }
+
+  it("clearGitHubCaches clears the velocity, probe, and snapshot caches", () => {
+    seedAll();
+    clearGitHubCaches();
+    expect(velocityCache.get("owner/repo::velocity::2026-05-20")).toBeUndefined();
+    expect(repoActivityProbeCache.get("owner/repo")).toBeUndefined();
+    expect(repoStatsAndPageSnapshotCache.get("owner/repo")).toBeUndefined();
+  });
+
+  it("clearPRCaches leaves them intact — they only clear on a full GitHub reset", () => {
+    seedAll();
+    clearPRCaches();
+    expect(velocityCache.get("owner/repo::velocity::2026-05-20")).toEqual({
+      60: 1,
+      120: 2,
+      180: 3,
+    });
+    expect(repoActivityProbeCache.get("owner/repo")).not.toBeUndefined();
+    expect(repoStatsAndPageSnapshotCache.get("owner/repo")).not.toBeUndefined();
   });
 });
