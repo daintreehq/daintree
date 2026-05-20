@@ -412,8 +412,8 @@ describe("ResourceProfileService adversarial", () => {
         setEfficiencyFreeze: vi.fn(),
       };
       const { deps } = createDeps({
-        getProjectViewManager: () =>
-          pvm as unknown as ReturnType<ResourceProfileDeps["getProjectViewManager"]>,
+        getAllProjectViewManagers: () =>
+          [pvm] as unknown as ReturnType<ResourceProfileDeps["getAllProjectViewManagers"]>,
       });
       const service = new ResourceProfileService(deps);
       service.start();
@@ -444,8 +444,8 @@ describe("ResourceProfileService adversarial", () => {
         setEfficiencyFreeze: vi.fn(),
       };
       const { deps } = createDeps({
-        getProjectViewManager: () =>
-          pvm as unknown as ReturnType<ResourceProfileDeps["getProjectViewManager"]>,
+        getAllProjectViewManagers: () =>
+          [pvm] as unknown as ReturnType<ResourceProfileDeps["getAllProjectViewManagers"]>,
         getUserCachedViewLimit: () => 3,
       });
       const service = new ResourceProfileService(deps);
@@ -996,8 +996,8 @@ describe("ResourceProfileService adversarial", () => {
         setEfficiencyFreeze: vi.fn(),
       };
       const { deps } = createDeps({
-        getProjectViewManager: () =>
-          pvm as unknown as ReturnType<ResourceProfileDeps["getProjectViewManager"]>,
+        getAllProjectViewManagers: () =>
+          [pvm] as unknown as ReturnType<ResourceProfileDeps["getAllProjectViewManagers"]>,
         getUserCachedViewLimit: () => 4,
       });
       const service = new ResourceProfileService(deps);

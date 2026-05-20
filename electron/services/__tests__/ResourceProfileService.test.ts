@@ -178,6 +178,8 @@ function makeMockPvm(): MockProjectViewManager {
     setCachedViewLimit: vi.fn(),
     setLowMemoryFreeThresholdMb: vi.fn(),
     setEfficiencyFreeze: vi.fn(),
+    setPaintGateTimeoutMs: vi.fn(),
+    setPaintGateHardTimeoutMs: vi.fn(),
   };
 }
 
@@ -413,7 +415,7 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
     expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
 
@@ -434,7 +436,7 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setCachedViewLimit).toHaveBeenCalledWith(1);
 
     service.stop();
@@ -459,7 +461,7 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
 
     // Clear thermal + battery — back to balanced.
@@ -512,7 +514,7 @@ describe("ResourceProfileService", () => {
     // efficiency unfrozen defeats the CPU/timer-wake suppression that
     // efficiency is supposed to provide.
     const deps = createDeps();
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     const service = new ResourceProfileService(deps);
     mockIsOnBatteryPower.mockReturnValue(true);
     service.start();
@@ -698,7 +700,7 @@ describe("ResourceProfileService", () => {
   it("pushes the balanced profile's paint-gate timeouts on start()", () => {
     const deps = createDeps();
     const service = new ResourceProfileService(deps);
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
 
     service.start();
 
@@ -722,7 +724,7 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setPaintGateTimeoutMs).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.paintGateTimeoutMs
     );
@@ -748,7 +750,7 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setPaintGateTimeoutMs).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.paintGateTimeoutMs
     );
