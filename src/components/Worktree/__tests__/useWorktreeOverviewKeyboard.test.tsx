@@ -325,11 +325,7 @@ describe("useWorktreeOverviewKeyboard — stale anchor recovery", () => {
     fireEvent.focus(grid);
     // Filter narrows: f is no longer visible. Anchor ref still points at f.
     rerender(
-      <Harness
-        worktreeIds={["a", "b", "c"]}
-        initialAnchor="f"
-        onSelectRange={onSelectRange}
-      />
+      <Harness worktreeIds={["a", "b", "c"]} initialAnchor="f" onSelectRange={onSelectRange} />
     );
     fireEvent.keyDown(grid, { key: "ArrowRight", shiftKey: true });
     // The hook bootstraps the anchor at the current cell (a) and extends to b.

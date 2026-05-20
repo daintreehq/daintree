@@ -476,10 +476,7 @@ export function WorktreeOverviewModal({
   // (lesson #4729) — only deliberate actions reset it.
   const selectionAnchorRef = useRef<string | null>(null);
 
-  const visibleIds = useMemo(
-    () => filteredWorktrees.map((w) => w.id),
-    [filteredWorktrees]
-  );
+  const visibleIds = useMemo(() => filteredWorktrees.map((w) => w.id), [filteredWorktrees]);
   const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
 
   // Drop selections that are no longer visible (filter narrowed). Anchor is
@@ -518,8 +515,7 @@ export function WorktreeOverviewModal({
       const anchorIdx = visibleIds.indexOf(anchorId);
       const targetIdx = visibleIds.indexOf(targetId);
       if (anchorIdx === -1 || targetIdx === -1) return;
-      const [lo, hi] =
-        anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
+      const [lo, hi] = anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
       setSelectedIds(new Set(visibleIds.slice(lo, hi + 1)));
     },
     [visibleIds]
@@ -624,9 +620,7 @@ export function WorktreeOverviewModal({
       const target = e.target as HTMLElement | null;
       const isEditable =
         !!target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable);
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
       if (isEditable) return;
       e.preventDefault();
       e.stopPropagation();
