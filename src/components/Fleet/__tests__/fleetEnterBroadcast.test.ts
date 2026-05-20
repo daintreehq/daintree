@@ -7,6 +7,11 @@ import {
   resolveFleetBroadcastConfirmation,
 } from "@/store/fleetBroadcastConfirmStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
+import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
+import {
+  useFleetTargetOverridesStore,
+  __resetFleetTargetOverridesStoreForTesting,
+} from "@/store/fleetTargetOverridesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
 import type { TerminalInstance } from "@shared/types";
@@ -70,6 +75,8 @@ beforeEach(() => {
     isActive: false,
     cancelled: false,
   });
+  useFleetResolutionPreviewStore.getState().clear();
+  __resetFleetTargetOverridesStoreForTesting();
   useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
   Object.assign(window, {
     electron: {
@@ -324,5 +331,110 @@ describe("cancelActiveBroadcast", () => {
   it("is a no-op when no broadcast is active", () => {
     expect(() => cancelActiveBroadcast()).not.toThrow();
     expect(useFleetBroadcastProgressStore.getState().isActive).toBe(false);
+  });
+});
+
+describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)", () => {
+  it("threads payload overrides into executeFleetBroadcast", async () => {
+    arm(["a", "b", "c"]);
+    useFleetTargetOverridesStore.getState().setPayloadOverride("b", "custom for b");
+
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    // Override triggers divergence → confirm path. Resolve it.
+    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
+    resolveFleetBroadcastConfirmation();
+    await flush();
+    await flush();
+
+    expect(submitMock).toHaveBeenCalledWith("a", "hello");
+    expect(submitMock).toHaveBeenCalledWith("b", "custom for b");
+    expect(submitMock).toHaveBeenCalledWith("c", "hello");
+  });
+
+  it("excludes skipped targets from the broadcast", async () => {
+    arm(["a", "b", "c"]);
+    useFleetTargetOverridesStore.getState().setSkipped("c", true);
+
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
+    resolveFleetBroadcastConfirmation();
+    await flush();
+    await flush();
+
+    expect(submitMock).toHaveBeenCalledWith("a", "hello");
+    expect(submitMock).toHaveBeenCalledWith("b", "hello");
+    expect(submitMock).not.toHaveBeenCalledWith("c", expect.anything());
+  });
+
+  it("returns true and skips dispatch when every armed target is skipped", () => {
+    arm(["a", "b"]);
+    useFleetTargetOverridesStore.getState().setSkipped("a", true);
+    useFleetTargetOverridesStore.getState().setSkipped("b", true);
+    const onSent = vi.fn();
+    const consumed = tryFleetBroadcastFromEditor("a", "hello", onSent);
+    expect(consumed).toBe(true);
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(onSent).toHaveBeenCalled();
+    expect(useAnnouncerStore.getState().polite?.msg).toMatch(/all targets/i);
+  });
+
+  it("routes through confirm dialog when any override is set", () => {
+    arm(["a", "b"]);
+    useFleetTargetOverridesStore.getState().setPayloadOverride("b", "edited");
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    const pending = useFleetBroadcastConfirmStore.getState().pending;
+    expect(pending).not.toBeNull();
+    expect(pending!.divergence).not.toBeUndefined();
+    expect(pending!.divergence!.targets).toHaveLength(2);
+    expect(pending!.divergence!.targets.find((t) => t.terminalId === "b")?.overridden).toBe(true);
+  });
+
+  it("routes through confirm dialog when any target is skipped", () => {
+    arm(["a", "b"]);
+    useFleetTargetOverridesStore.getState().setSkipped("b", true);
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    const pending = useFleetBroadcastConfirmStore.getState().pending;
+    expect(pending!.divergence?.targets.find((t) => t.terminalId === "b")?.skipped).toBe(true);
+  });
+
+  it("bypasses the confirm dialog when no overrides, skips, or warnings exist", async () => {
+    arm(["a", "b"]);
+    const onSent = vi.fn();
+    tryFleetBroadcastFromEditor("a", "hello", onSent);
+    await flush();
+    // No pending confirm — broadcast fires immediately.
+    expect(useFleetBroadcastConfirmStore.getState().pending).toBeNull();
+    expect(submitMock).toHaveBeenCalledTimes(2);
+    expect(onSent).toHaveBeenCalled();
+  });
+
+  it("re-reads override state inside doSend so late edits take effect", async () => {
+    arm(["a", "b", "c"]);
+    // Start with an override on b (creates divergence → confirm)
+    useFleetTargetOverridesStore.getState().setPayloadOverride("b", "first");
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
+
+    // While the confirm is open, change b's override and add a skip on c.
+    useFleetTargetOverridesStore.getState().setPayloadOverride("b", "final");
+    useFleetTargetOverridesStore.getState().setSkipped("c", true);
+
+    resolveFleetBroadcastConfirmation();
+    await flush();
+    await flush();
+
+    expect(submitMock).toHaveBeenCalledWith("b", "final");
+    expect(submitMock).not.toHaveBeenCalledWith("c", expect.anything());
+  });
+
+  it("clears the overrides store in the finally block after broadcast", async () => {
+    arm(["a", "b"]);
+    useFleetTargetOverridesStore.getState().setPayloadOverride("b", "x");
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    resolveFleetBroadcastConfirmation();
+    await flush();
+    await flush();
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({});
+    expect(useFleetTargetOverridesStore.getState().skippedIds.size).toBe(0);
   });
 });

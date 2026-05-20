@@ -1,11 +1,21 @@
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
-import { requestFleetBroadcastConfirmation } from "@/store/fleetBroadcastConfirmStore";
+import {
+  requestFleetBroadcastConfirmation,
+  type PendingFleetBroadcastTarget,
+} from "@/store/fleetBroadcastConfirmStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
+import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
+import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logWarn } from "@/utils/logger";
 import { getFleetBroadcastWarnings, resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
-import { executeFleetBroadcast, type FleetExecutionResult } from "./fleetExecution";
+import {
+  buildFleetTargetPreviews,
+  executeFleetBroadcast,
+  type FleetExecutionResult,
+  type FleetTargetPreview,
+} from "./fleetExecution";
 
 let activeBroadcastController: AbortController | null = null;
 
@@ -70,21 +80,43 @@ function describeWarnings(text: string): string[] {
   return reasons;
 }
 
+function buildDivergenceTargets(
+  previews: FleetTargetPreview[],
+  payloadOverrides: Record<string, string>,
+  skippedIds: Set<string>
+): PendingFleetBroadcastTarget[] {
+  return previews.map((p) => {
+    const override = payloadOverrides[p.terminalId];
+    const overridden = override !== undefined;
+    return {
+      terminalId: p.terminalId,
+      title: p.title,
+      payload: overridden ? override : p.resolvedPayload,
+      overridden,
+      skipped: skippedIds.has(p.terminalId),
+      unresolvedVars: p.unresolvedVars,
+    };
+  });
+}
+
 /**
  * Enter from a focused armed pane fans the draft out to every armed peer
  * (the "broadcast by default" model). Returns true when the broadcast was
- * either dispatched or queued for confirmation — the caller must skip its
- * single-pane send path. Returns false when the pane isn't in a 2+ fleet,
- * leaving the caller to do its normal per-pane submit.
+ * either dispatched, queued for confirmation, or absorbed because every
+ * armed target was user-skipped — the caller must skip its single-pane
+ * send path. Returns false when the pane isn't in a 2+ fleet, leaving the
+ * caller to do its normal per-pane submit.
  *
  * Followers stay single-pane on Enter — typing in a follower's input bar
  * is the deliberate "send only here" escape hatch and is not advertised
  * in the UI.
  *
- * Per-target recipe-variable resolution is handled by `executeFleetBroadcast`
- * (worktree path, branch name, issue/PR number). Unresolved variables
- * become empty strings rather than blocking the send — the user already
- * saw the per-target diff in the optional pill popover if they cared.
+ * Per-target recipe-variable resolution happens in `executeFleetBroadcast`.
+ * The drafting popover lets the user override any single target's payload
+ * or skip a target outright. Both forms of divergence (plus unresolved
+ * variables) route through a confirm dialog before dispatch so the user
+ * sees the actual per-target content — the silent-fallback comment that
+ * used to live here is gone because we no longer silently fall back.
  */
 export function tryFleetBroadcastFromEditor(
   terminalId: string,
@@ -97,9 +129,69 @@ export function tryFleetBroadcastFromEditor(
   const targets = resolveFleetBroadcastTargetIds();
   if (targets.length === 0) return false;
 
+  // Snapshot the override + skip state at the moment Enter is pressed.
+  // `doSend` will re-read inside the callback so any edits made while a
+  // confirm is open take effect, but the divergence check + dialog body
+  // need a stable view to render against.
+  const overridesState = useFleetTargetOverridesStore.getState();
+  const initialOverrides = { ...overridesState.payloadOverrides };
+  const initialSkipped = new Set(overridesState.skippedIds);
+
+  // All eligible targets skipped → consume the Enter (so the single-pane
+  // send doesn't also fire) without dispatching anything. The popover
+  // already shows every row as skipped so the cause is self-evident; just
+  // announce for screen readers and bail.
+  if (targets.every((id) => initialSkipped.has(id))) {
+    useAnnouncerStore.getState().announce("Broadcast skipped — all targets excluded", "polite");
+    onSent();
+    return true;
+  }
+
+  // Build the previews snapshot for the confirm dialog body. The live
+  // preview store rebuilds reactively on every keystroke; freeze a copy
+  // now so the dialog body doesn't change under the user mid-read.
+  const livePreviews = useFleetResolutionPreviewStore.getState().previews;
+  const previews: FleetTargetPreview[] =
+    livePreviews.length > 0 ? livePreviews : buildFleetTargetPreviews(text);
+
   const reasons = describeWarnings(text);
 
+  const hasOverrides = Object.keys(initialOverrides).length > 0;
+  const hasSkips = initialSkipped.size > 0;
+  const hasUnresolved = previews.some((p) => !p.excluded && p.unresolvedVars.length > 0);
+  const divergent = hasOverrides || hasSkips || hasUnresolved;
+
   const doSend = async () => {
+    // Stale-closure trap (lesson #5087): re-read the overrides store inside
+    // the async callback so edits made while a confirm dialog is open
+    // actually take effect. Reading from the outer scope would silently
+    // drop late edits.
+    const liveOverrides = useFleetTargetOverridesStore.getState();
+    const livePayloadOverrides = { ...liveOverrides.payloadOverrides };
+    const liveSkipped = liveOverrides.skippedIds;
+
+    // Re-resolve targets at execution time so terminals that disarmed
+    // during the confirm pause aren't included.
+    const liveTargets = resolveFleetBroadcastTargetIds().filter((id) => !liveSkipped.has(id));
+    if (liveTargets.length === 0) {
+      useAnnouncerStore
+        .getState()
+        .announce("Broadcast skipped — no eligible targets remain", "polite");
+      return;
+    }
+
+    // Strip overrides for terminals that are no longer in the live target
+    // set (skipped during confirm, or disarmed) so we don't pass dead-key
+    // overrides into executeFleetBroadcast.
+    const effectiveOverrides: Record<string, string> = {};
+    for (const id of liveTargets) {
+      if (id in livePayloadOverrides) {
+        effectiveOverrides[id] = livePayloadOverrides[id]!;
+      }
+    }
+    const overridesArg =
+      Object.keys(effectiveOverrides).length > 0 ? effectiveOverrides : undefined;
+
     // A second Enter while a broadcast is in-flight should pre-empt the
     // first — leaving a stale controller would race two runs against the
     // shared progress store. Abort then take over.
@@ -107,7 +199,12 @@ export function tryFleetBroadcastFromEditor(
     const controller = new AbortController();
     activeBroadcastController = controller;
     try {
-      const result = await executeFleetBroadcast(text, targets, undefined, controller.signal);
+      const result = await executeFleetBroadcast(
+        text,
+        liveTargets,
+        overridesArg,
+        controller.signal
+      );
       if (result.failureCount > 0) {
         logWarn("[fleetEnterBroadcast] broadcast had rejections", {
           failureCount: result.failureCount,
@@ -144,7 +241,7 @@ export function tryFleetBroadcastFromEditor(
         // A successful broadcast clears any stale failure dot on these
         // targets — the partial-failure state from a prior attempt is
         // now resolved.
-        for (const id of targets) useFleetFailureStore.getState().dismissId(id);
+        for (const id of liveTargets) useFleetFailureStore.getState().dismissId(id);
       } else if (result.successCount > 0) {
         // Partial cancel — dispatched batches that succeeded should clear
         // their old failure dots; targets in skipped batches stay as-is.
@@ -167,14 +264,22 @@ export function tryFleetBroadcastFromEditor(
       if (activeBroadcastController === controller) {
         activeBroadcastController = null;
       }
+      // Per-target overrides are ephemeral per-broadcast (#8691 constraint).
+      // Clear them so the next broadcast starts from the resolved defaults.
+      useFleetTargetOverridesStore.getState().clear();
       onSent();
     }
   };
 
-  if (reasons.length > 0) {
+  if (reasons.length > 0 || divergent) {
     void requestFleetBroadcastConfirmation({
       text,
       warningReasons: reasons,
+      divergence: divergent
+        ? {
+            targets: buildDivergenceTargets(previews, initialOverrides, initialSkipped),
+          }
+        : undefined,
     }).then(doSend);
     return true;
   }
