@@ -14,6 +14,17 @@ import {
   type RunData,
 } from "./lib/coldStartAggregate";
 
+// p95 from a tiny sample interpolates between rank n-2 and rank n-1, which is
+// effectively the maximum. With n=5 the rank is 3.8 (80% of max + 20% of #4):
+// statistically meaningless. Suppress the p95 cell in the text report until we
+// have enough samples for the interpolation to land between non-extreme ranks.
+// The raw value is still emitted in --json output for machine consumers.
+const MIN_SAMPLES_FOR_P95 = 20;
+
+function formatP95(stats: { runs: number; p95Ms: number }): string {
+  return stats.runs < MIN_SAMPLES_FOR_P95 ? "n/a (<20 runs)" : formatMs(stats.p95Ms);
+}
+
 interface JsonOutput {
   runs: Array<{
     index: number;
@@ -103,7 +114,7 @@ function renderTextReport(
       phase: label,
       runs: String(stats.runs),
       p50: formatMs(stats.p50Ms),
-      p95: formatMs(stats.p95Ms),
+      p95: formatP95(stats),
       mean: formatMs(stats.meanMs),
       stdDev: formatMs(stats.stdDevMs),
     }));
@@ -120,7 +131,7 @@ function renderTextReport(
       mark: name,
       runs: String(stats.runs),
       p50: formatMs(stats.p50Ms),
-      p95: formatMs(stats.p95Ms),
+      p95: formatP95(stats),
       mean: formatMs(stats.meanMs),
     }));
 
@@ -136,7 +147,7 @@ function renderTextReport(
       channel,
       samples: String(stats.samples),
       p50: formatMs(stats.p50Ms),
-      p95: formatMs(stats.p95Ms),
+      p95: formatP95(stats),
       mean: formatMs(stats.meanMs),
       errors: stats.errorCount > 0 ? String(stats.errorCount) : "",
     }));
@@ -158,7 +169,7 @@ function renderTextReport(
       source: sourceURL,
       frames: String(stats.frames),
       p50: formatMs(stats.p50BlockingMs),
-      p95: formatMs(stats.p95BlockingMs),
+      p95: stats.frames < MIN_SAMPLES_FOR_P95 ? "n/a (<20 frames)" : formatMs(stats.p95BlockingMs),
       total: formatMs(stats.totalBlockingMs),
       warn:
         stats.p95BlockingMs > LOAF_SOURCE_P95_WARN_MS ||
@@ -219,15 +230,19 @@ function renderTextReport(
     const warnMs = OS_TO_APP_BOOT_WARN_MS[platform];
     const exceeds = warnMs !== undefined && agg.osToAppBoot.p95Ms > warnMs;
     const warnLabel = warnMs !== undefined ? `warn p95 > ${warnMs}ms` : "no warn threshold";
+    const osBootRunsCount = agg.osToAppBoot.runs;
     lines.push(`OS-to-app-boot wall-clock — ${platform} (${warnLabel}, warn-only)`);
     lines.push(
       formatTable(
         [
           {
             metric: "os_to_app_boot",
-            runs: String(agg.osToAppBoot.runs),
+            runs: String(osBootRunsCount),
             p50: formatMs(agg.osToAppBoot.p50Ms),
-            p95: formatMs(agg.osToAppBoot.p95Ms),
+            p95:
+              osBootRunsCount < MIN_SAMPLES_FOR_P95
+                ? "n/a (<20 runs)"
+                : formatMs(agg.osToAppBoot.p95Ms),
             mean: formatMs(agg.osToAppBoot.meanMs),
             max: formatMs(agg.osToAppBoot.maxMs),
             warn: exceeds ? "⚠" : "",
@@ -242,6 +257,36 @@ function renderTextReport(
         `::warning::os_to_app_boot_ms p95 ${agg.osToAppBoot.p95Ms}ms exceeds warn-only threshold ${warnMs}ms on ${platform}`
       );
     }
+  }
+
+  if (agg.eventLoopLag) {
+    const lagSamples = agg.eventLoopLag.samples;
+    lines.push(
+      "Event-loop lag (samples emitted only when lag ≥ 100ms after the 5s startup-suppression window)"
+    );
+    lines.push(
+      formatTable(
+        [
+          {
+            metric: "event_loop_lag",
+            samples: String(lagSamples),
+            p50: formatMs(agg.eventLoopLag.p50Ms),
+            p95:
+              lagSamples < MIN_SAMPLES_FOR_P95
+                ? "n/a (<20 samples)"
+                : formatMs(agg.eventLoopLag.p95Ms),
+            mean: formatMs(agg.eventLoopLag.meanMs),
+            max: formatMs(agg.eventLoopLag.maxMs),
+            total: formatMs(agg.eventLoopLag.totalAccumulatedMs),
+          },
+        ],
+        ["metric", "samples", "p50", "p95", "mean", "max", "total"]
+      )
+    );
+    lines.push("");
+  } else {
+    lines.push("Event-loop lag: no samples captured (no stalls ≥ 100ms past startup window)");
+    lines.push("");
   }
 
   return lines.join("\n");
@@ -333,13 +378,15 @@ Requires a packaged binary under release/. Build one first with:
     try {
       const result = await launchPackagedAndMeasure(executablePath, i, { projectRoot });
       const marks = parseNdjson(result.ndjsonPath);
-      const degraded = Boolean(result.notes);
+      // Only true-degraded runs (wall-clock fallback) are excluded from
+      // mark/phase aggregates. A run that fell back from FI → RR still has
+      // valid marks; its `notes` is set but `degraded` is false.
       results.push({
         index: i,
         durationMs: result.durationMs,
         notes: result.notes,
         marks,
-        degraded,
+        degraded: Boolean(result.degraded),
       });
 
       if (!asJson) {

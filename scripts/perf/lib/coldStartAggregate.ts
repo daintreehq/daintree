@@ -55,6 +55,15 @@ export interface OsToAppBootStats {
   maxMs: number;
 }
 
+export interface EventLoopLagStats {
+  samples: number;
+  p50Ms: number;
+  p95Ms: number;
+  meanMs: number;
+  maxMs: number;
+  totalAccumulatedMs: number;
+}
+
 export interface Aggregate {
   marks: Record<string, MarkStats>;
   phaseDurations: Record<string, MarkStats>;
@@ -62,11 +71,30 @@ export interface Aggregate {
   loaf: Record<string, LoafSourceStats>;
   cls: ClsStats | null;
   osToAppBoot: OsToAppBootStats | null;
+  eventLoopLag: EventLoopLagStats | null;
+}
+
+// Vite/Rolldown default chunkFileNames is `[name]-[hash].js`. The hash is 8
+// chars by default and uses one of the supported alphabets — `base64`
+// (URL-safe: A-Z, a-z, 0-9, _, -), `base36` (a-z, 0-9), or `hex` (a-f, 0-9).
+// We accept the union so we don't have to special-case the build mode. The
+// lookahead anchors at the file extension so we only ever strip the trailing
+// hash, never a hash-shaped substring elsewhere in the path. Query strings
+// are preserved. Without normalization, every rebuild rotates the LoAF
+// source key and prevents build-to-build comparison.
+const LOAF_VITE_HASH_RE = /-[A-Za-z0-9_-]{8}(?=\.(?:js|css)(?:\?.*)?$)/;
+
+export function normalizeLoafSourceURL(sourceURL: string): string {
+  if (!sourceURL) return sourceURL;
+  return sourceURL.replace(LOAF_VITE_HASH_RE, "");
 }
 
 export const PHASE_PAIRS: Array<[string, string, string]> = [
-  [PERF_MARKS.APP_BOOT_START, PERF_MARKS.RENDERER_READY, "boot → renderer_ready"],
+  // Headline metric: boot → first_interactive. This is what users perceive as
+  // "the app is usable". renderer_ready (DOM did-finish-load, pre-hydration)
+  // is kept as a sub-phase signal to distinguish hydration cost.
   [PERF_MARKS.APP_BOOT_START, PERF_MARKS.RENDERER_FIRST_INTERACTIVE, "boot → first_interactive"],
+  [PERF_MARKS.APP_BOOT_START, PERF_MARKS.RENDERER_READY, "boot → renderer_ready (pre-hydration)"],
   [PERF_MARKS.SERVICE_INIT_START, PERF_MARKS.SERVICE_INIT_COMPLETE, "service_init"],
   [PERF_MARKS.HYDRATE_START, PERF_MARKS.HYDRATE_COMPLETE, "hydrate"],
   [
@@ -111,6 +139,7 @@ export function aggregate(runs: RunData[]): Aggregate {
   const loafBySource = new Map<string, number[]>();
   const clsValuesPerRun: number[] = [];
   const osToAppBootValues: number[] = [];
+  const eventLoopLagValues: number[] = [];
 
   for (const run of successful) {
     for (const record of run.marks) {
@@ -134,21 +163,37 @@ export function aggregate(runs: RunData[]): Aggregate {
     for (const record of run.marks) {
       if (record.mark === "ipc_request_sample") continue;
 
+      // event_loop_lag carries the lag amount in meta.lagMs (not elapsedMs).
+      // We bucket the lag values directly and skip the generic markElapsed
+      // path, since elapsedMs-since-boot tells us nothing about lag severity.
+      if (record.mark === "event_loop_lag") {
+        const rawLag = record.meta?.lagMs;
+        if (typeof rawLag === "number" && Number.isFinite(rawLag) && rawLag >= 0) {
+          eventLoopLagValues.push(rawLag);
+        }
+        continue;
+      }
+
       // LoAF marks attribute blocking time to the top script's source URL.
       // Boot-window marks are captured (the suppression in longTaskMonitor
       // suppresses logWarn only, not mark emission), so this is full coverage.
       if (record.mark === "renderer_long_animation_frame") {
         const topScripts = record.meta?.topScripts;
         const top = Array.isArray(topScripts) && topScripts.length > 0 ? topScripts[0] : null;
-        const sourceURL =
+        const rawSourceURL =
           top && typeof (top as Record<string, unknown>).sourceURL === "string"
             ? ((top as Record<string, unknown>).sourceURL as string) || "<unknown>"
             : "<unknown>";
+        const sourceURL = normalizeLoafSourceURL(rawSourceURL);
         // `typeof NaN === "number"` is true, so a malformed mark could poison
         // mean/percentile stats. `Number.isFinite` excludes NaN and ±Infinity.
+        // Negatives are clamped to 0 — a real LoAF entry cannot block for a
+        // negative duration; a negative value means malformed meta.
         const rawBlocking = record.meta?.blockingDurationMs;
         const blockingMs =
-          typeof rawBlocking === "number" && Number.isFinite(rawBlocking) ? rawBlocking : 0;
+          typeof rawBlocking === "number" && Number.isFinite(rawBlocking) && rawBlocking >= 0
+            ? rawBlocking
+            : 0;
         const list = loafBySource.get(sourceURL) ?? [];
         list.push(blockingMs);
         loafBySource.set(sourceURL, list);
@@ -172,6 +217,16 @@ export function aggregate(runs: RunData[]): Aggregate {
       }
 
       if (!firstByMark.has(record.mark)) {
+        // Skip malformed records: elapsedMs must be a finite non-negative
+        // number to participate in p50/p95 stats. A null/NaN/string from a
+        // mid-write would otherwise poison the bucket.
+        if (
+          typeof record.elapsedMs !== "number" ||
+          !Number.isFinite(record.elapsedMs) ||
+          record.elapsedMs < 0
+        ) {
+          continue;
+        }
         firstByMark.set(record.mark, record);
         const list = markElapsed.get(record.mark) ?? [];
         list.push(record.elapsedMs);
@@ -253,5 +308,17 @@ export function aggregate(runs: RunData[]): Aggregate {
         }
       : null;
 
-  return { marks, phaseDurations, ipc, loaf, cls, osToAppBoot };
+  const eventLoopLag: EventLoopLagStats | null =
+    eventLoopLagValues.length > 0
+      ? {
+          samples: eventLoopLagValues.length,
+          p50Ms: round(percentile(eventLoopLagValues, 50)),
+          p95Ms: round(percentile(eventLoopLagValues, 95)),
+          meanMs: round(mean(eventLoopLagValues)),
+          maxMs: round(Math.max(...eventLoopLagValues)),
+          totalAccumulatedMs: round(eventLoopLagValues.reduce((a, b) => a + b, 0)),
+        }
+      : null;
+
+  return { marks, phaseDurations, ipc, loaf, cls, osToAppBoot, eventLoopLag };
 }
