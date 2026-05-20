@@ -191,12 +191,18 @@ export const createCorePanelActions = (
       // when no user-visible field changed. `lastStateChange` gates the
       // window-blur badge filter (useTerminalSelectors) and the elapsed-time
       // header display (TerminalHeaderContent) — bumping it on duplicate
-      // events would falsely reset both. See #8592.
+      // events would falsely reset both. `stateChangeTrigger` is included
+      // because the optimistic controller path (TerminalAgentStateController
+      // onEnterPressed) writes `agentState:"working"` with no trigger, then the
+      // backend confirmation arrives with `trigger:"input"`; without comparing
+      // trigger here the confirmation would be suppressed and HybridInputBar
+      // would never see `agentHasLifecycleEvent === true`. See #8592.
       const nextWaitingReason = agentState === "waiting" ? waitingReason : undefined;
       if (
         terminal.agentState === agentState &&
         terminal.error === error &&
-        terminal.waitingReason === nextWaitingReason
+        terminal.waitingReason === nextWaitingReason &&
+        terminal.stateChangeTrigger === trigger
       ) {
         return state;
       }
