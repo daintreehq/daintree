@@ -1,6 +1,7 @@
 import type { GitStatus, StagingFileEntry } from "@shared/types";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { getGitRecoveryHint } from "@shared/utils/gitOperationErrors";
+import { isClientGitError } from "@/utils/clientGitError";
 
 export type DiffMode = "working-tree" | "base-branch";
 
@@ -140,16 +141,21 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
 /**
  * Pulls the divergence-recovery fields off a thrown value. `GitOperationError`
  * promotes `gitReason`/`leaseSha`/`branchName` to top-level fields on the
- * serialized error envelope (`SerializedError`), and the preload's
- * `_unwrappingInvoke` reattaches them onto the reconstructed Error before it
- * reaches the renderer. Each field is runtime-checked before use.
+ * serialized error envelope (`SerializedError`), but Electron's contextBridge
+ * strips own Error properties when the preload's reconstructed error crosses
+ * the preload→renderer realm. The preload encodes the discriminant fields
+ * into a `[GitError|<reason>|<leaseSha>|<branchName>]` message prefix;
+ * {@link isClientGitError} decodes it and side-effects the fields back onto
+ * the error. Same-realm throws (renderer tests, no contextBridge crossing)
+ * fall through to the duck-typed reads below.
  */
 export function readGitErrorFields(err: unknown): {
   gitReason?: GitOperationReason;
   leaseSha?: string;
   branchName?: string;
 } {
-  if (typeof err !== "object" || err === null) return {};
+  if (!(err instanceof Error)) return {};
+  isClientGitError(err);
   const gitReason = Reflect.get(err, "gitReason");
   const leaseSha = Reflect.get(err, "leaseSha");
   const branchName = Reflect.get(err, "branchName");
