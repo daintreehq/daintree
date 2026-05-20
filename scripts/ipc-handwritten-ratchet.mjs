@@ -152,8 +152,12 @@ function main() {
     process.exit(1);
   }
 
-  if (typeof baseline.count !== "number" || baseline.count < 0) {
-    console.error("❌ Invalid baseline: count must be a non-negative number");
+  if (
+    typeof baseline.count !== "number" ||
+    !Number.isFinite(baseline.count) ||
+    baseline.count < 0
+  ) {
+    console.error("❌ Invalid baseline: count must be a finite non-negative number");
     console.error(`   Found: ${JSON.stringify(baseline.count)}`);
     process.exit(1);
   }

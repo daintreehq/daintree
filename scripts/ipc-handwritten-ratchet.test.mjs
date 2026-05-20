@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { countHandWrittenEntries, checkShrinkageGuard } from "./ipc-handwritten-ratchet.mjs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(__dirname, "..");
+const MAPS_FILE = join(REPO_ROOT, "shared", "types", "ipc", "maps.ts");
+const BASELINE_FILE = join(REPO_ROOT, "ipc-handwritten-baseline.json");
 
 const HEADER = 'export interface IpcInvokeMap extends GeneratedIpcInvokeMap {';
 
@@ -94,6 +102,19 @@ describe("countHandWrittenEntries", () => {
   it("throws when the closing brace is missing", () => {
     const source = `${HEADER}\n  "a:one": {\n    args: [];\n    result: void;\n  };\n`;
     expect(() => countHandWrittenEntries(source)).toThrow(/Could not find closing/);
+  });
+
+  it("throws when the marker is split across multiple lines (strict single-line match)", () => {
+    const source = `export interface IpcInvokeMap\n  extends GeneratedIpcInvokeMap {\n  "a:one": { args: []; result: void };\n}\n`;
+    expect(() => countHandWrittenEntries(source)).toThrow(
+      /Could not find IpcInvokeMap interface marker/
+    );
+  });
+
+  it("matches the committed baseline against the real shared/types/ipc/maps.ts", () => {
+    const source = readFileSync(MAPS_FILE, "utf-8");
+    const baseline = JSON.parse(readFileSync(BASELINE_FILE, "utf-8"));
+    expect(countHandWrittenEntries(source)).toBe(baseline.count);
   });
 });
 
