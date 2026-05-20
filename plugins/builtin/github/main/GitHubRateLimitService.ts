@@ -57,6 +57,12 @@ const THROTTLE_BASE_INTERVAL_MS = 30_000;
 // multiplier moves by more than this fraction of its last-notified value.
 const MEANINGFUL_MULTIPLIER_DELTA = 0.05;
 
+// Extra delay past the budget window's reset before the one-shot recovery
+// sweep runs. Covers the PRIMARY_RESET_BUFFER_MS applied to a hard block
+// raised in the same window, so a single timer clears both the throttle and
+// the block.
+const BUDGET_SWEEP_BUFFER_MS = PRIMARY_RESET_BUFFER_MS + 1_000;
+
 interface BlockState {
   kind: GitHubRateLimitKind;
   resumeAt: number;
@@ -144,6 +150,9 @@ class GitHubRateLimitServiceImpl {
   private _lastNotifiedMultiplier = 1;
   // Whether the first budget reading has been pushed to listeners yet.
   private _hasNotifiedBudget = false;
+  // One-shot timer that sweeps stale budget state just after the window
+  // resets, so a stretched cadence doesn't defer throttle recovery.
+  private _budgetResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Register a subscriber that fires on every state transition (entering a
@@ -329,6 +338,7 @@ class GitHubRateLimitServiceImpl {
       };
       this._lastNotifiedMultiplier = MAX_THROTTLE_MULTIPLIER;
       this._hasNotifiedBudget = true;
+      this.scheduleBudgetResetSweep(resetMs);
       this.markBlocked("primary", resetMs + PRIMARY_RESET_BUFFER_MS, "graphql");
       return;
     }
@@ -381,6 +391,38 @@ class GitHubRateLimitServiceImpl {
       this._hasNotifiedBudget = true;
       this._lastNotifiedMultiplier = multiplier;
       this.notifyListeners();
+    }
+
+    // Arm the recovery sweep only while throttling — an un-throttled cadence
+    // polls often enough to refresh budget state on its own.
+    if (engaged) {
+      this.scheduleBudgetResetSweep(resetAt);
+    } else {
+      this.clearBudgetResetTimer();
+    }
+  }
+
+  /**
+   * Arm a one-shot timer that runs {@link autoClearExpired} just after the
+   * GraphQL budget window resets, so the throttle snaps back to baseline
+   * promptly even when a stretched cadence means no GitHub call would
+   * otherwise touch the service for a while.
+   */
+  private scheduleBudgetResetSweep(resetAtMs: number): void {
+    this.clearBudgetResetTimer();
+    const delay = Math.max(0, resetAtMs + BUDGET_SWEEP_BUFFER_MS - Date.now());
+    const timer = setTimeout(() => {
+      this._budgetResetTimer = null;
+      this.autoClearExpired();
+    }, delay);
+    timer.unref?.();
+    this._budgetResetTimer = timer;
+  }
+
+  private clearBudgetResetTimer(): void {
+    if (this._budgetResetTimer) {
+      clearTimeout(this._budgetResetTimer);
+      this._budgetResetTimer = null;
     }
   }
 
@@ -440,6 +482,7 @@ class GitHubRateLimitServiceImpl {
     this._budgetState = null;
     this._lastNotifiedMultiplier = 1;
     this._hasNotifiedBudget = false;
+    this.clearBudgetResetTimer();
     if (this.states.size === 0) {
       // Still surface the cleared budget so consumers snap back to baseline.
       if (hadBudget) this.notifyListeners();
@@ -457,6 +500,7 @@ class GitHubRateLimitServiceImpl {
     this._budgetState = null;
     this._lastNotifiedMultiplier = 1;
     this._hasNotifiedBudget = false;
+    this.clearBudgetResetTimer();
   }
 
   /** Test-only inspector. */
@@ -524,6 +568,7 @@ class GitHubRateLimitServiceImpl {
       this._budgetState = null;
       this._lastNotifiedMultiplier = 1;
       this._hasNotifiedBudget = false;
+      this.clearBudgetResetTimer();
       budgetCleared = true;
     }
 

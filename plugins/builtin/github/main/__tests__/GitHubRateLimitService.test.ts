@@ -382,6 +382,27 @@ describe("GitHubRateLimitService", () => {
 
       expect(listener.mock.calls.length).toBe(callsAfterEngage);
     });
+
+    it("snaps the throttle back when the budget window resets (passive sweep)", () => {
+      vi.useFakeTimers();
+      try {
+        gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+        gitHubRateLimitService.updateFromGraphQL(graphQLData(150, 5000));
+        expect(gitHubRateLimitService._getBudgetStateForTests()?.engaged).toBe(true);
+        listener.mockClear();
+
+        // Advance past the window reset without any further GitHub call — the
+        // one-shot sweep must clear the stale budget on its own.
+        vi.advanceTimersByTime(ONE_HOUR_MS + 60_000);
+
+        expect(gitHubRateLimitService._getBudgetStateForTests()).toBeNull();
+        expect(listener).toHaveBeenCalledWith(
+          expect.objectContaining({ blocked: false, kind: null })
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("computeThrottleMultiplier()", () => {

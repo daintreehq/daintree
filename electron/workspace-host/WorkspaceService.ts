@@ -555,8 +555,8 @@ export class WorkspaceService {
           circuitBreakerThreshold: this.circuitBreakerThreshold,
           gitWatchEnabled: this.gitWatchEnabled,
           gitWatchDebounceMs: this.gitWatchDebounceMs,
-          fetchIntervalActiveMs: this.fetchIntervalActiveMs,
-          fetchIntervalBackgroundMs: this.fetchIntervalBackgroundMs,
+          fetchIntervalActiveMs: this.throttledFetchActiveMs,
+          fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
         });
 
         existingMonitor.ensureWatcherState();
@@ -695,8 +695,8 @@ export class WorkspaceService {
         circuitBreakerThreshold: this.circuitBreakerThreshold,
         gitWatchEnabled: this.gitWatchEnabled,
         gitWatchDebounceMs: this.gitWatchDebounceMs,
-        fetchIntervalActiveMs: this.fetchIntervalActiveMs,
-        fetchIntervalBackgroundMs: this.fetchIntervalBackgroundMs,
+        fetchIntervalActiveMs: this.throttledFetchActiveMs,
+        fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
       },
       {
         onUpdate: (snapshot) => {
@@ -2216,10 +2216,25 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       const baseInterval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
       monitor.updateConfig({
         basePollingInterval: baseInterval,
-        fetchIntervalActiveMs: this.fetchIntervalActiveMs,
-        fetchIntervalBackgroundMs: this.fetchIntervalBackgroundMs,
+        fetchIntervalActiveMs: this.throttledFetchActiveMs,
+        fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
       });
     }
+  }
+
+  /**
+   * Focused-tier fetch interval with the active GitHub rate-limit throttle
+   * folded in. Used everywhere a monitor's fetch cadence is (re)written —
+   * syncMonitors, addNewWorktreeMonitor, updateMonitorConfig — so an unrelated
+   * config push can't silently clobber an in-effect throttle back to baseline.
+   */
+  private get throttledFetchActiveMs(): number {
+    return Math.round(this.fetchIntervalActiveMs * this._lastAppliedThrottleMultiplier);
+  }
+
+  /** Background-tier fetch interval with the active throttle folded in. */
+  private get throttledFetchBackgroundMs(): number {
+    return Math.round(this.fetchIntervalBackgroundMs * this._lastAppliedThrottleMultiplier);
   }
 
   /**

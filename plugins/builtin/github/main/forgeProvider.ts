@@ -48,7 +48,7 @@ const REPO_METADATA_QUERY = `
       licenseInfo { name }
       repositoryTopics(first: 20) { nodes { topic { name } } }
     }
-    rateLimit { cost remaining resetAt }
+    rateLimit { cost remaining resetAt limit }
   }
 `;
 
@@ -83,7 +83,7 @@ const PR_CI_STATUS_QUERY = `
         }
       }
     }
-    rateLimit { cost remaining resetAt }
+    rateLimit { cost remaining resetAt limit }
   }
 `;
 

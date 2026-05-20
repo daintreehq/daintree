@@ -327,9 +327,12 @@ function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
       resetAt: null,
     };
   }
+  // When blocked, force `remaining: 0` — the renderer's GitHub-flavored
+  // projection treats `remaining === 0` as the "blocked" signal, so the exact
+  // (1–50) hard-stop-band count must not leak through as a non-zero value.
   return {
     limit: payload.limit ?? null,
-    remaining: payload.remaining ?? 0,
+    remaining: 0,
     resetAt: payload.resetAt ?? null,
     ...(payload.kind === "secondary" ? { secondaryThrottled: true } : {}),
   };

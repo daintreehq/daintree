@@ -254,4 +254,21 @@ describe("WorkspaceService.applyFetchThrottle", () => {
       });
     }
   });
+
+  it("preserves the active throttle across an unrelated monitor-config push", () => {
+    const a = registerMonitor("/wt/a");
+    service.applyFetchThrottle(4);
+
+    const updateA = vi.spyOn(a, "updateConfig");
+    // A config push that does not touch fetch intervals must still write the
+    // *throttled* cadence — never clobber it back to the raw base.
+    service.updateMonitorConfig({} as any);
+
+    expect(updateA).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fetchIntervalActiveMs: BASE_ACTIVE_MS * 4,
+        fetchIntervalBackgroundMs: BASE_BACKGROUND_MS * 4,
+      })
+    );
+  });
 });
