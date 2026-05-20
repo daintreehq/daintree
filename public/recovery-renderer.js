@@ -137,20 +137,26 @@
     if (!api || !api.recovery) return;
     setAllButtonsDisabled(true);
     setStatus(pendingMessage, false);
-    promiseFactory()
-      .then(function (result) {
-        setStatus(
-          typeof successMessage === "function" ? successMessage(result) : successMessage,
-          false
-        );
-      })
-      .catch(function (err) {
-        var message = err && err.message ? err.message : String(err);
-        setStatus(failurePrefix + ": " + message, true);
-      })
-      .finally(function () {
-        setAllButtonsDisabled(false);
-      });
+    try {
+      promiseFactory()
+        .then(function (result) {
+          setStatus(
+            typeof successMessage === "function" ? successMessage(result) : successMessage,
+            false
+          );
+        })
+        .catch(function (err) {
+          var message = err && err.message ? err.message : String(err);
+          setStatus(failurePrefix + ": " + message, true);
+        })
+        .finally(function () {
+          setAllButtonsDisabled(false);
+        });
+    } catch (err) {
+      setAllButtonsDisabled(false);
+      var message = err && err.message ? err.message : String(err);
+      setStatus(failurePrefix + ": " + message, true);
+    }
   }
 
   document.getElementById("btn-reload").addEventListener("click", function () {
@@ -225,12 +231,18 @@
       if (!api || !api.recovery) return;
       setAllButtonsDisabled(true);
       setStatus("Resetting workspace…", false);
-      try {
-        api.recovery.resetAndReload();
-      } catch (err) {
+      function handleResetFailure(err) {
         setAllButtonsDisabled(false);
         var message = err && err.message ? err.message : String(err);
         setStatus("Failed to reset workspace: " + message, true);
+      }
+      try {
+        var result = api.recovery.resetAndReload();
+        if (result && typeof result.then === "function") {
+          result.catch(handleResetFailure);
+        }
+      } catch (err) {
+        handleResetFailure(err);
       }
     });
   }

@@ -997,6 +997,26 @@ describe("CrashRecoveryService", () => {
       expect(svc.getBackupPanelCount()).toBeNull();
     });
 
+    it("returns null when backup file exists on disk but no crash marker is present", () => {
+      // Defends the cache-only contract: a stale disk backup must never bleed
+      // into the panel count on a fresh boot. cachedBackupSnapshot is only
+      // populated by consumeMarker(), which requires a marker file.
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { terminals: [{ id: "t1", kind: "terminal" }] },
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount()).toBeNull();
+    });
+
     it("returns null when terminals is not an array", () => {
       const backupDir = path.join(userData, "backups");
       fs.mkdirSync(backupDir, { recursive: true });
