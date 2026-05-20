@@ -271,6 +271,18 @@ export function FleetArmingRibbon(): ReactElement | null {
     [setPreviewArmedIds, clearPreviewArmedIds]
   );
 
+  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId) ?? null;
+  usePanelStore((s) => s.panelIds);
+  usePanelStore((s) => s.panelsById);
+
+  const presetCounts = {
+    waitingCurrent: computeArmByStateIds("waiting", "current", activeWorktreeId).length,
+    waitingAll: computeArmByStateIds("waiting", "all", activeWorktreeId).length,
+    workingCurrent: computeArmByStateIds("working", "current", activeWorktreeId).length,
+    workingAll: computeArmByStateIds("working", "all", activeWorktreeId).length,
+    eligibleCurrent: collectEligibleIds("current", activeWorktreeId).length,
+  };
+
   const selectionMenuItems = (
     <>
       <DropdownMenuLabel>Select by state</DropdownMenuLabel>
@@ -281,6 +293,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("waiting", "current"))}
       >
         All waiting — this worktree
+        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+          {presetCounts.waitingCurrent}
+        </span>
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
@@ -289,6 +304,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("waiting", "all"))}
       >
         All waiting — all worktrees
+        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+          {presetCounts.waitingAll}
+        </span>
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
@@ -297,6 +315,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("working", "current"))}
       >
         All working — this worktree
+        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+          {presetCounts.workingCurrent}
+        </span>
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
@@ -305,6 +326,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("working", "all"))}
       >
         All working — all worktrees
+        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+          {presetCounts.workingAll}
+        </span>
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem
@@ -314,6 +338,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewAll("current"))}
       >
         All in this worktree
+        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+          {presetCounts.eligibleCurrent}
+        </span>
       </DropdownMenuItem>
       {armedCount > 0 ? (
         <>
