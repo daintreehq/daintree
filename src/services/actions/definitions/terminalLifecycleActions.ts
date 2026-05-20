@@ -400,7 +400,7 @@ export function registerTerminalLifecycleActions(
       for (const id of state.panelIds) {
         const panel = state.panelsById[id];
         if (!panel) continue;
-        if (!panelKindHasPty(panel.kind)) continue;
+        if (!panel.kind || !panelKindHasPty(panel.kind)) continue;
         if (panel.location === "trash") continue;
         if ("ephemeral" in panel && panel.ephemeral === true) continue;
         const agentState = "agentState" in panel ? panel.agentState : undefined;
