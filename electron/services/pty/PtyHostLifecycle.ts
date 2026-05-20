@@ -41,7 +41,7 @@ import type {
   PtyHostEvent,
   PtyHostRequest,
 } from "../../../shared/types/pty-host.js";
-import { markPerformance } from "../../utils/performance.js";
+import { mainBootAbsMs, markPerformance } from "../../utils/performance.js";
 
 /**
  * Map an authoritative `child-process-gone` reason (Electron 37+) to our CrashType.
@@ -329,6 +329,7 @@ export class PtyHostLifecycle {
           DAINTREE_IS_PACKAGED: app.isPackaged ? "1" : "0",
           DAINTREE_UTILITY_PROCESS_KIND: "pty-host",
           DAINTREE_PERF_FORK_ABS_MS: String(forkAbsMs),
+          DAINTREE_PERF_MAIN_BOOT_ABS_MS: String(mainBootAbsMs),
           // node-pty 1.x hangs intermittently on Linux kernels with io_uring
           // enabled (microsoft/node-pty#630, closed as not planned). The fix
           // is permanent and must be set inside the explicit env object — a

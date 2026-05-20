@@ -14,7 +14,7 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { GitHubAuth } from "./github/GitHubAuth.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { createLogger } from "../utils/logger.js";
-import { markPerformance } from "../utils/performance.js";
+import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../shared/utils/forgeProviderIds.js";
 
@@ -519,6 +519,10 @@ export class WorkspaceHostProcess extends EventEmitter {
           DAINTREE_USER_DATA: app.getPath("userData"),
           DAINTREE_UTILITY_PROCESS_KIND: "workspace-host",
           DAINTREE_PERF_FORK_ABS_MS: String(forkAbsMs),
+          DAINTREE_PERF_MAIN_BOOT_ABS_MS: String(mainBootAbsMs),
+          // Per-instance label so concurrent workspace-host marks (two projects
+          // open) remain distinguishable in the shared NDJSON.
+          DAINTREE_WORKSPACE_SERVICE_NAME: this.serviceName,
         },
       });
     } catch (error) {

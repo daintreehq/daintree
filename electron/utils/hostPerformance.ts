@@ -8,9 +8,16 @@ import type { PerfMarkName } from "../../shared/perf/marks.js";
 // in electron/utils/performance.ts but is safe to import from pty-host.ts and
 // workspace-host.ts — those run in their own UtilityProcess with a distinct
 // `performance.timeOrigin`, so they cannot reuse the main-process `APP_BOOT_T0`
-// constant for elapsed-time math. Instead, `elapsedMs` is measured from the
-// parent's `utilityProcess.fork()` call, anchored via `DAINTREE_PERF_FORK_ABS_MS`
-// (parent's `performance.timeOrigin + performance.now()` at fork time).
+// constant directly. The parent injects two anchor env vars at fork time:
+//   * DAINTREE_PERF_FORK_ABS_MS — `performance.timeOrigin + performance.now()`
+//     captured immediately before `utilityProcess.fork()`. Used for the
+//     fork-relative `sinceForkMs` field.
+//   * DAINTREE_PERF_MAIN_BOOT_ABS_MS — `mainTimeOrigin + APP_BOOT_T0` from the
+//     main process. Used to compute `elapsedMs` on the same boot-relative
+//     timeline as the parent's marks, so cross-process phase analysis (e.g.
+//     `pty_host_fork_dispatched.elapsedMs` vs `pty_host_ready_posted.elapsedMs`)
+//     produces meaningful deltas. Falls back to fork-relative or
+//     `performance.now()` when the anchor is missing.
 
 interface HostMarkPayload {
   mark: PerfMarkName | string;
@@ -25,16 +32,21 @@ const METRICS_FILE = process.env.DAINTREE_PERF_METRICS_FILE
   : null;
 const CAPTURE_ENABLED = SHOULD_CAPTURE && Boolean(METRICS_FILE);
 
-const FORK_ABS_MS_RAW = Number(process.env.DAINTREE_PERF_FORK_ABS_MS ?? "0");
-const FORK_ABS_MS =
-  Number.isFinite(FORK_ABS_MS_RAW) && FORK_ABS_MS_RAW > 0 ? FORK_ABS_MS_RAW : null;
+function readPositiveFiniteEnv(name: string): number | null {
+  const raw = Number(process.env[name] ?? "0");
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+const FORK_ABS_MS = readPositiveFiniteEnv("DAINTREE_PERF_FORK_ABS_MS");
+const MAIN_BOOT_ABS_MS = readPositiveFiniteEnv("DAINTREE_PERF_MAIN_BOOT_ABS_MS");
 
 const PROCESS_KIND = process.env.DAINTREE_UTILITY_PROCESS_KIND ?? null;
+const WORKSPACE_SERVICE_NAME = process.env.DAINTREE_WORKSPACE_SERVICE_NAME ?? null;
 
 /**
  * Compute a Unix-epoch ms wall-clock now() in this utility process. The result
  * matches the parent's `mainTimeOrigin + APP_BOOT_T0 + elapsedSinceBoot` so
- * cross-process subtraction against `DAINTREE_PERF_FORK_ABS_MS` is valid.
+ * cross-process subtraction against the env-injected anchors is valid.
  */
 function nowAbsMs(): number {
   return performance.timeOrigin + performance.now();
@@ -54,11 +66,11 @@ function appendPayload(payload: HostMarkPayload): void {
 /**
  * Emit a perf mark from a utility-process host. Silently no-ops when
  * `DAINTREE_PERF_CAPTURE` is not enabled or `DAINTREE_PERF_METRICS_FILE` is
- * unset, matching the gating in `electron/utils/performance.ts`. The
- * `elapsedMs` field is the wall-clock delta since the parent dispatched
- * `utilityProcess.fork()`, so host marks land on the same timeline as the
- * parent's `pty_host_fork_dispatched` / `workspace_host_fork_dispatched`
- * marks.
+ * unset, matching the gating in `electron/utils/performance.ts`. When the
+ * parent injects `DAINTREE_PERF_MAIN_BOOT_ABS_MS`, `elapsedMs` is the ms
+ * since main-process boot — directly comparable to parent marks. Callers
+ * cannot override the env-derived `processKind`, `sinceForkMs`, or
+ * `workspaceServiceName` meta keys (base wins).
  */
 export function markHostPerformance(
   mark: PerfMarkName | string,
@@ -67,13 +79,25 @@ export function markHostPerformance(
   if (!CAPTURE_ENABLED) return;
 
   const now = nowAbsMs();
-  const elapsedMs = FORK_ABS_MS !== null ? now - FORK_ABS_MS : performance.now();
+
+  let elapsedMs: number;
+  if (MAIN_BOOT_ABS_MS !== null) {
+    elapsedMs = now - MAIN_BOOT_ABS_MS;
+  } else if (FORK_ABS_MS !== null) {
+    elapsedMs = now - FORK_ABS_MS;
+  } else {
+    elapsedMs = performance.now();
+  }
 
   const baseMeta: Record<string, unknown> = {};
   if (PROCESS_KIND) baseMeta.processKind = PROCESS_KIND;
+  if (WORKSPACE_SERVICE_NAME) baseMeta.workspaceServiceName = WORKSPACE_SERVICE_NAME;
   if (FORK_ABS_MS !== null) baseMeta.sinceForkMs = now - FORK_ABS_MS;
 
-  const mergedMeta = { ...baseMeta, ...(meta ?? {}) };
+  // Caller meta spreads FIRST so base meta keys (processKind, sinceForkMs,
+  // workspaceServiceName) are non-overridable — protects the cross-process
+  // identity fields from accidental clobbering.
+  const mergedMeta = { ...(meta ?? {}), ...baseMeta };
 
   const payload: HostMarkPayload = {
     mark,
@@ -95,8 +119,8 @@ export function isHostPerformanceCaptureEnabled(): boolean {
  * is populating the cache directory; `0` on every launch indicates the cache is
  * silently failing (e.g. directory churn from auto-update or packaged-build path
  * changes). The directory uses opaque content-hash filenames so we can only
- * count files — there's no programmatic API for cache hit/miss in Node 22+
- * (`--trace-compile-cache-statistics` is CLI-only).
+ * count directory entries — there's no programmatic API for cache hit/miss in
+ * Node 22+ (`--trace-compile-cache-statistics` is CLI-only).
  */
 export function getCompileCacheMeta(): Record<string, unknown> {
   try {

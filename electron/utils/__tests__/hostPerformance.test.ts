@@ -83,11 +83,12 @@ describe("markHostPerformance", () => {
     expect(state.appendCalls).toHaveLength(0);
   });
 
-  it("appends NDJSON with elapsedMs anchored to fork timestamp", async () => {
+  it("rebases elapsedMs onto main-process boot timeline when MAIN_BOOT_ABS_MS is set", async () => {
     const mod = await loadModule({
       DAINTREE_PERF_CAPTURE: "1",
       DAINTREE_PERF_METRICS_FILE: "/tmp/marks.ndjson",
       DAINTREE_PERF_FORK_ABS_MS: "1000050",
+      DAINTREE_PERF_MAIN_BOOT_ABS_MS: "1000000",
       DAINTREE_UTILITY_PROCESS_KIND: "pty-host",
     });
     expect(mod.isHostPerformanceCaptureEnabled()).toBe(true);
@@ -99,19 +100,57 @@ describe("markHostPerformance", () => {
     const parsed = JSON.parse(state.appendCalls[0].trim());
     expect(parsed.mark).toBe("pty_host_ready_posted");
     // now() = timeOrigin (1_000_000) + perf.now (200) = 1_000_200
-    // elapsedMs = 1_000_200 - 1_000_050 = 150
-    expect(parsed.elapsedMs).toBe(150);
+    // elapsedMs = 1_000_200 - 1_000_000 = 200 (ms since main boot)
+    // sinceForkMs = 1_000_200 - 1_000_050 = 150 (ms since fork)
+    expect(parsed.elapsedMs).toBe(200);
     expect(parsed.meta.processKind).toBe("pty-host");
     expect(parsed.meta.sinceForkMs).toBe(150);
     expect(typeof parsed.timestamp).toBe("string");
   });
 
-  it("merges extra meta with base meta (processKind / sinceForkMs)", async () => {
+  it("falls back to fork-relative elapsedMs when MAIN_BOOT_ABS_MS is missing", async () => {
     const mod = await loadModule({
       DAINTREE_PERF_CAPTURE: "1",
       DAINTREE_PERF_METRICS_FILE: "/tmp/marks.ndjson",
       DAINTREE_PERF_FORK_ABS_MS: "1000050",
+    });
+
+    state.now = 200;
+    mod.markHostPerformance("pty_host_ready_posted");
+    const parsed = JSON.parse(state.appendCalls[0].trim());
+    // No main boot anchor → elapsedMs = absNow - FORK_ABS_MS = 150
+    expect(parsed.elapsedMs).toBe(150);
+    expect(parsed.meta.sinceForkMs).toBe(150);
+  });
+
+  it("base meta wins over caller-provided meta (processKind, sinceForkMs)", async () => {
+    const mod = await loadModule({
+      DAINTREE_PERF_CAPTURE: "1",
+      DAINTREE_PERF_METRICS_FILE: "/tmp/marks.ndjson",
+      DAINTREE_PERF_FORK_ABS_MS: "1000050",
+      DAINTREE_PERF_MAIN_BOOT_ABS_MS: "1000000",
+      DAINTREE_UTILITY_PROCESS_KIND: "pty-host",
+    });
+    state.now = 200;
+    mod.markHostPerformance("pty_host_ready_posted", {
+      processKind: "attacker",
+      sinceForkMs: 9999,
+      otherKey: "preserved",
+    });
+    const parsed = JSON.parse(state.appendCalls[0].trim());
+    expect(parsed.meta.processKind).toBe("pty-host"); // env wins
+    expect(parsed.meta.sinceForkMs).toBe(150); // computed value wins
+    expect(parsed.meta.otherKey).toBe("preserved"); // non-conflicting key kept
+  });
+
+  it("propagates DAINTREE_WORKSPACE_SERVICE_NAME into meta", async () => {
+    const mod = await loadModule({
+      DAINTREE_PERF_CAPTURE: "1",
+      DAINTREE_PERF_METRICS_FILE: "/tmp/marks.ndjson",
+      DAINTREE_PERF_FORK_ABS_MS: "1000050",
+      DAINTREE_PERF_MAIN_BOOT_ABS_MS: "1000000",
       DAINTREE_UTILITY_PROCESS_KIND: "workspace-host",
+      DAINTREE_WORKSPACE_SERVICE_NAME: "daintree-workspace-host:repo-abc12345",
     });
     state.now = 300;
     mod.markHostPerformance("workspace_host_module_eval_complete", {
@@ -120,16 +159,17 @@ describe("markHostPerformance", () => {
     });
     const parsed = JSON.parse(state.appendCalls[0].trim());
     expect(parsed.meta.processKind).toBe("workspace-host");
+    expect(parsed.meta.workspaceServiceName).toBe("daintree-workspace-host:repo-abc12345");
     expect(parsed.meta.compileCacheEnabled).toBe(true);
     expect(parsed.meta.cacheFileCount).toBe(5);
-    expect(parsed.meta.sinceForkMs).toBe(250);
   });
 
-  it("falls back to performance.now when DAINTREE_PERF_FORK_ABS_MS is missing", async () => {
+  it("falls back to performance.now when both anchors are missing", async () => {
     const mod = await loadModule({
       DAINTREE_PERF_CAPTURE: "1",
       DAINTREE_PERF_METRICS_FILE: "/tmp/marks.ndjson",
       DAINTREE_PERF_FORK_ABS_MS: undefined,
+      DAINTREE_PERF_MAIN_BOOT_ABS_MS: undefined,
     });
     state.now = 42;
     mod.markHostPerformance("pty_host_native_module_ready");
@@ -147,7 +187,7 @@ describe("markHostPerformance", () => {
     state.now = 50;
     mod.markHostPerformance("pty_host_ready_posted");
     const parsed = JSON.parse(state.appendCalls[0].trim());
-    // Negative anchor is rejected → falls back to performance.now()
+    // Negative anchor rejected → falls back to performance.now()
     expect(parsed.elapsedMs).toBe(50);
     expect(parsed.meta?.sinceForkMs).toBeUndefined();
   });
