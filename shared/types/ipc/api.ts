@@ -90,7 +90,7 @@ import type {
   PrerequisiteSpec,
   PrerequisiteCheckResult,
 } from "./system.js";
-import type { AppState, HydrateResult } from "./app.js";
+import type { AppState, BootResult, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js";
 import type { EventRecord } from "./events.js";
@@ -378,6 +378,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setState(partialState: Partial<AppState>): Promise<void>;
     getVersion(): Promise<string>;
     hydrate(): Promise<HydrateResult>;
+    boot(): Promise<BootResult>;
     quit(): Promise<void>;
     forceQuit(): Promise<void>;
     resetAndRelaunch(): Promise<void>;
