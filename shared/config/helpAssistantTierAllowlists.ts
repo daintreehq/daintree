@@ -73,6 +73,9 @@ export const ACTION_TIER_ADDONS = [
   "terminal.closeAll",
   "terminal.kill",
   "terminal.killAll",
+  "terminal.moveToDock",
+  "terminal.moveToGrid",
+  "terminal.toggleDock",
   TERMINAL_WAIT_UNTIL_IDLE_TOOL,
 
   "recipe.list",
