@@ -1170,10 +1170,11 @@ export class ProjectViewManager {
     }
 
     // Build pid → privateBytes index from the synchronous app.getAppMetrics()
-    // snapshot. Joined per-view via `webContents.getOSProcessId()` so eviction
-    // can prefer the largest renderer first instead of pure LRU. Views without
-    // a measured pid (process not yet spawned, or metrics missing) sort below
-    // measured ones via the 0 fallback, preserving LRU as the final tiebreak.
+    // snapshot. Joined per-view via `webContents.getOSProcessId()` so the
+    // eviction log line can record each evicted view's footprint. Memory size
+    // does not drive eviction order — the largest renderer is typically the
+    // project the user has been working in, so size-first ordering destroys
+    // the most valuable view. Eviction is pure LRU (see #8602).
     const memoryByPid = new Map<number, number>();
     try {
       for (const proc of app.getAppMetrics()) {
@@ -1183,7 +1184,8 @@ export class ProjectViewManager {
         }
       }
     } catch {
-      // app.getAppMetrics() throwing is non-fatal — fall back to pure LRU below.
+      // app.getAppMetrics() throwing is non-fatal — memoryKb is simply omitted
+      // from the eviction log line below.
     }
     const memoryFor = (entry: ViewEntry): number => {
       const wc = entry.view.webContents;
@@ -1197,14 +1199,10 @@ export class ProjectViewManager {
 
     const evictable = Array.from(this.views.entries())
       .filter(([id]) => id !== this.activeProjectId)
-      // Largest privateBytes first; LRU (oldest first) as tiebreaker so the
-      // existing limit-change/lru ordering still holds when memory data is
-      // unavailable for both candidates.
-      .sort(([, a], [, b]) => {
-        const memDelta = memoryFor(b) - memoryFor(a);
-        if (memDelta !== 0) return memDelta;
-        return a.lastUsed - b.lastUsed;
-      });
+      // Oldest lastUsed first — pure LRU. Sequential switchTo calls stamp
+      // distinct millisecond timestamps so equal-lastUsed ties don't arise
+      // in practice; Array.sort stability handles them deterministically.
+      .sort(([, a], [, b]) => a.lastUsed - b.lastUsed);
 
     // Partition: evict views without active agents first, only fall back to
     // active-agent views when safe candidates are exhausted. This keeps memory

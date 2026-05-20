@@ -354,9 +354,9 @@ describe("ProjectViewManager — eviction safety", () => {
     );
   });
 
-  // ── Memory-sorted eviction (issue #6272) ──
+  // ── LRU eviction with memory logging (issue #8602) ──
 
-  it("evicts the largest-privateBytes cached view first, not the LRU one", async () => {
+  it("evicts the LRU cached view first, not the largest renderer", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
@@ -369,8 +369,9 @@ describe("ProjectViewManager — eviction safety", () => {
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
 
-    // proj-a (oldest LRU) is small; proj-b is the heaviest cached renderer.
-    // Memory-sorted eviction should target proj-b even though proj-a is older.
+    // proj-a is the LRU view but small; proj-b is the heaviest cached renderer
+    // and more recent. Under #8602, size must not promote proj-b ahead of the
+    // LRU pick — proj-a is evicted, the large/recently-used proj-b survives.
     const wcBEntry = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b");
     const wcB = wcBEntry?.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
     mockGetAppMetrics.mockReturnValue([
@@ -381,11 +382,39 @@ describe("ProjectViewManager — eviction safety", () => {
     await managerWithLimit.switchTo("proj-c", "/path/c");
 
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).not.toContain("proj-a");
+    expect(remaining).toContain("proj-b");
+    expect(remaining).toContain("proj-c");
+    expect(wcA.close).toHaveBeenCalled();
+    expect(wcB.close).not.toHaveBeenCalled();
+  });
+
+  it("switching back to a cached view refreshes its LRU stamp", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    // Re-visit proj-a from cache — its lastUsed must be refreshed so it is
+    // no longer the oldest candidate. Without this, the next overflow would
+    // wrongly target proj-a.
+    await managerWithLimit.switchTo("proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-d", "/path/d");
+
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).not.toContain("proj-b");
     expect(remaining).toContain("proj-a");
     expect(remaining).toContain("proj-c");
-    expect(remaining).not.toContain("proj-b");
-    expect(wcA.close).not.toHaveBeenCalled();
-    expect(wcB.close).toHaveBeenCalled();
+    expect(remaining).toContain("proj-d");
   });
 
   it("falls back to LRU when no candidate has measured memory", async () => {
@@ -413,7 +442,7 @@ describe("ProjectViewManager — eviction safety", () => {
     expect(wcA.close).toHaveBeenCalled();
   });
 
-  it("missing-metric views sort below measured ones (LRU as the deeper fallback)", async () => {
+  it("evicts the LRU view even when only some candidates have measured memory", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
@@ -426,9 +455,9 @@ describe("ProjectViewManager — eviction safety", () => {
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
 
-    // Only proj-a has a measured pid. proj-b is unmeasured and should sort
-    // *below* proj-a despite being newer; proj-a (the only measured candidate)
-    // wins eviction priority.
+    // Only proj-a has a measured pid; proj-b is unmeasured. Memory data does
+    // not influence the sort — proj-a is the LRU pick and wins eviction
+    // priority regardless of which side has metrics.
     mockGetAppMetrics.mockReturnValue([
       { pid: wcA.osPid, memory: { privateBytes: 600 * 1024 } },
     ] as unknown as Electron.ProcessMetric[]);
@@ -441,7 +470,7 @@ describe("ProjectViewManager — eviction safety", () => {
     expect(remaining).toContain("proj-c");
   });
 
-  it("active-agent views are still evicted last regardless of memory rank", async () => {
+  it("active-agent views are still evicted last regardless of LRU rank", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
@@ -528,7 +557,7 @@ describe("ProjectViewManager — eviction safety", () => {
     expect(remaining).toContain("proj-c");
   });
 
-  it("evicts in descending privateBytes order when limit shrinks past multiple views", async () => {
+  it("evicts in LRU order when limit shrinks past multiple views", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
@@ -548,8 +577,10 @@ describe("ProjectViewManager — eviction safety", () => {
     const wcC = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-c")?.view
       .webContents as unknown as ReturnType<typeof createMockWebContents>;
 
-    // proj-d is active. Among the cached three (a, b, c), expect c (900) to
-    // evict before a (800), with b (100) surviving once limit drops to 2.
+    // proj-d is active. Among the cached three (a, b, c), LRU order is
+    // a → b → c (a was backgrounded first, c most recently). With the limit
+    // dropping to 2, the two oldest (a, b) evict and proj-c survives,
+    // regardless of their memory footprint.
     mockGetAppMetrics.mockReturnValue([
       { pid: wcA.osPid, memory: { privateBytes: 800 * 1024 } },
       { pid: wcB.osPid, memory: { privateBytes: 100 * 1024 } },
@@ -559,10 +590,19 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.setCachedViewLimit(2);
 
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
-    expect(remaining).toContain("proj-b");
+    expect(remaining).toContain("proj-c");
     expect(remaining).toContain("proj-d");
     expect(remaining).not.toContain("proj-a");
-    expect(remaining).not.toContain("proj-c");
+    expect(remaining).not.toContain("proj-b");
+
+    // Lock in eviction sequence (not just membership): proj-a evicts before
+    // proj-b, matching LRU order. Without this, a reverse-order regression
+    // would still produce the same survivor set and silently pass.
+    const evictionCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.eviction")
+      .map(([, ctx]) => (ctx as { projectId: string }).projectId);
+    expect(evictionCalls).toEqual(["proj-a", "proj-b"]);
   });
 
   it("calls forgetBlinkSample with the evicted webContents id", async () => {
