@@ -57,8 +57,6 @@ import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useFileDecorations } from "@/hooks/useFileDecorations";
 import { useShallow } from "zustand/react/shallow";
-// eslint-disable-next-line no-restricted-imports -- getPRReviewThreads is the only remaining GitHub-specific call; tracked by #8511
-import { githubClient } from "@/clients/githubClient";
 import { systemClient } from "@/clients/systemClient";
 import { forgeClient } from "@/clients/forgeClient";
 import { actionService } from "@/services/ActionService";
@@ -624,30 +622,6 @@ export function ReviewHubContent({
       setSelectedBaseBranchFile(null);
     }
   }, [status?.currentBranch, mainBranch, diffMode]);
-
-  useEffect(() => {
-    if (!isOpen || diffMode !== "base-branch" || !worktreePR?.prNumber || !worktreePath) {
-      if (diffMode !== "base-branch") {
-        setReviewThreadCounts(null);
-      }
-      return;
-    }
-
-    const requestId = ++reviewThreadsRequestRef.current;
-
-    void (async () => {
-      try {
-        const counts = await githubClient.getPRReviewThreads(worktreePath, worktreePR.prNumber!);
-        if (reviewThreadsRequestRef.current === requestId) {
-          setReviewThreadCounts(counts);
-        }
-      } catch {
-        if (reviewThreadsRequestRef.current === requestId) {
-          setReviewThreadCounts(null);
-        }
-      }
-    })();
-  }, [isOpen, diffMode, worktreePR?.prNumber, worktreePath]);
 
   // Classify push failures via the active forge provider (lives in main).
   // Provider-agnostic: surfaces a stable error code and the provider id used

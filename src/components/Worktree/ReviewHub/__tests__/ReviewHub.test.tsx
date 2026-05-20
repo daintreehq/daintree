@@ -124,7 +124,7 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 }));
 
 vi.mock("@/clients/githubClient", () => ({
-  githubClient: { openPR: openPRMock, getPRReviewThreads: vi.fn().mockResolvedValue({}) },
+  githubClient: { openPR: openPRMock },
 }));
 
 vi.mock("@/clients/systemClient", () => ({
