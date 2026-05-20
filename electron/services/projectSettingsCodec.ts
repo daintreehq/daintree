@@ -159,7 +159,8 @@ function decodeFleetSavedScopes(raw: unknown): FleetSavedScope[] | undefined {
     const usageHistory = Array.isArray(o.usageHistory)
       ? o.usageHistory.filter((t): t is number => typeof t === "number" && Number.isFinite(t))
       : undefined;
-    const usageHistoryFiltered = usageHistory && usageHistory.length > 0 ? usageHistory : undefined;
+    const usageHistoryFiltered =
+      usageHistory && usageHistory.length > 0 ? usageHistory.slice(-20) : undefined;
 
     if (o.kind === "snapshot") {
       if (!Array.isArray(o.terminalIds)) continue;
