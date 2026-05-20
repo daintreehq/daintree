@@ -36,7 +36,6 @@ import { startAppMetricsMonitor } from "../services/ProcessMemoryMonitor.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
-import { exposeGc } from "../setup/environment.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/handlers.js";
@@ -421,11 +420,6 @@ export async function initGlobalServices(
               await session.defaultSession.clearStorageData({
                 storages: ["shadercache", "cachestorage"],
               });
-            } catch {
-              /* non-critical */
-            }
-            try {
-              exposeGc?.();
             } catch {
               /* non-critical */
             }
