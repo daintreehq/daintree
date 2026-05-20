@@ -3,11 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "events";
 import { Readable } from "node:stream";
 
-const { forkMock, mockChildren, loggerCalls } = vi.hoisted(() => {
+const { forkMock, mockChildren, loggerCalls, appMock } = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { EventEmitter } = require("events") as typeof import("events");
   const forkMock = vi.fn();
   const mockChildren: any[] = [];
   const loggerCalls: { level: "info" | "warn"; message: string }[] = [];
-  return { forkMock, mockChildren, loggerCalls };
+  const appEmitter = new EventEmitter();
+  const appMock = Object.assign(appEmitter, {
+    getPath: vi.fn(() => "/tmp/userData"),
+  });
+  return { forkMock, mockChildren, loggerCalls, appMock };
 });
 
 class MockUtilityChild extends EventEmitter {
@@ -29,9 +35,7 @@ vi.mock("electron", () => ({
   utilityProcess: {
     fork: forkMock,
   },
-  app: {
-    getPath: vi.fn(() => "/tmp/userData"),
-  },
+  app: appMock,
   UtilityProcess: class {},
   MessagePortMain: class {},
 }));
@@ -62,6 +66,7 @@ describe("WorkspaceHostProcess", () => {
     forkMock.mockReset();
     mockChildren.length = 0;
     loggerCalls.length = 0;
+    appMock.removeAllListeners();
     forkMock.mockImplementation(() => new MockUtilityChild());
   });
 
@@ -249,6 +254,7 @@ describe("WorkspaceHostProcess BrokerError contract", () => {
     forkMock.mockReset();
     mockChildren.length = 0;
     loggerCalls.length = 0;
+    appMock.removeAllListeners();
     forkMock.mockImplementation(() => new MockUtilityChild());
   });
 
@@ -442,7 +448,7 @@ describe("WorkspaceHostProcess BrokerError contract", () => {
   });
 
   it("restart delay has random jitter (full-jitter parity with PtyHostLifecycle)", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setImmediate", "Date"] });
     // Mock Math.random to control jitter
     const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
 
@@ -457,12 +463,15 @@ describe("WorkspaceHostProcess BrokerError contract", () => {
     child.emit("message", { type: "ready" });
     child.emit("exit", 1);
 
-    // restartAttempts = 1, cap = min(1000*2^1, 10000) = 2000
+    // After one crash: crashTimestamps.length=1, cap = min(1000*2^1, 10000) = 2000
     // delay = 100 + 0.5 * (2000 - 100) = 100 + 950 = 1050
     const restartSpy = vi.fn();
     host.on("restarted", restartSpy);
 
-    vi.advanceTimersByTime(1050);
+    // Flush the setImmediate that defers crash classification
+    await vi.advanceTimersByTimeAsync(0);
+    // Then advance through the restart delay
+    await vi.advanceTimersByTimeAsync(1050);
     expect(restartSpy).toHaveBeenCalledTimes(1);
 
     // Auto-restart created a new readyPromise; swallow its rejection on dispose
@@ -473,7 +482,7 @@ describe("WorkspaceHostProcess BrokerError contract", () => {
   });
 
   it("auto-restart does not emit 'restarted' when fork fails", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setImmediate", "Date"] });
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {
       maxRestartAttempts: 3,
@@ -496,9 +505,10 @@ describe("WorkspaceHostProcess BrokerError contract", () => {
 
     child.emit("exit", 1);
 
-    // Advance past the restart delay
+    // Flush setImmediate then advance past the restart delay
+    await vi.advanceTimersByTimeAsync(0);
     const cap = Math.min(1000 * Math.pow(2, 1), 10000); // 2000
-    vi.advanceTimersByTime(cap + 100);
+    await vi.advanceTimersByTimeAsync(cap + 100);
 
     expect(restartSpy).not.toHaveBeenCalled();
     expect(crashSpy).toHaveBeenCalled();
@@ -545,5 +555,362 @@ describe("WorkspaceHostProcess BrokerError contract", () => {
 
     host.dispose();
     vi.useRealTimers();
+  });
+});
+
+// ── Sliding-window crash guard (regression #8553) ──
+
+describe("WorkspaceHostProcess crash window", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    forkMock.mockReset();
+    mockChildren.length = 0;
+    loggerCalls.length = 0;
+    appMock.removeAllListeners();
+    forkMock.mockImplementation(() => new MockUtilityChild());
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setImmediate", "Date"] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("ready does NOT reset the crash window (regression #8553)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    // Crash 1
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).crashTimestamps).toHaveLength(1);
+
+    // Auto-restart fires
+    host.waitForReady().catch(() => {});
+    await vi.advanceTimersByTimeAsync(2_001);
+    const child2 = mockChildren[1] as MockUtilityChild;
+
+    // New host becomes ready — under the OLD bug, this would reset the
+    // crash counter to zero. Under the new sliding-window guard, the
+    // history must persist.
+    child2.emit("message", { type: "ready" });
+    expect((host as any).crashTimestamps).toHaveLength(1);
+
+    host.dispose();
+  });
+
+  it("emits host-crash on three crashes within the window (with intervening ready)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const crashSpy = vi.fn();
+    host.on("host-crash", crashSpy);
+
+    // Crash 1 — ready then crash
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_001);
+    expect((host as any).crashTimestamps).toHaveLength(1);
+    expect(crashSpy).not.toHaveBeenCalled();
+
+    // Crash 2 — ready then crash again (regression: this used to reset
+    // crashTimestamps to zero via the `ready` case)
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(4_001);
+    expect((host as any).crashTimestamps).toHaveLength(2);
+    expect(crashSpy).not.toHaveBeenCalled();
+
+    // Crash 3 — threshold reached, no further restart, host-crash emitted
+    const child3 = mockChildren[2] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child3.emit("message", { type: "ready" });
+    child3.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).crashTimestamps).toHaveLength(3);
+    expect(crashSpy).toHaveBeenCalledWith(1);
+
+    host.dispose();
+  });
+
+  it("stability timer clears the crash window after a quiet interval", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).crashTimestamps).toHaveLength(1);
+
+    // Auto-restart fires and host comes up; ready arms a fresh stability timer
+    host.waitForReady().catch(() => {});
+    await vi.advanceTimersByTimeAsync(2_001);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    child2.emit("message", { type: "ready" });
+
+    // Crash entry must survive immediately after ready
+    expect((host as any).crashTimestamps).toHaveLength(1);
+
+    // After STABILITY_TIMEOUT_MS of clean running, the window is cleared
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect((host as any).crashTimestamps).toHaveLength(0);
+
+    host.dispose();
+  });
+
+  it("stability timer from a prior ready is cancelled on crash", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "ready" });
+
+    // Run almost to the stability deadline, then crash. The stability timer
+    // is now ~100ms from firing; if it weren't cancelled it would wipe the
+    // crash window AFTER the crash, defeating the three-strike guard.
+    await vi.advanceTimersByTimeAsync(299_900);
+    child.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).crashTimestamps).toHaveLength(1);
+
+    // Advance past the stale deadline — the crash entry must survive
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((host as any).crashTimestamps).toHaveLength(1);
+
+    host.dispose();
+  });
+
+  it("crashes spread beyond the window decay out", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    // Crash 1
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).crashTimestamps).toHaveLength(1);
+
+    // Restart fires; advance well past the window (6 minutes)
+    host.waitForReady().catch(() => {});
+    await vi.advanceTimersByTimeAsync(2_001);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    child2.emit("message", { type: "ready" });
+    // Advance well past the 5-min window — the stability timer fires at
+    // exactly 5min, which clears the window. After this point, any new
+    // crash starts fresh.
+    await vi.advanceTimersByTimeAsync(360_000);
+    expect((host as any).crashTimestamps).toHaveLength(0);
+
+    // A subsequent crash gets a fresh budget
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).crashTimestamps).toHaveLength(1);
+
+    host.dispose();
+  });
+
+  it("manualRestart clears the crash window so a fresh budget is given", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    // Two rapid crashes — short of the threshold
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_001);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).crashTimestamps).toHaveLength(2);
+    expect((host as any).child).toBeNull();
+
+    // User intervenes with manualRestart — clears window + pending stability timer
+    host.manualRestart();
+    host.waitForReady().catch(() => {});
+    expect((host as any).crashTimestamps).toHaveLength(0);
+    expect((host as any).restartTimer).toBeNull();
+
+    host.dispose();
+  });
+
+  it("child-process-gone with matching serviceName captures reason", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "ready" });
+
+    // Simulate Electron 37-41 race: child-process-gone arrives BEFORE exit
+    appMock.emit(
+      "child-process-gone",
+      {} as Electron.Event,
+      {
+        type: "Utility",
+        name: "daintree-workspace-host:project",
+        reason: "oom",
+        exitCode: 137,
+      } as Electron.Details
+    );
+
+    // The handler should have captured the reason
+    expect((host as any).pendingChildProcessGoneReason).toEqual({
+      reason: "oom",
+      exitCode: 137,
+    });
+
+    const crashSpy = vi.fn();
+    host.on("host-crash", crashSpy);
+
+    // To trigger host-crash on first exit, fill the crash window
+    (host as any).crashTimestamps = [Date.now() - 1000, Date.now() - 500];
+
+    child.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // host-crash uses the authoritative exitCode 137, not the exit event's 1
+    expect(crashSpy).toHaveBeenCalledWith(137);
+
+    host.dispose();
+  });
+
+  it("child-process-gone with non-matching serviceName is ignored", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    appMock.emit(
+      "child-process-gone",
+      {} as Electron.Event,
+      {
+        type: "Utility",
+        name: "daintree-workspace-host:some-other-project",
+        reason: "oom",
+        exitCode: 137,
+      } as Electron.Details
+    );
+
+    expect((host as any).pendingChildProcessGoneReason).toBeNull();
+
+    host.dispose();
+  });
+
+  it("child-process-gone with non-Utility type is ignored", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    appMock.emit(
+      "child-process-gone",
+      {} as Electron.Event,
+      {
+        type: "Tab",
+        name: "daintree-workspace-host:project",
+        reason: "crashed",
+        exitCode: 1,
+      } as unknown as Electron.Details
+    );
+
+    expect((host as any).pendingChildProcessGoneReason).toBeNull();
+
+    host.dispose();
+  });
+
+  it("dispose removes the child-process-gone listener", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    expect(appMock.listenerCount("child-process-gone")).toBe(1);
+
+    host.dispose();
+
+    expect(appMock.listenerCount("child-process-gone")).toBe(0);
+  });
+
+  it("each WorkspaceHostProcess instance registers its own listener (isolation across projects)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const hostA = new WorkspaceHostProcess("/tmp/projectA", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    hostA.waitForReady().catch(() => {});
+    const hostB = new WorkspaceHostProcess("/tmp/projectB", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    hostB.waitForReady().catch(() => {});
+
+    expect(appMock.listenerCount("child-process-gone")).toBe(2);
+
+    // Emit a gone event matching hostA's serviceName only
+    appMock.emit(
+      "child-process-gone",
+      {} as Electron.Event,
+      {
+        type: "Utility",
+        name: "daintree-workspace-host:projectA",
+        reason: "oom",
+        exitCode: 137,
+      } as Electron.Details
+    );
+
+    expect((hostA as any).pendingChildProcessGoneReason).toEqual({
+      reason: "oom",
+      exitCode: 137,
+    });
+    // hostB must NOT have captured the reason (cross-instance isolation)
+    expect((hostB as any).pendingChildProcessGoneReason).toBeNull();
+
+    hostA.dispose();
+    hostB.dispose();
   });
 });
