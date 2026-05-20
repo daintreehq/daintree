@@ -30,6 +30,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["agent-capabilities:is-agent-enabled"]["args"]
     ): Promise<IpcInvokeMap["agent-capabilities:is-agent-enabled"]["result"]>;
   };
+  cli: {
+    getStatus(
+      ...args: IpcInvokeMap["cli:get-status"]["args"]
+    ): Promise<IpcInvokeMap["cli:get-status"]["result"]>;
+    install(
+      ...args: IpcInvokeMap["cli:install"]["args"]
+    ): Promise<IpcInvokeMap["cli:install"]["result"]>;
+  };
   clipboard: {
     readSelection(
       ...args: IpcInvokeMap["clipboard:read-selection"]["args"]
