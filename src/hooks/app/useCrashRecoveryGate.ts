@@ -55,8 +55,21 @@ export function useCrashRecoveryGate(boot: AppBootState): {
       const suspectCount = (pending.panels ?? []).filter((p) => p.isSuspect).length;
       const crashCount = pending.crashCount ?? 0;
       const allPanelIds = (pending.panels ?? []).map((p) => p.id);
-      window.electron.crashRecovery
-        .resolve({ kind: "restore", panelIds: allPanelIds })
+      // Guard against a malformed bridge that throws synchronously off
+      // window.electron.crashRecovery.resolve — still close the span and fall
+      // back to state: 'none' so the gate doesn't deadlock the loading screen.
+      let restorePromise: Promise<void>;
+      try {
+        restorePromise = window.electron.crashRecovery.resolve({
+          kind: "restore",
+          panelIds: allPanelIds,
+        });
+      } catch {
+        done();
+        setState({ status: "none" });
+        return;
+      }
+      restorePromise
         .then(() => {
           done();
           useRestoreConfirmationStore
