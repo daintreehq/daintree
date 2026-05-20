@@ -202,11 +202,12 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // preview is unmistakable but doesn't squat on the focus anchor color.
   const isFleetPreviewed = useFleetArmingStore((s) => s.previewArmedIds.has(id));
   // Dim panes that are NOT in the active preview set so matched panes
-  // stand out. Active = preview set is non-empty AND this pane is missing
-  // from it. Two .has() checks on the existing Set — primitive boolean
-  // selector, no derived collection, no extra store state.
+  // stand out. Gated on kind === "terminal" so browser, dev-preview, and
+  // other non-fleet panels (which are never in previewArmedIds) stay at
+  // full opacity — dimming them would imply they could have been armed.
+  // Primitive boolean selector — no derived collection, no extra state.
   const isFleetPreviewDimmed = useFleetArmingStore(
-    (s) => s.previewArmedIds.size > 0 && !s.previewArmedIds.has(id)
+    (s) => kind === "terminal" && s.previewArmedIds.size > 0 && !s.previewArmedIds.has(id)
   );
 
   // One-shot ring pulse when this pane becomes the new primary on fleet

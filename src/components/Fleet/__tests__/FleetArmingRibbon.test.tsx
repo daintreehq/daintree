@@ -95,6 +95,7 @@ function resetStores() {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
+    previewArmedIds: new Set<string>(),
   });
   useFleetPendingActionStore.setState({ pending: null });
   useFleetBroadcastConfirmStore.setState({ pending: null });
