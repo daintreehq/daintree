@@ -3,6 +3,7 @@ import type { EditorView } from "@codemirror/view";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
+import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 
 interface UseFleetMirrorParams {
   editorViewRef: React.RefObject<EditorView | null>;
@@ -58,10 +59,13 @@ export function useFleetMirror({
     }
   }, [externalDraft, isFleetFollower, value]);
 
-  // Clear resolution preview when not primary or disabled
+  // Clear resolution preview when not primary or disabled. Per-target
+  // overrides (#8691) ride alongside — they're ephemeral per-broadcast and
+  // shouldn't survive disarm or focus moves to a non-primary pane.
   useEffect(() => {
     if (!isFleetPrimary || disabled) {
       useFleetResolutionPreviewStore.getState().clear();
+      useFleetTargetOverridesStore.getState().clear();
     }
   }, [isFleetPrimary, disabled]);
 

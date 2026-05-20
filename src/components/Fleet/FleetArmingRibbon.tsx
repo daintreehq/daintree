@@ -466,12 +466,27 @@ export function FleetArmingRibbon(): ReactElement | null {
 
   const exitChordLabel = isMac() ? "⌘Esc" : "Ctrl+Esc";
 
-  // When a destructive broadcast (paste or Enter) is pending, the right-side
-  // controls collapse to the confirm question so we keep one ribbon row
-  // instead of stacking a second strip below. Per-pane red dots (PanelHeader)
-  // still carry per-target failure state; the `FleetFailureBanner` below
-  // adds the Tier-2 multi-terminal surface with the retry action.
-  const isBroadcastConfirmActive = pendingBroadcast !== null;
+  // Two confirm shapes share the same pending entry:
+  //   - warnings-only (destructive/multi-line/byte-limit) → inline ribbon
+  //     strip with a single warning sentence — fast, low-friction. The
+  //     right-side controls collapse to the confirm question so we keep one
+  //     ribbon row instead of stacking a second strip below. Per-pane red
+  //     dots (PanelHeader) still carry per-target failure state; the
+  //     `FleetFailureBanner` below adds the Tier-2 multi-terminal surface
+  //     with the retry action.
+  //   - divergence (per-target overrides, skips, unresolved vars) →
+  //     ConfirmDialog modal with a scrollable per-target preview so the
+  //     user sees exactly what each terminal will receive (D2 from
+  //     CLAUDE.md, #8691). The modal also folds in any warning reasons.
+  const isDivergenceConfirmActive =
+    pendingBroadcast !== null && pendingBroadcast.divergence !== undefined;
+  const isBroadcastConfirmActive = pendingBroadcast !== null && !isDivergenceConfirmActive;
+
+  const divergenceTargets = pendingBroadcast?.divergence?.targets ?? [];
+  const activeDivergenceTargets = divergenceTargets.filter((t) => !t.skipped && !t.excluded);
+  const divergenceConfirmDescription = pendingBroadcast?.warningReasons.length
+    ? `${pendingBroadcast.warningReasons.join(", ")}. Review what each target will receive.`
+    : "Per-target payloads diverge from your draft. Review what each target will receive.";
 
   return (
     <div data-testid="fleet-arming-ribbon-group">
@@ -494,6 +509,71 @@ export function FleetArmingRibbon(): ReactElement | null {
         onClose={() => setPendingDeleteFleetId(null)}
       />
       <FleetFailureBanner />
+      <ConfirmDialog
+        isOpen={isDivergenceConfirmActive}
+        variant={
+          pendingBroadcast?.warningReasons.some((r) => r.startsWith("destructive"))
+            ? "destructive"
+            : "default"
+        }
+        title={`Send broadcast to ${activeDivergenceTargets.length}?`}
+        description={divergenceConfirmDescription}
+        confirmLabel="Send broadcast"
+        onConfirm={confirmPendingBroadcast}
+        onClose={cancelPendingBroadcast}
+      >
+        <ul
+          data-testid="fleet-divergence-preview-list"
+          className="max-h-[280px] overflow-y-auto rounded border border-daintree-border bg-tint/[0.03]"
+        >
+          {divergenceTargets.map((t) => (
+            <li
+              key={t.terminalId}
+              data-testid="fleet-divergence-preview-row"
+              data-skipped={t.skipped ? "true" : undefined}
+              className={cn(
+                "border-b border-daintree-border/40 px-2 py-1.5 text-[11px] last:border-b-0",
+                t.skipped && "opacity-50"
+              )}
+            >
+              <div className="flex items-center gap-1.5 font-medium text-daintree-text/80">
+                <span className={cn("truncate", t.skipped && "line-through")}>{t.title}</span>
+                {t.skipped && (
+                  <span className="ml-auto shrink-0 text-[10px] text-daintree-text/50">
+                    Skipped
+                  </span>
+                )}
+                {t.overridden && !t.skipped && (
+                  <span className="ml-auto shrink-0 text-[10px] text-category-amber-text">
+                    Edited
+                  </span>
+                )}
+              </div>
+              {!t.skipped && (
+                <div className="mt-0.5 leading-relaxed break-all text-daintree-text">
+                  {t.payload === "" ? (
+                    <span className="text-daintree-text/40">(empty)</span>
+                  ) : (
+                    t.payload
+                  )}
+                </div>
+              )}
+              {!t.skipped && t.unresolvedVars.length > 0 && (
+                <div className="mt-0.5 flex flex-wrap gap-1">
+                  {t.unresolvedVars.map((v) => (
+                    <span
+                      key={v}
+                      className="inline-flex items-center rounded-full px-1.5 py-px text-[9px] bg-category-rose-subtle text-category-rose-text"
+                    >
+                      {`{{${v}}}`} unresolved
+                    </span>
+                  ))}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      </ConfirmDialog>
       <AnimatePresence initial={false}>
         <m.div
           ref={ribbonRef}

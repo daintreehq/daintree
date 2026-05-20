@@ -1,20 +1,57 @@
 import { create } from "zustand";
 
 /**
- * Single in-flight broadcast that's waiting for the user to confirm
- * (destructive command, multi-line, or over-byte payload). Fed by both
- * the live-paste path and the Enter-broadcast path. The fleet ribbon
- * subscribes and renders the confirm controls in-place.
+ * Frozen per-target snapshot rendered in the divergence confirm dialog.
+ * The popover's live preview store rebuilds on every keystroke, so we
+ * snapshot the values at confirm-request time to keep the dialog body
+ * stable while the user reads it.
+ */
+export interface PendingFleetBroadcastTarget {
+  terminalId: string;
+  title: string;
+  /** The text that will actually be submitted to this terminal. */
+  payload: string;
+  /** True when the user explicitly overrode this target's payload. */
+  overridden: boolean;
+  /** True when the user veto-skipped this target in the popover. */
+  skipped: boolean;
+  /**
+   * True when the target was excluded by eligibility at snapshot time
+   * (PTY exited, panel disposed). Rendered in the dialog as context, never
+   * counted in the active-target tally, never submitted.
+   */
+  excluded: boolean;
+  /** Variables in the draft that couldn't be resolved for this target. */
+  unresolvedVars: string[];
+}
+
+/**
+ * Single in-flight broadcast that's waiting for the user to confirm.
+ * Two paths feed it:
+ *   - Pattern-based warnings (destructive command, multi-line, over-byte) —
+ *     renders as an inline ribbon strip via `warningReasons`.
+ *   - Per-target divergence (overrides set, skips set, unresolved vars) —
+ *     renders as a ConfirmDialog modal via `divergence.targets`.
+ * Both can be present at once; the divergence dialog takes precedence and
+ * folds the warnings into its description.
  *
- * Lives outside the ribbon's local state so any caller (paste handler,
- * input bar, future scriptable broadcasts) can request a confirm without
- * a callback prop chain.
+ * Lives outside ribbon-local state so any caller (paste handler, input bar,
+ * future scriptable broadcasts) can request a confirm without a callback
+ * prop chain.
  */
 export interface PendingFleetBroadcast {
   requestId: string;
   text: string;
   /** Human-readable warnings to surface in the confirm prompt. */
   warningReasons: string[];
+  /**
+   * When set, the broadcast diverges from the user's typed text and the
+   * confirm should show a per-target preview. Absent on warnings-only
+   * confirms (existing destructive/multi-line/byte-limit path).
+   */
+  divergence?: {
+    targets: PendingFleetBroadcastTarget[];
+  };
 }
 
 interface FleetBroadcastConfirmState {

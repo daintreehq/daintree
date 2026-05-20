@@ -38,8 +38,42 @@ describe("fleetBroadcastConfirmStore", () => {
       expect(parsed.requestId).toBeTypeOf("string");
       expect(parsed.text).toBe("rm -rf /");
       expect(parsed.warningReasons).toEqual(["destructive"]);
-      // Guard against regression: onConfirm must not exist on pending
+      // Guard against regression: onConfirm must not exist on pending.
+      // `divergence` is optional (omitted when absent serializes to undefined,
+      // which JSON.stringify drops) — guard sorts on whatever keys survive.
       expect(Object.keys(parsed).sort()).toEqual(["requestId", "text", "warningReasons"].sort());
+    });
+
+    it("carries divergence targets when provided", () => {
+      requestFleetBroadcastConfirmation({
+        text: "deploy {{branch_name}}",
+        warningReasons: [],
+        divergence: {
+          targets: [
+            {
+              terminalId: "t-1",
+              title: "T1",
+              payload: "deploy feature-x",
+              overridden: false,
+              skipped: false,
+              excluded: false,
+              unresolvedVars: [],
+            },
+            {
+              terminalId: "t-2",
+              title: "T2",
+              payload: "deploy",
+              overridden: false,
+              skipped: false,
+              excluded: false,
+              unresolvedVars: ["branch_name"],
+            },
+          ],
+        },
+      }).catch(() => {});
+      const { pending } = useFleetBroadcastConfirmStore.getState();
+      expect(pending!.divergence?.targets).toHaveLength(2);
+      expect(pending!.divergence?.targets[1]!.unresolvedVars).toEqual(["branch_name"]);
     });
   });
 
