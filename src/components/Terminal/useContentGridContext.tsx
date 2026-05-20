@@ -140,6 +140,7 @@ export interface ContentGridContext {
   projectIconSvg: string | undefined;
   worktreeMap: ReturnType<typeof useWorktrees>["worktreeMap"];
   isInTrash: (id: string) => boolean;
+  isWorktreeInitialized: boolean;
   getTabGroupPanels: (groupId: string, location?: TabGroupLocation) => TerminalInstance[];
   getPanelGroup: (panelId: string) => TabGroup | undefined;
   getActiveTabId: (groupId: string) => string | null;
@@ -214,7 +215,7 @@ export function useContentGridContext({
   );
   const isProjectSwitching = false;
   const { projectIconSvg } = useProjectBranding(currentProject?.id);
-  const { worktreeMap } = useWorktrees();
+  const { worktreeMap, isInitialized: isWorktreeInitialized } = useWorktrees();
   const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
   const hasActiveWorktree = activeWorktreeId != null && activeWorktree != null;
   const activeWorktreeName = activeWorktree
@@ -976,6 +977,7 @@ export function useContentGridContext({
     projectIconSvg,
     worktreeMap,
     isInTrash,
+    isWorktreeInitialized,
     getTabGroupPanels,
     getPanelGroup,
     getActiveTabId,

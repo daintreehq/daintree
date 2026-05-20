@@ -57,6 +57,7 @@ export function ContentGridFleetScope({
               <ContentGridEmptyState
                 hasActiveWorktree={ctx.hasActiveWorktree}
                 hasWorktrees={ctx.worktreeMap.size > 0}
+                isWorktreeInitialized={ctx.isWorktreeInitialized}
                 activeWorktreeName={ctx.activeWorktreeName}
                 activeWorktreeId={ctx.activeWorktreeId}
                 activeWorktreeBranch={ctx.activeWorktreeBranch}

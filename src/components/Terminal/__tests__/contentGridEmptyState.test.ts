@@ -49,21 +49,23 @@ describe("ContentGrid EmptyState — quiet no-worktree variants (issue #6935)", 
     expect(content).not.toContain("View documentation");
     expect(content).not.toContain("status-warning");
     expect(content).not.toContain("handleOpenHelp");
-    expect(content).not.toContain("actionService");
   });
 
-  it("renders muted helper text with role=status / aria-live=polite for both empty variants", async () => {
+  it("renders structured EmptyState with role=status / aria-live=polite for both empty variants", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).toContain('role="status"');
-    expect(content).toContain('aria-live="polite"');
-    expect(content).toContain("text-daintree-text/60");
+    expect(content).toContain('variant="zero-data"');
+    expect(content).toContain('scale="canvas"');
+    expect(content).toContain("<EmptyState");
   });
 
-  it("branches helper text on hasWorktrees: select-worktree vs open-directory", async () => {
+  it("branches empty state on hasWorktrees: select-worktree vs open-directory with button", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).toContain("Select a worktree in the sidebar to get started");
-    expect(content).toContain("Open a directory in the sidebar to get started");
-    expect(content).toMatch(/hasWorktrees\s*\n?\s*\?\s*"Select a worktree/);
+    expect(content).toContain("Select a worktree");
+    expect(content).toContain("Choose a worktree from the sidebar to open it in the canvas.");
+    expect(content).toContain("Open a Git repository to get started");
+    expect(content).toContain("Worktrees let you work on multiple tasks in isolated environments.");
+    expect(content).toContain("Open directory...");
+    expect(content).toContain("project.openDialog");
   });
 
   it("gates the project-icon hero on hasActiveWorktree so empty states stay silent", async () => {
@@ -71,5 +73,63 @@ describe("ContentGrid EmptyState — quiet no-worktree variants (issue #6935)", 
     expect(content).toMatch(
       /\{hasActiveWorktree && \(\s*\n\s*<div className="mb-6 flex flex-col items-center text-center"/
     );
+  });
+});
+
+describe("ContentGrid EmptyState — initialization gate (issue #8645)", () => {
+  it("accepts isWorktreeInitialized prop", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    expect(content).toContain("isWorktreeInitialized: boolean");
+  });
+
+  it("guards no-worktree branch on isWorktreeInitialized to prevent cold-start copy flash", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    expect(content).toContain("!hasActiveWorktree && !isWorktreeInitialized");
+    expect(content).toContain("!hasActiveWorktree && isWorktreeInitialized && hasWorktrees");
+    expect(content).toContain("!hasActiveWorktree && isWorktreeInitialized && !hasWorktrees");
+  });
+
+  it("does not render bare <p> with text-daintree-text/60 in the no-worktree branch", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    // The old bare <p> with diluted text color is gone — replaced by EmptyState
+    const lines = content.split("\n");
+    const noWorktreeSection = lines.filter(
+      (line) => !line.includes("hasActiveWorktree") || line.includes("!hasActiveWorktree")
+    );
+    const hasOldPattern = noWorktreeSection.some(
+      (line) =>
+        line.includes("<p") && line.includes("text-daintree-text/60") && line.includes("max-w-md")
+    );
+    expect(hasOldPattern).toBe(false);
+  });
+});
+
+describe("ContentGrid EmptyState — structured empty state integration (issue #8645)", () => {
+  it("imports EmptyState, Button, FolderOpen, and actionService", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    expect(content).toContain('from "@/components/ui/EmptyState"');
+    expect(content).toContain('from "@/components/ui/button"');
+    expect(content).toContain('from "@/services/ActionService"');
+    expect(content).toContain("FolderOpen");
+  });
+
+  it("renders Button variant=outline size=sm for opening a directory", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    expect(content).toContain('variant="outline"');
+    expect(content).toContain('size="sm"');
+    expect(content).toContain("Open directory...");
+  });
+
+  it("dispatches project.openDialog via actionService with source: user", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    expect(content).toContain('actionService.dispatch("project.openDialog"');
+    expect(content).toContain('source: "user"');
+  });
+
+  it("uses FolderOpen icon in both zero-data variants", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    // FolderOpen should appear in both EmptyState renders (hasWorktrees + !hasWorktrees)
+    const folderOpenCount = (content.match(/<FolderOpen \/>/g) || []).length;
+    expect(folderOpenCount).toBe(2);
   });
 });
