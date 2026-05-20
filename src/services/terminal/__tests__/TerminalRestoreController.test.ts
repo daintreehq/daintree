@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { TerminalRestoreController } from "../TerminalRestoreController";
+import { TerminalRestoreController, safeChunkSlice } from "../TerminalRestoreController";
 import { INCREMENTAL_RESTORE_CONFIG, type ManagedTerminal } from "../types";
 
 vi.mock("@/clients", () => ({
@@ -22,6 +22,7 @@ describe("TerminalRestoreController", () => {
   let writeCallbacks: Map<number, () => void>;
   let writeCallId: number;
   let postTaskCallbacks: Array<() => void>;
+  let yieldCallbacks: Array<() => void>;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -29,6 +30,7 @@ describe("TerminalRestoreController", () => {
     writeCallbacks = new Map();
     writeCallId = 0;
     postTaskCallbacks = [];
+    yieldCallbacks = [];
 
     vi.stubGlobal("scheduler", {
       postTask: vi.fn((cb: () => unknown) => {
@@ -40,6 +42,11 @@ describe("TerminalRestoreController", () => {
               reject(e);
             }
           });
+        });
+      }),
+      yield: vi.fn(() => {
+        return new Promise<void>((resolve) => {
+          yieldCallbacks.push(resolve);
         });
       }),
     });
@@ -83,6 +90,7 @@ describe("TerminalRestoreController", () => {
     vi.unstubAllGlobals();
     writeCallbacks.clear();
     postTaskCallbacks = [];
+    yieldCallbacks = [];
   });
 
   function makeManagedTerminal(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
@@ -107,6 +115,18 @@ describe("TerminalRestoreController", () => {
     postTaskCallbacks = [];
     callbacks.forEach((cb) => cb());
     await flushMicrotasks();
+  };
+
+  const flushYields = async () => {
+    const callbacks = [...yieldCallbacks];
+    yieldCallbacks = [];
+    callbacks.forEach((cb) => cb());
+    await flushMicrotasks();
+  };
+
+  const flushScheduler = async () => {
+    await flushYields();
+    await flushPostTasks();
   };
 
   describe("restoreFromSerialized", () => {
@@ -221,10 +241,11 @@ describe("TerminalRestoreController", () => {
       await flushMicrotasks();
 
       expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
-      expect((global as any).scheduler.postTask).toHaveBeenCalled();
+      expect((global as any).scheduler.yield).toHaveBeenCalled();
+      expect((global as any).scheduler.postTask).not.toHaveBeenCalled();
 
       for (let i = 0; i < 10; i++) {
-        await flushPostTasks();
+        await flushScheduler();
       }
 
       await restorePromise;
@@ -233,6 +254,64 @@ describe("TerminalRestoreController", () => {
         .map((call: [string, ...unknown[]]) => call[0].length)
         .reduce((sum: number, len: number) => sum + len, 0);
       expect(totalWritten).toBe(largeState.length);
+    });
+
+    it("falls back to scheduler.postTask when yield is unavailable", async () => {
+      (global as any).scheduler.yield = undefined;
+
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+      const data = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
+
+      const promise = controller.restoreFromSerializedIncremental("t1", data);
+      await flushMicrotasks();
+
+      expect((global as any).scheduler.postTask).toHaveBeenCalled();
+
+      for (let i = 0; i < 10; i++) {
+        await flushPostTasks();
+      }
+      await promise;
+
+      const totalWritten = mockTerminal.write.mock.calls
+        .map((call: [string, ...unknown[]]) => call[0].length)
+        .reduce((sum: number, len: number) => sum + len, 0);
+      expect(totalWritten).toBe(data.length);
+    });
+
+    it("does not split surrogate pairs across chunks", async () => {
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      // Build a state where a surrogate pair (rocket emoji U+1F680 → "🚀")
+      // straddles the configured chunk boundary. Fill up to one code unit short
+      // of the boundary, then emit the pair, then pad the second chunk.
+      const chunkBytes = INCREMENTAL_RESTORE_CONFIG.chunkBytes;
+      const rocket = "🚀";
+      const head = "a".repeat(chunkBytes - 1);
+      const tail = "b".repeat(chunkBytes);
+      const state = head + rocket + tail;
+
+      const promise = controller.restoreFromSerializedIncremental("t1", state);
+      await flushMicrotasks();
+
+      for (let i = 0; i < 10; i++) {
+        await flushScheduler();
+      }
+      await promise;
+
+      const chunks = mockTerminal.write.mock.calls.map((call: [string, ...unknown[]]) => call[0]);
+      const totalWritten = chunks.reduce((sum: number, c: string) => sum + c.length, 0);
+      expect(totalWritten).toBe(state.length);
+
+      for (const chunk of chunks as string[]) {
+        if (chunk.length === 0) continue;
+        const firstCode = chunk.charCodeAt(0);
+        const lastCode = chunk.charCodeAt(chunk.length - 1);
+        // A chunk must not begin with a lone low surrogate or end with a lone high surrogate.
+        expect(firstCode >= 0xdc00 && firstCode <= 0xdfff).toBe(false);
+        expect(lastCode >= 0xd800 && lastCode <= 0xdbff).toBe(false);
+      }
     });
 
     it("sets and clears isSerializedRestoreInProgress flag", async () => {
@@ -247,7 +326,7 @@ describe("TerminalRestoreController", () => {
       expect(managed.isSerializedRestoreInProgress).toBe(true);
 
       for (let i = 0; i < 10; i++) {
-        await flushPostTasks();
+        await flushScheduler();
       }
       await promise;
 
@@ -266,7 +345,7 @@ describe("TerminalRestoreController", () => {
 
       controller.destroy("t1");
 
-      await flushPostTasks();
+      await flushScheduler();
       await flushMicrotasks();
       await promise;
 
@@ -284,7 +363,7 @@ describe("TerminalRestoreController", () => {
       await flushMicrotasks();
 
       for (let i = 0; i < 10; i++) {
-        await flushPostTasks();
+        await flushScheduler();
       }
       await promise;
 
@@ -300,7 +379,7 @@ describe("TerminalRestoreController", () => {
       await flushMicrotasks();
 
       for (let i = 0; i < 10; i++) {
-        await flushPostTasks();
+        await flushScheduler();
       }
       await promise;
 
@@ -431,5 +510,50 @@ describe("TerminalRestoreController", () => {
       expect(managed.isSerializedRestoreInProgress).toBe(false);
       expect(managed.deferredOutput).toHaveLength(0);
     });
+  });
+});
+
+describe("safeChunkSlice", () => {
+  it("returns exactly chunkSize when no surrogate at the boundary", () => {
+    const input = "abcdefghij";
+    expect(safeChunkSlice(input, 0, 4)).toBe("abcd");
+    expect(safeChunkSlice(input, 4, 4)).toBe("efgh");
+  });
+
+  it("returns the full remainder when the chunk reaches the end", () => {
+    const input = "abcdefghij";
+    expect(safeChunkSlice(input, 0, 100)).toBe(input);
+    expect(safeChunkSlice(input, 7, 100)).toBe("hij");
+  });
+
+  it("returns an empty string when offset is at or past the end", () => {
+    const input = "abc";
+    expect(safeChunkSlice(input, 3, 8)).toBe("");
+    expect(safeChunkSlice(input, 10, 8)).toBe("");
+  });
+
+  it("retreats the boundary by one when the last code unit is a high surrogate", () => {
+    // "🚀" is U+1F680, encoded in JS strings as two code units (0xD83D, 0xDE80).
+    // Build a string where slicing at chunkSize=4 would land between the two halves.
+    const input = "ab" + "🚀" + "cd"; // length 6, surrogate pair at indices 2-3
+    // chunkSize=3 would slice up to index 3 — last char is high surrogate (0xD83D)
+    expect(safeChunkSlice(input, 0, 3)).toBe("ab");
+    // The next call from offset 2 should return the full surrogate pair plus more
+    expect(safeChunkSlice(input, 2, 3)).toBe("🚀c");
+  });
+
+  it("does not retreat when the chunk reaches the very end of the string", () => {
+    // Trailing unpaired high surrogate at the end of the string — we keep it
+    // rather than emit an empty chunk and stall the caller's loop.
+    const input = "ab\uD83D";
+    expect(safeChunkSlice(input, 0, 100)).toBe(input);
+  });
+
+  it("emits at least one code unit even when an unpaired high surrogate would block progress", () => {
+    // Pathological input: chunkSize=1 starting on a high surrogate that is not
+    // at end-of-string. Without the floor guard the loop would stall.
+    const input = "🚀🚀";
+    const chunk = safeChunkSlice(input, 0, 1);
+    expect(chunk.length).toBeGreaterThanOrEqual(1);
   });
 });
