@@ -1,12 +1,10 @@
 import type { TerminalActivityPayload } from "@shared/types";
 import { terminalRegistryController } from "@/controllers";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
-import { enqueueActivityUpdate, cancelPanelStatusBuffer } from "@/store/panelStatusBuffer";
+import { enqueueActivityUpdate } from "@/store/panelStatusBuffer";
 
 export function setupActivityListeners(): DisposableStore {
   const d = new DisposableStore();
-
-  d.add(toDisposable(cancelPanelStatusBuffer));
 
   d.add(
     toDisposable(

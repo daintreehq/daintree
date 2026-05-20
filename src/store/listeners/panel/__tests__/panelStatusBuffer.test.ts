@@ -161,14 +161,36 @@ describe("panelStatusBuffer — flow-status batching", () => {
   });
 
   it("derives runtimeStatus from current isVisible (not a stale closure)", () => {
-    seedPanel("term-1", { isVisible: false, runtimeStatus: "background" });
-    // Enqueue with flowStatus that would normally win; visibility is false,
-    // and deriveRuntimeStatus returns the flowStatus first if non-running.
+    // Lock in stale-closure proof: enqueue while panel is visible, mutate
+    // isVisible -> false BEFORE the RAF flush. The fold must observe the
+    // post-mutation `isVisible: false` from the state snapshot, which makes
+    // deriveRuntimeStatus(false, "running") return "background".
+    seedPanel("term-1", { isVisible: true, runtimeStatus: "running" });
+    enqueueFlowStatusUpdate("term-1", "running", 100);
+    usePanelStore.setState((s) => ({
+      panelsById: {
+        ...s.panelsById,
+        "term-1": { ...s.panelsById["term-1"]!, isVisible: false },
+      },
+    }));
+    raf.flushAll();
+    const t = usePanelStore.getState().panelsById["term-1"];
+    expect(t?.flowStatus).toBe("running");
+    expect(t?.runtimeStatus).toBe("background");
+  });
+
+  it("rejects in-buffer reordering: later-arriving older event must not displace newer in-buffer event", () => {
+    // Locks in the fix for the critical review finding: IPC can deliver
+    // events out of order within a frame (backpressure, multi-source). The
+    // buffer must guard at enqueue time, not only via the fold's
+    // persisted-store guard which can't see other in-buffer patches.
+    seedPanel("term-1", { isVisible: true });
+    enqueueFlowStatusUpdate("term-1", "running", 200);
     enqueueFlowStatusUpdate("term-1", "suspended", 100);
     raf.flushAll();
     const t = usePanelStore.getState().panelsById["term-1"];
-    expect(t?.flowStatus).toBe("suspended");
-    expect(t?.runtimeStatus).toBe("suspended");
+    expect(t?.flowStatus).toBe("running");
+    expect(t?.flowStatusTimestamp).toBe(200);
   });
 
   it("rejects out-of-order flow-status timestamps inside the fold", () => {
@@ -211,6 +233,23 @@ describe("panelStatusBuffer — combined flush", () => {
     const state = usePanelStore.getState();
     expect(state.panelsById["term-1"]?.activityHeadline).toBe("Doing");
     expect(state.panelsById["term-2"]?.flowStatus).toBe("suspended");
+  });
+
+  it("same terminal: activity + flow-status patches do not clobber each other", () => {
+    // The fold iterates activity first, then flow-status. Both must compose
+    // into a single merged terminal record; the flow-status pass reads from
+    // the activity-merged draft, not the original state snapshot.
+    seedPanel("term-1", { isVisible: true, runtimeStatus: "running" });
+    enqueueActivityUpdate("term-1", "Compiling", "working", "interactive", 100, "npm run dev");
+    enqueueFlowStatusUpdate("term-1", "suspended", 100);
+    raf.flushAll();
+    const t = usePanelStore.getState().panelsById["term-1"];
+    expect(t?.activityHeadline).toBe("Compiling");
+    expect(t?.activityStatus).toBe("working");
+    expect(t?.lastCommand).toBe("npm run dev");
+    expect(t?.flowStatus).toBe("suspended");
+    expect(t?.flowStatusTimestamp).toBe(100);
+    expect(t?.runtimeStatus).toBe("suspended");
   });
 });
 

@@ -57,10 +57,14 @@ export function enqueueFlowStatusUpdate(
   status: PersistableFlowStatus,
   timestamp: number
 ): void {
-  // Last write wins per terminal per frame. The slice's stale-timestamp guard
-  // is reproduced inside the fold against live store state, so accepting the
-  // latest enqueued patch here is correct: an older event still in-buffer is
-  // already superseded by the newer one we are about to set.
+  // Guard against in-buffer reordering: IPC can deliver events out of
+  // chronological order within a single frame (backpressure, multi-source
+  // emission, reconnect). Without this guard, a later-arriving `t=100`
+  // event would clobber an in-buffer `t=200` event and then pass the
+  // fold's persisted-store guard because nothing else has been committed
+  // yet for this terminal.
+  const existing = flowStatusBuffer.get(terminalId);
+  if (existing && timestamp < existing.timestamp) return;
   flowStatusBuffer.set(terminalId, { status, timestamp });
   schedule();
 }
