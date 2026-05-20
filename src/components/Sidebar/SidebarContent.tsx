@@ -13,7 +13,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { AlertTriangle, FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-import { Skeleton } from "@/components/ui/Skeleton";
+import { Skeleton, SkeletonBone, SkeletonText, SkeletonHint } from "@/components/ui/Skeleton";
 import { ScrollIndicator } from "@/components/Worktree/ScrollIndicator";
 import {
   useAgentLauncher,
@@ -23,6 +23,7 @@ import {
   useAriaKeyshortcuts,
   useKeybindingDisplay,
   useDeferredLoading,
+  useResizeObserverRaf,
 } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
@@ -109,6 +110,11 @@ const SIDEBAR_VIRTUOSO_OVERSCAN_PX = 600;
 // indicator never flickers on transient reconnects, and below the worst-case
 // ~14s workspace-host restart budget so it fires before `setFatalError`.
 const RECONNECT_ESCALATE_MS = 10_000;
+
+// Skeleton row height matching collapsed WorktreeCard sidebar variant
+// (py-3=12px + min-h-[22px]=22px + py-3=12px + border-b=1px).
+const SKELETON_ROW_HEIGHT_PX = 47;
+const MIN_SKELETON_ROWS = 3;
 
 function truncateSearchQuery(trimmedQuery: string) {
   const codepoints = Array.from(trimmedQuery);
@@ -427,6 +433,19 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const [isRestartConfirmOpen, setIsRestartConfirmOpen] = useState(false);
   const openFleetPicker = useCallback(() => setIsFleetPickerOpen(true), []);
   const closeFleetPicker = useCallback(() => setIsFleetPickerOpen(false), []);
+
+  const [skeletonContainerEl, setSkeletonContainerEl] = useState<HTMLElement | null>(null);
+  const [skeletonHeight, setSkeletonHeight] = useState(0);
+  const skeletonContainerRef = useCallback((el: HTMLElement | null) => {
+    setSkeletonContainerEl(el);
+  }, []);
+  useResizeObserverRaf(skeletonContainerEl, (entry) => {
+    setSkeletonHeight(entry.contentRect.height);
+  });
+  const skeletonRowCount = Math.max(
+    MIN_SKELETON_ROWS,
+    Math.floor(skeletonHeight / SKELETON_ROW_HEIGHT_PX)
+  );
   useEffect(() => {
     if (!error) setIsRestartConfirmOpen(false);
   }, [error]);
@@ -1213,18 +1232,26 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <div className="flex items-center px-4 py-4 border-b border-divider shrink-0">
           <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
         </div>
-        <Skeleton label="Loading worktrees">
-          {[0, 1, 2].map((i) => (
-            <div
-              key={i}
-              aria-hidden="true"
-              className="border-b border-border-default px-4 py-3 flex flex-col gap-1.5"
-            >
-              <div className="h-3.5 w-2/3 bg-muted rounded animate-pulse-delayed" />
-              <div className="h-3 w-1/3 bg-muted rounded animate-pulse-delayed" />
-            </div>
-          ))}
-        </Skeleton>
+        <div className="flex-1 min-h-0 relative" ref={skeletonContainerRef}>
+          <Skeleton label="Loading worktrees">
+            {Array.from({ length: skeletonRowCount }).map((_, i) => (
+              <div
+                key={i}
+                aria-hidden="true"
+                className="border-b border-border-default px-4 py-3"
+                style={{ height: SKELETON_ROW_HEIGHT_PX }}
+              >
+                <div className="flex items-center gap-2 min-h-[22px]">
+                  <SkeletonBone className="w-3.5 h-3.5 rounded-full shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <SkeletonText lines={2} lineHeightClassName="h-3" gapClassName="space-y-1" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </Skeleton>
+          <SkeletonHint className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-auto" />
+        </div>
       </div>
     );
   }
