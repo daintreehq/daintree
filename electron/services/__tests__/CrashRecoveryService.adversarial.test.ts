@@ -464,8 +464,13 @@ describe("CrashRecoveryService adversarial", () => {
 
     const pending = service.getPendingCrash();
     expect(pending).not.toBeNull();
-    expect(pending?.hasBackup).toBe(true);
-    expect(pending?.panels).toEqual([]);
+    // With backup rotation (#8699): a corrupt current with no usable previous
+    // reports hasBackup=false so the recovery UI doesn't offer a restore that
+    // would silently fail. The safety invariant remains: the app doesn't brick
+    // (pending is non-null, panels are an empty array, restoreBackup returns
+    // false rather than throwing).
+    expect(pending?.hasBackup).toBe(false);
+    expect(pending?.panels).toBeUndefined();
     expect(service.restoreBackup()).toBe(false);
   });
 

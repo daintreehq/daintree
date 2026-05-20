@@ -817,6 +817,72 @@ describe("CrashRecoveryService", () => {
       expect(ts).toBe(stat.mtimeMs);
     });
 
+    it("readBackupInfo skips corrupt current and reports previous timestamp", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      // Corrupt current — exists on disk but unparseable.
+      const currentPath = path.join(backupDir, "session-state.json");
+      fs.writeFileSync(currentPath, "{ corrupt");
+      // Valid previous.
+      const previousPath = path.join(backupDir, "session-state.previous.json");
+      fs.writeFileSync(
+        previousPath,
+        JSON.stringify({ capturedAt: Date.now() - 30_000, appState: { terminals: [] } })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      // Without the parseability gate, getLastBackupTimestamp would return the
+      // corrupt current's mtimeMs and mislead the UI into showing a backup
+      // exists at a timestamp it can't actually restore from.
+      const ts = svc.getLastBackupTimestamp();
+      const previousStat = fs.statSync(previousPath);
+      expect(ts).toBe(previousStat.mtimeMs);
+    });
+
+    it("rolling pair stays a pair across multiple takeBackup calls (no chain accumulation)", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const currentPath = path.join(backupDir, "session-state.json");
+      const previousPath = path.join(backupDir, "session-state.previous.json");
+
+      // First write to set the baseline (no previous yet).
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 1, terminals: [] };
+        return { autoRestoreOnCrash: false };
+      });
+      windowStatesStoreMock.get.mockReturnValue({});
+
+      const svc = makeService();
+      svc.initialize();
+      svc.takeBackup();
+
+      // Change state and write again — previous now holds gen-1, current holds gen-2.
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 2, terminals: [] };
+        return { autoRestoreOnCrash: false };
+      });
+      svc.takeBackup();
+
+      // Change state and write a third time — previous now holds gen-2, current holds gen-3.
+      // Critically: gen-1 must be gone (no `.previous.previous.json` accumulation).
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 3, terminals: [] };
+        return { autoRestoreOnCrash: false };
+      });
+      svc.takeBackup();
+
+      const current = JSON.parse(fs.readFileSync(currentPath, "utf8"));
+      const previous = JSON.parse(fs.readFileSync(previousPath, "utf8"));
+      expect(current.appState.sidebarWidth).toBe(3);
+      expect(previous.appState.sidebarWidth).toBe(2);
+      // No third-generation file ever created — the directory must hold at
+      // most two backup files (plus crash logs in a sibling dir).
+      const backupFiles = fs.readdirSync(backupDir).filter((f) => f.endsWith(".json"));
+      expect(backupFiles.sort()).toEqual(["session-state.json", "session-state.previous.json"]);
+    });
+
     it("consumeMarker caches previous-generation snapshot when current is corrupt", () => {
       const backupDir = path.join(userData, "backups");
       fs.mkdirSync(backupDir, { recursive: true });

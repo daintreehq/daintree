@@ -411,16 +411,17 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         } catch (err) {
           console.warn("[MAIN] CrashLoopGuard.markCleanExit failed:", err);
         }
+        // Defuse the signal-handler safety-belt the moment we've committed to a
+        // clean exit. closeTelemetry below has a 2500ms internal cap, but
+        // clearing first eliminates the dependency on that cap holding — if a
+        // future refactor extends the telemetry budget, the belt won't be able
+        // to fire after app.exit(0) and clobber the exit code with exit(1).
+        clearSafetyBeltTimer();
         try {
           await closeTelemetry();
         } catch (err) {
           console.warn("[MAIN] closeTelemetry failed:", err);
         }
-        // Cancel the signal-handler safety-belt before exiting cleanly so a slow
-        // closeTelemetry() above can't let the belt fire after app.exit(0) and
-        // clobber the exit code (signal handlers in appLifecycle.ts schedule
-        // SAFETY_BELT_TIMEOUT_MS to app.exit(1) on the dirty path).
-        clearSafetyBeltTimer();
         app.exit(0);
       })
       .catch(async (error) => {
@@ -430,12 +431,14 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         console.error("[MAIN] Error during cleanup:", error);
         // Intentionally do NOT clean up the marker on the error/timeout path —
         // leaving running.lock on disk is the dirty-exit signal for next launch.
+        // Defuse the belt before telemetry flush for the same reason as the
+        // clean branch above.
+        clearSafetyBeltTimer();
         try {
           await closeTelemetry();
         } catch (err) {
           console.warn("[MAIN] closeTelemetry failed:", err);
         }
-        clearSafetyBeltTimer();
         app.exit(1);
       });
   });

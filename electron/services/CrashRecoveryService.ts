@@ -72,6 +72,11 @@ export class CrashRecoveryService {
   // current session's backup tick cannot overwrite it. Null when there was
   // no pre-crash backup or after the file has been consumed/cleaned up.
   private crashedBackupPath: string | null = null;
+  // In-memory snapshot captured during consumeMarker() so restoreBackup() and
+  // getBackupPanelCount() can serve the pre-crash state even if the on-disk
+  // files are deleted, rotated, or overwritten between marker consumption and
+  // the user resolving the recovery dialog.
+  private cachedBackupSnapshot: SessionSnapshot | null = null;
 
   constructor() {
     this.userData = app.getPath("userData");
@@ -294,21 +299,22 @@ export class CrashRecoveryService {
 
   restoreBackup(panelIds?: string[]): boolean {
     try {
-      // After a crash, consumeMarker() renames the live backup file to a
-      // timestamped crashed-* path. Read from that path so the current
-      // session's backup tick can recreate session-state.json without
-      // clobbering the pre-crash snapshot. Fall back to the live path for
-      // explicit user-driven restores in a non-crash session, then to the
-      // rotated previous-generation file when the current file is corrupt
-      // or missing.
-      let snapshot: SessionSnapshot | null = null;
-      const sourcePath = this.crashedBackupPath ?? this.backupPath;
-      snapshot = this.readBackupFile(sourcePath);
-      if (!snapshot && sourcePath !== this.previousBackupPath) {
-        const previous = this.readBackupFile(this.previousBackupPath);
-        if (previous) {
-          console.log("[CrashRecovery] Current backup unreadable; using previous generation");
-          snapshot = previous;
+      // Prefer the snapshot cached by consumeMarker — startBackupTimer can
+      // overwrite the on-disk backup files between marker consumption and
+      // the user clicking restore, and the renamed crashed-* file could be
+      // unlinked concurrently. The cache holds the parsed pre-crash snapshot.
+      // Fall back current → previous on disk for explicit user-driven
+      // restores in a non-crash session (no cache populated).
+      let snapshot: SessionSnapshot | null = this.cachedBackupSnapshot;
+      if (!snapshot) {
+        const sourcePath = this.crashedBackupPath ?? this.backupPath;
+        snapshot = this.readBackupFile(sourcePath);
+        if (!snapshot && sourcePath !== this.previousBackupPath) {
+          const previous = this.readBackupFile(this.previousBackupPath);
+          if (previous) {
+            console.log("[CrashRecovery] Current backup unreadable; using previous generation");
+            snapshot = previous;
+          }
         }
       }
       if (!snapshot) return false;
@@ -430,10 +436,34 @@ export class CrashRecoveryService {
 
       this.deleteMarker();
 
+      // Gate hasBackup on parseability: a renamed crashed-* file that fails
+      // to parse (corrupted write, partial flush) shouldn't surface a
+      // restore option that would silently fail. Verify the crashed-* file
+      // parses; if not, fall back to the rotated previous-generation file
+      // (rotated by takeBackup before the crash). Cache the parsed snapshot
+      // so the recovery dialog and getBackupPanelCount survive concurrent
+      // file deletions/overwrites between marker consumption and resolve.
       let backupTimestamp: number | undefined;
-      if (this.crashedBackupPath !== null) {
+      let parseableBackupPath: string | null = null;
+      const fromCrashed = this.crashedBackupPath
+        ? this.readBackupFile(this.crashedBackupPath)
+        : null;
+      if (fromCrashed) {
+        this.cachedBackupSnapshot = fromCrashed;
+        parseableBackupPath = this.crashedBackupPath;
+      } else {
+        // Crashed file unparseable or missing — drop the pointer so the
+        // restoreBackup path doesn't try a known-bad read.
+        this.crashedBackupPath = null;
+        const fromPrevious = this.readBackupFile(this.previousBackupPath);
+        if (fromPrevious) {
+          this.cachedBackupSnapshot = fromPrevious;
+          parseableBackupPath = this.previousBackupPath;
+        }
+      }
+      if (parseableBackupPath) {
         try {
-          backupTimestamp = fs.statSync(this.crashedBackupPath).mtimeMs;
+          backupTimestamp = fs.statSync(parseableBackupPath).mtimeMs;
         } catch {
           // best-effort: backup timestamp is informational only
         }
@@ -459,13 +489,14 @@ export class CrashRecoveryService {
           }
         }
       }
-      const panels =
-        this.crashedBackupPath !== null ? this.extractPanelSummaries(entry.timestamp) : undefined;
+      const panels = parseableBackupPath
+        ? this.extractPanelSummaries(entry.timestamp, parseableBackupPath)
+        : undefined;
 
       return {
         logPath: logPath ?? path.join(this.crashesDir, `crash-${entry.id}.json`),
         entry,
-        hasBackup: this.crashedBackupPath !== null,
+        hasBackup: parseableBackupPath !== null,
         backupTimestamp,
         panels,
       };
@@ -554,6 +585,10 @@ export class CrashRecoveryService {
   }
 
   private unlinkCrashedBackup(): void {
+    // Always clear the in-memory cache too — keeping it around after the
+    // recovery decision is resolved would let a stale pre-crash snapshot
+    // surface from getBackupPanelCount or a follow-up restoreBackup call.
+    this.cachedBackupSnapshot = null;
     if (!this.crashedBackupPath) return;
     try {
       fs.unlinkSync(this.crashedBackupPath);
@@ -617,15 +652,17 @@ export class CrashRecoveryService {
     return annotation;
   }
 
-  private extractPanelSummaries(crashTimestamp: number): PanelSummary[] {
+  private extractPanelSummaries(crashTimestamp: number, sourcePath: string): PanelSummary[] {
     try {
-      // Reads the renamed crashed-* file populated by consumeMarker. The
-      // current session's backup tick can recreate session-state.json freely
-      // — it can't overwrite the renamed file, so panel summaries here and
-      // restoreBackup later see the same pre-crash snapshot.
-      if (!this.crashedBackupPath || !fs.existsSync(this.crashedBackupPath)) return [];
-      const raw = fs.readFileSync(this.crashedBackupPath, "utf8");
-      const snapshot = JSON.parse(raw) as SessionSnapshot;
+      // Prefer the cached snapshot resolved by consumeMarker so concurrent
+      // file deletion or backup-tick overwrites can't drop pre-crash panels.
+      // Fall back to disk only when the cache wasn't populated.
+      let snapshot: SessionSnapshot | null = this.cachedBackupSnapshot;
+      if (!snapshot) {
+        if (!fs.existsSync(sourcePath)) return [];
+        const raw = fs.readFileSync(sourcePath, "utf8");
+        snapshot = JSON.parse(raw) as SessionSnapshot;
+      }
       if (!snapshot.appState) return [];
 
       const appState = snapshot.appState as Record<string, unknown>;
@@ -958,21 +995,29 @@ export class CrashRecoveryService {
     // Prefer current; fall back to previous so the rotation pair is fully
     // observable. `path` lets callers (consumeMarker, extractPanelSummaries)
     // read from the file that readBackupInfo determined as usable.
-    try {
-      if (fs.existsSync(this.backupPath)) {
+    // Parseability is verified before reporting `exists: true` — a stat-able
+    // but corrupt current would otherwise mislead the recovery UI into showing
+    // a timestamp that points to an unrestorable file while restore silently
+    // uses previous. The probe (readBackupFile) reads the whole file; this is
+    // acceptable because readBackupInfo is only called during marker consumption
+    // (startup) and when the user opens the recovery dialog.
+    const currentParseable = this.readBackupFile(this.backupPath) !== null;
+    if (currentParseable) {
+      try {
         const stat = fs.statSync(this.backupPath);
         return { exists: true, timestamp: stat.mtimeMs, path: this.backupPath };
+      } catch {
+        // fall through to previous
       }
-    } catch {
-      // fall through to previous
     }
-    try {
-      if (fs.existsSync(this.previousBackupPath)) {
+    const previousParseable = this.readBackupFile(this.previousBackupPath) !== null;
+    if (previousParseable) {
+      try {
         const stat = fs.statSync(this.previousBackupPath);
         return { exists: true, timestamp: stat.mtimeMs, path: this.previousBackupPath };
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
     }
     return { exists: false };
   }
