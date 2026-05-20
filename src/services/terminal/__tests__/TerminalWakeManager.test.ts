@@ -13,6 +13,12 @@ vi.mock("@/clients", () => ({
 import { TerminalWakeManager, type WakeManagerDeps } from "../TerminalWakeManager";
 import type { ManagedTerminal } from "../types";
 
+type MockManagedTerminal = Pick<ManagedTerminal, "terminal" | "isAltBuffer"> & {
+  isOpened?: boolean;
+  isAttaching?: boolean;
+  isHibernated?: boolean;
+};
+
 describe("TerminalWakeManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -20,11 +26,13 @@ describe("TerminalWakeManager", () => {
 
   it("returns false when wake request fails instead of rejecting", async () => {
     wakeMock.mockRejectedValueOnce(new Error("wake failed"));
-    const managed = {
-      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
     };
     const deps: WakeManagerDeps = {
-      getInstance: vi.fn(() => managed as any),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
       hasInstance: vi.fn(() => true),
       restoreFromSerialized: vi.fn(() => true),
       restoreFromSerializedIncremental: vi.fn(async () => true),
@@ -36,11 +44,13 @@ describe("TerminalWakeManager", () => {
 
   it("allows retry after a failed wakeAndRestore call", async () => {
     wakeMock.mockRejectedValue(new Error("wake failed"));
-    const managed = {
-      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
     };
     const deps: WakeManagerDeps = {
-      getInstance: vi.fn(() => managed as any),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
       hasInstance: vi.fn(() => true),
       restoreFromSerialized: vi.fn(() => true),
       restoreFromSerializedIncremental: vi.fn(async () => true),
@@ -60,11 +70,13 @@ describe("TerminalWakeManager", () => {
     });
     wakeMock.mockReturnValue(wakePromise);
 
-    const managed = {
-      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
     };
     const deps: WakeManagerDeps = {
-      getInstance: vi.fn(() => managed as any),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
       hasInstance: vi.fn(() => true),
       restoreFromSerialized: vi.fn(() => true),
       restoreFromSerializedIncremental: vi.fn(async () => true),
@@ -84,12 +96,14 @@ describe("TerminalWakeManager", () => {
 
   it("skips serialized state restore for alt-screen terminals", async () => {
     wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
-    const managed = {
-      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
       isAltBuffer: true,
-    } as unknown as ManagedTerminal;
+    };
     const deps: WakeManagerDeps = {
-      getInstance: vi.fn(() => managed),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
       hasInstance: vi.fn(() => true),
       restoreFromSerialized: vi.fn(() => true),
       restoreFromSerializedIncremental: vi.fn(async () => true),
@@ -105,12 +119,14 @@ describe("TerminalWakeManager", () => {
 
   it("treats alt-screen wake as successful even when serialized state is missing", async () => {
     wakeMock.mockResolvedValueOnce({ state: null });
-    const managed = {
-      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
       isAltBuffer: true,
-    } as unknown as ManagedTerminal;
+    };
     const deps: WakeManagerDeps = {
-      getInstance: vi.fn(() => managed),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
       hasInstance: vi.fn(() => true),
       restoreFromSerialized: vi.fn(() => true),
       restoreFromSerializedIncremental: vi.fn(async () => true),
@@ -126,12 +142,14 @@ describe("TerminalWakeManager", () => {
 
   it("restores serialized state for non-alt-screen terminals", async () => {
     wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
-    const managed = {
-      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
       isAltBuffer: false,
-    } as unknown as ManagedTerminal;
+    };
     const deps: WakeManagerDeps = {
-      getInstance: vi.fn(() => managed),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
       hasInstance: vi.fn(() => true),
       restoreFromSerialized: vi.fn(() => true),
       restoreFromSerializedIncremental: vi.fn(async () => true),
@@ -146,12 +164,14 @@ describe("TerminalWakeManager", () => {
 
   it("fails wake for non-alt-screen terminals when serialized state is missing", async () => {
     wakeMock.mockResolvedValueOnce({ state: null });
-    const managed = {
-      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
       isAltBuffer: false,
-    } as unknown as ManagedTerminal;
+    };
     const deps: WakeManagerDeps = {
-      getInstance: vi.fn(() => managed),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
       hasInstance: vi.fn(() => true),
       restoreFromSerialized: vi.fn(() => true),
       restoreFromSerializedIncremental: vi.fn(async () => true),
@@ -172,11 +192,13 @@ describe("TerminalWakeManager", () => {
     });
     wakeMock.mockReturnValue(wakePromise);
 
-    const managed = {
-      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) },
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
     };
     const deps: WakeManagerDeps = {
-      getInstance: vi.fn(() => managed as any),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
       hasInstance: vi.fn(() => true),
       restoreFromSerialized: vi.fn(() => true),
       restoreFromSerializedIncremental: vi.fn(async () => true),
@@ -190,5 +212,138 @@ describe("TerminalWakeManager", () => {
 
     resolveWake({ state: "serialized-state" });
     await wakePromise;
+  });
+
+  describe("rate-limit coalescing (#8562)", () => {
+    function makeDeps(managed: MockManagedTerminal): WakeManagerDeps {
+      return {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+        hasInstance: vi.fn(() => true),
+        restoreFromSerialized: vi.fn(() => true),
+        restoreFromSerializedIncremental: vi.fn(async () => true),
+      };
+    }
+
+    it("schedules a trailing-edge wake when called inside the rate-limit window", async () => {
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        const managed: MockManagedTerminal = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed));
+
+        // First wake fires immediately
+        manager.wake("term-rl-1");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        // Allow first wake to resolve and record lastWakeTime
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Second wake within rate-limit window MUST NOT be dropped silently —
+        // it schedules a trailing-edge timer for the end of the window.
+        vi.setSystemTime(Date.now() + 200);
+        manager.wake("term-rl-1");
+        // Trailing-edge timer hasn't fired yet
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        // Advance past the window and the trailing wake fires
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(wakeMock).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("collapses repeated calls inside the window to a single trailing wake", async () => {
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        const managed: MockManagedTerminal = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed));
+
+        manager.wake("term-rl-2");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        // Three more calls during the window — should collapse to one trailing
+        vi.setSystemTime(Date.now() + 100);
+        manager.wake("term-rl-2");
+        vi.setSystemTime(Date.now() + 100);
+        manager.wake("term-rl-2");
+        vi.setSystemTime(Date.now() + 100);
+        manager.wake("term-rl-2");
+
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1500);
+        expect(wakeMock).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("cancels pending rate-limited wake when clearWakeState is called", async () => {
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        const managed: MockManagedTerminal = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed));
+
+        manager.wake("term-rl-3");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        vi.setSystemTime(Date.now() + 200);
+        manager.wake("term-rl-3");
+
+        // Clear state cancels the pending trailing wake
+        manager.clearWakeState("term-rl-3");
+
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("dispose cancels all pending rate-limited wakes", async () => {
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        const managed: MockManagedTerminal = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed));
+
+        manager.wake("term-rl-4");
+        await vi.advanceTimersByTimeAsync(0);
+        manager.wake("term-rl-5");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(wakeMock).toHaveBeenCalledTimes(2);
+
+        vi.setSystemTime(Date.now() + 100);
+        manager.wake("term-rl-4");
+        manager.wake("term-rl-5");
+
+        manager.dispose();
+
+        await vi.advanceTimersByTimeAsync(2000);
+        // No additional wakes fired after dispose
+        expect(wakeMock).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
