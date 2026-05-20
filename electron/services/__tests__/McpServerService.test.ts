@@ -2566,6 +2566,24 @@ describe("McpServerService", () => {
         title: "New Terminal",
         description: "Create a new terminal",
       }),
+      createManifestEntry({
+        id: "terminal.moveToDock" as ActionId,
+        title: "Move to Dock",
+        description:
+          "Move the target terminal from the grid to the dock. Accepts an optional terminalId; defaults to the currently focused terminal.",
+      }),
+      createManifestEntry({
+        id: "terminal.moveToGrid" as ActionId,
+        title: "Move to Grid",
+        description:
+          "Move the target terminal from the dock back into the grid. Accepts an optional terminalId; defaults to the currently focused terminal.",
+      }),
+      createManifestEntry({
+        id: "terminal.toggleDock" as ActionId,
+        title: "Toggle Dock",
+        description:
+          "Toggle the focused terminal between the dock and the grid. Pushes a layout undo snapshot so the move can be reversed.",
+      }),
       waitUntilIdleManifestEntry(),
       createManifestEntry({
         id: "recipe.list" as ActionId,

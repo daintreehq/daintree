@@ -12,7 +12,8 @@ export function registerTerminalLayoutActions(
   actions.set("terminal.moveToDock", () => ({
     id: "terminal.moveToDock",
     title: "Move to Dock",
-    description: "Move terminal to the dock",
+    description:
+      "Move the target terminal from the grid to the dock. Accepts an optional terminalId; defaults to the currently focused terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -43,7 +44,8 @@ export function registerTerminalLayoutActions(
   actions.set("terminal.moveToGrid", () => ({
     id: "terminal.moveToGrid",
     title: "Move to Grid",
-    description: "Move terminal to the grid",
+    description:
+      "Move the target terminal from the dock back into the grid. Accepts an optional terminalId; defaults to the currently focused terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -237,7 +239,8 @@ export function registerTerminalLayoutActions(
   actions.set("terminal.toggleDock", () => ({
     id: "terminal.toggleDock",
     title: "Toggle Dock",
-    description: "Toggle focused terminal between grid and dock",
+    description:
+      "Toggle the focused terminal between the dock and the grid. Pushes a layout undo snapshot so the move can be reversed.",
     category: "terminal",
     kind: "command",
     danger: "safe",
