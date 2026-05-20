@@ -50,16 +50,21 @@ export function getTerminalFocusTarget(options: {
  * that the user is just trying to activate.
  *
  * Intentionally narrow: only applies to the unfocused grid case, only for
- * non-pointer (non-link) cells. The redirect to hybrid input vs xterm is *not*
- * decided here — callers consult `getTerminalFocusTarget` separately.
+ * non-pointer (non-link) cells, and never for shift+click — xterm's
+ * SelectionService treats shift as the override gesture to bypass PTY mouse
+ * reporting and force native text selection, so the event must reach xterm.
+ * The redirect to hybrid input vs xterm is *not* decided here — callers
+ * consult `getTerminalFocusTarget` separately.
  */
 export function shouldSuppressUnfocusedClick(options: {
   location: string;
   isFocused: boolean;
   isCursorPointer: boolean;
+  isShiftKey: boolean;
 }): boolean {
   if (options.location !== "grid") return false;
   if (options.isFocused) return false;
   if (options.isCursorPointer) return false;
+  if (options.isShiftKey) return false;
   return true;
 }

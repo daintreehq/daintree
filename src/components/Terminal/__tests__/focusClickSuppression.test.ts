@@ -8,6 +8,7 @@ describe("shouldSuppressUnfocusedClick", () => {
         location: "grid",
         isFocused: false,
         isCursorPointer: false,
+        isShiftKey: false,
       })
     ).toBe(true);
   });
@@ -18,6 +19,7 @@ describe("shouldSuppressUnfocusedClick", () => {
         location: "grid",
         isFocused: true,
         isCursorPointer: false,
+        isShiftKey: false,
       })
     ).toBe(false);
   });
@@ -28,6 +30,7 @@ describe("shouldSuppressUnfocusedClick", () => {
         location: "dock",
         isFocused: false,
         isCursorPointer: false,
+        isShiftKey: false,
       })
     ).toBe(false);
   });
@@ -38,6 +41,18 @@ describe("shouldSuppressUnfocusedClick", () => {
         location: "grid",
         isFocused: false,
         isCursorPointer: true,
+        isShiftKey: false,
+      })
+    ).toBe(false);
+  });
+
+  it("passes through shift+click on unfocused grid pane — xterm uses shift to bypass PTY mouse reporting", () => {
+    expect(
+      shouldSuppressUnfocusedClick({
+        location: "grid",
+        isFocused: false,
+        isCursorPointer: false,
+        isShiftKey: true,
       })
     ).toBe(false);
   });
