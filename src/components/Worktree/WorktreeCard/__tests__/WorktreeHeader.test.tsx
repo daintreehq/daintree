@@ -6,6 +6,7 @@ import { render, screen, fireEvent, act, cleanup } from "@testing-library/react"
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
 import type { WorktreeState } from "@shared/types";
+import type { NormalizedPRState } from "@shared/types/forge";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
 
@@ -43,7 +44,7 @@ vi.mock("@/services/ActionService", () => ({
 
 const noop = () => {};
 
-function prLinked(num: number, state: "open" | "merged" | "closed" | "declined" = "open") {
+function prLinked(num: number, state: NormalizedPRState = "open") {
   return {
     linked: {
       providerId: "daintree.github.github",
@@ -55,7 +56,7 @@ function prLinked(num: number, state: "open" | "merged" | "closed" | "declined" 
           number: num,
           rawData: null,
         },
-        state,
+        state: state as NormalizedPRState,
         url: `https://github.com/test/repo/pull/${num}`,
       },
     },
@@ -956,7 +957,7 @@ function ciFailureLinked(num: number) {
           number: num,
           rawData: null,
         },
-        state: "open" as const,
+        state: "open" as NormalizedPRState,
         url: `https://github.com/test/repo/pull/${num}`,
         ciStatus: {
           state: "failure" as const,
