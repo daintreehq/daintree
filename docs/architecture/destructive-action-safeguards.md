@@ -174,6 +174,14 @@ The current GitHub action set is read-only (`openIssues`, `listPullRequests`, et
 | `devPreview.restartAndClearCache` | **confirm** | none yet — `ConfirmDialog` wired in sibling UI issue | Boolean via dispatch | local-irreversible (framework build caches `.next`/`.vite`/`.turbo` wiped; regenerate on next build) | one panel | D1 | `danger:"confirm"` classification set; wire `ConfirmDialog` at the UI call site | TBD (UI issue) |
 | `devPreview.reinstallAndRestart` | **confirm** | none yet — `ConfirmDialog` wired in sibling UI issue | Boolean via dispatch | shared-state (`node_modules` removed; recovery requires a full reinstall, network + lockfile dependent) | one panel | D2 | `danger:"confirm"` classification set; wire `ConfirmDialog` + change preview at the UI call site | TBD (UI issue) |
 
+### Recovery page (bypass — static HTML)
+
+The emergency recovery page (`public/recovery.html`) is a zero-React surface loaded after a crash loop. It cannot use the React `ConfirmDialog` primitive — React itself may be the thing that's broken — so the confirm gate is implemented as a vanilla-JS Disclosure pattern (ARIA `aria-expanded` + `aria-controls` + the `inert` attribute) inline on the page. Focus moves to Cancel on expand and returns to the trigger on cancel.
+
+| Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `public/recovery-renderer.js` `btn-reset` → `RECOVERY_RESET_AND_RELOAD` | (bypass — static HTML, no `ActionService`) | **Yes** — inline Disclosure confirm section with panel-count + backup-timestamp preview (#8697) | n/a (bypass) | local-irreversible (`appState` overwritten; `cachedBackupSnapshot` nulled; backup file on disk survives) | one window's sessions + layout | D1 | Done (#8697) — confirm wired at the JS call site; IPC fires only after explicit confirm button click | — |
+
 ## Known bypasses
 
 Direct `window.electron.*` IPC calls that skip `ActionService`. These are the highest-risk locations because the action's `danger` rating cannot gate them — the confirmation must live in the component itself.
@@ -189,6 +197,7 @@ Direct `window.electron.*` IPC calls that skip `ActionService`. These are the hi
 | `src/components/Worktree/ReviewHub/ForcePushConfirmDialog.tsx` | `forcePushWithLease` | **Yes** — model implementation |
 | `src/hooks/useDevServer.ts:299` | `devPreview.restart` (dev-preview restart button) | **No** — hook invokes IPC directly; sibling UI issue migrates to the `devPreview.restart` action |
 | `src/components/Recovery/SafeModeBanner.tsx` | `app.resetAndRelaunch` (safe-mode restart) | **Yes** — `ConfirmDialog` with destructive variant + `logs.openFile` recovery (#8685) |
+| `public/recovery-renderer.js` | `recovery:reset-and-reload` (emergency recovery page) | **Yes** — inline vanilla-JS Disclosure confirm with panel count + backup timestamp preview; React is unavailable on this surface (#8697) |
 
 ## Maintenance
 

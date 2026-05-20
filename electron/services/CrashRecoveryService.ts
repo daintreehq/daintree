@@ -89,6 +89,12 @@ export class CrashRecoveryService {
     return info.exists && typeof info.timestamp === "number" ? info.timestamp : null;
   }
 
+  getBackupPanelCount(): number | null {
+    const appState = this.cachedBackupSnapshot?.appState as Record<string, unknown> | undefined;
+    const terminals = appState?.terminals;
+    return Array.isArray(terminals) ? terminals.length : null;
+  }
+
   getConfig(): CrashRecoveryConfig {
     const stored = store.get("crashRecovery");
     return {

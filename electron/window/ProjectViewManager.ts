@@ -1113,9 +1113,14 @@ export class ProjectViewManager {
           if (crashEntry?.projectPath) {
             params.set("project", path.basename(crashEntry.projectPath));
           }
-          const backupTimestamp = getCrashRecoveryService().getLastBackupTimestamp();
+          const recoverySvc = getCrashRecoveryService();
+          const backupTimestamp = recoverySvc.getLastBackupTimestamp();
           if (backupTimestamp !== null) {
             params.set("backupTimestamp", String(backupTimestamp));
+          }
+          const panelCount = recoverySvc.getBackupPanelCount();
+          if (panelCount !== null) {
+            params.set("panelCount", String(panelCount));
           }
           if (process.env.NODE_ENV === "development") {
             wc.loadURL(`${getDevServerUrl()}/recovery.html?${params}`);

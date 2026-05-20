@@ -906,6 +906,125 @@ describe("CrashRecoveryService", () => {
     });
   });
 
+  describe("getBackupPanelCount", () => {
+    it("returns null when no backup snapshot is cached", () => {
+      const svc = makeService();
+      svc.initialize();
+      expect(svc.getBackupPanelCount()).toBeNull();
+    });
+
+    it("returns terminal count from cached snapshot after crash detection", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: {
+            terminals: [
+              { id: "t1", kind: "terminal" },
+              { id: "t2", kind: "terminal" },
+              { id: "t3", kind: "browser" },
+            ],
+          },
+        })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount()).toBe(3);
+    });
+
+    it("returns zero when cached snapshot has an empty terminals array", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { terminals: [] },
+        })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount()).toBe(0);
+    });
+
+    it("returns null when cached snapshot has no appState", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({ capturedAt: Date.now() })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount()).toBeNull();
+    });
+
+    it("returns null when terminals is not an array", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { terminals: "not an array" },
+        })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount()).toBeNull();
+    });
+  });
+
   describe("resetToFresh", () => {
     it("resets appState to clean workspace defaults", () => {
       storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
