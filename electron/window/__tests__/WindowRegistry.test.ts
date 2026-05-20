@@ -3,7 +3,7 @@ import { WindowRegistry } from "../WindowRegistry.js";
 import { toDisposable } from "../../utils/lifecycle.js";
 import type { BrowserWindow } from "electron";
 
-function makeMockWindow(id: number, webContentsId: number) {
+function makeMockWindow(id: number, webContentsId: number, opts?: { focused?: boolean }) {
   const closedHandlers: Array<() => void> = [];
   const destroyedHandlers: Array<() => void> = [];
 
@@ -20,6 +20,7 @@ function makeMockWindow(id: number, webContentsId: number) {
       if (event === "closed") closedHandlers.push(handler);
     }),
     isDestroyed: vi.fn(() => false),
+    isFocused: vi.fn(() => opts?.focused ?? false),
     isMinimized: vi.fn(() => false),
     focus: vi.fn(),
     restore: vi.fn(),
@@ -31,6 +32,23 @@ function makeMockWindow(id: number, webContentsId: number) {
   };
 
   return win;
+}
+
+function makeMockApp() {
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  return {
+    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      const arr = listeners.get(event) ?? [];
+      arr.push(listener);
+      listeners.set(event, arr);
+    }),
+    emit: (event: string, ...args: unknown[]) => {
+      for (const listener of listeners.get(event) ?? []) {
+        listener(...args);
+      }
+    },
+    listenerCount: (event: string) => listeners.get(event)?.length ?? 0,
+  };
 }
 
 describe("WindowRegistry", () => {
@@ -162,6 +180,90 @@ describe("WindowRegistry", () => {
     registry.setPrimary(999);
 
     expect(registry.getPrimary()?.windowId).toBe(1);
+  });
+
+  describe("focus tracking", () => {
+    it("wireFocusTracking: focus on second registered window reassigns primary", () => {
+      const registry = new WindowRegistry();
+      const mockApp = makeMockApp();
+      const win1 = makeMockWindow(1, 100);
+      const win2 = makeMockWindow(2, 200);
+
+      registry.wireFocusTracking(mockApp);
+      registry.register(win1);
+      registry.register(win2);
+
+      expect(registry.getPrimary()?.windowId).toBe(1);
+
+      mockApp.emit("browser-window-focus", null, win2);
+
+      expect(registry.getPrimary()?.windowId).toBe(2);
+    });
+
+    it("wireFocusTracking: focus event for window not in registry does not change primary", () => {
+      const registry = new WindowRegistry();
+      const mockApp = makeMockApp();
+      const win1 = makeMockWindow(1, 100);
+
+      registry.wireFocusTracking(mockApp);
+      registry.register(win1);
+
+      const devtoolsLikeWin = makeMockWindow(42, 4200);
+      mockApp.emit("browser-window-focus", null, devtoolsLikeWin);
+
+      expect(registry.getPrimary()?.windowId).toBe(1);
+    });
+
+    it("wireFocusTracking is idempotent — calling twice attaches only one listener", () => {
+      const registry = new WindowRegistry();
+      const mockApp = makeMockApp();
+
+      registry.wireFocusTracking(mockApp);
+      registry.wireFocusTracking(mockApp);
+
+      expect(mockApp.listenerCount("browser-window-focus")).toBe(1);
+    });
+
+    it("register: already-focused window becomes primary immediately even when not first", () => {
+      const registry = new WindowRegistry();
+      const win1 = makeMockWindow(1, 100, { focused: false });
+      const win2 = makeMockWindow(2, 200, { focused: true });
+
+      registry.register(win1);
+      registry.register(win2);
+
+      expect(registry.getPrimary()?.windowId).toBe(2);
+    });
+
+    it("register: cold-start fallback still applies when no window is focused yet", () => {
+      const registry = new WindowRegistry();
+      const win1 = makeMockWindow(1, 100, { focused: false });
+      const win2 = makeMockWindow(2, 200, { focused: false });
+
+      registry.register(win1);
+      registry.register(win2);
+
+      expect(registry.getPrimary()?.windowId).toBe(1);
+    });
+
+    it("focus updates survive after unregister of unrelated window", () => {
+      const registry = new WindowRegistry();
+      const mockApp = makeMockApp();
+      const win1 = makeMockWindow(1, 100);
+      const win2 = makeMockWindow(2, 200);
+      const win3 = makeMockWindow(3, 300);
+
+      registry.wireFocusTracking(mockApp);
+      registry.register(win1);
+      registry.register(win2);
+      registry.register(win3);
+
+      mockApp.emit("browser-window-focus", null, win3);
+      expect(registry.getPrimary()?.windowId).toBe(3);
+
+      registry.unregister(2);
+      expect(registry.getPrimary()?.windowId).toBe(3);
+    });
   });
 
   it("auto-unregisters on window closed event", () => {

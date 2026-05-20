@@ -5,6 +5,18 @@ import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import { DisposableStore } from "../utils/lifecycle.js";
 
+/**
+ * Narrow structural type for the Electron `app` module — exposes only the
+ * `on("browser-window-focus", ...)` subscription used by focus tracking.
+ * Keeps WindowRegistry testable without mocking the whole electron module.
+ */
+export interface FocusTrackingApp {
+  on(
+    event: "browser-window-focus",
+    listener: (event: unknown, win: BrowserWindow) => void
+  ): unknown;
+}
+
 export interface WindowServices {
   portalManager?: PortalManager;
   eventBuffer?: EventBuffer;
@@ -35,6 +47,7 @@ export class WindowRegistry {
   private webContentsIndex = new Map<number, number>();
   private appViewWebContentsIds = new Map<number, Set<number>>(); // windowId → all view webContentsIds
   private primaryWindowId: number | null = null;
+  private focusTrackingWired = false;
 
   register(win: BrowserWindow, opts?: WindowRegistryOptions): WindowContext {
     const windowId = win.id;
@@ -57,7 +70,15 @@ export class WindowRegistry {
     this.windows.set(windowId, ctx);
     this.webContentsIndex.set(webContentsId, windowId);
 
+    // Cold-start fallback: claim primary on first registration so getPrimary()
+    // returns a sane value before any focus event fires.
     if (this.primaryWindowId === null) {
+      this.primaryWindowId = windowId;
+    }
+
+    // If the window is already focused at registration time (sync show/focus
+    // before the async browser-window-focus event arrives), promote it now.
+    if (typeof win.isFocused === "function" && win.isFocused()) {
       this.primaryWindowId = windowId;
     }
 
@@ -70,6 +91,24 @@ export class WindowRegistry {
     win.webContents.once("destroyed", doUnregister);
 
     return ctx;
+  }
+
+  /**
+   * Subscribe to `browser-window-focus` so `primaryWindowId` tracks the most
+   * recently focused registered window. Idempotent — safe to call multiple
+   * times.
+   *
+   * The `windows.has(win.id)` guard filters out detached DevTools windows and
+   * any other Electron-internal BrowserWindow that isn't in our registry.
+   */
+  wireFocusTracking(app: FocusTrackingApp): void {
+    if (this.focusTrackingWired) return;
+    this.focusTrackingWired = true;
+    app.on("browser-window-focus", (_event, win) => {
+      if (this.windows.has(win.id)) {
+        this.primaryWindowId = win.id;
+      }
+    });
   }
 
   /**
