@@ -207,9 +207,7 @@ export class MainProcessWatchdogClient {
     // the post-append attempt number used both for the cap check and as
     // the exponent in the jitter cap calculation.
     const crashAt = Date.now();
-    this.crashTimestamps = this.crashTimestamps.filter(
-      (t) => crashAt - t < RAPID_CRASH_WINDOW_MS
-    );
+    this.crashTimestamps = this.crashTimestamps.filter((t) => crashAt - t < RAPID_CRASH_WINDOW_MS);
     this.crashTimestamps.push(crashAt);
 
     if (this.crashTimestamps.length >= CRASH_THRESHOLD) {

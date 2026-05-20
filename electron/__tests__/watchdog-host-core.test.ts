@@ -210,7 +210,7 @@ describe("createWatchdog", () => {
     // arming ping has a chance to reset the counter.
     it("suppresses ticks fired within HEARTBEAT_INTERVAL_MS of the most recent wake", () => {
       const killMain = vi.fn();
-      let now = 1000;
+      const now = 1000;
       const wd = createWatchdog({ killMain, logError: () => {}, now: () => now });
       wd.handleMessage({ type: "ping" });
 
