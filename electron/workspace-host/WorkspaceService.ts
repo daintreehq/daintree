@@ -55,6 +55,12 @@ export { probeGitLfsAvailable } from "./worktreeUtils.js";
 const DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS = 2000;
 const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
 const WORKTREE_REMOVE_LOCK_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 3000, 5000, 8000];
+// Periodic safety-net reconcile cadence. On macOS the FSEvents-backed topology
+// watcher goes silent when `.git/worktrees/` is deleted (last worktree removed)
+// and `startTopologyWatcher()` no-ops when that dir is absent — so a phantom row
+// can persist until the 300s background poll happens to hit the fs.access check.
+// This interval bounds that staleness independent of watcher liveness (#8510).
+const TOPOLOGY_SAFETY_INTERVAL_MS = 90_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -129,6 +135,11 @@ export class WorkspaceService {
   private topologyDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private topologyWatcherEnabled = true;
   private topologyWatcherGeneration = 0;
+  // Watcher-independent safety net (#8510): the topology watcher can go
+  // permanently silent (macOS FSEvents root deletion) or never start (metadata
+  // dir absent), so a periodic reconcile bounds phantom-row staleness. Calls
+  // are no-ops while paused/disabled via scheduleTopologyReconcile's guards.
+  private periodicSafetyTimer: ReturnType<typeof setInterval> | null = null;
 
   /**
    * Host-run identity, minted once per WorkspaceService instance — i.e. once
@@ -451,6 +462,12 @@ export class WorkspaceService {
       ]);
 
       this.startTopologyWatcher();
+      // Started independently of startTopologyWatcher() — that method no-ops
+      // when `.git/worktrees/` is absent (the exact "all worktrees removed"
+      // case), so gating the safety net on it would defeat its purpose (#8510).
+      if (this.pollingEnabled) {
+        this.startPeriodicSafetyTimer();
+      }
 
       this.sendEvent({ type: "load-project-result", requestId, success: true, lfsAvailable });
 
@@ -1001,6 +1018,19 @@ export class WorkspaceService {
     return `${commonDir}/worktrees`;
   }
 
+  // Idempotent: a second call while the timer is live is a no-op, so the two
+  // call sites (load-project path + setPollingEnabled resume) can both invoke
+  // it unconditionally. Cleared in stopTopologyWatcher() (which dispose() and
+  // the pause path both call), so the timer never outlives the service.
+  private startPeriodicSafetyTimer(): void {
+    if (this.periodicSafetyTimer !== null) return;
+    const timer = setInterval(() => {
+      this.scheduleTopologyReconcile();
+    }, TOPOLOGY_SAFETY_INTERVAL_MS);
+    timer.unref?.();
+    this.periodicSafetyTimer = timer;
+  }
+
   private startTopologyWatcher(): void {
     if (!this.topologyWatcherEnabled) return;
     if (this.topologyWatcherSubscription.value) return;
@@ -1070,6 +1100,10 @@ export class WorkspaceService {
     this.topologyPendingDelete.clear();
     this.topologyReconcilePending = false;
     this.topologyWatchCooldownDirty = false;
+    if (this.periodicSafetyTimer !== null) {
+      clearInterval(this.periodicSafetyTimer);
+      this.periodicSafetyTimer = null;
+    }
   }
 
   // The basename of `.git/worktrees/<name>` is exactly what @parcel/watcher
@@ -2183,6 +2217,9 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         monitor.resumePolling();
       }
       this.startTopologyWatcher();
+      // stopTopologyWatcher() (run on the !enabled branch) cleared the safety
+      // timer, so resume must restart it symmetrically (#8510).
+      this.startPeriodicSafetyTimer();
       this.scheduleTopologyReconcile();
     }
   }

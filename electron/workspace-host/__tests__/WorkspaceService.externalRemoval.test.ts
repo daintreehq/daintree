@@ -659,4 +659,107 @@ describe("WorkspaceService external worktree removal", () => {
       expect(service["activeWorktreeId"]).toBe("/test/main");
     });
   });
+
+  describe("periodic safety-net timer (#8510)", () => {
+    it("calls scheduleTopologyReconcile on each interval tick", async () => {
+      vi.useFakeTimers();
+      const reconcileSpy = vi
+        .spyOn(service as any, "scheduleTopologyReconcile")
+        .mockImplementation(() => {});
+
+      service["startPeriodicSafetyTimer"]();
+
+      expect(reconcileSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(reconcileSpy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(reconcileSpy).toHaveBeenCalledTimes(2);
+
+      vi.useRealTimers();
+    });
+
+    it("is idempotent — a second start does not create a duplicate interval", async () => {
+      vi.useFakeTimers();
+      const reconcileSpy = vi
+        .spyOn(service as any, "scheduleTopologyReconcile")
+        .mockImplementation(() => {});
+
+      service["startPeriodicSafetyTimer"]();
+      service["startPeriodicSafetyTimer"]();
+
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(reconcileSpy).toHaveBeenCalledTimes(1);
+
+      vi.useRealTimers();
+    });
+
+    it("stopTopologyWatcher clears the timer so no further ticks fire", async () => {
+      vi.useFakeTimers();
+      const reconcileSpy = vi
+        .spyOn(service as any, "scheduleTopologyReconcile")
+        .mockImplementation(() => {});
+
+      service["startPeriodicSafetyTimer"]();
+      service["stopTopologyWatcher"]();
+
+      await vi.advanceTimersByTimeAsync(90_000 * 2);
+      expect(reconcileSpy).not.toHaveBeenCalled();
+      expect(service["periodicSafetyTimer"]).toBeNull();
+
+      vi.useRealTimers();
+    });
+
+    it("clears a phantom monitor end-to-end when the interval fires", async () => {
+      createAndRegisterMonitor();
+      expect(service["monitors"].has("/test/worktree")).toBe(true);
+
+      mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+        if (args[0] === "worktree" && args[1] === "list") {
+          // Post-prune list: the externally-removed worktree is gone.
+          return [
+            "worktree /test/root",
+            "HEAD aaaaaaaaaaaaaaaaaaaa",
+            "branch refs/heads/main",
+            "",
+          ].join("\n");
+        }
+        return undefined;
+      });
+      service["listService"].invalidateCache();
+
+      vi.useFakeTimers();
+      service["startPeriodicSafetyTimer"]();
+      await vi.advanceTimersByTimeAsync(90_000);
+
+      expect(service["monitors"].has("/test/worktree")).toBe(false);
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "worktree-removed", worktreeId: "/test/worktree" })
+      );
+
+      vi.useRealTimers();
+    });
+
+    it("restarts symmetrically across a setPollingEnabled pause/resume cycle", async () => {
+      vi.useFakeTimers();
+      const reconcileSpy = vi
+        .spyOn(service as any, "scheduleTopologyReconcile")
+        .mockImplementation(() => {});
+
+      service["startPeriodicSafetyTimer"]();
+      service.setPollingEnabled(false);
+      expect(service["periodicSafetyTimer"]).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(reconcileSpy).not.toHaveBeenCalled();
+
+      service.setPollingEnabled(true);
+      // setPollingEnabled(true) also fires an immediate reconcile (line 2186);
+      // clear it so the assertion isolates the restarted timer's tick.
+      reconcileSpy.mockClear();
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(reconcileSpy).toHaveBeenCalledTimes(1);
+
+      vi.useRealTimers();
+    });
+  });
 });
