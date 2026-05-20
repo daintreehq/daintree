@@ -46,6 +46,10 @@ export function useCrashRecoveryGate(): {
           return;
         }
 
+        // Kick off the CrashRecoveryDialog chunk fetch before the next render
+        // commits the Suspense boundary, so the dialog appears without a blank
+        // fallback. The promise is cached, so the lazy() consumer reuses it.
+        void import("@/components/Recovery/CrashRecoveryDialog");
         setState({ status: "pending", crash: pending, config });
       })
       .catch(() => {
