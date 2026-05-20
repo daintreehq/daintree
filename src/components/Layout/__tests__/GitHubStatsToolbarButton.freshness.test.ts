@@ -88,7 +88,13 @@ describe("GitHubStatsToolbarButton freshness wiring", () => {
     const pillSource = await fs.readFile(path.resolve(__dirname, "../GitHubStatPill.tsx"), "utf-8");
     expect(pillSource).toContain("h-full flex-1 justify-center");
     expect(pillSource).toContain("min-w-[2ch] text-center");
-    expect(source).toContain("w-[13rem] shrink-0");
+    // The container width is dynamic — a constant 13rem budget for the three
+    // flex-1 pills plus a fixed slot per active trailing indicator — so the
+    // pills keep stable equal widths without the old fixed-width +
+    // overflow-hidden combo clipping (and disabling hover on) the indicators.
+    expect(source).toContain("flex h-8 shrink-0 items-center");
+    expect(source).toContain("width: statsContainerWidth");
+    expect(source).toContain("calc(13rem +");
   });
 
   it("parent className props do not introduce transition-all", () => {

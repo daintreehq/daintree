@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/context-menu";
 import { actionService } from "@/services/ActionService";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useGitHubFilterStore } from "@github-renderer/stores/githubFilterStore";
@@ -147,6 +148,8 @@ export const GitHubStatsToolbarButton = memo(
 
     const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
+    const prCircuitTripped = usePRCircuitBreakerStore((s) => s.tripped);
+
     const [issuesOpen, setIssuesOpen] = useState(false);
     const [prsOpen, setPrsOpen] = useState(false);
     const [commitsOpen, setCommitsOpen] = useState(false);
@@ -246,11 +249,17 @@ export const GitHubStatsToolbarButton = memo(
     }, [rateLimitResetAt]);
 
     const rateLimitActive = rateLimitCountdown !== null;
-    const rateLimitLabel = rateLimitActive
-      ? rateLimitKind === "secondary"
-        ? `Paused · resumes in ${rateLimitCountdown}`
-        : `Resets in ${rateLimitCountdown}`
-      : null;
+
+    // The pill row holds three equal flex-1 stat pills budgeted to a constant
+    // 13rem. Each active trailing indicator (rate-limit clock, PR-detection-
+    // paused glyph) adds a fixed 1.75rem (w-7) slot plus its 1px divider, so
+    // the container grows by exactly that much and the pills keep their
+    // original width. The previous fixed w-[13rem] + overflow-hidden silently
+    // clipped any indicator off the right edge — and a clipped element can't
+    // receive pointer events, which is why the rate-limit details tooltip
+    // stopped opening on hover.
+    const trailingIndicatorCount = (rateLimitActive ? 1 : 0) + (prCircuitTripped ? 1 : 0);
+    const statsContainerWidth = `calc(13rem + ${trailingIndicatorCount * 1.75}rem + ${trailingIndicatorCount}px)`;
 
     // Fetch the per-bucket breakdown when the tooltip opens, and tick a 1Hz
     // clock so the per-bucket countdowns animate locally without re-fetching.
@@ -612,8 +621,9 @@ export const GitHubStatsToolbarButton = memo(
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
-            className="toolbar-stats app-no-drag relative mr-2 flex h-8 w-[13rem] shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,0.5rem)] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))]"
+            className="toolbar-stats app-no-drag relative mr-2 flex h-8 shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,0.5rem)] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] transition-[width] duration-150 ease-out"
             style={{
+              width: statsContainerWidth,
               ["--toolbar-stats-divider" as string]:
                 "var(--toolbar-stats-divider,var(--theme-border-subtle))",
             }}
@@ -890,7 +900,7 @@ export const GitHubStatsToolbarButton = memo(
               error={statsError ?? undefined}
               onTransitionEnd={handleGitHubStatusTransitionEnd}
             />
-            {rateLimitActive && rateLimitLabel ? (
+            {rateLimitActive ? (
               <Tooltip open={rateLimitTooltipOpen} onOpenChange={setRateLimitTooltipOpen}>
                 <TooltipTrigger asChild>
                   <div
@@ -901,10 +911,9 @@ export const GitHubStatsToolbarButton = memo(
                         ? `GitHub secondary rate limit — resuming in ${rateLimitCountdown}`
                         : `GitHub rate limit — resets in ${rateLimitCountdown}`
                     }
-                    className="flex h-full items-center gap-1.5 px-2.5 text-[10px] font-medium text-muted-foreground"
+                    className="flex h-full w-7 shrink-0 items-center justify-center text-muted-foreground"
                   >
-                    <Clock className="h-3 w-3 opacity-70" aria-hidden />
-                    <span className="tabular-nums">{rateLimitLabel}</span>
+                    <Clock className="h-3.5 w-3.5 opacity-80" aria-hidden />
                   </div>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="px-0 py-0">

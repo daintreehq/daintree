@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import type { GitHubRateLimitDetails } from "@shared/types";
 
 export function formatRateLimitCountdown(remainingMs: number): string {
@@ -23,6 +24,18 @@ export function msUntilNextLabelChange(remainingMs: number): number {
   }
   const minutes = Math.floor(totalSeconds / 60);
   return remainingMs - (60_000 * minutes - 1000);
+}
+
+/**
+ * Live GitHub rate-limit reset countdown for in-panel banners (e.g. the
+ * issues/PRs dropdown). Re-evaluates on the shared minute ticker — minute
+ * granularity is intentional for a passive banner; the per-second readout
+ * lives in the toolbar {@link RateLimitDetailsPanel} tooltip.
+ */
+export function LiveRateLimitCountdown({ resetAt }: { resetAt: number }) {
+  useGlobalMinuteTicker();
+  const remaining = resetAt - Date.now();
+  return <>{remaining <= 0 ? "any moment now" : formatRateLimitCountdown(remaining)}</>;
 }
 
 interface RateLimitDetailsPanelProps {

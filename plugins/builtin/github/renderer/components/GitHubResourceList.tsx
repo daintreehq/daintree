@@ -38,6 +38,7 @@ import {
   RESOURCE_ITEM_HEIGHT_PX,
 } from "./GitHubDropdownSkeletons";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
+import { LiveRateLimitCountdown } from "@/components/Layout/RateLimitDetails";
 import { useGitHubResourceListSWR } from "../hooks/useGitHubResourceListSWR";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
@@ -174,6 +175,7 @@ export function GitHubResourceList({
     exactNumberNotFound,
     isTokenError,
     isRateLimited,
+    rateLimitResetAt,
     handleLoadMore,
     handleRetry,
     handleManualRefresh,
@@ -880,6 +882,11 @@ export function GitHubResourceList({
                 <span className="text-xs truncate">
                   GitHub requests are paused. Showing last known results.
                 </span>
+                {rateLimitResetAt != null && rateLimitResetAt > Date.now() && (
+                  <span className="text-xs text-muted-foreground/70 shrink-0 whitespace-nowrap tabular-nums">
+                    · Resumes in <LiveRateLimitCountdown resetAt={rateLimitResetAt} />
+                  </span>
+                )}
                 {lastUpdatedAt != null && !debouncedSearch && (
                   <span className="text-xs text-muted-foreground/70 shrink-0 whitespace-nowrap">
                     · Updated <LiveTimeAgo timestamp={lastUpdatedAt} />
