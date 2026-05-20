@@ -242,6 +242,112 @@ describe("IssuePickerDialog stale behavior", () => {
     }
   });
 
+  it("does not show prior-session results when the dialog reopens", async () => {
+    vi.useFakeTimers();
+    try {
+      const issueA = makeIssue(1, "Issue A");
+
+      let resolveSecond: ((value: { items: GitHubIssue[] }) => void) | undefined;
+      const secondOpenPromise = new Promise<{ items: GitHubIssue[] }>((r) => {
+        resolveSecond = r;
+      });
+
+      listIssuesMock
+        .mockResolvedValueOnce({ items: [issueA] })
+        .mockResolvedValueOnce({ items: [issueA] })
+        .mockReturnValueOnce(secondOpenPromise)
+        .mockReturnValueOnce(secondOpenPromise);
+
+      const { rerender } = render(
+        <IssuePickerDialog
+          isOpen
+          onClose={() => {}}
+          worktree={worktree}
+          onAttach={() => {}}
+          onDetach={() => {}}
+        />
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      expect(screen.getByText("Issue A")).toBeTruthy();
+
+      rerender(
+        <IssuePickerDialog
+          isOpen={false}
+          onClose={() => {}}
+          worktree={worktree}
+          onAttach={() => {}}
+          onDetach={() => {}}
+        />
+      );
+
+      rerender(
+        <IssuePickerDialog
+          isOpen
+          onClose={() => {}}
+          worktree={worktree}
+          onAttach={() => {}}
+          onDetach={() => {}}
+        />
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(screen.queryByText("Issue A")).toBeNull();
+      expect(screen.queryByRole("listbox")).toBeNull();
+
+      resolveSecond?.({ items: [] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a slow response when the user has already typed past it", async () => {
+    vi.useFakeTimers();
+    try {
+      const stale = makeIssue(1, "Stale foo result");
+
+      let resolveFoo: ((value: { items: GitHubIssue[] }) => void) | undefined;
+      const fooPromise = new Promise<{ items: GitHubIssue[] }>((r) => {
+        resolveFoo = r;
+      });
+
+      listIssuesMock
+        .mockResolvedValueOnce({ items: [] })
+        .mockResolvedValueOnce({ items: [] })
+        .mockReturnValueOnce(fooPromise);
+
+      renderDialog();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      const input = screen.getByPlaceholderText("Search issues by title or number...");
+
+      fireEvent.change(input, { target: { value: "foo" } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      fireEvent.change(input, { target: { value: "foobar" } });
+
+      await act(async () => {
+        resolveFoo?.({ items: [stale] });
+        await Promise.resolve();
+      });
+
+      expect(screen.queryByText("Stale foo result")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("binds the empty-state title to the committed query, not the live input", async () => {
     vi.useFakeTimers();
     try {

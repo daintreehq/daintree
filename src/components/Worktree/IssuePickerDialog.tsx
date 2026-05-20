@@ -134,6 +134,9 @@ export function IssuePickerDialog({
     }, 300);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      // Invalidate any in-flight fetch the moment the user's input changes,
+      // so a slow response from the prior query can't land under the new one.
+      fetchIdRef.current++;
     };
   }, [search, stateFilter, isOpen, fetchIssues]);
 
@@ -142,6 +145,9 @@ export function IssuePickerDialog({
       setSearch("");
       setStateFilter("open");
       setFetchedQuery("");
+      setIssues([]);
+      setError(null);
+      setIsPending(true);
       setSelectedIndex(0);
       setTimeout(() => inputRef.current?.focus(), 100);
     }
