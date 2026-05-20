@@ -24,14 +24,22 @@ function plural(count: number, singular: string, pluralForm: string): string {
 }
 
 function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
+  const skipped =
+    result.skippedCount > 0
+      ? `, ${plural(result.skippedCount, "terminal", "terminals")} skipped`
+      : "";
+
   if (result.cancelled) {
     if (result.successCount === 0 && result.failureCount === 0) {
+      if (result.skippedCount > 0) {
+        return `Broadcast cancelled — ${plural(result.skippedCount, "terminal", "terminals")} skipped`;
+      }
       return "Broadcast cancelled";
     }
     if (result.failureCount > 0) {
-      return `Broadcast cancelled — ${result.successCount} sent, ${result.failureCount} failed`;
+      return `Broadcast cancelled — ${result.successCount} sent, ${result.failureCount} failed${skipped}`;
     }
-    return `Broadcast cancelled — ${result.successCount} sent`;
+    return `Broadcast cancelled — ${result.successCount} sent${skipped}`;
   }
   if (result.failureCount > 0) {
     return `Broadcast sent to ${result.successCount} — ${result.failureCount} failed`;
