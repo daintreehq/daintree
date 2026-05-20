@@ -19,8 +19,9 @@ export function SavedFleetRow({ scope, onRequestDelete }: SavedFleetRowProps): R
   const isStale = scope.kind === "snapshot" && count === 0;
   return (
     <DropdownMenuItem
-      disabled={isStale}
+      aria-disabled={isStale || undefined}
       onSelect={() => {
+        if (isStale) return;
         void actionService.dispatch("fleet.recallNamedFleet", { id: scope.id }, { source: "user" });
       }}
       data-testid="fleet-saved-row"

@@ -31,18 +31,23 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     children,
     onSelect,
     disabled,
+    "aria-disabled": ariaDisabled,
+    ...rest
   }: {
     children: React.ReactNode;
     onSelect?: (e: Event) => void;
     disabled?: boolean;
+    "aria-disabled"?: boolean;
   }) => (
     <div
       role="menuitem"
       data-disabled={disabled ? "true" : undefined}
+      aria-disabled={ariaDisabled ? "true" : undefined}
       onClick={(e) => {
         if (disabled) return;
         onSelect?.(e as unknown as Event);
       }}
+      {...rest}
     >
       {children}
     </div>
@@ -64,6 +69,7 @@ vi.mock("@/services/actions/definitions/fleetActions", () => ({
   }),
 }));
 
+import { actionService } from "@/services/ActionService";
 import { SavedFleetsSection } from "../SavedFleetsSection";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -141,6 +147,7 @@ function setSavedScopes(scopes: FleetSavedScope[]) {
 beforeEach(() => {
   useProjectSettingsStore.setState({ settings: {} } as any);
   useFleetArmingStore.setState({ armedIds: new Set() });
+  vi.clearAllMocks();
 });
 
 describe("SavedFleetsSection", () => {
@@ -207,14 +214,14 @@ describe("SavedFleetsSection", () => {
     expect(screen.queryByText("Smart-Sets")).toBeNull();
   });
 
-  it("renders stale snapshot with disabled attribute", () => {
+  it("renders stale snapshot with aria-disabled", () => {
     setSavedScopes([SNAPSHOT_B]);
     render(<SavedFleetsSection onRequestDelete={vi.fn()} />);
     expect(screen.getByText("Stale snapshot")).toBeDefined();
     const rows = screen.getAllByRole("menuitem");
     const staleRow = rows.find((r) => r.textContent?.includes("Stale snapshot"));
     expect(staleRow).toBeDefined();
-    expect(staleRow!.getAttribute("data-disabled")).toBe("true");
+    expect(staleRow!.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("fires onRequestDelete when delete button clicked", () => {
@@ -224,5 +231,47 @@ describe("SavedFleetsSection", () => {
     const deleteBtn = screen.getByLabelText('Delete fleet "My terminals"');
     fireEvent.click(deleteBtn);
     expect(onDelete).toHaveBeenCalledWith("snap-a");
+  });
+
+  it("fires onRequestDelete when stale snapshot delete button clicked", () => {
+    const onDelete = vi.fn();
+    setSavedScopes([SNAPSHOT_B]);
+    render(<SavedFleetsSection onRequestDelete={onDelete} />);
+    const deleteBtn = screen.getByLabelText('Delete fleet "Stale snapshot"');
+    fireEvent.click(deleteBtn);
+    expect(onDelete).toHaveBeenCalledWith("snap-b");
+  });
+
+  it("dispatches recall when live snapshot row is selected", () => {
+    setSavedScopes([SNAPSHOT_A]);
+    render(<SavedFleetsSection onRequestDelete={vi.fn()} />);
+    const rows = screen.getAllByRole("menuitem");
+    const liveRow = rows.find((r) => r.textContent?.includes("My terminals"));
+    fireEvent.click(liveRow!);
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "fleet.recallNamedFleet",
+      { id: "snap-a" },
+      { source: "user" }
+    );
+  });
+
+  it("does not dispatch recall when stale snapshot row is selected", () => {
+    setSavedScopes([SNAPSHOT_B]);
+    render(<SavedFleetsSection onRequestDelete={vi.fn()} />);
+    const rows = screen.getAllByRole("menuitem");
+    const staleRow = rows.find((r) => r.textContent?.includes("Stale snapshot"));
+    fireEvent.click(staleRow!);
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("renders Pinned group before Smart-Sets group in DOM order", () => {
+    setSavedScopes([SNAPSHOT_A, PREDICATE_FINISHED_CURRENT]);
+    render(<SavedFleetsSection onRequestDelete={vi.fn()} />);
+    const groups = screen.getAllByTestId("dropdown-group");
+    expect(groups).toHaveLength(2);
+    expect(groups[0].textContent).toContain("Pinned");
+    expect(groups[0].textContent).toContain("My terminals");
+    expect(groups[1].textContent).toContain("Smart-Sets");
+    expect(groups[1].textContent).toContain("Finished here");
   });
 });
