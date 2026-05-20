@@ -726,4 +726,12 @@ export const usePanelStore = create<PanelGridState>()(
   })
 );
 
+/**
+ * Non-hook alias for the panel store's vanilla API. Use this for imperative
+ * `getState()`/`subscribe()` access inside React Compiler-processed code
+ * (`"use memo"` components, `useMemo` bodies) where referencing the
+ * `usePanelStore` hook as a value is disallowed.
+ */
+export const panelStoreApi = usePanelStore;
+
 export { setupTerminalStoreListeners, cleanupTerminalStoreListeners } from "./panelStoreListeners";

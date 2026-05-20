@@ -1,4 +1,4 @@
-export { usePanelStore, isAgentReady, getTerminalRefreshTier } from "./panelStore";
+export { usePanelStore, panelStoreApi, isAgentReady, getTerminalRefreshTier } from "./panelStore";
 export type { TerminalInstance, AddPanelOptions, QueuedCommand } from "./panelStore";
 export type { CrashType } from "@shared/types/pty-host";
 export { MAX_GRID_TERMINALS } from "./slices/panelRegistrySlice";

@@ -6,6 +6,7 @@ import { logError } from "@/utils/logger";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import {
   usePanelStore,
+  panelStoreApi,
   useLayoutConfigStore,
   useWorktreeSelectionStore,
   usePreferencesStore,
@@ -150,7 +151,7 @@ export function useContentGridContext({
   // plus the dedicated `gridPanelIds`/`fleetPanelIds` subscriptions defined
   // further down only change on add/remove/move/trash/restore. Memos that
   // need per-panel fields read `panelsById` non-reactively via
-  // `usePanelStore.getState()` at evaluation time. See issue #8593.
+  // `panelStoreApi.getState()` at evaluation time. See issue #8593.
   const {
     storeTerminalIds,
     storeTabGroups,
@@ -242,7 +243,7 @@ export function useContentGridContext({
 
   const gridTerminals = useMemo(() => {
     if (gridPanelIds.length === 0) return EMPTY_TERMINALS;
-    const byId = usePanelStore.getState().panelsById;
+    const byId = panelStoreApi.getState().panelsById;
     const result: TerminalInstance[] = [];
     for (const id of gridPanelIds) {
       const t = byId[id];
@@ -497,7 +498,13 @@ export function useContentGridContext({
     }
   }, [layoutConfig, clearPreMaximizeLayout]);
 
-  const hysteresisGridColsRef = useRef<number | undefined>(undefined);
+  // Previous committed column count, fed back into `computeGridColumns` for
+  // breakpoint hysteresis. Held as state (not a ref) so the `gridCols` memo can
+  // read it during render — the React Compiler disallows ref reads there. The
+  // effect below settles it to the committed value; feeding the result back is
+  // a hysteresis fixed point, so this costs at most one extra render per actual
+  // column change.
+  const [hysteresisGridCols, setHysteresisGridCols] = useState<number | undefined>(undefined);
 
   const gridCols = useMemo(() => {
     if (
@@ -512,14 +519,16 @@ export function useContentGridContext({
       return preMaximizeLayout.gridCols;
     }
     const { strategy, value } = layoutConfig;
-    return computeGridColumns(
-      gridItemCount,
-      gridWidth,
-      strategy,
-      value,
-      hysteresisGridColsRef.current
-    );
-  }, [gridItemCount, layoutConfig, gridWidth, maximizedId, preMaximizeLayout, activeWorktreeId]);
+    return computeGridColumns(gridItemCount, gridWidth, strategy, value, hysteresisGridCols);
+  }, [
+    gridItemCount,
+    layoutConfig,
+    gridWidth,
+    maximizedId,
+    preMaximizeLayout,
+    activeWorktreeId,
+    hysteresisGridCols,
+  ]);
 
   const layoutTransition: Transition = useMemo(
     () => ({
@@ -582,7 +591,7 @@ export function useContentGridContext({
 
   const fleetPanels = useMemo(() => {
     if (fleetPanelIds.length === 0) return EMPTY_TERMINALS;
-    const byId = usePanelStore.getState().panelsById;
+    const byId = panelStoreApi.getState().panelsById;
     const result: TerminalInstance[] = [];
     for (const id of fleetPanelIds) {
       const t = byId[id];
@@ -599,7 +608,10 @@ export function useContentGridContext({
     return fleetPanels.some((t) => (t.worktreeId ?? null) !== firstWorktreeId);
   }, [fleetPanels]);
 
-  const hysteresisFleetColsRef = useRef<number | undefined>(undefined);
+  // See `hysteresisGridCols` — same prior-render feedback for breakpoint
+  // hysteresis, held as state so the `fleetGridCols` memo can read it during
+  // render.
+  const [hysteresisFleetCols, setHysteresisFleetCols] = useState<number | undefined>(undefined);
 
   const fleetGridCols = useMemo(() => {
     if (!isFleetScopeRender) return 1;
@@ -609,9 +621,9 @@ export function useContentGridContext({
       gridWidth,
       strategy,
       value,
-      hysteresisFleetColsRef.current
+      hysteresisFleetCols
     );
-  }, [isFleetScopeRender, fleetPanels, layoutConfig, gridWidth]);
+  }, [isFleetScopeRender, fleetPanels, layoutConfig, gridWidth, hysteresisFleetCols]);
 
   const prevFleetGridColsRef = useRef(fleetGridCols);
   useEffect(() => {
@@ -619,7 +631,7 @@ export function useContentGridContext({
       isFleetScopeRender && layoutConfig.strategy === "automatic" ? fleetGridCols : undefined;
     if (!isFleetScopeRender) {
       prevFleetGridColsRef.current = fleetGridCols;
-      hysteresisFleetColsRef.current = writeFleetHysteresis;
+      setHysteresisFleetCols(writeFleetHysteresis);
       return;
     }
     const ids = fleetPanels.map((t) => t.id);
@@ -628,7 +640,7 @@ export function useContentGridContext({
     }
     const fleetColsChanged = prevFleetGridColsRef.current !== fleetGridCols;
     prevFleetGridColsRef.current = fleetGridCols;
-    hysteresisFleetColsRef.current = writeFleetHysteresis;
+    setHysteresisFleetCols(writeFleetHysteresis);
     if (fleetColsChanged && !isDraggingRef.current && ids.length > 0) {
       terminalInstanceService.suppressResizesDuringLayoutTransition(
         ids,
@@ -658,8 +670,9 @@ export function useContentGridContext({
 
     const colsChanged = prevGridColsRef.current !== gridCols;
     prevGridColsRef.current = gridCols;
-    hysteresisGridColsRef.current =
-      layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined;
+    setHysteresisGridCols(
+      layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined
+    );
 
     if (colsChanged && !isProjectSwitching && !isDraggingRef.current) {
       const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
