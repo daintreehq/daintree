@@ -220,6 +220,11 @@ export class ResourceGovernor {
         } else {
           this.engageThrottle(heapUsedMb, utilizationPercent);
         }
+      } else if (!aboveThreshold && this.trimAttemptedForCurrentPressure) {
+        // Pressure cleared after trim but before engage — preserve the
+        // "one-shot per pressure episode" contract by re-arming the flag so
+        // a fresh episode can trim again.
+        this.trimAttemptedForCurrentPressure = false;
       }
     } else {
       const throttleDuration = Date.now() - this.throttleStartTime;
@@ -495,7 +500,9 @@ export class ResourceGovernor {
       this.checkInterval = null;
     }
     if (this.isThrottling) {
-      for (const id of this.deps.getTerminalIds()) {
+      // Iterate only governor-paused terminals so we don't emit spurious
+      // "running" statuses for terminals the governor never touched.
+      for (const id of this.pausedTerminalIds) {
         const coordinator = this.deps.getPauseCoordinator(id);
         coordinator?.resume("resource-governor");
         if (!coordinator?.isPaused) {

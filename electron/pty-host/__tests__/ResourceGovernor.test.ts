@@ -264,6 +264,55 @@ describe("ResourceGovernor", () => {
       governor.dispose();
     });
 
+    it("disengages on raw utilization even when smoothed is still elevated", () => {
+      const { coordinator } = createMockCoordinator();
+      const memSpy = vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // Engage at sustained 87.89% — smoothed EMA tracks this value exactly.
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      // Drop raw to 53.7% (550MB) in a single tick — well below the 60%
+      // resume threshold. Smoothed will only decay to ~81.7% on this tick,
+      // still above 60%. Disengage must still fire because it uses RAW.
+      memSpy.mockReturnValue({
+        heapUsed: 550 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+      vi.advanceTimersByTime(2000);
+
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+      const disengageEvent = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "host-throttled" &&
+          (c[0] as Record<string, unknown>)?.isThrottled === false
+      );
+      expect(disengageEvent).toBeDefined();
+      expect((disengageEvent?.[0] as Record<string, unknown>).forced).toBe(false);
+
+      governor.dispose();
+    });
+
     it("emits forced: true on force-resume timeout", () => {
       const { coordinator } = createMockCoordinator();
       const deps = createMockDeps({
@@ -1117,6 +1166,58 @@ describe("ResourceGovernor", () => {
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
       expect(trimBuffers).toHaveBeenCalled();
       expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      governor.dispose();
+    });
+
+    it("re-arms trim attempt when pressure clears without ever engaging", () => {
+      const { coordinator } = createMockCoordinator();
+      const memSpy = vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // 5 ticks at high pressure → trim attempt fires on tick 5.
+      vi.advanceTimersByTime(10000);
+      expect(deps.trimBuffers).toHaveBeenCalledTimes(1);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      // Pressure clears. EMA decays so smoothed eventually crosses below the
+      // engage threshold and the re-arm branch fires.
+      memSpy.mockReturnValue({
+        heapUsed: 256 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+      vi.advanceTimersByTime(40000);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      // Pressure returns. EMA needs ~16 ticks to climb from ~25% back above
+      // the 85% engage threshold; trim must fire again for the new episode.
+      memSpy.mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+      vi.advanceTimersByTime(40000);
+      expect(deps.trimBuffers).toHaveBeenCalledTimes(2);
 
       governor.dispose();
     });
