@@ -218,82 +218,8 @@ ipcRenderer.on("terminal-port", (event, payload: { token: string }) => {
   }
 });
 
-// Direct MessagePort from workspace host for worktree/PR/issue events.
-// Events arrive as WorkspaceHostEvent objects and are re-emitted on ipcRenderer
-// so existing contextBridge-exposed listeners work transparently.
-let workspacePort: MessagePort | null = null;
-
-ipcRenderer.on("workspace-port", (event: Electron.IpcRendererEvent) => {
-  if (!event.ports || event.ports.length === 0) return;
-
-  if (workspacePort) {
-    try {
-      workspacePort.close();
-    } catch {
-      /* ignore */
-    }
-  }
-
-  workspacePort = event.ports[0];
-  workspacePort.onmessage = (msg: MessageEvent) => {
-    const data = msg.data;
-    if (!data?.type) return;
-
-    // Re-emit as ipcRenderer events so existing on*/subscribe handlers fire
-    const fakeEvent = {} as Electron.IpcRendererEvent;
-    switch (data.type) {
-      case "worktree-update":
-        ipcRenderer.emit(CHANNELS.EVENTS_PUSH, fakeEvent, {
-          name: "worktree:update",
-          payload: { worktree: data.worktree },
-        });
-        break;
-      case "worktree-removed":
-        ipcRenderer.emit(CHANNELS.WORKTREE_REMOVE, fakeEvent, {
-          worktreeId: data.worktreeId,
-        });
-        break;
-      case "pr-detected":
-        ipcRenderer.emit(CHANNELS.PR_DETECTED, fakeEvent, {
-          worktreeId: data.worktreeId,
-          prNumber: data.prNumber,
-          prUrl: data.prUrl,
-          prState: data.prState,
-          prCiStatus: data.prCiStatus,
-          prTitle: data.prTitle,
-          issueNumber: data.issueNumber,
-          issueTitle: data.issueTitle,
-          timestamp: Date.now(),
-        });
-        break;
-      case "pr-cleared":
-        ipcRenderer.emit(CHANNELS.PR_CLEARED, fakeEvent, {
-          worktreeId: data.worktreeId,
-          timestamp: Date.now(),
-        });
-        break;
-      case "issue-detected":
-        ipcRenderer.emit(CHANNELS.ISSUE_DETECTED, fakeEvent, {
-          worktreeId: data.worktreeId,
-          issueNumber: data.issueNumber,
-          issueTitle: data.issueTitle,
-        });
-        break;
-      case "issue-not-found":
-        ipcRenderer.emit(CHANNELS.ISSUE_NOT_FOUND, fakeEvent, {
-          worktreeId: data.worktreeId,
-          issueNumber: data.issueNumber,
-          timestamp: Date.now(),
-        });
-        break;
-    }
-  };
-  console.log("[Preload] Workspace direct port connected");
-});
-
 // ── Worktree Port Client (Phase 1) ──────────────────────────────────────────
 // New dedicated port for worktree data with request/response correlation.
-// Coexists with the legacy workspace-port above — both work independently.
 
 type WorktreePortEventCallback = (data: unknown) => void;
 

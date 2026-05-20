@@ -1,4 +1,4 @@
-import { MessageChannelMain, type WebContents } from "electron";
+import { type WebContents } from "electron";
 import path from "path";
 import { WorkspaceHostProcess } from "../WorkspaceHostProcess.js";
 import { store } from "../../store.js";
@@ -403,22 +403,7 @@ export class WorkspaceHostPool {
       console.warn("[WorkspaceClient] No entry for window, cannot attach direct port");
       return;
     }
-    this.createDirectPortForEntry(entry, webContents);
-  }
-
-  private createDirectPortForEntry(entry: ProcessEntry, webContents: WebContents): void {
     if (webContents.isDestroyed()) return;
-
-    const { port1, port2 } = new MessageChannelMain();
-
-    const attached = entry.host.attachRendererPort(port1);
-    if (!attached) {
-      port1.close();
-      port2.close();
-      return;
-    }
-
-    webContents.postMessage("workspace-port", null, [port2]);
     entry.directPortViews.set(webContents.id, webContents);
   }
 
@@ -462,9 +447,7 @@ export class WorkspaceHostPool {
     for (const [wcId, wc] of entry.directPortViews) {
       if (wc.isDestroyed()) {
         entry.directPortViews.delete(wcId);
-        continue;
       }
-      this.createDirectPortForEntry(entry, wc);
     }
 
     this.emit("host-restarted", {

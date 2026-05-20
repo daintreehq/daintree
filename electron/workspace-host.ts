@@ -338,13 +338,6 @@ port.on("message", async (rawMsg: any) => {
 
   // Handle MessagePort transfers (worktree-specific port with request/response correlation)
   const transferredPorts = rawMsg?.ports || [];
-  // Legacy renderer ports are no longer used — worktreePorts replaced them.
-  // Accept and close the port silently to avoid "Unknown message type" warnings.
-  if (msg?.type === "attach-renderer-port" && transferredPorts.length > 0) {
-    transferredPorts[0].close();
-    return;
-  }
-
   if (msg?.type === "attach-worktree-port" && transferredPorts.length > 0) {
     attachWorktreePort(transferredPorts[0] as MessagePort);
     return;

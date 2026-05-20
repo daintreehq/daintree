@@ -111,22 +111,6 @@ export class WorkspaceHostProcess extends EventEmitter {
   }
 
   /**
-   * Transfer a MessagePort to the workspace host for direct renderer communication.
-   * The host sends spontaneous events (worktree updates, PR events) through this port,
-   * bypassing the main-process IPC relay.
-   */
-  attachRendererPort(port: MessagePortMain): boolean {
-    if (!this.child || this.isDisposed) return false;
-    try {
-      this.child.postMessage({ type: "attach-renderer-port" }, [port]);
-      return true;
-    } catch (error) {
-      console.error(`[WorkspaceHost:${this.serviceName}] Failed to attach renderer port:`, error);
-      return false;
-    }
-  }
-
-  /**
    * Transfer a MessagePort for the new worktree port protocol (Phase 1).
    * Supports request/response correlation and scoped event delivery.
    */

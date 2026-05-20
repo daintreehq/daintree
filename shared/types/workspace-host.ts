@@ -394,8 +394,6 @@ export type WorkspaceHostRequest =
       envKey: string;
     }
   | { type: "has-resource-config"; requestId: string; rootPath: string }
-  // Direct renderer port attachment (port transferred via postMessage transfer list)
-  | { type: "attach-renderer-port" }
   // Forge credential propagation
   | { type: "update-forge-credentials"; providerId: string; credentials: Credentials | null }
   // Project environment variable propagation

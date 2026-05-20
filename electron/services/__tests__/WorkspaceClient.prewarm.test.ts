@@ -53,7 +53,6 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
     dispose = vi.fn(() => {
       this._isDisposed = true;
     });
-    attachRendererPort = vi.fn(() => true);
 
     setLogLevelOverrides = vi.fn();
 
@@ -104,13 +103,8 @@ vi.mock("../WorkspaceHostProcess.js", () => ({
 }));
 
 vi.mock("electron", () => {
-  class MockMessageChannelMain {
-    port1 = { close: vi.fn() };
-    port2 = { close: vi.fn() };
-  }
   return {
     BrowserWindow: { getAllWindows: vi.fn(() => []) },
-    MessageChannelMain: MockMessageChannelMain,
   };
 });
 
