@@ -219,6 +219,10 @@ describe("TerminalInstanceService — installTerminalBoundListeners call-site pa
 
   it("detach path: detachForProjectSwitch does not install listeners", () => {
     const managed = makeMockManaged();
+    // Append hostElement to a container so the parented DOM-move branch in
+    // detachForProjectSwitch (lines 1311-1315) is exercised, not just the
+    // unparented short-circuit.
+    document.body.appendChild(managed.hostElement);
     service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
     service.detachForProjectSwitch("t1");
