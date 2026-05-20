@@ -56,6 +56,8 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       createHttpIdleTimer: vi.fn(() => setTimeout(() => {}, 1_000_000)),
       resetIdleTimer: vi.fn(),
       resetHttpIdleTimer: vi.fn(),
+      armTierElevationTimer: vi.fn(),
+      clearElevationTimer: vi.fn(),
       revokeSession: vi.fn(() => false),
     },
     auditService: {
@@ -262,6 +264,13 @@ describe("HttpLifecycle", () => {
 
       expect(result).toEqual({ sessionId: "sess-1", tier: "system" });
       expect(deps.sessionStore.sessionTierMap.get("sess-1")).toBe("system");
+      // The elevation must arm the decay timer with the pre-elevation tier
+      // as the baseline (#8462) — otherwise the elevation is unbounded.
+      expect(deps.sessionStore.armTierElevationTimer).toHaveBeenCalledWith(
+        "sess-1",
+        "system",
+        "workbench"
+      );
     });
 
     it("refuses downgrades silently and keeps current tier", () => {
