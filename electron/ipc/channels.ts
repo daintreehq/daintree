@@ -160,6 +160,7 @@ export const CHANNELS = {
   APP_SET_STATE: "app:set-state",
   APP_GET_VERSION: "app:get-version",
   APP_HYDRATE: "app:hydrate",
+  APP_BOOT: "app:boot",
   APP_QUIT: "app:quit",
   APP_FORCE_QUIT: "app:force-quit",
   APP_RESET_AND_RELAUNCH: "app:reset-and-relaunch",

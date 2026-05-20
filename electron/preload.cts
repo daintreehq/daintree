@@ -1099,6 +1099,8 @@ const api: ElectronAPI = {
 
     hydrate: () => _unwrappingInvoke(CHANNELS.APP_HYDRATE),
 
+    boot: () => _unwrappingInvoke(CHANNELS.APP_BOOT),
+
     quit: () => _unwrappingInvoke(CHANNELS.APP_QUIT),
 
     forceQuit: () => _unwrappingInvoke(CHANNELS.APP_FORCE_QUIT),

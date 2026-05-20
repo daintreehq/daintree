@@ -305,6 +305,34 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
   };
   handlers.push(typedHandle(CHANNELS.APP_HYDRATE, handleAppHydrate));
 
+  // Batched cold-start boot payload. Collapses what was three separate renderer
+  // round-trips (`crash-recovery:get-pending`, `crash-recovery:get-config`,
+  // `app:hydrate`) into one. The destructive one-shot consumers
+  // (`consumePanelFilter`, `consumePendingSettingsRecovery`) and the prefetch
+  // fast path remain inside `handleAppHydrate` — boot just appends the crash
+  // gate fields onto the same result.
+  const handleAppBoot = async () => {
+    const hydrate = await handleAppHydrate();
+    const crashService = getCrashRecoveryService();
+    const guard = getCrashLoopGuard();
+    // Mirror crash-recovery:get-pending: suppress in safe mode and inject the
+    // live crash count so the renderer's auto-restore heuristic matches the
+    // standalone path.
+    let crashPending: import("../../../../shared/types/ipc/crashRecovery.js").PendingCrash | null;
+    if (guard.isSafeMode()) {
+      crashPending = null;
+    } else {
+      const pending = crashService.getPendingCrash();
+      crashPending = pending ? { ...pending, crashCount: guard.getCrashCount() } : null;
+    }
+    return {
+      ...hydrate,
+      crashPending,
+      crashConfig: crashService.getConfig(),
+    };
+  };
+  handlers.push(typedHandle(CHANNELS.APP_BOOT, handleAppBoot));
+
   const handleAppGetState = async () => {
     return store.get("appState") as import("../../../../shared/types/ipc/app.js").AppState;
   };

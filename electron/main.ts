@@ -76,7 +76,13 @@ import {
 } from "./utils/logger.js";
 import { broadcastToRenderer } from "./ipc/utils.js";
 import { registerCommands } from "./services/commands/index.js";
-import { initializeCrashRecoveryService } from "./services/CrashRecoveryService.js";
+import {
+  initializeCrashRecoveryService,
+  getCrashRecoveryService,
+} from "./services/CrashRecoveryService.js";
+import { projectStore } from "./services/ProjectStore.js";
+import { prefetchHydrateResult } from "./services/prefetchHydrateCache.js";
+import { buildSwitchHydrateResult } from "./services/AppHydrationService.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
 import { initializeTrashedPidCleanup } from "./services/TrashedPidTracker.js";
 import { initializeScratchCleanup } from "./services/ScratchCleanupService.js";
@@ -387,6 +393,31 @@ if (!gotTheLock) {
       registerAppProtocol(distPath);
       registerDaintreeFileProtocol();
       setupWebviewCSP();
+      // Prime the hydrate prefetch cache for the last-active project so the
+      // renderer's first `app:boot` invoke resolves as a cache hit instead of
+      // doing an inline disk read. Fire-and-forget — overlaps with window
+      // creation. Skipped when:
+      //   - no last-active project (first run / project unset)
+      //   - safe mode (terminals are suppressed; priming would write empty)
+      //   - pending crash recovery (panelFilter path layers extra constraints)
+      //   - per-project state file doesn't exist yet (migration must run on
+      //     the renderer-blocking handler path — `buildSwitchHydrateResult`
+      //     intentionally skips the migration write)
+      if (lastActiveProjectId) {
+        const guard = getCrashLoopGuard();
+        const crashService = getCrashRecoveryService();
+        if (!guard.isSafeMode() && !crashService.getPendingCrash()) {
+          void projectStore
+            .getProjectState(lastActiveProjectId)
+            .then((state) => {
+              if (state === null) return;
+              return prefetchHydrateResult(lastActiveProjectId, buildSwitchHydrateResult);
+            })
+            .catch((error) => {
+              console.warn("[MAIN] Boot-prime hydrate prefetch failed:", error);
+            });
+        }
+      }
       await createWindow(undefined, lastActiveProjectId ?? undefined);
       getCrashLoopGuard().startStabilityTimer();
     } catch (error) {

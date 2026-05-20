@@ -6,7 +6,8 @@
  * by the renderer store orchestrator initialized in main.tsx.
  */
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import type { TerminalConfig } from "@shared/types/ipc/config";
 import { setupTerminalStoreListeners } from "../../store/panelStore";
 import { setupProjectStatsListeners } from "../../store/projectStatsStore";
 import { setupSystemWakeListeners } from "../../store/systemWakeStore";
@@ -19,9 +20,15 @@ import {
   DEFAULT_AUTO_RESTART_THRESHOLD_MB,
 } from "../../store/memoryLeakConfigStore";
 
-export function usePanelStoreBootstrap() {
+/**
+ * @param terminalConfig optional config from the boot payload. When provided,
+ *   resource-monitoring / memory-leak / cached-views hydration runs without
+ *   issuing a redundant `terminal-config:get` IPC round-trip on cold start.
+ */
+export function usePanelStoreBootstrap(terminalConfig?: TerminalConfig | null) {
   const leakDetectionEnabled = useMemoryLeakConfigStore((s) => s.enabled);
   const autoRestartThresholdMb = useMemoryLeakConfigStore((s) => s.autoRestartThresholdMb);
+  const hasHydratedConfig = useRef(false);
 
   useEffect(() => {
     if (!isElectronAvailable()) return;
@@ -29,32 +36,36 @@ export function usePanelStoreBootstrap() {
     const cleanupProjectStats = setupProjectStatsListeners();
     const cleanupSystemWake = setupSystemWakeListeners();
 
-    // Hydrate resource monitoring preference and activate backend if enabled
-    window.electron.terminalConfig.get().then((config) => {
-      const resourceEnabled = config.resourceMonitoringEnabled === true;
-      useResourceMonitoringStore.getState().setEnabled(resourceEnabled);
-      if (resourceEnabled) {
-        window.electron.terminalConfig.setResourceMonitoring(true);
-      }
-
-      // Memory leak detection defaults to on when resource monitoring is on
-      const leakEnabled = config.memoryLeakDetectionEnabled ?? resourceEnabled;
-      useMemoryLeakConfigStore.getState().setEnabled(leakEnabled);
-      useMemoryLeakConfigStore
-        .getState()
-        .setAutoRestartThresholdMb(
-          config.memoryLeakAutoRestartThresholdMb ?? DEFAULT_AUTO_RESTART_THRESHOLD_MB
-        );
-
-      useCachedProjectViewsStore.getState().setCachedProjectViews(config.cachedProjectViews ?? 1);
-    });
-
     return () => {
       cleanupTerminalStore();
       cleanupProjectStats();
       cleanupSystemWake();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isElectronAvailable() || !terminalConfig || hasHydratedConfig.current) return;
+    hasHydratedConfig.current = true;
+
+    const resourceEnabled = terminalConfig.resourceMonitoringEnabled === true;
+    useResourceMonitoringStore.getState().setEnabled(resourceEnabled);
+    if (resourceEnabled) {
+      window.electron.terminalConfig.setResourceMonitoring(true);
+    }
+
+    // Memory leak detection defaults to on when resource monitoring is on
+    const leakEnabled = terminalConfig.memoryLeakDetectionEnabled ?? resourceEnabled;
+    useMemoryLeakConfigStore.getState().setEnabled(leakEnabled);
+    useMemoryLeakConfigStore
+      .getState()
+      .setAutoRestartThresholdMb(
+        terminalConfig.memoryLeakAutoRestartThresholdMb ?? DEFAULT_AUTO_RESTART_THRESHOLD_MB
+      );
+
+    useCachedProjectViewsStore
+      .getState()
+      .setCachedProjectViews(terminalConfig.cachedProjectViews ?? 1);
+  }, [terminalConfig]);
 
   useMemoryLeakDetection(leakDetectionEnabled, autoRestartThresholdMb);
 }

@@ -1,8 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
 
 vi.mock("electron", () => ({
   app: { getVersion: vi.fn(() => "1.0.0"), getPath: vi.fn(() => "/tmp") },
-  ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
+  ipcMain: {
+    handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+      ipcHandlers.set(channel, handler);
+    }),
+    removeHandler: vi.fn((channel: string) => {
+      ipcHandlers.delete(channel);
+    }),
+  },
   BrowserWindow: {
     getAllWindows: vi.fn(() => []),
     fromWebContents: vi.fn(() => null),
@@ -10,20 +19,33 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("../../store.js", () => ({
-  store: { get: vi.fn(), set: vi.fn(), delete: vi.fn() },
+  store: {
+    get: vi.fn((key: string) => {
+      if (key === "appState") return { terminals: [], sidebarWidth: 350 };
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    }),
+    set: vi.fn(),
+    delete: vi.fn(),
+  },
   consumePendingSettingsRecovery: vi.fn(() => null),
   windowStatesStore: { get: vi.fn(), set: vi.fn() },
 }));
 
+const crashService = {
+  scheduleBackup: vi.fn(),
+  consumePanelFilter: vi.fn(() => null),
+  startBackupTimer: vi.fn(),
+  resetToFresh: vi.fn(),
+  restoreBackup: vi.fn(() => false),
+  setPanelFilter: vi.fn(),
+  getPendingCrash: vi.fn(() => null),
+  getConfig: vi.fn(() => ({ autoRestoreOnCrash: false })),
+};
+
 vi.mock("../../services/CrashRecoveryService.js", () => ({
-  getCrashRecoveryService: () => ({
-    scheduleBackup: vi.fn(),
-    consumePanelFilter: vi.fn(() => null),
-    startBackupTimer: vi.fn(),
-    resetToFresh: vi.fn(),
-    restoreBackup: vi.fn(() => false),
-    setPanelFilter: vi.fn(),
-  }),
+  getCrashRecoveryService: () => crashService,
   initializeCrashRecoveryService: vi.fn(),
 }));
 
@@ -44,13 +66,15 @@ vi.mock("../../services/GpuCrashMonitorService.js", () => ({
   isGpuDisabledByFlag: vi.fn(() => false),
 }));
 
+const crashGuard = {
+  isSafeMode: vi.fn(() => false),
+  getCrashCount: vi.fn(() => 0),
+  getLastCrashTimestamp: vi.fn(() => null),
+  resetForNormalBoot: vi.fn(),
+};
+
 vi.mock("../../services/CrashLoopGuardService.js", () => ({
-  getCrashLoopGuard: () => ({
-    isSafeMode: vi.fn(() => false),
-    getCrashCount: vi.fn(() => 0),
-    getLastCrashTimestamp: vi.fn(() => null),
-    resetForNormalBoot: vi.fn(),
-  }),
+  getCrashLoopGuard: () => crashGuard,
 }));
 
 vi.mock("../../services/TelemetryService.js", () => ({
@@ -85,7 +109,8 @@ vi.mock("../../ipc/utils.js", async (importOriginal) => {
   };
 });
 
-import { CRASH_CRITICAL_FIELDS } from "../handlers/app/state.js";
+import { CRASH_CRITICAL_FIELDS, registerAppStateHandlers } from "../handlers/app/state.js";
+import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
 
 function shouldTriggerBackup(updates: Record<string, unknown>): boolean {
   return Object.keys(updates).some((k) => CRASH_CRITICAL_FIELDS.has(k));
@@ -216,5 +241,106 @@ describe("shouldTriggerBackup", () => {
 
   it("returns false for empty object", () => {
     expect(shouldTriggerBackup({})).toBe(false);
+  });
+});
+
+async function invokeBoot() {
+  ipcHandlers.clear();
+  const cleanup = registerAppStateHandlers();
+  const handler = ipcHandlers.get("app:boot");
+  if (!handler) throw new Error("app:boot handler not registered");
+  const result = (await handler({})) as Record<string, unknown>;
+  cleanup();
+  return result;
+}
+
+describe("app:boot handler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ipcHandlers.clear();
+    crashGuard.isSafeMode.mockReturnValue(false);
+    crashGuard.getCrashCount.mockReturnValue(0);
+    crashService.getPendingCrash.mockReturnValue(null);
+    crashService.consumePanelFilter.mockReturnValue(null);
+    crashService.getConfig.mockReturnValue({ autoRestoreOnCrash: false });
+    vi.mocked(consumePrefetchedHydrateResult).mockReturnValue(undefined);
+  });
+
+  it("returns a BootResult with crashPending=null and the live crashConfig when no crash is pending", async () => {
+    const result = await invokeBoot();
+    expect(result).toHaveProperty("appState");
+    expect(result).toHaveProperty("terminalConfig");
+    expect(result).toHaveProperty("agentSettings");
+    expect(result).toHaveProperty("crashPending", null);
+    expect(result).toHaveProperty("crashConfig", { autoRestoreOnCrash: false });
+  });
+
+  it("attaches a pending crash plus the live crashCount when one exists", async () => {
+    crashGuard.getCrashCount.mockReturnValue(3);
+    crashService.getPendingCrash.mockReturnValue({
+      logPath: "/fake.json",
+      entry: {
+        id: "c",
+        timestamp: 0,
+        appVersion: "1",
+        platform: "x",
+        osVersion: "y",
+        arch: "z",
+      },
+      hasBackup: false,
+      panels: [],
+    });
+
+    const result = (await invokeBoot()) as { crashPending: { crashCount: number } | null };
+    expect(result.crashPending).not.toBeNull();
+    expect(result.crashPending?.crashCount).toBe(3);
+  });
+
+  it("suppresses crashPending when in safe mode (mirrors crash-recovery:get-pending)", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    crashService.getPendingCrash.mockReturnValue({
+      logPath: "/fake.json",
+      entry: {
+        id: "c",
+        timestamp: 0,
+        appVersion: "1",
+        platform: "x",
+        osVersion: "y",
+        arch: "z",
+      },
+      hasBackup: false,
+      panels: [],
+    });
+
+    const result = (await invokeBoot()) as { crashPending: unknown };
+    expect(result.crashPending).toBeNull();
+  });
+
+  it("propagates the cache-hit fast path from handleAppHydrate (no disk read)", async () => {
+    const cachedResult = {
+      appState: { terminals: [], sidebarWidth: 350 },
+      terminalConfig: { resourceMonitoringEnabled: true },
+      project: null,
+      agentSettings: {},
+      gpuWebGLHardware: true,
+      gpuHardwareAccelerationDisabled: false,
+      safeMode: false,
+      isWindowsStore: false,
+    };
+    vi.mocked(consumePrefetchedHydrateResult).mockReturnValue(
+      cachedResult as ReturnType<typeof consumePrefetchedHydrateResult>
+    );
+    // Force the cache path by giving handleAppHydrate a current project.
+    const projectStoreModule = await import("../../services/ProjectStore.js");
+    vi.mocked(projectStoreModule.projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStoreModule.projectStore.getCurrentProject>);
+
+    const result = (await invokeBoot()) as Record<string, unknown>;
+    expect(result.terminalConfig).toEqual({ resourceMonitoringEnabled: true });
+    expect(result.crashPending).toBeNull();
+    expect(result.crashConfig).toEqual({ autoRestoreOnCrash: false });
   });
 });

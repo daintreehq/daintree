@@ -97,6 +97,20 @@ export interface ProjectStateRecovery {
   quarantinedPath: string;
 }
 
+/**
+ * Combined cold-start payload — collapses the three independent IPC round-trips
+ * the renderer used to fire on mount (`crash-recovery:get-pending`,
+ * `crash-recovery:get-config`, `app:hydrate`) into one. The `terminalConfig`
+ * already present in `HydrateResult` also obsoletes the separate
+ * `terminal-config:get` invoked by `usePanelStoreBootstrap`.
+ */
+export interface BootResult extends HydrateResult {
+  /** Pending crash recovery state, or null when there is no crash to recover from. */
+  crashPending: import("./crashRecovery.js").PendingCrash | null;
+  /** Live crash recovery configuration (auto-restore toggle, thresholds). */
+  crashConfig: import("./crashRecovery.js").CrashRecoveryConfig;
+}
+
 /** Result from app hydration */
 export interface HydrateResult {
   appState: AppState;
