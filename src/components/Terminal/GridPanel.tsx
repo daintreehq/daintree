@@ -45,7 +45,9 @@ export interface GridPanelProps {
  * Skips callback props (onTabClick, onTabClose, onTabRename, onAddTab,
  * onTabReorder) because ContentGrid passes inline closures that change every
  * render. Compares terminal fields used by buildPanelProps and ErrorBoundary
- * resetKeys — if buildPanelProps gains new terminal fields, update this list.
+ * resetKeys. The drift-coverage test in gridPanelPropsAreEqual.test.ts
+ * Proxies buildPanelProps and asserts each accessed terminal.* field is
+ * caught here, so this list fails CI if it falls behind panelProps.ts.
  */
 export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProps): boolean {
   // Scalar props
@@ -93,7 +95,13 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
       a.runtimeStatus !== b.runtimeStatus ||
       a.isInputLocked !== b.isInputLocked ||
       a.extensionState !== b.extensionState ||
-      a.pluginId !== b.pluginId
+      a.pluginId !== b.pluginId ||
+      a.exitCode !== b.exitCode ||
+      a.agentPresetColor !== b.agentPresetColor ||
+      a.agentPresetId !== b.agentPresetId ||
+      a.agentLaunchFlags !== b.agentLaunchFlags ||
+      a.browserHistory !== b.browserHistory ||
+      a.browserZoom !== b.browserZoom
     ) {
       return false;
     }

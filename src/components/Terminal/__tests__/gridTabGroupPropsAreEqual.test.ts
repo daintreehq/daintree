@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import { gridTabGroupPropsAreEqual, type GridTabGroupProps } from "../GridTabGroup";
 import type { TerminalInstance } from "@/store";
 import type { TabGroup } from "@/types";
+import { buildPanelProps } from "@/utils/panelProps";
+
+const noop = () => {};
 
 const baseGroup: TabGroup = {
   id: "g-1",
@@ -165,4 +168,139 @@ describe("gridTabGroupPropsAreEqual", () => {
     const next = baseProps({ group: { ...baseGroup, worktreeId: "wt-2" } });
     expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
   });
+
+  it("returns false when panel exitCode changes", () => {
+    const prev = baseProps({ panels: [basePanel, basePanel2] });
+    const next = baseProps({
+      panels: [{ ...basePanel, exitCode: 137 } as TerminalInstance, basePanel2],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when panel agentPresetColor changes", () => {
+    const prev = baseProps({
+      panels: [{ ...basePanel, agentPresetColor: "#ff00ff" } as TerminalInstance, basePanel2],
+    });
+    const next = baseProps({
+      panels: [{ ...basePanel, agentPresetColor: "#00ffff" } as TerminalInstance, basePanel2],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when panel agentPresetId changes", () => {
+    const prev = baseProps({
+      panels: [{ ...basePanel, agentPresetId: "preset-a" } as TerminalInstance, basePanel2],
+    });
+    const next = baseProps({
+      panels: [{ ...basePanel, agentPresetId: "preset-b" } as TerminalInstance, basePanel2],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when panel pluginId changes", () => {
+    const prev = baseProps({
+      panels: [{ ...basePanel, pluginId: undefined } as TerminalInstance, basePanel2],
+    });
+    const next = baseProps({
+      panels: [{ ...basePanel, pluginId: "my-plugin" } as TerminalInstance, basePanel2],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when panel extensionState changes reference", () => {
+    const prev = baseProps({
+      panels: [{ ...basePanel, extensionState: { kind: "a" } } as TerminalInstance, basePanel2],
+    });
+    const next = baseProps({
+      panels: [{ ...basePanel, extensionState: { kind: "b" } } as TerminalInstance, basePanel2],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when panel browserHistory changes reference", () => {
+    const prev = baseProps({
+      panels: [
+        { ...basePanel, browserHistory: { entries: [], currentIndex: -1 } } as TerminalInstance,
+        basePanel2,
+      ],
+    });
+    const next = baseProps({
+      panels: [
+        {
+          ...basePanel,
+          browserHistory: { entries: [{ url: "http://x" }], currentIndex: 0 },
+        } as TerminalInstance,
+        basePanel2,
+      ],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when panel browserZoom changes", () => {
+    const prev = baseProps({
+      panels: [{ ...basePanel, browserZoom: 1.0 } as TerminalInstance, basePanel2],
+    });
+    const next = baseProps({
+      panels: [{ ...basePanel, browserZoom: 1.25 } as TerminalInstance, basePanel2],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  describe("drift coverage", () => {
+    // Wraps a panel in a Proxy that records every property read, then drives
+    // buildPanelProps so the Proxy captures the full terminal.* surface
+    // (including transitive reads inside deriveTerminalChrome). For each
+    // recorded key, mutating it must force the comparator to return false.
+    // Fails automatically when buildPanelProps gains a new terminal.* field
+    // that the comparator does not check.
+    it("catches every terminal.* field buildPanelProps reads", () => {
+      const reads = new Set<string>();
+      const fixture: TerminalInstance = {
+        ...basePanel,
+        agentState: "idle",
+        runtimeStatus: "running",
+        agentLaunchFlags: ["--print"],
+        browserHistory: { entries: [], currentIndex: -1 },
+        browserZoom: 1.0,
+      } as TerminalInstance;
+
+      const proxy = new Proxy(fixture, {
+        get(target, prop, receiver) {
+          if (typeof prop === "string") reads.add(prop);
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+
+      buildPanelProps({
+        terminal: proxy,
+        isFocused: false,
+        overrides: { onFocus: noop, onClose: noop },
+      });
+
+      const observed = [...reads];
+      expect(observed.length).toBeGreaterThan(0);
+
+      for (const key of observed) {
+        const prev = baseProps({ panels: [fixture, basePanel2] });
+        const next = baseProps({
+          panels: [mutateTerminalField(fixture, key), basePanel2],
+        });
+        expect(
+          gridTabGroupPropsAreEqual(prev, next),
+          `gridTabGroupPropsAreEqual must return false when panel.${key} changes`
+        ).toBe(false);
+      }
+    });
+  });
 });
+
+function mutateTerminalField(terminal: TerminalInstance, key: string): TerminalInstance {
+  const current = (terminal as Record<string, unknown>)[key];
+  let mutated: unknown;
+  if (typeof current === "string") mutated = `${current}__drift`;
+  else if (typeof current === "number") mutated = current + 1;
+  else if (typeof current === "boolean") mutated = !current;
+  else if (Array.isArray(current)) mutated = [...current, "__drift"];
+  else mutated = { __drift: true };
+  return { ...terminal, [key]: mutated } as TerminalInstance;
+}

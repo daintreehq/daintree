@@ -28,7 +28,10 @@ export interface GridTabGroupProps {
  * Compares panel rendering fields used by the tabs useMemo, isGroupFocused,
  * and getGroupAmbientAgentState. Skips callback props (none on this component).
  * The group.activeTabId is NOT compared because the component subscribes to it
- * via Zustand store selector instead.
+ * via Zustand store selector instead. The drift-coverage test in
+ * gridTabGroupPropsAreEqual.test.ts Proxies buildPanelProps and asserts each
+ * accessed terminal.* field is caught here, so this list fails CI if it falls
+ * behind panelProps.ts.
  */
 export function gridTabGroupPropsAreEqual(
   prev: GridTabGroupProps,
@@ -95,7 +98,14 @@ export function gridTabGroupPropsAreEqual(
           a.browserUrl !== b.browserUrl ||
           a.isRestarting !== b.isRestarting ||
           a.runtimeStatus !== b.runtimeStatus ||
-          a.isInputLocked !== b.isInputLocked
+          a.isInputLocked !== b.isInputLocked ||
+          a.exitCode !== b.exitCode ||
+          a.agentPresetColor !== b.agentPresetColor ||
+          a.agentPresetId !== b.agentPresetId ||
+          a.extensionState !== b.extensionState ||
+          a.pluginId !== b.pluginId ||
+          a.browserHistory !== b.browserHistory ||
+          a.browserZoom !== b.browserZoom
         ) {
           return false;
         }
