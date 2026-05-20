@@ -41,6 +41,21 @@ const RAW_HANDLE_ALLOWLIST = new Set<string>([
   "CHANNELS.STORE_UPDATE_SET_SETTINGS",
   "CHANNELS.STORE_UPDATE_GET_LATEST",
   "CHANNELS.STORE_UPDATE_DISMISS",
+
+  // Auto-update settings + lifecycle handlers in
+  // electron/services/AutoUpdaterService.ts — registered lazily by the
+  // service constructor (outside ipc/handlers/) so the file currently uses
+  // raw `ipcMain.handle`. `UPDATE_DISMISS_TOAST` additionally validates the
+  // sender origin (matches `recovery.ts` / `plugin.ts` pattern) which the
+  // typed-handle adapter doesn't expose. Migration: move the five settings
+  // channels to `typedHandle` and add a `DEAD_CHANNEL_ALLOWLIST`-only entry
+  // for `UPDATE_DISMISS_TOAST` (already present in channelDrift.test.ts).
+  "CHANNELS.UPDATE_GET_CHANNEL",
+  "CHANNELS.UPDATE_SET_CHANNEL",
+  "CHANNELS.UPDATE_GET_LAST_CHECK",
+  "CHANNELS.UPDATE_DISMISS_TOAST",
+  "CHANNELS.UPDATE_QUIT_AND_INSTALL",
+  "CHANNELS.UPDATE_CHECK_FOR_UPDATES",
 ]);
 
 /**
@@ -51,6 +66,7 @@ const RAW_HANDLE_ALLOWLIST = new Set<string>([
 const EXTRA_HANDLER_FILES = [
   path.join("electron", "window", "createWindow.ts"),
   path.join("electron", "services", "WindowsStoreNotifierService.ts"),
+  path.join("electron", "services", "AutoUpdaterService.ts"),
 ];
 
 async function walk(dir: string): Promise<string[]> {
@@ -79,15 +95,24 @@ describe("IPC handler coverage", () => {
 
     const violations: Array<{ file: string; line: string }> = [];
 
+    // Whole-source scan so multi-line `ipcMain.handle(\n  CHANNELS.X, …)` calls
+    // (e.g. plugin.ts line 244) are not silently skipped — `\s` matches across
+    // newlines in JS regex, so the same pattern is reused.
+    const handleCallRe = /ipcMain\.handle\s*\(\s*(CHANNELS\.\w+)/g;
+
     for (const file of files) {
       const source = await readFile(file, "utf8");
-      const lines = source.split("\n");
-      for (const line of lines) {
-        const match = line.match(/ipcMain\.handle\(\s*(CHANNELS\.\w+)/);
-        if (!match) continue;
-        const ref = match[1];
+      handleCallRe.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = handleCallRe.exec(source)) !== null) {
+        const ref = m[1]!;
         if (RAW_HANDLE_ALLOWLIST.has(ref)) continue;
-        violations.push({ file: path.relative(process.cwd(), file), line: line.trim() });
+        const lineNumber = source.slice(0, m.index).split("\n").length;
+        const matchLine = source.split("\n")[lineNumber - 1]?.trim() ?? "";
+        violations.push({
+          file: `${path.relative(process.cwd(), file)}:${lineNumber}`,
+          line: matchLine,
+        });
       }
     }
 

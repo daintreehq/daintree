@@ -273,6 +273,11 @@ async function extractInvokeMapKeys(): Promise<Set<string>> {
  *
  * `callees` is a list of bare identifiers (`ipcRenderer.on`, `_typedOn`, etc.);
  * the regex anchors on word boundary + dotted path + `(`.
+ *
+ * Scans the whole source as one string (not line-by-line) so multi-line call
+ * expressions like `_unwrappingInvoke(\n  CHANNELS.WEBVIEW_OAUTH_LOOPBACK,\n
+ *   …)` are not silently skipped. `\s` matches newlines in JS regex, so the
+ * same pattern works.
  */
 function extractChannelCallSites(
   source: string,
@@ -285,23 +290,23 @@ function extractChannelCallSites(
   // includes `.` so e.g. `ipcRenderer.on` after `something.` is rejected.
   const re = new RegExp(`(?<![\\w$.])(?:${calleePattern})\\s*\\(\\s*CHANNELS\\.(\\w+)`, "g");
 
-  const lines = source.split("\n");
   const matches: Array<{ channel: string; member: string; line: number }> = [];
-  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-    const lineText = lines[lineIdx]!;
-    re.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(lineText)) !== null) {
-      const member = m[1]!;
-      const channel = channelsLookup[member];
-      if (typeof channel !== "string") {
-        // Caller resolves these — see `unresolvedMembers()`. We still emit the
-        // entry so the test can report the unresolved member with line context.
-        matches.push({ channel: "", member, line: lineIdx + 1 });
-        continue;
-      }
-      matches.push({ channel, member, line: lineIdx + 1 });
+  re.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    const member = m[1]!;
+    // Recover the line number from the match index — splitting up to the
+    // match offset and counting newlines is O(n) per match but the source
+    // is small (preload is ~1.6k lines) and only runs once at test time.
+    const line = source.slice(0, m.index).split("\n").length;
+    const channel = channelsLookup[member];
+    if (typeof channel !== "string") {
+      // Caller resolves these — see `unresolvedMembers()`. We still emit the
+      // entry so the test can report the unresolved member with line context.
+      matches.push({ channel: "", member, line });
+      continue;
     }
+    matches.push({ channel, member, line });
   }
   return matches;
 }
@@ -448,6 +453,32 @@ describe("IPC channel drift guardrails", () => {
         "uses raw `ipcMain.handle` for documented reasons (see RAW_HANDLE_ALLOWLIST in " +
         "ipcHandleCoverage.test.ts) — add it to PRELOAD_INVOKE_WITHOUT_MAP_ALLOWLIST."
     ).toEqual([]);
+  });
+
+  it("preload string-literal channels stay in sync with CHANNELS", async () => {
+    // A handful of preload listeners use raw string literals instead of
+    // `CHANNELS.X` member access — they're outside the static drift scan
+    // above. Guard against a typo silently subscribing to a ghost channel
+    // by asserting the literal still equals the canonical CHANNELS value.
+    const preloadSrc = await readFile(PRELOAD_CTS, "utf8");
+    const literalChecks: Array<{ literal: string; constant: string }> = [
+      // worktree port disconnect — `WorkspaceHostPool.sendToEntryWindows`
+      // pushes on this channel; the preload listener is the only consumer.
+      // Migration target: switch to `_typedOn(CHANNELS.WORKTREE_HOST_DISCONNECTED, …)`.
+      { literal: '"worktree:host-disconnected"', constant: CHANNELS.WORKTREE_HOST_DISCONNECTED },
+    ];
+    for (const { literal, constant } of literalChecks) {
+      expect(
+        preloadSrc.includes(literal),
+        `electron/preload.cts is expected to subscribe to the literal ${literal}, ` +
+          `which must equal CHANNELS value ${JSON.stringify(constant)}. If the channel ` +
+          `string was renamed, update the preload literal — or, preferably, switch the ` +
+          `listener to a CHANNELS.* reference so the regex scan catches future drift.`
+      ).toBe(true);
+      expect(literal.slice(1, -1), `literal ${literal} must equal CHANNELS constant`).toBe(
+        constant
+      );
+    }
   });
 
   it("preload imports CHANNELS from channels.ts — no hand-maintained inline copy", async () => {
