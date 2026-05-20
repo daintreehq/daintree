@@ -11,6 +11,7 @@ const shared = vi.hoisted(() => {
   return {
     forkMock: vi.fn(),
     appMock,
+    trackEventMock: vi.fn(),
   };
 });
 
@@ -20,6 +21,10 @@ vi.mock("electron", () => ({
   },
   UtilityProcess: EventEmitter,
   app: shared.appMock,
+}));
+
+vi.mock("../TelemetryService.js", () => ({
+  trackEvent: shared.trackEventMock,
 }));
 
 interface MockChild extends EventEmitter {
@@ -48,6 +53,11 @@ describe("MainProcessWatchdogClient", () => {
     vi.useFakeTimers();
     vi.resetModules();
     vi.clearAllMocks();
+    // Drain any lingering mockReturnValueOnce queue from prior tests —
+    // `clearAllMocks()` resets call history but not queued implementations,
+    // so a previous test's unconsumed queue can hijack the next constructor's
+    // fork() and attach the exit handler to a stale child.
+    shared.forkMock.mockReset();
     mockChild = createMockChild();
     shared.forkMock.mockReturnValue(mockChild);
     ({ MainProcessWatchdogClient: WatchdogClient } =
@@ -318,5 +328,136 @@ describe("MainProcessWatchdogClient", () => {
       (c) => (c[0] as { type?: string })?.type === "sleep"
     );
     expect(sleeps).toHaveLength(0);
+  });
+
+  it("fires onDisabled listener exactly once when the restart cap is hit", () => {
+    const client = new WatchdogClient({ mainPid: 4242, maxRestartAttempts: 2 });
+    const listener = vi.fn();
+    client.onDisabled(listener);
+
+    // Drive 3 crash cycles: 2 restarts, 3rd hits the cap.
+    let currentChild = mockChild;
+    for (let i = 0; i < 3; i++) {
+      const next = createMockChild();
+      shared.forkMock.mockReturnValueOnce(next);
+      currentChild.emit("exit", 137);
+      vi.advanceTimersByTime(11_000);
+      currentChild = next;
+    }
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    const payload = listener.mock.calls[0][0] as {
+      attemptCount: number;
+      lastExitCode: number | null;
+      timestamp: number;
+    };
+    expect(payload.attemptCount).toBe(2);
+    expect(payload.lastExitCode).toBe(137);
+    expect(typeof payload.timestamp).toBe("number");
+    client.dispose();
+  });
+
+  it("sends a watchdog_disabled telemetry event when the restart cap is hit", () => {
+    shared.trackEventMock.mockClear();
+    const client = new WatchdogClient({ mainPid: 4242, maxRestartAttempts: 1 });
+
+    // 1 restart, 2nd exit hits the cap.
+    const next = createMockChild();
+    shared.forkMock.mockReturnValueOnce(next);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+    next.emit("exit", 1);
+
+    expect(shared.trackEventMock).toHaveBeenCalledTimes(1);
+    const [eventName, props] = shared.trackEventMock.mock.calls[0];
+    expect(eventName).toBe("watchdog_disabled");
+    expect(props).toMatchObject({
+      attemptCount: 1,
+      lastExitCode: 1,
+    });
+    client.dispose();
+  });
+
+  it("does not call onDisabled or telemetry on intermediate restarts below the cap", () => {
+    shared.trackEventMock.mockClear();
+    const client = new WatchdogClient({ mainPid: 4242, maxRestartAttempts: 3 });
+    const listener = vi.fn();
+    client.onDisabled(listener);
+
+    // One crash below the cap.
+    const next = createMockChild();
+    shared.forkMock.mockReturnValueOnce(next);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(shared.trackEventMock).not.toHaveBeenCalled();
+    client.dispose();
+  });
+
+  it("does not refire onDisabled when scheduleRestart is invoked again while still capped", () => {
+    const client = new WatchdogClient({ mainPid: 4242, maxRestartAttempts: 1 });
+    const listener = vi.fn();
+    client.onDisabled(listener);
+
+    // 1 restart, 2nd exit hits cap, listener fires once.
+    const next = createMockChild();
+    shared.forkMock.mockReturnValueOnce(next);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+    next.emit("exit", 1);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // A second cap-hit before restart() is a no-op — no extra fires.
+    // (No fork happens after the cap, but defensively assert.)
+    vi.advanceTimersByTime(11_000);
+    expect(listener).toHaveBeenCalledTimes(1);
+    client.dispose();
+  });
+
+  it("restart() resets attempt counters, forks a fresh child, and re-arms the disabled listener", () => {
+    const client = new WatchdogClient({ mainPid: 4242, maxRestartAttempts: 1 });
+    const listener = vi.fn();
+    client.onDisabled(listener);
+
+    // First cap-hit cycle.
+    const second = createMockChild();
+    shared.forkMock.mockReturnValueOnce(second);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+    second.emit("exit", 1);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // Manual restart — a fresh fork happens.
+    const third = createMockChild();
+    shared.forkMock.mockReturnValueOnce(third);
+    client.restart();
+    expect(shared.forkMock).toHaveBeenCalledTimes(3);
+
+    // A second cap-hit cycle re-fires the listener (re-armed).
+    const fourth = createMockChild();
+    shared.forkMock.mockReturnValueOnce(fourth);
+    third.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+    fourth.emit("exit", 1);
+    expect(listener).toHaveBeenCalledTimes(2);
+    client.dispose();
+  });
+
+  it("restart() is a no-op after dispose", () => {
+    const client = new WatchdogClient({ mainPid: 4242 });
+    client.dispose();
+    const forksBefore = shared.forkMock.mock.calls.length;
+    expect(() => client.restart()).not.toThrow();
+    expect(shared.forkMock.mock.calls.length).toBe(forksBefore);
+  });
+
+  it("restart() while the child is still running only resets counters (no extra fork)", () => {
+    const client = new WatchdogClient({ mainPid: 4242, maxRestartAttempts: 5 });
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+    client.restart();
+    // Already running — no new fork, counters reset silently.
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+    client.dispose();
   });
 });

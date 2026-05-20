@@ -60,6 +60,7 @@ export const CHANNELS = {
   TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
   TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
   TERMINAL_RESTART_SERVICE: "terminal:restart-service",
+  WATCHDOG_RESTART: "watchdog:restart",
   TERMINAL_FD_LEAK_WARNING: "terminal:fd-leak-warning",
   TERMINAL_RESOURCE_METRICS: "terminal:resource-metrics",
 

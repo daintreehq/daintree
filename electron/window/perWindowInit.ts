@@ -4,7 +4,10 @@ import { sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import { distributePortsToView } from "./portDistribution.js";
 import { PtyClient } from "../services/PtyClient.js";
-import { getMainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
+import {
+  getMainProcessWatchdogClient,
+  type MainProcessWatchdogClient,
+} from "../services/MainProcessWatchdogClient.js";
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
 import { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
@@ -126,7 +129,9 @@ export async function initPerWindowServices(
       try {
         // Use the singleton accessor so `disposeMainProcessWatchdog()` in
         // shutdown.ts reaches the running instance instead of a no-op.
-        setMainProcessWatchdogClientRef(getMainProcessWatchdogClient());
+        const watchdog = getMainProcessWatchdogClient();
+        setMainProcessWatchdogClientRef(watchdog);
+        wireWatchdogDisabledBroadcast(watchdog, windowRegistry);
       } catch (err) {
         console.error("[MAIN] Failed to start main-process watchdog:", err);
         setMainProcessWatchdogClientRef(null);
@@ -371,4 +376,35 @@ export async function initPerWindowServices(
   handlerDeps.projectSwitchService = ctx.services.projectSwitchService;
 
   return handlerDeps;
+}
+
+/**
+ * Register the broadcast listener that turns a watchdog cap-hit into a
+ * `watchdog:disabled` push to every renderer. The watchdog client is Electron-
+ * agnostic and has no reference to the window registry; this helper is the
+ * single seam that bridges them. Called both at first-window startup (above)
+ * and from the `watchdog:restart` IPC handler after a manual restart, so a
+ * second cap-hit cycle reaches the renderer instead of dying silently.
+ */
+export function wireWatchdogDisabledBroadcast(
+  client: MainProcessWatchdogClient,
+  windowRegistry: WindowRegistry | undefined
+): void {
+  client.onDisabled((payload) => {
+    if (!windowRegistry) return;
+    for (const wCtx of windowRegistry.all()) {
+      const w = wCtx.browserWindow;
+      if (w.isDestroyed()) continue;
+      const wc = getAppWebContents(w);
+      if (wc.isDestroyed()) continue;
+      try {
+        wc.send(CHANNELS.EVENTS_PUSH, {
+          name: "watchdog:disabled",
+          payload,
+        });
+      } catch {
+        // Silently ignore send failures during window disposal.
+      }
+    }
+  });
 }

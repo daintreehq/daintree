@@ -45,6 +45,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "terminal:backend-crashed": "external",
   "terminal:backend-recovering": "external",
   "terminal:backend-ready": "external",
+  "watchdog:disabled": "external",
 
   // Terminal observability (relayed from TypedEventBus via PtyEventsBridge)
   "terminal:reliability-metric": "bus",

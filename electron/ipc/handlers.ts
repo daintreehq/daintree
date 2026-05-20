@@ -55,6 +55,7 @@ import { registerPerfHandlers } from "./handlers/perf.js";
 import { registerAccessibilityHandlers } from "./handlers/accessibility.js";
 import { registerDemoHandlers } from "./handlers/demo.js";
 import { registerRecoveryHandlers } from "./handlers/recovery.js";
+import { registerWatchdogHandlers } from "./handlers/watchdog.js";
 import { registerPluginHandlers } from "./handlers/plugin.js";
 import { registerConnectivityHandlers } from "./handlers/connectivity.js";
 import { registerScratchHandlers } from "./handlers/scratch/index.js";
@@ -156,6 +157,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerAccessibilityHandlers());
     register(() => registerDemoHandlers(deps));
     register(() => registerRecoveryHandlers(deps));
+    register(() => registerWatchdogHandlers(deps));
     register(() => registerPluginHandlers());
     register(() => registerPerfHandlers());
     register(() => registerConnectivityHandlers());

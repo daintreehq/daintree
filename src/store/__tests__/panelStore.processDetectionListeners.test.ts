@@ -216,6 +216,10 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     get: vi.fn().mockResolvedValue({}),
     setResourceMonitoring: vi.fn(),
   },
+  watchdog: {
+    restart: vi.fn().mockResolvedValue(undefined),
+    onDisabled: vi.fn(() => vi.fn()),
+  },
 };
 
 const { usePanelStore, setupTerminalStoreListeners, cleanupTerminalStoreListeners } =

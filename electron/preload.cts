@@ -938,6 +938,20 @@ const api: ElectronAPI = {
     read: (payload) => _unwrappingInvoke(CHANNELS.FILES_READ, payload),
   },
 
+  // Watchdog API — surfaces the main-process deadlock detector's disabled
+  // state to the renderer and exposes a manual restart path.
+  watchdog: {
+    restart: (): Promise<void> => _unwrappingInvoke(CHANNELS.WATCHDOG_RESTART),
+
+    onDisabled: (
+      callback: (data: {
+        attemptCount: number;
+        lastExitCode: number | null;
+        timestamp: number;
+      }) => void
+    ): (() => void) => _eventBusOn("watchdog:disabled", callback),
+  },
+
   // Slash Commands API
   slashCommands: buildSlashCommandsPreloadBindings(_unwrappingInvoke),
 

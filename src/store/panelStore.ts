@@ -120,6 +120,14 @@ export function getTerminalRefreshTier(
 
 export type BackendStatus = "connected" | "disconnected" | "recovering";
 
+export type WatchdogStatus = "active" | "disabled";
+
+export interface WatchdogDisabledInfo {
+  attemptCount: number;
+  lastExitCode: number | null;
+  timestamp: number;
+}
+
 export interface PanelGridState
   extends
     PanelRegistrySlice,
@@ -130,8 +138,12 @@ export interface PanelGridState
     WatchedPanelsSlice {
   backendStatus: BackendStatus;
   lastCrashType: CrashType | null;
+  watchdogStatus: WatchdogStatus;
+  watchdogDisabledInfo: WatchdogDisabledInfo | null;
   setBackendStatus: (status: BackendStatus) => void;
   setLastCrashType: (crashType: CrashType | null) => void;
+  setWatchdogDisabled: (info: WatchdogDisabledInfo) => void;
+  clearWatchdogDisabled: () => void;
   reset: () => Promise<void>;
   resetWithoutKilling: (options?: { preserveTerminalIds?: Set<string> }) => Promise<void>;
   detachTerminalsForProjectSwitch: () => void;
@@ -190,9 +202,14 @@ export const usePanelStore = create<PanelGridState>()(
 
       backendStatus: "connected" as BackendStatus,
       lastCrashType: null as CrashType | null,
+      watchdogStatus: "active" as WatchdogStatus,
+      watchdogDisabledInfo: null as WatchdogDisabledInfo | null,
       lastClosedConfig: null as AddPanelOptions | null,
       setBackendStatus: (status: BackendStatus) => set({ backendStatus: status }),
       setLastCrashType: (crashType: CrashType | null) => set({ lastCrashType: crashType }),
+      setWatchdogDisabled: (info: WatchdogDisabledInfo) =>
+        set({ watchdogStatus: "disabled", watchdogDisabledInfo: info }),
+      clearWatchdogDisabled: () => set({ watchdogStatus: "active", watchdogDisabledInfo: null }),
 
       addPanel: async (options: AddPanelOptions) => {
         // Capture the pre-create focus so we can restore previousFocusedId for the

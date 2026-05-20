@@ -782,6 +782,10 @@ export interface GeneratedIpcInvokeMap {
     args: [id: string];
     result: { state: string | null; warnings?: string[] | undefined };
   };
+  "watchdog:restart": {
+    args: [];
+    result: void;
+  };
   "worktree:attach-issue": {
     args: [payload: import("./worktree.js").AttachIssuePayload];
     result: void;

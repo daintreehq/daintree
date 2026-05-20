@@ -303,6 +303,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;
     read(payload: FileReadPayload): Promise<FileReadResult>;
   };
+  watchdog: {
+    restart(): Promise<void>;
+    onDisabled(
+      callback: (data: {
+        attemptCount: number;
+        lastExitCode: number | null;
+        timestamp: number;
+      }) => void
+    ): () => void;
+  };
   // slashCommands is generated — see GeneratedElectronAPI.
   artifact: {
     onDetected(callback: (data: ArtifactDetectedPayload) => void): () => void;

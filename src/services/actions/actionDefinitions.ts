@@ -26,6 +26,7 @@ import { registerTerminalInputActions } from "./definitions/terminalInputActions
 import { registerTerminalWorktreeActions } from "./definitions/terminalWorktreeActions";
 import { registerFleetActions } from "./definitions/fleetActions";
 import { registerVoiceActions } from "./definitions/voiceActions";
+import { registerWatchdogActions } from "./definitions/watchdogActions";
 import { registerWorktreeActions } from "./definitions/worktreeActions";
 import { registerWorktreeSessionActions } from "./definitions/worktreeSessionActions";
 import { registerWorkflowActions } from "./definitions/workflowActions";
@@ -56,6 +57,7 @@ export function createActionDefinitions(
   registerGithubActions(actions, callbacks);
   registerGitActions(actions, callbacks);
   registerSystemActions(actions, callbacks);
+  registerWatchdogActions(actions);
   registerLogActions(actions, callbacks);
   registerNavigationActions(actions, callbacks);
   registerAppActions(actions, callbacks);
