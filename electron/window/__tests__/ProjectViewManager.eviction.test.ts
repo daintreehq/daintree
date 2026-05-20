@@ -1144,7 +1144,10 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     await manager.switchTo("proj-b", "/path/b");
 
     const cachedOrder = onViewCached.mock.invocationCallOrder[0];
-    const throttleCall = throttleMock.mock.calls.findIndex((args) => args[0] === wcA);
+    const throttleCall = throttleMock.mock.calls.findIndex((args) => {
+      const arg = args[0] as unknown;
+      return arg instanceof Object && "id" in arg && (arg as { id: number }).id === wcA.id;
+    });
     const throttleOrder = throttleMock.mock.invocationCallOrder[throttleCall];
     expect(cachedOrder).toBeDefined();
     expect(throttleOrder).toBeDefined();
