@@ -343,7 +343,7 @@ describe("app:boot handler", () => {
     } as unknown as ReturnType<typeof projectStoreModule.projectStore.getCurrentProject>);
 
     const result = (await invokeBoot()) as Record<string, unknown>;
-    expect(result.terminalConfig).toEqual({ resourceMonitoringEnabled: true });
+    expect(result.terminalConfig).toEqual(cachedResult.terminalConfig);
     expect(result.crashPending).toBeNull();
     expect(result.crashConfig).toEqual({ autoRestoreOnCrash: false });
   });
