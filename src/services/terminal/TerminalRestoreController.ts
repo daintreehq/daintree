@@ -26,6 +26,24 @@ export interface RestoreControllerDeps {
   writeData: (id: string, data: string | Uint8Array) => void;
 }
 
+// Slice a chunk without splitting a UTF-16 surrogate pair. xterm 6's parser
+// already buffers partial ANSI/UTF-8 state across writes, so the only
+// boundary we must protect is the JS string surrogate pair.
+export function safeChunkSlice(serializedState: string, offset: number, chunkSize: number): string {
+  const total = serializedState.length;
+  let end = Math.min(offset + chunkSize, total);
+  if (end < total) {
+    const lastCode = serializedState.charCodeAt(end - 1);
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
+      end -= 1;
+    }
+  }
+  if (end <= offset) {
+    end = Math.min(offset + 1, total);
+  }
+  return serializedState.substring(offset, end);
+}
+
 export class TerminalRestoreController {
   private deps: RestoreControllerDeps;
 
@@ -118,9 +136,12 @@ export class TerminalRestoreController {
             return false;
           }
 
-          const chunkSize = Math.min(INCREMENTAL_RESTORE_CONFIG.chunkBytes, total - offset);
-          const chunk = serializedState.substring(offset, offset + chunkSize);
-          offset += chunkSize;
+          const chunk = safeChunkSlice(
+            serializedState,
+            offset,
+            INCREMENTAL_RESTORE_CONFIG.chunkBytes
+          );
+          offset += chunk.length;
 
           let timeoutHandle!: ReturnType<typeof setTimeout>;
           try {
@@ -253,8 +274,16 @@ export class TerminalRestoreController {
   }
 
   private yieldToUI(): Promise<void> {
-    if (typeof scheduler !== "undefined" && typeof scheduler.postTask === "function") {
-      return scheduler.postTask(() => {}, { priority: "background" });
+    if (typeof scheduler !== "undefined" && scheduler !== null) {
+      // Prefer scheduler.yield() — its continuation runs ahead of newly-queued
+      // same-priority tasks, giving a tighter inter-chunk budget than postTask,
+      // which would queue behind any background work already in flight.
+      if (typeof scheduler.yield === "function") {
+        return scheduler.yield();
+      }
+      if (typeof scheduler.postTask === "function") {
+        return scheduler.postTask(() => {}, { priority: "background" });
+      }
     }
     return new Promise((resolve) => setTimeout(resolve, INCREMENTAL_RESTORE_CONFIG.timeBudgetMs));
   }

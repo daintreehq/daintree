@@ -8,6 +8,7 @@ interface SchedulerPostTaskOptions {
 
 interface Scheduler {
   postTask<T>(callback: () => T | PromiseLike<T>, options?: SchedulerPostTaskOptions): Promise<T>;
+  yield?(): Promise<void>;
 }
 
 declare const scheduler: Scheduler;
