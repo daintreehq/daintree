@@ -167,7 +167,8 @@ describe("--anti-flicker-delay CSS contract", () => {
   it("token value matches UI_DOHERTY_THRESHOLD", () => {
     const match = css.match(/--anti-flicker-delay\s*:\s*(\d+)ms/);
     expect(match).not.toBeNull();
-    const ms = Number.parseInt(match![1], 10);
+    if (!match?.[1]) return;
+    const ms = Number.parseInt(match[1], 10);
     expect(ms).toBe(UI_DOHERTY_THRESHOLD);
   });
 
