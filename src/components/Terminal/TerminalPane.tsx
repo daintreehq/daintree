@@ -14,6 +14,7 @@ import type {
   TerminalRestartError,
   SpawnError,
   TerminalReconnectError,
+  TerminalScrollbackRestoreError,
   PersistableFlowStatus,
 } from "@/types";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ import { getRestartBannerVariant } from "./restartStatus";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
+import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { AgentCompletionBanner } from "./AgentCompletionBanner";
@@ -217,6 +219,7 @@ export interface TerminalPaneProps {
   restartError?: TerminalRestartError;
   reconnectError?: TerminalReconnectError;
   spawnError?: SpawnError;
+  scrollbackRestoreError?: TerminalScrollbackRestoreError;
   gridPanelCount?: number;
   detectedProcessId?: string;
   // Group-level ambient state: highest-urgency state across all tabs, for container border styling
@@ -262,6 +265,7 @@ function TerminalPaneComponent({
   restartError,
   reconnectError,
   spawnError,
+  scrollbackRestoreError,
   gridPanelCount,
   detectedProcessId,
   ambientAgentState,
@@ -321,6 +325,9 @@ function TerminalPaneComponent({
   const removePanel = usePanelStore((state) => state.removePanel);
   const backendStatus = usePanelStore((state) => state.backendStatus);
   const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
+  const clearScrollbackRestoreError = usePanelStore(
+    (state) => state.clearScrollbackRestoreError
+  );
 
   const cliDetails = useCliAvailabilityStore((state) => state.details);
   const getPanelCliDetail = (): AgentCliDetail | undefined => {
@@ -783,6 +790,10 @@ function TerminalPaneComponent({
     clearReconnectError(id);
   };
 
+  const handleDismissScrollbackRestoreError = () => {
+    clearScrollbackRestoreError(id);
+  };
+
   useEffect(() => {
     terminalInstanceService.setFocused(id, isFocused);
 
@@ -1005,6 +1016,10 @@ function TerminalPaneComponent({
   const showRestartError = Boolean(restartError);
   const showSpawnError = Boolean(spawnError) && !showRestartError;
   const showReconnectError = Boolean(reconnectError) && !showRestartError && !showSpawnError;
+  // Scrollback restore is independent of PTY launch state (spawn/reconnect),
+  // so it can co-exist with those banners. Only restartError, which already
+  // implies a destroyed-and-respawning PTY, suppresses it.
+  const showScrollbackRestoreError = Boolean(scrollbackRestoreError) && !showRestartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
 
   return (
@@ -1129,6 +1144,18 @@ function TerminalPaneComponent({
             terminalId={id}
             error={reconnectError}
             onDismiss={handleDismissReconnectError}
+            onRestart={handleRestart}
+            isRestarting={isRestarting}
+          />
+        )}
+      </BannerSlot>
+
+      <BannerSlot visible={showScrollbackRestoreError}>
+        {scrollbackRestoreError && (
+          <ScrollbackRestoreErrorBanner
+            terminalId={id}
+            error={scrollbackRestoreError}
+            onDismiss={handleDismissScrollbackRestoreError}
             onRestart={handleRestart}
             isRestarting={isRestarting}
           />

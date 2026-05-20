@@ -193,6 +193,7 @@ export const createRestartActions = (
         restartError: undefined,
         reconnectError: undefined,
         spawnError: undefined,
+        scrollbackRestoreError: undefined,
         isRestarting: true,
       }))
     );
@@ -562,7 +563,13 @@ export const createRestartActions = (
   },
 
   clearTerminalError: (id) => {
-    set((state) => updateTerminal(state, id, (t) => ({ ...t, restartError: undefined })));
+    set((state) =>
+      updateTerminal(state, id, (t) => ({
+        ...t,
+        restartError: undefined,
+        scrollbackRestoreError: undefined,
+      }))
+    );
   },
 
   updateTerminalCwd: (id, cwd) => {

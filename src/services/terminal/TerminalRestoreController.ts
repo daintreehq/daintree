@@ -2,6 +2,24 @@ import { terminalClient } from "@/clients";
 import type { ManagedTerminal } from "./types";
 import { INCREMENTAL_RESTORE_CONFIG } from "./types";
 import { logWarn, logError } from "@/utils/logger";
+import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
+
+function classifyRestoreError(error: unknown): TerminalScrollbackRestoreError {
+  const timestamp = Date.now();
+  if (error instanceof Error) {
+    if (error.message === "Write timeout") {
+      return { type: "timeout", message: error.message, timestamp };
+    }
+    // xterm.js parser throws plain Error with messages starting with "Parser"
+    // or containing "parse"; fall through to generic "error" otherwise. Keep
+    // the message verbatim so the banner shows the underlying cause.
+    if (/pars/i.test(error.message)) {
+      return { type: "parse", message: error.message, timestamp };
+    }
+    return { type: "error", message: error.message, timestamp };
+  }
+  return { type: "error", message: String(error), timestamp };
+}
 
 export interface RestoreControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
@@ -30,6 +48,7 @@ export class TerminalRestoreController {
 
       const restoreGeneration = ++managed.restoreGeneration;
       managed.isSerializedRestoreInProgress = true;
+      managed.lastScrollbackRestoreError = undefined;
 
       const scrollBackOffset = managed.isUserScrolledBack
         ? managed.terminal.buffer.active.baseY - managed.terminal.buffer.active.viewportY
@@ -56,6 +75,7 @@ export class TerminalRestoreController {
       return true;
     } catch (error) {
       managed.isSerializedRestoreInProgress = false;
+      managed.lastScrollbackRestoreError = classifyRestoreError(error);
       logError(`Failed to restore terminal ${id}`, error);
       return false;
     }
@@ -70,6 +90,7 @@ export class TerminalRestoreController {
 
     const restoreGeneration = ++managed.restoreGeneration;
     managed.isSerializedRestoreInProgress = true;
+    managed.lastScrollbackRestoreError = undefined;
 
     const task = async (): Promise<boolean> => {
       const scrollBackOffset = managed.isUserScrolledBack
@@ -126,6 +147,11 @@ export class TerminalRestoreController {
 
         return true;
       } catch (error) {
+        // Real failure during chunked replay (write timeout, xterm parse
+        // error). Stash the classified error on `managed` so the scheduler
+        // can surface it to the panel store; the stale-generation early
+        // returns above bypass this catch and remain silent. See #8535.
+        managed.lastScrollbackRestoreError = classifyRestoreError(error);
         logError(`Incremental restore failed for ${id}`, error);
         return false;
       } finally {
@@ -182,6 +208,7 @@ export class TerminalRestoreController {
 
     const restoreGeneration = managed.restoreGeneration;
     managed.isSerializedRestoreInProgress = true;
+    managed.lastScrollbackRestoreError = undefined;
 
     try {
       const serializedState = await terminalClient.getSerializedState(id);
@@ -201,6 +228,7 @@ export class TerminalRestoreController {
       return result;
     } catch (error) {
       managed.isSerializedRestoreInProgress = false;
+      managed.lastScrollbackRestoreError = classifyRestoreError(error);
       logError(`Failed to fetch state for terminal ${id}`, error);
       return false;
     }

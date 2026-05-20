@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 
 vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
@@ -12,6 +13,16 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     get: (id: string) => getMock(id),
     fetchAndRestore: (id: string) => fetchAndRestoreMock(id),
+  },
+}));
+
+const setScrollbackRestoreErrorMock = vi.fn();
+
+vi.mock("@/store", () => ({
+  usePanelStore: {
+    getState: () => ({
+      setScrollbackRestoreError: setScrollbackRestoreErrorMock,
+    }),
   },
 }));
 
@@ -41,6 +52,7 @@ interface FakeManaged {
   hostElement?: HTMLElement | null;
   listeners: Array<() => void>;
   scrollbackRestoreDisposable?: { dispose: () => void };
+  lastScrollbackRestoreError?: TerminalScrollbackRestoreError;
 }
 
 function fakeManaged(state: FakeManaged["scrollbackRestoreState"] = "none"): FakeManaged {
@@ -55,6 +67,7 @@ beforeEach(() => {
   getMock.mockReset();
   scheduleBackgroundFetchAndRestoreMock.mockReset();
   registerLazyScrollRestoreMock.mockReset();
+  setScrollbackRestoreErrorMock.mockReset();
 });
 
 afterEach(() => {
@@ -113,6 +126,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
 
     expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1");
     expect(managed.scrollbackRestoreState).toBe("done");
+    expect(setScrollbackRestoreErrorMock).not.toHaveBeenCalled();
   });
 
   it("doRestore bails when isCurrent returns false (no fetch, state stays pending)", async () => {
@@ -169,7 +183,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
     expect(fetchAndRestoreMock).not.toHaveBeenCalled();
   });
 
-  it("resets state to 'none' on fetchAndRestore failure (so it can be retried)", async () => {
+  it("resets state to 'none' on fetchAndRestore rejection (IPC error path)", async () => {
     const managed = fakeManaged("none");
     getMock.mockReturnValue(managed);
     fetchAndRestoreMock.mockRejectedValue(new Error("nope"));
@@ -182,6 +196,69 @@ describe("scheduleScrollbackRestore — background mode", () => {
 
     await getScheduledDoRestore()();
 
+    expect(managed.scrollbackRestoreState).toBe("none");
+    expect(setScrollbackRestoreErrorMock).toHaveBeenCalledWith(
+      "t1",
+      expect.objectContaining({ type: "error", message: "nope" })
+    );
+  });
+
+  it("surfaces lastScrollbackRestoreError to the panel store when fetchAndRestore returns silently after a replay failure (#8535)", async () => {
+    const managed = fakeManaged("none");
+    getMock.mockReturnValue(managed);
+    // Simulate the controller swallowing a write timeout: fetchAndRestore
+    // resolves (returns false internally) but stashes a classified error on
+    // managed.lastScrollbackRestoreError.
+    fetchAndRestoreMock.mockImplementation(async () => {
+      managed.lastScrollbackRestoreError = {
+        type: "timeout",
+        message: "Write timeout",
+        timestamp: 123,
+      };
+      return false;
+    });
+
+    scheduleScrollbackRestore(
+      [{ terminalId: "t1", label: "x", location: "grid" }],
+      () => true,
+      "background"
+    );
+
+    await getScheduledDoRestore()();
+
+    expect(managed.scrollbackRestoreState).toBe("none");
+    expect(setScrollbackRestoreErrorMock).toHaveBeenCalledWith("t1", {
+      type: "timeout",
+      message: "Write timeout",
+      timestamp: 123,
+    });
+  });
+
+  it("does not emit to panel store if isCurrent flips to false before the failure handler reads it", async () => {
+    const managed = fakeManaged("none");
+    getMock.mockReturnValue(managed);
+    let currentFlag = true;
+    fetchAndRestoreMock.mockImplementation(async () => {
+      managed.lastScrollbackRestoreError = {
+        type: "parse",
+        message: "boom",
+        timestamp: 1,
+      };
+      // Simulate a project switch happening during the IPC await window.
+      currentFlag = false;
+      return false;
+    });
+
+    scheduleScrollbackRestore(
+      [{ terminalId: "t1", label: "x", location: "grid" }],
+      () => currentFlag,
+      "background"
+    );
+
+    await getScheduledDoRestore()();
+
+    expect(setScrollbackRestoreErrorMock).not.toHaveBeenCalled();
+    // State still resets so a future restore can retry.
     expect(managed.scrollbackRestoreState).toBe("none");
   });
 });

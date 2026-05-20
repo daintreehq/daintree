@@ -1,10 +1,20 @@
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { usePanelStore } from "@/store";
 import { logWarn } from "@/utils/logger";
+import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 import {
   type TerminalRestoreTask,
   registerLazyScrollRestore,
   scheduleBackgroundFetchAndRestore,
 } from "./batchScheduler";
+
+function classifySchedulerError(error: unknown): TerminalScrollbackRestoreError {
+  const timestamp = Date.now();
+  if (error instanceof Error) {
+    return { type: "error", message: error.message, timestamp };
+  }
+  return { type: "error", message: String(error), timestamp };
+}
 
 export function scheduleScrollbackRestore(
   tasks: TerminalRestoreTask[],
@@ -26,9 +36,36 @@ export function scheduleScrollbackRestore(
       managed.scrollbackRestoreState = "in-progress";
       try {
         await terminalInstanceService.fetchAndRestore(task.terminalId);
-        managed.scrollbackRestoreState = "done";
+
+        // fetchAndRestore swallows write-timeout / parse errors internally
+        // and returns false; the controller stashes the classified error on
+        // `managed.lastScrollbackRestoreError`. Emit it to the panel store
+        // so the user sees an inline banner instead of a silent blank
+        // terminal. Gated on isCurrent() so a project switch that aborts
+        // restore mid-flight does not surface a spurious banner.
+        const restoreError = managed.lastScrollbackRestoreError;
+        if (restoreError) {
+          managed.scrollbackRestoreState = "none";
+          if (isCurrent()) {
+            usePanelStore
+              .getState()
+              .setScrollbackRestoreError(task.terminalId, restoreError);
+          }
+          logWarn(`Scrollback restore failed for ${task.label}`, { error: restoreError });
+        } else {
+          managed.scrollbackRestoreState = "done";
+        }
       } catch (error) {
+        // IPC-level failure from terminalClient.getSerializedState (the
+        // controller's own catch returns false rather than rethrowing for
+        // replay failures, so reaching here means something below
+        // fetchAndRestore escaped — e.g. an unmocked test rejection).
         managed.scrollbackRestoreState = "none";
+        if (isCurrent()) {
+          usePanelStore
+            .getState()
+            .setScrollbackRestoreError(task.terminalId, classifySchedulerError(error));
+        }
         logWarn(`Scrollback restore failed for ${task.label}`, { error });
       }
     };

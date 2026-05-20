@@ -86,6 +86,7 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
       a.restartError !== b.restartError ||
       a.reconnectError !== b.reconnectError ||
       a.spawnError !== b.spawnError ||
+      a.scrollbackRestoreError !== b.scrollbackRestoreError ||
       a.detectedProcessId !== b.detectedProcessId ||
       a.browserUrl !== b.browserUrl ||
       a.isRestarting !== b.isRestarting ||

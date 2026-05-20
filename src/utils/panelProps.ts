@@ -96,6 +96,7 @@ export function buildPanelProps({
     restartError: terminal.restartError,
     reconnectError: terminal.reconnectError,
     spawnError: terminal.spawnError,
+    scrollbackRestoreError: terminal.scrollbackRestoreError,
     detectedProcessId: terminal.detectedProcessId,
 
     // Extension state

@@ -33,6 +33,8 @@ export const createBrowserActions = (
   | "clearSpawnError"
   | "setReconnectError"
   | "clearReconnectError"
+  | "setScrollbackRestoreError"
+  | "clearScrollbackRestoreError"
 > => ({
   setBrowserUrl: (id, url) => {
     set((state) => {
@@ -289,6 +291,38 @@ export const createBrowserActions = (
         panelsById: {
           ...state.panelsById,
           [id]: { ...terminal, reconnectError: undefined, runtimeStatus: undefined },
+        },
+      };
+    });
+  },
+
+  // Scrollback restore is a one-shot lifecycle event — no debounce. Severity
+  // is "warning" not "error", so we deliberately do NOT flip runtimeStatus;
+  // the terminal is still operational, only the replayed history is missing.
+  setScrollbackRestoreError: (id, error) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+
+      return {
+        panelsById: {
+          ...state.panelsById,
+          [id]: { ...terminal, scrollbackRestoreError: error },
+        },
+      };
+    });
+  },
+
+  clearScrollbackRestoreError: (id) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      if (terminal.scrollbackRestoreError === undefined) return state;
+
+      return {
+        panelsById: {
+          ...state.panelsById,
+          [id]: { ...terminal, scrollbackRestoreError: undefined },
         },
       };
     });
