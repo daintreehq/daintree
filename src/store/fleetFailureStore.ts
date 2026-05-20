@@ -26,7 +26,7 @@ export interface FleetFailureSnapshot {
 }
 
 interface FleetFailureState extends FleetFailureSnapshot {
-  recordFailure: (payload: string, failedIds: Iterable<string>) => void;
+  recordFailure: (payload: string | null, failedIds: Iterable<string>) => void;
   /** Drop a single pane from the failure set (e.g. when retry succeeds). */
   dismissId: (id: string) => void;
   /** Clear everything (user acknowledged, fleet cleared, etc.). */

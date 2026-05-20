@@ -11,6 +11,7 @@ import { useFleetEscapeChords } from "./useFleetEscapeChords";
 import { useFleetRibbonFlashes } from "./useFleetRibbonFlashes";
 import { buildConfirmMessage, type FleetConfirmActionId } from "./buildConfirmMessage";
 import { FleetCountChip } from "./FleetCountChip";
+import { FleetFailureBanner } from "./FleetFailureBanner";
 import { SavedFleetsSection } from "./SavedFleetsSection";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "./fleetBroadcast";
 import { cancelActiveBroadcast } from "./fleetEnterBroadcast";
@@ -463,7 +464,8 @@ export function FleetArmingRibbon(): ReactElement | null {
   // When a destructive broadcast (paste or Enter) is pending, the right-side
   // controls collapse to the confirm question so we keep one ribbon row
   // instead of stacking a second strip below. Per-pane red dots (PanelHeader)
-  // carry any post-broadcast failure state — no retry/dismiss buttons here.
+  // still carry per-target failure state; the `FleetFailureBanner` below
+  // adds the Tier-2 multi-terminal surface with the retry action.
   const isBroadcastConfirmActive = pendingBroadcast !== null;
 
   return (
@@ -486,6 +488,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         }}
         onClose={() => setPendingDeleteFleetId(null)}
       />
+      <FleetFailureBanner />
       <AnimatePresence initial={false}>
         <m.div
           ref={ribbonRef}

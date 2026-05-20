@@ -123,8 +123,10 @@ export function broadcastFleetRawInput(originId: string, data: string): boolean 
  * - Non-permanent failures (e.g., `EAGAIN`) leave arming alone and record a
  *   transient failure entry so the user sees the chip. The chip's "Retry
  *   failed" path is a no-op for the raw-input transport (single keystrokes
- *   are not meaningful to replay), and `recordFailure` is called with an
- *   empty payload to make that explicit.
+ *   are not meaningful to replay), so `recordFailure` is called with a
+ *   `null` payload. `fleet.retryFailures` guards on `payload == null` and
+ *   will skip the IPC write — using `""` here would slip through that guard
+ *   and fire real empty-byte writes against live PTYs (#8705).
  *
  * Exported for testing — production wires this into the IPC subscription
  * registered at module load.
@@ -154,10 +156,10 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
   });
 
   if (nonPermanentFailedIds.length > 0) {
-    // Empty payload — raw input has no meaningful retry, and the
-    // `Retry failed` action checks for a non-null payload before firing.
+    // Null payload — raw input has no meaningful retry, and the
+    // `Retry failed` action checks for `payload == null` before firing.
     // The chip still surfaces so the user notices something rejected.
-    useFleetFailureStore.getState().recordFailure("", nonPermanentFailedIds);
+    useFleetFailureStore.getState().recordFailure(null, nonPermanentFailedIds);
   }
 
   if (permanentlyFailedIds.length > 0) {

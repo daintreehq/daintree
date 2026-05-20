@@ -396,10 +396,11 @@ describe("applyFleetBroadcastResult", () => {
 
     const failure = useFleetFailureStore.getState();
     expect(Array.from(failure.failedIds)).toEqual(["t2"]);
-    // Payload is intentionally empty for raw-input failures — single
-    // keystrokes aren't meaningful to retry, and the `Retry failed` action
-    // checks for a non-null payload before firing.
-    expect(failure.payload).toBe("");
+    // Payload is intentionally null for raw-input failures — single
+    // keystrokes aren't meaningful to retry, and `fleet.retryFailures`
+    // guards on `payload == null` to skip the IPC write. An empty string
+    // would slip past the loose-equality guard (#8705).
+    expect(failure.payload).toBeNull();
 
     const arming = useFleetArmingStore.getState();
     expect(arming.armedIds.has("t2")).toBe(true);
