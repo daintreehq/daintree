@@ -422,6 +422,63 @@ describe("HelpSessionController — launch phase FSM", () => {
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
     ctrl.stop();
   });
+
+  it("_fireHibernate resets the phase to idle if terminalId is cleared mid-kill (no stuck skeleton)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.isOpen = false;
+    panelStoreState.panelsById = { "term-1": { id: "term-1", cwd: "/p" } };
+    let resolveKill: (v: string | null) => void = () => {};
+    (window.electron.terminal.gracefulKill as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise((r) => {
+        resolveKill = r;
+      })
+    );
+    ctrl["_hibernateArmedFor"] = { terminalId: "term-1", agentId: "claude", projectId: "proj" };
+
+    ctrl["_fireHibernate"]("term-1", "claude", "proj");
+    expect(ctrl.getSnapshot().phase).toBe("hibernating");
+
+    // The panel disappears while the kill is in flight (handleTerminalPanelMissing).
+    helpPanelState.terminalId = null;
+    resolveKill("captured-sess");
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().phase).toBe("idle");
+    });
+    ctrl.stop();
+  });
+
+  it("revokes the provisioned session when agent.launch rejects after provisioning", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-leak",
+      sessionPath: "/help",
+      token: "tok-leak",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    vi.mocked(actionService.dispatch).mockRejectedValue(new Error("dispatch boom") as never);
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      visibilityEpoch: 0,
+    });
+
+    await vi.waitFor(() => {
+      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-leak");
+    });
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    ctrl.stop();
+  });
 });
 
 describe("HelpSessionController — tier-mismatch handlers", () => {

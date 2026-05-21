@@ -989,7 +989,16 @@ export class HelpSessionController {
         .gracefulKill(initialTerminalId)
         .then((capturedSessionId) => {
           const after = useHelpPanelStore.getState();
-          if (after.terminalId !== initialTerminalId) return;
+          if (after.terminalId !== initialTerminalId) {
+            // Another flow took over the slot, or the panel was torn down
+            // (e.g. `handleTerminalPanelMissing` cleared the terminal) while
+            // the kill was in flight. If a new launch took over it already
+            // wrote its own phase; only when the phase is still "hibernating"
+            // is this hibernate the last writer, so drop back to idle and
+            // don't strand the "Saving session…" skeleton.
+            if (this._snapshot.phase === "hibernating") this._resetPhase();
+            return;
+          }
           // Critical race: user reopened the panel while gracefulKill was
           // in flight. Terminal is still live — don't tear it down out
           // from under them. The captured session ID is also discarded;
@@ -1029,10 +1038,14 @@ export class HelpSessionController {
         })
         .catch((err) => {
           const after = useHelpPanelStore.getState();
-          if (after.terminalId !== initialTerminalId || after.isOpen) {
-            if (after.isOpen && after.terminalId === initialTerminalId) {
-              this._patch({ phase: "live" });
-            }
+          if (after.terminalId !== initialTerminalId) {
+            // See the `.then()` guard: only reset when this hibernate is still
+            // the phase's last writer.
+            if (this._snapshot.phase === "hibernating") this._resetPhase();
+            return;
+          }
+          if (after.isOpen) {
+            this._patch({ phase: "live" });
             return;
           }
           logError("HelpPanel: gracefulKill during hibernate failed", err);
@@ -1271,8 +1284,13 @@ export class HelpSessionController {
         // re-fire the effect — the new preferred agent should auto-launch
         // now. Earlier this was driven solely by the next syncInputs render,
         // which a transient phase re-render could consume before this reset
-        // landed, swallowing the relaunch.
-        if (this._lastInputs) this._maybeAutoLaunch(this._lastInputs);
+        // landed, swallowing the relaunch. Read `preferredAgentId` straight
+        // from the store (not the possibly-stale `_lastInputs`) so the re-eval
+        // launches the agent that actually superseded this one, never looping
+        // on the old agent.
+        if (this._lastInputs) {
+          this._maybeAutoLaunch({ ...this._lastInputs, preferredAgentId: currentPreferred });
+        }
         return;
       }
 
@@ -1304,6 +1322,10 @@ export class HelpSessionController {
     } catch (err) {
       logError("HelpPanel: auto-launch threw", err);
       this._hasAutoLaunched = false;
+      // A throw after provisioning (e.g. agent.launch rejecting) would
+      // otherwise strand the minted MCP session token.
+      revokeHelpSession(session?.sessionId ?? null);
+      this._pendingSessionId = null;
     } finally {
       if (gen === this._launchGen && !reached) this._resetPhase();
     }
