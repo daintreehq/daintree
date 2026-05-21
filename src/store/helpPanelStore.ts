@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { getAssistantSupportedAgentIds } from "../../shared/config/agentRegistry";
+import { isBuiltInAgentId } from "../../shared/config/agentIds";
 
 function isAssistantSupportedAgentId(value: unknown): value is string {
   return typeof value === "string" && getAssistantSupportedAgentIds().includes(value);
@@ -126,6 +127,9 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           // choice (made via Settings) must survive terminal re-binds —
           // overwriting it here is what made #8353's agent switch a no-op.
           preferredAgentId: s.preferredAgentId ?? agentId,
+          // A launched session is a successful recovery — drop the stale banner
+          // so it can't resurface if the panel later returns to the empty state.
+          droppedPreferredAgentId: null,
           conversationTouched: false,
         })),
 
@@ -172,12 +176,15 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
       }),
       merge: (persistedState: unknown, currentState) => {
         const persisted = persistedState as Partial<HelpPanelState>;
-        // Capture a persisted preference that's no longer a valid assistant
-        // backend so the empty state can explain the silent null-out instead of
-        // appearing blank. A null/missing preference is a clean first-run state,
-        // not a drop.
+        // Capture a built-in preference that's no longer a valid assistant
+        // backend (demoted from tier:"stable") so the empty state can explain
+        // the silent null-out instead of appearing blank. Restricted to built-in
+        // IDs: the user agent registry loads asynchronously after this synchronous
+        // rehydration, so a still-valid user-defined agent would otherwise be
+        // false-flagged as dropped on every restart. A null/missing preference is
+        // a clean first-run state, not a drop.
         const droppedPreferredAgentId =
-          typeof persisted.preferredAgentId === "string" &&
+          isBuiltInAgentId(persisted.preferredAgentId) &&
           !isAssistantSupportedAgentId(persisted.preferredAgentId)
             ? persisted.preferredAgentId
             : null;

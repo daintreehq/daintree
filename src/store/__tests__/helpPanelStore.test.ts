@@ -122,6 +122,34 @@ describe("helpPanelStore persistence migration", () => {
     expect(store.getState().droppedPreferredAgentId).toBeNull();
   });
 
+  it("does not flag a non-built-in (user-defined / not-yet-loaded) preferredAgentId as dropped (issue #8775)", async () => {
+    // The user agent registry loads asynchronously after this synchronous
+    // rehydration, so a still-valid user-defined agent must NOT be treated as a
+    // drop or it would false-banner on every restart.
+    const legacyBlob = JSON.stringify({
+      state: { width: 420, preferredAgentId: "my-custom-agent" },
+    });
+    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().preferredAgentId).toBeNull();
+    expect(store.getState().droppedPreferredAgentId).toBeNull();
+  });
+
+  it("setTerminal() clears droppedPreferredAgentId so the banner can't resurface after recovery (issue #8775)", async () => {
+    const legacyBlob = JSON.stringify({
+      state: { width: 420, preferredAgentId: "gemini" },
+    });
+    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    expect(store.getState().droppedPreferredAgentId).toBe("gemini");
+
+    store.getState().setTerminal("term-1", "claude", null);
+    expect(store.getState().droppedPreferredAgentId).toBeNull();
+  });
+
   it("clearDroppedPreferredAgent() clears the banner state without persisting it (issue #8775)", async () => {
     const legacyBlob = JSON.stringify({
       state: { width: 420, preferredAgentId: "gemini" },
