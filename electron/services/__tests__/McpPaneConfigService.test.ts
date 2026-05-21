@@ -49,8 +49,8 @@ describe("McpPaneConfigService", () => {
     expect(parsed.mcpServers.daintree.url).toBe("http://127.0.0.1:45454/sse");
     expect(parsed.mcpServers.daintree.headers.Authorization).toBe(`Bearer ${token}`);
     // Token must NOT be ${VAR}-style — Claude Code's header env substitution is
-    // still broken (anthropics/claude-code#6204, #28293) and `mcp add/remove`
-    // leak it to disk (#18692, #57131); the literal bearer is the reliable path.
+    // still broken (anthropics/claude-code#6204) and `mcp add/remove` rewrite it
+    // to a literal, leaking it to disk (#18692, #57131); literal is reliable.
     expect(parsed.mcpServers.daintree.headers.Authorization).not.toContain("${");
   });
 

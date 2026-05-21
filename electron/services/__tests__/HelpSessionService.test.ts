@@ -233,7 +233,7 @@ describe("HelpSessionService", () => {
 
   it("creates a session dir with a .mcp.json that bakes the literal session token into the Authorization header", async () => {
     // Claude Code's `${VAR}` substitution in `headers` is still broken as of
-    // v2.1.83 through v2.1.133 (anthropics/claude-code#6204, #28293) and `mcp
+    // v2.1.83 through v2.1.133 (anthropics/claude-code#6204) and `mcp
     // add/remove` rewrite it to a literal env value, leaking the bearer to disk
     // (#18692, #57131) — must bake the literal token. Same reason as
     // McpPaneConfigService.ts.
