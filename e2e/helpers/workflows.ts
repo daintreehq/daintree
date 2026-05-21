@@ -3,7 +3,7 @@ import type { ElectronApplication, Locator, Page } from "@playwright/test";
 import path from "path";
 import { mockOpenDialog, refreshActiveWindow, waitForActiveProject } from "./launch";
 import { dismissTelemetryConsent } from "./project";
-import { waitForTerminalReady, waitForTerminalText } from "./terminal";
+import { waitForTerminalPty, waitForTerminalReady, waitForTerminalText } from "./terminal";
 import { getGridPanelIds, getPanelById, openTerminal } from "./panels";
 import { SEL } from "./selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "./timeouts";
@@ -183,7 +183,8 @@ export async function selectExistingProjectAndRefresh(
 
 export async function spawnTerminalAndVerify(
   window: Page,
-  expectedText?: string
+  expectedText?: string,
+  options: { waitForInitialOutput?: boolean } = {}
 ): Promise<Locator> {
   return await test.step(
     "Spawn terminal and verify",
@@ -218,7 +219,11 @@ export async function spawnTerminalAndVerify(
         ? getPanelById(window, selectedPanelId)
         : window.locator(SEL.panel.gridPanel).last();
       await expect(panel).toBeVisible({ timeout: T_MEDIUM });
-      await waitForTerminalReady(window, panel, T_LONG);
+      if (options.waitForInitialOutput ?? true) {
+        await waitForTerminalReady(window, panel, T_LONG);
+      } else {
+        await waitForTerminalPty(window, panel, T_LONG);
+      }
 
       if (expectedText) {
         await waitForTerminalText(panel, expectedText);
