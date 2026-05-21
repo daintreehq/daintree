@@ -967,6 +967,21 @@ export class HelpSessionController {
               cwd,
               agentId: liveAgentId,
             });
+          } else if (
+            projectId &&
+            liveAgentId &&
+            cwd &&
+            buildResumeLatestCommand(liveAgentId) !== undefined
+          ) {
+            // Capture missed but the agent has a resume-latest flag — persist
+            // a sentinel hibernate entry (empty sessionId) so the next panel
+            // open hits the `--continue`-style fallback in `_spawnResumed`
+            // instead of starting a fresh session (#8787).
+            after.setHibernateSession(projectId, {
+              sessionId: "",
+              cwd,
+              agentId: liveAgentId,
+            });
           } else if (projectId) {
             after.clearHibernateSession(projectId);
           }

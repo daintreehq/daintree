@@ -586,7 +586,6 @@ describe("helpPanelStore persistence migration", () => {
             "no-session": { cwd: "/tmp", agentId: "claude" },
             "no-cwd": { sessionId: "abc", agentId: "claude" },
             "no-agent": { sessionId: "abc", cwd: "/tmp" },
-            "empty-session": { sessionId: "", cwd: "/tmp", agentId: "claude" },
             "wrong-types": { sessionId: 1, cwd: 2, agentId: 3 },
           },
         },
@@ -597,6 +596,31 @@ describe("helpPanelStore persistence migration", () => {
 
       expect(store.getState().hibernateSessions).toEqual({
         "good-proj": { sessionId: "abc", cwd: "/tmp", agentId: "claude" },
+      });
+    });
+
+    it("preserves empty-sessionId entries (resume-latest sentinel, #8787)", async () => {
+      // sessionId: "" signals "graceful-shutdown capture missed — use the
+      // agent's resume-latest flag on next open" (e.g. claude --continue).
+      // Sanitization must NOT drop these.
+      const blob = JSON.stringify({
+        version: 3,
+        state: {
+          isOpen: false,
+          width: 400,
+          preferredAgentId: null,
+          introDismissed: false,
+          hibernateSessions: {
+            "resume-latest-proj": { sessionId: "", cwd: "/tmp", agentId: "claude" },
+          },
+        },
+      });
+      installLocalStorage({ [STORAGE_KEY]: blob });
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+      expect(store.getState().hibernateSessions).toEqual({
+        "resume-latest-proj": { sessionId: "", cwd: "/tmp", agentId: "claude" },
       });
     });
 

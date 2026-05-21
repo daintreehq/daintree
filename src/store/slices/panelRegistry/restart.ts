@@ -262,6 +262,7 @@ export const createRestartActions = (
     // For agent terminals, regenerate command from current settings
     // For other terminals, use the saved command
     let commandToRun = currentTerminal.command;
+    let usedResumeLatest = false;
     const effectiveAgentId = currentTerminal.launchAgentId;
     // Gate on launch intent (`effectiveAgentId`, derived from the sealed
     // `launchAgentId`) plus two demotion
@@ -352,6 +353,7 @@ export const createRestartActions = (
         const resumeLatestCmd = buildResumeLatestCommand(effectiveAgentId, nextAgentLaunchFlags);
         if (resumeLatestCmd) {
           commandToRun = resumeLatestCmd;
+          usedResumeLatest = true;
         }
       }
 
@@ -421,9 +423,13 @@ export const createRestartActions = (
 
     const spawnCommand = commandToRun;
     // Track session ID for restore-on-failure; resume command is transient,
-    // so keep the original command as the durable stored command
+    // so keep the original command as the durable stored command. Same for
+    // the resume-latest fallback (e.g. `claude --continue`) — re-storing that
+    // as durable would re-resume on every subsequent restart instead of
+    // launching fresh.
     const consumedSessionId = currentTerminal.agentSessionId;
-    const durableCommand = consumedSessionId ? currentTerminal.command : spawnCommand;
+    const durableCommand =
+      consumedSessionId || usedResumeLatest ? currentTerminal.command : spawnCommand;
 
     try {
       // CAPTURE LIVE DIMENSIONS before destroying the frontend
