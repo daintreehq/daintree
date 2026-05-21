@@ -99,6 +99,60 @@ describe("helpPanelStore persistence migration", () => {
     expect(store.getState().width).toBe(420);
   });
 
+  it("captures a dropped unsupported preferredAgentId as droppedPreferredAgentId (issue #8775)", async () => {
+    const legacyBlob = JSON.stringify({
+      state: { width: 420, preferredAgentId: "gemini" },
+    });
+    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().preferredAgentId).toBeNull();
+    expect(store.getState().droppedPreferredAgentId).toBe("gemini");
+  });
+
+  it("leaves droppedPreferredAgentId null when no preference was persisted (issue #8775)", async () => {
+    const legacyBlob = JSON.stringify({
+      state: { width: 420, preferredAgentId: null },
+    });
+    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+    expect(store.getState().droppedPreferredAgentId).toBeNull();
+  });
+
+  it("clearDroppedPreferredAgent() clears the banner state without persisting it (issue #8775)", async () => {
+    const legacyBlob = JSON.stringify({
+      state: { width: 420, preferredAgentId: "gemini" },
+    });
+    const backing = installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    expect(store.getState().droppedPreferredAgentId).toBe("gemini");
+
+    store.getState().clearDroppedPreferredAgent();
+    expect(store.getState().droppedPreferredAgentId).toBeNull();
+
+    const written = backing.get(STORAGE_KEY);
+    expect(written).toBeDefined();
+    expect(written!).not.toContain("droppedPreferredAgentId");
+  });
+
+  it("setPreferredAgent() clears droppedPreferredAgentId (issue #8775)", async () => {
+    const legacyBlob = JSON.stringify({
+      state: { width: 420, preferredAgentId: "gemini" },
+    });
+    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    expect(store.getState().droppedPreferredAgentId).toBe("gemini");
+
+    store.getState().setPreferredAgent("claude");
+    expect(store.getState().preferredAgentId).toBe("claude");
+    expect(store.getState().droppedPreferredAgentId).toBeNull();
+  });
+
   it("preserves a v0 preferredAgentId when migrating to v1 if the agent is supported", async () => {
     const v0Blob = JSON.stringify({
       version: 0,

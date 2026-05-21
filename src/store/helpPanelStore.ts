@@ -30,6 +30,13 @@ interface HelpPanelState {
   terminalId: string | null;
   agentId: string | null;
   preferredAgentId: string | null;
+  /**
+   * Set at rehydration when a persisted preferredAgentId was dropped because the
+   * agent is no longer an assistant backend (CLI uninstalled or demoted from
+   * tier:"stable"). Transient (never persisted) — drives a one-shot banner so
+   * the silent null-out is explained instead of leaving a blank empty state.
+   */
+  droppedPreferredAgentId: string | null;
   sessionId: string | null;
   introDismissed: boolean;
   conversationTouched: boolean;
@@ -50,6 +57,7 @@ interface HelpPanelActions {
   setTerminal: (terminalId: string, agentId: string, sessionId: string | null) => void;
   clearTerminal: () => void;
   setPreferredAgent: (agentId: string | null) => void;
+  clearDroppedPreferredAgent: () => void;
   dismissIntro: () => void;
   markConversationStarted: () => void;
   requestFocus: () => void;
@@ -66,6 +74,7 @@ const initialState: HelpPanelState = {
   terminalId: null,
   agentId: null,
   preferredAgentId: null,
+  droppedPreferredAgentId: null,
   sessionId: null,
   introDismissed: false,
   conversationTouched: false,
@@ -123,7 +132,10 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
       clearTerminal: () =>
         set({ terminalId: null, agentId: null, sessionId: null, conversationTouched: false }),
 
-      setPreferredAgent: (agentId) => set({ preferredAgentId: agentId }),
+      setPreferredAgent: (agentId) =>
+        set({ preferredAgentId: agentId, droppedPreferredAgentId: null }),
+
+      clearDroppedPreferredAgent: () => set({ droppedPreferredAgentId: null }),
 
       dismissIntro: () => set({ introDismissed: true }),
 
@@ -160,6 +172,15 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
       }),
       merge: (persistedState: unknown, currentState) => {
         const persisted = persistedState as Partial<HelpPanelState>;
+        // Capture a persisted preference that's no longer a valid assistant
+        // backend so the empty state can explain the silent null-out instead of
+        // appearing blank. A null/missing preference is a clean first-run state,
+        // not a drop.
+        const droppedPreferredAgentId =
+          typeof persisted.preferredAgentId === "string" &&
+          !isAssistantSupportedAgentId(persisted.preferredAgentId)
+            ? persisted.preferredAgentId
+            : null;
         return {
           ...currentState,
           // The assistant can auto-launch as soon as it opens. Starting every
@@ -173,6 +194,7 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           preferredAgentId: isAssistantSupportedAgentId(persisted.preferredAgentId)
             ? persisted.preferredAgentId
             : null,
+          droppedPreferredAgentId,
           introDismissed:
             typeof persisted.introDismissed === "boolean"
               ? persisted.introDismissed
