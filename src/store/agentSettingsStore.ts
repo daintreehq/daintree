@@ -3,34 +3,43 @@ import type { AgentSettings, AgentSettingsEntry, CliAvailability } from "@shared
 import { agentSettingsClient } from "@/clients";
 import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { getEffectiveAgentIds } from "../../shared/config/agentRegistry";
+import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds";
 import { isAgentPinned } from "../../shared/utils/agentPinned";
+import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 /** Bump when a future migration needs to run on existing persisted stores. */
 const CURRENT_SETTINGS_VERSION = 1;
+const INITIAL_PIN_SETTINGS_VERSION = 2;
+const INITIAL_PIN_LIMIT = 5;
 
 /**
  * In-memory normalization with tri-state pin semantics. `entry.pinned` is
- * authoritative and never derived from CLI availability here — the renderer
- * computes effective toolbar visibility at read time via
- * `isAgentToolbarVisible(entry, availability)` (see #7673). The two paths:
+ * authoritative: explicit `true`/`false` values stand, and `undefined` keeps
+ * the #7673 availability-following behavior for migrated/unknown entries.
  *
- *  - No entry at all for a registered agent + `hasRealData` → seed an empty
- *    record (no `pinned` field) so the agent participates in tri-state and
- *    follows live availability until the user toggles it explicitly. Before
- *    real data (`hasRealData === false`) nothing is seeded so the orchestrator
- *    can re-run normalization once the first probe completes.
- *  - Entry exists → preserved verbatim. Explicit `pinned: true`/`false`
- *    values stand; `pinned: undefined` stays undefined.
+ * Fresh default installs are the exception. Once real CLI availability exists,
+ * Daintree chooses the first five installed built-in agents (registry order is
+ * popularity order), pins them, and explicitly unpins the remaining built-ins
+ * so toolbar icons and tray pin state agree on first launch.
  *
- * Does NOT persist.
+ * Does NOT persist; callers schedule write-backs for first-install defaults.
  */
 export function normalizeAgentSelection(
   settings: AgentSettings,
-  _availability?: CliAvailability | null,
-  hasRealData: boolean = false
+  availability?: CliAvailability | null,
+  hasRealData: boolean = false,
+  options: { seedInitialPins?: boolean } = {}
 ): AgentSettings {
+  const { seedInitialPins = true } = options;
+  if (seedInitialPins) {
+    const initialPinUpdates = buildInitialAgentPinUpdates(settings, availability, hasRealData);
+    if (initialPinUpdates) {
+      return applyAgentPinUpdates(settings, initialPinUpdates, INITIAL_PIN_SETTINGS_VERSION);
+    }
+  }
+
   const registeredIds = getEffectiveAgentIds();
   let changed = false;
   const agents = { ...settings.agents };
@@ -43,6 +52,69 @@ export function normalizeAgentSelection(
   }
 
   return changed ? { ...settings, agents } : settings;
+}
+
+function isFreshDefaultAgentSettings(settings: AgentSettings): boolean {
+  const version = settings.settingsVersion;
+  if (version !== undefined && version !== CURRENT_SETTINGS_VERSION) return false;
+
+  const agents = settings.agents;
+  if (!agents || typeof agents !== "object") return false;
+
+  const defaultAgents = DEFAULT_AGENT_SETTINGS.agents;
+  const defaultIds = new Set(Object.keys(defaultAgents));
+  const rawIds = Object.keys(agents);
+  if (rawIds.some((id) => !defaultIds.has(id))) return false;
+
+  for (const id of BUILT_IN_AGENT_IDS) {
+    const entry = agents[id];
+    const defaultEntry = defaultAgents[id];
+    if (!entry || !defaultEntry) return false;
+    if ("pinned" in entry) return false;
+
+    const entryKeys = Object.keys(entry);
+    const defaultKeys = Object.keys(defaultEntry);
+    if (entryKeys.length !== defaultKeys.length) return false;
+    for (const key of defaultKeys) {
+      if (entry[key] !== defaultEntry[key]) return false;
+    }
+  }
+
+  return true;
+}
+
+export function buildInitialAgentPinUpdates(
+  settings: AgentSettings,
+  availability: CliAvailability | null | undefined,
+  hasRealData: boolean
+): Record<string, boolean> | null {
+  if (!hasRealData || !availability) return null;
+  if (!isFreshDefaultAgentSettings(settings)) return null;
+
+  const selected = new Set(
+    BUILT_IN_AGENT_IDS.filter((id) => isAgentInstalled(availability[id])).slice(
+      0,
+      INITIAL_PIN_LIMIT
+    )
+  );
+
+  return Object.fromEntries(BUILT_IN_AGENT_IDS.map((id) => [id, selected.has(id)]));
+}
+
+function applyAgentPinUpdates(
+  settings: AgentSettings,
+  pinUpdates: Record<string, boolean>,
+  settingsVersion?: number
+): AgentSettings {
+  const agents = { ...settings.agents };
+  for (const [id, pinned] of Object.entries(pinUpdates)) {
+    agents[id] = { ...(agents[id] ?? {}), pinned };
+  }
+  return {
+    ...settings,
+    ...(settingsVersion !== undefined ? { settingsVersion } : {}),
+    agents,
+  };
 }
 
 /**
@@ -109,6 +181,23 @@ async function scheduleMigrationWriteBacks(agentIds: readonly string[]): Promise
   } catch {
     // Leave version unstamped — next cold start retries the (now no-op)
     // per-agent clears and re-attempts the version stamp.
+  }
+}
+
+async function scheduleInitialPinWriteBacks(pinUpdates: Record<string, boolean>): Promise<void> {
+  const entries = Object.entries(pinUpdates);
+  if (entries.length === 0) return;
+
+  const results = await Promise.allSettled(
+    entries.map(([id, pinned]) => agentSettingsClient.set(id, { pinned }))
+  );
+  const allOk = results.every((r) => r.status === "fulfilled");
+  if (!allOk) return;
+
+  try {
+    await agentSettingsClient.stampVersion(INITIAL_PIN_SETTINGS_VERSION);
+  } catch {
+    // Best-effort persistence; the current session already has the in-memory defaults.
   }
 }
 
@@ -184,12 +273,24 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
           set({ isLoading: false, isInitialized: true });
           return;
         }
-        const { migrated, agentsToClear } = migrateAgentSettings(raw);
         const { availability, hasRealData } = readAvailabilitySnapshot();
-        const settings = normalizeAgentSelection(migrated, availability, hasRealData);
+        const initialPinUpdates = buildInitialAgentPinUpdates(raw, availability, hasRealData);
+        const { migrated, agentsToClear } = migrateAgentSettings(raw);
+        let settings = normalizeAgentSelection(migrated, availability, hasRealData, {
+          seedInitialPins: agentsToClear.length === 0,
+        });
+        if (initialPinUpdates) {
+          settings = applyAgentPinUpdates(
+            settings,
+            initialPinUpdates,
+            INITIAL_PIN_SETTINGS_VERSION
+          );
+        }
         set({ settings, isLoading: false, isInitialized: true });
         if (agentsToClear.length > 0) {
           void scheduleMigrationWriteBacks(agentsToClear);
+        } else if (initialPinUpdates) {
+          void scheduleInitialPinWriteBacks(initialPinUpdates);
         }
       } catch (e) {
         if (myEpoch !== normalizeEpoch) {
@@ -219,12 +320,20 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     try {
       const raw = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
       if (myEpoch !== normalizeEpoch) return;
-      const { migrated, agentsToClear } = migrateAgentSettings(raw);
       const { availability, hasRealData } = readAvailabilitySnapshot();
-      const settings = normalizeAgentSelection(migrated, availability, hasRealData);
+      const initialPinUpdates = buildInitialAgentPinUpdates(raw, availability, hasRealData);
+      const { migrated, agentsToClear } = migrateAgentSettings(raw);
+      let settings = normalizeAgentSelection(migrated, availability, hasRealData, {
+        seedInitialPins: agentsToClear.length === 0,
+      });
+      if (initialPinUpdates) {
+        settings = applyAgentPinUpdates(settings, initialPinUpdates, INITIAL_PIN_SETTINGS_VERSION);
+      }
       set({ settings });
       if (agentsToClear.length > 0) {
         void scheduleMigrationWriteBacks(agentsToClear);
+      } else if (initialPinUpdates) {
+        void scheduleInitialPinWriteBacks(initialPinUpdates);
       }
     } catch (e) {
       // Stale failures yield silently — whichever newer op bumped the epoch
@@ -258,12 +367,20 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       // `updateAgent` is the first interaction with a legacy store (before
       // initialize() has hydrated) and the IPC response still carries stale
       // concrete pin values for other agents (#7673 review).
-      const { migrated, agentsToClear } = migrateAgentSettings(raw);
       const { availability, hasRealData } = readAvailabilitySnapshot();
-      const settings = normalizeAgentSelection(migrated, availability, hasRealData);
+      const initialPinUpdates = buildInitialAgentPinUpdates(raw, availability, hasRealData);
+      const { migrated, agentsToClear } = migrateAgentSettings(raw);
+      let settings = normalizeAgentSelection(migrated, availability, hasRealData, {
+        seedInitialPins: agentsToClear.length === 0,
+      });
+      if (initialPinUpdates) {
+        settings = applyAgentPinUpdates(settings, initialPinUpdates, INITIAL_PIN_SETTINGS_VERSION);
+      }
       set({ settings });
       if (agentsToClear.length > 0) {
         void scheduleMigrationWriteBacks(agentsToClear);
+      } else if (initialPinUpdates) {
+        void scheduleInitialPinWriteBacks(initialPinUpdates);
       }
     } catch (e) {
       if (myEpoch !== normalizeEpoch) return;
@@ -303,12 +420,20 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       // Reset response may still represent a legacy store (per-agent reset
       // doesn't bump version); run migration to keep tri-state semantics
       // intact (#7673 review).
-      const { migrated, agentsToClear } = migrateAgentSettings(raw);
       const { availability, hasRealData } = readAvailabilitySnapshot();
-      const settings = normalizeAgentSelection(migrated, availability, hasRealData);
+      const initialPinUpdates = buildInitialAgentPinUpdates(raw, availability, hasRealData);
+      const { migrated, agentsToClear } = migrateAgentSettings(raw);
+      let settings = normalizeAgentSelection(migrated, availability, hasRealData, {
+        seedInitialPins: agentsToClear.length === 0,
+      });
+      if (initialPinUpdates) {
+        settings = applyAgentPinUpdates(settings, initialPinUpdates, INITIAL_PIN_SETTINGS_VERSION);
+      }
       set({ settings });
       if (agentsToClear.length > 0) {
         void scheduleMigrationWriteBacks(agentsToClear);
+      } else if (initialPinUpdates) {
+        void scheduleInitialPinWriteBacks(initialPinUpdates);
       }
     } catch (e) {
       if (myEpoch !== normalizeEpoch) return;

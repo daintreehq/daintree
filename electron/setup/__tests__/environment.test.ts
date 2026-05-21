@@ -90,11 +90,13 @@ describe("V8 flag setup", () => {
     vi.resetAllMocks();
     Object.defineProperty(process, "platform", { value: "darwin", writable: true });
     process.argv = ["electron", "main.js"];
+    delete process.env.DAINTREE_DEV_USER_DATA_DIR;
   });
 
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
     process.argv = originalArgv;
+    delete process.env.DAINTREE_DEV_USER_DATA_DIR;
   });
 
   it("sets --expose_gc and does not set --optimize_for_size", async () => {
@@ -105,6 +107,46 @@ describe("V8 flag setup", () => {
     const nodeV8 = (await import("node:v8")).default;
     expect(nodeV8.setFlagsFromString).toHaveBeenCalledWith("--expose_gc");
     expect(nodeV8.setFlagsFromString).not.toHaveBeenCalledWith("--optimize_for_size");
+  });
+});
+
+describe("development userData path", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "main.js"];
+    delete process.env.DAINTREE_DEV_USER_DATA_DIR;
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+    delete process.env.DAINTREE_DEV_USER_DATA_DIR;
+  });
+
+  it("uses the isolated dev userData directory when provided", async () => {
+    process.env.DAINTREE_DEV_USER_DATA_DIR = "/tmp/daintree-dev-fresh-test";
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    expect(electronMock.app.setPath).toHaveBeenCalledWith(
+      "userData",
+      "/tmp/daintree-dev-fresh-test"
+    );
+  });
+
+  it("ignores a relative dev userData override", async () => {
+    process.env.DAINTREE_DEV_USER_DATA_DIR = "relative-profile";
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    expect(electronMock.app.setPath).toHaveBeenCalledWith(
+      "userData",
+      path.join("/tmp/test-appdata", "daintree-dev")
+    );
   });
 });
 

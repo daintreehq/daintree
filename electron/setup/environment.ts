@@ -40,7 +40,13 @@ try {
 // each test run gets its own isolated data directory.
 const hasExplicitUserDataDir = process.argv.some((a) => a.startsWith("--user-data-dir"));
 if (!app.isPackaged && !hasExplicitUserDataDir) {
-  app.setPath("userData", path.join(app.getPath("appData"), "daintree-dev"));
+  const devUserDataDir = process.env.DAINTREE_DEV_USER_DATA_DIR?.trim();
+  app.setPath(
+    "userData",
+    devUserDataDir && path.isAbsolute(devUserDataDir)
+      ? devUserDataDir
+      : path.join(app.getPath("appData"), "daintree-dev")
+  );
 }
 
 // Handle --reset-data: wipe userData before Chromium acquires file locks

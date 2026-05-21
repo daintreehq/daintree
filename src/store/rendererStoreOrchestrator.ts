@@ -29,6 +29,12 @@ const debouncedPersistMruList = debounce(persistMruList, 150);
 
 let cleanupFn: (() => void) | null = null;
 
+function refreshAgentSettingsFromAvailability(): void {
+  const { isInitialized, isLoading } = useAgentSettingsStore.getState();
+  if (!isInitialized || isLoading) return;
+  void useAgentSettingsStore.getState().refresh();
+}
+
 export function initStoreOrchestrator(): () => void {
   // Cross-store accessors are registered up-front, BEFORE the idempotency
   // guard, so tests that `destroyStoreOrchestrator()` + re-init reconnect
@@ -231,12 +237,29 @@ export function initStoreOrchestrator(): () => void {
           const realDataLanded = selected.hasRealData && !prevSelected.hasRealData;
           const availabilityChanged = selected.availability !== prevSelected.availability;
           if (!realDataLanded && !availabilityChanged) return;
-          const { isInitialized, isLoading } = useAgentSettingsStore.getState();
-          if (!isInitialized || isLoading) return;
-          void useAgentSettingsStore.getState().refresh();
+          refreshAgentSettingsFromAvailability();
         },
         { equalityFn: shallow }
       )
+    )
+  );
+
+  // 6. Loading-race backstop for the same availability → settings sync.
+  // If the first real CLI snapshot lands while agent settings are still
+  // hydrating, the subscription above intentionally does not refresh a store
+  // that is mid-initialize. Re-check when the settings store becomes ready so
+  // first-run default pins are not missed on fast availability probes.
+  disposables.add(
+    toDisposable(
+      useAgentSettingsStore.subscribe((state, prevState) => {
+        const becameReady =
+          state.isInitialized &&
+          !state.isLoading &&
+          (!prevState.isInitialized || prevState.isLoading);
+        if (!becameReady) return;
+        if (!useCliAvailabilityStore.getState().hasRealData) return;
+        refreshAgentSettingsFromAvailability();
+      })
     )
   );
 
