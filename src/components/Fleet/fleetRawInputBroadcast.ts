@@ -3,9 +3,7 @@ import { registerFleetInputBroadcastHandler } from "@/services/terminal/fleetInp
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { isFleetArmEligible, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
-import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { usePanelStore } from "@/store/panelStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";
 import type { BroadcastWriteResultPayload } from "@shared/types";
 import { PERMANENT_FAILURE_CODES } from "./fleetBroadcast";
@@ -32,32 +30,6 @@ export function broadcastFleetRawInput(originId: string, data: string): boolean 
 
   const targets = resolveLiveFleetTargetIds();
   if (targets.length < 2 || !targets.includes(originId)) return false;
-
-  // Auto-enter fleet scope when targets span worktrees so cross-worktree
-  // armed terminals are actually rendered while raw input is in flight —
-  // otherwise the user is firing keystrokes into hidden panes. Gated on
-  // `mode === "scoped"` + hydrated so legacy users keep their existing
-  // silent-write behavior. `enterFleetScope` is idempotent.
-  const scopeFlag = useFleetScopeFlagStore.getState();
-  if (scopeFlag.isHydrated && scopeFlag.mode === "scoped") {
-    const { panelsById } = usePanelStore.getState();
-    const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-    let hasCrossWorktreeTarget = false;
-    for (const id of targets) {
-      const targetWorktreeId = panelsById[id]?.worktreeId;
-      // `undefined` is treated as "no worktree affiliation" — global/unowned
-      // terminals don't drive scope entry on their own. A real cross-worktree
-      // target (a non-undefined id that differs from the active worktree) is
-      // still detected when present alongside such a terminal.
-      if (targetWorktreeId !== undefined && targetWorktreeId !== activeWorktreeId) {
-        hasCrossWorktreeTarget = true;
-        break;
-      }
-    }
-    if (hasCrossWorktreeTarget) {
-      useWorktreeSelectionStore.getState().enterFleetScope();
-    }
-  }
 
   terminalClient.broadcast(targets, data);
   // Mirror the origin's xterm onData → onUserInput path on every non-origin
