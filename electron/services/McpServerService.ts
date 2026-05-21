@@ -286,7 +286,10 @@ export class McpServerService {
     this.persistConfig({ enabled });
     if (enabled && this._registry && !this.isRunning) {
       await this.httpLifecycle.start(this._registry);
-    } else if (!enabled && this.isRunning) {
+    } else if (!enabled && (this.isRunning || this.httpLifecycle.isStartInFlight)) {
+      // `stop()` awaits any in-flight `start()` before closing, so a disable
+      // that races a slow start still tears the server down instead of
+      // leaving it listening after the user turned it off.
       await this.httpLifecycle.stop();
     } else if (wasEnabled !== enabled) {
       if (!enabled) this.httpLifecycle.setLastError(null);

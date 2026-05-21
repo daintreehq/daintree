@@ -877,4 +877,16 @@ describe("SessionStore.listExternalActiveClients (#8779)", () => {
 
     expect(store.listExternalActiveClients()).toEqual([]);
   });
+
+  it("clearClientMetadata drops a normally-disconnected client from the list", () => {
+    addExternal("ext", "Claude Code", "streamable-http");
+    expect(store.listExternalActiveClients()).toHaveLength(1);
+
+    // Mirrors the inline transport.onclose cleanup in httpLifecycle, which
+    // deletes the session map entry and clears its metadata.
+    store.httpSessions.delete("ext");
+    store.clearClientMetadata("ext");
+
+    expect(store.listExternalActiveClients()).toEqual([]);
+  });
 });

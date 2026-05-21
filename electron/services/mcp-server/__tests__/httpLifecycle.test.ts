@@ -235,6 +235,23 @@ describe("HttpLifecycle", () => {
       expect(s.closeAllConnections).not.toHaveBeenCalled();
     });
 
+    it("does not log a timeout warning when close completes within the deadline (#8779)", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const deps = fakeDeps();
+      const s = mockServer();
+      (s as MockServer & { listening: boolean }).listening = true;
+
+      const lc = new HttpLifecycle(deps);
+      (lc as unknown as { httpServer: MockServer }).httpServer = s;
+      (lc as unknown as { port: number }).port = 45454;
+
+      await lc.stop();
+      // Fire the (already-resolved) deadline timer — its callback must not warn.
+      await vi.advanceTimersByTimeAsync(4_000);
+
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("server.close() timed out"));
+    });
+
     it("force-closes connections only after the 3s drain deadline (#8779)", async () => {
       const deps = fakeDeps();
       const s = mockServer();

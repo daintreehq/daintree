@@ -717,8 +717,8 @@ export function McpServerSettingsTab() {
         title="Stop MCP server?"
         description={
           disableClients.length === 1
-            ? "Turning the server off disconnects the client below. Any tool call it has in flight is allowed to finish first."
-            : `Turning the server off disconnects the ${disableClients.length} clients below. Any tool calls they have in flight are allowed to finish first.`
+            ? "Turning the server off disconnects the client below and stops accepting new tool calls."
+            : `Turning the server off disconnects the ${disableClients.length} clients below and stops accepting new tool calls.`
         }
         confirmLabel="Stop sharing"
         cancelLabel="Keep running"

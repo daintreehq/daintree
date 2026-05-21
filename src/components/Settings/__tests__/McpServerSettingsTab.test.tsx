@@ -659,6 +659,28 @@ describe("McpServerSettingsTab", () => {
     expect(screen.queryByRole("heading", { name: /stop mcp server\?/i })).toBeNull();
   });
 
+  it("surfaces an error and does not stop the server when listActiveClients fails (#8779)", async () => {
+    const setEnabledMock = vi.fn();
+    installMcpApi({
+      setEnabled: setEnabledMock,
+      listActiveClients: vi.fn().mockRejectedValue(new Error("clients lookup failed")),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "MCP server");
+
+    fireEvent.click(screen.getByLabelText("Enable MCP server"));
+
+    await waitForContent(container, "clients lookup failed");
+    expect(setEnabledMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: /stop mcp server\?/i })).toBeNull();
+    expect(mockedNotify).not.toHaveBeenCalled();
+  });
+
   it("shows inline error for invalid audit max records instead of notifying", async () => {
     const { container } = render(
       <SettingsValidationProvider>

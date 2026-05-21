@@ -184,7 +184,13 @@ export class SessionStore {
     this.sessionTransport.set(sessionId, transport);
   }
 
-  private clearClientMetadata(sessionId: string): void {
+  /**
+   * Drop a session's connection metadata. Public so the inline
+   * `transport.onclose` / connect-failure cleanup closures in `httpLifecycle`
+   * can tear it down in lockstep with the other per-session maps on a normal
+   * disconnect (not just idle expiry / revoke / drain).
+   */
+  clearClientMetadata(sessionId: string): void {
     this.sessionConnectedAtMs.delete(sessionId);
     this.sessionUserAgent.delete(sessionId);
     this.sessionTransport.delete(sessionId);

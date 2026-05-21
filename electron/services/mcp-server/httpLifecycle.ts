@@ -115,6 +115,16 @@ export class HttpLifecycle {
     return this.httpServer !== null && this.httpServer.listening && this.port !== null;
   }
 
+  /**
+   * True while a `start()` is mid-flight (socket not yet bound). Lets
+   * `setEnabled(false)` route through `stop()` — which awaits the start —
+   * instead of no-op'ing and leaving a server that comes up after the user
+   * already turned it off.
+   */
+  get isStartInFlight(): boolean {
+    return this.startPromise !== null;
+  }
+
   get currentPort(): number | null {
     return this.port;
   }
@@ -456,7 +466,11 @@ export class HttpLifecycle {
             }),
             new Promise<void>((resolve) => {
               setTimeout(() => {
-                console.warn("[MCP] server.close() timed out after 3s — force-closing connections");
+                if (!drained) {
+                  console.warn(
+                    "[MCP] server.close() timed out after 3s — force-closing connections"
+                  );
+                }
                 resolve();
               }, MCP_STOP_DRAIN_TIMEOUT_MS).unref?.();
             }),
@@ -629,6 +643,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
         this.deps.sessionStore.clearRateLimitState(sessionId);
+        this.deps.sessionStore.clearClientMetadata(sessionId);
         this.deps.abusePolicy.dropSession(sessionId);
         cleanupResourceSubscriptions(sessionId, this.deps.sessionStore);
       };
@@ -647,6 +662,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
         this.deps.sessionStore.clearRateLimitState(sessionId);
+        this.deps.sessionStore.clearClientMetadata(sessionId);
         this.deps.abusePolicy.dropSession(sessionId);
         transport.onclose = undefined;
         await transport.close().catch(() => {});
@@ -764,6 +780,7 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionContextMap.delete(id);
       this.deps.sessionStore.clearDedupState(id);
       this.deps.sessionStore.clearRateLimitState(id);
+      this.deps.sessionStore.clearClientMetadata(id);
       this.deps.abusePolicy.dropSession(id);
       cleanupResourceSubscriptions(id, this.deps.sessionStore);
     };
@@ -787,6 +804,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionContextMap.delete(id);
         this.deps.sessionStore.clearDedupState(id);
         this.deps.sessionStore.clearRateLimitState(id);
+        this.deps.sessionStore.clearClientMetadata(id);
         this.deps.abusePolicy.dropSession(id);
         cleanupResourceSubscriptions(id, this.deps.sessionStore);
       } else {
@@ -797,6 +815,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionContextMap.delete(newSessionId);
         this.deps.sessionStore.clearDedupState(newSessionId);
         this.deps.sessionStore.clearRateLimitState(newSessionId);
+        this.deps.sessionStore.clearClientMetadata(newSessionId);
         this.deps.abusePolicy.dropSession(newSessionId);
         cleanupResourceSubscriptions(newSessionId, this.deps.sessionStore);
       }
