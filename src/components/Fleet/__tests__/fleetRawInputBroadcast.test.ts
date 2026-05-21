@@ -240,7 +240,12 @@ describe("broadcastFleetRawInput", () => {
     expect(notifyEnterPressedMock).not.toHaveBeenCalled();
   });
 
-  it("auto-enters fleet scope when broadcast targets cross worktrees in scoped mode (#8255)", () => {
+  it("does not enter fleet scope on broadcast even when targets span worktrees (#8797)", () => {
+    // Raw input broadcast must never rearrange the layout. Set up the exact
+    // conditions that used to auto-enter fleet scope — cross-worktree targets,
+    // scoped mode, hydrated — and assert the broadcast still goes out while
+    // `enterFleetScope` is never called. Fleet scope is now strictly opt-in
+    // via the `fleet.scope.enter` action.
     seedPanels([
       makeTerminal("t1", { worktreeId: "wt-1" }),
       makeTerminal("t2", { worktreeId: "wt-2" }),
@@ -250,90 +255,11 @@ describe("broadcastFleetRawInput", () => {
     worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
 
     expect(broadcastFleetRawInput("t1", "ls\r")).toBe(true);
-    expect(enterFleetScopeMock).toHaveBeenCalledTimes(1);
-  });
 
-  it("does not enter fleet scope when targets are same-worktree", () => {
-    seedPanels([
-      makeTerminal("t1", { worktreeId: "wt-1" }),
-      makeTerminal("t2", { worktreeId: "wt-1" }),
-    ]);
-    useFleetArmingStore.getState().armIds(["t1", "t2"]);
-    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
-    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
-
-    broadcastFleetRawInput("t1", "ls\r");
+    // The write still goes out to every target...
+    expect(broadcastMock).toHaveBeenCalledWith(["t1", "t2"], "ls\r");
+    // ...but the layout is left untouched.
     expect(enterFleetScopeMock).not.toHaveBeenCalled();
-  });
-
-  it("does not enter fleet scope in legacy mode even when cross-worktree", () => {
-    seedPanels([
-      makeTerminal("t1", { worktreeId: "wt-1" }),
-      makeTerminal("t2", { worktreeId: "wt-2" }),
-    ]);
-    useFleetArmingStore.getState().armIds(["t1", "t2"]);
-    useFleetScopeFlagStore.setState({ mode: "legacy", isHydrated: true });
-    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
-
-    broadcastFleetRawInput("t1", "ls\r");
-    expect(enterFleetScopeMock).not.toHaveBeenCalled();
-  });
-
-  it("does not enter fleet scope before hydration (preserves persisted-mode load order)", () => {
-    seedPanels([
-      makeTerminal("t1", { worktreeId: "wt-1" }),
-      makeTerminal("t2", { worktreeId: "wt-2" }),
-    ]);
-    useFleetArmingStore.getState().armIds(["t1", "t2"]);
-    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: false });
-    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
-
-    broadcastFleetRawInput("t1", "ls\r");
-    expect(enterFleetScopeMock).not.toHaveBeenCalled();
-  });
-
-  it("treats panels with undefined worktreeId as no-affiliation (no scope entry on their own)", () => {
-    const t1 = makeTerminal("t1", { worktreeId: "wt-1" });
-    const t2 = makeTerminal("t2");
-    // Strip the worktreeId so the lookup returns undefined.
-    delete (t2 as { worktreeId?: string }).worktreeId;
-    seedPanels([t1, t2]);
-    useFleetArmingStore.getState().armIds(["t1", "t2"]);
-    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
-    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
-
-    broadcastFleetRawInput("t1", "ls\r");
-    expect(enterFleetScopeMock).not.toHaveBeenCalled();
-  });
-
-  it("still enters fleet scope when an undefined-worktreeId target sits alongside a real cross-worktree target", () => {
-    const t1 = makeTerminal("t1", { worktreeId: "wt-1" });
-    const t2 = makeTerminal("t2");
-    delete (t2 as { worktreeId?: string }).worktreeId;
-    const t3 = makeTerminal("t3", { worktreeId: "wt-2" });
-    seedPanels([t1, t2, t3]);
-    useFleetArmingStore.getState().armIds(["t1", "t2", "t3"]);
-    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
-    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
-
-    broadcastFleetRawInput("t1", "ls\r");
-    expect(enterFleetScopeMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("enters fleet scope regardless of payload — non-Enter cross-worktree still promotes visibility", () => {
-    seedPanels([
-      makeTerminal("t1", { worktreeId: "wt-1" }),
-      makeTerminal("t2", { worktreeId: "wt-2" }),
-    ]);
-    useFleetArmingStore.getState().armIds(["t1", "t2"]);
-    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
-    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
-
-    // ESC+CR soft-newline (alt-Enter) — not a submit but still keystroke input.
-    expect(broadcastFleetRawInput("t1", "\x1b\r")).toBe(true);
-    expect(enterFleetScopeMock).toHaveBeenCalledTimes(1);
-    // notifyEnterPressed must NOT fire for the soft-newline payload.
-    expect(notifyEnterPressedMock).not.toHaveBeenCalled();
   });
 
   it("performs the raw broadcast alongside notifyEnterPressed for plain Enter", () => {
